@@ -52,10 +52,10 @@ def write_minimal_files(repo_root: Path) -> None:
             "brr:\n"
             "  version: 1\n"
             "  mode: paused\n"
-            "  default_executor: codex\n"
+            "  default_executor: auto\n"
             "  commands:\n"
-            "    verify: ""\n"
-            "    status: ""\n"
+            '    verify: ""\n'
+            '    status: ""\n'
             "  task_sources: []\n"
             "  state_file: agent_state.md\n"
             "  commit_policy: commit-at-end-if-material\n"

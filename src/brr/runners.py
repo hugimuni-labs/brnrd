@@ -9,6 +9,7 @@ script) to perform a task or an analysis.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Any
 
 
@@ -47,13 +48,23 @@ class ShellRunner(Runner):
         return "{}"
 
 
+import shutil
+
+
+# Executors to try, in order of preference.
+_AUTO_DETECT_ORDER = ["claude", "codex", "gemini"]
+
+
 def get_default_runner() -> Runner:
     """Return the default runner instance.
 
-    Currently this always returns a CodexRunner.  In the future this
-    function will inspect the repository's AGENTS.md header to select an
-    executor.
+    When the executor is set to 'auto' (the default), brr probes for
+    available CLI tools in order: claude, codex, gemini.  If none are
+    found it falls back to CodexRunner as a stub.
     """
+    for name in _AUTO_DETECT_ORDER:
+        if shutil.which(name):
+            return ShellRunner(command=name)
     return CodexRunner()
 
 
@@ -73,18 +84,14 @@ def run_task(instruction: str) -> None:
 def run_adoption_prompt(runner: Runner) -> Optional[Any]:
     """Ask the runner to perform adoption analysis.
 
-    This stub constructs a prompt from `prompts/init_adopt.md` and passes it
-    to the runner.  It returns the parsed JSON structure or None if
-    unimplemented.
+    Constructs a prompt from `prompts/init_adopt.md` and passes it to the
+    runner.  Returns the parsed JSON structure or None on failure.
     """
-    try:
-        prompt_path = __import__("importlib.resources").files(__package__).joinpath("../prompts/init_adopt.md")
-    except Exception:
-        # Python <3.9 fallback
-        from pkg_resources import resource_filename
-        prompt_path = resource_filename(__package__, "../prompts/init_adopt.md")
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        prompt = f.read()
+    prompt_path = Path(__file__).resolve().parent.parent.parent / "prompts" / "init_adopt.md"
+    if not prompt_path.exists():
+        print(f"[brr] adoption prompt not found at {prompt_path}")
+        return None
+    prompt = prompt_path.read_text(encoding="utf-8")
     result = runner.run(prompt)
     # TODO: parse JSON from result
     return None

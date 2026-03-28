@@ -2,7 +2,7 @@
 name = "brr"
 version = "0.1.0"
 description = "Git-centric AI repo operating layer"
-authors = [ { name = "brr Contributors", email = "" } ]
+authors = [ { name = "brr Contributors" } ]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
@@ -11,5 +11,11 @@ dependencies = []
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
 [project.scripts]
 brr = "brr.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

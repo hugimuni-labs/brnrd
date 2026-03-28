@@ -14,9 +14,10 @@ a prompt and a minimal helper script will be done that way.
 ## Executor‑owned execution
 
 brr is not a coding agent.  It orchestrates runs but delegates all code
-generation, editing and reasoning to the configured executor (Codex,
-Claude Code, Gemini, custom shells, etc.).  You can swap out the executor
-without rewriting the project.
+generation, editing and reasoning to the configured executor (Claude Code,
+Codex, Gemini, custom shells, etc.).  When no executor is specified, brr
+auto-detects which AI CLI tools are available.  You can swap out the
+executor without rewriting the project.
 
 ## Repo‑native state
 

@@ -34,7 +34,7 @@ automatically.
 
 ### 2. Extract
 
-brr uses your configured executor (Codex by default) to summarise the
+brr uses your configured executor (auto-detected by default) to summarise the
 repository’s purpose, important commands, constraints and operating
 model.  This extraction prompt lives in `prompts/init_adopt.md` and is
 meant to be high level; it does not ask the executor to rewrite code or
