@@ -1,7 +1,7 @@
 [project]
 name = "brr"
 version = "0.1.0"
-description = "Git-centric AI repo operating layer"
+description = "AI agent daemon for Git repositories"
 authors = [ { name = "brr Contributors" } ]
 readme = "README.md"
 requires-python = ">=3.10"

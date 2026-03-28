@@ -1,34 +1,28 @@
-You are preparing a Git repository for AI‑assisted operation.  Your goal is
-to extract the key aspects of the project and propose a new, normalised set
-of instruction files.  Follow these steps:
+You are preparing a Git repository for managed AI operation.  Extract the
+key aspects of the project and propose a normalised set of instruction
+files.
 
-1. **Identify purpose.** Summarise the project in one sentence.
-2. **Enumerate commands.** List commands for build, test, verify, start,
-   stop, status, logs and any other tasks you infer from existing scripts
-   or documentation.  Use exact command strings when possible.
-3. **Extract policies.** Note any constraints or operating rules (e.g.
-   branch naming conventions, commit message format, testing
-   requirements, code style, security policies).  Quote them briefly.
-4. **Collect task sources.** Identify TODO files, roadmap documents or
-   issue trackers that the agent should use for tasks.  Provide paths.
-5. **Plan normalisation.** Decide whether existing instruction files
-   should be kept as‑is, appended with a managed section or replaced.
-6. **Emit structured proposal.** Produce a JSON object with fields:
+1. **Purpose.** Summarise the project in one sentence.
+2. **Commands.** List commands for build, test, verify, start, stop,
+   status, logs and anything else you find in scripts or docs.  Use exact
+   command strings.
+3. **Policies.** Note constraints and rules: branch conventions, commit
+   format, testing requirements, code style, security policies.  Be brief.
+4. **Task sources.** Identify TODO files, roadmaps, issue trackers the
+   agent should use.  Provide paths.
+5. **File plan.** Decide whether existing instruction files should be kept,
+   appended with a managed section, or replaced.
+6. **Emit JSON.**
 
-```
+```json
 {
-  "project_purpose": "…",
-  "commands": {
-    "verify": "…",
-    "status": "…",
-    "start": "…",
-    …
-  },
-  "policies": ["…", "…"],
-  "task_sources": ["…", …],
-  "keep_files": ["CLAUDE.md", …],
-  "rewrite_files": ["AGENTS.md", …]
+  "project_purpose": "...",
+  "commands": {"verify": "...", "status": "...", ...},
+  "policies": ["...", "..."],
+  "task_sources": ["...", ...],
+  "keep_files": ["CLAUDE.md", ...],
+  "rewrite_files": ["AGENTS.md", ...]
 }
 ```
 
-Return only this JSON.  Do not write files yourself.
+Return only this JSON.

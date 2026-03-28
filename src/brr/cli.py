@@ -21,7 +21,7 @@ from . import status as status_mod
 
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the brr CLI."""
-    parser = argparse.ArgumentParser(prog="brr", description="Git-centric AI repo operating layer")
+    parser = argparse.ArgumentParser(prog="brr", description="AI agent daemon for Git repositories")
     parser.add_argument("--version", action="version", version=f"brr {__version__}")
 
     subparsers = parser.add_subparsers(dest="command", required=True, help="subcommand to run")

@@ -1,8 +1,7 @@
 # Adoption process
 
-`brr init` converts an existing codebase into a brr‑managed project.  It
-preserves your workflow while adding a structured, reproducible layer
-understood by AI coding tools.
+`brr init` converts an existing codebase into a brr-managed project.  It
+preserves your workflow while adding a structured layer for AI tools.
 
 ## Goals
 

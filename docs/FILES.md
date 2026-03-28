@@ -7,8 +7,8 @@ their roles clear is a core design goal.
 ## `AGENTS.md`
 
 This is the canonical instruction file for your repository.  It is read
-by Codex and other AI tools as part of their context.  The file has two
-parts:
+by AI tools (Claude Code, Codex, Gemini, etc.) as part of their context.
+The file has two parts:
 
 1. A YAML frontmatter block under the `brr` key.  It defines the
    repository mode (paused, incubating or live), the default and named
@@ -39,14 +39,16 @@ It is rewritten on every substantive run.  The structure includes:
 
 - **Current focus** – a plain language description of what the agent is
   working on.
+- **Conversation topics** – a compacted list of recent threads with the
+  user, oldest first.  This gives continuity across one-shot runs so the
+  agent remembers what was discussed and can follow up.
 - **Decisions** – key architecture or design choices made so far.
 - **Discoveries** – important findings, performance notes and gotchas.
 - **Next steps** – an ordered list of concrete actions.
 - **Open questions** – things the user or agent needs to clarify.
-- **Parking lot** – ideas not relevant now but worth keeping.
 
 This file is intentionally short.  Git history captures the evolution of
-state.  Avoid appending endlessly; rewrite it with fresh information.
+state.  Rewrite it with fresh information each run rather than appending.
 
 ## `CLAUDE.md` and `GEMINI.md`
 

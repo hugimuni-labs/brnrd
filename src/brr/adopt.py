@@ -71,6 +71,8 @@ def write_minimal_files(repo_root: Path) -> None:
             "# Agent State\n\n"
             "## Current Focus\n\n"
             "Not set.\n\n"
+            "## Conversation Topics\n\n"
+            "Recent threads with the user, compacted. Oldest first.\n\n"
             "## Decisions\n\n"
             "\n"
             "## Discoveries\n\n"
@@ -78,8 +80,6 @@ def write_minimal_files(repo_root: Path) -> None:
             "## Next Steps\n\n"
             "\n"
             "## Open Questions\n\n"
-            "\n"
-            "## Parking Lot\n\n"
             "\n"
         )
         print(f"[brr] Wrote {state_file}")
