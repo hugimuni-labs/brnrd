@@ -1,0 +1,16 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local runtime state
+.brr.local/
+
+# Environment / editor settings
+.env
+.venv
+.idea/
+.vscode/
+
+# MacOS
+.DS_Store

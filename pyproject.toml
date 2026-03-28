@@ -1,0 +1,15 @@
+[project]
+name = "brr"
+version = "0.1.0"
+description = "Git-centric AI repo operating layer"
+authors = [ { name = "brr Contributors", email = "" } ]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+brr = "brr.cli:main"
