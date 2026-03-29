@@ -15,8 +15,9 @@ brr:
   mode: paused
   default_executor: auto
   commands:
+    build: ""
+    test: ""
     verify: ""
-    status: ""
   task_sources: []
   state_file: agent_state.md
   commit_policy: commit-at-end-if-material
@@ -24,7 +25,19 @@ brr:
 
 # Project
 
-Describe your project here.
+<!-- What this project is and does. One paragraph. -->
+
+## Build and run
+
+<!-- Exact commands to build, test, and run the project. -->
+
+## Code guidelines
+
+<!-- Style, testing, and commit conventions. -->
+
+## Constraints
+
+<!-- Things the agent must not do without approval. -->
 """
 
 _STATE_TEMPLATE = """\
