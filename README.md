@@ -1,7 +1,7 @@
 # brr
 
-A daemon that runs AI coding agents on your machine and lets you
-manage them remotely from a chat.
+A daemon that runs AI agents on your machine and lets you manage
+them remotely from a chat.
 
 You describe tasks in plain language. brr delegates to whichever AI
 tool you use (Claude Code, Codex, Gemini CLI, or a custom script)
@@ -87,6 +87,12 @@ brr delegates to an executor configured per-repo in `AGENTS.md`:
 - **Shell** — any command that accepts a prompt on stdin
 
 When set to `auto` (the default), brr detects what's installed.
+
+## Extending
+
+brr is small on purpose. Connectors are single-file Python modules
+registered as CLI subcommands. Executors are classes with one method.
+Prompts are plain Markdown. Fork it and make it yours.
 
 ## License
 

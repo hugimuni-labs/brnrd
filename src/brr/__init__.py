@@ -1,8 +1,4 @@
-"""brr package root.
-
-This package provides a minimal control plane for AI‑assisted
-development.  See README.md for more information.
-"""
+"""brr — AI agent daemon for Git repositories."""
 
 __all__ = ["__version__"]
 
