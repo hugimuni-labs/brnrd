@@ -1,37 +1,31 @@
-"""Status and reporting helpers.
-
-This module provides functions to assemble a project status snapshot and
-generate narrative reports.  In this seed version, the functions return
-placeholder strings.
-"""
+"""Status — read and display agent_state.md."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from . import gitops
+from . import config as conf
 
 
 def get_status() -> str:
-    """Return a concise status string for the current project.
-
-    A real implementation will read the YAML header in `AGENTS.md` and
-    current `agent_state.md`, check the Git branch and determine whether
-    there are uncommitted changes.  For now, this returns a static
-    message.
-    """
+    """Return a formatted status string from agent_state.md and git."""
     try:
         repo_root = gitops.ensure_git_repo()
     except RuntimeError:
-        return "Not a Git repository.  Run `git init` first."
-    return f"Project at {repo_root}: status not yet implemented."
+        return "Not a Git repository."
 
+    cfg = conf.load_config(repo_root)
+    state_path = conf.state_file_path(repo_root, cfg)
 
-def generate_report() -> str:
-    """Generate a narrative report about the project.
+    parts = [f"repo: {repo_root.name}"]
+    parts.append(f"mode: {cfg.get('mode', '?')}")
+    parts.append(f"executor: {cfg.get('default_executor', '?')}")
 
-    In the MVP, this function returns a placeholder.  A full
-    implementation will call the executor with the prompt in
-    `prompts/report.md` and use `agent_state.md` as context.
-    """
-    return "Report generation is not implemented yet."
+    if state_path.exists():
+        parts.append("")
+        parts.append(state_path.read_text(encoding="utf-8").strip())
+    else:
+        parts.append("\nNo state file found.")
+
+    return "\n".join(parts)

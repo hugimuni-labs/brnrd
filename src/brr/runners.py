@@ -1,97 +1,101 @@
-"""Runner abstraction and implementations.
-
-This module defines a minimal interface for executors and provides
-placeholders for concrete implementations.  A runner is responsible for
-invoking an AI coding tool (Codex CLI, Claude Code, Gemini CLI or a custom
-script) to perform a task or an analysis.
-"""
+"""Executor management — find and run AI tools via subprocess."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional, Any
-
-
-@dataclass
-class Runner:
-    """Base class for all runners."""
-    name: str
-
-    def run(self, prompt: str) -> str:
-        """Run the given prompt and return a string result.
-
-        Subclasses should override this method.  It may raise if the tool
-        fails.  For now this is a stub.
-        """
-        raise NotImplementedError
-
-
-class CodexRunner(Runner):
-    def __init__(self) -> None:
-        super().__init__(name="codex")
-
-    def run(self, prompt: str) -> str:
-        # Placeholder: call Codex CLI with the prompt.  For now, just echo
-        print(f"[codex] would run prompt:\n{prompt}\n")
-        return "{}"
-
-
-class ShellRunner(Runner):
-    def __init__(self, command: str) -> None:
-        super().__init__(name="shell")
-        self.command = command
-
-    def run(self, prompt: str) -> str:
-        # Placeholder: call external command with prompt via stdin
-        print(f"[shell] would run {self.command} with prompt:\n{prompt}\n")
-        return "{}"
-
-
 import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from . import config as conf
+
+# CLI names to probe, in preference order.
+_KNOWN_EXECUTORS = ["claude", "codex", "gemini"]
 
 
-# Executors to try, in order of preference.
-_AUTO_DETECT_ORDER = ["claude", "codex", "gemini"]
-
-
-def get_default_runner() -> Runner:
-    """Return the default runner instance.
-
-    When the executor is set to 'auto' (the default), brr probes for
-    available CLI tools in order: claude, codex, gemini.  If none are
-    found it falls back to CodexRunner as a stub.
-    """
-    for name in _AUTO_DETECT_ORDER:
+def detect_executor() -> str | None:
+    """Return the first available executor CLI name, or None."""
+    for name in _KNOWN_EXECUTORS:
         if shutil.which(name):
-            return ShellRunner(command=name)
-    return CodexRunner()
+            return name
+    return None
 
 
-def run_task(instruction: str) -> None:
-    """Run a user instruction via the default runner.
+def resolve_executor(repo_root: Path) -> str:
+    """Determine which executor to use for this repo.
 
-    This stub prints the instruction and returns.  A real implementation
-    will prepare the prompt with current state and call the runner.
+    Reads default_executor from AGENTS.md.  'auto' triggers detection.
+    Raises RuntimeError if nothing is found.
     """
-    runner = get_default_runner()
-    print(f"[brr] running task: {instruction}")
-    # In a full implementation, we'd construct a prompt using AGENTS.md,
-    # agent_state.md and the instruction, then call runner.run().
-    _ = runner.run(instruction)
+    cfg = conf.load_config(repo_root)
+    configured = cfg.get("default_executor", "auto")
+    if configured != "auto":
+        if shutil.which(configured):
+            return configured
+        raise RuntimeError(f"Configured executor '{configured}' not found on PATH.")
+    detected = detect_executor()
+    if detected:
+        return detected
+    raise RuntimeError(
+        "No AI executor found.  Install claude, codex, or gemini, "
+        "or set default_executor in AGENTS.md."
+    )
 
 
-def run_adoption_prompt(runner: Runner) -> Optional[Any]:
-    """Ask the runner to perform adoption analysis.
+def run_executor(executor: str, prompt: str, cwd: Path | None = None) -> str:
+    """Run an executor CLI with the given prompt, return stdout."""
+    result = subprocess.run(
+        [executor, "--print", "-p", prompt],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"{executor} failed (exit {result.returncode}): {result.stderr.strip()}")
+    return result.stdout
 
-    Constructs a prompt from `prompts/init_adopt.md` and passes it to the
-    runner.  Returns the parsed JSON structure or None on failure.
-    """
+
+def run_task(instruction: str) -> str:
+    """Run a user instruction via the configured executor."""
+    from . import gitops
+    repo_root = gitops.ensure_git_repo()
+    executor = resolve_executor(repo_root)
+
+    # Build prompt from run.md template + state
+    prompt_path = Path(__file__).resolve().parent.parent.parent / "prompts" / "run.md"
+    prompt_parts = []
+    if prompt_path.exists():
+        prompt_parts.append(prompt_path.read_text(encoding="utf-8"))
+
+    state_path = conf.state_file_path(repo_root)
+    if state_path.exists():
+        prompt_parts.append(f"\n---\nCurrent agent_state.md:\n{state_path.read_text(encoding='utf-8')}")
+
+    prompt_parts.append(f"\n---\nTask: {instruction}")
+    prompt = "\n".join(prompt_parts)
+
+    print(f"[brr] running: {instruction}")
+    print(f"[brr] executor: {executor}")
+    output = run_executor(executor, prompt, cwd=repo_root)
+    print(output)
+    return output
+
+
+def run_adopt_prompt(repo_root: Path) -> str | None:
+    """Run the adoption analysis prompt. Returns executor output or None."""
+    try:
+        executor = resolve_executor(repo_root)
+    except RuntimeError:
+        return None
+
     prompt_path = Path(__file__).resolve().parent.parent.parent / "prompts" / "init_adopt.md"
     if not prompt_path.exists():
-        print(f"[brr] adoption prompt not found at {prompt_path}")
         return None
+
     prompt = prompt_path.read_text(encoding="utf-8")
-    result = runner.run(prompt)
-    # TODO: parse JSON from result
-    return None
+    try:
+        return run_executor(executor, prompt, cwd=repo_root)
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        print(f"[brr] adoption prompt failed: {e}")
+        return None

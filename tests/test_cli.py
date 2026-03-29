@@ -1,7 +1,6 @@
 """Tests for CLI dispatch."""
 
 import subprocess
-import sys
 
 import pytest
 
@@ -21,11 +20,6 @@ def test_status_outside_repo(tmp_path, monkeypatch, capsys):
     assert "Not a Git repository" in capsys.readouterr().out
 
 
-def test_run_dispatches(tmp_path, monkeypatch, capsys):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    monkeypatch.chdir(repo)
-    main(["run", "hello world"])
-    out = capsys.readouterr().out
-    assert "hello world" in out
+def test_run_requires_instruction(capsys):
+    with pytest.raises(SystemExit):
+        main(["run"])

@@ -1,21 +1,30 @@
 """Tests for adopt module."""
 
-from pathlib import Path
+import subprocess
 
 from brr import adopt
 
 
-def test_write_minimal_files(tmp_path, monkeypatch):
-    # Create temporary git repo
+def test_write_templates(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "file").write_text("irrelevant")
-    # initialise git
-    import subprocess
     subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    # change into repo
     monkeypatch.chdir(repo)
-    # call write_minimal_files
-    adopt.write_minimal_files(repo)
+    adopt.init_repo()
     assert (repo / "AGENTS.md").exists()
     assert (repo / "agent_state.md").exists()
+    # Second call should not overwrite
+    content = (repo / "AGENTS.md").read_text()
+    adopt.init_repo()
+    assert (repo / "AGENTS.md").read_text() == content
+
+
+def test_template_has_valid_yaml_header(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    monkeypatch.chdir(repo)
+    adopt.init_repo()
+    text = (repo / "AGENTS.md").read_text()
+    assert text.startswith("---\n")
+    assert "\n---\n" in text[4:]

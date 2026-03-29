@@ -13,19 +13,20 @@ No database, no cloud service, no lock-in.
 ```bash
 pip install brr
 
-cd your-project
-brr init               # scan the repo, generate AGENTS.md
-brr auth telegram      # authenticate the Telegram connector
-brr connect telegram   # bind this repo to a chat topic
-brr up                 # start the daemon
+brr init                         # adopt current repo
+brr init https://github.com/u/r  # or clone and adopt
+
+brr auth telegram                # set up your connector
+brr connect telegram             # bind repo to a chat topic
+brr up                           # start the daemon
 ```
 
 From chat:
 
 ```
 > fix the failing tests in auth/
-> what's the status?
-> run the migration for the new user fields
+> status
+> write a migration for the new user fields
 ```
 
 Or locally:
@@ -33,20 +34,18 @@ Or locally:
 ```bash
 brr run "fix failing tests in the auth module"
 brr status
-brr report
 ```
 
 ## How it works
 
 brr adds two files to your repo:
 
-- **`AGENTS.md`** — machine-readable YAML header + instructions that
-  tell any AI tool how to build, test and operate the project.
-- **`agent_state.md`** — working memory: current focus, decisions,
-  recent conversation topics, next steps. Rewritten each run,
-  versioned by Git.
+- **`AGENTS.md`** — YAML header + instructions for AI tools.
+- **`agent_state.md`** — working memory: focus, decisions, conversation
+  topics, next steps. Rewritten each run, versioned by Git.
 
-Executors read these files directly. brr manages the lifecycle.
+For repos that don't want state committed, set `state_file` in the
+YAML header to `.brr.local/state.md`.
 
 ```
 You (chat / CLI)
@@ -62,37 +61,30 @@ claude  codex   shell
 
 ## Commands
 
-| Command                | What it does                            |
-|------------------------|-----------------------------------------|
-| `brr init`             | Scan repo, generate instruction files   |
-| `brr run "<task>"`     | Run a task through the executor         |
-| `brr status`           | Project state at a glance               |
-| `brr report`           | Narrative progress report               |
-| `brr auth <connector>` | Authenticate a chat connector           |
+| Command                   | What it does                         |
+|---------------------------|--------------------------------------|
+| `brr init [url]`          | Adopt a repo (optionally clone first)|
+| `brr run "<task>"`        | Run a task through the executor      |
+| `brr status`              | Show project state                   |
+| `brr auth <connector>`    | Authenticate a chat connector        |
 | `brr connect <connector>` | Bind repo to a chat topic            |
-| `brr up`               | Start the daemon                        |
+| `brr up`                  | Start the daemon                     |
 
 ## Connectors
 
-Connectors let you interact with your repos from a chat app.
-Currently ships with **Telegram**.
+Connectors let you interact with repos from a chat app.
+Ships with **Telegram**.
 
 ## Executors
 
-brr delegates to an executor configured per-repo in `AGENTS.md`:
-
-- **Claude Code** — `claude` CLI
-- **Codex** — OpenAI Codex CLI
-- **Gemini** — Google Gemini CLI
-- **Shell** — any command that accepts a prompt on stdin
-
-When set to `auto` (the default), brr detects what's installed.
+Configured per-repo in `AGENTS.md`. When set to `auto` (the default),
+brr detects what's installed: `claude`, `codex`, `gemini`.
 
 ## Extending
 
-brr is small on purpose. Connectors are single-file Python modules
-registered as CLI subcommands. Executors are classes with one method.
-Prompts are plain Markdown. Fork it and make it yours.
+brr is small on purpose. Connectors are single-file Python modules.
+Executors are CLI commands. Prompts are plain Markdown.
+Fork it and make it yours.
 
 ## License
 

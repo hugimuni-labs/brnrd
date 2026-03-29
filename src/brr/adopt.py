@@ -1,85 +1,85 @@
-"""Repository adoption and normalisation logic.
-
-This module contains the functions called by `brr init` and `brr regenerate`.
-It scans the repository, runs a summarisation prompt via the configured
-executor and writes the resulting files.  The implementation here is
-minimal and intended as a scaffold; most logic will reside in prompts.
-"""
+"""Repository adoption — brr init."""
 
 from __future__ import annotations
 
-import json
-import os
+import subprocess
 from pathlib import Path
 
 from . import gitops
 from . import runners
 
+_AGENTS_TEMPLATE = """\
+---
+brr:
+  version: 1
+  mode: paused
+  default_executor: auto
+  commands:
+    verify: ""
+    status: ""
+  task_sources: []
+  state_file: agent_state.md
+  commit_policy: commit-at-end-if-material
+---
 
-def init_repo() -> None:
-    """Initialise the current repository for brr management.
+# Project
 
-    This function performs a minimal set of actions: it ensures we are in a
-    Git repository, invokes the executor in adoption mode to get a
-    structured summary and then writes a new `AGENTS.md` and
-    `agent_state.md` if they do not already exist.  A full implementation
-    will preserve existing files and show diffs before writing.
+Describe your project here.
+"""
+
+_STATE_TEMPLATE = """\
+# Agent State
+
+## Current Focus
+
+Not set.
+
+## Conversation Topics
+
+## Decisions
+
+## Discoveries
+
+## Next Steps
+
+## Open Questions
+"""
+
+
+def init_repo(url: str | None = None) -> None:
+    """Initialise a repository for brr management.
+
+    If url is provided, clones the repo first.
     """
+    if url:
+        name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        print(f"[brr] cloning {url}")
+        subprocess.run(["git", "clone", url, name], check=True)
+        import os
+        os.chdir(name)
+
     repo_root = gitops.ensure_git_repo()
-    print(f"[brr] Initialising repository at {repo_root}")
-
-    # Determine default executor (hardcoded to codex for now)
-    executor = runners.get_default_runner()
-
-    # Invoke adoption prompt
-    adoption_spec = runners.run_adoption_prompt(executor)
-    # For now, adoption_spec may be None if not implemented
-    if adoption_spec is None:
-        print("[brr] Adoption prompt not implemented; writing minimal files.")
-        # Write minimal files if they don't exist
-        write_minimal_files(repo_root)
-        return
-    # TODO: parse adoption_spec and write files accordingly
-
-
-def write_minimal_files(repo_root: Path) -> None:
-    """Write a minimal AGENTS.md and agent_state.md if absent."""
     agents_file = repo_root / "AGENTS.md"
+
+    if agents_file.exists():
+        print(f"[brr] {agents_file} already exists, skipping.")
+        return
+
+    # Try adoption via executor
+    result = runners.run_adopt_prompt(repo_root)
+    if result:
+        # TODO: parse structured output and generate tailored files
+        print("[brr] adoption analysis complete")
+        print(result)
+
+    # Write template files
+    _write_if_missing(agents_file, _AGENTS_TEMPLATE)
     state_file = repo_root / "agent_state.md"
-    if not agents_file.exists():
-        agents_file.write_text(
-            "---\n"
-            "brr:\n"
-            "  version: 1\n"
-            "  mode: paused\n"
-            "  default_executor: auto\n"
-            "  commands:\n"
-            '    verify: ""\n'
-            '    status: ""\n'
-            "  task_sources: []\n"
-            "  state_file: agent_state.md\n"
-            "  commit_policy: commit-at-end-if-material\n"
-            "---\n\n"
-            "# Project\n\n"
-            "Describe your project here.  This section tells the AI what the\n"
-            "repository does, how to build it, how to run it and any other\n"
-            "important context.  Keep it clear and concise.\n\n"
-        )
-        print(f"[brr] Wrote {agents_file}")
-    if not state_file.exists():
-        state_file.write_text(
-            "# Agent State\n\n"
-            "## Current Focus\n\n"
-            "Not set.\n\n"
-            "## Conversation Topics\n\n"
-            "Recent threads with the user, compacted. Oldest first.\n\n"
-            "## Decisions\n\n"
-            "\n"
-            "## Discoveries\n\n"
-            "\n"
-            "## Next Steps\n\n"
-            "\n"
-            "## Open Questions\n\n"
-            "\n"
-        )
-        print(f"[brr] Wrote {state_file}")
+    _write_if_missing(state_file, _STATE_TEMPLATE)
+
+
+def _write_if_missing(path: Path, content: str) -> None:
+    if path.exists():
+        return
+    path.write_text(content, encoding="utf-8")
+    print(f"[brr] wrote {path.name}")
