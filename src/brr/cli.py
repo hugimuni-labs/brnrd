@@ -43,14 +43,14 @@ def main(argv: list[str] | None = None) -> None:
     report_parser = subparsers.add_parser("report", help="generate a narrative project report")
     report_parser.set_defaults(func=cmd_report)
 
-    # auth telegram
-    auth_parser = subparsers.add_parser("auth", help="authenticate connectors")
+    # auth <connector>
+    auth_parser = subparsers.add_parser("auth", help="authenticate a chat connector")
     auth_sub = auth_parser.add_subparsers(dest="provider", required=True, help="connector to authenticate")
     tg_parser = auth_sub.add_parser("telegram", help="authenticate Telegram")
     tg_parser.set_defaults(func=cmd_auth_telegram)
 
-    # connect telegram
-    conn_parser = subparsers.add_parser("connect", help="connect repo to a chat/channel")
+    # connect <connector>
+    conn_parser = subparsers.add_parser("connect", help="bind repo to a chat connector")
     conn_sub = conn_parser.add_subparsers(dest="provider", required=True, help="connector to use")
     conn_tg = conn_sub.add_parser("telegram", help="connect to Telegram chat/topic")
     conn_tg.set_defaults(func=cmd_connect_telegram)

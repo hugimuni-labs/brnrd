@@ -1,7 +1,7 @@
 # brr
 
 A daemon that runs AI coding agents on your machine and lets you
-manage them from your phone via Telegram.
+manage them remotely from a chat.
 
 You describe tasks in plain language. brr delegates to whichever AI
 tool you use (Claude Code, Codex, Gemini CLI, or a custom script)
@@ -15,12 +15,12 @@ pip install brr
 
 cd your-project
 brr init               # scan the repo, generate AGENTS.md
-brr auth telegram      # set up your Telegram bot
+brr auth telegram      # authenticate the Telegram connector
 brr connect telegram   # bind this repo to a chat topic
 brr up                 # start the daemon
 ```
 
-From Telegram:
+From chat:
 
 ```
 > fix the failing tests in auth/
@@ -49,15 +49,15 @@ brr adds two files to your repo:
 Executors read these files directly. brr manages the lifecycle.
 
 ```
-You (Telegram / CLI)
-        |
-     brr daemon
-        |
-   +-------+-------+
-   |       |       |
- repo A  repo B  repo C
-   |       |       |
-claude   codex   shell
+You (chat / CLI)
+       |
+    brr daemon
+       |
+  +-------+-------+
+  |       |       |
+repo A  repo B  repo C
+  |       |       |
+claude  codex   shell
 ```
 
 ## Commands
@@ -68,9 +68,14 @@ claude   codex   shell
 | `brr run "<task>"`     | Run a task through the executor         |
 | `brr status`           | Project state at a glance               |
 | `brr report`           | Narrative progress report               |
-| `brr auth telegram`    | Set up Telegram bot credentials         |
-| `brr connect telegram` | Bind repo to a Telegram chat topic      |
+| `brr auth <connector>` | Authenticate a chat connector           |
+| `brr connect <connector>` | Bind repo to a chat topic            |
 | `brr up`               | Start the daemon                        |
+
+## Connectors
+
+Connectors let you interact with your repos from a chat app.
+Currently ships with **Telegram**.
 
 ## Executors
 

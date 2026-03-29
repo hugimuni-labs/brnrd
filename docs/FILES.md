@@ -62,8 +62,9 @@ memory.  They should stay concise to keep context sizes small.
 This directory stores machine‑specific and transient state that should
 never be committed.  It may contain:
 
-- `telegram.json` – the bot token and chat configuration for the
-  Telegram connector.
+- `telegram.json` – bot token and chat configuration for the Telegram
+  connector.  Other connectors follow the same pattern
+  (`<connector>.json`).
 - `runtime.json` – current run identifiers, offsets and PIDs for the
   daemon and workers.
 - `locks/` – files used to coordinate access when concurrent tools
