@@ -86,6 +86,15 @@ brr is small on purpose. Connectors are single-file Python modules.
 Executors are CLI commands. Prompts are plain Markdown.
 Fork it and make it yours.
 
+## Development
+
+```bash
+git clone https://github.com/…/brr.git
+cd brr
+pip install -e ".[dev]"
+pytest
+```
+
 ## License
 
 MIT
