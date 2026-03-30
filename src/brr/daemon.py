@@ -125,13 +125,16 @@ def _handle_task(
 
     try:
         output = runners.run_task(instruction)
-        # Truncate for Telegram's 4096 char limit
         if len(output) > 3900:
             output = output[:3900] + "\n\n[truncated]"
         telegram.send_message(token, chat_id, output, topic_id)
     except Exception as e:
+        err_msg = str(e)
+        print(f"[brr] task failed: {err_msg}")
+        reply = f"⚠ task failed: {err_msg}"
+        if len(reply) > 3900:
+            reply = reply[:3900] + "\n\n[truncated]"
         try:
-            telegram.send_message(token, chat_id, f"failed: {e}", topic_id)
-        except RuntimeError:
-            pass
-        print(f"[brr] task failed: {e}")
+            telegram.send_message(token, chat_id, reply, topic_id)
+        except RuntimeError as send_err:
+            print(f"[brr] could not send error to chat: {send_err}")
