@@ -1,4 +1,4 @@
-"""brr CLI."""
+"""brr CLI — thin dispatch layer over the library modules."""
 
 from __future__ import annotations
 

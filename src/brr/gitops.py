@@ -1,4 +1,4 @@
-"""Git helpers — repo detection and tracking checks."""
+"""Git helpers — repo detection and file tracking."""
 
 from __future__ import annotations
 

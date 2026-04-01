@@ -1,8 +1,10 @@
-"""Executor management — find and run AI tools via subprocess.
+"""Executor — shell out to AI CLIs, one task at a time.
 
-Built-in profiles are provided for ``claude``, ``codex``, and ``gemini``.
-Any other executable on PATH can be used by setting ``default_executor``
-in AGENTS.md.  For full command-template control, use ``executor_cmd``.
+brr doesn't do AI work itself.  It delegates to whatever executor CLI
+the user has installed (claude, codex, gemini, or any command on PATH).
+This module handles detection, subprocess management, and the
+``TaskRunner`` class that connectors use for serial task execution
+with cancellation.
 """
 
 from __future__ import annotations

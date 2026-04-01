@@ -1,4 +1,11 @@
-"""Repository adoption — brr init."""
+"""Repository adoption — create AGENTS.md with universal conventions.
+
+``brr init`` produces the AGENTS.md instruction file that any AI tool
+can read.  It detects the executor, incorporates existing instruction
+files (CLAUDE.md, GEMINI.md, etc.), writes the YAML config and
+skeleton body, then optionally runs the executor to enrich it with
+actual project details.
+"""
 
 from __future__ import annotations
 
@@ -12,25 +19,14 @@ from . import gitops
 
 _KNOWN_INSTRUCTION_FILES = ["CLAUDE.md", "GEMINI.md", "CODEX.md"]
 
-_SETUP_INSTRUCTION = (
-    "Read this repository and fill in the AGENTS.md body sections. "
-    "Replace every HTML comment placeholder (<!-- ... -->) with real content.\n\n"
-    "For each section:\n"
-    "- **# Project** — one paragraph: what this is, what stack, what it does.\n"
-    "- **## Build and run** — exact commands from Makefile, package.json, "
-    "pyproject.toml, CI configs, etc. Use code blocks.\n"
-    "- **## Code guidelines** — language version, formatting, test framework, "
-    "commit style. Be specific to this repo.\n"
-    "- **## Workflow** — leave the defaults unless the repo has an established "
-    "branching or review convention you can identify.\n"
-    "- **## Guardrails** — leave the defaults; they apply universally.\n"
-    "- **## Constraints** — sensitive dirs, deployment commands, public API "
-    "surfaces — things an agent should not change without asking.\n\n"
-    "Also fill in the YAML `commands:` block (build, test, verify) with "
-    "the actual commands you found.\n\n"
-    "Keep the whole body under a page. Every word is read by an AI executor "
-    "on every task. Do not modify the rest of the YAML frontmatter."
-)
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
+
+
+def _load_setup_prompt() -> str:
+    path = _PROMPTS_DIR / "setup.md"
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return "Read this repository and fill in the AGENTS.md placeholder sections."
 
 _FRONTMATTER = """\
 ---
@@ -65,21 +61,38 @@ _SKELETON_BODY = """\
 
 ## Workflow
 
-- For code changes, create a feature branch and commit when done.
-- For read-only tasks (review, research, verify), report results
-  without branching.
-- Update the state file after each task: rewrite Current Focus,
-  add to Conversation Topics, update Decisions/Next Steps as needed.
-  Remove stale items rather than accumulating.
+**Branching.** Create a feature branch for code changes; commit with
+a descriptive message when done.  For read-only tasks (review, verify,
+research), report results without branching or committing.
+
+**State file.** After each task, update `.brr.local/state.md`:
+- Rewrite **Current Focus** to reflect where things stand.
+- Add to **Conversation Topics** (one line: what was asked, what was
+  done).  Keep the last ~10 entries; drop older ones.
+- Update **Decisions**, **Discoveries**, **Next Steps**, **Open
+  Questions** as needed.  Remove stale items — do not accumulate.
+
+**Long output.** If your response would exceed a few hundred lines,
+write it to a file or create a gist (`gh gist create`) and reference
+the link.  The chat connector has a message size limit.
+
+**Task types.** Adapt your approach to what is being asked:
+- *Implement / fix* — branch, code, test, commit.
+- *Review / verify / check* — read, analyse, report.  No branch.
+- *Research / plan* — investigate, write findings to a file or gist.
+- *Release / deploy* — follow the project's release process exactly.
 
 ## Guardrails
 
-- **Dead ends.** If you have attempted the same approach twice
-  without progress, stop and report what you tried.
-- **Scope drift.** If work is expanding beyond the original task,
-  pause and note what you found. Do not silently take on unbounded scope.
-- **Proportionality.** Match effort to task size. A one-line fix does
-  not need a multi-file refactor.
+- **Dead ends.** Two failed attempts at the same approach → stop and
+  report what you tried rather than retrying.
+- **Scope drift.** If work expands beyond the original task, pause
+  and note what you found.  Do not silently take on unbounded scope.
+- **Proportionality.** Match effort to task size.  A one-line fix
+  does not need a multi-file refactor.  A question does not need a
+  prototype.
+- **State tracking.** Always update the state file, even on failure
+  or partial progress.  The next run depends on it.
 
 When in doubt, write down what you know and what you are unsure about,
 and let the user decide the next move.
@@ -104,7 +117,7 @@ def _enrich(detected: str) -> None:
     """Run the executor to fill in AGENTS.md."""
     print("[brr] analyzing repo...")
     try:
-        executor.run_task(_SETUP_INSTRUCTION)
+        executor.run_task(_load_setup_prompt())
         print("[brr] AGENTS.md populated")
     except RuntimeError as e:
         print(f"[brr] enrichment failed: {e}")

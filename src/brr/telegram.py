@@ -1,4 +1,13 @@
-"""Telegram connector — Bot API via stdlib urllib, plus daemon loop."""
+"""Telegram connector — the reference remote control for brr.
+
+A connector translates between a chat interface and the ``TaskRunner``.
+This module implements the Telegram Bot API (via stdlib urllib, zero
+deps), interactive setup (auth/connect), and the polling daemon that
+dispatches messages as tasks.  Long output overflows to GitHub gists.
+
+To add another connector (Discord, Slack, etc.), use the same
+``TaskRunner`` from ``executor.py`` with a different event loop.
+"""
 
 from __future__ import annotations
 

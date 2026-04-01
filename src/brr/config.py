@@ -1,4 +1,9 @@
-"""Parse AGENTS.md frontmatter and manage project configuration."""
+"""Parse the YAML frontmatter from AGENTS.md.
+
+AGENTS.md has two parts: a YAML header (brr config) and a Markdown
+body (universal instructions).  This module reads the header without
+requiring PyYAML — keeping brr at zero runtime dependencies.
+"""
 
 from __future__ import annotations
 

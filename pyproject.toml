@@ -1,7 +1,7 @@
 [project]
 name = "brr"
 version = "0.1.0"
-description = "AI agent daemon for Git repositories"
+description = "Structured guardrails for AI agent work, managed from a chat"
 authors = [ { name = "brr Contributors" } ]
 readme = "README.md"
 requires-python = ">=3.10"

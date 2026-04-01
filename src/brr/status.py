@@ -1,4 +1,4 @@
-"""Status — read and display agent_state.md."""
+"""Status — read AGENTS.md config and working state for display."""
 
 from __future__ import annotations
 
