@@ -13,6 +13,7 @@ def _git_init(path: Path) -> None:
 
 def _run_init(path: Path, monkeypatch) -> None:
     monkeypatch.chdir(path)
+    monkeypatch.setattr("brr.executor.run_adopt_prompt", lambda *a, **kw: None)
     adopt.init_repo()
 
 
@@ -34,7 +35,7 @@ def _check_agents_md(path: Path) -> dict:
 
 def _check_state_md(path: Path, brr_config: dict) -> None:
     """Assert state file exists and has required sections."""
-    state_rel = brr_config.get("state_file", "agent_state.md")
+    state_rel = brr_config.get("state_file", ".brr.local/state.md")
     state = path / state_rel
     assert state.exists(), f"State file {state_rel} not created"
     text = state.read_text()
@@ -54,6 +55,12 @@ class TestEmptyRepo:
         _run_init(tmp_path, monkeypatch)
         brr = _check_agents_md(tmp_path)
         assert brr["default_executor"] == "auto"
+
+    def test_default_state_is_local(self, tmp_path, monkeypatch):
+        _git_init(tmp_path)
+        _run_init(tmp_path, monkeypatch)
+        brr = _check_agents_md(tmp_path)
+        assert brr["state_file"] == ".brr.local/state.md"
 
     def test_template_has_sections(self, tmp_path, monkeypatch):
         _git_init(tmp_path)
@@ -97,19 +104,16 @@ class TestRepoWithExistingClaudeMd:
         _run_init(tmp_path, monkeypatch)
         brr = _check_agents_md(tmp_path)
         _check_state_md(tmp_path, brr)
-        # CLAUDE.md should not be touched
         assert (tmp_path / "CLAUDE.md").read_text() == "# Claude instructions\n"
 
 
 class TestStateFileConfig:
-    def test_local_state_file(self, tmp_path, monkeypatch):
+    def test_custom_state_file(self, tmp_path, monkeypatch):
         _git_init(tmp_path)
-        # Pre-create AGENTS.md with state in .brr.local
         (tmp_path / "AGENTS.md").write_text(
             "---\nbrr:\n  version: 1\n  mode: paused\n"
             "  default_executor: auto\n"
-            "  state_file: .brr.local/state.md\n---\n"
+            "  state_file: custom/state.md\n---\n"
         )
         _run_init(tmp_path, monkeypatch)
-        # Should not create agent_state.md in root since AGENTS.md already exists
-        assert not (tmp_path / "agent_state.md").exists()
+        assert not (tmp_path / ".brr.local" / "state.md").exists()

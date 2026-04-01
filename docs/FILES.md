@@ -8,7 +8,7 @@ Instruction file for the repository. Two parts:
    state file location, commit policy.
 2. Markdown body — project-specific instructions for AI tools.
 
-## `agent_state.md`
+## `.brr.local/state.md`
 
 Working memory, rewritten each run:
 
@@ -19,13 +19,14 @@ Working memory, rewritten each run:
 - **Next steps** — ordered actions.
 - **Open questions** — things to clarify.
 
-Can be placed under `.brr.local/` via the `state_file` config key
-for repos that don't want it committed.
+Default location is `.brr.local/state.md` (gitignored).  Override with
+the `state_file` config key in `AGENTS.md` if you want it committed.
 
 ## `.brr.local/`
 
 Machine-local, gitignored. Contains:
 
+- `state.md` — agent working memory (default location).
 - `telegram.json` — connector credentials and chat binding.
   Other connectors follow the same pattern (`<connector>.json`).
 - `runtime.json` — daemon PID and state.

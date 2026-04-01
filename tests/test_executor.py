@@ -1,6 +1,6 @@
-"""Tests for runners module."""
+"""Tests for executor module."""
 
-from brr.runners import detect_executor
+from brr.executor import detect_executor
 
 
 def test_detect_executor_returns_string_or_none():

@@ -5,8 +5,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from . import config as conf
+from . import executor
 from . import gitops
-from . import runners
 
 _AGENTS_TEMPLATE = """\
 ---
@@ -19,7 +20,7 @@ brr:
     test: ""
     verify: ""
   task_sources: []
-  state_file: agent_state.md
+  state_file: .brr.local/state.md
   commit_policy: commit-at-end-if-material
 ---
 
@@ -78,17 +79,17 @@ def init_repo(url: str | None = None) -> None:
         print(f"[brr] {agents_file} already exists, skipping.")
         return
 
-    # Try adoption via executor
-    result = runners.run_adopt_prompt(repo_root)
+    result = executor.run_adopt_prompt(repo_root)
     if result:
-        # TODO: parse structured output and generate tailored files
         print("[brr] adoption analysis complete")
         print(result)
 
-    # Write template files
     _write_if_missing(agents_file, _AGENTS_TEMPLATE)
-    state_file = repo_root / "agent_state.md"
-    _write_if_missing(state_file, _STATE_TEMPLATE)
+
+    cfg = conf.load_config(repo_root)
+    state_path = conf.state_file_path(repo_root, cfg)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_if_missing(state_path, _STATE_TEMPLATE)
 
 
 def _write_if_missing(path: Path, content: str) -> None:

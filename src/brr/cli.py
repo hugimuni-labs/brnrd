@@ -7,9 +7,8 @@ import sys
 
 from . import __version__
 from . import adopt
-from . import runners
+from . import executor
 from . import telegram
-from . import daemon
 from . import status as status_mod
 
 
@@ -49,7 +48,7 @@ def cmd_init(args):
     adopt.init_repo(args.url)
 
 def cmd_run(args):
-    runners.run_task(args.instruction)
+    executor.run_task(args.instruction)
 
 def cmd_status(args):
     sys.stdout.write(status_mod.get_status() + "\n")
@@ -61,4 +60,4 @@ def cmd_connect_telegram(args):
     telegram.connect()
 
 def cmd_up(args):
-    daemon.start()
+    telegram.start_daemon()

@@ -38,14 +38,14 @@ brr status
 
 ## How it works
 
-brr adds two files to your repo:
+brr adds one file to your repo and keeps working state local:
 
-- **`AGENTS.md`** — YAML header + instructions for AI tools.
-- **`agent_state.md`** — working memory: focus, decisions, conversation
-  topics, next steps. Rewritten each run, versioned by Git.
+- **`AGENTS.md`** — YAML header + instructions for AI tools. Committed.
+- **`.brr.local/state.md`** — working memory: focus, decisions, next
+  steps. Local and gitignored. Rewritten each run.
 
-For repos that don't want state committed, set `state_file` in the
-YAML header to `.brr.local/state.md`.
+When executor output exceeds Telegram's message limit, brr posts the
+full result to a GitHub gist and sends the link instead.
 
 ```
 You (chat / CLI)
@@ -56,7 +56,7 @@ You (chat / CLI)
   |       |       |
 repo A  repo B  repo C
   |       |       |
-claude  codex   shell
+claude  codex   gemini
 ```
 
 ## Commands
@@ -79,6 +79,10 @@ Ships with **Telegram**.
 
 Configured per-repo in `AGENTS.md`. When set to `auto` (the default),
 brr detects what's installed: `claude`, `codex`, `gemini`.
+
+For anything else, set `default_executor` to the name of any
+executable on PATH, or use `executor_cmd` for full command-template
+control.
 
 ## Extending
 
