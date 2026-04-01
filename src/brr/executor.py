@@ -2,9 +2,9 @@
 
 brr doesn't do AI work itself.  It delegates to whatever executor CLI
 the user has installed (claude, codex, gemini, or any command on PATH).
-This module handles detection, subprocess management, and the
-``TaskRunner`` class that connectors use for serial task execution
-with cancellation.
+Profiles are defined in ``prompts/executors.md`` — this module is
+plumbing: detection, subprocess management, and the ``TaskRunner``
+class that connectors use for serial task execution with cancellation.
 """
 
 from __future__ import annotations
@@ -17,28 +17,29 @@ from typing import Any
 
 from . import config as conf
 
-_EXECUTOR_PROFILES: dict[str, dict[str, Any]] = {
-    "claude": {
-        "cmd": ["claude", "-p"],
-        "approve": ["--dangerously-skip-permissions"],
-    },
-    "codex": {
-        "cmd": ["codex", "exec"],
-        "approve": ["--dangerously-bypass-approvals-and-sandbox"],
-    },
-    "gemini": {
-        "cmd": ["gemini"],
-        "approve": [],
-    },
-}
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
+_profiles_cache: dict[str, dict[str, Any]] | None = None
 
 _active_proc: subprocess.Popen | None = None
 _proc_lock = threading.Lock()
 
 
+def _load_profiles() -> dict[str, dict[str, Any]]:
+    """Load executor profiles from prompts/executors.md."""
+    global _profiles_cache
+    if _profiles_cache is not None:
+        return _profiles_cache
+    path = _PROMPTS_DIR / "executors.md"
+    if path.exists():
+        _profiles_cache = conf.parse_frontmatter(path.read_text(encoding="utf-8"))
+    else:
+        _profiles_cache = {}
+    return _profiles_cache
+
+
 def detect_executor() -> str | None:
     """Return the first available built-in executor CLI name, or None."""
-    for name in _EXECUTOR_PROFILES:
+    for name in _load_profiles():
         if shutil.which(name):
             return name
     return None
@@ -75,11 +76,12 @@ def _build_cmd(executor: str, prompt: str, cfg: dict[str, Any]) -> list[str]:
             return [s.replace("{prompt}", prompt) for s in custom]
         return [s.replace("{prompt}", prompt) for s in str(custom).split()]
 
-    profile = _EXECUTOR_PROFILES.get(executor)
+    profile = _load_profiles().get(executor)
     if profile:
-        cmd = list(profile["cmd"])
-        if cfg.get("auto_approve") and profile.get("approve"):
-            cmd.extend(profile["approve"])
+        cmd = str(profile.get("cmd", executor)).split()
+        approve = str(profile.get("approve", "")).strip()
+        if cfg.get("auto_approve") and approve:
+            cmd.extend(approve.split())
         cmd.append(prompt)
         return cmd
 
@@ -226,7 +228,7 @@ def run_task(instruction: str) -> str:
     cfg = conf.load_config(repo_root)
     executor = resolve_executor(repo_root)
 
-    prompt_path = Path(__file__).resolve().parent.parent.parent / "prompts" / "run.md"
+    prompt_path = _PROMPTS_DIR / "run.md"
     prompt_parts = []
     if prompt_path.exists():
         prompt_parts.append(prompt_path.read_text(encoding="utf-8"))

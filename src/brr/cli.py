@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("init", help="adopt a repo for brr management")
     p.add_argument("url", nargs="?", default=None, help="clone URL (optional)")
+    p.add_argument("--executor", default=None, help="executor command (default: auto-detect)")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("run", help="run a task through the executor")
@@ -45,7 +46,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def cmd_init(args):
-    adopt.init_repo(args.url)
+    adopt.init_repo(args.url, executor_name=args.executor)
 
 def cmd_run(args):
     executor.run_task(args.instruction)
