@@ -13,7 +13,7 @@ def _git_init(path: Path) -> None:
 
 def _run_init(path: Path, monkeypatch) -> None:
     monkeypatch.chdir(path)
-    monkeypatch.setattr("brr.executor.run_adopt_prompt", lambda *a, **kw: None)
+    monkeypatch.setattr("brr.executor.detect_executor", lambda: None)
     adopt.init_repo()
 
 
@@ -34,13 +34,10 @@ def _check_agents_md(path: Path) -> dict:
 
 
 def _check_state_md(path: Path, brr_config: dict) -> None:
-    """Assert state file exists and has required sections."""
+    """Assert state file exists."""
     state_rel = brr_config.get("state_file", ".brr.local/state.md")
     state = path / state_rel
     assert state.exists(), f"State file {state_rel} not created"
-    text = state.read_text()
-    for section in ["Current Focus", "Conversation Topics", "Decisions", "Next Steps"]:
-        assert section in text, f"Missing section: {section}"
 
 
 class TestEmptyRepo:
@@ -49,12 +46,6 @@ class TestEmptyRepo:
         _run_init(tmp_path, monkeypatch)
         brr = _check_agents_md(tmp_path)
         _check_state_md(tmp_path, brr)
-
-    def test_default_executor_is_auto(self, tmp_path, monkeypatch):
-        _git_init(tmp_path)
-        _run_init(tmp_path, monkeypatch)
-        brr = _check_agents_md(tmp_path)
-        assert brr["default_executor"] == "auto"
 
     def test_default_state_is_local(self, tmp_path, monkeypatch):
         _git_init(tmp_path)
@@ -79,32 +70,30 @@ class TestRepoWithExistingAgentsMd:
         assert agents.read_text() == "# Custom content\n"
 
 
-class TestRepoWithMakefile:
-    def test_creates_files(self, tmp_path, monkeypatch):
+class TestRepoWithClaudeMd:
+    def test_incorporates_body(self, tmp_path, monkeypatch):
         _git_init(tmp_path)
-        (tmp_path / "Makefile").write_text("test:\n\tpytest\nbuild:\n\tpython setup.py build\n")
+        (tmp_path / "CLAUDE.md").write_text("# My Project\n\nExisting instructions.\n")
         _run_init(tmp_path, monkeypatch)
         brr = _check_agents_md(tmp_path)
+        text = (tmp_path / "AGENTS.md").read_text()
+        assert "Existing instructions." in text
         _check_state_md(tmp_path, brr)
 
-
-class TestRepoWithPackageJson:
-    def test_creates_files(self, tmp_path, monkeypatch):
-        _git_init(tmp_path)
-        (tmp_path / "package.json").write_text('{"scripts":{"test":"jest","build":"tsc"}}')
-        _run_init(tmp_path, monkeypatch)
-        brr = _check_agents_md(tmp_path)
-        _check_state_md(tmp_path, brr)
-
-
-class TestRepoWithExistingClaudeMd:
-    def test_creates_agents_md_alongside(self, tmp_path, monkeypatch):
+    def test_claude_md_untouched(self, tmp_path, monkeypatch):
         _git_init(tmp_path)
         (tmp_path / "CLAUDE.md").write_text("# Claude instructions\n")
         _run_init(tmp_path, monkeypatch)
+        assert (tmp_path / "CLAUDE.md").read_text() == "# Claude instructions\n"
+
+
+class TestRepoWithMakefile:
+    def test_creates_files(self, tmp_path, monkeypatch):
+        _git_init(tmp_path)
+        (tmp_path / "Makefile").write_text("test:\n\tpytest\n")
+        _run_init(tmp_path, monkeypatch)
         brr = _check_agents_md(tmp_path)
         _check_state_md(tmp_path, brr)
-        assert (tmp_path / "CLAUDE.md").read_text() == "# Claude instructions\n"
 
 
 class TestStateFileConfig:

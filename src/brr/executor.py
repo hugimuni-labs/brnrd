@@ -243,21 +243,3 @@ def run_task(instruction: str) -> str:
     return output
 
 
-def run_adopt_prompt(repo_root: Path) -> str | None:
-    """Run the adoption analysis prompt. Returns executor output or None."""
-    try:
-        cfg = conf.load_config(repo_root)
-        executor = resolve_executor(repo_root)
-    except RuntimeError:
-        return None
-
-    prompt_path = Path(__file__).resolve().parent.parent.parent / "prompts" / "init_adopt.md"
-    if not prompt_path.exists():
-        return None
-
-    prompt = prompt_path.read_text(encoding="utf-8")
-    try:
-        return run_executor(executor, prompt, cwd=repo_root, cfg=cfg)
-    except (RuntimeError, subprocess.TimeoutExpired) as e:
-        print(f"[brr] adoption prompt failed: {e}")
-        return None
