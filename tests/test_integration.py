@@ -57,7 +57,8 @@ class TestEmptyRepo:
         _git_init(tmp_path)
         _run_init(tmp_path, monkeypatch)
         text = (tmp_path / "AGENTS.md").read_text()
-        for section in ["# Project", "## Build and run", "## Code guidelines", "## Constraints"]:
+        for section in ["# Project", "## Build and run", "## Code guidelines",
+                        "## Workflow", "## Guardrails", "## Constraints"]:
             assert section in text, f"Template missing {section}"
 
 

@@ -1,23 +1,31 @@
 # brr
 
-A daemon that runs AI agents on your machine and lets you manage
-them remotely from a chat.
+Structured guardrails for AI agent work, managed from a chat.
 
-You describe tasks in plain language. brr delegates to whichever AI
-tool you use (Claude Code, Codex, Gemini CLI, or a custom script)
-and reports back. All state lives in your Git repo as plain Markdown.
-No database, no cloud service, no lock-in.
+brr produces `AGENTS.md` — a single instruction file that encodes
+your project's build commands, code conventions, workflow rules, and
+safety guardrails.  Any AI tool that reads it (Claude Code, Cursor,
+Codex, Gemini) gets the same conventions.  brr itself is just the
+remote control: it delegates tasks to whichever executor you use and
+reports back via Telegram.
+
+**The guardrails live in AGENTS.md, not in brr.** brr creates the
+file, enriches it from the repo, and provides the remote execution
+layer.  But the conventions work even without brr — they're just
+Markdown that any agentic tool can read.
+
+Zero runtime dependencies.  No database, no cloud service, no lock-in.
 
 ## Quick start
 
 ```bash
 pip install brr
 
-brr init                         # adopt current repo
-brr init https://github.com/u/r  # or clone and adopt
+brr init                         # create AGENTS.md + detect executor
+brr init https://github.com/u/r  # or clone first
 
-brr auth telegram                # set up your connector
-brr connect telegram             # bind repo to a chat topic
+brr auth telegram                # set up the chat connector
+brr connect telegram             # bind repo to a Telegram topic
 brr up                           # start the daemon
 ```
 
@@ -26,69 +34,99 @@ From chat:
 ```
 > fix the failing tests in auth/
 > status
-> write a migration for the new user fields
+> /cancel
 ```
 
 Or locally:
 
 ```bash
 brr run "fix failing tests in the auth module"
-brr status
 ```
 
-## How it works
+## What brr produces
 
-brr adds one file to your repo and keeps working state local:
+`brr init` creates `AGENTS.md` with:
 
-- **`AGENTS.md`** — YAML header + instructions for AI tools. Committed.
-- **`.brr.local/state.md`** — working memory: focus, decisions, next
-  steps. Local and gitignored. Rewritten each run.
+- **YAML frontmatter** — executor config, commands, state file path
+  (only used by brr itself)
+- **Project instructions** — what it is, how to build/test/run
+- **Workflow conventions** — branching, commit policy, state management
+- **Guardrails** — dead-end detection, scope drift, proportionality
+- **Constraints** — things the agent must not do without asking
 
-When executor output exceeds Telegram's message limit, brr posts the
-full result to a GitHub gist and sends the link instead.
+If an executor is on PATH, init runs it to fill in the sections from
+the repo.  If the repo already has a `CLAUDE.md` or `GEMINI.md`, its
+content is incorporated as the body.
+
+Working memory lives in `.brr.local/state.md` (gitignored).
+
+## Architecture
 
 ```
-You (chat / CLI)
-       |
-    brr daemon
-       |
-  +-------+-------+
-  |       |       |
-repo A  repo B  repo C
-  |       |       |
-claude  codex   gemini
+AGENTS.md        ← universal: works with any AI tool
+  │
+  ├── Claude Code reads it
+  ├── Cursor reads it
+  ├── Codex reads it
+  │
+  └── brr reads it + adds remote execution:
+        │
+     Telegram ←→ daemon ←→ executor (subprocess)
+        │                      │
+     /cancel              TaskRunner
+     /status           (one task at a time)
 ```
 
-## Commands
+brr is a thin layer.  The intelligence is in the executor.
+The conventions are in AGENTS.md.  brr connects the two to a chat.
+
+## AGENTS.md format
+
+```yaml
+---
+brr:
+  version: 1
+  mode: live
+  default_executor: claude
+  auto_approve: true
+  commands:
+    build: "npm run build"
+    test: "npm test"
+    verify: "npm run lint && npm test"
+  state_file: .brr.local/state.md
+  commit_policy: commit-at-end-if-material
+---
+```
+
+| Field              | Values                                               |
+|--------------------|------------------------------------------------------|
+| `default_executor` | `auto`, `claude`, `codex`, `gemini`, or any on PATH  |
+| `mode`             | `paused`, `incubating`, `live`                       |
+| `executor_cmd`     | command template: `["tool", "-p", "{prompt}"]`       |
+| `state_file`       | path to state file (default: `.brr.local/state.md`)  |
+
+## CLI
 
 | Command                   | What it does                         |
 |---------------------------|--------------------------------------|
-| `brr init [url]`          | Adopt a repo (optionally clone first)|
+| `brr init [url]`          | Create AGENTS.md, enrich from repo   |
 | `brr run "<task>"`        | Run a task through the executor      |
 | `brr status`              | Show project state                   |
-| `brr auth <connector>`    | Authenticate a chat connector        |
-| `brr connect <connector>` | Bind repo to a chat topic            |
+| `brr auth telegram`       | Set bot token                        |
+| `brr connect telegram`    | Bind repo to a chat topic            |
 | `brr up`                  | Start the daemon                     |
 
-## Connectors
-
-Connectors let you interact with repos from a chat app.
-Ships with **Telegram**.
-
-## Executors
-
-Configured per-repo in `AGENTS.md`. When set to `auto` (the default),
-brr detects what's installed: `claude`, `codex`, `gemini`.
-
-For anything else, set `default_executor` to the name of any
-executable on PATH, or use `executor_cmd` for full command-template
-control.
+Chat: any message is a task.  `/status`, `/cancel` are built-in.
 
 ## Extending
 
-brr is small on purpose. Connectors are single-file Python modules.
-Executors are CLI commands. Prompts are plain Markdown.
-Fork it and make it yours.
+**Connectors** are single-file Python modules.  `telegram.py` is the
+reference.  The `TaskRunner` class in `executor.py` handles threading,
+cancellation, and serial execution — any connector can use it.
+
+**Executors** are CLI commands on PATH.  Built-in profiles exist for
+`claude`, `codex`, and `gemini`.  Set `default_executor` to any
+executable, or use `executor_cmd` for full command-template control.
 
 ## Development
 

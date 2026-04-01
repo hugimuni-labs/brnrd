@@ -1,4 +1,4 @@
-"""brr — AI agent daemon for Git repositories."""
+"""brr — structured guardrails for AI agent work, managed from a chat."""
 
 __all__ = ["__version__"]
 

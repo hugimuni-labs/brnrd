@@ -14,11 +14,22 @@ _KNOWN_INSTRUCTION_FILES = ["CLAUDE.md", "GEMINI.md", "CODEX.md"]
 
 _SETUP_INSTRUCTION = (
     "Read this repository and fill in the AGENTS.md body sections. "
-    "Replace the HTML comment placeholders with actual content: "
-    "what the project does, exact build/test/run commands "
-    "(from Makefile, package.json, CI configs, etc.), code style "
-    "and commit conventions, and constraints the agent should respect. "
-    "Keep it concise — under a page. Do not modify the YAML frontmatter."
+    "Replace every HTML comment placeholder (<!-- ... -->) with real content.\n\n"
+    "For each section:\n"
+    "- **# Project** — one paragraph: what this is, what stack, what it does.\n"
+    "- **## Build and run** — exact commands from Makefile, package.json, "
+    "pyproject.toml, CI configs, etc. Use code blocks.\n"
+    "- **## Code guidelines** — language version, formatting, test framework, "
+    "commit style. Be specific to this repo.\n"
+    "- **## Workflow** — leave the defaults unless the repo has an established "
+    "branching or review convention you can identify.\n"
+    "- **## Guardrails** — leave the defaults; they apply universally.\n"
+    "- **## Constraints** — sensitive dirs, deployment commands, public API "
+    "surfaces — things an agent should not change without asking.\n\n"
+    "Also fill in the YAML `commands:` block (build, test, verify) with "
+    "the actual commands you found.\n\n"
+    "Keep the whole body under a page. Every word is read by an AI executor "
+    "on every task. Do not modify the rest of the YAML frontmatter."
 )
 
 _FRONTMATTER = """\
@@ -46,16 +57,58 @@ _SKELETON_BODY = """\
 
 ## Build and run
 
-<!-- Exact commands to build, test, and run the project. -->
+<!-- Exact commands to install, build, test, and run. -->
 
 ## Code guidelines
 
-<!-- Style, testing, and commit conventions. -->
+<!-- Language version, formatting, test framework, commit conventions. -->
+
+## Workflow
+
+- For code changes, create a feature branch and commit when done.
+- For read-only tasks (review, research, verify), report results
+  without branching.
+- Update the state file after each task: rewrite Current Focus,
+  add to Conversation Topics, update Decisions/Next Steps as needed.
+  Remove stale items rather than accumulating.
+
+## Guardrails
+
+- **Dead ends.** If you have attempted the same approach twice
+  without progress, stop and report what you tried.
+- **Scope drift.** If work is expanding beyond the original task,
+  pause and note what you found. Do not silently take on unbounded scope.
+- **Proportionality.** Match effort to task size. A one-line fix does
+  not need a multi-file refactor.
+
+When in doubt, write down what you know and what you are unsure about,
+and let the user decide the next move.
 
 ## Constraints
 
 <!-- Things the agent must not do without approval. -->
 """
+
+_PLACEHOLDER_MARKER = "<!-- "
+
+
+def _needs_enrichment(agents_file: Path) -> bool:
+    """True if AGENTS.md still has HTML comment placeholders."""
+    text = agents_file.read_text(encoding="utf-8")
+    parts = text.split("---", 2)
+    body = parts[2] if len(parts) >= 3 else text
+    return _PLACEHOLDER_MARKER in body
+
+
+def _enrich(detected: str) -> None:
+    """Run the executor to fill in AGENTS.md."""
+    print("[brr] analyzing repo...")
+    try:
+        executor.run_task(_SETUP_INSTRUCTION)
+        print("[brr] AGENTS.md populated")
+    except RuntimeError as e:
+        print(f"[brr] enrichment failed: {e}")
+        print("[brr] re-run `brr init` to retry")
 
 
 def init_repo(url: str | None = None) -> None:
@@ -68,12 +121,15 @@ def init_repo(url: str | None = None) -> None:
 
     repo_root = gitops.ensure_git_repo()
     agents_file = repo_root / "AGENTS.md"
+    detected = executor.detect_executor() or "auto"
 
     if agents_file.exists():
-        print(f"[brr] {agents_file} already exists")
+        if _needs_enrichment(agents_file) and detected != "auto":
+            _enrich(detected)
+        else:
+            print(f"[brr] {agents_file} already configured")
         return
 
-    detected = executor.detect_executor() or "auto"
     frontmatter = _FRONTMATTER.format(executor=detected)
 
     body = _SKELETON_BODY
@@ -93,13 +149,7 @@ def init_repo(url: str | None = None) -> None:
     if not state_path.exists():
         state_path.write_text("# Agent State\n\n## Current Focus\n\nNot set.\n", encoding="utf-8")
 
-    # Step 2: have the executor enrich AGENTS.md with repo-specific details.
     if detected != "auto":
-        print("[brr] analyzing repo...")
-        try:
-            executor.run_task(_SETUP_INSTRUCTION)
-            print("[brr] AGENTS.md populated")
-        except RuntimeError as e:
-            print(f"[brr] enrichment skipped: {e}")
+        _enrich(detected)
     else:
         print("[brr] no executor found — edit AGENTS.md manually, or install one and re-run")

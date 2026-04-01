@@ -4,6 +4,8 @@ __pycache__/
 *$py.class
 *.egg-info/
 .pytest_cache/
+build/
+dist/
 
 # Local runtime state
 .brr.local/
@@ -13,6 +15,7 @@ __pycache__/
 .venv
 .idea/
 .vscode/
+build/
 
 # MacOS
 .DS_Store
