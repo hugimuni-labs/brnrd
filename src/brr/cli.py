@@ -7,6 +7,7 @@ import sys
 
 from . import __version__
 from . import adopt
+from . import daemon
 from . import executor
 from . import telegram
 from . import status as status_mod
@@ -61,4 +62,7 @@ def cmd_connect_telegram(args):
     telegram.connect()
 
 def cmd_up(args):
-    telegram.start_daemon()
+    connector = telegram.make_connector()
+    if connector is None:
+        return
+    daemon.start(connector)

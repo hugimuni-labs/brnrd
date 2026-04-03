@@ -1,27 +1,22 @@
-"""Telegram connector — the reference remote control for brr.
+"""Telegram connector — transport adapter for the brr daemon.
 
-A connector translates between a chat interface and the ``TaskRunner``.
-This module implements the Telegram Bot API (via stdlib urllib, zero
-deps), interactive setup (auth/connect), and the polling daemon that
-dispatches messages as tasks.  Long output overflows to GitHub gists.
+Implements the ``Connector`` protocol from ``daemon.py`` using the
+Telegram Bot API (via stdlib urllib, zero deps).  Also provides
+interactive setup (auth/connect) and gist overflow for long output.
 
-To add another connector (Discord, Slack, etc.), use the same
-``TaskRunner`` from ``executor.py`` with a different event loop.
+To add another connector (Discord, Slack, etc.), implement the same
+``Connector`` protocol and pass it to ``daemon.start()``.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import signal
 import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
 
-from . import executor
-from . import gitops
-from . import config as conf
+from .daemon import Message
 
 _API = "https://api.telegram.org/bot{token}/{method}"
 
@@ -140,6 +135,9 @@ def connect() -> None:
 
 # ── Gist overflow ────────────────────────────────────────────────────
 
+_MAX_TG_LEN = 3900
+
+
 def _post_gist(content: str, filename: str = "result.md") -> str | None:
     """Post content to a GitHub gist via ``gh``. Returns URL or None."""
     try:
@@ -154,25 +152,7 @@ def _post_gist(content: str, filename: str = "result.md") -> str | None:
     return None
 
 
-# ── Daemon ───────────────────────────────────────────────────────────
-
-_MAX_TG_LEN = 3900
-
-
-def _load_runtime() -> dict:
-    path = Path.cwd() / ".brr.local" / "runtime.json"
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
-
-
-def _save_runtime(data: dict) -> None:
-    d = Path.cwd() / ".brr.local"
-    d.mkdir(exist_ok=True)
-    (d / "runtime.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-
-def _reply(token: str, chat_id: int, topic_id: int | None, text: str) -> None:
+def _send_with_overflow(token: str, chat_id: int, topic_id: int | None, text: str) -> None:
     """Send a reply, posting overflow to a gist when too long for Telegram."""
     if len(text) <= _MAX_TG_LEN:
         send_message(token, chat_id, text, topic_id)
@@ -184,74 +164,27 @@ def _reply(token: str, chat_id: int, topic_id: int | None, text: str) -> None:
         send_message(token, chat_id, text[:_MAX_TG_LEN] + "\n\n[truncated]", topic_id)
 
 
-def start_daemon() -> None:
-    """Start the Telegram polling daemon for the current repo."""
-    repo_root = gitops.ensure_git_repo()
-    creds = _load_creds()
+# ── Connector ────────────────────────────────────────────────────────
 
-    if "token" not in creds or "chat_id" not in creds:
-        print("[brr] Telegram not configured.  Run `brr auth telegram` and `brr connect telegram` first.")
-        return
+class TelegramConnector:
+    """Implements the daemon Connector protocol over Telegram Bot API."""
 
-    token = creds["token"]
-    chat_id = creds["chat_id"]
-    topic_id = creds.get("topic_id")
+    def __init__(self, token: str, chat_id: int, topic_id: int | None = None) -> None:
+        self._token = token
+        self._chat_id = chat_id
+        self._topic_id = topic_id
+        self._offset = 0
 
-    try:
-        exec_name = executor.resolve_executor(repo_root)
-    except RuntimeError as e:
-        print(f"[brr] {e}")
-        return
-
-    print(f"[brr] daemon started for {repo_root}")
-    print(f"[brr] executor: {exec_name}")
-    print(f"[brr] listening on chat {chat_id}" + (f" topic {topic_id}" if topic_id else ""))
-    print("[brr] press Ctrl+C to stop")
-
-    runtime = _load_runtime()
-    runtime["pid"] = os.getpid()
-    runtime["repo"] = str(repo_root)
-    _save_runtime(runtime)
-
-    runner = executor.TaskRunner()
-    offset = 0
-    running = True
-
-    def _stop(sig, frame):
-        nonlocal running
-        running = False
-        runner.shutdown(timeout=0)
-        print("\n[brr] shutting down")
-
-    signal.signal(signal.SIGINT, _stop)
-    signal.signal(signal.SIGTERM, _stop)
-
-    while running:
-        # Deliver completed task result.
-        result = runner.poll_result()
-        if result:
-            if result["cancelled"]:
-                _reply(token, chat_id, topic_id, f"cancelled: {result['instruction']}")
-            elif "output" in result:
-                _reply(token, chat_id, topic_id, result["output"])
-            else:
-                _reply(token, chat_id, topic_id, f"task failed: {result['error']}")
-
-        # Short poll while busy so /cancel is responsive.
-        poll_timeout = 2 if runner.busy else 30
-        try:
-            updates = get_updates(token, offset=offset, timeout=poll_timeout)
-        except (RuntimeError, OSError) as e:
-            print(f"[brr] poll error: {e}")
-            continue
-
+    def poll(self, timeout: int) -> list[Message]:
+        updates = get_updates(self._token, offset=self._offset, timeout=timeout)
+        messages: list[Message] = []
         for update in updates:
-            offset = update["update_id"] + 1
+            self._offset = update["update_id"] + 1
             msg = update.get("message", {})
 
-            if msg.get("chat", {}).get("id") != chat_id:
+            if msg.get("chat", {}).get("id") != self._chat_id:
                 continue
-            if topic_id and msg.get("message_thread_id") != topic_id:
+            if self._topic_id and msg.get("message_thread_id") != self._topic_id:
                 continue
 
             text = msg.get("text", "").strip()
@@ -259,32 +192,30 @@ def start_daemon() -> None:
                 continue
 
             user = msg.get("from", {}).get("first_name", "?")
-            print(f"[brr] {user}: {text}")
+            messages.append(Message(text=text, user=user))
+        return messages
 
-            if text.lower() in ("/cancel", "cancel"):
-                if runner.cancel():
-                    _reply(token, chat_id, topic_id, f"cancelling: {runner.instruction}")
-                else:
-                    _reply(token, chat_id, topic_id, "nothing running")
-                continue
+    def reply(self, text: str) -> None:
+        try:
+            _send_with_overflow(self._token, self._chat_id, self._topic_id, text)
+        except RuntimeError as e:
+            print(f"[brr] telegram reply error: {e}")
 
-            if text.lower() in ("/status", "status", "status?"):
-                from . import status as status_mod
-                status_text = status_mod.get_status()
-                if runner.busy:
-                    status_text += f"\n\ncurrently running: {runner.instruction}"
-                _reply(token, chat_id, topic_id, status_text)
-                continue
+    def describe(self) -> str:
+        desc = f"telegram chat {self._chat_id}"
+        if self._topic_id:
+            desc += f" topic {self._topic_id}"
+        return desc
 
-            if runner.busy:
-                _reply(token, chat_id, topic_id,
-                       f"busy with: {runner.instruction}\nsend /cancel to abort it")
-                continue
 
-            runner.submit(text)
-            try:
-                send_message(token, chat_id, f"running: {text}", topic_id)
-            except RuntimeError:
-                pass
-
-    runner.shutdown()
+def make_connector() -> TelegramConnector | None:
+    """Build a TelegramConnector from saved credentials, or None."""
+    creds = _load_creds()
+    if "token" not in creds or "chat_id" not in creds:
+        print("[brr] Telegram not configured.  Run `brr auth telegram` and `brr connect telegram` first.")
+        return None
+    return TelegramConnector(
+        token=creds["token"],
+        chat_id=creds["chat_id"],
+        topic_id=creds.get("topic_id"),
+    )
