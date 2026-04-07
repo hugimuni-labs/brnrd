@@ -3,66 +3,130 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
-
-from . import __version__
-from . import adopt
-from . import daemon
-from . import executor
-from . import telegram
-from . import status as status_mod
+from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="brr", description="AI agent daemon for Git repositories")
+    from . import __version__
+    parser = argparse.ArgumentParser(
+        prog="brr",
+        description="Playbook + knowledge base for AI agents, with remote execution",
+    )
     parser.add_argument("--version", action="version", version=f"brr {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("init", help="adopt a repo for brr management")
+    p = sub.add_parser("init", help="set up a repo for brr")
     p.add_argument("url", nargs="?", default=None, help="clone URL (optional)")
-    p.add_argument("--executor", default=None, help="executor command (default: auto-detect)")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("run", help="run a task through the executor")
+    p = sub.add_parser("run", help="run a task through the runner")
     p.add_argument("instruction", help="what to do")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("status", help="show project state")
     p.set_defaults(func=cmd_status)
 
-    p = sub.add_parser("auth", help="authenticate a connector")
-    s = p.add_subparsers(dest="connector", required=True)
-    s.add_parser("telegram").set_defaults(func=cmd_auth_telegram)
+    p = sub.add_parser("auth", help="authenticate a gate")
+    p.add_argument("gate", help="gate name (telegram, slack, git)")
+    p.set_defaults(func=cmd_auth)
 
-    p = sub.add_parser("connect", help="bind repo to a connector")
-    s = p.add_subparsers(dest="connector", required=True)
-    s.add_parser("telegram").set_defaults(func=cmd_connect_telegram)
+    p = sub.add_parser("connect", help="bind repo to a gate")
+    p.add_argument("gate", help="gate name (telegram, slack, git)")
+    p.set_defaults(func=cmd_connect)
 
     p = sub.add_parser("up", help="start the daemon")
     p.set_defaults(func=cmd_up)
+
+    p = sub.add_parser("down", help="stop the daemon")
+    p.set_defaults(func=cmd_down)
+
+    p = sub.add_parser("eject", help="copy bundled prompts for customization")
+    p.set_defaults(func=cmd_eject)
 
     args = parser.parse_args(argv)
     return args.func(args)
 
 
+def _repo_root() -> Path:
+    from . import gitops
+    return gitops.ensure_git_repo()
+
+
+def _brr_dir() -> Path:
+    return _repo_root() / ".brr"
+
+
 def cmd_init(args):
-    adopt.init_repo(args.url, executor_name=args.executor)
+    from . import adopt
+    adopt.init_repo(args.url)
+
 
 def cmd_run(args):
-    executor.run_task(args.instruction)
+    from . import daemon as daemon_mod
+    brr = _brr_dir()
+    pid = daemon_mod.read_pid(brr)
+    if pid:
+        print(f"[brr] warning: daemon running (pid {pid}) — concurrent writes possible")
+
+    from . import runner
+    runner.run_task(args.instruction)
+
 
 def cmd_status(args):
+    from . import status as status_mod
     sys.stdout.write(status_mod.get_status() + "\n")
 
-def cmd_auth_telegram(args):
-    telegram.auth()
 
-def cmd_connect_telegram(args):
-    telegram.connect()
+def cmd_auth(args):
+    gate_mod = _load_gate(args.gate)
+    gate_mod.auth(_brr_dir())
+
+
+def cmd_connect(args):
+    gate_mod = _load_gate(args.gate)
+    gate_mod.connect(_brr_dir())
+
 
 def cmd_up(args):
-    connector = telegram.make_connector()
-    if connector is None:
-        return
-    daemon.start(connector)
+    from . import daemon as daemon_mod
+    root = _repo_root()
+    daemon_mod.start(root)
+
+
+def cmd_down(args):
+    from . import daemon as daemon_mod
+    brr = _brr_dir()
+    if daemon_mod.stop(brr):
+        print("[brr] daemon stopped")
+    else:
+        print("[brr] daemon not running")
+
+
+def cmd_eject(args):
+    from . import runner as runner_mod
+    dest = _brr_dir() / "prompts"
+    dest.mkdir(parents=True, exist_ok=True)
+    src = runner_mod._PROMPTS_DIR
+    count = 0
+    for f in src.iterdir():
+        if f.suffix == ".md":
+            target = dest / f.name
+            if target.exists():
+                print(f"[brr] skip (exists): {target.relative_to(_repo_root())}")
+            else:
+                shutil.copy2(f, target)
+                print(f"[brr] copied: {target.relative_to(_repo_root())}")
+                count += 1
+    print(f"[brr] ejected {count} prompt(s) to .brr/prompts/")
+
+
+def _load_gate(name: str):
+    gate_map = {"telegram": "telegram", "slack": "slack", "git": "git_gate"}
+    mod_name = gate_map.get(name)
+    if not mod_name:
+        raise SystemExit(f"[brr] unknown gate: {name} (available: {', '.join(gate_map)})")
+    from .gates import import_gate
+    return import_gate(mod_name)

@@ -8,7 +8,7 @@ build/
 dist/
 
 # Local runtime state
-.brr.local/
+.brr/
 
 # Environment / editor settings
 .env

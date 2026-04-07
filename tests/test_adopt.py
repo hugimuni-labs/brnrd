@@ -5,59 +5,68 @@ import subprocess
 from brr import adopt
 
 
-def _mock_no_executor(monkeypatch):
-    """Make detect_executor return None so init skips the enrichment step."""
-    monkeypatch.setattr("brr.executor.detect_executor", lambda: None)
+def _mock_runner(monkeypatch, output=""):
+    """Mock runner detection and execution to avoid calling real CLIs."""
+    monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+    monkeypatch.setattr("brr.runner.run_executor", lambda *a, **kw: output)
 
 
-def test_write_templates(tmp_path, monkeypatch):
-    _mock_no_executor(monkeypatch)
+def test_creates_brr_dir(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     monkeypatch.chdir(repo)
+    _mock_runner(monkeypatch)
+
     adopt.init_repo()
-    assert (repo / "AGENTS.md").exists()
-    assert (repo / ".brr.local" / "state.md").exists()
-    # Second call should not overwrite
-    content = (repo / "AGENTS.md").read_text()
-    adopt.init_repo()
-    assert (repo / "AGENTS.md").read_text() == content
+
+    brr = repo / ".brr"
+    assert brr.exists()
+    assert (brr / "inbox").exists()
+    assert (brr / "responses").exists()
+    assert (brr / "config").exists()
 
 
-def test_template_has_valid_yaml_header(tmp_path, monkeypatch):
-    _mock_no_executor(monkeypatch)
+def test_gitignore_updated(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     monkeypatch.chdir(repo)
+    _mock_runner(monkeypatch)
+
     adopt.init_repo()
-    text = (repo / "AGENTS.md").read_text()
-    assert text.startswith("---\n")
-    assert "\n---\n" in text[4:]
+    text = (repo / ".gitignore").read_text()
+    assert ".brr/" in text
 
 
-def test_incorporates_claude_md(tmp_path, monkeypatch):
-    _mock_no_executor(monkeypatch)
+def test_idempotent_gitignore(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    (repo / "CLAUDE.md").write_text("# My project\n\nCustom instructions here.\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    (repo / ".gitignore").write_text("*.pyc\n.brr/\n")
     monkeypatch.chdir(repo)
+    _mock_runner(monkeypatch)
+
     adopt.init_repo()
-    text = (repo / "AGENTS.md").read_text()
-    assert "Custom instructions here." in text
-    assert text.startswith("---\n")
+    text = (repo / ".gitignore").read_text()
+    assert text.count(".brr/") == 1
 
 
-def test_enrichment_runs_when_executor_available(tmp_path, monkeypatch):
+def test_fails_without_runner(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     monkeypatch.chdir(repo)
-    monkeypatch.setattr("brr.executor.detect_executor", lambda: "codex")
-    calls = []
-    monkeypatch.setattr("brr.executor.run_task", lambda inst: calls.append(inst) or "")
+    monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: None)
+
+    import pytest
+    with pytest.raises(SystemExit):
+        adopt.init_repo()
+
+
+def test_git_init_if_needed(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _mock_runner(monkeypatch)
+
     adopt.init_repo()
-    assert len(calls) == 1
-    assert "AGENTS.md" in calls[0]
+    assert (tmp_path / ".git").exists()

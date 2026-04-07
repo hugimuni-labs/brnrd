@@ -1,43 +1,25 @@
-"""Tests for config parser."""
+"""Tests for config module — flat key=value parser."""
 
-from brr.config import parse_frontmatter, load_config
-
-
-def test_parse_basic():
-    text = """\
----
-brr:
-  version: 1
-  mode: paused
-  default_executor: auto
-  commands:
-    verify: "make test"
-    status: ""
-  task_sources: []
-  state_file: agent_state.md
----
-
-# Body
-"""
-    fm = parse_frontmatter(text)
-    brr = fm["brr"]
-    assert brr["version"] == 1
-    assert brr["mode"] == "paused"
-    assert brr["default_executor"] == "auto"
-    assert brr["commands"]["verify"] == "make test"
-    assert brr["task_sources"] == []
-    assert brr["state_file"] == "agent_state.md"
+from brr.config import load_config, write_config
 
 
-def test_parse_list():
-    text = "---\nbrr:\n  sources: [a, b, c]\n---\n"
-    fm = parse_frontmatter(text)
-    assert fm["brr"]["sources"] == ["a", "b", "c"]
-
-
-def test_parse_no_frontmatter():
-    assert parse_frontmatter("# Just a doc") == {}
-
-
-def test_load_config_missing(tmp_path):
+def test_load_missing(tmp_path):
     assert load_config(tmp_path) == {}
+
+
+def test_roundtrip(tmp_path):
+    write_config(tmp_path, {"runner": "codex", "auto_approve": True, "retries": 2})
+    cfg = load_config(tmp_path)
+    assert cfg["runner"] == "codex"
+    assert cfg["auto_approve"] is True
+    assert cfg["retries"] == 2
+
+
+def test_comments_and_blanks(tmp_path):
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "# comment\n\nrunner=claude\n  spaces = ignored  \n"
+    )
+    cfg = load_config(tmp_path)
+    assert cfg["runner"] == "claude"
+    assert cfg["spaces"] == "ignored"

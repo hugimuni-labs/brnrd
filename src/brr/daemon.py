@@ -1,138 +1,219 @@
-"""Daemon — process lifecycle and task dispatch loop.
+"""Daemon — main loop that scans the inbox, runs workers, pushes results.
 
-The daemon is transport-agnostic.  It receives user messages through a
-Connector, dispatches them to the TaskRunner, and delivers results back
-through the same Connector.  Signal handling, PID tracking, and command
-dispatch (/cancel, /status) live here — connectors only do I/O.
+The daemon is a single foreground process (``brr up``).  It:
+
+1. Starts configured gate threads (each gate polls its own channel).
+2. Scans ``.brr/inbox/`` for pending events on a timer.
+3. Spawns workers (runner subprocesses) one at a time (serial v1).
+4. Checks for response files after each worker finishes.
+5. Retries the runner if no response file was created.
+6. Pushes git commits after a worker makes changes.
+
+No cancellation in v1 — the runner runs to completion.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import signal
-from dataclasses import dataclass
+import subprocess
+import threading
+import time
 from pathlib import Path
-from typing import Protocol
 
-from . import executor
+from . import config as conf
+from . import protocol
+from . import runner
 from . import gitops
-from . import status as status_mod
+
+_SCAN_INTERVAL = 3
+_BUILTIN_GATES = ["telegram", "slack", "git_gate"]
 
 
-@dataclass
-class Message:
-    """A single inbound message from the chat transport."""
-    text: str
-    user: str
+# ── PID file ─────────────────────────────────────────────────────────
 
 
-class Connector(Protocol):
-    """Transport adapter that polls for messages and sends replies.
-
-    Implementations handle transport-specific details (authentication,
-    message filtering, length limits) internally.
-    """
-
-    def poll(self, timeout: int) -> list[Message]:
-        """Block up to *timeout* seconds, return new messages."""
-        ...
-
-    def reply(self, text: str) -> None:
-        """Send a reply to the connected chat."""
-        ...
-
-    def describe(self) -> str:
-        """One-line description for startup logging."""
-        ...
+def _pid_path(brr_dir: Path) -> Path:
+    return brr_dir / "daemon.pid"
 
 
-def _load_runtime() -> dict:
-    path = Path.cwd() / ".brr.local" / "runtime.json"
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+def _write_pid(brr_dir: Path) -> None:
+    _pid_path(brr_dir).write_text(str(os.getpid()) + "\n")
 
 
-def _save_runtime(data: dict) -> None:
-    d = Path.cwd() / ".brr.local"
-    d.mkdir(exist_ok=True)
-    (d / "runtime.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+def _clear_pid(brr_dir: Path) -> None:
+    _pid_path(brr_dir).unlink(missing_ok=True)
 
 
-def start(connector: Connector) -> None:
-    """Run the daemon loop with the given connector until interrupted."""
-    repo_root = gitops.ensure_git_repo()
-
+def read_pid(brr_dir: Path) -> int | None:
+    """Read the daemon PID, or None if not running."""
+    path = _pid_path(brr_dir)
+    if not path.exists():
+        return None
     try:
-        exec_name = executor.resolve_executor(repo_root)
-    except RuntimeError as e:
-        print(f"[brr] {e}")
-        return
+        pid = int(path.read_text().strip())
+        os.kill(pid, 0)
+        return pid
+    except (ValueError, ProcessLookupError, PermissionError):
+        path.unlink(missing_ok=True)
+        return None
 
-    print(f"[brr] daemon started for {repo_root}")
-    print(f"[brr] executor: {exec_name}")
-    print(f"[brr] {connector.describe()}")
-    print("[brr] press Ctrl+C to stop")
 
-    runtime = _load_runtime()
-    runtime["pid"] = os.getpid()
-    runtime["repo"] = str(repo_root)
-    _save_runtime(runtime)
+def stop(brr_dir: Path) -> bool:
+    """Send SIGTERM to the running daemon. Returns True if one was running."""
+    pid = read_pid(brr_dir)
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        _clear_pid(brr_dir)
+        return False
 
-    runner = executor.TaskRunner()
+
+# ── Gate threads ─────────────────────────────────────────────────────
+
+
+def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[threading.Thread]:
+    threads = []
+    for name in _BUILTIN_GATES:
+        try:
+            from .gates import import_gate
+            mod = import_gate(name)
+        except ImportError:
+            continue
+        if not hasattr(mod, "is_configured") or not mod.is_configured(brr_dir):
+            continue
+        print(f"[brr] starting gate: {name}")
+        t = threading.Thread(
+            target=mod.run_loop,
+            args=(brr_dir, inbox_dir, responses_dir),
+            daemon=True,
+            name=f"gate-{name}",
+        )
+        t.start()
+        threads.append(t)
+    return threads
+
+
+# ── Git push ─────────────────────────────────────────────────────────
+
+
+def _push_if_needed(repo_root: Path) -> None:
+    """Push to origin if there are unpushed commits."""
+    try:
+        result = subprocess.run(
+            ["git", "log", "@{u}..HEAD", "--oneline"],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            print("[brr] pushing changes...")
+            subprocess.run(
+                ["git", "push"], cwd=repo_root,
+                capture_output=True, text=True, timeout=60,
+            )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+
+# ── Worker ───────────────────────────────────────────────────────────
+
+
+def _run_worker(
+    event: dict,
+    repo_root: Path,
+    responses_dir: Path,
+    cfg: dict,
+    max_retries: int,
+) -> None:
+    """Run the runner for a single event, with retries."""
+    eid = event["id"]
+    body = event.get("body", "")
+    runner_name = runner.resolve_runner(repo_root)
+    resp_path = protocol.response_path(responses_dir, eid)
+
+    for attempt in range(1, max_retries + 2):
+        if attempt == 1:
+            prompt = runner.build_daemon_prompt(
+                body, eid, str(resp_path), repo_root,
+            )
+        else:
+            prompt = runner.build_daemon_prompt(
+                f"Previous attempt did not produce a response file. "
+                f"Please complete the task and write your response to {resp_path}.\n\n"
+                f"Original task: {body}",
+                eid, str(resp_path), repo_root,
+            )
+
+        print(f"[brr] worker {eid}: attempt {attempt}")
+        try:
+            runner.run_executor(runner_name, prompt, cwd=repo_root, cfg=cfg)
+        except RuntimeError as e:
+            print(f"[brr] worker {eid}: runner error: {e}")
+
+        if protocol.response_exists(responses_dir, eid):
+            print(f"[brr] worker {eid}: response ready")
+            return
+
+        if attempt <= max_retries:
+            print(f"[brr] worker {eid}: no response file, retrying...")
+
+    print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
+
+
+# ── Main loop ────────────────────────────────────────────────────────
+
+
+def start(repo_root: Path) -> None:
+    """Run the daemon main loop (blocking, foreground)."""
+    brr_dir = repo_root / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+
+    if read_pid(brr_dir):
+        raise SystemExit("[brr] daemon already running")
+    if not (repo_root / "AGENTS.md").exists():
+        raise SystemExit("[brr] run `brr init` first")
+
+    _write_pid(brr_dir)
     running = True
 
-    def _stop(sig, frame):
+    def _handle_signal(signum, frame):
         nonlocal running
         running = False
-        runner.shutdown(timeout=0)
-        print("\n[brr] shutting down")
 
-    signal.signal(signal.SIGINT, _stop)
-    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
 
-    while running:
-        result = runner.poll_result()
-        if result:
-            if result["cancelled"]:
-                connector.reply(f"cancelled: {result['instruction']}")
-            elif "output" in result:
-                connector.reply(result["output"])
+    cfg = conf.load_config(repo_root)
+    max_retries = int(cfg.get("response_retries", 1))
+
+    gate_threads = _start_gates(brr_dir, inbox_dir, responses_dir)
+    if not gate_threads:
+        print("[brr] warning: no gates configured — inbox will only receive events from `brr run` or scripts")
+
+    print(f"[brr] daemon started (pid {os.getpid()})")
+
+    try:
+        while running:
+            events = protocol.list_pending(inbox_dir)
+            if events:
+                event = events[0]
+                eid = event["id"]
+                print(f"[brr] processing: {eid}")
+                protocol.set_status(event, "processing")
+
+                _run_worker(event, repo_root, responses_dir, cfg, max_retries)
+                protocol.set_status(event, "done")
+                _push_if_needed(repo_root)
             else:
-                connector.reply(f"task failed: {result['error']}")
+                time.sleep(_SCAN_INTERVAL)
 
-        poll_timeout = 2 if runner.busy else 30
-        try:
-            messages = connector.poll(timeout=poll_timeout)
-        except (RuntimeError, OSError) as e:
-            print(f"[brr] poll error: {e}")
-            continue
+            for t in gate_threads:
+                if not t.is_alive():
+                    print(f"[brr] warning: gate thread {t.name} died")
 
-        for msg in messages:
-            print(f"[brr] {msg.user}: {msg.text}")
-
-            if msg.text.lower() in ("/cancel", "cancel"):
-                if runner.cancel():
-                    connector.reply(f"cancelling: {runner.instruction}")
-                else:
-                    connector.reply("nothing running")
-                continue
-
-            if msg.text.lower() in ("/status", "status", "status?"):
-                status_text = status_mod.get_status()
-                if runner.busy:
-                    status_text += f"\n\ncurrently running: {runner.instruction}"
-                connector.reply(status_text)
-                continue
-
-            if runner.busy:
-                connector.reply(
-                    f"busy with: {runner.instruction}\nsend /cancel to abort it"
-                )
-                continue
-
-            runner.submit(msg.text)
-            connector.reply(f"running: {msg.text}")
-
-    runner.shutdown()
+    finally:
+        _clear_pid(brr_dir)
+        print("[brr] daemon stopped")

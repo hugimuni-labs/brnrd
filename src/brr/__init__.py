@@ -1,4 +1,4 @@
-"""brr — structured guardrails for AI agent work, managed from a chat."""
+"""brr — playbook + knowledge base for AI agents, with remote execution."""
 
 __all__ = ["__version__"]
 

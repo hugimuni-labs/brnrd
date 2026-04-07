@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Entry point for clone-based installation (no pip install needed).
+
+Usage:
+    git clone <repo> .brr && .brr/brr init
+
+If uv is available, use: uv run .brr/brr init
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from brr.cli import main
+
+main()

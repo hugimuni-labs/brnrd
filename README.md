@@ -1,137 +1,124 @@
 # brr
 
-Structured guardrails for AI agent work, managed from a chat.
+Structured AI agent playbook with persistent knowledge base and remote execution.
 
-brr produces `AGENTS.md` — a single instruction file that encodes
-your project's build commands, code conventions, workflow rules, and
-safety guardrails.  Any AI tool that reads it (Claude Code, Cursor,
-Codex, Gemini) gets the same conventions.  brr itself is just the
-remote control: it delegates tasks to whichever executor you use and
-reports back via Telegram.
+brr produces `AGENTS.md` — a playbook that encodes your project's conventions,
+workflow, and guardrails.  Any AI tool that reads it (Claude Code, Cursor, Codex,
+Gemini) gets the same behavior.  brr adds a remote execution layer: a daemon that
+accepts tasks from Telegram, Slack, Git, or anything that writes a file.
 
-**The guardrails live in AGENTS.md, not in brr.** brr creates the
-file, enriches it from the repo, and provides the remote execution
-layer.  But the conventions work even without brr — they're just
-Markdown that any agentic tool can read.
+**Two layers of value:**
 
-Zero runtime dependencies.  No database, no cloud service, no lock-in.
+1. **Playbook only** — `AGENTS.md` + `kb/` work with any AI tool, no brr needed.
+   Copy the conventions, use them everywhere.
+2. **Full tool** — brr daemon handles remote execution, gate I/O, knowledge
+   persistence, and git push.
+
+Zero runtime dependencies.  Stdlib Python only.  No database, no cloud, no lock-in.
+
+## Install
+
+```bash
+pip install brr
+```
+
+Or clone into a project for full prompt customization:
+
+```bash
+git clone https://github.com/user/brr .brr-tool
+.brr-tool/brr init
+```
+
+If you have [uv](https://github.com/astral-sh/uv):
+
+```bash
+uv run .brr-tool/brr init
+```
 
 ## Quick start
 
 ```bash
-pip install brr
+brr init                          # detect runner, create AGENTS.md + kb/
+brr run "fix the failing tests"   # run a task locally
 
-brr init                         # create AGENTS.md + detect executor
-brr init https://github.com/u/r  # or clone first
-
-brr auth telegram                # set up the chat connector
-brr connect telegram             # bind repo to a Telegram topic
-brr up                           # start the daemon
+brr auth telegram                 # set up a gate
+brr connect telegram              # bind to a chat
+brr up                            # start the daemon
 ```
 
-From chat:
+From Telegram (or Slack, or a task file):
 
 ```
 > fix the failing tests in auth/
-> status
-> /cancel
+> research caching strategies for the API layer
+> review the latest PR for security issues
 ```
 
-Or locally:
+## What brr creates
 
-```bash
-brr run "fix failing tests in the auth module"
-```
+`brr init` sets up:
 
-## What brr produces
-
-`brr init` creates `AGENTS.md` with:
-
-- **YAML frontmatter** — executor config, commands, state file path
-  (only used by brr itself)
-- **Project instructions** — what it is, how to build/test/run
-- **Workflow conventions** — branching, commit policy, state management
-- **Guardrails** — dead-end detection, scope drift, proportionality
-- **Constraints** — things the agent must not do without asking
-
-If an executor is on PATH, init runs it to fill in the sections from
-the repo.  If the repo already has a `CLAUDE.md` or `GEMINI.md`, its
-content is incorporated as the body.
-
-Working memory lives in `.brr.local/state.md` (gitignored).
+- **`AGENTS.md`** — playbook with workflow, kb conventions, commit protocol,
+  artifact rules, guardrails, self-review instructions.
+- **`kb/`** — persistent knowledge base committed to the repo.  Compounds
+  across sessions.
+- **`.brr/`** — runtime directory (gitignored): inbox, responses, config,
+  gate state.
 
 ## Architecture
 
 ```
-AGENTS.md        ← universal: works with any AI tool
+AGENTS.md + kb/         universal: works with any AI tool
   │
   ├── Claude Code reads it
   ├── Cursor reads it
   ├── Codex reads it
   │
-  └── brr reads it + adds remote execution:
-        │
-     Telegram ←→ daemon ←→ executor (subprocess)
-        │                      │
-     /cancel              TaskRunner
-     /status           (one task at a time)
+  └── brr adds remote execution:
+
+  ┌─────────┐    .brr/inbox/    ┌────────┐    runner     ┌──────────┐
+  │  Gates   │───────────────────│ Daemon │──────────────│  Runner   │
+  │ tg/slack │    .brr/responses │        │  subprocess  │ (AI CLI)  │
+  │ git/any  │◄──────────────────│        │◄─────────────│           │
+  └─────────┘                    └────────┘   git push   └──────────┘
 ```
 
-brr is a thin layer.  The intelligence is in the executor.
-The conventions are in AGENTS.md.  brr connects the two to a chat.
-
-## AGENTS.md format
-
-```yaml
----
-brr:
-  version: 1
-  mode: live
-  default_executor: claude
-  auto_approve: true
-  commands:
-    build: "npm run build"
-    test: "npm test"
-    verify: "npm run lint && npm test"
-  state_file: .brr.local/state.md
-  commit_policy: commit-at-end-if-material
----
-```
-
-| Field              | Values                                               |
-|--------------------|------------------------------------------------------|
-| `default_executor` | `auto`, `claude`, `codex`, `gemini`, or any on PATH  |
-| `mode`             | `paused`, `incubating`, `live`                       |
-| `executor_cmd`     | command template: `["tool", "-p", "{prompt}"]`       |
-| `state_file`       | path to state file (default: `.brr.local/state.md`)  |
+Gates are transport adapters — they create event files and deliver responses.
+The daemon scans the inbox and runs workers.  The runner is whatever AI CLI
+you have installed.
 
 ## CLI
 
-| Command                   | What it does                         |
-|---------------------------|--------------------------------------|
-| `brr init [url]`          | Create AGENTS.md, enrich from repo   |
-| `brr run "<task>"`        | Run a task through the executor      |
-| `brr status`              | Show project state                   |
-| `brr auth telegram`       | Set bot token                        |
-| `brr connect telegram`    | Bind repo to a chat topic            |
-| `brr up`                  | Start the daemon                     |
+| Command                | What it does                          |
+|------------------------|---------------------------------------|
+| `brr init [url]`       | Create AGENTS.md + kb/, detect runner |
+| `brr run "<task>"`     | Run a task locally via runner         |
+| `brr status`           | Show project state + recent activity  |
+| `brr auth <gate>`      | Set credentials for a gate            |
+| `brr connect <gate>`   | Bind repo to a gate channel           |
+| `brr up`               | Start the daemon (foreground)         |
+| `brr down`             | Stop the daemon                       |
+| `brr eject`            | Copy prompts to .brr/prompts/ to edit |
 
-Chat: any message is a task.  `/status`, `/cancel` are built-in.
+Gates: `telegram`, `slack`, `git`.
 
 ## Extending
 
-**Connectors** are single-file Python modules.  `telegram.py` is the
-reference.  The `TaskRunner` class in `executor.py` handles threading,
-cancellation, and serial execution — any connector can use it.
+**Gates** follow a file protocol: write to `.brr/inbox/`, read from
+`.brr/responses/`.  Any language works.  See `src/brr/gates/README.md`
+for the spec and a bash example.
 
-**Executors** are CLI commands on PATH.  Built-in profiles exist for
-`claude`, `codex`, and `gemini`.  Set `default_executor` to any
-executable, or use `executor_cmd` for full command-template control.
+**Runners** are CLI commands on PATH.  Built-in profiles: `claude`,
+`codex`, `gemini`.  Set `runner=<name>` in `.brr/config` or use any
+executable.
+
+**Prompts** live in `src/brr/prompts/`.  Run `brr eject` to copy them
+to `.brr/prompts/` for per-repo customization.
 
 ## Development
 
 ```bash
-git clone https://github.com/…/brr.git
+git clone https://github.com/user/brr
 cd brr
 pip install -e ".[dev]"
 pytest
