@@ -9,6 +9,7 @@ class for serial task execution in a background thread.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import threading
@@ -139,6 +140,51 @@ def run_executor(
     return stdout
 
 
+# ── Context injection ────────────────────────────────────────────────
+
+_LOG_ENTRY_RE = re.compile(r"^## \[", re.MULTILINE)
+_MAX_LOG_ENTRIES = 10
+
+
+def _read_recent_log(repo_root: Path, max_entries: int = _MAX_LOG_ENTRIES) -> str:
+    """Read the most recent entries from kb/log.md.
+
+    Returns the raw markdown of the last *max_entries* entries, or
+    empty string if the log doesn't exist or is empty.  This gives
+    the agent conversation context from previous sessions without
+    unbounded growth in the prompt.
+    """
+    log_path = repo_root / "kb" / "log.md"
+    if not log_path.exists():
+        return ""
+    text = log_path.read_text(encoding="utf-8")
+    # Split on entry headers (## [YYYY-MM-DD] ...)
+    parts = _LOG_ENTRY_RE.split(text)
+    if len(parts) <= 1:
+        return ""
+    # parts[0] is the preamble, rest are entries (without the "## [" prefix)
+    entries = [f"## [{p}" for p in parts[1:]]
+    recent = entries[-max_entries:]
+    return "\n".join(recent).strip()
+
+
+def _build_context_block(repo_root: Path) -> str:
+    """Build the conversation context block for prompt injection.
+
+    Includes recent log entries so the agent has continuity with
+    previous sessions.  The log is maintained by agents (per AGENTS.md)
+    so it stays proportional.
+    """
+    recent = _read_recent_log(repo_root)
+    if not recent:
+        return ""
+    return (
+        "## Recent Activity (from kb/log.md)\n\n"
+        "This is your conversation context — what happened in previous sessions:\n\n"
+        f"{recent}"
+    )
+
+
 # ── Prompt construction ──────────────────────────────────────────────
 
 
@@ -152,7 +198,12 @@ def build_init_prompt(repo_root: Path) -> str:
 def build_run_prompt(task: str, repo_root: Path) -> str:
     """Build the prompt for ``brr run`` — run.md + task text."""
     preamble = _read_prompt("run.md", repo_root)
-    return f"{preamble}\n\n---\nTask: {task}"
+    context = _build_context_block(repo_root)
+    parts = [preamble]
+    if context:
+        parts.append(context)
+    parts.append(f"---\nTask: {task}")
+    return "\n\n".join(parts)
 
 
 def build_daemon_prompt(
@@ -160,18 +211,45 @@ def build_daemon_prompt(
     event_id: str,
     response_path: str,
     repo_root: Path,
+    *,
+    log_file: str | None = None,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
-    Same as run prompt but with event metadata prepended to the task.
+    Same as run prompt but with event metadata and conversation context.
+    When *log_file* is set (e.g. for worktree mode), the agent is told
+    to write its log entry there instead of kb/log.md.
     """
     preamble = _read_prompt("run.md", repo_root)
+    context = _build_context_block(repo_root)
     metadata = (
         f"Event: {event_id}\n"
         f"Write your final response to: {response_path}\n"
         f"Do not explore or modify any other files in .brr/.\n"
     )
-    return f"{preamble}\n\n---\n{metadata}\nTask: {task}"
+    if log_file:
+        metadata += f"\nWrite your log entry to {log_file} instead of kb/log.md.\n"
+
+    parts = [preamble]
+    if context:
+        parts.append(context)
+    parts.append(f"---\n{metadata}\nTask: {task}")
+    return "\n\n".join(parts)
+
+
+def build_triage_prompt(event_body: str, event_id: str, repo_root: Path) -> str:
+    """Build the prompt for the triage step — event → task conversion.
+
+    The triage agent reads the event and decides branch strategy and
+    execution environment.  Its output is parsed into a Task.
+    """
+    triage = _read_prompt("triage.md", repo_root)
+    context = _build_context_block(repo_root)
+    parts = [triage]
+    if context:
+        parts.append(context)
+    parts.append(f"---\nEvent ID: {event_id}\n\n{event_body}")
+    return "\n\n".join(parts)
 
 
 # ── Task execution ───────────────────────────────────────────────────

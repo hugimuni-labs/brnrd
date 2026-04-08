@@ -25,6 +25,7 @@ from . import config as conf
 from . import protocol
 from . import runner
 from . import gitops
+from .task import Task
 
 _SCAN_INTERVAL = 3
 _BUILTIN_GATES = ["telegram", "slack", "git_gate"]
@@ -126,23 +127,32 @@ def _run_worker(
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
-) -> None:
-    """Run the runner for a single event, with retries."""
+) -> Task:
+    """Run the runner for a single event, with retries.
+
+    Creates a Task from the event, persists it to .brr/tasks/,
+    and tracks status throughout execution.  Returns the Task.
+    """
     eid = event["id"]
-    body = event.get("body", "")
+    tasks_dir = repo_root / ".brr" / "tasks"
+    task = Task.from_event(event, cfg)
+    task.update_status("running", tasks_dir)
+
     runner_name = runner.resolve_runner(repo_root)
     resp_path = protocol.response_path(responses_dir, eid)
+
+    print(f"[brr] task {task.id} (event {eid}): branch={task.branch} env={task.env}")
 
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = runner.build_daemon_prompt(
-                body, eid, str(resp_path), repo_root,
+                task.body, eid, str(resp_path), repo_root,
             )
         else:
             prompt = runner.build_daemon_prompt(
                 f"Previous attempt did not produce a response file. "
                 f"Please complete the task and write your response to {resp_path}.\n\n"
-                f"Original task: {body}",
+                f"Original task: {task.body}",
                 eid, str(resp_path), repo_root,
             )
 
@@ -154,12 +164,21 @@ def _run_worker(
 
         if protocol.response_exists(responses_dir, eid):
             print(f"[brr] worker {eid}: response ready")
-            return
+            # Check for needs_context status in response
+            resp_text = (responses_dir / f"{eid}.md").read_text(encoding="utf-8")
+            resp_fm = protocol.parse_frontmatter(resp_text)
+            if resp_fm.get("status") == "needs_context":
+                task.update_status("needs_context", tasks_dir)
+            else:
+                task.update_status("done", tasks_dir)
+            return task
 
         if attempt <= max_retries:
             print(f"[brr] worker {eid}: no response file, retrying...")
 
     print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
+    task.update_status("error", tasks_dir)
+    return task
 
 
 # ── Main loop ────────────────────────────────────────────────────────
@@ -204,8 +223,14 @@ def start(repo_root: Path) -> None:
                 print(f"[brr] processing: {eid}")
                 protocol.set_status(event, "processing")
 
-                _run_worker(event, repo_root, responses_dir, cfg, max_retries)
+                task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
                 protocol.set_status(event, "done")
+
+                if task.status == "needs_context":
+                    print(f"[brr] task {task.id}: needs more context")
+                elif task.status == "error":
+                    print(f"[brr] task {task.id}: failed")
+
                 _push_if_needed(repo_root)
             else:
                 time.sleep(_SCAN_INTERVAL)
