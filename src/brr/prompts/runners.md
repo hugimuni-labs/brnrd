@@ -3,7 +3,7 @@ claude:
   cmd: claude --print
   approve: --dangerously-skip-permissions
 codex:
-  cmd: codex --full-auto
+  cmd: codex exec --full-auto
   approve: ""
 gemini:
   cmd: gemini

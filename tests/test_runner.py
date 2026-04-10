@@ -2,6 +2,7 @@
 
 from brr.runner import (
     detect_runner,
+    _build_cmd,
     _read_recent_log,
     _build_context_block,
     build_run_prompt,
@@ -61,6 +62,10 @@ class TestContextInjection:
 
 
 class TestPromptBuilding:
+    def test_build_cmd_uses_noninteractive_codex_exec(self):
+        cmd = _build_cmd("codex", "fix it", {})
+        assert cmd == ["codex", "exec", "--full-auto", "fix it"]
+
     def test_run_prompt_includes_context(self, tmp_path):
         kb = tmp_path / "kb"
         kb.mkdir()
