@@ -80,21 +80,37 @@ def resolve_runner(repo_root: Path) -> str:
     )
 
 
-def _build_cmd(runner_name: str, prompt: str, cfg: dict[str, Any]) -> list[str]:
+def _build_cmd(
+    runner_name: str,
+    prompt: str,
+    cfg: dict[str, Any],
+    response_path: str | None = None,
+) -> list[str]:
     """Build subprocess argv for a built-in or named runner."""
+    def _replace_placeholders(parts: list[str]) -> list[str]:
+        replaced = [s.replace("{prompt}", prompt) for s in parts]
+        if response_path is not None:
+            replaced = [s.replace("{response_path}", response_path) for s in replaced]
+        return replaced
+
     custom = cfg.get("runner_cmd")
     if custom:
         if isinstance(custom, list):
-            return [s.replace("{prompt}", prompt) for s in custom]
-        return [s.replace("{prompt}", prompt) for s in str(custom).split()]
+            return _replace_placeholders(custom)
+        return _replace_placeholders(str(custom).split())
 
     profiles = _load_profiles()
     profile = profiles.get(runner_name)
     if profile:
         cmd = str(profile.get("cmd", runner_name)).split()
         approve = str(profile.get("approve", "")).strip()
+        if runner_name == "codex" and cfg.get("auto_approve"):
+            cmd = [part for part in cmd if part != "--full-auto"]
+            cmd.append("--dangerously-bypass-approvals-and-sandbox")
         if cfg.get("auto_approve") and approve:
             cmd.extend(approve.split())
+        if runner_name == "codex" and response_path:
+            cmd.extend(["--output-last-message", response_path])
         cmd.append(prompt)
         return cmd
 
@@ -106,11 +122,12 @@ def run_executor(
     prompt: str,
     cwd: Path | None = None,
     cfg: dict[str, Any] | None = None,
+    response_path: str | None = None,
 ) -> str:
     """Run a runner subprocess with the given prompt, return stdout."""
     global _active_proc
     cfg = cfg or {}
-    cmd = _build_cmd(runner_name, prompt, cfg)
+    cmd = _build_cmd(runner_name, prompt, cfg, response_path=response_path)
     try:
         with _proc_lock:
             _active_proc = subprocess.Popen(
@@ -185,6 +202,20 @@ def _build_context_block(repo_root: Path) -> str:
     )
 
 
+def _join_prompt_parts(
+    preamble: str,
+    repo_root: Path,
+    trailer: str,
+) -> str:
+    """Join a prompt preamble, optional recent context, and task-specific text."""
+    parts = [preamble]
+    context = _build_context_block(repo_root)
+    if context:
+        parts.append(context)
+    parts.append(trailer)
+    return "\n\n".join(parts)
+
+
 # ── Prompt construction ──────────────────────────────────────────────
 
 
@@ -198,12 +229,7 @@ def build_init_prompt(repo_root: Path) -> str:
 def build_run_prompt(task: str, repo_root: Path) -> str:
     """Build the prompt for ``brr run`` — run.md + task text."""
     preamble = _read_prompt("run.md", repo_root)
-    context = _build_context_block(repo_root)
-    parts = [preamble]
-    if context:
-        parts.append(context)
-    parts.append(f"---\nTask: {task}")
-    return "\n\n".join(parts)
+    return _join_prompt_parts(preamble, repo_root, f"---\nTask: {task}")
 
 
 def build_daemon_prompt(
@@ -221,20 +247,15 @@ def build_daemon_prompt(
     to write its log entry there instead of kb/log.md.
     """
     preamble = _read_prompt("run.md", repo_root)
-    context = _build_context_block(repo_root)
     metadata = (
         f"Event: {event_id}\n"
-        f"Write your final response to: {response_path}\n"
+        f"Your final response must be the exact content to place in: {response_path}\n"
+        f"Some runners capture your final response automatically; if not, write that exact content there yourself.\n"
         f"Do not explore or modify any other files in .brr/.\n"
     )
     if log_file:
         metadata += f"\nWrite your log entry to {log_file} instead of kb/log.md.\n"
-
-    parts = [preamble]
-    if context:
-        parts.append(context)
-    parts.append(f"---\n{metadata}\nTask: {task}")
-    return "\n\n".join(parts)
+    return _join_prompt_parts(preamble, repo_root, f"---\n{metadata}\nTask: {task}")
 
 
 def build_triage_prompt(event_body: str, event_id: str, repo_root: Path) -> str:
@@ -244,12 +265,7 @@ def build_triage_prompt(event_body: str, event_id: str, repo_root: Path) -> str:
     execution environment.  Its output is parsed into a Task.
     """
     triage = _read_prompt("triage.md", repo_root)
-    context = _build_context_block(repo_root)
-    parts = [triage]
-    if context:
-        parts.append(context)
-    parts.append(f"---\nEvent ID: {event_id}\n\n{event_body}")
-    return "\n\n".join(parts)
+    return _join_prompt_parts(triage, repo_root, f"---\nEvent ID: {event_id}\n\n{event_body}")
 
 
 # ── Task execution ───────────────────────────────────────────────────

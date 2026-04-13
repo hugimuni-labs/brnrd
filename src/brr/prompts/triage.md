@@ -30,5 +30,8 @@ env: <environment>
 Guidelines:
 - Default to `branch: current` and `env: local` unless the task clearly
   warrants isolation (touches multiple files, risky refactor, long-running).
+- Treat `branch` and `env` as related: `env: local` only makes sense with
+  `branch: current`; if you pick any other branch strategy, prefer
+  `env: worktree`.
 - If the event references an existing branch or PR, use that branch name.
 - If unsure, prefer `current` — simpler is better for serial execution.

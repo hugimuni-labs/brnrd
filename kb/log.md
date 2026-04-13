@@ -78,3 +78,43 @@ Implemented three connected features from the v2 plans:
 
 Closed open question #4 (task persistence) in both plan documents.
 All 56 tests pass (26 new).
+
+## [2026-04-10] fix | Use non-interactive Codex runner
+
+Updated the built-in `codex` runner profile to use `codex exec --full-auto`
+instead of the interactive `codex --full-auto` path, which was failing under
+the daemon with `stdout is not a terminal`. Added a regression test covering
+the generated Codex command.
+
+## [2026-04-10] fix | Make Codex daemon writes reliable
+
+Troubleshot a second Codex daemon failure where runs exited successfully but
+never created `.brr/responses/<event>.md`. Root cause: Codex's default sandbox
+was blocked on this Linux host (`bwrap ... Operation not permitted`), and brr
+also relied on the agent manually writing the response file. Updated daemon
+invocations to pass Codex `--output-last-message <response-path>` and to append
+`--dangerously-bypass-approvals-and-sandbox` when `auto_approve=true`, plus
+clarified the daemon prompt and added regression coverage.
+
+## [2026-04-10] review | PR #1 task abstraction review
+
+Reviewed PR #1 deeply against the code path actually exercised by the daemon.
+Found a larger gap where the new triage prompt is present but not wired into
+execution, so branch/env are still not agent-decided in practice. Also fixed
+two concrete issues in the working tree: daemon event files now preserve the
+real task outcome (`needs_context` / `error` instead of always `done`), and
+`Task.from_event()` now honors explicit event `branch` / `env` overrides.
+Added daemon and task regression tests and recorded the review in
+`kb/review-pr-1.md`. Verified with `PYTHONPATH=src pytest` because the current
+virtualenv imports `brr` from `.venv/site-packages` rather than `src/`.
+
+## [2026-04-14] fix | Wire daemon triage into task execution
+
+Fixed the remaining PR #1 review gap by making the daemon run a real triage
+step before execution instead of creating tasks directly from raw events.
+Triage output is now parsed into a persisted `Task`, malformed triage output
+fails closed with task/event status `error`, and branch/env/body decisions now
+actually affect execution. Also reduced duplicated prompt assembly in
+`runner.py`, clarified the triage prompt's branch/env relationship, and added
+regression coverage for valid and invalid triage output. Verified with
+`PYTHONPATH=src pytest tests/test_task.py tests/test_runner.py tests/test_daemon.py`.

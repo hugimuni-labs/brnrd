@@ -14,4 +14,4 @@ or remove a page.
 
 ## Research
 
-(none yet)
+- [PR #1 Review](review-pr-1.md) — deep review notes for task abstraction PR and follow-up notes after wiring the triage path
