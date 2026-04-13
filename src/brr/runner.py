@@ -13,6 +13,11 @@ import re
 import shutil
 import subprocess
 import threading
+import time
+import random
+import string
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +27,100 @@ _profiles_cache: dict[str, dict[str, Any]] | None = None
 
 _active_proc: subprocess.Popen | None = None
 _proc_lock = threading.Lock()
+
+
+def _trace_id() -> str:
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    return f"{ts}-{rand}"
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
+    return slug or "invocation"
+
+
+@dataclass(frozen=True)
+class RunnerArtifactSpec:
+    """A file the runner invocation is expected to produce."""
+
+    path: Path
+    label: str | None = None
+    copy_to_trace: bool = True
+
+
+@dataclass(frozen=True)
+class RunnerArtifactRecord:
+    """Observed status for one expected runner artifact."""
+
+    path: Path
+    label: str
+    exists: bool
+    trace_copy: Path | None = None
+
+
+@dataclass(frozen=True)
+class RunnerInvocation:
+    """Single runner invocation plus its validation contract."""
+
+    kind: str
+    label: str
+    prompt: str
+    repo_root: Path
+    cwd: Path | None = None
+    response_path: str | None = None
+    required_artifacts: list[RunnerArtifactSpec] = field(default_factory=list)
+
+    @property
+    def trace_root(self) -> Path:
+        return self.repo_root / ".brr" / "traces" / _slugify(self.kind)
+
+
+@dataclass
+class RunnerResult:
+    """Runner subprocess result plus trace and artifact validation."""
+
+    invocation: RunnerInvocation
+    runner_name: str
+    command: list[str]
+    stdout: str
+    stderr: str
+    returncode: int
+    trace_dir: Path | None
+    artifacts: list[RunnerArtifactRecord]
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
+
+    @property
+    def output(self) -> str:
+        return self.stdout
+
+    @property
+    def missing_artifacts(self) -> list[RunnerArtifactRecord]:
+        return [artifact for artifact in self.artifacts if not artifact.exists]
+
+    @property
+    def validation_ok(self) -> bool:
+        return not self.missing_artifacts
+
+    def retry_reason(self) -> str | None:
+        if not self.missing_artifacts:
+            return None
+        labels = ", ".join(artifact.label for artifact in self.missing_artifacts)
+        return f"missing required output(s): {labels}"
+
+    def raise_for_error(self) -> None:
+        if self.ok:
+            return
+        detail = self.stderr.strip() or self.stdout.strip()
+        if len(detail) > 500:
+            detail = detail[:500] + " …[truncated]"
+        raise RuntimeError(
+            f"{self.command[0]} failed (exit {self.returncode}): "
+            + (detail or "(no output)")
+        )
 
 
 def _read_prompt(name: str, repo_root: Path | None = None) -> str:
@@ -117,6 +216,128 @@ def _build_cmd(
     return [runner_name, prompt]
 
 
+def _copy_artifact_to_trace(
+    trace_dir: Path,
+    artifact: RunnerArtifactSpec,
+    index: int,
+) -> Path | None:
+    if not artifact.copy_to_trace or not artifact.path.exists():
+        return None
+    artifacts_dir = trace_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    target = artifacts_dir / f"{index:02d}-{artifact.path.name}"
+    shutil.copy2(artifact.path, target)
+    return target
+
+
+def _write_trace(result: RunnerResult) -> Path | None:
+    trace_root = result.invocation.trace_root
+    try:
+        trace_dir = trace_root / f"{_slugify(result.invocation.label)}-{_trace_id()}"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    (trace_dir / "prompt.md").write_text(result.invocation.prompt, encoding="utf-8")
+    (trace_dir / "stdout.txt").write_text(result.stdout, encoding="utf-8")
+    (trace_dir / "stderr.txt").write_text(result.stderr, encoding="utf-8")
+
+    records = []
+    copied_artifacts = []
+    for index, artifact in enumerate(result.invocation.required_artifacts, start=1):
+        trace_copy = _copy_artifact_to_trace(trace_dir, artifact, index)
+        copied_artifacts.append(
+            RunnerArtifactRecord(
+                path=artifact.path,
+                label=artifact.label or str(artifact.path),
+                exists=artifact.path.exists(),
+                trace_copy=trace_copy,
+            )
+        )
+
+    result.artifacts = copied_artifacts
+    metadata = {
+        "runner": result.runner_name,
+        "kind": result.invocation.kind,
+        "label": result.invocation.label,
+        "cwd": str(result.invocation.cwd or ""),
+        "command": result.command,
+        "returncode": result.returncode,
+        "response_path": result.invocation.response_path,
+        "validation_ok": result.validation_ok,
+        "retry_reason": result.retry_reason(),
+        "artifacts": [
+            {
+                "label": artifact.label,
+                "path": str(artifact.path),
+                "exists": artifact.exists,
+                "trace_copy": str(artifact.trace_copy) if artifact.trace_copy else None,
+            }
+            for artifact in result.artifacts
+        ],
+    }
+    (trace_dir / "meta.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return trace_dir
+
+
+def invoke_runner(
+    runner_name: str,
+    invocation: RunnerInvocation,
+    cfg: dict[str, Any] | None = None,
+) -> RunnerResult:
+    """Run a runner subprocess, persist a trace, and validate outputs."""
+    global _active_proc
+    cfg = cfg or {}
+    cmd = _build_cmd(
+        runner_name,
+        invocation.prompt,
+        cfg,
+        response_path=invocation.response_path,
+    )
+    stdout = ""
+    stderr = ""
+    returncode = 0
+    try:
+        with _proc_lock:
+            _active_proc = subprocess.Popen(
+                cmd,
+                cwd=invocation.cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        proc = _active_proc
+        stdout, stderr = proc.communicate(timeout=600)
+        returncode = proc.returncode
+    except FileNotFoundError:
+        stderr = f"executable '{cmd[0]}' not found on PATH"
+        returncode = 127
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        stderr = (stderr + "\n" if stderr else "") + "runner timed out after 600s"
+        returncode = 124
+    finally:
+        with _proc_lock:
+            _active_proc = None
+
+    result = RunnerResult(
+        invocation=invocation,
+        runner_name=runner_name,
+        command=cmd,
+        stdout=stdout,
+        stderr=stderr,
+        returncode=returncode,
+        trace_dir=None,
+        artifacts=[],
+    )
+    result.trace_dir = _write_trace(result)
+    return result
+
+
 def run_executor(
     runner_name: str,
     prompt: str,
@@ -125,36 +346,19 @@ def run_executor(
     response_path: str | None = None,
 ) -> str:
     """Run a runner subprocess with the given prompt, return stdout."""
-    global _active_proc
-    cfg = cfg or {}
-    cmd = _build_cmd(runner_name, prompt, cfg, response_path=response_path)
-    try:
-        with _proc_lock:
-            _active_proc = subprocess.Popen(
-                cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-        proc = _active_proc
-        stdout, stderr = proc.communicate(timeout=600)
-        returncode = proc.returncode
-    except FileNotFoundError:
-        raise RuntimeError(f"executable '{cmd[0]}' not found on PATH")
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.communicate()
-        raise RuntimeError("runner timed out after 600s")
-    finally:
-        with _proc_lock:
-            _active_proc = None
-
-    if returncode != 0:
-        detail = stderr.strip() or stdout.strip()
-        if len(detail) > 500:
-            detail = detail[:500] + " …[truncated]"
-        raise RuntimeError(
-            f"{cmd[0]} failed (exit {returncode}): "
-            + (detail or "(no output)")
-        )
-    return stdout
+    if cwd is None:
+        raise RuntimeError("run_executor requires cwd to infer repo_root for tracing")
+    invocation = RunnerInvocation(
+        kind="executor",
+        label=runner_name,
+        prompt=prompt,
+        cwd=cwd,
+        repo_root=cwd,
+        response_path=response_path,
+    )
+    result = invoke_runner(runner_name, invocation, cfg=cfg)
+    result.raise_for_error()
+    return result.stdout
 
 
 # ── Context injection ────────────────────────────────────────────────
@@ -283,7 +487,19 @@ def run_task(instruction: str) -> str:
 
     print(f"[brr] running: {instruction}")
     print(f"[brr] runner: {runner_name}")
-    output = run_executor(runner_name, prompt, cwd=repo_root, cfg=cfg)
+    result = invoke_runner(
+        runner_name,
+        RunnerInvocation(
+            kind="run",
+            label=instruction[:40],
+            prompt=prompt,
+            cwd=repo_root,
+            repo_root=repo_root,
+        ),
+        cfg=cfg,
+    )
+    result.raise_for_error()
+    output = result.output
     print(output)
     return output
 
