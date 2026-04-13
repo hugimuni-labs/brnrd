@@ -23,6 +23,10 @@ from typing import Any
 BRANCH_STRATEGIES = ("current", "auto", "task")  # or arbitrary name / "new:<name>"
 ENV_TYPES = ("local", "worktree", "docker")
 STATUSES = ("pending", "running", "done", "needs_context", "error", "conflict")
+_EVENT_META_FIELDS = {
+    "id", "body", "source", "status", "_path", "created", "branch", "env",
+}
+_TASK_FIELDS = {"id", "event_id", "branch", "env", "status", "source"}
 
 
 def _generate_task_id() -> str:
@@ -71,14 +75,51 @@ class Task:
             id=task_id,
             event_id=event.get("id", ""),
             body=event.get("body", ""),
-            branch=cfg.get("default_branch", "current"),
-            env=cfg.get("default_env", "local"),
+            branch=event.get("branch", cfg.get("default_branch", "current")),
+            env=event.get("env", cfg.get("default_env", "local")),
             source=event.get("source", ""),
             meta={
                 k: v for k, v in event.items()
-                if k not in ("id", "body", "source", "status", "_path", "created")
+                if k not in _EVENT_META_FIELDS
             },
         )
+
+    @classmethod
+    def from_triage_output(
+        cls,
+        text: str,
+        event: dict[str, Any],
+        cfg: dict[str, Any] | None = None,
+    ) -> Task:
+        """Create a task from triage-agent output plus the originating event."""
+        from . import protocol
+
+        task = cls.from_event(event, cfg)
+        fm = protocol.parse_frontmatter(text)
+        if not fm:
+            raise ValueError("triage output is missing frontmatter")
+
+        body = protocol.frontmatter_body(text).strip()
+        if not body:
+            raise ValueError("triage output is missing a task body")
+
+        branch = str(fm.get("branch", task.branch)).strip()
+        env = str(fm.get("env", task.env)).strip()
+        status = str(fm.get("status", task.status)).strip()
+
+        if not branch or branch == "new:":
+            raise ValueError(f"invalid triage branch: {branch!r}")
+        if env not in ENV_TYPES:
+            raise ValueError(f"invalid triage env: {env!r}")
+        if status not in STATUSES:
+            raise ValueError(f"invalid triage status: {status!r}")
+
+        task.body = body
+        task.branch = branch
+        task.env = env
+        task.status = status
+        task.meta.update({k: v for k, v in fm.items() if k not in _TASK_FIELDS})
+        return task
 
     # ── Persistence ─────────────────────────────────────────────────
 
@@ -112,8 +153,7 @@ class Task:
         if not fm.get("id"):
             return None
         body = protocol.frontmatter_body(text).strip()
-        known = {"id", "event_id", "branch", "env", "status", "source"}
-        meta = {k: v for k, v in fm.items() if k not in known}
+        meta = {k: v for k, v in fm.items() if k not in _TASK_FIELDS}
         return cls(
             id=fm["id"],
             event_id=fm.get("event_id", ""),

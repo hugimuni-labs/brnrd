@@ -66,6 +66,19 @@ class TestPromptBuilding:
         cmd = _build_cmd("codex", "fix it", {})
         assert cmd == ["codex", "exec", "--full-auto", "fix it"]
 
+    def test_build_cmd_codex_auto_approve_adds_bypass_and_output_path(self):
+        cmd = _build_cmd(
+            "codex", "fix it", {"auto_approve": True}, response_path="/tmp/resp.md",
+        )
+        assert cmd == [
+            "codex",
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--output-last-message",
+            "/tmp/resp.md",
+            "fix it",
+        ]
+
     def test_run_prompt_includes_context(self, tmp_path):
         kb = tmp_path / "kb"
         kb.mkdir()
@@ -91,6 +104,7 @@ class TestPromptBuilding:
             log_file="kb/log-task-123.md",
         )
         assert "kb/log-task-123.md" in prompt
+        assert "Some runners capture your final response automatically" in prompt
         assert "fix it" in prompt
 
     def test_triage_prompt(self, tmp_path):

@@ -22,6 +22,18 @@ class TestTaskFromEvent:
         assert task.branch == "auto"
         assert task.env == "worktree"
 
+    def test_event_overrides_config_defaults(self):
+        event = {
+            "id": "evt-2", "body": "fix bug",
+            "branch": "new:feature/task", "env": "worktree",
+        }
+        cfg = {"default_branch": "current", "default_env": "local"}
+        task = Task.from_event(event, cfg)
+        assert task.branch == "new:feature/task"
+        assert task.env == "worktree"
+        assert "branch" not in task.meta
+        assert "env" not in task.meta
+
     def test_meta_preserved(self):
         event = {
             "id": "evt-3", "body": "hi", "source": "telegram",
@@ -32,6 +44,48 @@ class TestTaskFromEvent:
         # Known fields should NOT be in meta
         assert "id" not in task.meta
         assert "body" not in task.meta
+
+    def test_from_triage_output_applies_frontmatter_and_body(self):
+        event = {
+            "id": "evt-4",
+            "body": "raw event body",
+            "source": "telegram",
+            "telegram_chat_id": 123,
+        }
+        text = (
+            "---\n"
+            "branch: auto\n"
+            "env: worktree\n"
+            "priority: high\n"
+            "---\n"
+            "refined task body\n"
+        )
+        task = Task.from_triage_output(text, event)
+        assert task.event_id == "evt-4"
+        assert task.body == "refined task body"
+        assert task.branch == "auto"
+        assert task.env == "worktree"
+        assert task.meta["telegram_chat_id"] == 123
+        assert task.meta["priority"] == "high"
+
+    def test_from_triage_output_requires_frontmatter(self):
+        event = {"id": "evt-5", "body": "raw event body"}
+        try:
+            Task.from_triage_output("refined task body", event)
+        except ValueError as exc:
+            assert "missing frontmatter" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+    def test_from_triage_output_rejects_invalid_env(self):
+        event = {"id": "evt-6", "body": "raw event body"}
+        text = "---\nbranch: current\nenv: cloud\n---\nrefined task body\n"
+        try:
+            Task.from_triage_output(text, event)
+        except ValueError as exc:
+            assert "invalid triage env" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
 
 
 class TestBranchResolution:

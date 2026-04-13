@@ -135,10 +135,16 @@ def _run_worker(
     """
     eid = event["id"]
     tasks_dir = repo_root / ".brr" / "tasks"
-    task = Task.from_event(event, cfg)
-    task.update_status("running", tasks_dir)
-
     runner_name = runner.resolve_runner(repo_root)
+    try:
+        task = _triage_task(event, repo_root, cfg, runner_name)
+    except RuntimeError as e:
+        print(f"[brr] task {eid}: triage error: {e}")
+        task = Task.from_event(event, cfg)
+        task.update_status("error", tasks_dir)
+        return task
+
+    task.update_status("running", tasks_dir)
     resp_path = protocol.response_path(responses_dir, eid)
 
     print(f"[brr] task {task.id} (event {eid}): branch={task.branch} env={task.env}")
@@ -158,7 +164,9 @@ def _run_worker(
 
         print(f"[brr] worker {eid}: attempt {attempt}")
         try:
-            runner.run_executor(runner_name, prompt, cwd=repo_root, cfg=cfg)
+            runner.run_executor(
+                runner_name, prompt, cwd=repo_root, cfg=cfg, response_path=str(resp_path),
+            )
         except RuntimeError as e:
             print(f"[brr] worker {eid}: runner error: {e}")
 
@@ -178,6 +186,24 @@ def _run_worker(
 
     print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
     task.update_status("error", tasks_dir)
+    return task
+
+
+def _triage_task(
+    event: dict,
+    repo_root: Path,
+    cfg: dict,
+    runner_name: str,
+) -> Task:
+    """Run the triage agent and parse its task output."""
+    prompt = runner.build_triage_prompt(event.get("body", ""), event["id"], repo_root)
+    output = runner.run_executor(runner_name, prompt, cwd=repo_root, cfg=cfg)
+    try:
+        task = Task.from_triage_output(output, event, cfg)
+    except ValueError as e:
+        raise RuntimeError(f"invalid triage output: {e}") from e
+
+    task.save(repo_root / ".brr" / "tasks")
     return task
 
 
@@ -224,7 +250,7 @@ def start(repo_root: Path) -> None:
                 protocol.set_status(event, "processing")
 
                 task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
-                protocol.set_status(event, "done")
+                protocol.set_status(event, task.status)
 
                 if task.status == "needs_context":
                     print(f"[brr] task {task.id}: needs more context")
