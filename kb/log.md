@@ -141,3 +141,15 @@ new `gitops.merge_branch()` helper, while named branches are preserved and only
 their temporary worktree is removed. Added `src/brr/worktree.py` for worktree
 lifecycle management plus daemon/git regression tests. Verified with
 `PYTHONPATH=src pytest`.
+
+## [2026-04-14] fix | Trace runner invocations and validate outputs consistently
+
+Added a runner-level invocation contract in `runner.py` with explicit required
+artifacts, validation status, and retry reasons, then persisted each invocation
+under `.brr/traces/<kind>/...` with the prompt, stdout/stderr, metadata, and
+copies of produced required files. Updated daemon execution and triage to use
+that contract so response retries derive from missing validated artifacts rather
+than ad hoc file checks, and updated `brr init` to validate AGENTS/kb outputs
+through the same interface. Added regression coverage for trace persistence,
+missing-output validation, daemon retries, and init/integration call sites.
+Verified with `PYTHONPATH=src pytest`.
