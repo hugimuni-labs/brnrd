@@ -1,5 +1,8 @@
 """Tests for runner module."""
 
+import json
+import sys
+
 from brr.runner import (
     detect_runner,
     _build_cmd,
@@ -8,6 +11,9 @@ from brr.runner import (
     build_run_prompt,
     build_daemon_prompt,
     build_triage_prompt,
+    RunnerArtifactSpec,
+    RunnerInvocation,
+    invoke_runner,
 )
 
 
@@ -115,3 +121,74 @@ class TestPromptBuilding:
         prompt = build_triage_prompt("add logging", "evt-1", tmp_path)
         assert "triage agent" in prompt
         assert "add logging" in prompt
+
+
+class TestInvocationTracing:
+    def test_invoke_runner_persists_trace_and_artifact_copy(self, tmp_path):
+        repo_root = tmp_path
+        (repo_root / ".brr").mkdir()
+        produced = repo_root / ".brr" / "responses" / "evt-1.md"
+        produced.parent.mkdir(parents=True)
+        prompt = "trace this prompt"
+        cfg = {
+            "runner_cmd": [
+                sys.executable,
+                "-c",
+                (
+                    "from pathlib import Path; import sys; "
+                    "Path(sys.argv[2]).write_text('saved output\\n', encoding='utf-8'); "
+                    "print('runner stdout'); "
+                    "print(sys.argv[1])"
+                ),
+                "{prompt}",
+                "{response_path}",
+            ]
+        }
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="evt-1-attempt-1",
+            prompt=prompt,
+            cwd=repo_root,
+            repo_root=repo_root,
+            response_path=str(produced),
+            required_artifacts=[RunnerArtifactSpec(produced, "response:evt-1")],
+        )
+
+        result = invoke_runner("mock-runner", invocation, cfg=cfg)
+
+        assert result.ok
+        assert result.validation_ok
+        assert result.output == f"runner stdout\n{prompt}\n"
+        assert result.trace_dir is not None
+        assert (result.trace_dir / "prompt.md").read_text(encoding="utf-8") == prompt
+        assert (result.trace_dir / "stdout.txt").read_text(encoding="utf-8") == result.output
+        meta = json.loads((result.trace_dir / "meta.json").read_text(encoding="utf-8"))
+        assert meta["kind"] == "daemon-run"
+        assert meta["validation_ok"] is True
+        assert meta["artifacts"][0]["label"] == "response:evt-1"
+        artifact_copy = result.artifacts[0].trace_copy
+        assert artifact_copy is not None
+        assert artifact_copy.read_text(encoding="utf-8") == "saved output\n"
+
+    def test_invoke_runner_reports_missing_required_artifacts(self, tmp_path):
+        repo_root = tmp_path
+        (repo_root / ".brr").mkdir()
+        missing = repo_root / ".brr" / "responses" / "evt-2.md"
+        cfg = {
+            "runner_cmd": [sys.executable, "-c", "print('no artifact created')", "{prompt}"]
+        }
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="evt-2-attempt-1",
+            prompt="missing output",
+            cwd=repo_root,
+            repo_root=repo_root,
+            required_artifacts=[RunnerArtifactSpec(missing, "response:evt-2")],
+        )
+
+        result = invoke_runner("mock-runner", invocation, cfg=cfg)
+
+        assert result.ok
+        assert not result.validation_ok
+        assert result.retry_reason() == "missing required output(s): response:evt-2"
+        assert result.missing_artifacts[0].path == missing

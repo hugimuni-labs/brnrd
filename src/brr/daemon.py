@@ -180,14 +180,27 @@ def _run_worker(
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
+        result = runner.invoke_runner(
+            runner_name,
+            runner.RunnerInvocation(
+                kind="daemon-run",
+                label=f"{eid}-attempt-{attempt}",
+                prompt=prompt,
+                cwd=run_root,
+                repo_root=repo_root,
+                response_path=str(resp_path),
+                required_artifacts=[
+                    runner.RunnerArtifactSpec(resp_path, f"response:{eid}"),
+                ],
+            ),
+            cfg=cfg,
+        )
         try:
-            runner.run_executor(
-                runner_name, prompt, cwd=run_root, cfg=cfg, response_path=str(resp_path),
-            )
+            result.raise_for_error()
         except RuntimeError as e:
             print(f"[brr] worker {eid}: runner error: {e}")
 
-        if protocol.response_exists(responses_dir, eid):
+        if result.validation_ok:
             print(f"[brr] worker {eid}: response ready")
             # Check for needs_context status in response
             resp_text = (responses_dir / f"{eid}.md").read_text(encoding="utf-8")
@@ -202,8 +215,9 @@ def _run_worker(
                     task = _finalize_worktree_task(task, repo_root, tasks_dir, branch_name)
             return task
 
-        if attempt <= max_retries:
-            print(f"[brr] worker {eid}: no response file, retrying...")
+        retry_reason = result.retry_reason()
+        if retry_reason and attempt <= max_retries:
+            print(f"[brr] worker {eid}: {retry_reason}, retrying...")
 
     print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
     task.update_status("error", tasks_dir)
@@ -242,9 +256,20 @@ def _triage_task(
 ) -> Task:
     """Run the triage agent and parse its task output."""
     prompt = runner.build_triage_prompt(event.get("body", ""), event["id"], repo_root)
-    output = runner.run_executor(runner_name, prompt, cwd=repo_root, cfg=cfg)
+    result = runner.invoke_runner(
+        runner_name,
+        runner.RunnerInvocation(
+            kind="triage",
+            label=event["id"],
+            prompt=prompt,
+            cwd=repo_root,
+            repo_root=repo_root,
+        ),
+        cfg=cfg,
+    )
+    result.raise_for_error()
     try:
-        task = Task.from_triage_output(output, event, cfg)
+        task = Task.from_triage_output(result.output, event, cfg)
     except ValueError as e:
         raise RuntimeError(f"invalid triage output: {e}") from e
 
