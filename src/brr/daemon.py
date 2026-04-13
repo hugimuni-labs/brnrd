@@ -22,9 +22,10 @@ import time
 from pathlib import Path
 
 from . import config as conf
+from . import gitops
 from . import protocol
 from . import runner
-from . import gitops
+from . import worktree
 from .task import Task
 
 _SCAN_INTERVAL = 3
@@ -149,23 +150,39 @@ def _run_worker(
 
     print(f"[brr] task {task.id} (event {eid}): branch={task.branch} env={task.env}")
 
+    run_root = repo_root
+    branch_name = task.resolve_branch_name()
+    uses_worktree = task.needs_worktree and branch_name is not None
+    if uses_worktree:
+        try:
+            run_root = worktree.create(
+                repo_root,
+                task.id,
+                branch_name,
+                create_branch=not gitops.branch_exists(repo_root, branch_name),
+            )
+        except RuntimeError as e:
+            print(f"[brr] task {task.id}: worktree setup failed: {e}")
+            task.update_status("error", tasks_dir)
+            return task
+
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = runner.build_daemon_prompt(
-                task.body, eid, str(resp_path), repo_root,
+                task.body, eid, str(resp_path), run_root,
             )
         else:
             prompt = runner.build_daemon_prompt(
                 f"Previous attempt did not produce a response file. "
                 f"Please complete the task and write your response to {resp_path}.\n\n"
                 f"Original task: {task.body}",
-                eid, str(resp_path), repo_root,
+                eid, str(resp_path), run_root,
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
         try:
             runner.run_executor(
-                runner_name, prompt, cwd=repo_root, cfg=cfg, response_path=str(resp_path),
+                runner_name, prompt, cwd=run_root, cfg=cfg, response_path=str(resp_path),
             )
         except RuntimeError as e:
             print(f"[brr] worker {eid}: runner error: {e}")
@@ -177,8 +194,12 @@ def _run_worker(
             resp_fm = protocol.parse_frontmatter(resp_text)
             if resp_fm.get("status") == "needs_context":
                 task.update_status("needs_context", tasks_dir)
+                if uses_worktree:
+                    worktree.remove(repo_root, task.id, branch=branch_name, force=True)
             else:
                 task.update_status("done", tasks_dir)
+                if uses_worktree:
+                    task = _finalize_worktree_task(task, repo_root, tasks_dir, branch_name)
             return task
 
         if attempt <= max_retries:
@@ -186,6 +207,30 @@ def _run_worker(
 
     print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
     task.update_status("error", tasks_dir)
+    if uses_worktree:
+        worktree.remove(repo_root, task.id, branch=branch_name, force=True)
+    return task
+
+
+def _finalize_worktree_task(
+    task: Task,
+    repo_root: Path,
+    tasks_dir: Path,
+    branch_name: str,
+) -> Task:
+    """Merge or clean up a completed worktree task."""
+    if task.branch in ("auto", "task"):
+        result = gitops.merge_branch(
+            repo_root, branch_name, f"merge {branch_name} for {task.id}",
+        )
+        if not result.success:
+            print(f"[brr] task {task.id}: merge conflict on {branch_name}")
+            task.update_status("conflict", tasks_dir)
+            return task
+        worktree.remove(repo_root, task.id, branch=branch_name, delete_branch=True)
+        return task
+
+    worktree.remove(repo_root, task.id, branch=branch_name)
     return task
 
 

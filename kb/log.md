@@ -118,3 +118,26 @@ actually affect execution. Also reduced duplicated prompt assembly in
 `runner.py`, clarified the triage prompt's branch/env relationship, and added
 regression coverage for valid and invalid triage output. Verified with
 `PYTHONPATH=src pytest tests/test_task.py tests/test_runner.py tests/test_daemon.py`.
+
+## [2026-04-14] review | Concurrency follow-up review
+
+Re-reviewed the code after the triage wiring change, focusing on whether the
+planned merge coordinator and concurrent worktree execution now exist in code.
+Conclusion: task branch/env/needs-context scaffolding is implemented and
+coherent, but the actual concurrency path is still not present — no
+`worktree.py`, `pool.py`, merge-back flow, or daemon pool dispatch yet, and
+`daemon.py` remains serial v1. Recorded the review in
+`kb/review-concurrency-followup-2026-04-14.md`, clarified what "concurrent
+execution" means in the plan, and recommended deferring cancellation until
+after the worktree/pool path exists.
+
+## [2026-04-14] fix | Make worktree tasks execute on real branches
+
+Implemented the first runtime slice from the concurrency follow-up review.
+`daemon.py` now creates a real git worktree when a triaged task requires one,
+runs the agent in that isolated checkout, and finalizes the branch explicitly
+after success. Auto/task branches are merged back to the current branch via a
+new `gitops.merge_branch()` helper, while named branches are preserved and only
+their temporary worktree is removed. Added `src/brr/worktree.py` for worktree
+lifecycle management plus daemon/git regression tests. Verified with
+`PYTHONPATH=src pytest`.
