@@ -84,16 +84,34 @@ def _run_setup(runner_name: str, repo_root: Path) -> None:
     """Call the runner with the init prompt to create AGENTS.md + kb/."""
     prompt = runner.build_init_prompt(repo_root)
     cfg = conf.load_config(repo_root)
+    invocation = runner.RunnerInvocation(
+        kind="init",
+        label="setup",
+        prompt=prompt,
+        cwd=repo_root,
+        repo_root=repo_root,
+        required_artifacts=[
+            runner.RunnerArtifactSpec(repo_root / "AGENTS.md", "AGENTS.md"),
+            runner.RunnerArtifactSpec(repo_root / "kb" / "index.md", "kb/index.md"),
+            runner.RunnerArtifactSpec(repo_root / "kb" / "log.md", "kb/log.md"),
+        ],
+    )
 
     print("[brr] running setup...")
+    result = runner.invoke_runner(runner_name, invocation, cfg=cfg)
     try:
-        output = runner.run_executor(runner_name, prompt, cwd=repo_root, cfg=cfg)
-        if output.strip():
-            print(output)
+        result.raise_for_error()
     except RuntimeError as e:
         print(f"[brr] setup failed: {e}")
         print("[brr] re-run `brr init` to retry")
         raise SystemExit(1)
+    if not result.validation_ok:
+        missing = ", ".join(artifact.label for artifact in result.missing_artifacts)
+        print(f"[brr] setup failed: missing required output(s): {missing}")
+        print("[brr] re-run `brr init` to retry")
+        raise SystemExit(1)
+    if result.output.strip():
+        print(result.output)
 
 
 def _verify(repo_root: Path) -> None:
