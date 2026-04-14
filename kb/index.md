@@ -15,3 +15,4 @@ or remove a page.
 ## Research
 
 - [PR #1 Review](review-pr-1.md) — deep review notes for task abstraction PR and follow-up notes after wiring the triage path
+- [Concurrency Follow-up Review](review-concurrency-followup-2026-04-14.md) — second review pass clarifying that concurrency scaffolding exists but the merge coordinator and worker pool are not implemented yet
