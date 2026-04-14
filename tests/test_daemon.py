@@ -29,7 +29,7 @@ def test_start_preserves_needs_context_event_status(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon,
         "_run_worker",
-        lambda *_args: Task(id="task-1", event_id="evt-1", body="help", status="needs_context"),
+        lambda *_args, **_kw: Task(id="task-1", event_id="evt-1", body="help", status="needs_context"),
     )
     monkeypatch.setattr(daemon, "_push_if_needed", _stop_after_first_push)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
@@ -60,7 +60,7 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon,
         "_run_worker",
-        lambda *_args: Task(id="task-2", event_id="evt-2", body="help", status="error"),
+        lambda *_args, **_kw: Task(id="task-2", event_id="evt-2", body="help", status="error"),
     )
     monkeypatch.setattr(daemon, "_push_if_needed", _stop_after_first_push)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
@@ -115,7 +115,7 @@ def test_run_worker_uses_triage_output_for_task(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(daemon.worktree, "remove", lambda *_args, **_kwargs: None)
 
-    def fake_invoke_runner(runner_name, invocation, cfg=None):
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
         calls.append((runner_name, invocation.prompt, invocation.response_path))
         if invocation.prompt.startswith("TRIAGE"):
             return RunnerResult(
@@ -215,7 +215,7 @@ def test_run_worker_executes_worktree_tasks_in_worktree_and_merges(tmp_path, mon
         lambda _repo_root, task_id, **kwargs: removals.append((task_id, kwargs)),
     )
 
-    def fake_invoke_runner(runner_name, invocation, cfg=None):
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
         calls.append((runner_name, invocation.prompt, invocation.cwd, invocation.response_path))
         if invocation.prompt.startswith("TRIAGE"):
             return RunnerResult(
@@ -283,7 +283,7 @@ def test_run_worker_marks_error_on_invalid_triage_output(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "invoke_runner",
-        lambda runner_name, invocation, cfg=None: RunnerResult(
+        lambda runner_name, invocation, cfg=None, *, trace=False: RunnerResult(
             invocation=invocation,
             runner_name=runner_name,
             command=["mock"],
@@ -351,11 +351,9 @@ def test_run_worker_preserves_named_branch_without_merge(tmp_path, monkeypatch):
         "remove",
         lambda _repo_root, task_id, **kwargs: removals.append((task_id, kwargs)),
     )
-    monkeypatch.setattr(
-        daemon.runner,
-        "invoke_runner",
-        lambda _runner_name, invocation, cfg=None: (
-            RunnerResult(
+    def _named_branch_invoke(_runner_name, invocation, cfg=None, *, trace=False):
+        if invocation.prompt.startswith("TRIAGE"):
+            return RunnerResult(
                 invocation=invocation,
                 runner_name=_runner_name,
                 command=["mock"],
@@ -365,29 +363,26 @@ def test_run_worker_preserves_named_branch_without_merge(tmp_path, monkeypatch):
                 trace_dir=None,
                 artifacts=[],
             )
-            if invocation.prompt.startswith("TRIAGE")
-            else (
-                Path(invocation.response_path).write_text("---\n---\nall done\n", encoding="utf-8"),
-                RunnerResult(
-                    invocation=invocation,
-                    runner_name=_runner_name,
-                    command=["mock"],
-                    stdout="ok",
-                    stderr="",
-                    returncode=0,
-                    trace_dir=None,
-                    artifacts=[
-                        daemon.runner.RunnerArtifactRecord(
-                            path=Path(invocation.response_path),
-                            label=f"response:{event['id']}",
-                            exists=True,
-                            trace_copy=None,
-                        )
-                    ],
-                ),
-            )[1]
-        ),
-    )
+        Path(invocation.response_path).write_text("---\n---\nall done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=_runner_name,
+            command=["mock"],
+            stdout="ok",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[
+                daemon.runner.RunnerArtifactRecord(
+                    path=Path(invocation.response_path),
+                    label=f"response:{event['id']}",
+                    exists=True,
+                    trace_copy=None,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", _named_branch_invoke)
 
     task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
@@ -426,7 +421,7 @@ def test_run_worker_retries_from_missing_required_output(tmp_path, monkeypatch):
         ),
     )
 
-    def fake_invoke_runner(runner_name, invocation, cfg=None):
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
         attempts.append(invocation.label)
         if invocation.prompt.startswith("TRIAGE"):
             return RunnerResult(
@@ -483,6 +478,201 @@ def test_run_worker_retries_from_missing_required_output(tmp_path, monkeypatch):
 
     assert task.status == "done"
     assert attempts == ["evt-7", "evt-7-attempt-1", "evt-7-attempt-2"]
+
+
+def test_debug_mode_keeps_worktree_after_merge(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    event = {
+        "id": "evt-8",
+        "status": "pending",
+        "body": "raw event body",
+        "source": "telegram",
+        "_path": tmp_path / ".brr" / "inbox" / "evt-8.md",
+    }
+    event["_path"].write_text(
+        "---\nid: evt-8\nstatus: pending\nsource: telegram\n---\nraw event body\n",
+        encoding="utf-8",
+    )
+
+    worktree_path = tmp_path / ".brr" / "worktrees" / "task-1"
+    removals = []
+    trace_flags = []
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _repo_root: "codex")
+    monkeypatch.setattr(
+        daemon.runner,
+        "build_triage_prompt",
+        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+    )
+    monkeypatch.setattr(
+        daemon.runner,
+        "build_daemon_prompt",
+        lambda task, event_id, response_path, prompt_root: (
+            f"RUN {event_id}: {task} @ {prompt_root} -> {response_path}"
+        ),
+    )
+    monkeypatch.setattr(daemon.gitops, "branch_exists", lambda *_args: False)
+    monkeypatch.setattr(
+        daemon.worktree, "create", lambda *_args, **_kwargs: worktree_path,
+    )
+    monkeypatch.setattr(
+        daemon.gitops,
+        "merge_branch",
+        lambda _repo_root, branch, message=None:
+        daemon.gitops.MergeResult(success=True, branch=branch, commit="abc123"),
+    )
+    monkeypatch.setattr(
+        daemon.worktree,
+        "remove",
+        lambda _repo_root, task_id, **kwargs: removals.append((task_id, kwargs)),
+    )
+
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
+        trace_flags.append(trace)
+        if invocation.prompt.startswith("TRIAGE"):
+            return RunnerResult(
+                invocation=invocation,
+                runner_name=runner_name,
+                command=["mock"],
+                stdout="---\nbranch: task\nenv: worktree\n---\nrefined body\n",
+                stderr="",
+                returncode=0,
+                trace_dir=None,
+                artifacts=[],
+            )
+        Path(invocation.response_path).write_text("---\n---\nall done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[
+                daemon.runner.RunnerArtifactRecord(
+                    path=Path(invocation.response_path),
+                    label=f"response:{event['id']}",
+                    exists=True,
+                    trace_copy=None,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0, debug=True,
+    )
+
+    assert task.status == "done"
+    assert removals == [], "worktree should NOT be removed in debug mode"
+    assert all(trace_flags), "trace should be True for all invocations in debug mode"
+
+
+def test_debug_mode_from_config(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    event = {"id": "evt-9", "status": "pending", "_path": tmp_path / ".brr" / "inbox" / "evt-9.md"}
+    event["_path"].write_text("---\nid: evt-9\nstatus: pending\n---\nhelp\n", encoding="utf-8")
+    statuses = []
+    worker_debug_flags = []
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _repo_root: {"debug": True})
+    monkeypatch.setattr(
+        daemon.protocol,
+        "list_pending",
+        lambda _inbox_dir: [event] if not statuses else [],
+    )
+    monkeypatch.setattr(daemon.protocol, "set_status", lambda _event, status: statuses.append(status))
+
+    original_run_worker = daemon._run_worker
+
+    def capturing_run_worker(*args, **kwargs):
+        worker_debug_flags.append(kwargs.get("debug", False))
+        return Task(id="task-9", event_id="evt-9", body="help", status="done")
+
+    monkeypatch.setattr(daemon, "_run_worker", capturing_run_worker)
+    monkeypatch.setattr(daemon, "_push_if_needed", _stop_after_first_push)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert worker_debug_flags == [True], "debug=True from config should propagate to worker"
+
+
+def test_no_debug_removes_worktree(tmp_path, monkeypatch):
+    """Verify that without debug, worktrees are removed as before."""
+    _write_repo_scaffold(tmp_path)
+    event = {
+        "id": "evt-10",
+        "status": "pending",
+        "body": "raw event body",
+        "source": "telegram",
+        "_path": tmp_path / ".brr" / "inbox" / "evt-10.md",
+    }
+    event["_path"].write_text(
+        "---\nid: evt-10\nstatus: pending\nsource: telegram\n---\nraw event body\n",
+        encoding="utf-8",
+    )
+
+    worktree_path = tmp_path / ".brr" / "worktrees" / "task-1"
+    removals = []
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _repo_root: "codex")
+    monkeypatch.setattr(
+        daemon.runner, "build_triage_prompt",
+        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+    )
+    monkeypatch.setattr(
+        daemon.runner, "build_daemon_prompt",
+        lambda task, event_id, response_path, prompt_root: (
+            f"RUN {event_id}: {task} @ {prompt_root} -> {response_path}"
+        ),
+    )
+    monkeypatch.setattr(daemon.gitops, "branch_exists", lambda *_args: False)
+    monkeypatch.setattr(daemon.worktree, "create", lambda *_args, **_kwargs: worktree_path)
+    monkeypatch.setattr(
+        daemon.gitops, "merge_branch",
+        lambda _repo_root, branch, message=None:
+        daemon.gitops.MergeResult(success=True, branch=branch, commit="abc123"),
+    )
+    monkeypatch.setattr(
+        daemon.worktree, "remove",
+        lambda _repo_root, task_id, **kwargs: removals.append((task_id, kwargs)),
+    )
+
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
+        if invocation.prompt.startswith("TRIAGE"):
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="---\nbranch: task\nenv: worktree\n---\nbody\n",
+                stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+        Path(invocation.response_path).write_text("---\n---\ndone\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok", stderr="", returncode=0, trace_dir=None,
+            artifacts=[
+                daemon.runner.RunnerArtifactRecord(
+                    path=Path(invocation.response_path),
+                    label=f"response:{event['id']}", exists=True, trace_copy=None,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0, debug=False,
+    )
+
+    assert task.status == "done"
+    assert len(removals) == 1, "worktree should be removed when not in debug mode"
 
 
 def _write_repo_scaffold(repo_root: Path) -> None:

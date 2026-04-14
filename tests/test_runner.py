@@ -154,7 +154,7 @@ class TestInvocationTracing:
             required_artifacts=[RunnerArtifactSpec(produced, "response:evt-1")],
         )
 
-        result = invoke_runner("mock-runner", invocation, cfg=cfg)
+        result = invoke_runner("mock-runner", invocation, cfg=cfg, trace=True)
 
         assert result.ok
         assert result.validation_ok
