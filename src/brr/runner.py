@@ -454,6 +454,9 @@ def build_daemon_prompt(
     response_path: str,
     repo_root: Path,
     *,
+    task_id: str | None = None,
+    branch_name: str | None = None,
+    runtime_dir: str | None = None,
     log_file: str | None = None,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
@@ -465,9 +468,13 @@ def build_daemon_prompt(
     preamble = _read_prompt("run.md", repo_root)
     metadata = (
         f"Event: {event_id}\n"
-        f"Your final response must be the exact content to place in: {response_path}\n"
-        f"Some runners capture your final response automatically; if not, write that exact content there yourself.\n"
-        f"Do not explore or modify any other files in .brr/.\n"
+        + (f"Task ID: {task_id}\n" if task_id else "")
+        + f"Execution root: {repo_root}\n"
+        + (f"Current branch: {branch_name}\n" if branch_name else "")
+        + (f"Shared runtime dir: {runtime_dir}\n" if runtime_dir else "")
+        + f"Your final response must be the exact content to place in: {response_path}\n"
+        + "Some runners capture your final response automatically; if not, write that exact content there yourself.\n"
+        + "Do not explore or modify any other files in .brr/ beyond what this task explicitly asks for.\n"
     )
     if log_file:
         metadata += f"\nWrite your log entry to {log_file} instead of kb/log.md.\n"

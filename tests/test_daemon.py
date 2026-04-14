@@ -96,8 +96,9 @@ def test_run_worker_uses_triage_output_for_task(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_daemon_prompt",
-        lambda task, event_id, response_path, _repo_root: (
-            f"RUN {event_id}: {task} -> {response_path}"
+        lambda task, event_id, response_path, _repo_root, **kwargs: (
+            f"RUN {event_id}: {kwargs.get('task_id')} {kwargs.get('branch_name')} "
+            f"{kwargs.get('runtime_dir')} :: {task} -> {response_path}"
         ),
     )
     monkeypatch.setattr(daemon.gitops, "branch_exists", lambda *_args: False)
@@ -157,6 +158,9 @@ def test_run_worker_uses_triage_output_for_task(tmp_path, monkeypatch):
     assert task.env == "worktree"
     assert calls[0][1] == "TRIAGE evt-3: raw event body"
     assert "refined task body" in calls[1][1]
+    assert task.id in calls[1][1]
+    assert task.resolve_branch_name() in calls[1][1]
+    assert str(tmp_path / ".brr") in calls[1][1]
 
     persisted = Task.from_file(tmp_path / ".brr" / "tasks" / f"{task.id}.md")
     assert persisted is not None
@@ -193,8 +197,9 @@ def test_run_worker_executes_worktree_tasks_in_worktree_and_merges(tmp_path, mon
     monkeypatch.setattr(
         daemon.runner,
         "build_daemon_prompt",
-        lambda task, event_id, response_path, prompt_root: (
-            f"RUN {event_id}: {task} @ {prompt_root} -> {response_path}"
+        lambda task, event_id, response_path, prompt_root, **kwargs: (
+            f"RUN {event_id}: {kwargs.get('task_id')} {kwargs.get('branch_name')} "
+            f"{kwargs.get('runtime_dir')} :: {task} @ {prompt_root} -> {response_path}"
         ),
     )
     monkeypatch.setattr(daemon.gitops, "branch_exists", lambda *_args: False)
@@ -254,6 +259,9 @@ def test_run_worker_executes_worktree_tasks_in_worktree_and_merges(tmp_path, mon
     assert task.status == "done"
     assert calls[1][2] == worktree_path
     assert f"@ {worktree_path} ->" in calls[1][1]
+    assert task.id in calls[1][1]
+    assert task.resolve_branch_name() in calls[1][1]
+    assert str(tmp_path / ".brr") in calls[1][1]
     assert len(merges) == 1
     assert merges[0][0] == task.resolve_branch_name()
     assert merges[0][1] == f"merge {task.resolve_branch_name()} for {task.id}"
@@ -331,8 +339,9 @@ def test_run_worker_preserves_named_branch_without_merge(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_daemon_prompt",
-        lambda task, event_id, response_path, prompt_root: (
-            f"RUN {event_id}: {task} @ {prompt_root} -> {response_path}"
+        lambda task, event_id, response_path, prompt_root, **kwargs: (
+            f"RUN {event_id}: {kwargs.get('task_id')} {kwargs.get('branch_name')} "
+            f"{kwargs.get('runtime_dir')} :: {task} @ {prompt_root} -> {response_path}"
         ),
     )
     monkeypatch.setattr(daemon.gitops, "branch_exists", lambda *_args: True)
@@ -416,8 +425,9 @@ def test_run_worker_retries_from_missing_required_output(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_daemon_prompt",
-        lambda task, event_id, response_path, _repo_root: (
-            f"RUN {event_id}: {task} -> {response_path}"
+        lambda task, event_id, response_path, _repo_root, **kwargs: (
+            f"RUN {event_id}: {kwargs.get('task_id')} {kwargs.get('branch_name')} "
+            f"{kwargs.get('runtime_dir')} :: {task} -> {response_path}"
         ),
     )
 
@@ -507,8 +517,9 @@ def test_debug_mode_keeps_worktree_after_merge(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_daemon_prompt",
-        lambda task, event_id, response_path, prompt_root: (
-            f"RUN {event_id}: {task} @ {prompt_root} -> {response_path}"
+        lambda task, event_id, response_path, prompt_root, **kwargs: (
+            f"RUN {event_id}: {kwargs.get('task_id')} {kwargs.get('branch_name')} "
+            f"{kwargs.get('runtime_dir')} :: {task} @ {prompt_root} -> {response_path}"
         ),
     )
     monkeypatch.setattr(daemon.gitops, "branch_exists", lambda *_args: False)
@@ -630,8 +641,9 @@ def test_no_debug_removes_worktree(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         daemon.runner, "build_daemon_prompt",
-        lambda task, event_id, response_path, prompt_root: (
-            f"RUN {event_id}: {task} @ {prompt_root} -> {response_path}"
+        lambda task, event_id, response_path, prompt_root, **kwargs: (
+            f"RUN {event_id}: {kwargs.get('task_id')} {kwargs.get('branch_name')} "
+            f"{kwargs.get('runtime_dir')} :: {task} @ {prompt_root} -> {response_path}"
         ),
     )
     monkeypatch.setattr(daemon.gitops, "branch_exists", lambda *_args: False)
