@@ -241,10 +241,10 @@ def _finalize_worktree_task(
             print(f"[brr] task {task.id}: merge conflict on {branch_name}")
             task.update_status("conflict", tasks_dir)
             return task
-        worktree.remove(repo_root, task.id, branch=branch_name, delete_branch=True)
+        worktree.remove(repo_root, task.id, branch=branch_name, delete_branch=True, force=True)
         return task
 
-    worktree.remove(repo_root, task.id, branch=branch_name)
+    worktree.remove(repo_root, task.id, branch=branch_name, force=True)
     return task
 
 

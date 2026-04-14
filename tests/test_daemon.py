@@ -257,7 +257,7 @@ def test_run_worker_executes_worktree_tasks_in_worktree_and_merges(tmp_path, mon
     assert len(merges) == 1
     assert merges[0][0] == task.resolve_branch_name()
     assert merges[0][1] == f"merge {task.resolve_branch_name()} for {task.id}"
-    assert removals == [(task.id, {"branch": task.resolve_branch_name(), "delete_branch": True})]
+    assert removals == [(task.id, {"branch": task.resolve_branch_name(), "delete_branch": True, "force": True})]
 
 
 def test_run_worker_marks_error_on_invalid_triage_output(tmp_path, monkeypatch):
@@ -393,7 +393,7 @@ def test_run_worker_preserves_named_branch_without_merge(tmp_path, monkeypatch):
 
     assert task.status == "done"
     assert merges == []
-    assert removals == [(task.id, {"branch": "feature/review-fixes"})]
+    assert removals == [(task.id, {"branch": "feature/review-fixes", "force": True})]
 
 
 def test_run_worker_retries_from_missing_required_output(tmp_path, monkeypatch):
