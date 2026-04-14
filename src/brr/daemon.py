@@ -128,6 +128,8 @@ def _run_worker(
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
+    *,
+    debug: bool = False,
 ) -> Task:
     """Run the runner for a single event, with retries.
 
@@ -138,7 +140,7 @@ def _run_worker(
     tasks_dir = repo_root / ".brr" / "tasks"
     runner_name = runner.resolve_runner(repo_root)
     try:
-        task = _triage_task(event, repo_root, cfg, runner_name)
+        task = _triage_task(event, repo_root, cfg, runner_name, trace=debug)
     except RuntimeError as e:
         print(f"[brr] task {eid}: triage error: {e}")
         task = Task.from_event(event, cfg)
@@ -194,6 +196,7 @@ def _run_worker(
                 ],
             ),
             cfg=cfg,
+            trace=debug,
         )
         try:
             result.raise_for_error()
@@ -207,12 +210,14 @@ def _run_worker(
             resp_fm = protocol.parse_frontmatter(resp_text)
             if resp_fm.get("status") == "needs_context":
                 task.update_status("needs_context", tasks_dir)
-                if uses_worktree:
+                if uses_worktree and not debug:
                     worktree.remove(repo_root, task.id, branch=branch_name, force=True)
             else:
                 task.update_status("done", tasks_dir)
                 if uses_worktree:
-                    task = _finalize_worktree_task(task, repo_root, tasks_dir, branch_name)
+                    task = _finalize_worktree_task(
+                        task, repo_root, tasks_dir, branch_name, keep_worktree=debug,
+                    )
             return task
 
         retry_reason = result.retry_reason()
@@ -221,7 +226,7 @@ def _run_worker(
 
     print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
     task.update_status("error", tasks_dir)
-    if uses_worktree:
+    if uses_worktree and not debug:
         worktree.remove(repo_root, task.id, branch=branch_name, force=True)
     return task
 
@@ -231,6 +236,8 @@ def _finalize_worktree_task(
     repo_root: Path,
     tasks_dir: Path,
     branch_name: str,
+    *,
+    keep_worktree: bool = False,
 ) -> Task:
     """Merge or clean up a completed worktree task."""
     if task.branch in ("auto", "task"):
@@ -241,10 +248,16 @@ def _finalize_worktree_task(
             print(f"[brr] task {task.id}: merge conflict on {branch_name}")
             task.update_status("conflict", tasks_dir)
             return task
-        worktree.remove(repo_root, task.id, branch=branch_name, delete_branch=True, force=True)
+        if keep_worktree:
+            print(f"[brr] debug: keeping worktree for {task.id}")
+        else:
+            worktree.remove(repo_root, task.id, branch=branch_name, delete_branch=True, force=True)
         return task
 
-    worktree.remove(repo_root, task.id, branch=branch_name, force=True)
+    if keep_worktree:
+        print(f"[brr] debug: keeping worktree for {task.id}")
+    else:
+        worktree.remove(repo_root, task.id, branch=branch_name, force=True)
     return task
 
 
@@ -253,6 +266,8 @@ def _triage_task(
     repo_root: Path,
     cfg: dict,
     runner_name: str,
+    *,
+    trace: bool = False,
 ) -> Task:
     """Run the triage agent and parse its task output."""
     prompt = runner.build_triage_prompt(event.get("body", ""), event["id"], repo_root)
@@ -266,6 +281,7 @@ def _triage_task(
             repo_root=repo_root,
         ),
         cfg=cfg,
+        trace=trace,
     )
     result.raise_for_error()
     try:
@@ -280,8 +296,12 @@ def _triage_task(
 # ── Main loop ────────────────────────────────────────────────────────
 
 
-def start(repo_root: Path) -> None:
-    """Run the daemon main loop (blocking, foreground)."""
+def start(repo_root: Path, *, debug: bool | None = None) -> None:
+    """Run the daemon main loop (blocking, foreground).
+
+    *debug* enables trace persistence and worktree retention.  When
+    ``None``, falls back to the ``debug`` key in ``.brr/config``.
+    """
     brr_dir = repo_root / ".brr"
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
@@ -303,11 +323,14 @@ def start(repo_root: Path) -> None:
 
     cfg = conf.load_config(repo_root)
     max_retries = int(cfg.get("response_retries", 1))
+    debug_mode = debug if debug is not None else bool(cfg.get("debug", False))
 
     gate_threads = _start_gates(brr_dir, inbox_dir, responses_dir)
     if not gate_threads:
         print("[brr] warning: no gates configured — inbox will only receive events from `brr run` or scripts")
 
+    if debug_mode:
+        print("[brr] debug mode enabled (traces + worktree retention)")
     print(f"[brr] daemon started (pid {os.getpid()})")
 
     try:
@@ -319,7 +342,10 @@ def start(repo_root: Path) -> None:
                 print(f"[brr] processing: {eid}")
                 protocol.set_status(event, "processing")
 
-                task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
+                task = _run_worker(
+                    event, repo_root, responses_dir, cfg, max_retries,
+                    debug=debug_mode,
+                )
                 protocol.set_status(event, task.status)
 
                 if task.status == "needs_context":

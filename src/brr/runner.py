@@ -287,8 +287,10 @@ def invoke_runner(
     runner_name: str,
     invocation: RunnerInvocation,
     cfg: dict[str, Any] | None = None,
+    *,
+    trace: bool = False,
 ) -> RunnerResult:
-    """Run a runner subprocess, persist a trace, and validate outputs."""
+    """Run a runner subprocess, validate outputs, and optionally persist a trace."""
     global _active_proc
     cfg = cfg or {}
     cmd = _build_cmd(
@@ -334,7 +336,17 @@ def invoke_runner(
         trace_dir=None,
         artifacts=[],
     )
-    result.trace_dir = _write_trace(result)
+    if trace:
+        result.trace_dir = _write_trace(result)
+    else:
+        result.artifacts = [
+            RunnerArtifactRecord(
+                path=spec.path,
+                label=spec.label or str(spec.path),
+                exists=spec.path.exists(),
+            )
+            for spec in invocation.required_artifacts
+        ]
     return result
 
 

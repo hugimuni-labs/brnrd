@@ -38,6 +38,8 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=cmd_connect)
 
     p = sub.add_parser("up", help="start the daemon")
+    p.add_argument("--debug", action="store_true", default=None,
+                    help="keep worktrees and write traces for troubleshooting")
     p.set_defaults(func=cmd_up)
 
     p = sub.add_parser("down", help="stop the daemon")
@@ -93,7 +95,7 @@ def cmd_connect(args):
 def cmd_up(args):
     from . import daemon as daemon_mod
     root = _repo_root()
-    daemon_mod.start(root)
+    daemon_mod.start(root, debug=args.debug)
 
 
 def cmd_down(args):
