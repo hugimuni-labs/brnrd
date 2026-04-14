@@ -172,6 +172,9 @@ def _run_worker(
         if attempt == 1:
             prompt = runner.build_daemon_prompt(
                 task.body, eid, str(resp_path), run_root,
+                task_id=task.id,
+                branch_name=branch_name,
+                runtime_dir=str(repo_root / ".brr"),
             )
         else:
             prompt = runner.build_daemon_prompt(
@@ -179,6 +182,9 @@ def _run_worker(
                 f"Please complete the task and write your response to {resp_path}.\n\n"
                 f"Original task: {task.body}",
                 eid, str(resp_path), run_root,
+                task_id=task.id,
+                branch_name=branch_name,
+                runtime_dir=str(repo_root / ".brr"),
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
