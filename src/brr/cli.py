@@ -45,6 +45,10 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("down", help="stop the daemon")
     p.set_defaults(func=cmd_down)
 
+    p = sub.add_parser("inspect", help="show details for a task or event")
+    p.add_argument("task_id", help="task ID (or partial match)")
+    p.set_defaults(func=cmd_inspect)
+
     p = sub.add_parser("eject", help="copy bundled prompts for customization")
     p.set_defaults(func=cmd_eject)
 
@@ -105,6 +109,11 @@ def cmd_down(args):
         print("[brr] daemon stopped")
     else:
         print("[brr] daemon not running")
+
+
+def cmd_inspect(args):
+    from . import status as status_mod
+    sys.stdout.write(status_mod.inspect_task(args.task_id, _repo_root()) + "\n")
 
 
 def cmd_eject(args):

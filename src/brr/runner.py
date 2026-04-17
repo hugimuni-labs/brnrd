@@ -481,14 +481,35 @@ def build_daemon_prompt(
     return _join_prompt_parts(preamble, repo_root, f"---\n{metadata}\nTask: {task}")
 
 
+_TRIAGE_LOG_ENTRIES = 3
+
+
 def build_triage_prompt(event_body: str, event_id: str, repo_root: Path) -> str:
     """Build the prompt for the triage step — event → task conversion.
 
     The triage agent reads the event and decides branch strategy and
     execution environment.  Its output is parsed into a Task.
+
+    Uses a reduced context window (last 3 log entries) compared to the
+    full run prompt — triage only needs enough history to make a
+    branch/env decision, not full session continuity.
     """
     triage = _read_prompt("triage.md", repo_root)
-    return _join_prompt_parts(triage, repo_root, f"---\nEvent ID: {event_id}\n\n{event_body}")
+    parts = [triage]
+    recent = _read_recent_log(repo_root, max_entries=_TRIAGE_LOG_ENTRIES)
+    if recent:
+        parts.append(
+            "## Recent Activity (last 3 entries)\n\n"
+            "Use this only to understand what kind of work has been done recently.\n\n"
+            f"{recent}"
+        )
+    parts.append(f"---\nEvent ID: {event_id}\n\n{event_body}")
+    return "\n\n".join(parts)
+
+
+def build_kb_maintenance_prompt(repo_root: Path) -> str:
+    """Build a short prompt for the post-task KB consistency check."""
+    return _read_prompt("kb-maintenance.md", repo_root)
 
 
 # ── Task execution ───────────────────────────────────────────────────
