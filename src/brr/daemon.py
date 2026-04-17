@@ -140,7 +140,7 @@ def _run_worker(
     tasks_dir = repo_root / ".brr" / "tasks"
     runner_name = runner.resolve_runner(repo_root)
     try:
-        task = _triage_task(event, repo_root, cfg, runner_name, trace=debug)
+        task, triage_trace = _triage_task(event, repo_root, cfg, runner_name, trace=debug)
     except RuntimeError as e:
         print(f"[brr] task {eid}: triage error: {e}")
         task = Task.from_event(event, cfg)
@@ -155,6 +155,11 @@ def _run_worker(
     run_root = repo_root
     branch_name = task.resolve_branch_name()
     uses_worktree = task.needs_worktree and branch_name is not None
+
+    task.meta["response_path"] = str(resp_path)
+    if branch_name:
+        task.meta["branch_name"] = branch_name
+
     if uses_worktree:
         try:
             run_root = worktree.create(
@@ -163,11 +168,14 @@ def _run_worker(
                 branch_name,
                 create_branch=not gitops.branch_exists(repo_root, branch_name),
             )
+            task.meta["worktree_path"] = str(run_root)
         except RuntimeError as e:
             print(f"[brr] task {task.id}: worktree setup failed: {e}")
             task.update_status("error", tasks_dir)
             return task
 
+    log_file = f"kb/log-{task.id}.md" if uses_worktree else None
+    trace_dirs: list[str] = [triage_trace] if triage_trace else []
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = runner.build_daemon_prompt(
@@ -175,6 +183,7 @@ def _run_worker(
                 task_id=task.id,
                 branch_name=branch_name,
                 runtime_dir=str(repo_root / ".brr"),
+                log_file=log_file,
             )
         else:
             prompt = runner.build_daemon_prompt(
@@ -185,6 +194,7 @@ def _run_worker(
                 task_id=task.id,
                 branch_name=branch_name,
                 runtime_dir=str(repo_root / ".brr"),
+                log_file=log_file,
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
@@ -204,6 +214,8 @@ def _run_worker(
             cfg=cfg,
             trace=debug,
         )
+        if result.trace_dir:
+            trace_dirs.append(str(result.trace_dir.relative_to(repo_root / ".brr")))
         try:
             result.raise_for_error()
         except RuntimeError as e:
@@ -211,7 +223,8 @@ def _run_worker(
 
         if result.validation_ok:
             print(f"[brr] worker {eid}: response ready")
-            # Check for needs_context status in response
+            if trace_dirs:
+                task.meta["trace_dirs"] = ", ".join(trace_dirs)
             resp_text = (responses_dir / f"{eid}.md").read_text(encoding="utf-8")
             resp_fm = protocol.parse_frontmatter(resp_text)
             if resp_fm.get("status") == "needs_context":
@@ -220,6 +233,9 @@ def _run_worker(
                     worktree.remove(repo_root, task.id, branch=branch_name, force=True)
             else:
                 task.update_status("done", tasks_dir)
+                _maybe_kb_maintenance(
+                    run_root, repo_root, cfg, runner_name, trace=debug,
+                )
                 if uses_worktree:
                     task = _finalize_worktree_task(
                         task, repo_root, tasks_dir, branch_name, keep_worktree=debug,
@@ -231,10 +247,68 @@ def _run_worker(
             print(f"[brr] worker {eid}: {retry_reason}, retrying...")
 
     print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
+    if trace_dirs:
+        task.meta["trace_dirs"] = ", ".join(trace_dirs)
     task.update_status("error", tasks_dir)
     if uses_worktree and not debug:
         worktree.remove(repo_root, task.id, branch=branch_name, force=True)
     return task
+
+
+def _kb_changed(run_root: Path) -> bool:
+    """Return True if the task modified any files under kb/."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--", "kb/"],
+            cwd=run_root, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return True
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "--", "kb/"],
+            cwd=run_root, capture_output=True, text=True, timeout=10,
+        )
+        return bool(untracked.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _maybe_kb_maintenance(
+    run_root: Path,
+    repo_root: Path,
+    cfg: dict,
+    runner_name: str,
+    *,
+    trace: bool = False,
+) -> None:
+    """Run KB maintenance if configured and KB was modified."""
+    policy = str(cfg.get("kb_maintenance", "auto")).strip().lower()
+    if policy == "never":
+        return
+    if policy == "auto" and not _kb_changed(run_root):
+        return
+
+    prompt = runner.build_kb_maintenance_prompt(run_root)
+    if not prompt:
+        return
+
+    print("[brr] running kb maintenance...")
+    result = runner.invoke_runner(
+        runner_name,
+        runner.RunnerInvocation(
+            kind="kb-maintenance",
+            label="kb-maintenance",
+            prompt=prompt,
+            cwd=run_root,
+            repo_root=repo_root,
+        ),
+        cfg=cfg,
+        trace=trace,
+    )
+    if result.ok:
+        print("[brr] kb maintenance complete")
+    else:
+        print(f"[brr] kb maintenance failed (non-fatal): exit {result.returncode}")
 
 
 def _finalize_worktree_task(
@@ -274,8 +348,12 @@ def _triage_task(
     runner_name: str,
     *,
     trace: bool = False,
-) -> Task:
-    """Run the triage agent and parse its task output."""
+) -> tuple[Task, str | None]:
+    """Run the triage agent and parse its task output.
+
+    Returns ``(task, triage_trace_dir_relative)`` where the trace dir
+    is relative to ``.brr/`` (or ``None`` when tracing is off).
+    """
     prompt = runner.build_triage_prompt(event.get("body", ""), event["id"], repo_root)
     result = runner.invoke_runner(
         runner_name,
@@ -295,8 +373,15 @@ def _triage_task(
     except ValueError as e:
         raise RuntimeError(f"invalid triage output: {e}") from e
 
+    triage_trace: str | None = None
+    if result.trace_dir:
+        try:
+            triage_trace = str(result.trace_dir.relative_to(repo_root / ".brr"))
+        except ValueError:
+            triage_trace = str(result.trace_dir)
+
     task.save(repo_root / ".brr" / "tasks")
-    return task
+    return task, triage_trace
 
 
 # ── Main loop ────────────────────────────────────────────────────────

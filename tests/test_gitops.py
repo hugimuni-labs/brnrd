@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from brr.gitops import is_tracked, merge_branch
+from brr.worktree import list_worktrees, create, remove
 
 
 def _init_repo(repo: Path) -> str:
@@ -71,3 +72,41 @@ def test_merge_branch_reports_conflicts(tmp_path):
 
     assert result.success is False
     assert result.conflicts == ["file.txt"]
+
+
+def test_list_worktrees_empty(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "file.txt").write_text("init\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=repo, check=True,
+        stdout=subprocess.PIPE,
+    )
+
+    assert list_worktrees(repo) == []
+
+
+def test_list_worktrees_finds_brr_worktree(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "file.txt").write_text("init\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=repo, check=True,
+        stdout=subprocess.PIPE,
+    )
+
+    wt_path = create(repo, "task-42", "brr/task-42", create_branch=True)
+    assert wt_path.exists()
+
+    wts = list_worktrees(repo)
+    assert len(wts) == 1
+    assert wts[0].task_id == "task-42"
+    assert wts[0].branch == "brr/task-42"
+    assert wts[0].path == wt_path
+
+    remove(repo, "task-42", branch="brr/task-42", delete_branch=True, force=True)
+    assert list_worktrees(repo) == []

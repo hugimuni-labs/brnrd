@@ -129,6 +129,25 @@ class TestPromptBuilding:
         assert "triage agent" in prompt
         assert "add logging" in prompt
 
+    def test_triage_prompt_uses_reduced_context(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "triage.md").write_text("You are a triage agent.")
+        kb = tmp_path / "kb"
+        kb.mkdir()
+        entries = "\n\n".join(
+            f"## [2026-04-{i:02d}] implement | Entry {i}\n\nDid thing {i}."
+            for i in range(1, 11)
+        )
+        (kb / "log.md").write_text(f"# Log\n\n{entries}\n")
+
+        prompt = build_triage_prompt("add logging", "evt-1", tmp_path)
+        assert "Entry 10" in prompt
+        assert "Entry 9" in prompt
+        assert "Entry 8" in prompt
+        assert "Entry 7" not in prompt
+        assert "last 3 entries" in prompt
+
 
 class TestInvocationTracing:
     def test_invoke_runner_persists_trace_and_artifact_copy(self, tmp_path):

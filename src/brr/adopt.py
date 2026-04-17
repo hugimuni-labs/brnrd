@@ -56,7 +56,16 @@ def _ensure_repo() -> Path:
 def _setup_brr_dir(repo_root: Path) -> None:
     """Create ``.brr/`` structure and update .gitignore."""
     brr = repo_root / ".brr"
-    for sub in ("inbox", "responses", "gates", "prompts"):
+    for sub in (
+        "inbox",       # incoming event files
+        "responses",   # per-event response files
+        "gates",       # gate state (telegram.json, slack.json, …)
+        "prompts",     # user overrides for bundled prompt templates
+        "tasks",       # persisted Task files (task-*.md)
+        "traces",      # runner invocation traces (prompt/stdout/stderr/meta)
+        "reviews",     # review artifacts produced by agents
+        "worktrees",   # git worktrees for task-isolated execution
+    ):
         (brr / sub).mkdir(parents=True, exist_ok=True)
 
     config_path = brr / "config"

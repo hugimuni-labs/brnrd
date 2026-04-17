@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -16,6 +17,67 @@ def _git(repo_root: Path, *args: str, check: bool = True) -> subprocess.Complete
         stderr=subprocess.PIPE,
         text=True,
     )
+
+
+@dataclass(frozen=True)
+class WorktreeInfo:
+    """A brr-managed worktree entry."""
+
+    path: Path
+    task_id: str
+    branch: str
+
+
+def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
+    """List brr-managed worktrees under ``.brr/worktrees/``.
+
+    Parses ``git worktree list --porcelain`` and filters to worktrees
+    whose path starts with the brr worktrees directory.
+    """
+    worktrees_dir = repo_root / ".brr" / "worktrees"
+    result = _git(repo_root, "worktree", "list", "--porcelain", check=False)
+    if result.returncode != 0:
+        return []
+
+    entries: list[WorktreeInfo] = []
+    current_path: Path | None = None
+    current_branch: str = ""
+
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_path = Path(line.split(" ", 1)[1])
+            current_branch = ""
+        elif line.startswith("branch "):
+            ref = line.split(" ", 1)[1]
+            current_branch = ref.removeprefix("refs/heads/")
+        elif line == "" and current_path is not None:
+            try:
+                current_path.relative_to(worktrees_dir)
+            except ValueError:
+                pass
+            else:
+                task_id = current_path.name
+                entries.append(WorktreeInfo(
+                    path=current_path,
+                    task_id=task_id,
+                    branch=current_branch,
+                ))
+            current_path = None
+            current_branch = ""
+
+    if current_path is not None:
+        try:
+            current_path.relative_to(worktrees_dir)
+        except ValueError:
+            pass
+        else:
+            entries.append(WorktreeInfo(
+                path=current_path,
+                task_id=current_path.name,
+                branch=current_branch,
+            ))
+
+    return entries
 
 
 def path_for(repo_root: Path, task_id: str) -> Path:

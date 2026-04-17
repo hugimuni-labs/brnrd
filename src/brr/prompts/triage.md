@@ -35,3 +35,8 @@ Guidelines:
   `env: worktree`.
 - If the event references an existing branch or PR, use that branch name.
 - If unsure, prefer `current` — simpler is better for serial execution.
+
+Important: classify from the event text and provided recent context only.
+Do not read or explore repository files unless the event explicitly
+references repo state, a branch, or a PR. Your job is fast classification,
+not investigation.

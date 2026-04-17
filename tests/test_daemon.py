@@ -167,6 +167,9 @@ def test_run_worker_uses_triage_output_for_task(tmp_path, monkeypatch):
     assert persisted.branch == "auto"
     assert persisted.env == "worktree"
     assert persisted.status == "done"
+    assert "response_path" in persisted.meta
+    assert "branch_name" in persisted.meta
+    assert persisted.meta["branch_name"] == task.resolve_branch_name()
 
 
 def test_run_worker_executes_worktree_tasks_in_worktree_and_merges(tmp_path, monkeypatch):
@@ -685,6 +688,201 @@ def test_no_debug_removes_worktree(tmp_path, monkeypatch):
 
     assert task.status == "done"
     assert len(removals) == 1, "worktree should be removed when not in debug mode"
+
+
+def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    event = {
+        "id": "evt-kb",
+        "status": "pending",
+        "body": "update docs",
+        "source": "telegram",
+        "_path": tmp_path / ".brr" / "inbox" / "evt-kb.md",
+    }
+    event["_path"].write_text(
+        "---\nid: evt-kb\nstatus: pending\nsource: telegram\n---\nupdate docs\n",
+        encoding="utf-8",
+    )
+
+    maintenance_calls = []
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
+    monkeypatch.setattr(
+        daemon.runner, "build_triage_prompt",
+        lambda body, eid, _: f"TRIAGE {eid}: {body}",
+    )
+    monkeypatch.setattr(
+        daemon.runner, "build_daemon_prompt",
+        lambda task, eid, rp, rr, **kw: f"RUN {eid}: {task} -> {rp}",
+    )
+    monkeypatch.setattr(
+        daemon.runner, "build_kb_maintenance_prompt",
+        lambda _: "KB MAINTENANCE",
+    )
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _: True)
+
+    def fake_invoke(runner_name, invocation, cfg=None, *, trace=False):
+        if invocation.prompt.startswith("TRIAGE"):
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name,
+                command=["mock"],
+                stdout="---\nbranch: current\nenv: local\n---\nupdate docs\n",
+                stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+        if invocation.kind == "kb-maintenance":
+            maintenance_calls.append(invocation.prompt)
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name,
+                command=["mock"], stdout="ok", stderr="",
+                returncode=0, trace_dir=None, artifacts=[],
+            )
+        Path(invocation.response_path).write_text("---\n---\ndone\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name,
+            command=["mock"], stdout="ok", stderr="", returncode=0,
+            trace_dir=None,
+            artifacts=[
+                daemon.runner.RunnerArtifactRecord(
+                    path=Path(invocation.response_path),
+                    label=f"response:{event['id']}", exists=True, trace_copy=None,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke)
+
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert task.status == "done"
+    assert len(maintenance_calls) == 1
+    assert maintenance_calls[0] == "KB MAINTENANCE"
+
+
+def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    event = {
+        "id": "evt-nochange",
+        "status": "pending",
+        "body": "quick fix",
+        "source": "telegram",
+        "_path": tmp_path / ".brr" / "inbox" / "evt-nochange.md",
+    }
+    event["_path"].write_text(
+        "---\nid: evt-nochange\nstatus: pending\nsource: telegram\n---\nquick fix\n",
+        encoding="utf-8",
+    )
+
+    maintenance_calls = []
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
+    monkeypatch.setattr(
+        daemon.runner, "build_triage_prompt",
+        lambda body, eid, _: f"TRIAGE {eid}: {body}",
+    )
+    monkeypatch.setattr(
+        daemon.runner, "build_daemon_prompt",
+        lambda task, eid, rp, rr, **kw: f"RUN {eid}: {task} -> {rp}",
+    )
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _: False)
+
+    def fake_invoke(runner_name, invocation, cfg=None, *, trace=False):
+        if invocation.prompt.startswith("TRIAGE"):
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name,
+                command=["mock"],
+                stdout="---\nbranch: current\nenv: local\n---\nquick fix\n",
+                stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+        if invocation.kind == "kb-maintenance":
+            maintenance_calls.append(True)
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name,
+                command=["mock"], stdout="", stderr="",
+                returncode=0, trace_dir=None, artifacts=[],
+            )
+        Path(invocation.response_path).write_text("---\n---\ndone\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name,
+            command=["mock"], stdout="ok", stderr="", returncode=0,
+            trace_dir=None,
+            artifacts=[
+                daemon.runner.RunnerArtifactRecord(
+                    path=Path(invocation.response_path),
+                    label=f"response:{event['id']}", exists=True, trace_copy=None,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke)
+
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert task.status == "done"
+    assert maintenance_calls == [], "maintenance should not run when kb/ unchanged"
+
+
+def test_kb_maintenance_never_config(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    event = {
+        "id": "evt-never",
+        "status": "pending",
+        "body": "docs",
+        "source": "telegram",
+        "_path": tmp_path / ".brr" / "inbox" / "evt-never.md",
+    }
+    event["_path"].write_text(
+        "---\nid: evt-never\nstatus: pending\nsource: telegram\n---\ndocs\n",
+        encoding="utf-8",
+    )
+
+    maintenance_calls = []
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
+    monkeypatch.setattr(
+        daemon.runner, "build_triage_prompt",
+        lambda body, eid, _: f"TRIAGE {eid}: {body}",
+    )
+    monkeypatch.setattr(
+        daemon.runner, "build_daemon_prompt",
+        lambda task, eid, rp, rr, **kw: f"RUN {eid}: {task} -> {rp}",
+    )
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _: True)
+
+    def fake_invoke(runner_name, invocation, cfg=None, *, trace=False):
+        if invocation.prompt.startswith("TRIAGE"):
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name,
+                command=["mock"],
+                stdout="---\nbranch: current\nenv: local\n---\ndocs\n",
+                stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+        if invocation.kind == "kb-maintenance":
+            maintenance_calls.append(True)
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name,
+                command=["mock"], stdout="", stderr="",
+                returncode=0, trace_dir=None, artifacts=[],
+            )
+        Path(invocation.response_path).write_text("---\n---\ndone\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name,
+            command=["mock"], stdout="ok", stderr="", returncode=0,
+            trace_dir=None,
+            artifacts=[
+                daemon.runner.RunnerArtifactRecord(
+                    path=Path(invocation.response_path),
+                    label=f"response:{event['id']}", exists=True, trace_copy=None,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke)
+
+    cfg = {"kb_maintenance": "never"}
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", cfg, 0)
+
+    assert task.status == "done"
+    assert maintenance_calls == [], "maintenance should not run when config=never"
 
 
 def _write_repo_scaffold(repo_root: Path) -> None:

@@ -5,6 +5,7 @@ or remove a page.
 
 ## Architecture
 
+- [Execution Map](execution-map.md) — how events flow through the brr pipeline, artifact locations, and cross-linking
 - [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) — v2: concurrent task execution via worktrees, task abstraction, per-task logs, env abstraction
 - [Branch Modes Plan](plan-branch-modes.md) — v2: branch as task property, agent-decided branching, needs-context status, execution environments
 
