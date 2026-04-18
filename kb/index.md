@@ -3,15 +3,22 @@
 Pages are organized by category. Update this file whenever you create
 or remove a page.
 
+Tool-level documentation (how brr itself works, pipeline/artifact
+map, internals) ships with the package. Run `brr docs` to list it.
+This index only covers this repo's project-specific knowledge.
+
 ## Architecture
 
-- [Execution Map](execution-map.md) — how events flow through the brr pipeline, artifact locations, and cross-linking
 - [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) — v2: concurrent task execution via worktrees, task abstraction, per-task logs, env abstraction
 - [Branch Modes Plan](plan-branch-modes.md) — v2: branch as task property, agent-decided branching, needs-context status, execution environments
 
 ## Decisions
 
-(none yet)
+- [Bundled Docs Location](decision-bundled-docs.md) — why tool-level docs live in `src/brr/docs/` and ship with the package rather than in `kb/`
+
+## Ideas / Follow-ups
+
+- [Personal Workflow Variants](idea-personal-workflow-variants.md) — split brr into machinery vs. a personal workflow overlay so users don't need per-repo overrides
 
 ## Research
 

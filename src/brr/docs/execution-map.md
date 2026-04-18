@@ -2,6 +2,10 @@
 
 How an event flows through brr, and where each artifact lives.
 
+This document ships with the `brr` tool. To see it at runtime, run
+`brr docs execution-map`. Users can override it per-repo by dropping
+a file at `.brr/docs/execution-map.md`.
+
 ## Pipeline
 
 ```
@@ -11,7 +15,7 @@ event (inbox) → triage (classify) → task (persisted) → run (worktree or lo
 ### 1. Event arrives
 
 A gate (Telegram, Slack, Git) or a script writes a markdown file to
-`.brr/inbox/`.  The file has frontmatter (`id`, `source`, `status`) and
+`.brr/inbox/`. The file has frontmatter (`id`, `source`, `status`) and
 a body with the user's message.
 
 ### 2. Triage
@@ -20,10 +24,13 @@ The daemon invokes the runner with `triage.md` to classify the event.
 The triage agent decides **branch strategy** and **execution environment**,
 then outputs a task spec (frontmatter + refined body).
 
+Triage runs with a reduced log context window (last 3 entries only) —
+it's a fast classifier, not an investigator.
+
 ### 3. Task persisted
 
 The daemon parses triage output into a `Task` and saves it to
-`.brr/tasks/<task-id>.md`.  The task file tracks: event ID, branch,
+`.brr/tasks/<task-id>.md`. The task file tracks: event ID, branch,
 env, status, source, and manifest metadata (response path, branch name,
 worktree path, trace directories).
 
@@ -53,31 +60,31 @@ the agent to write it manually if needed.
 
 If the task modified files in `kb/`, a lightweight maintenance step runs
 to verify `kb/index.md` consistency and ensure a log entry exists.
-Controlled by `kb_maintenance` config (`auto`/`always`/`never`).
+See `brr docs brr-internals` for the full trigger logic.
 
 ### 7. Finalization
 
 For worktree tasks with `auto`/`task` branch strategy, the branch is
-merged back to the main checkout and the worktree is removed.  For named
+merged back to the main checkout and the worktree is removed. For named
 branches, the worktree is removed but the branch is preserved.
 
 ## Artifact locations
 
-| Artifact | Path | Persists across runs |
-|----------|------|---------------------|
-| Events | `.brr/inbox/<event-id>.md` | Yes (until cleanup) |
-| Tasks | `.brr/tasks/<task-id>.md` | Yes |
-| Responses | `.brr/responses/<event-id>.md` | Yes |
-| Traces | `.brr/traces/<kind>/<label>-<timestamp>/` | Yes (debug mode) |
-| Reviews | `.brr/reviews/<event-id>.md` | Yes |
-| Worktrees | `.brr/worktrees/<task-id>/` | Removed after merge (kept in debug) |
-| Gate state | `.brr/gates/<gate>.json` | Yes |
-| Config | `.brr/config` | Yes |
-| Per-task logs | `kb/log-<task-id>.md` (in worktree) | Merged into `kb/log.md` |
+| Artifact      | Path                                        | Persists across runs                |
+| ------------- | ------------------------------------------- | ----------------------------------- |
+| Events        | `.brr/inbox/<event-id>.md`                  | Yes (until cleanup)                 |
+| Tasks         | `.brr/tasks/<task-id>.md`                   | Yes                                 |
+| Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
+| Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Yes (debug mode)                    |
+| Reviews       | `.brr/reviews/<event-id>.md`                | Yes                                 |
+| Worktrees     | `.brr/worktrees/<task-id>/`                 | Removed after merge (kept in debug) |
+| Gate state    | `.brr/gates/<gate>.json`                    | Yes                                 |
+| Config        | `.brr/config`                               | Yes                                 |
+| Per-task logs | `kb/log-<task-id>.md` (in worktree)         | Merged into `kb/log.md`             |
 
 ## Cross-linking
 
-The task file (``.brr/tasks/<task-id>.md``) is the central manifest.
+The task file (`.brr/tasks/<task-id>.md`) is the central manifest.
 Its frontmatter contains:
 
 - `event_id` → links to `.brr/inbox/` and `.brr/responses/`
