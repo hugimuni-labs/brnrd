@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("task_id", help="task ID (or partial match)")
     p.set_defaults(func=cmd_inspect)
 
+    p = sub.add_parser("docs", help="show bundled brr documentation")
+    p.add_argument("topic", nargs="?", default=None,
+                    help="doc topic (omit to list available topics)")
+    p.set_defaults(func=cmd_docs)
+
     p = sub.add_parser("eject", help="copy bundled prompts for customization")
     p.set_defaults(func=cmd_eject)
 
@@ -114,6 +119,30 @@ def cmd_down(args):
 def cmd_inspect(args):
     from . import status as status_mod
     sys.stdout.write(status_mod.inspect_task(args.task_id, _repo_root()) + "\n")
+
+
+def cmd_docs(args):
+    from . import docs as docs_mod
+    from . import gitops
+    try:
+        repo_root = gitops.ensure_git_repo()
+    except (RuntimeError, SystemExit):
+        repo_root = None
+
+    if not args.topic:
+        sys.stdout.write(docs_mod.format_listing(repo_root) + "\n")
+        return
+
+    content = docs_mod.read_topic(args.topic, repo_root)
+    if content is None:
+        topics = docs_mod.list_topics(repo_root)
+        available = ", ".join(topics) if topics else "(none)"
+        raise SystemExit(
+            f"[brr] unknown doc topic: {args.topic} (available: {available})"
+        )
+    sys.stdout.write(content)
+    if not content.endswith("\n"):
+        sys.stdout.write("\n")
 
 
 def cmd_eject(args):
