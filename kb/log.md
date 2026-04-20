@@ -153,3 +153,23 @@ than ad hoc file checks, and updated `brr init` to validate AGENTS/kb outputs
 through the same interface. Added regression coverage for trace persistence,
 missing-output validation, daemon retries, and init/integration call sites.
 Verified with `PYTHONPATH=src pytest`.
+
+## [2026-04-20] plan | Fleet & steering design (overlays, brnrd, envs)
+
+Took the personal-workflow-variants idea to a full three-axis design and
+delivered two Marp decks as consulting-style artefacts:
+`kb/deck-brr-current.md` (bird's-eye of the system today: file protocol,
+pipeline, CLI surface, where state lives, current override model) and
+`kb/deck-brr-fleet-steering.md` (the future design).
+
+Locked decisions: single-slot overlay profile, pull-on-next-run, overlay scope
+= prompts + config defaults (not docs), `~/.config/brr/` ownership, worktree
+demoted to one env among several with no concurrent pool in v1, fleet UX ships
+as `brnrd` (registry + broadcaster first; supervisor daemon later).
+
+Recommended roadmap: Phase 1 overlays (~200 LOC), Phase 2 `brnrd` registry +
+`brnrd all`, Phase 3 `Env` protocol refactor, Phase 4 first non-worktree env
+(docker) + optional `brnrd up` supervisor. Phase 1 alone unblocks the
+one-edit-N-repos-converge demo that sells the whole thesis. Marked
+`idea-personal-workflow-variants.md` as absorbed into the new decks.
+No code changes; read-only design pass.

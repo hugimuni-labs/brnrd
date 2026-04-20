@@ -16,9 +16,14 @@ This index only covers this repo's project-specific knowledge.
 
 - [Bundled Docs Location](decision-bundled-docs.md) — why tool-level docs live in `src/brr/docs/` and ship with the package rather than in `kb/`
 
+## Design decks
+
+- [Deck: brr today](deck-brr-current.md) — Marp bird's-eye of the current system (file protocol, pipeline, CLI surface, state layout, override model, pain points)
+- [Deck: brr fleet & steering](deck-brr-fleet-steering.md) — Marp three-axis design (overlays, `brnrd`, environments) with locked decisions, roadmap, and the minimum compelling slice
+
 ## Ideas / Follow-ups
 
-- [Personal Workflow Variants](idea-personal-workflow-variants.md) — split brr into machinery vs. a personal workflow overlay so users don't need per-repo overrides
+- [Personal Workflow Variants](idea-personal-workflow-variants.md) — absorbed into the fleet-&-steering deck as Axis 1; kept for provenance
 
 ## Research
 
