@@ -21,9 +21,14 @@ This index only covers this repo's project-specific knowledge.
 - [Deck: brr today](deck-brr-current.md) — Marp bird's-eye of the current system (file protocol, pipeline, CLI surface, state layout, override model, pain points)
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) — Marp three-axis design (overlays, `brnrd`, environments) with locked decisions, roadmap, and the minimum compelling slice
 
+## Active design
+
+- [Env Interface design](design-env-interface.md) — actionable spec for the in-flight worktree PR: `Env` Protocol, durability contract, `local`/`worktree`/`docker`/`ssh` built-ins, decentralised merging via `git merge --ff-only` + `conflict` status, plugin entry points
+
 ## Ideas / Follow-ups
 
 - [Personal Workflow Variants](idea-personal-workflow-variants.md) — absorbed into the fleet-&-steering deck as Axis 1; kept for provenance
+- [Notes: Fleet pondering](notes-pondering-fleet.md) — open thinking on overlays-as-single-file, dropping `brr eject`, self-maintaining repo registry, brnrd-as-agentic-operator, cross-platform supervisor, decentralised merge examples — capture-only while env work ships
 
 ## Research
 

@@ -173,3 +173,46 @@ Recommended roadmap: Phase 1 overlays (~200 LOC), Phase 2 `brnrd` registry +
 one-edit-N-repos-converge demo that sells the whole thesis. Marked
 `idea-personal-workflow-variants.md` as absorbed into the new decks.
 No code changes; read-only design pass.
+
+## [2026-04-20] plan | Fleet & steering v2 — git-backed overlay + env parallelism correction
+
+Revised `kb/deck-brr-fleet-steering.md` after user review. Two changes:
+(1) Blessed overlay transport is now a git clone of a user-owned repo, making
+overlays remote-editable (push from phone/web IDE; fleet converges via
+`overlay_sync=auto|always|never` and `brnrd overlay sync`). Added a dedicated
+slide and updated the gitlab demo to showcase push-based rollout. (2) Corrected
+the parallelism framing in A3: concurrency is *not* a property of the env type.
+All non-local envs are ephemeral by construction, so every env shares the same
+durability contract (commit + push + response in `finalize`), and real
+parallelism is gated by the merge coordinator above the Env layer — not by
+whether the env is worktree, docker, or kube. Added a "durability contract"
+slide and a "where parallelism lives" slide with a mermaid diagram. Roadmap
+gained Phase 5 "merge coordinator → true concurrency" decoupled from env work.
+Updated decisions-locked table (overlay transport, env model, parallelism
+source rows added) and the idea-page resolution section. Still read-only.
+
+## [2026-04-20] plan | Refocus on envs; capture pondering for overlays/brnrd
+
+Pivoted the active work from the strategic three-axis design back onto the
+in-flight worktree PR. New `kb/design-env-interface.md` is the actionable
+spec to finish that PR: extract an `Env` Protocol with `prepare/invoke/finalize`,
+codify the durability contract (only git refs + the response file survive an
+ephemeral env), ship four built-ins (`local`, `worktree`, `docker`, `ssh`),
+and replace the deferred "merge coordinator" with a decentralised model —
+every task produces a branch, `auto`/`task` strategies attempt
+`git merge --ff-only` with a `conflict` fallback, named branches stay for
+human/PR review. Third-party envs ship via the `brr.envs` entry-point group.
+Concurrency stays serial in v1; the v2 unlock is a host-HEAD mutex, not a
+component. Daemon code shrinks because env-specific branches collapse into
+the protocol calls.
+
+Captured the parallel pondering in `kb/notes-pondering-fleet.md` so it does
+not block the env work: likely-drop of `brr eject`, lean toward a
+single-file overlay (`~/.config/brr/overlay.md` appended to every prompt
+rather than a multi-file lookup chain), self-maintaining registry under
+`~/.local/state/brr/repos.json` for discovery without home-scanning, brnrd
+as an agentic operator (separate project, hosted, uses the existing brr
+file-protocol as its interface), cross-platform supervisor sketch
+(systemd / launchd / docker), and a use-case table that grounds the
+no-coordinator framing. Updated `kb/index.md` with both new pages.
+No code changes; planning pass to drive the next implementation slice.

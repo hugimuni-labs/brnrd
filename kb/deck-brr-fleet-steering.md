@@ -143,6 +143,33 @@ _USER_CFG = Path(os.environ.get("BRR_CONFIG_HOME", "~/.config/brr")).expanduser(
 
 ---
 
+# remote-editable overlays — the dir is a git clone
+
+The overlay is a directory. Nothing stops that directory from being a git
+checkout of a repo the user controls (self-hosted gitea, private GitHub,
+GitLab — whatever). Make that the **blessed** path, not a side-workflow.
+
+```
+$ git clone git@gitlab.me:ana/brr-overlay.git ~/.config/brr
+```
+
+- **Edit from anywhere.** Web IDE, phone, another machine. `git push`.
+- **Versioned.** Diff-able, revertible, branchable for experiments.
+- **Offline-safe.** Last `git pull` is the ground truth until the next sync.
+- **Self-hosted-ideology-native.** Ana owns the repo, brr doesn't care where it lives.
+
+Sync policy per machine (`.brr/config`):
+
+| value                 | behaviour                                                    |
+|-----------------------|--------------------------------------------------------------|
+| `overlay_sync=auto`   | `git -C $BRR_CONFIG_HOME pull` if last pull > N min old      |
+| `overlay_sync=always` | pull before every task                                       |
+| `overlay_sync=never`  | manual only (`brr overlay sync` or fleet-wide `brnrd overlay sync`) |
+
+**Same gate-as-filesystem spirit.** A push to the overlay repo *is* the event; the next run is the delivery. Zero new transport.
+
+---
+
 # overlay CLI (minimal surface)
 
 ```
@@ -337,41 +364,94 @@ Built-ins ship with brr. Third-party envs register via `entry_points = {"brr.env
 
 ---
 
-# what the refactor buys (salvage & unlock)
+# the durability contract
 
-1. **Merge coordinator has a natural home.** `WorktreeEnv.finalize()`. Not scattered across the daemon.
-2. **Concurrency becomes a property of the env, not the daemon.**
-   - `docker` runs: trivially parallel (independent containers).
-   - `local` runs: mutually exclusive (one cwd).
-   - `worktree` runs: serial until a merge coordinator exists.
-3. **Drop-in replacements.** Distrust worktrees? `default_env=docker` and move on.
-4. **Everything on the unmerged branch is salvageable.** `Task` abstraction, triage, per-task log, trace system, `needs_context` status — all apply verbatim. **Pausing concurrent-worktree costs nothing.**
+Every non-`local` env is **ephemeral by construction**. A container exits. A
+worktree is removed. An ssh scratch dir gets rsync'd over. A kube Job is
+garbage-collected. None of those survive the run.
+
+So the only thing that persists from a task is what the task **commits** and
+**pushes** (or a response file the daemon already drains before cleanup).
+
+This flips the Env contract:
+
+```
+prepare   →  lay down a clean, isolated working copy of the repo
+invoke    →  run the agent
+finalize  →  harvest durable output (commit · push · response), then tear down
+```
+
+All envs — including `worktree` and even `local` at crash-time — share this
+contract. "Durable output" is git refs + `.brr/responses/<event>.md`. Nothing else is real.
 
 ---
 
-# recommendation on worktrees
+# where parallelism actually lives
 
-You asked me to weigh in. Pointed answer:
+**Correction to the earlier framing.** Parallelism is *not* a property of the env.
+Any non-local env can fan out; containers, kube Jobs, ssh hosts are all independent executors.
 
-- **Keep `env: worktree` as one environment among several.** It's correct for "multiple branches, one box, no container cost."
-- **Do not ship the concurrent-worktree pool + merge coordinator in v1.** Half-built; tail is expensive; failure modes are data-corruption-shaped.
-- **Make serial the v1 guarantee.** One task at a time, per daemon. Advertised. Boring. Solid.
-- **Unlock concurrency through the Env interface.** `env: docker` gives parallelism for free because containers are inherently independent.
+The bottleneck is **how concurrent outputs reconcile back into the repo**.
 
-This preserves the "future concurrent" story without betting v1 on the hard case.
+```mermaid
+flowchart LR
+  subgraph Parallel["parallel · env handles isolation"]
+    E1[task 1 / container]
+    E2[task 2 / container]
+    E3[task 3 / container]
+  end
+  subgraph Serial["serial · merge coordinator"]
+    direction TB
+    M1[merge 1] --> M2[merge 2] --> M3[merge 3]
+  end
+  E1 & E2 & E3 -->|push branch| Serial
+  Serial --> Trunk[(trunk)]
+```
+
+Real-world throughput = `N × (merge cost + conflict rate)`. If the merge
+coordinator is serial and fast, N=10 is fine. If merges stall on conflicts,
+`N=1` is as good as you get regardless of env.
+
+→ **The merge coordinator is the concurrency unlock, not the env.** Worktree, docker, kube — all need it the same way.
+
+---
+
+# what the refactor buys (salvage & unlock)
+
+1. **One durability contract to honour, not per-env ad hoc plumbing.** `prepare → invoke → finalize`, with `finalize` always producing git refs + response file or nothing.
+2. **Merge coordinator has a natural home** — above the Env, not inside it. Envs commit and push; the coordinator rebases/merges serially into trunk. Same logic for every env.
+3. **Worktree complexity is demystified.** It looks special today because it reuses the local filesystem; the durability contract reveals it's just another ephemeral env whose "push" happens to be a local branch ref.
+4. **Drop-in replacements.** Distrust worktrees? `default_env=docker`. The merge coordinator doesn't notice.
+5. **Everything on the unmerged branch is salvageable.** `Task`, triage, per-task log, trace system, `needs_context` — all apply verbatim. Pausing the current concurrent-worktree implementation costs nothing; the merge coordinator returns later as an env-agnostic component.
+
+---
+
+# recommendation on concurrency & worktrees
+
+Revised in light of the above:
+
+- **Keep `env: worktree` as one env among several.** Good for "multiple branches, one box, no container cost."
+- **Make serial the v1 guarantee.** One task at a time, per daemon. Boring. Advertised. Solid. The durability contract is trivially met (commit-before-exit is already the convention).
+- **The concurrency unlock is the merge coordinator, not any specific env.** When it lands, it enables parallel `worktree` *and* parallel `docker` *and* parallel `kube` at once.
+- **Do not ship the coordinator in v1.** Its correctness surface is data-corruption-shaped; ship it when there's a real parallel use case pulling on it.
+
+This decouples "run anywhere" (Phase 3–4, env interface) from "run N at once" (later, coordinator) so each can ship when ready.
 
 ---
 
 # decisions locked (from the conversation)
 
-| Question                            | Choice                                              |
-|-------------------------------------|-----------------------------------------------------|
-| Overlay composition                 | single slot (`profile=<name>`)                      |
-| Overlay scope                       | prompts + config defaults; **not** docs             |
-| Overlay update model                | pull-on-next-run (live read, no copy)               |
-| Worktree position                   | one env among several; no concurrent pool in v1     |
-| Fleet shape                         | `brnrd` — registry + broadcaster first; daemon later |
-| Ownership ideology                  | self-hosted, user-owned `~/.config/brr/`            |
+| Question                            | Choice                                                          |
+|-------------------------------------|-----------------------------------------------------------------|
+| Overlay composition                 | single slot (`profile=<name>`)                                  |
+| Overlay scope                       | prompts + config defaults; **not** docs                         |
+| Overlay update model                | pull-on-next-run (live read, no copy)                           |
+| Overlay transport                   | filesystem dir; **blessed form: git clone** (remote-editable)    |
+| Env model                           | Protocol with `prepare/invoke/finalize` + durability contract   |
+| Parallelism source                  | merge coordinator above the Env — **not** any specific env      |
+| Worktree position                   | one env among several; no concurrent pool in v1                 |
+| Fleet shape                         | `brnrd` — registry + broadcaster first; daemon later            |
+| Ownership ideology                  | self-hosted, user-owned `~/.config/brr/` (optionally a git repo) |
 
 Anything not in this table is still open.
 
@@ -384,21 +464,29 @@ Anything not in this table is still open.
 + `BRR_CONFIG_HOME` + `~/.config/brr/{default,profiles/<name>}/`
 + `profile=` key in `.brr/config`, resolved in `runner._read_prompt`
 + `brr eject --global [--profile=X]`, `brr profile set|show`
++ `overlay_sync=auto|always|never` + `brr overlay sync` (git pull helper)
 + docs page + tests
 
 **Phase 2 · brnrd registry + broadcast** — ~400 LOC, ~1 week
 
 + `fleet.toml`, `brnrd ls / adopt / forget / tag / all`
++ `brnrd overlay sync` (fan `git pull` across the fleet)
 + Separate entry point, same repo
 
 **Phase 3 · Env interface refactor** — no user-visible change
 
-+ Extract `Env` protocol; reimplement `local` and `worktree` behind it
++ Extract `Env` Protocol; reimplement `local` and `worktree` behind it
++ Codify the durability contract (`finalize` = commit + push + response)
 
-**Phase 4 · First non-worktree env + optional brnrd up**
+**Phase 4 · Second env (`docker`) + optional `brnrd up`**
 
-+ `env: docker` with a tested image recipe
++ `env: docker` with a tested image recipe — still serial
 + `brnrd up` supervisor if demand is real
+
+**Phase 5 (optional) · Merge coordinator → true concurrency**
+
++ Env-agnostic rebase/merge loop above the Env layer
++ Unlocks parallel `worktree` / `docker` / `kube` at once when N > 1
 
 ---
 
@@ -406,11 +494,11 @@ Anything not in this table is still open.
 
 If you want **one week of work that sells the whole thesis**:
 
-1. **Phase 1 shipped** — overlays live under `~/.config/brr/`.
-2. **Half of Phase 2** — `brnrd ls`, `brnrd all`.
-3. **One demo.** Adopt three repos → edit `~/.config/brr/profiles/personal/prompts/agents-template.md` → broadcast `refresh AGENTS.md from template` → watch three repos converge in the same minute.
+1. **Phase 1 shipped** — overlays live under `~/.config/brr/`, optionally a git clone.
+2. **Half of Phase 2** — `brnrd ls`, `brnrd all`, `brnrd overlay sync`.
+3. **One demo.** Clone overlay repo on three machines → `git push` a change to `profiles/personal/prompts/agents-template.md` from your phone → `brnrd all overlay sync && brnrd all run 'refresh AGENTS.md from template'` → three repos converge in the same minute.
 
-That demo **is** the pitch. Everything else compounds on top of it.
+That demo **is** the pitch: *edit once anywhere · N repos converge · user owns it all*.
 
 ---
 
@@ -430,8 +518,8 @@ That demo **is** the pitch. Everything else compounds on top of it.
 
 ## three axes · one coherent story
 
-**A1 Overlays** — steering across repos is cheap
+**A1 Overlays** — steering across repos is cheap, remote-editable over git
 **A2 brnrd** — the fleet becomes a first-class object
-**A3 Env** — the runtime is pluggable; worktrees demoted to "one of many"
+**A3 Env** — runtime pluggable; durability contract explicit; parallelism lives in the coordinator, not the env
 
 Ship Phase 1 alone and the gitlab scenario already works end-to-end.

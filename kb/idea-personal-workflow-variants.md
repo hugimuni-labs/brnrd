@@ -61,11 +61,15 @@ a config setting or env var.
 - **Shape:** four-layer chain
   `bundled → ~/.config/brr/default/ → ~/.config/brr/profiles/<name>/ → .brr/prompts/`.
 - **Composition:** single slot (`profile=<name>` in `.brr/config`).
-- **Transport:** filesystem path only in v1. Git-remote overlays are a
-  trivial user-side workflow (`git clone` into `~/.config/brr/`). No
-  special mechanism needed.
+- **Transport:** filesystem path. **Blessed form: a git clone** of a
+  user-owned repo (self-hosted gitea, private GitHub/GitLab, etc.). This
+  makes the overlay remote-editable — push from any machine / phone /
+  web IDE and the fleet converges on the next sync. No new brr-side
+  transport; git is the transport.
 - **Update model:** pull-on-next-run. Overlay files are read live; no
-  copy into `.brr/`.
+  copy into `.brr/`. A per-machine `overlay_sync=auto|always|never`
+  setting controls whether `git pull` runs automatically before each
+  task. Fleet-wide refresh is `brnrd overlay sync`.
 - **Scope:** prompts and `.brr/config` defaults. Bundled docs stay
   bundled — they describe brr itself, not agent behaviour.
 - **Versioning:** not needed in v1. Overlay is a directory of plain
