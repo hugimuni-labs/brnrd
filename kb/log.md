@@ -216,3 +216,75 @@ file-protocol as its interface), cross-platform supervisor sketch
 (systemd / launchd / docker), and a use-case table that grounds the
 no-coordinator framing. Updated `kb/index.md` with both new pages.
 No code changes; planning pass to drive the next implementation slice.
+
+## [2026-04-23] research | brr vs GitHub Agentic Workflows (gh-aw)
+
+Deep comparison against `github/gh-aw` (cloned locally at `.local/gh-aw`,
+CLI v0.68.x, technical-preview-since-2026-02-13) to assess opposition,
+market fit, and whether gh-aw could be adopted for brr's stated use case
+("remotely controlled repo-first agentic CLI runner"). Read gh-aw's canonical
+schema (`.github/aw/github-agentic-workflows.md`, ~2400 lines), the docs
+site content (`introduction/*`, `patterns/chat-ops`, `patterns/multi-repo-ops`),
+`create.md`/`install.md`, and web-researched reception (GitHub Changelog,
+gh-aw internal audit discussions, adjacent-project landscape).
+
+Conclusion: **not a substitute, not a direct competitor, plausible complement
+on GitHub-hosted repos**. gh-aw is GitHub-native — substrate is the GHA runner,
+transport is GitHub events, security posture is defense-in-depth for
+multi-principal untrusted input. brr is self-hosted, gate-pluggable
+(Telegram/Slack/git/anything-writing-a-file), on-box execution, cross-SCM,
+single-principal. They share the "markdown playbook → coding agent → commit+push"
+spine but disagree on every structural axis. Wrote full write-up to
+`kb/research-brr-vs-gh-aw.md` with side-by-side architecture map, eight axis-
+by-axis comparisons, market-fit segmentation, use-case winner table, list
+of ideas brr should steal (safe-outputs pattern, rate-limit/stop-after,
+XPIA nudge) vs. not (compile step, large frontmatter DSL, GitHub-shaped
+worldview), and a concrete recommendation. No code changes; research only.
+
+## [2026-04-24] plan | Env design refinements; extract overlays plan
+
+Markdown-only pass following a review of `kb/design-env-interface.md`.
+
+Refined the env design: split `RunContext.response_path` into
+`response_path_env` (runner-visible) vs `response_path_host` (daemon-
+checked), with a per-env equality table; added `devcontainer` as the
+fifth built-in (validate → up → exec → down mirroring docker);
+rewrote the registry section to cover both dispatch modes — Python
+entry points and drop-in script envs under `.brr/envs/<name>/` or
+`~/.config/brr/envs/<name>/`, sharing a JSON-on-stdio protocol; added
+a "Why worktree stays a flat env in v1" subsection arguing against a
+working-copy × isolation taxonomy for now; upgraded the salvage rule so
+worktrees, docker containers, ssh scratch dirs, and devcontainers are
+preserved on `status ∈ {error, conflict}` or `debug=True` (matching the
+existing `conflict` case); replaced the "Custom Env packaging tooling"
+one-liner with a forward-looking `brr env init` sketch (`--kind=script`
+seeds four executables + README; `--kind=python` seeds a minimal
+pyproject with an entry point); expanded the tests section with
+worktree-salvage, devcontainer-stub, script-env dispatch, and registry
+precedence cases. Done-definition and docs list updated to reflect five
+built-ins and the dual plugin model.
+
+Extracted the overlays roadmap into a new `kb/plan-overlays.md`. Plan
+is blocked behind the env PR and a research gate: before implementation
+starts, we must pick between a single-file overlay (`~/.config/brr/
+overlay.md` appended to every prompt) and the multi-file lookup chain
+from the deck, with the decision landing as
+`kb/research-overlay-shape.md`. Plan covers XDG paths +
+`BRR_CONFIG_HOME`, `brr overlay init|sync|show`, `overlay_sync=auto|
+always|never`, a staged `brr eject` retirement (ship overlays →
+deprecation notice → remove one release later → replace with
+`src/brr/docs/customising.md`), tests, and explicit non-goals
+(`brnrd`, multi-profile composition, auto-migration).
+
+Updated `kb/notes-pondering-fleet.md`: marked §1 (`brr eject`) and §2
+(single-file overlay) as promoted — both now live in
+`kb/plan-overlays.md` — with provenance preserved; refreshed §9
+re-promotion guide; added §10 "Plugin candidates for `brr.envs`"
+naming Daytona as the first dogfood plugin (rationale: validates the
+plugin mechanism end-to-end, keeps core zero-dep and self-hosted, ships
+as `brr-env-daytona` outside the main repo; sketches the env shape
+reusing the `ssh` pattern), plus one-liners for E2B, Modal, Gitpod,
+Codespaces, Fly Machines, Runpod, each testing a slightly different
+plugin-surface slice. Added the same Daytona pointer in the design
+doc's registry section. Updated `kb/index.md` under Active design with
+`plan-overlays.md` (blocked / research gate noted). No code changes.

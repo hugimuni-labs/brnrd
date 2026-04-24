@@ -23,7 +23,8 @@ This index only covers this repo's project-specific knowledge.
 
 ## Active design
 
-- [Env Interface design](design-env-interface.md) — actionable spec for the in-flight worktree PR: `Env` Protocol, durability contract, `local`/`worktree`/`docker`/`ssh` built-ins, decentralised merging via `git merge --ff-only` + `conflict` status, plugin entry points
+- [Env Interface design](design-env-interface.md) — actionable spec for the in-flight worktree PR: `Env` Protocol, durability contract, `local`/`worktree`/`docker`/`ssh`/`devcontainer` built-ins, salvage rule on `error`/`conflict`, decentralised merging via `git merge --ff-only` + `conflict` status, dual plugin model (Python entry points + drop-in script envs)
+- [Overlays plan](plan-overlays.md) — **blocked** on the env PR and a research gate (`kb/research-overlay-shape.md`) picking single-file vs multi-file overlays; covers XDG paths, git-backed `~/.config/brr/`, `brr overlay init|sync|show`, and the staged `brr eject` retirement
 
 ## Ideas / Follow-ups
 
@@ -34,3 +35,4 @@ This index only covers this repo's project-specific knowledge.
 
 - [PR #1 Review](review-pr-1.md) — deep review notes for task abstraction PR and follow-up notes after wiring the triage path
 - [Concurrency Follow-up Review](review-concurrency-followup-2026-04-14.md) — second review pass clarifying that concurrency scaffolding exists but the merge coordinator and worker pool are not implemented yet
+- [brr vs gh-aw](research-brr-vs-gh-aw.md) — deep comparison with GitHub Agentic Workflows: axes of opposition (substrate, transport, durability, security, fleet), market fit, verdict for the remote-controlled repo-first CLI runner use case, and which ideas brr could credibly adopt (`safe-outputs`, rate-limits, XPIA) vs. not (compile step, frontmatter DSL, GitHub-shaped worldview)

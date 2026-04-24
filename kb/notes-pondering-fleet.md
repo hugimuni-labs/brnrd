@@ -15,6 +15,11 @@ answers.
 
 ## 1. Drop `brr eject`?
 
+> **Promoted — see `plan-overlays.md` → "`brr eject` retirement".**
+> The staged retirement path (ship overlays → deprecation notice → remove
+> one release later) now lives there as part of the overlays plan. The
+> thinking below is kept for provenance.
+
 **Likely yes.** The verb made sense when per-repo override (`.brr/prompts/`)
 was the only customisation path. Once overlays exist as the
 "workflow-wide" path, `eject` is just a copy-paste shortcut.
@@ -35,6 +40,12 @@ loses CLI discoverability. Fine.
 ---
 
 ## 2. Single overlay file vs multi-file overlay
+
+> **Promoted — see `plan-overlays.md` → "Research gate (blocking)".**
+> The single-vs-multi choice is now a blocking research step before the
+> overlays implementation can start; the deliverable is
+> `kb/research-overlay-shape.md`. The two-option analysis below feeds
+> directly into that page and is kept here for provenance.
 
 User leans toward **single file**. That's a real simplification worth
 exploring.
@@ -294,13 +305,83 @@ transition that either succeeds or yields to manual intervention.
 
 When picking any of these up:
 
-- **#1 (drop eject)** → small PR; do alongside or after overlays land.
-- **#2 (single overlay file)** → rewrite the overlay slide in the deck, then ship Phase 1.
+- **#1 (drop eject)** → **promoted** — see `plan-overlays.md` → "`brr eject` retirement".
+- **#2 (single overlay file)** → **promoted** — see `plan-overlays.md` → "Research gate (blocking)"; blocks the overlays implementation until resolved.
 - **#5 (registry)** → trivial PR; do it now if convenient since brnrd will need it.
 - **#6 (brnrd)** → separate project; start when the env work is shipped and the overlay is proven.
 - **#7 (cross-platform supervisor)** → defer until a non-Linux user complains.
 - **#8 (decentralised merge)** → already absorbed into `design-env-interface.md`; this section is just provenance.
+- **#10 (plugin candidates)** → first dogfood plugin (Daytona) after the env PR merges; each other candidate promotes when demand appears.
 
 Until one of these is promoted, **no code changes here**. The point of
 this page is to keep the side-channel from getting lost while the env
 work ships.
+
+---
+
+## 10. Plugin candidates for `brr.envs`
+
+Once the env PR merges, `brr.envs` is an open plugin point. Everything
+below is a candidate for a **third-party plugin package**, not a
+built-in. Keeping brr core zero-dep and self-hosted-first means these
+ship as separate pip packages (or script envs), never in the main
+repo.
+
+### Daytona — the planned dogfood target
+
+Daytona is a natural first real-world plugin because it exercises the
+remote-env shape end-to-end (workspace lifecycle, remote filesystem,
+CLI-driven control plane). If the plugin mechanism can host Daytona
+cleanly, we designed it right.
+
+- **Why a plugin, not a built-in.** Daytona is SaaS-adjacent — making it
+  core would pull brr toward "we integrate with services," which cuts
+  against the self-hosted ideology. Ship it as `brr-env-daytona` in its
+  own repo; document it in the brr docs as an example plugin.
+- **Sketch — roughly the `ssh` env shape, backed by the Daytona CLI**:
+  - `validate` — `daytona` CLI on PATH, auth configured.
+  - `prepare` — `daytona create --image=<img> --from-repo=<url>` (or
+    `--devcontainer` when the repo has one); stash the workspace id in
+    `ctx.env_state`.
+  - `invoke` — `daytona exec <ws-id> -- <runner-cmd>`; stdout/stderr
+    streamed back to the host; trace is host-side as usual.
+  - `finalize` — `git bundle` the branch inside the workspace, fetch
+    back locally; `scp` or `daytona cp` the response file; delete the
+    workspace only when `status=done` and `debug=False` (honours the
+    env salvage rule).
+- **Response-path split.** `response_path_env` lives inside the Daytona
+  workspace; `response_path_host` stays at `.brr/responses/<id>.md`.
+  The finalize transfer closes the gap — exactly the `ssh` pattern.
+- **Open questions for the plugin.** Auth model (personal token vs.
+  org-level?); image choice ergonomics (default to the repo's
+  devcontainer when one exists?); cost visibility (per-workspace
+  pricing should surface in `brr inspect`).
+
+### Neighbouring candidates
+
+Each of these tests a slightly different slice of the plugin surface.
+Kept at one-line notes until someone actually wants to build one.
+
+- **E2B** — sandbox-as-a-service with a Python SDK; tests whether a
+  plugin can stay entirely API-driven with no CLI dependency.
+- **Modal** — function-style ephemeral compute; tests whether the
+  prepare/invoke/finalize rhythm survives a non-workspace-shaped
+  backend.
+- **Gitpod** — devcontainer-native remote env; overlaps with the
+  built-in `devcontainer` but remote; tests the "remote devcontainer"
+  shape.
+- **GitHub Codespaces** — similar to Gitpod; proves the plugin story on
+  a major GitHub-integrated surface; `gh codespace ssh` makes the
+  invoke step trivial.
+- **Fly Machines** — cheap, global, per-task VM; tests whether a plugin
+  can take over scheduling without brr caring.
+- **Runpod** — GPU-first sandbox; tests the "GPU box on demand" use
+  case that `ssh` currently covers only if you already have a box.
+
+### Rule of thumb
+
+**Built-in** means "works with zero extra install, for the common
+case." **Plugin** means "works when the user opts in and installs
+something." Daytona, E2B, Modal, Gitpod, Codespaces, Fly, Runpod all
+fail the first test: they each require an account, a CLI, or an SDK
+install. They belong in plugins, not core.
