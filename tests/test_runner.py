@@ -109,12 +109,15 @@ class TestPromptBuilding:
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
             task_id="task-123",
             branch_name="brr/task-123",
+            base_branch="feat/task-abstraction",
             runtime_dir="/repo/.brr",
             log_file="kb/log-task-123.md",
         )
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
+        assert "Base branch: feat/task-abstraction" in prompt
         assert "Current branch: brr/task-123" in prompt
+        assert "do not rebase or retarget to main" in prompt
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "kb/log-task-123.md" in prompt
         assert "Some runners capture your final response automatically" in prompt

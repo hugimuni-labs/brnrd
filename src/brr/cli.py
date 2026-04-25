@@ -67,7 +67,9 @@ def _repo_root() -> Path:
 
 
 def _brr_dir() -> Path:
-    return _repo_root() / ".brr"
+    from . import gitops
+
+    return gitops.shared_brr_dir(_repo_root())
 
 
 def cmd_init(args):

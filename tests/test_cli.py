@@ -77,3 +77,40 @@ def test_inspect_task_partial_match(tmp_path):
 
     output = inspect_task("12345", tmp_path)
     assert "task-12345-xyz" in output
+
+
+def test_inspect_task_from_worktree_uses_shared_runtime(tmp_path):
+    import subprocess
+
+    from brr.status import inspect_task
+    from brr.task import Task
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    (repo / "README.md").write_text("hi\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    tasks_dir = repo / ".brr" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    task = Task(id="task-123-abc", event_id="evt-99", body="fix", status="done")
+    task.save(tasks_dir)
+
+    worktree = repo / ".brr" / "worktrees" / "task-123-abc"
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "brr/task-123-abc", str(worktree), "HEAD"],
+        cwd=repo,
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+
+    try:
+        output = inspect_task("task-123-abc", worktree)
+        assert "task-123-abc" in output
+        assert "evt-99" in output
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=repo, check=True)
+        subprocess.run(["git", "branch", "-D", "brr/task-123-abc"], cwd=repo, check=True, stdout=subprocess.PIPE)

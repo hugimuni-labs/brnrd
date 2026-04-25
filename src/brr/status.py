@@ -17,7 +17,7 @@ def get_status() -> str:
     except (RuntimeError, SystemExit):
         return "[brr] not in a git repo"
 
-    brr_dir = repo_root / ".brr"
+    brr_dir = gitops.shared_brr_dir(repo_root)
     lines = [f"repo: {repo_root}"]
 
     cfg = conf.load_config(repo_root)
@@ -38,7 +38,7 @@ def get_status() -> str:
         lines.append("kb/: missing")
 
     from . import worktree as wt_mod
-    wts = wt_mod.list_worktrees(repo_root)
+    wts = wt_mod.list_worktrees(brr_dir.parent)
     if wts:
         lines.append(f"worktrees: {len(wts)} active")
         for w in wts:
@@ -59,7 +59,9 @@ def get_status() -> str:
 
 def inspect_task(task_id: str, repo_root: Path) -> str:
     """Return a human-readable summary of a task and its linked artifacts."""
-    brr_dir = repo_root / ".brr"
+    from . import gitops
+
+    brr_dir = gitops.shared_brr_dir(repo_root)
     tasks_dir = brr_dir / "tasks"
 
     task_file = tasks_dir / f"{task_id}.md"
@@ -92,6 +94,9 @@ def inspect_task(task_id: str, repo_root: Path) -> str:
     branch_name = task.meta.get("branch_name") or task.resolve_branch_name()
     if branch_name:
         lines.append(f"Git branch: {branch_name}")
+    base_branch = task.meta.get("base_branch")
+    if base_branch:
+        lines.append(f"Base branch: {base_branch}")
 
     resp = task.meta.get("response_path")
     if resp:
@@ -122,7 +127,7 @@ def inspect_task(task_id: str, repo_root: Path) -> str:
             lines.append(f"Worktree: {wt_default} (exists)")
 
     extra_keys = set(task.meta) - {
-        "branch_name", "response_path", "trace_dirs", "worktree_path",
+        "base_branch", "branch_name", "response_path", "trace_dirs", "worktree_path",
     }
     if extra_keys:
         lines.append("Meta:")

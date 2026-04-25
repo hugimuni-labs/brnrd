@@ -3,7 +3,7 @@
 import subprocess
 from pathlib import Path
 
-from brr.gitops import is_tracked, merge_branch
+from brr.gitops import current_branch, is_tracked, merge_branch, shared_brr_dir
 from brr.worktree import list_worktrees, create, remove
 
 
@@ -110,3 +110,57 @@ def test_list_worktrees_finds_brr_worktree(tmp_path):
 
     remove(repo, "task-42", branch="brr/task-42", delete_branch=True, force=True)
     assert list_worktrees(repo) == []
+
+
+def test_shared_brr_dir_uses_main_checkout_for_worktree(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "file.txt").write_text("init\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=repo, check=True,
+        stdout=subprocess.PIPE,
+    )
+
+    (repo / ".brr").mkdir()
+    wt_path = create(repo, "task-42", "brr/task-42", create_branch=True)
+    assert shared_brr_dir(repo) == repo / ".brr"
+    assert shared_brr_dir(wt_path) == repo / ".brr"
+    assert current_branch(wt_path) == "brr/task-42"
+
+    remove(repo, "task-42", branch="brr/task-42", delete_branch=True, force=True)
+
+
+def test_worktree_branch_is_created_from_current_branch(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "file.txt").write_text("main\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "checkout", "-b", "feature/base"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    (repo / "feature.txt").write_text("feature\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "feature base"], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    wt_path = create(repo, "task-43", "brr/task-43", create_branch=True)
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", "feature/base", "brr/task-43"],
+            cwd=repo,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        feature_head = subprocess.run(
+            ["git", "rev-parse", "feature/base"],
+            cwd=repo,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        assert merge_base == feature_head
+        assert (wt_path / "feature.txt").exists()
+    finally:
+        remove(repo, "task-43", branch="brr/task-43", delete_branch=True, force=True)

@@ -39,6 +39,34 @@ def ensure_git_repo() -> Path:
     return Path(result.stdout.strip())
 
 
+def current_branch(repo_root: Path) -> str:
+    """Return the current branch name, or ``HEAD`` when detached."""
+    result = _git(repo_root, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    if result.returncode != 0:
+        return "HEAD"
+    return result.stdout.strip() or "HEAD"
+
+
+def shared_brr_dir(repo_root: Path) -> Path:
+    """Return the shared ``.brr`` dir for a repo or worktree checkout.
+
+    In a normal checkout this is ``repo_root/.brr``. In a git worktree,
+    runtime state lives beside the common git dir in the main checkout.
+    """
+    local = repo_root / ".brr"
+    if local.exists():
+        return local
+
+    result = _git(repo_root, "rev-parse", "--git-common-dir", check=False)
+    if result.returncode != 0:
+        return local
+
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = (repo_root / common_dir).resolve()
+    return common_dir.parent / ".brr"
+
+
 def is_tracked(path: Path) -> bool:
     """Return True if *path* is tracked by Git."""
     try:

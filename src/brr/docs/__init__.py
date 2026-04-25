@@ -18,7 +18,9 @@ _DOCS_DIR = Path(__file__).resolve().parent
 def _override_dir(repo_root: Path | None) -> Path | None:
     if repo_root is None:
         return None
-    return repo_root / ".brr" / "docs"
+    from .. import gitops
+
+    return gitops.shared_brr_dir(repo_root) / "docs"
 
 
 def list_topics(repo_root: Path | None = None) -> list[str]:

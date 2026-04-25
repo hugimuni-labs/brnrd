@@ -34,7 +34,9 @@ def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
     Parses ``git worktree list --porcelain`` and filters to worktrees
     whose path starts with the brr worktrees directory.
     """
-    worktrees_dir = repo_root / ".brr" / "worktrees"
+    from . import gitops
+
+    worktrees_dir = gitops.shared_brr_dir(repo_root) / "worktrees"
     result = _git(repo_root, "worktree", "list", "--porcelain", check=False)
     if result.returncode != 0:
         return []
@@ -82,7 +84,9 @@ def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
 
 def path_for(repo_root: Path, task_id: str) -> Path:
     """Return the worktree path for *task_id*."""
-    return repo_root / ".brr" / "worktrees" / task_id
+    from . import gitops
+
+    return gitops.shared_brr_dir(repo_root) / "worktrees" / task_id
 
 
 def create(repo_root: Path, task_id: str, branch: str, create_branch: bool = True) -> Path:

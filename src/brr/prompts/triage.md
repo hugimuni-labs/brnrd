@@ -33,6 +33,9 @@ Guidelines:
 - Treat `branch` and `env` as related: `env: local` only makes sense with
   `branch: current`; if you pick any other branch strategy, prefer
   `env: worktree`.
+- `auto` / `task` branches are created from the currently checked-out
+  branch where `brr up` is running. That branch is not necessarily
+  `main`; do not assume `main` is the base unless the event says so.
 - If the event references an existing branch or PR, use that branch name.
 - If unsure, prefer `current` — simpler is better for serial execution.
 

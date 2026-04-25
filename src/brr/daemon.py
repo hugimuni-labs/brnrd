@@ -137,8 +137,10 @@ def _run_worker(
     and tracks status throughout execution.  Returns the Task.
     """
     eid = event["id"]
-    tasks_dir = repo_root / ".brr" / "tasks"
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    tasks_dir = brr_dir / "tasks"
     runner_name = runner.resolve_runner(repo_root)
+    base_branch = gitops.current_branch(repo_root)
     try:
         task, triage_trace = _triage_task(event, repo_root, cfg, runner_name, trace=debug)
     except RuntimeError as e:
@@ -159,6 +161,7 @@ def _run_worker(
     task.meta["response_path"] = str(resp_path)
     if branch_name:
         task.meta["branch_name"] = branch_name
+    task.meta["base_branch"] = base_branch
 
     if uses_worktree:
         try:
@@ -182,7 +185,8 @@ def _run_worker(
                 task.body, eid, str(resp_path), run_root,
                 task_id=task.id,
                 branch_name=branch_name,
-                runtime_dir=str(repo_root / ".brr"),
+                base_branch=base_branch,
+                runtime_dir=str(brr_dir),
                 log_file=log_file,
             )
         else:
@@ -193,7 +197,8 @@ def _run_worker(
                 eid, str(resp_path), run_root,
                 task_id=task.id,
                 branch_name=branch_name,
-                runtime_dir=str(repo_root / ".brr"),
+                base_branch=base_branch,
+                runtime_dir=str(brr_dir),
                 log_file=log_file,
             )
 
@@ -215,7 +220,7 @@ def _run_worker(
             trace=debug,
         )
         if result.trace_dir:
-            trace_dirs.append(str(result.trace_dir.relative_to(repo_root / ".brr")))
+            trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
         try:
             result.raise_for_error()
         except RuntimeError as e:
@@ -376,11 +381,11 @@ def _triage_task(
     triage_trace: str | None = None
     if result.trace_dir:
         try:
-            triage_trace = str(result.trace_dir.relative_to(repo_root / ".brr"))
+            triage_trace = str(result.trace_dir.relative_to(gitops.shared_brr_dir(repo_root)))
         except ValueError:
             triage_trace = str(result.trace_dir)
 
-    task.save(repo_root / ".brr" / "tasks")
+    task.save(gitops.shared_brr_dir(repo_root) / "tasks")
     return task, triage_trace
 
 
@@ -393,7 +398,7 @@ def start(repo_root: Path, *, debug: bool | None = None) -> None:
     *debug* enables trace persistence and worktree retention.  When
     ``None``, falls back to the ``debug`` key in ``.brr/config``.
     """
-    brr_dir = repo_root / ".brr"
+    brr_dir = gitops.shared_brr_dir(repo_root)
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
 
