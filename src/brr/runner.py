@@ -73,7 +73,9 @@ class RunnerInvocation:
 
     @property
     def trace_root(self) -> Path:
-        return self.repo_root / ".brr" / "traces" / _slugify(self.kind)
+        from . import gitops
+
+        return gitops.shared_brr_dir(self.repo_root) / "traces" / _slugify(self.kind)
 
 
 @dataclass
@@ -126,7 +128,9 @@ class RunnerResult:
 def _read_prompt(name: str, repo_root: Path | None = None) -> str:
     """Read a prompt file, checking user overrides first."""
     if repo_root:
-        override = repo_root / ".brr" / "prompts" / name
+        from . import gitops
+
+        override = gitops.shared_brr_dir(repo_root) / "prompts" / name
         if override.exists():
             return override.read_text(encoding="utf-8")
     bundled = _PROMPTS_DIR / name
@@ -456,6 +460,7 @@ def build_daemon_prompt(
     *,
     task_id: str | None = None,
     branch_name: str | None = None,
+    base_branch: str | None = None,
     runtime_dir: str | None = None,
     log_file: str | None = None,
 ) -> str:
@@ -470,12 +475,19 @@ def build_daemon_prompt(
         f"Event: {event_id}\n"
         + (f"Task ID: {task_id}\n" if task_id else "")
         + f"Execution root: {repo_root}\n"
+        + (f"Base branch: {base_branch}\n" if base_branch else "")
         + (f"Current branch: {branch_name}\n" if branch_name else "")
         + (f"Shared runtime dir: {runtime_dir}\n" if runtime_dir else "")
         + f"Your final response must be the exact content to place in: {response_path}\n"
         + "Some runners capture your final response automatically; if not, write that exact content there yourself.\n"
         + "Do not explore or modify any other files in .brr/ beyond what this task explicitly asks for.\n"
     )
+    if branch_name and base_branch:
+        metadata += (
+            "Branching note: this task branch was created from the base branch "
+            "shown above. Keep your edits on Current branch; do not rebase or "
+            "retarget to main unless the task explicitly asks for it.\n"
+        )
     if log_file:
         metadata += f"\nWrite your log entry to {log_file} instead of kb/log.md.\n"
     return _join_prompt_parts(preamble, repo_root, f"---\n{metadata}\nTask: {task}")

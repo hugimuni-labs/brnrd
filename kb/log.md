@@ -288,3 +288,19 @@ Codespaces, Fly Machines, Runpod, each testing a slightly different
 plugin-surface slice. Added the same Daytona pointer in the design
 doc's registry section. Updated `kb/index.md` under Active design with
 `plan-overlays.md` (blocked / research gate noted). No code changes.
+
+## [2026-04-25] fix | Salvage agent ergonomics worktree changes
+
+Reviewed the retained worktree for `task-1777067182-xej1`. The task branch
+`brr/task-1777067182-xej1` existed, but it pointed at the same commit as the
+base branch and all useful work was still uncommitted inside the retained
+worktree, which explains why normal finalization had nothing to merge.
+
+Salvaged the useful changes into the main checkout: shared runtime state now
+resolves through `git rev-parse --git-common-dir` so config, docs overrides,
+prompt overrides, status, inspect, and brr-managed worktree paths keep using
+the shared `.brr/` even when commands run from a worktree. Added base-branch
+metadata to daemon prompts and task inspection so task branches created while
+`brr up` runs on a non-main branch are clearly described as branching from the
+current checkout branch, not `main`; triage guidance now says the same.
+
