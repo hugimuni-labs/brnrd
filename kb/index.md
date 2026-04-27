@@ -37,4 +37,8 @@ This index only covers this repo's project-specific knowledge.
 - [PR #1 Review](review-pr-1.md) — deep review notes for task abstraction PR and follow-up notes after wiring the triage path
 - [Concurrency Follow-up Review](review-concurrency-followup-2026-04-14.md) — second review pass clarifying that concurrency scaffolding exists but the merge coordinator and worker pool are not implemented yet
 - [brr vs gh-aw](research-brr-vs-gh-aw.md) — deep comparison with GitHub Agentic Workflows: axes of opposition (substrate, transport, durability, security, fleet), market fit, verdict for the remote-controlled repo-first CLI runner use case, and which ideas brr could credibly adopt (`safe-outputs`, rate-limits, XPIA) vs. not (compile step, frontmatter DSL, GitHub-shaped worldview)
-- [Agent Ergonomics Review](log-task-1777067182-xej1.md) — per-task review notes for the runner/orchestration ergonomics pass, including the git-common-dir fix for shared `.brr/` state under worktrees
+
+## Agent ergonomics evaluations
+
+- [Task Context Bundle runner review](agent-ergonomics-evaluation/task-context-bundle-runner-review-2026-04-28.md) — review from inside a live daemon worktree task after the workstream and Task Context Bundle changes, covering context recovery effort, stream/task artifact discoverability, per-task log lifecycle, prompt/docs clarity, and prioritized runner-UX recommendations
+- [Task log: Task Context Bundle runner review](log-task-1777333195-8ed7.md) — per-task log entry for the 2026-04-28 runner ergonomics evaluation
