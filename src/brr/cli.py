@@ -20,6 +20,8 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("init", help="set up a repo for brr")
     p.add_argument("url", nargs="?", default=None, help="clone URL (optional)")
+    p.add_argument("-i", "--interactive", action="store_true",
+                   help="ask setup questions (runner, config) with timed defaults")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("run", help="run a task through the runner")
@@ -74,7 +76,7 @@ def _brr_dir() -> Path:
 
 def cmd_init(args):
     from . import adopt
-    adopt.init_repo(args.url)
+    adopt.init_repo(args.url, interactive=args.interactive)
 
 
 def cmd_run(args):
