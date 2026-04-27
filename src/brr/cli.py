@@ -60,6 +60,15 @@ def main(argv: list[str] | None = None) -> None:
                     help="doc topic (omit to list available topics)")
     p.set_defaults(func=cmd_docs)
 
+    p = sub.add_parser("streams", help="list known workstreams")
+    p.set_defaults(func=cmd_streams)
+
+    p = sub.add_parser("stream", help="workstream operations")
+    stream_sub = p.add_subparsers(dest="stream_command", required=True)
+    p_show = stream_sub.add_parser("show", help="show a workstream's details")
+    p_show.add_argument("stream_id", help="stream ID (or partial match)")
+    p_show.set_defaults(func=cmd_stream_show)
+
     p = sub.add_parser("eject", help="copy bundled prompts for customization")
     p.set_defaults(func=cmd_eject)
 
@@ -134,6 +143,16 @@ def cmd_inspect(args):
             show_prompt=args.prompt,
         ) + "\n"
     )
+
+
+def cmd_streams(args):
+    from . import status as status_mod
+    sys.stdout.write(status_mod.list_streams() + "\n")
+
+
+def cmd_stream_show(args):
+    from . import status as status_mod
+    sys.stdout.write(status_mod.show_stream(args.stream_id) + "\n")
 
 
 def cmd_docs(args):

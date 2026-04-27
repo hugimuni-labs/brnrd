@@ -322,3 +322,38 @@ and `brr docs active-task`; added the new bundled `active-task` doc as a short
 task-orientation guide. Larger decisions remain open around a structured run
 manifest and making Telegram feel more like a straight conversation.
 
+## [2026-04-27] implement | Workstream ergonomics — first slice
+
+Implemented the workstream-ergonomics plan end-to-end. The runtime now
+resolves every incoming event to a stream before triage (explicit
+`stream_id` → related task → gate-thread fingerprint → fallback) and
+maintains `.brr/streams/<stream-id>/` with a `stream.md` manifest plus
+append-only `events.ndjson` / `tasks.ndjson` / `artifacts.ndjson` logs.
+
+Daemon prompts now ship a structured **Task Context Bundle** (workstream,
+task metadata, delivery contract, original event body when small) so
+agents can orient without needing extra CLI calls. Triage prompts gain
+the same workstream block plus an opt-in stage-feedback note when the
+event explicitly requests per-stage artifacts.
+
+Added a gate-agnostic update packet model in `src/brr/updates.py` —
+`stream_created`, `event_received`, `task_created`, `triage_done`,
+`run_started`, `artifact_created`, `needs_context`, `done`, `failed`,
+`conflict` — appended to each stream's event log, printed to the
+daemon console, and dispatched to any gate that exposes a
+`render_update(brr_dir, packet)` hook. Agents can now suggest a
+`reply_route` in the response frontmatter; the daemon enforces the
+stream's allowed list with `input_gate` as the default and tiebreaker.
+
+CLI surface: added `brr streams` and `brr stream show <id>`,
+extended `brr status` with an active-streams summary, and enriched
+`brr inspect` with stream/title/intent/per-task artifact links.
+
+Tests added: stream resolution, append-only records, manifest
+roundtrip, prompt enrichment (with and without stream), reply-route
+acceptance/rejection, daemon stream wiring (records, prompt threading,
+follow-up reuse), and CLI/status output. Documented the model in
+`src/brr/docs/streams.md` and the bundled `active-task.md` guide;
+updated `brr-internals.md` and `prompts/run.md` to surface the new
+commands and Task Context Bundle expectations.
+
