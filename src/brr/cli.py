@@ -48,6 +48,10 @@ def main(argv: list[str] | None = None) -> None:
     p.set_defaults(func=cmd_down)
 
     p = sub.add_parser("inspect", help="show details for a task or event")
+    p.add_argument("--event-body", action="store_true",
+                   help="include the originating event body")
+    p.add_argument("--prompt", action="store_true",
+                   help="include the latest linked runner prompt")
     p.add_argument("task_id", help="task ID (or partial match)")
     p.set_defaults(func=cmd_inspect)
 
@@ -122,7 +126,14 @@ def cmd_down(args):
 
 def cmd_inspect(args):
     from . import status as status_mod
-    sys.stdout.write(status_mod.inspect_task(args.task_id, _repo_root()) + "\n")
+    sys.stdout.write(
+        status_mod.inspect_task(
+            args.task_id,
+            _repo_root(),
+            show_event_body=args.event_body,
+            show_prompt=args.prompt,
+        ) + "\n"
+    )
 
 
 def cmd_docs(args):

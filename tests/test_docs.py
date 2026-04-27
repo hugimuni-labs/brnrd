@@ -10,6 +10,7 @@ from brr.cli import main
 
 def test_list_topics_includes_bundled():
     topics = docs.list_topics()
+    assert "active-task" in topics
     assert "execution-map" in topics
     assert "brr-internals" in topics
 

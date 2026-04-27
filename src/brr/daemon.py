@@ -238,9 +238,13 @@ def _run_worker(
                     worktree.remove(repo_root, task.id, branch=branch_name, force=True)
             else:
                 task.update_status("done", tasks_dir)
-                _maybe_kb_maintenance(
+                maintenance_trace = _maybe_kb_maintenance(
                     run_root, repo_root, cfg, runner_name, trace=debug,
                 )
+                if maintenance_trace:
+                    trace_dirs.append(maintenance_trace)
+                    task.meta["trace_dirs"] = ", ".join(trace_dirs)
+                    task.save(tasks_dir)
                 if uses_worktree:
                     task = _finalize_worktree_task(
                         task, repo_root, tasks_dir, branch_name, keep_worktree=debug,
@@ -285,17 +289,17 @@ def _maybe_kb_maintenance(
     runner_name: str,
     *,
     trace: bool = False,
-) -> None:
+) -> str | None:
     """Run KB maintenance if configured and KB was modified."""
     policy = str(cfg.get("kb_maintenance", "auto")).strip().lower()
     if policy == "never":
-        return
+        return None
     if policy == "auto" and not _kb_changed(run_root):
-        return
+        return None
 
     prompt = runner.build_kb_maintenance_prompt(run_root)
     if not prompt:
-        return
+        return None
 
     print("[brr] running kb maintenance...")
     result = runner.invoke_runner(
@@ -314,6 +318,9 @@ def _maybe_kb_maintenance(
         print("[brr] kb maintenance complete")
     else:
         print(f"[brr] kb maintenance failed (non-fatal): exit {result.returncode}")
+    if result.trace_dir:
+        return str(result.trace_dir.relative_to(gitops.shared_brr_dir(repo_root)))
+    return None
 
 
 def _finalize_worktree_task(
