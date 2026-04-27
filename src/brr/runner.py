@@ -161,6 +161,11 @@ def detect_runner(repo_root: Path | None = None) -> str | None:
     return None
 
 
+def detect_all_runners(repo_root: Path | None = None) -> list[str]:
+    """Return all available runner CLI names found on PATH."""
+    return [name for name in _load_profiles(repo_root) if shutil.which(name)]
+
+
 def resolve_runner(repo_root: Path) -> str:
     """Determine which runner to use for this repo.
 
