@@ -29,6 +29,15 @@ def test_inspect_task(tmp_path):
     tasks_dir = tmp_path / ".brr" / "tasks"
     tasks_dir.mkdir(parents=True)
     (tmp_path / ".brr" / "responses").mkdir(parents=True)
+    inbox_dir = tmp_path / ".brr" / "inbox"
+    inbox_dir.mkdir(parents=True)
+    (inbox_dir / "evt-99.md").write_text(
+        "---\nid: evt-99\nstatus: done\nsource: telegram\n---\noriginal event\n",
+        encoding="utf-8",
+    )
+    trace_dir = tmp_path / ".brr" / "traces" / "daemon-run" / "evt-99-attempt-1"
+    trace_dir.mkdir(parents=True)
+    (trace_dir / "prompt.md").write_text("runner prompt", encoding="utf-8")
 
     task = Task(
         id="task-123-abc",
@@ -41,7 +50,7 @@ def test_inspect_task(tmp_path):
         meta={
             "branch_name": "brr/task-123-abc",
             "response_path": str(tmp_path / ".brr" / "responses" / "evt-99.md"),
-            "trace_dirs": "traces/triage/evt-99-xxx, traces/daemon-run/evt-99-attempt-1-yyy",
+            "trace_dirs": "traces/triage/evt-99-xxx, traces/daemon-run/evt-99-attempt-1",
         },
     )
     task.save(tasks_dir)
@@ -55,6 +64,41 @@ def test_inspect_task(tmp_path):
     assert "Traces:" in output
     assert "triage" in output
     assert "daemon-run" in output
+    assert "Event file:" in output
+    assert "Latest prompt:" in output
+
+    verbose = inspect_task("task-123-abc", tmp_path, show_event_body=True, show_prompt=True)
+    assert "Event body:" in verbose
+    assert "original event" in verbose
+    assert "runner prompt" in verbose
+
+
+def test_inspect_task_recovers_event_body_from_triage_trace(tmp_path):
+    from brr.status import inspect_task
+    from brr.task import Task
+
+    tasks_dir = tmp_path / ".brr" / "tasks"
+    tasks_dir.mkdir(parents=True)
+    triage_trace = tmp_path / ".brr" / "traces" / "triage" / "evt-99-triage"
+    triage_trace.mkdir(parents=True)
+    (triage_trace / "prompt.md").write_text(
+        "triage prompt\n---\nEvent ID: evt-99\n\noriginal event from trace",
+        encoding="utf-8",
+    )
+    task = Task(
+        id="task-123-abc",
+        event_id="evt-99",
+        body="fix",
+        status="done",
+        meta={"trace_dirs": "traces/triage/evt-99-triage"},
+    )
+    task.save(tasks_dir)
+
+    output = inspect_task("task-123-abc", tmp_path, show_event_body=True)
+
+    assert "Event file:" in output
+    assert "(missing)" in output
+    assert "original event from trace" in output
 
 
 def test_inspect_task_not_found(tmp_path):

@@ -304,3 +304,21 @@ metadata to daemon prompts and task inspection so task branches created while
 `brr up` runs on a non-main branch are clearly described as branching from the
 current checkout branch, not `main`; triage guidance now says the same.
 
+## [2026-04-25] fix | Improve active-task inspection and orientation
+
+Analyzed the debug run for `task-1777109858-zopo`. The run produced three
+runner invocations: triage, daemon-run, and KB maintenance. Only the daemon-run
+was asked to create the ergonomics review artifact; triage emitted the task
+spec and KB maintenance only reconciled `kb/index.md` / `kb/log.md`. The real
+discoverability gap was that task metadata linked the triage and daemon traces
+but not the KB-maintenance trace, and `brr inspect` did not expose the event
+file or latest prompt path.
+
+Implemented the clear ergonomic fixes: `brr inspect` now shows the event file
+and latest linked prompt path and supports `--event-body` / `--prompt` for
+inline inspection; KB-maintenance trace dirs are appended to task metadata for
+future runs; `run.md` now points daemon tasks at `brr status`, `brr inspect`,
+and `brr docs active-task`; added the new bundled `active-task` doc as a short
+task-orientation guide. Larger decisions remain open around a structured run
+manifest and making Telegram feel more like a straight conversation.
+
