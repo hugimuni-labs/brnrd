@@ -123,6 +123,44 @@ def test_inspect_task_partial_match(tmp_path):
     assert "task-12345-xyz" in output
 
 
+def test_inspect_task_includes_stream_context(tmp_path):
+    from brr import stream as stream_mod
+    from brr.status import inspect_task
+    from brr.task import Task
+
+    brr_dir = tmp_path / ".brr"
+    tasks_dir = brr_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+    (brr_dir / "responses").mkdir(parents=True)
+    (brr_dir / "inbox").mkdir(parents=True)
+
+    manifest = stream_mod.StreamManifest(
+        id="stream-show-1",
+        title="Refactor auth",
+        status="active",
+        intent="Make login testable",
+    )
+    stream_mod.save_manifest(brr_dir, manifest)
+    stream_mod.append_artifact(
+        brr_dir, manifest.id,
+        kind="response", path=str(brr_dir / "responses" / "evt-x.md"),
+        task_id="task-stream-x", label="response:evt-x",
+    )
+
+    task = Task(
+        id="task-stream-x", event_id="evt-x", body="fix",
+        status="done", source="telegram",
+        stream_id=manifest.id,
+    )
+    task.save(tasks_dir)
+
+    output = inspect_task("task-stream-x", tmp_path)
+    assert "Stream:   stream-show-1" in output
+    assert "Refactor auth" in output
+    assert "Make login testable" in output
+    assert "response:evt-x" in output
+
+
 def test_inspect_task_from_worktree_uses_shared_runtime(tmp_path):
     import subprocess
 

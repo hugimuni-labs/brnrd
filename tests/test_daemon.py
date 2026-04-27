@@ -91,7 +91,7 @@ def test_run_worker_uses_triage_output_for_task(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_triage_prompt",
-        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+        lambda body, event_id, _repo_root, **_kwargs: f"TRIAGE {event_id}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner,
@@ -195,7 +195,7 @@ def test_run_worker_executes_worktree_tasks_in_worktree_and_merges(tmp_path, mon
     monkeypatch.setattr(
         daemon.runner,
         "build_triage_prompt",
-        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+        lambda body, event_id, _repo_root, **_kwargs: f"TRIAGE {event_id}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner,
@@ -289,7 +289,7 @@ def test_run_worker_marks_error_on_invalid_triage_output(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_triage_prompt",
-        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+        lambda body, event_id, _repo_root, **_kwargs: f"TRIAGE {event_id}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner,
@@ -337,7 +337,7 @@ def test_run_worker_preserves_named_branch_without_merge(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_triage_prompt",
-        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+        lambda body, event_id, _repo_root, **_kwargs: f"TRIAGE {event_id}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner,
@@ -423,7 +423,7 @@ def test_run_worker_retries_from_missing_required_output(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_triage_prompt",
-        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+        lambda body, event_id, _repo_root, **_kwargs: f"TRIAGE {event_id}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner,
@@ -515,7 +515,7 @@ def test_debug_mode_keeps_worktree_after_merge(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.runner,
         "build_triage_prompt",
-        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+        lambda body, event_id, _repo_root, **_kwargs: f"TRIAGE {event_id}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner,
@@ -640,7 +640,7 @@ def test_no_debug_removes_worktree(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _repo_root: "codex")
     monkeypatch.setattr(
         daemon.runner, "build_triage_prompt",
-        lambda body, event_id, _repo_root: f"TRIAGE {event_id}: {body}",
+        lambda body, event_id, _repo_root, **_kwargs: f"TRIAGE {event_id}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner, "build_daemon_prompt",
@@ -709,7 +709,7 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
     monkeypatch.setattr(
         daemon.runner, "build_triage_prompt",
-        lambda body, eid, _: f"TRIAGE {eid}: {body}",
+        lambda body, eid, _, **_kwargs: f"TRIAGE {eid}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner, "build_daemon_prompt",
@@ -783,7 +783,7 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
     monkeypatch.setattr(
         daemon.runner, "build_triage_prompt",
-        lambda body, eid, _: f"TRIAGE {eid}: {body}",
+        lambda body, eid, _, **_kwargs: f"TRIAGE {eid}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner, "build_daemon_prompt",
@@ -846,7 +846,7 @@ def test_kb_maintenance_never_config(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
     monkeypatch.setattr(
         daemon.runner, "build_triage_prompt",
-        lambda body, eid, _: f"TRIAGE {eid}: {body}",
+        lambda body, eid, _, **_kwargs: f"TRIAGE {eid}: {body}",
     )
     monkeypatch.setattr(
         daemon.runner, "build_daemon_prompt",

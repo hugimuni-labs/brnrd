@@ -40,6 +40,7 @@ gitignored; do not commit its contents.
 | `inbox/`     | Incoming events from gates, one markdown file per event            |
 | `tasks/`     | Parsed task manifests, one per event (source of truth post-triage) |
 | `responses/` | Agent final responses destined for gate replies                    |
+| `streams/`   | Workstream manifests, append-only event/task/artifact records      |
 | `traces/`    | Prompt + stdout + meta for every runner invocation (debug mode)    |
 | `reviews/`   | Self-review notes the agent writes about its own runs              |
 | `worktrees/` | Isolated git worktrees for concurrent tasks                        |
@@ -52,12 +53,15 @@ gitignored; do not commit its contents.
 
 These are always available inside a brr-driven task:
 
-- `brr status` — active daemon + recent tasks + active worktrees.
+- `brr status` — active daemon + recent tasks + active worktrees +
+  active streams.
 - `brr inspect <task-id>` — cross-linked manifest for a task (event,
-  branch, worktree, response, trace directories).
+  branch, worktree, response, trace directories, stream link).
+- `brr streams` — list workstreams.
+- `brr stream show <id>` — manifest, recent tasks, artifacts.
 - `brr docs` — list bundled documentation topics.
 - `brr docs <topic>` — print a bundled doc (e.g. `execution-map`,
-  `brr-internals`).
+  `streams`, `brr-internals`).
 
 The agent does not run `brr up`/`brr down`; the daemon is managed by
 the human operator.

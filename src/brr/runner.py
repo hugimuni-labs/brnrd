@@ -468,40 +468,160 @@ def build_daemon_prompt(
     base_branch: str | None = None,
     runtime_dir: str | None = None,
     log_file: str | None = None,
+    stream: Any = None,
+    event_body: str | None = None,
+    stage_feedback: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
-    Same as run prompt but with event metadata and conversation context.
+    Same as run prompt but with event metadata, workstream context, and
+    a delivery contract assembled into a single ``Task Context Bundle``.
     When *log_file* is set (e.g. for worktree mode), the agent is told
     to write its log entry there instead of kb/log.md.
     """
     preamble = _read_prompt("run.md", repo_root)
-    metadata = (
-        f"Event: {event_id}\n"
-        + (f"Task ID: {task_id}\n" if task_id else "")
-        + f"Execution root: {repo_root}\n"
-        + (f"Base branch: {base_branch}\n" if base_branch else "")
-        + (f"Current branch: {branch_name}\n" if branch_name else "")
-        + (f"Shared runtime dir: {runtime_dir}\n" if runtime_dir else "")
-        + f"Your final response must be the exact content to place in: {response_path}\n"
-        + "Some runners capture your final response automatically; if not, write that exact content there yourself.\n"
-        + "Do not explore or modify any other files in .brr/ beyond what this task explicitly asks for.\n"
+    bundle = _build_task_context_bundle(
+        event_id=event_id,
+        response_path=response_path,
+        repo_root=repo_root,
+        task_id=task_id,
+        branch_name=branch_name,
+        base_branch=base_branch,
+        runtime_dir=runtime_dir,
+        log_file=log_file,
+        stream=stream,
+        event_body=event_body,
+        stage_feedback=stage_feedback,
+    )
+    return _join_prompt_parts(preamble, repo_root, f"{bundle}\nTask: {task}")
+
+
+def _build_task_context_bundle(
+    *,
+    event_id: str,
+    response_path: str,
+    repo_root: Path,
+    task_id: str | None,
+    branch_name: str | None,
+    base_branch: str | None,
+    runtime_dir: str | None,
+    log_file: str | None,
+    stream: Any,
+    event_body: str | None,
+    stage_feedback: bool,
+) -> str:
+    """Assemble the human-readable Task Context Bundle for the daemon prompt.
+
+    The bundle preserves the legacy ``Key: value`` lines (Task ID:,
+    Execution root:, Base branch:, etc.) so that any tool grepping the
+    prompt keeps working, while grouping them under semantic headings.
+    """
+    sections: list[str] = ["---", "## Task Context Bundle"]
+
+    if stream is not None:
+        sections.append("")
+        sections.append("### Workstream")
+        sections.append(f"- Stream ID: {getattr(stream, 'id', '') or ''}")
+        title = getattr(stream, "title", "") or ""
+        if title:
+            sections.append(f"- Title: {title}")
+        status = getattr(stream, "status", "") or ""
+        if status:
+            sections.append(f"- Status: {status}")
+        intent = getattr(stream, "intent", "") or ""
+        if intent:
+            sections.append(f"- Intent: {intent}")
+        summary = (getattr(stream, "summary", "") or "").strip()
+        if summary:
+            sections.append("- Current summary:")
+            for line in summary.splitlines():
+                sections.append(f"  {line}")
+        open_questions = (getattr(stream, "open_questions", "") or "").strip()
+        if open_questions:
+            sections.append("- Open questions:")
+            for line in open_questions.splitlines():
+                sections.append(f"  {line}")
+        gate_ctx = getattr(stream, "gate_context", None) or {}
+        if isinstance(gate_ctx, dict) and gate_ctx:
+            ctx_bits = [f"{k}={v}" for k, v in sorted(gate_ctx.items())]
+            sections.append(f"- Gate context: {' '.join(ctx_bits)}")
+        reply_route = getattr(stream, "reply_route", None) or {}
+        if isinstance(reply_route, dict) and reply_route:
+            preferred = reply_route.get("preferred", "")
+            selected = reply_route.get("selected", preferred)
+            allowed = reply_route.get("allowed", [])
+            allowed_str = ",".join(allowed) if isinstance(allowed, (list, tuple)) else str(allowed)
+            sections.append(
+                f"- Reply route: preferred={preferred} selected={selected} "
+                f"allowed=[{allowed_str}]"
+            )
+
+    sections.append("")
+    sections.append("### Task")
+    sections.append(f"- Event: {event_id}")
+    if task_id:
+        sections.append(f"- Task ID: {task_id}")
+    sections.append(f"- Execution root: {repo_root}")
+    if base_branch:
+        sections.append(f"- Base branch: {base_branch}")
+    if branch_name:
+        sections.append(f"- Current branch: {branch_name}")
+    if runtime_dir:
+        sections.append(f"- Shared runtime dir: {runtime_dir}")
+    sections.append(
+        f"- Stage feedback requested: {'yes' if stage_feedback else 'no'}"
+    )
+
+    sections.append("")
+    sections.append("### Delivery contract")
+    sections.append(
+        f"- Your final response must be the exact content to place in: {response_path}"
+    )
+    sections.append(
+        "- Some runners capture your final response automatically; if not, write that exact content there yourself."
+    )
+    sections.append(
+        "- Do not explore or modify any other files in .brr/ beyond what this task explicitly asks for."
     )
     if branch_name and base_branch:
-        metadata += (
-            "Branching note: this task branch was created from the base branch "
+        sections.append(
+            "- Branching note: this task branch was created from the base branch "
             "shown above. Keep your edits on Current branch; do not rebase or "
-            "retarget to main unless the task explicitly asks for it.\n"
+            "retarget to main unless the task explicitly asks for it."
         )
     if log_file:
-        metadata += f"\nWrite your log entry to {log_file} instead of kb/log.md.\n"
-    return _join_prompt_parts(preamble, repo_root, f"---\n{metadata}\nTask: {task}")
+        sections.append(
+            f"- Write your log entry to {log_file} instead of kb/log.md."
+        )
+    if stage_feedback:
+        sections.append(
+            "- Stage feedback was explicitly requested: emit a short, "
+            "structured stage note artifact alongside your main response."
+        )
+
+    if event_body is not None:
+        body = event_body.strip()
+        if body:
+            sections.append("")
+            sections.append("### Original event body")
+            sections.append("")
+            sections.append(body)
+
+    sections.append("")
+    return "\n".join(sections) + "\n"
 
 
 _TRIAGE_LOG_ENTRIES = 3
 
 
-def build_triage_prompt(event_body: str, event_id: str, repo_root: Path) -> str:
+def build_triage_prompt(
+    event_body: str,
+    event_id: str,
+    repo_root: Path,
+    *,
+    stream: Any = None,
+    stage_feedback: bool = False,
+) -> str:
     """Build the prompt for the triage step — event → task conversion.
 
     The triage agent reads the event and decides branch strategy and
@@ -509,10 +629,36 @@ def build_triage_prompt(event_body: str, event_id: str, repo_root: Path) -> str:
 
     Uses a reduced context window (last 3 log entries) compared to the
     full run prompt — triage only needs enough history to make a
-    branch/env decision, not full session continuity.
+    branch/env decision, not full session continuity. When *stream* is
+    provided, a compact workstream block is included; *stage_feedback*
+    asks the triage agent to emit a structured stage note artifact.
     """
     triage = _read_prompt("triage.md", repo_root)
     parts = [triage]
+    if stream is not None:
+        block_lines = ["## Workstream"]
+        block_lines.append(f"- id: {getattr(stream, 'id', '')}")
+        title = getattr(stream, "title", "")
+        if title:
+            block_lines.append(f"- title: {title}")
+        status = getattr(stream, "status", "")
+        if status:
+            block_lines.append(f"- status: {status}")
+        intent = getattr(stream, "intent", "")
+        if intent:
+            block_lines.append(f"- intent: {intent}")
+        summary = (getattr(stream, "summary", "") or "").strip()
+        if summary:
+            block_lines.append(f"- current summary: {summary}")
+        parts.append("\n".join(block_lines))
+    if stage_feedback:
+        parts.append(
+            "## Stage feedback requested\n\n"
+            "The originating event asked for per-stage feedback. Emit a "
+            "short, structured stage note alongside your task spec — keep "
+            "it focused on the triage decision rationale, not a freeform "
+            "essay."
+        )
     recent = _read_recent_log(repo_root, max_entries=_TRIAGE_LOG_ENTRIES)
     if recent:
         parts.append(
