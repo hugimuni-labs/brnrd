@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import stream as stream_mod
 from .task import Task
 
 
@@ -45,6 +46,17 @@ def get_status() -> str:
             lines.append(f"  {w.task_id} ({w.branch})")
     else:
         lines.append("worktrees: none")
+
+    streams = [s for s in stream_mod.list_streams(brr_dir) if s.status == "active"]
+    if streams:
+        lines.append(f"streams: {len(streams)} active")
+        for s in streams[:5]:
+            title = s.title or "(untitled)"
+            lines.append(f"  {s.id} — {title}")
+        if len(streams) > 5:
+            lines.append(f"  … and {len(streams) - 5} more")
+    else:
+        lines.append("streams: none")
 
     log = repo_root / "kb" / "log.md"
     if log.exists():
@@ -97,6 +109,22 @@ def inspect_task(
     ]
     if task.source:
         lines.append(f"Source:   {task.source}")
+    if task.stream_id:
+        lines.append(f"Stream:   {task.stream_id}")
+        manifest = stream_mod.load_manifest(brr_dir, task.stream_id)
+        if manifest:
+            if manifest.title:
+                lines.append(f"  title:   {manifest.title}")
+            if manifest.intent:
+                lines.append(f"  intent:  {manifest.intent}")
+            artifacts = stream_mod.read_artifacts(brr_dir, task.stream_id)
+            task_artifacts = [a for a in artifacts if a.get("task_id") == task.id]
+            if task_artifacts:
+                lines.append("  artifacts:")
+                for art in task_artifacts:
+                    label = art.get("label") or art.get("kind", "artifact")
+                    path = art.get("path", "")
+                    lines.append(f"    {label} → {path}")
 
     event_file = brr_dir / "inbox" / f"{task.event_id}.md"
     lines.append(f"Event file: {event_file}{'' if event_file.exists() else ' (missing)'}")
@@ -232,3 +260,124 @@ def _recent_log(path: Path, n: int) -> list[str]:
         if line.startswith("## [")
     ]
     return entries[-n:]
+
+
+# ── Streams ─────────────────────────────────────────────────────────
+
+
+def list_streams() -> str:
+    """Render `brr streams` — all known streams with high-level status."""
+    from . import gitops
+
+    try:
+        repo_root = gitops.ensure_git_repo()
+    except (RuntimeError, SystemExit):
+        return "[brr] not in a git repo"
+
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    streams = stream_mod.list_streams(brr_dir)
+    if not streams:
+        return "No streams yet."
+
+    lines: list[str] = []
+    for manifest in streams:
+        tasks = stream_mod.read_tasks(brr_dir, manifest.id)
+        artifacts = stream_mod.read_artifacts(brr_dir, manifest.id)
+        title = manifest.title or "(untitled)"
+        lines.append(
+            f"{manifest.id}  [{manifest.status}]  {title}"
+        )
+        if manifest.intent:
+            lines.append(f"  intent: {manifest.intent}")
+        lines.append(
+            f"  tasks: {len(tasks)}  artifacts: {len(artifacts)}"
+        )
+        if manifest.updated:
+            lines.append(f"  updated: {manifest.updated}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def show_stream(stream_id: str) -> str:
+    """Render `brr stream show <id>` — manifest, tasks, artifacts, events."""
+    from . import gitops
+
+    try:
+        repo_root = gitops.ensure_git_repo()
+    except (RuntimeError, SystemExit):
+        return "[brr] not in a git repo"
+
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    manifest = stream_mod.load_manifest(brr_dir, stream_id)
+    if manifest is None:
+        candidates = [m for m in stream_mod.list_streams(brr_dir) if stream_id in m.id]
+        if len(candidates) == 1:
+            manifest = candidates[0]
+            stream_id = manifest.id
+        elif candidates:
+            return (
+                f"Ambiguous stream ID '{stream_id}'. Matches:\n"
+                + "\n".join(f"  {m.id}" for m in candidates)
+            )
+        else:
+            return f"No stream matching '{stream_id}'"
+
+    lines = [
+        f"Stream:   {manifest.id}",
+        f"Title:    {manifest.title or '(untitled)'}",
+        f"Status:   {manifest.status}",
+    ]
+    if manifest.intent:
+        lines.append(f"Intent:   {manifest.intent}")
+    if manifest.created:
+        lines.append(f"Created:  {manifest.created}")
+    if manifest.updated:
+        lines.append(f"Updated:  {manifest.updated}")
+    if manifest.gate_context:
+        ctx_bits = [f"{k}={v}" for k, v in sorted(manifest.gate_context.items())]
+        lines.append(f"Gate:     {' '.join(ctx_bits)}")
+    if manifest.reply_route:
+        rr = manifest.reply_route
+        lines.append(
+            f"Reply:    preferred={rr.get('preferred')} "
+            f"selected={rr.get('selected')}"
+        )
+    if manifest.summary:
+        lines.append("")
+        lines.append("Current summary:")
+        for line in manifest.summary.splitlines():
+            lines.append(f"  {line}")
+    if manifest.open_questions:
+        lines.append("")
+        lines.append("Open questions:")
+        for line in manifest.open_questions.splitlines():
+            lines.append(f"  {line}")
+
+    tasks = stream_mod.read_tasks(brr_dir, stream_id)
+    if tasks:
+        lines.append("")
+        lines.append(f"Tasks ({len(tasks)}):")
+        for task in tasks[-10:]:
+            lines.append(
+                f"  {task.get('task_id')} [{task.get('status')}] "
+                f"{task.get('branch')}/{task.get('env')}"
+            )
+
+    artifacts = stream_mod.read_artifacts(brr_dir, stream_id)
+    if artifacts:
+        lines.append("")
+        lines.append(f"Artifacts ({len(artifacts)}):")
+        for art in artifacts[-10:]:
+            label = art.get("label") or art.get("kind", "artifact")
+            lines.append(f"  {label} → {art.get('path', '')}")
+
+    events = stream_mod.read_events(brr_dir, stream_id)
+    if events:
+        lines.append("")
+        lines.append(f"Events ({len(events)}):")
+        for ev in events[-10:]:
+            kind = ev.get("type") or ev.get("source", "event")
+            summary = ev.get("summary") or ev.get("event_id", "")
+            lines.append(f"  {ev.get('ts', '')} {kind} {summary}".rstrip())
+
+    return "\n".join(lines)

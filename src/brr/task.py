@@ -25,8 +25,9 @@ ENV_TYPES = ("local", "worktree", "docker")
 STATUSES = ("pending", "running", "done", "needs_context", "error", "conflict")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
+    "stream_id",
 }
-_TASK_FIELDS = {"id", "event_id", "branch", "env", "status", "source"}
+_TASK_FIELDS = {"id", "event_id", "branch", "env", "status", "source", "stream_id"}
 
 
 def _generate_task_id() -> str:
@@ -58,6 +59,7 @@ class Task:
     env: str = "local"
     status: str = "pending"
     source: str = ""
+    stream_id: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -78,6 +80,7 @@ class Task:
             branch=event.get("branch", cfg.get("default_branch", "current")),
             env=event.get("env", cfg.get("default_env", "local")),
             source=event.get("source", ""),
+            stream_id=str(event.get("stream_id", "") or ""),
             meta={
                 k: v for k, v in event.items()
                 if k not in _EVENT_META_FIELDS
@@ -134,6 +137,8 @@ class Task:
             f"status: {self.status}",
             f"source: {self.source}",
         ]
+        if self.stream_id:
+            lines.append(f"stream_id: {self.stream_id}")
         for k, v in self.meta.items():
             lines.append(f"{k}: {v}")
         lines.append("---")
@@ -162,6 +167,7 @@ class Task:
             env=fm.get("env", "local"),
             status=fm.get("status", "pending"),
             source=fm.get("source", ""),
+            stream_id=str(fm.get("stream_id", "") or ""),
             meta=meta,
         )
 

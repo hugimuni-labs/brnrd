@@ -25,6 +25,8 @@ from . import config as conf
 from . import gitops
 from . import protocol
 from . import runner
+from . import stream as stream_mod
+from . import updates
 from . import worktree
 from .task import Task
 
@@ -134,20 +136,60 @@ def _run_worker(
     """Run the runner for a single event, with retries.
 
     Creates a Task from the event, persists it to .brr/tasks/,
-    and tracks status throughout execution.  Returns the Task.
+    resolves the workstream context, and tracks status throughout
+    execution. Returns the Task.
     """
     eid = event["id"]
     brr_dir = gitops.shared_brr_dir(repo_root)
     tasks_dir = brr_dir / "tasks"
     runner_name = runner.resolve_runner(repo_root)
     base_branch = gitops.current_branch(repo_root)
+
+    resolution = stream_mod.resolve_for_event(brr_dir, event)
+    stream_id = resolution.stream_id
+    if resolution.created:
+        updates.emit(brr_dir, updates.UpdatePacket(
+            type="stream_created",
+            stream_id=stream_id,
+            payload={"event_id": eid, "reason": resolution.reason},
+        ))
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="event_received",
+        stream_id=stream_id,
+        payload={"event_id": eid, "source": event.get("source", "")},
+    ))
+    stream_mod.append_event(brr_dir, stream_id, event)
+
+    stage_feedback = _wants_stage_feedback(event)
+
     try:
-        task, triage_trace = _triage_task(event, repo_root, cfg, runner_name, trace=debug)
+        task, triage_trace = _triage_task(
+            event, repo_root, cfg, runner_name, stream_id,
+            stage_feedback=stage_feedback,
+            trace=debug,
+        )
     except RuntimeError as e:
         print(f"[brr] task {eid}: triage error: {e}")
         task = Task.from_event(event, cfg)
+        task.stream_id = stream_id
         task.update_status("error", tasks_dir)
+        updates.emit(brr_dir, updates.UpdatePacket(
+            type="failed",
+            stream_id=stream_id,
+            payload={"event_id": eid, "task_id": task.id, "stage": "triage", "error": str(e)},
+        ))
         return task
+
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="task_created",
+        stream_id=stream_id,
+        payload={"task_id": task.id, "event_id": eid, "branch": task.branch, "env": task.env},
+    ))
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="triage_done",
+        stream_id=stream_id,
+        payload={"task_id": task.id, "branch": task.branch, "env": task.env},
+    ))
 
     task.update_status("running", tasks_dir)
     resp_path = protocol.response_path(responses_dir, eid)
@@ -175,10 +217,30 @@ def _run_worker(
         except RuntimeError as e:
             print(f"[brr] task {task.id}: worktree setup failed: {e}")
             task.update_status("error", tasks_dir)
+            updates.emit(brr_dir, updates.UpdatePacket(
+                type="failed",
+                stream_id=stream_id,
+                payload={"task_id": task.id, "stage": "worktree", "error": str(e)},
+            ))
             return task
+
+    stream_manifest = stream_mod.load_manifest(brr_dir, stream_id)
+    event_body_for_prompt = event.get("body", "") or ""
+
+    stream_mod.append_task(
+        brr_dir, stream_id,
+        task_id=task.id, event_id=eid,
+        branch=task.branch, env=task.env, status=task.status,
+        base_branch=base_branch, branch_name=branch_name,
+    )
 
     log_file = f"kb/log-{task.id}.md" if uses_worktree else None
     trace_dirs: list[str] = [triage_trace] if triage_trace else []
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="run_started",
+        stream_id=stream_id,
+        payload={"task_id": task.id, "branch": branch_name, "env": task.env},
+    ))
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = runner.build_daemon_prompt(
@@ -188,6 +250,9 @@ def _run_worker(
                 base_branch=base_branch,
                 runtime_dir=str(brr_dir),
                 log_file=log_file,
+                stream=stream_manifest,
+                event_body=event_body_for_prompt,
+                stage_feedback=stage_feedback,
             )
         else:
             prompt = runner.build_daemon_prompt(
@@ -200,6 +265,9 @@ def _run_worker(
                 base_branch=base_branch,
                 runtime_dir=str(brr_dir),
                 log_file=log_file,
+                stream=stream_manifest,
+                event_body=event_body_for_prompt,
+                stage_feedback=stage_feedback,
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
@@ -232,8 +300,16 @@ def _run_worker(
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             resp_text = (responses_dir / f"{eid}.md").read_text(encoding="utf-8")
             resp_fm = protocol.parse_frontmatter(resp_text)
+            _record_response_artifact(
+                brr_dir, stream_id, task, resp_path, resp_fm,
+            )
             if resp_fm.get("status") == "needs_context":
                 task.update_status("needs_context", tasks_dir)
+                updates.emit(brr_dir, updates.UpdatePacket(
+                    type="needs_context",
+                    stream_id=stream_id,
+                    payload={"task_id": task.id, "event_id": eid},
+                ))
                 if uses_worktree and not debug:
                     worktree.remove(repo_root, task.id, branch=branch_name, force=True)
             else:
@@ -249,6 +325,18 @@ def _run_worker(
                     task = _finalize_worktree_task(
                         task, repo_root, tasks_dir, branch_name, keep_worktree=debug,
                     )
+                if task.status == "conflict":
+                    updates.emit(brr_dir, updates.UpdatePacket(
+                        type="conflict",
+                        stream_id=stream_id,
+                        payload={"task_id": task.id, "branch": branch_name},
+                    ))
+                else:
+                    updates.emit(brr_dir, updates.UpdatePacket(
+                        type="done",
+                        stream_id=stream_id,
+                        payload={"task_id": task.id, "event_id": eid},
+                    ))
             return task
 
         retry_reason = result.retry_reason()
@@ -259,9 +347,69 @@ def _run_worker(
     if trace_dirs:
         task.meta["trace_dirs"] = ", ".join(trace_dirs)
     task.update_status("error", tasks_dir)
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="failed",
+        stream_id=stream_id,
+        payload={"task_id": task.id, "event_id": eid, "stage": "run"},
+    ))
     if uses_worktree and not debug:
         worktree.remove(repo_root, task.id, branch=branch_name, force=True)
     return task
+
+
+def _wants_stage_feedback(event: dict) -> bool:
+    """Detect if the event explicitly asks for per-stage feedback artifacts."""
+    flag = event.get("stage_feedback")
+    if isinstance(flag, bool):
+        return flag
+    if isinstance(flag, str) and flag.strip().lower() in ("true", "yes", "1", "on"):
+        return True
+    body = (event.get("body") or "").lower()
+    return "stage feedback" in body or "per-stage feedback" in body
+
+
+def _record_response_artifact(
+    brr_dir: Path,
+    stream_id: str,
+    task: Task,
+    response_path: Path,
+    response_frontmatter: dict,
+) -> None:
+    """Index the response artifact and apply any reply-route policy."""
+    label = f"response:{task.event_id}" if task.event_id else f"response:{task.id}"
+    stream_mod.append_artifact(
+        brr_dir, stream_id,
+        kind="response",
+        path=str(response_path),
+        task_id=task.id,
+        label=label,
+    )
+
+    requested = response_frontmatter.get("reply_route") if isinstance(response_frontmatter, dict) else None
+    if not isinstance(requested, dict):
+        requested = None
+
+    manifest = stream_mod.load_manifest(brr_dir, stream_id)
+    if manifest is None:
+        return
+    normalized = stream_mod.normalize_reply_route(
+        requested,
+        stream_route=manifest.reply_route,
+        source=task.source,
+    )
+    if normalized != manifest.reply_route:
+        manifest.reply_route = normalized
+        stream_mod.save_manifest(brr_dir, manifest)
+
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="artifact_created",
+        stream_id=stream_id,
+        payload={
+            "task_id": task.id, "kind": "response",
+            "path": str(response_path),
+            "selected_reply_route": normalized.get("selected"),
+        },
+    ))
 
 
 def _kb_changed(run_root: Path) -> bool:
@@ -358,15 +506,27 @@ def _triage_task(
     repo_root: Path,
     cfg: dict,
     runner_name: str,
+    stream_id: str | None = None,
     *,
+    stage_feedback: bool = False,
     trace: bool = False,
 ) -> tuple[Task, str | None]:
     """Run the triage agent and parse its task output.
 
     Returns ``(task, triage_trace_dir_relative)`` where the trace dir
-    is relative to ``.brr/`` (or ``None`` when tracing is off).
+    is relative to ``.brr/`` (or ``None`` when tracing is off). When a
+    *stream_id* is provided the triage prompt is enriched with the
+    stream manifest so the triage agent can route consistently.
     """
-    prompt = runner.build_triage_prompt(event.get("body", ""), event["id"], repo_root)
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    stream_manifest = (
+        stream_mod.load_manifest(brr_dir, stream_id) if stream_id else None
+    )
+    prompt = runner.build_triage_prompt(
+        event.get("body", ""), event["id"], repo_root,
+        stream=stream_manifest,
+        stage_feedback=stage_feedback,
+    )
     result = runner.invoke_runner(
         runner_name,
         runner.RunnerInvocation(
@@ -385,14 +545,17 @@ def _triage_task(
     except ValueError as e:
         raise RuntimeError(f"invalid triage output: {e}") from e
 
+    if stream_id:
+        task.stream_id = stream_id
+
     triage_trace: str | None = None
     if result.trace_dir:
         try:
-            triage_trace = str(result.trace_dir.relative_to(gitops.shared_brr_dir(repo_root)))
+            triage_trace = str(result.trace_dir.relative_to(brr_dir))
         except ValueError:
             triage_trace = str(result.trace_dir)
 
-    task.save(gitops.shared_brr_dir(repo_root) / "tasks")
+    task.save(brr_dir / "tasks")
     return task, triage_trace
 
 
