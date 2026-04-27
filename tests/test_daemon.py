@@ -731,10 +731,11 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
             )
         if invocation.kind == "kb-maintenance":
             maintenance_calls.append(invocation.prompt)
+            trace_dir = tmp_path / ".brr" / "traces" / "kb-maintenance" / "kb-maintenance-test"
             return RunnerResult(
                 invocation=invocation, runner_name=runner_name,
                 command=["mock"], stdout="ok", stderr="",
-                returncode=0, trace_dir=None, artifacts=[],
+                returncode=0, trace_dir=trace_dir, artifacts=[],
             )
         Path(invocation.response_path).write_text("---\n---\ndone\n", encoding="utf-8")
         return RunnerResult(
@@ -756,6 +757,11 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     assert task.status == "done"
     assert len(maintenance_calls) == 1
     assert maintenance_calls[0] == "KB MAINTENANCE"
+    assert "traces/kb-maintenance/kb-maintenance-test" in task.meta["trace_dirs"]
+
+    persisted = Task.from_file(tmp_path / ".brr" / "tasks" / f"{task.id}.md")
+    assert persisted is not None
+    assert "traces/kb-maintenance/kb-maintenance-test" in persisted.meta["trace_dirs"]
 
 
 def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
