@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from brr import stream as stream_mod, status as status_mod
+from brr.task import Task
 
 
 def _init_repo(tmp_path):
@@ -95,6 +96,32 @@ def test_show_stream_renders_full_view(tmp_path, monkeypatch):
     assert "task-1" in out
     assert "Artifacts (1)" in out
     assert "response:evt-1" in out
+
+
+def test_show_stream_uses_current_task_status(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    brr_dir = repo / ".brr"
+    manifest = _seed_stream(brr_dir, id="stream-stale-task")
+    stream_mod.append_task(
+        brr_dir, manifest.id,
+        task_id="task-1", event_id="evt-1",
+        branch="auto", env="worktree", status="running",
+        base_branch="main", branch_name="brr/task-1",
+    )
+    Task(
+        id="task-1",
+        event_id="evt-1",
+        body="do the work",
+        branch="auto",
+        env="worktree",
+        status="done",
+        stream_id=manifest.id,
+    ).save(brr_dir / "tasks")
+
+    out = status_mod.show_stream("stream-stale-task")
+    assert "task-1 [done] auto/worktree" in out
+    assert "task-1 [running]" not in out
 
 
 def test_show_stream_partial_match(tmp_path, monkeypatch):

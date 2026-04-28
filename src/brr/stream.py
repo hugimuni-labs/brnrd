@@ -331,6 +331,14 @@ def save_manifest(brr_dir: Path, manifest: StreamManifest) -> Path:
     return path
 
 
+def touch_manifest(brr_dir: Path, stream_id: str) -> None:
+    """Refresh a stream manifest's updated timestamp if it exists."""
+    manifest = load_manifest(brr_dir, stream_id)
+    if manifest is None:
+        return
+    save_manifest(brr_dir, manifest)
+
+
 # ── Title generation ─────────────────────────────────────────────────
 
 
@@ -462,6 +470,7 @@ def append_event(brr_dir: Path, stream_id: str, event: dict[str, Any]) -> None:
         "summary": (event.get("body") or "").strip().splitlines()[0] if event.get("body") else "",
     }
     _append_jsonl(events_path(brr_dir, stream_id), record)
+    touch_manifest(brr_dir, stream_id)
 
 
 def append_task(
@@ -487,6 +496,7 @@ def append_task(
         "status": status,
     }
     _append_jsonl(tasks_path(brr_dir, stream_id), record)
+    touch_manifest(brr_dir, stream_id)
 
 
 def append_artifact(
@@ -511,6 +521,7 @@ def append_artifact(
     if extra:
         record.update(extra)
     _append_jsonl(artifacts_path(brr_dir, stream_id), record)
+    touch_manifest(brr_dir, stream_id)
 
 
 # ── Listing / read helpers ───────────────────────────────────────────
