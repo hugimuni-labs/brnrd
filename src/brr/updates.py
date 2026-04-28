@@ -67,6 +67,7 @@ def emit(brr_dir: Path, packet: UpdatePacket) -> None:
     record = {"ts": stream._now_iso(), **packet.to_record()}
     path = stream.events_path(brr_dir, packet.stream_id)
     stream._append_jsonl(path, record)
+    stream.touch_manifest(brr_dir, packet.stream_id)
     _render_console(packet)
     _dispatch_to_gates(brr_dir, packet)
 

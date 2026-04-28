@@ -203,6 +203,24 @@ def test_append_event_task_artifact(tmp_path):
     assert artifacts[0]["kind"] == "response"
 
 
+def test_append_records_touch_manifest_updated(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    manifest = stream.StreamManifest(id="stream-touch-1", title="Touch stream")
+
+    monkeypatch.setattr(stream, "_now_iso", lambda: "2026-04-28T00:00:00Z")
+    stream.save_manifest(brr_dir, manifest)
+
+    monkeypatch.setattr(stream, "_now_iso", lambda: "2026-04-28T00:00:01Z")
+    stream.append_task(
+        brr_dir, manifest.id, task_id="task-1", event_id="evt-1",
+        branch="auto", env="worktree", status="running",
+    )
+
+    loaded = stream.load_manifest(brr_dir, manifest.id)
+    assert loaded is not None
+    assert loaded.updated == "2026-04-28T00:00:01Z"
+
+
 # ── Reply route normalization ───────────────────────────────────────
 
 
