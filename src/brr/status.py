@@ -358,8 +358,9 @@ def show_stream(stream_id: str) -> str:
         lines.append("")
         lines.append(f"Tasks ({len(tasks)}):")
         for task in tasks[-10:]:
+            task_status = _current_task_status(brr_dir, task)
             lines.append(
-                f"  {task.get('task_id')} [{task.get('status')}] "
+                f"  {task.get('task_id')} [{task_status}] "
                 f"{task.get('branch')}/{task.get('env')}"
             )
 
@@ -381,3 +382,12 @@ def show_stream(stream_id: str) -> str:
             lines.append(f"  {ev.get('ts', '')} {kind} {summary}".rstrip())
 
     return "\n".join(lines)
+
+
+def _current_task_status(brr_dir: Path, stream_task: dict) -> str:
+    task_id = stream_task.get("task_id")
+    if task_id:
+        task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
+        if task is not None:
+            return task.status
+    return str(stream_task.get("status", ""))
