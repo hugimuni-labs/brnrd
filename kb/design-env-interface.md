@@ -285,14 +285,19 @@ compose axis moves into a follow-up, not v1.
 ### `docker`
 
 - **prepare**:
-  - Image: `cfg["docker"]["image"]` (default: a brr-published `python:3.11-slim`-based image with the configured runner CLI baked in).
-  - Bind-mount `repo_root` at `/work` (read-write).
-  - Bind-mount `repo_root/.brr/responses` at `/work/.brr/responses` (read-write).
-  - Bind-mount `repo_root/.brr/traces` if `debug` (read-write).
+  - Image: `docker.image` in `.brr/config`. Until brr ships a first-party
+    runner image, this is required so users choose an image that contains
+    their configured runner CLI and credentials.
+  - Bind-mount `repo_root` at the same absolute path inside the container
+    (read-write), so the prompt's host paths remain valid in the env.
   - Network: configurable (`cfg["docker"]["network"]`, default `bridge`).
-  - **Branch handling:** because the bind-mount IS the host's `.git`, the agent's commits on `ctx.branch` are immediately visible to the host. Same trick as worktrees, no fetch/push needed.
-- **invoke** → `docker run --name brr-<task-id> -v ...:/work -w /work <image> <runner-cmd>`. The cmd line is built from the existing runner profile machinery. Note: **no `--rm`** — cleanup is `finalize`'s job so we can preserve the container for salvage.
-- **finalize** → branch handling identical to worktree finalize. Container teardown rule matches `worktree`: `docker rm brr-<task-id>` only when `status=done` and `debug=False`; preserve when `status ∈ {error, conflict}` or `debug=True`.
+  - **Branch handling:** current-branch Docker tasks mount the main checkout.
+    Non-current branch tasks first create the same `.brr/worktrees/<task-id>`
+    checkout that `worktree` uses and run Docker with that as the working
+    directory. This keeps branch work from switching or dirtying the host's
+    main checkout while keeping commits visible through the shared `.git`.
+- **invoke** → `docker run --name brr-<task-id>-<attempt> -v <repo>:<repo> -w <run-root> <image> <runner-cmd>`. The cmd line is built from the existing runner profile machinery. Note: **no `--rm`** — cleanup is `finalize`'s job so we can preserve the container for salvage and support retry diagnostics.
+- **finalize** → branch handling identical to worktree finalize. Container teardown rule matches `worktree`: `docker rm -f <container>` only when `status=done` and `debug=False`; preserve when `status ∈ {error, conflict}` or `debug=True`.
 
 For users who want **stronger isolation** (no shared `.git`), a
 sub-mode `docker.isolation=clone`: `prepare` clones the repo into a

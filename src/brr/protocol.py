@@ -113,7 +113,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 def _generate_id() -> str:
-    ts = int(time.time())
+    ts = time.time_ns()
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
     return f"evt-{ts}-{rand}"
 
@@ -160,12 +160,20 @@ def _read_event(path: Path) -> dict[str, Any] | None:
     return fm
 
 
+def _event_sort_key(entry: os.DirEntry) -> tuple[int, str]:
+    try:
+        mtime = entry.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    return (mtime, entry.name)
+
+
 def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
     """Return events with status pending or processing, oldest first."""
     if not inbox_dir.exists():
         return []
     events = []
-    for entry in sorted(os.scandir(inbox_dir), key=lambda e: e.name):
+    for entry in sorted(os.scandir(inbox_dir), key=_event_sort_key):
         if not entry.name.endswith(".md"):
             continue
         ev = _read_event(Path(entry.path))
@@ -179,7 +187,7 @@ def list_done(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
     if not inbox_dir.exists():
         return []
     events = []
-    for entry in sorted(os.scandir(inbox_dir), key=lambda e: e.name):
+    for entry in sorted(os.scandir(inbox_dir), key=_event_sort_key):
         if not entry.name.endswith(".md"):
             continue
         ev = _read_event(Path(entry.path))
