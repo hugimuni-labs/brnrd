@@ -145,9 +145,16 @@ isolate the working directory and branch, but they do not yet run in
 parallel — the worker pool is single-threaded. See
 `kb/plan-concurrent-worktrees.md` for the roadmap in this repo.
 
-When a worktree task finishes, the daemon merges the branch back (for
-`auto`/`task` strategies) or preserves it (named branches), then
-removes the worktree unless debug mode keeps it for inspection.
+When a worktree-backed task finishes, the daemon merges the branch back
+(for `auto`/`task` strategies) or preserves it (named branches), then
+removes the worktree unless debug mode keeps it for inspection. Docker
+branch tasks use the same worktree-backed branch behavior, with the
+runner command executed inside the configured container image.
+
+The built-in Docker env requires Docker on PATH and `docker.image` in
+`.brr/config`. It bind-mounts the repository at the same absolute path
+inside the container so prompt paths, response files, traces, and git
+metadata stay valid from both host and container.
 
 ## Debug mode
 
@@ -155,8 +162,8 @@ removes the worktree unless debug mode keeps it for inspection.
 
 - Traces are written for every runner invocation (prompt, stdout,
   stderr, meta, artifacts) under `.brr/traces/<kind>/...`.
-- Worktrees are preserved after their task finishes instead of being
-  removed — useful for post-mortem inspection.
+- Worktrees and Docker containers are preserved after their task finishes
+  instead of being removed — useful for post-mortem inspection.
 
 Reviewers can correlate a task's generated run context file with trace
 directories under `.brr/traces/`.

@@ -40,15 +40,19 @@ worktree path, run context path, trace directories).
   `.brr/worktrees/<task-id>`, the runner runs there, and the branch is
   merged back (for `auto`/`task` strategies) or preserved (for named
   branches) on success.
-- Other envs such as `docker`, `devcontainer`, or `ssh` are future
-  backends/plugins and fail clearly until implemented or installed.
+- **docker**: the runner command is wrapped in `docker run` using
+  `docker.image` from `.brr/config`. Current-branch tasks mount the main
+  checkout; branch tasks mount a brr worktree so the host checkout is not
+  disturbed. Docker containers are removed only after a clean non-debug run.
+- Other envs such as `devcontainer` or `ssh` are future backends/plugins
+  and fail clearly until implemented or installed.
 
 The runner receives `run.md` + recent `kb/log.md` context + daemon
 metadata (task ID, event ID, execution root, current branch, response
 path, shared runtime dir, generated run context file).
 
-In worktree mode, the agent writes its log entry to
-`kb/log-<task-id>.md` to avoid conflicts with the main log.
+In worktree-backed modes, including Docker branch tasks, the agent writes
+its log entry to `kb/log-<task-id>.md` to avoid conflicts with the main log.
 
 ### 5. Response
 

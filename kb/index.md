@@ -40,6 +40,7 @@ This index only covers this repo's project-specific knowledge.
 
 ## Agent ergonomics evaluations
 
+- [Clean-Slate Environment Testing Playbook](agent-ergonomics-evaluation/clean-slate-environment-testing-playbook.md) — manual playbook for comparing brr environment ergonomics on fresh repos without `AGENTS.md`, `kb/`, prior runtime state, or git history where possible; covers local, worktree, unsupported future envs, prompts, observation checklist, scoring rubric, and run-note templates
 - [Task Context Bundle runner review](agent-ergonomics-evaluation/task-context-bundle-runner-review-2026-04-28.md) — review from inside a live daemon worktree task after the workstream and Task Context Bundle changes, covering context recovery effort, stream/task artifact discoverability, per-task log lifecycle, prompt/docs clarity, and prioritized runner-UX recommendations
 - [Task log: Task Context Bundle runner review](log-task-1777333195-8ed7.md) — per-task log entry for the 2026-04-28 runner ergonomics evaluation
 - [Task Context Bundle v2 follow-up review](agent-ergonomics-evaluation/task-context-bundle-v2-followup-review-2026-04-28.md) — follow-up live daemon-worktree review covering current context recovery, stream/task state fidelity, worktree/status wording, per-task log lifecycle, and a scoped stream CLI freshness fix

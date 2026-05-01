@@ -368,3 +368,31 @@ always-on behavior. While verifying the change, tightened adopt tests to mock
 the actual runner detection path so the suite cannot escape to a real local
 runner.
 
+## [2026-05-01] implement | Add first Docker env slice
+
+Implemented the built-in `docker` execution environment behind the existing
+`EnvBackend` protocol. Docker now requires the CLI on PATH plus a configured
+`docker.image`, wraps the normal runner command in `docker run`, bind-mounts the
+repo at the same absolute path, tracks per-attempt container names for retries,
+and removes containers only after clean non-debug runs.
+
+For branch work, Docker now reuses the worktree setup/finalize path before
+entering the container so it does not switch or dirty the main checkout. Updated
+the triage prompt, bundled docs, active env design note, and focused tests to
+document and verify the required image config, worktree-backed branch behavior,
+container cleanup, and unconfigured-daemon rejection path. While running the
+full suite, fixed a pre-existing gate-ordering flake by making event listing
+honor the documented oldest-first behavior via file modification time instead
+of random event IDs, and switched newly generated event IDs to a nanosecond
+timestamp prefix so same-second events still sort by creation order.
+
+## [2026-05-01] plan | Clean-slate environment testing playbook
+
+Created `kb/agent-ergonomics-evaluation/clean-slate-environment-testing-playbook.md`
+as a lightweight manual testing guide for brr environment ergonomics. The
+playbook keeps the scope to fresh fixture repos, the currently implemented
+`local` and `worktree` backends, unsupported-env failure probes for `docker`,
+`devcontainer`, and `ssh`, repeatable prompts, an observation checklist, a
+1-5 scoring rubric, and copy-paste run/finding templates. Updated `kb/index.md`
+so the playbook is discoverable with the other agent ergonomics materials.
+
