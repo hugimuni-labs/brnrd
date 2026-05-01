@@ -68,14 +68,12 @@ enforces policy: `selected` is only updated if the suggestion is in
 `allowed`. The default and tiebreaker is the input gate — replies go
 back to the channel that fired the event.
 
-## CLI
+## Recovery
 
-- `brr streams` — list active streams.
-- `brr stream show <id>` — manifest, recent tasks, artifacts, and
-  events for a stream.
-- `brr inspect <task-id>` — task view that links its stream and
-  per-task artifacts.
-- `brr status` — daemon overview that summarises active streams.
+Agents normally see stream state in the Task Context Bundle. When they
+need to reread it, the generated `.brr/runs/<task-id>/context.md` file
+contains the current stream summary, open questions, reply route, and
+runtime file paths.
 
 ## What streams do not replace
 
@@ -84,5 +82,5 @@ back to the channel that fired the event.
   durable outputs; they do not replace them.
 - A workflow engine. Streams are coordination state, not orchestration
   rules. Agents stay in charge of the work itself.
-- A dashboard. The CLI surface is the first slice; richer renderings
-  can be built on top of the same packet log when needed.
+- A dashboard. Richer renderings can be built on top of the same packet
+  log when needed.

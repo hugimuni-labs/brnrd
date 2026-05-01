@@ -2,14 +2,13 @@
 
 How an event flows through brr, and where each artifact lives.
 
-This document ships with the `brr` tool. To see it at runtime, run
-`brr docs execution-map`. Users can override it per-repo by dropping
-a file at `.brr/docs/execution-map.md`.
+This document ships with the `brr` tool. Users can override it
+per-repo by dropping a file at `.brr/docs/execution-map.md`.
 
 ## Pipeline
 
 ```
-event (inbox) → triage (classify) → task (persisted) → run (worktree or local) → response → traces/review
+event (inbox) → triage (classify) → task (persisted) → context file → run env → response → traces/review
 ```
 
 ### 1. Event arrives
@@ -21,8 +20,8 @@ a body with the user's message.
 ### 2. Triage
 
 The daemon invokes the runner with `triage.md` to classify the event.
-The triage agent decides **branch strategy** and **execution environment**,
-then outputs a task spec (frontmatter + refined body).
+The triage agent decides **branch strategy** and usually leaves env as
+`auto`, then outputs a task spec (frontmatter + refined body).
 
 Triage runs with a reduced log context window (last 3 entries only) —
 it's a fast classifier, not an investigator.
@@ -32,20 +31,21 @@ it's a fast classifier, not an investigator.
 The daemon parses triage output into a `Task` and saves it to
 `.brr/tasks/<task-id>.md`. The task file tracks: event ID, branch,
 env, status, source, and manifest metadata (response path, branch name,
-worktree path, trace directories).
+worktree path, run context path, trace directories).
 
 ### 4. Execution
 
-- **local** (`branch: current`, `env: local`): runner runs in the main
-  repo checkout.
-- **worktree** (any other branch strategy): a git worktree is created
-  under `.brr/worktrees/<task-id>`, the runner runs there, and the
-  branch is merged back (for `auto`/`task` strategies) or preserved
-  (for named branches) on success.
+- **local**: runner runs in the main repo checkout.
+- **worktree**: a git worktree is created under
+  `.brr/worktrees/<task-id>`, the runner runs there, and the branch is
+  merged back (for `auto`/`task` strategies) or preserved (for named
+  branches) on success.
+- Other envs such as `docker`, `devcontainer`, or `ssh` are future
+  backends/plugins and fail clearly until implemented or installed.
 
 The runner receives `run.md` + recent `kb/log.md` context + daemon
 metadata (task ID, event ID, execution root, current branch, response
-path, shared runtime dir).
+path, shared runtime dir, generated run context file).
 
 In worktree mode, the agent writes its log entry to
 `kb/log-<task-id>.md` to avoid conflicts with the main log.
@@ -60,7 +60,7 @@ the agent to write it manually if needed.
 
 If the task modified files in `kb/`, a lightweight maintenance step runs
 to verify `kb/index.md` consistency and ensure a log entry exists.
-See `brr docs brr-internals` for the full trigger logic.
+See `brr-internals.md` for the full trigger logic.
 
 ### 7. Finalization
 
@@ -75,6 +75,7 @@ branches, the worktree is removed but the branch is preserved.
 | Events        | `.brr/inbox/<event-id>.md`                  | Yes (until cleanup)                 |
 | Tasks         | `.brr/tasks/<task-id>.md`                   | Yes                                 |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
+| Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Yes (debug mode)                    |
 | Reviews       | `.brr/reviews/<event-id>.md`                | Yes                                 |
 | Worktrees     | `.brr/worktrees/<task-id>/`                 | Removed after merge (kept in debug) |
@@ -90,7 +91,6 @@ Its frontmatter contains:
 - `event_id` → links to `.brr/inbox/` and `.brr/responses/`
 - `branch_name` → the git branch used
 - `worktree_path` → the worktree directory (if applicable)
+- `context_path` → generated run context file
 - `response_path` → the response file
 - `trace_dirs` → comma-separated trace directories under `.brr/`
-
-Use `brr inspect <task-id>` to view all linked artifacts for a task.

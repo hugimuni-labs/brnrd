@@ -22,8 +22,10 @@ import time
 from pathlib import Path
 
 from . import config as conf
+from . import envs
 from . import gitops
 from . import protocol
+from . import run_context
 from . import runner
 from . import stream as stream_mod
 from . import updates
@@ -196,36 +198,43 @@ def _run_worker(
 
     print(f"[brr] task {task.id} (event {eid}): branch={task.branch} env={task.env}")
 
-    run_root = repo_root
     branch_name = task.resolve_branch_name()
-    uses_worktree = task.needs_worktree and branch_name is not None
 
     task.meta["response_path"] = str(resp_path)
     if branch_name:
         task.meta["branch_name"] = branch_name
     task.meta["base_branch"] = base_branch
 
-    if uses_worktree:
-        try:
-            run_root = worktree.create(
-                repo_root,
-                task.id,
-                branch_name,
-                create_branch=not gitops.branch_exists(repo_root, branch_name),
-            )
-            task.meta["worktree_path"] = str(run_root)
-        except RuntimeError as e:
-            print(f"[brr] task {task.id}: worktree setup failed: {e}")
-            task.update_status("error", tasks_dir)
-            updates.emit(brr_dir, updates.UpdatePacket(
-                type="failed",
-                stream_id=stream_id,
-                payload={"task_id": task.id, "stage": "worktree", "error": str(e)},
-            ))
-            return task
-
     stream_manifest = stream_mod.load_manifest(brr_dir, stream_id)
     event_body_for_prompt = event.get("body", "") or ""
+
+    try:
+        env_backend = envs.get_env(task.env)
+        env_ctx = env_backend.prepare(
+            task,
+            repo_root,
+            cfg,
+            branch_name=branch_name,
+            base_branch=base_branch,
+            response_path=resp_path,
+            debug=debug,
+        )
+    except RuntimeError as e:
+        print(f"[brr] task {task.id}: env setup failed: {e}")
+        task.update_status("error", tasks_dir)
+        updates.emit(brr_dir, updates.UpdatePacket(
+            type="failed",
+            stream_id=stream_id,
+            payload={"task_id": task.id, "stage": "env", "error": str(e)},
+        ))
+        return task
+
+    run_root = env_ctx.cwd
+    branch_name = env_ctx.branch_name
+    if branch_name:
+        task.meta["branch_name"] = branch_name
+    if env_ctx.log_file:
+        task.meta["log_file"] = env_ctx.log_file
 
     stream_mod.append_task(
         brr_dir, stream_id,
@@ -234,7 +243,17 @@ def _run_worker(
         base_branch=base_branch, branch_name=branch_name,
     )
 
-    log_file = f"kb/log-{task.id}.md" if uses_worktree else None
+    context_path = run_context.write_context_file(
+        brr_dir,
+        task,
+        event,
+        env_ctx,
+        stream=stream_manifest,
+        event_body=event_body_for_prompt,
+    )
+    task.meta["context_path"] = str(context_path)
+    task.save(tasks_dir)
+
     trace_dirs: list[str] = [triage_trace] if triage_trace else []
     updates.emit(brr_dir, updates.UpdatePacket(
         type="run_started",
@@ -244,12 +263,13 @@ def _run_worker(
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = runner.build_daemon_prompt(
-                task.body, eid, str(resp_path), run_root,
+                task.body, eid, str(env_ctx.response_path_env), run_root,
                 task_id=task.id,
                 branch_name=branch_name,
                 base_branch=base_branch,
-                runtime_dir=str(brr_dir),
-                log_file=log_file,
+                runtime_dir=str(env_ctx.runtime_dir),
+                log_file=env_ctx.log_file,
+                context_path=str(context_path),
                 stream=stream_manifest,
                 event_body=event_body_for_prompt,
                 stage_feedback=stage_feedback,
@@ -257,21 +277,24 @@ def _run_worker(
         else:
             prompt = runner.build_daemon_prompt(
                 f"Previous attempt did not produce a response file. "
-                f"Please complete the task and write your response to {resp_path}.\n\n"
+                f"Please complete the task and write your response to "
+                f"{env_ctx.response_path_env}.\n\n"
                 f"Original task: {task.body}",
-                eid, str(resp_path), run_root,
+                eid, str(env_ctx.response_path_env), run_root,
                 task_id=task.id,
                 branch_name=branch_name,
                 base_branch=base_branch,
-                runtime_dir=str(brr_dir),
-                log_file=log_file,
+                runtime_dir=str(env_ctx.runtime_dir),
+                log_file=env_ctx.log_file,
+                context_path=str(context_path),
                 stream=stream_manifest,
                 event_body=event_body_for_prompt,
                 stage_feedback=stage_feedback,
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
-        result = runner.invoke_runner(
+        result = env_backend.invoke(
+            env_ctx,
             runner_name,
             runner.RunnerInvocation(
                 kind="daemon-run",
@@ -279,9 +302,12 @@ def _run_worker(
                 prompt=prompt,
                 cwd=run_root,
                 repo_root=repo_root,
-                response_path=str(resp_path),
+                response_path=str(env_ctx.response_path_host),
                 required_artifacts=[
-                    runner.RunnerArtifactSpec(resp_path, f"response:{eid}"),
+                    runner.RunnerArtifactSpec(
+                        env_ctx.response_path_host,
+                        f"response:{eid}",
+                    ),
                 ],
             ),
             cfg=cfg,
@@ -298,7 +324,7 @@ def _run_worker(
             print(f"[brr] worker {eid}: response ready")
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
-            resp_text = (responses_dir / f"{eid}.md").read_text(encoding="utf-8")
+            resp_text = env_ctx.response_path_host.read_text(encoding="utf-8")
             resp_fm = protocol.parse_frontmatter(resp_text)
             _record_response_artifact(
                 brr_dir, stream_id, task, resp_path, resp_fm,
@@ -310,8 +336,9 @@ def _run_worker(
                     stream_id=stream_id,
                     payload={"task_id": task.id, "event_id": eid},
                 ))
-                if uses_worktree and not debug:
-                    worktree.remove(repo_root, task.id, branch=branch_name, force=True)
+                task = env_backend.finalize(
+                    env_ctx, task, tasks_dir, debug=debug,
+                )
             else:
                 task.update_status("done", tasks_dir)
                 maintenance_trace = _maybe_kb_maintenance(
@@ -321,10 +348,9 @@ def _run_worker(
                     trace_dirs.append(maintenance_trace)
                     task.meta["trace_dirs"] = ", ".join(trace_dirs)
                     task.save(tasks_dir)
-                if uses_worktree:
-                    task = _finalize_worktree_task(
-                        task, repo_root, tasks_dir, branch_name, keep_worktree=debug,
-                    )
+                task = env_backend.finalize(
+                    env_ctx, task, tasks_dir, debug=debug,
+                )
                 if task.status == "conflict":
                     updates.emit(brr_dir, updates.UpdatePacket(
                         type="conflict",
@@ -352,8 +378,7 @@ def _run_worker(
         stream_id=stream_id,
         payload={"task_id": task.id, "event_id": eid, "stage": "run"},
     ))
-    if uses_worktree and not debug:
-        worktree.remove(repo_root, task.id, branch=branch_name, force=True)
+    task = env_backend.finalize(env_ctx, task, tasks_dir, debug=debug)
     return task
 
 
@@ -469,36 +494,6 @@ def _maybe_kb_maintenance(
     if result.trace_dir:
         return str(result.trace_dir.relative_to(gitops.shared_brr_dir(repo_root)))
     return None
-
-
-def _finalize_worktree_task(
-    task: Task,
-    repo_root: Path,
-    tasks_dir: Path,
-    branch_name: str,
-    *,
-    keep_worktree: bool = False,
-) -> Task:
-    """Merge or clean up a completed worktree task."""
-    if task.branch in ("auto", "task"):
-        result = gitops.merge_branch(
-            repo_root, branch_name, f"merge {branch_name} for {task.id}",
-        )
-        if not result.success:
-            print(f"[brr] task {task.id}: merge conflict on {branch_name}")
-            task.update_status("conflict", tasks_dir)
-            return task
-        if keep_worktree:
-            print(f"[brr] debug: keeping worktree for {task.id}")
-        else:
-            worktree.remove(repo_root, task.id, branch=branch_name, delete_branch=True, force=True)
-        return task
-
-    if keep_worktree:
-        print(f"[brr] debug: keeping worktree for {task.id}")
-    else:
-        worktree.remove(repo_root, task.id, branch=branch_name, force=True)
-    return task
 
 
 def _triage_task(

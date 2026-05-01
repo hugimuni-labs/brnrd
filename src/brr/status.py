@@ -266,7 +266,7 @@ def _recent_log(path: Path, n: int) -> list[str]:
 
 
 def list_streams() -> str:
-    """Render `brr streams` — all known streams with high-level status."""
+    """Render all known streams with high-level status."""
     from . import gitops
 
     try:
@@ -299,7 +299,7 @@ def list_streams() -> str:
 
 
 def show_stream(stream_id: str) -> str:
-    """Render `brr stream show <id>` — manifest, tasks, artifacts, events."""
+    """Render a stream manifest with tasks, artifacts, and events."""
     from . import gitops
 
     try:

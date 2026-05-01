@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import shutil
-import sys
 from pathlib import Path
 
 
@@ -28,9 +26,6 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("instruction", help="what to do")
     p.set_defaults(func=cmd_run)
 
-    p = sub.add_parser("status", help="show project state")
-    p.set_defaults(func=cmd_status)
-
     p = sub.add_parser("auth", help="authenticate a gate")
     p.add_argument("gate", help="gate name (telegram, slack, git)")
     p.set_defaults(func=cmd_auth)
@@ -46,31 +41,6 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("down", help="stop the daemon")
     p.set_defaults(func=cmd_down)
-
-    p = sub.add_parser("inspect", help="show details for a task or event")
-    p.add_argument("--event-body", action="store_true",
-                   help="include the originating event body")
-    p.add_argument("--prompt", action="store_true",
-                   help="include the latest linked runner prompt")
-    p.add_argument("task_id", help="task ID (or partial match)")
-    p.set_defaults(func=cmd_inspect)
-
-    p = sub.add_parser("docs", help="show bundled brr documentation")
-    p.add_argument("topic", nargs="?", default=None,
-                    help="doc topic (omit to list available topics)")
-    p.set_defaults(func=cmd_docs)
-
-    p = sub.add_parser("streams", help="list known workstreams")
-    p.set_defaults(func=cmd_streams)
-
-    p = sub.add_parser("stream", help="workstream operations")
-    stream_sub = p.add_subparsers(dest="stream_command", required=True)
-    p_show = stream_sub.add_parser("show", help="show a workstream's details")
-    p_show.add_argument("stream_id", help="stream ID (or partial match)")
-    p_show.set_defaults(func=cmd_stream_show)
-
-    p = sub.add_parser("eject", help="copy bundled prompts for customization")
-    p.set_defaults(func=cmd_eject)
 
     args = parser.parse_args(argv)
     return args.func(args)
@@ -103,11 +73,6 @@ def cmd_run(args):
     runner.run_task(args.instruction)
 
 
-def cmd_status(args):
-    from . import status as status_mod
-    sys.stdout.write(status_mod.get_status() + "\n")
-
-
 def cmd_auth(args):
     gate_mod = _load_gate(args.gate)
     gate_mod.auth(_brr_dir())
@@ -131,70 +96,6 @@ def cmd_down(args):
         print("[brr] daemon stopped")
     else:
         print("[brr] daemon not running")
-
-
-def cmd_inspect(args):
-    from . import status as status_mod
-    sys.stdout.write(
-        status_mod.inspect_task(
-            args.task_id,
-            _repo_root(),
-            show_event_body=args.event_body,
-            show_prompt=args.prompt,
-        ) + "\n"
-    )
-
-
-def cmd_streams(args):
-    from . import status as status_mod
-    sys.stdout.write(status_mod.list_streams() + "\n")
-
-
-def cmd_stream_show(args):
-    from . import status as status_mod
-    sys.stdout.write(status_mod.show_stream(args.stream_id) + "\n")
-
-
-def cmd_docs(args):
-    from . import docs as docs_mod
-    from . import gitops
-    try:
-        repo_root = gitops.ensure_git_repo()
-    except (RuntimeError, SystemExit):
-        repo_root = None
-
-    if not args.topic:
-        sys.stdout.write(docs_mod.format_listing(repo_root) + "\n")
-        return
-
-    content = docs_mod.read_topic(args.topic, repo_root)
-    if content is None:
-        topics = docs_mod.list_topics(repo_root)
-        available = ", ".join(topics) if topics else "(none)"
-        raise SystemExit(
-            f"[brr] unknown doc topic: {args.topic} (available: {available})"
-        )
-    sys.stdout.write(content)
-    if not content.endswith("\n"):
-        sys.stdout.write("\n")
-
-
-def cmd_eject(args):
-    from . import runner as runner_mod
-    dest = _brr_dir() / "prompts"
-    dest.mkdir(parents=True, exist_ok=True)
-    src = runner_mod._PROMPTS_DIR
-    count = 0
-    for f in src.iterdir():
-        if f.suffix == ".md":
-            target = dest / f.name
-            if target.exists():
-                print(f"[brr] skip (exists): {target.relative_to(_repo_root())}")
-            else:
-                shutil.copy2(f, target)
-                print(f"[brr] copied: {target.relative_to(_repo_root())}")
-                count += 1
-    print(f"[brr] ejected {count} prompt(s) to .brr/prompts/")
 
 
 def _load_gate(name: str):

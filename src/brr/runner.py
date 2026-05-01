@@ -467,6 +467,7 @@ def build_daemon_prompt(
     branch_name: str | None = None,
     base_branch: str | None = None,
     runtime_dir: str | None = None,
+    context_path: str | None = None,
     log_file: str | None = None,
     stream: Any = None,
     event_body: str | None = None,
@@ -488,6 +489,7 @@ def build_daemon_prompt(
         branch_name=branch_name,
         base_branch=base_branch,
         runtime_dir=runtime_dir,
+        context_path=context_path,
         log_file=log_file,
         stream=stream,
         event_body=event_body,
@@ -505,6 +507,7 @@ def _build_task_context_bundle(
     branch_name: str | None,
     base_branch: str | None,
     runtime_dir: str | None,
+    context_path: str | None,
     log_file: str | None,
     stream: Any,
     event_body: str | None,
@@ -568,6 +571,8 @@ def _build_task_context_bundle(
         sections.append(f"- Current branch: {branch_name}")
     if runtime_dir:
         sections.append(f"- Shared runtime dir: {runtime_dir}")
+    if context_path:
+        sections.append(f"- Run context file: {context_path}")
     sections.append(
         f"- Stage feedback requested: {'yes' if stage_feedback else 'no'}"
     )

@@ -11,10 +11,12 @@ def test_version(capsys):
     assert exc.value.code == 0
 
 
-def test_status_outside_repo(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("command", ["status", "inspect", "docs", "streams", "stream", "eject"])
+def test_removed_diagnostic_commands_are_not_public(tmp_path, monkeypatch, command):
     monkeypatch.chdir(tmp_path)
-    main(["status"])
-    assert "not in a git repo" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as exc:
+        main([command])
+    assert exc.value.code == 2
 
 
 def test_run_requires_instruction():

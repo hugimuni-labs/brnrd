@@ -17,9 +17,20 @@ class TestTaskFromEvent:
 
     def test_config_defaults(self):
         event = {"id": "evt-2", "body": "fix bug"}
-        cfg = {"default_branch": "auto", "default_env": "worktree"}
+        cfg = {"default_branch": "auto"}
         task = Task.from_event(event, cfg)
         assert task.branch == "auto"
+        assert task.env == "worktree"
+
+    def test_env_auto_selects_local_for_current_branch(self):
+        event = {"id": "evt-auto-local", "body": "answer question"}
+        task = Task.from_event(event, {"env": "auto"})
+        assert task.branch == "current"
+        assert task.env == "local"
+
+    def test_env_auto_selects_worktree_for_branch_work(self):
+        event = {"id": "evt-auto-wt", "body": "change code", "branch": "auto"}
+        task = Task.from_event(event, {"env": "auto"})
         assert task.env == "worktree"
 
     def test_event_overrides_config_defaults(self):
@@ -77,15 +88,21 @@ class TestTaskFromEvent:
         else:
             raise AssertionError("expected ValueError")
 
-    def test_from_triage_output_rejects_invalid_env(self):
+    def test_from_triage_output_rejects_invalid_env_name(self):
         event = {"id": "evt-6", "body": "raw event body"}
-        text = "---\nbranch: current\nenv: cloud\n---\nrefined task body\n"
+        text = "---\nbranch: current\nenv: bad/env\n---\nrefined task body\n"
         try:
             Task.from_triage_output(text, event)
         except ValueError as exc:
             assert "invalid triage env" in str(exc)
         else:
             raise AssertionError("expected ValueError")
+
+    def test_from_triage_output_allows_future_env_names(self):
+        event = {"id": "evt-7", "body": "raw event body"}
+        text = "---\nbranch: current\nenv: docker\n---\nrefined task body\n"
+        task = Task.from_triage_output(text, event)
+        assert task.env == "docker"
 
 
 class TestBranchResolution:
@@ -122,6 +139,10 @@ class TestNeedsWorktree:
     def test_branch_implies_worktree(self):
         task = Task(id="t-1", event_id="e-1", body="x", branch="auto", env="local")
         assert task.needs_worktree
+
+    def test_future_env_does_not_imply_worktree(self):
+        task = Task(id="t-1", event_id="e-1", body="x", branch="auto", env="docker")
+        assert not task.needs_worktree
 
 
 class TestPersistence:

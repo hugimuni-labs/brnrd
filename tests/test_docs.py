@@ -1,11 +1,8 @@
-"""Tests for bundled docs module and `brr docs` CLI."""
+"""Tests for bundled docs module."""
 
 from __future__ import annotations
 
-import pytest
-
 from brr import docs
-from brr.cli import main
 
 
 def test_list_topics_includes_bundled():
@@ -89,24 +86,3 @@ def test_read_topic_uses_shared_runtime_override_for_worktree(tmp_path):
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=repo, check=True)
         subprocess.run(["git", "branch", "-D", "brr/task-1"], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-
-def test_cli_docs_list_outside_repo(monkeypatch, tmp_path, capsys):
-    monkeypatch.chdir(tmp_path)
-    main(["docs"])
-    out = capsys.readouterr().out
-    assert "execution-map" in out
-    assert "brr-internals" in out
-
-
-def test_cli_docs_show_topic(monkeypatch, tmp_path, capsys):
-    monkeypatch.chdir(tmp_path)
-    main(["docs", "brr-internals"])
-    out = capsys.readouterr().out
-    assert "brr Internals" in out
-
-
-def test_cli_docs_unknown_topic_errors(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(SystemExit) as exc:
-        main(["docs", "nonexistent-topic"])
-    assert "unknown doc topic" in str(exc.value)

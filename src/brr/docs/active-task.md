@@ -16,26 +16,22 @@ the prompt. It contains:
   shared runtime dir, response path, log file (in worktree mode).
 - The delivery contract: where to write the final response and how to
   treat the branch.
+- A generated run context file under `.brr/runs/<task-id>/context.md`
+  for read-only recovery when the inline bundle is not enough.
 - The original event body when it fits inline.
 
-Read it once at the start of the task. You should rarely need to call
-`brr status` or `brr inspect` to orient yourself.
+Read it once at the start of the task. You should not need `brr`
+inspection commands to orient yourself.
 
-## When to fall back to commands
+## When to read the context file
 
-`brr` ships a few commands for deeper inspection. These remain useful
-when the bundle is not enough:
+The run context file is generated for the current task and lives in the
+gitignored `.brr/` runtime directory. Read it when the inline bundle is
+not enough or when you need to re-check original event text, stream
+state, runtime paths, or environment details.
 
-- `brr status` — daemon state, active streams, active worktrees.
-- `brr inspect <task-id>` — cross-linked manifest for any task.
-- `brr inspect --event-body --prompt <task-id>` — original event and
-  the latest runner prompt verbatim, useful when something looks
-  inconsistent or pruned.
-- `brr stream show <stream-id>` — full stream manifest with task and
-  artifact history.
-- `brr docs streams` — model overview for streams.
-- `brr docs brr-internals` — the `.brr/` layout, KB maintenance, debug
-  mode.
+Treat it as read-only. It is runtime scratch, not durable project
+knowledge, and agents should not edit it.
 
 ## What to write
 

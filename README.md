@@ -22,17 +22,23 @@ Zero runtime dependencies.  Stdlib Python only.  No database, no cloud, no lock-
 pip install brr
 ```
 
-Or clone into a project for full prompt customization:
+Or run from a local checkout while developing or customizing brr itself:
 
 ```bash
-git clone https://github.com/user/brr .brr-tool
-.brr-tool/brr init
+git clone https://github.com/user/brr
+/path/to/brr/brr init
 ```
 
-If you have [uv](https://github.com/astral-sh/uv):
+For an editable install:
 
 ```bash
-uv run .brr-tool/brr init
+pip install -e /path/to/brr
+```
+
+Forks work with normal Python packaging too:
+
+```bash
+pip install git+https://github.com/you/brr.git
 ```
 
 ## Quick start
@@ -95,12 +101,10 @@ bot a message; brr records the chat ID from each message and replies there.
 |------------------------|---------------------------------------|
 | `brr init [url]`       | Create AGENTS.md + kb/, detect runner |
 | `brr run "<task>"`     | Run a task locally via runner         |
-| `brr status`           | Show project state + recent activity  |
 | `brr auth <gate>`      | Set credentials for a gate            |
 | `brr bind <gate>`      | Bind repo to a gate channel or watch  |
 | `brr up`               | Start the daemon (foreground)         |
 | `brr down`             | Stop the daemon                       |
-| `brr eject`            | Copy prompts to .brr/prompts/ to edit |
 
 Gates: `telegram`, `slack`, `git`.
 
@@ -114,8 +118,13 @@ for the spec and a bash example.
 `codex`, `gemini`.  Set `runner=<name>` in `.brr/config` or use any
 executable.
 
-**Prompts** live in `src/brr/prompts/`.  Run `brr eject` to copy them
-to `.brr/prompts/` for per-repo customization.
+**Environments** are daemon backends.  Today `local` and `worktree` are
+implemented; future backends such as `docker`, `devcontainer`, `ssh`,
+or service-specific plugins fit behind the same internal protocol.
+
+**Deep customization** should use a local checkout, editable install, or
+fork.  `.brr/config` is for lightweight runtime choices like runner and
+environment policy.
 
 ## Development
 
