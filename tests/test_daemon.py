@@ -321,7 +321,7 @@ def test_run_worker_marks_error_on_invalid_triage_output(tmp_path, monkeypatch):
     assert persisted.status == "error"
 
 
-def test_run_worker_rejects_unimplemented_env_before_run(tmp_path, monkeypatch):
+def test_run_worker_rejects_unconfigured_docker_before_run(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     event = {
         "id": "evt-docker",
@@ -337,6 +337,7 @@ def test_run_worker_rejects_unimplemented_env_before_run(tmp_path, monkeypatch):
     invocations = []
 
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _repo_root: "codex")
+    monkeypatch.setattr(daemon.envs.shutil, "which", lambda _name: "/usr/bin/docker")
     monkeypatch.setattr(
         daemon.runner,
         "build_triage_prompt",
