@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 import random
 import string
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,8 +22,9 @@ from typing import Any
 
 # Valid values for each field
 BRANCH_STRATEGIES = ("current", "auto", "task")  # or arbitrary name / "new:<name>"
-ENV_TYPES = ("local", "worktree", "docker")
+ENV_TYPES = ("auto", "local", "worktree", "docker", "devcontainer", "ssh")
 STATUSES = ("pending", "running", "done", "needs_context", "error", "conflict")
+_ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
     "stream_id",
@@ -36,6 +38,18 @@ def _generate_task_id() -> str:
     return f"task-{ts}-{rand}"
 
 
+def resolve_env(branch: str, env_policy: str | None = None) -> str:
+    """Resolve an env policy into the concrete backend name for a branch."""
+    requested = (env_policy or "auto").strip()
+    if not requested or requested == "auto":
+        return "local" if branch == "current" else "worktree"
+    if not _ENV_NAME_RE.match(requested):
+        raise ValueError(f"invalid env: {requested!r}")
+    if requested == "local" and branch != "current":
+        return "worktree"
+    return requested
+
+
 @dataclass
 class Task:
     """A unit of work derived from an event.
@@ -46,7 +60,8 @@ class Task:
         body:     The task description / instruction for the agent.
         branch:   Branching strategy — "current", "auto", "task",
                   "<name>", or "new:<name>".
-        env:      Execution environment — "local", "worktree", "docker".
+        env:      Execution environment backend — "local", "worktree",
+                  "docker", a future built-in, or a plugin name.
         status:   Lifecycle state — pending → running → done/needs_context/error.
         source:   The gate that produced the originating event.
         meta:     Arbitrary metadata carried from the event.
@@ -73,12 +88,14 @@ class Task:
         """
         cfg = cfg or {}
         task_id = _generate_task_id()
+        branch = event.get("branch", cfg.get("default_branch", "current"))
+        env_policy = event.get("env", cfg.get("env", cfg.get("default_env", "auto")))
         return cls(
             id=task_id,
             event_id=event.get("id", ""),
             body=event.get("body", ""),
-            branch=event.get("branch", cfg.get("default_branch", "current")),
-            env=event.get("env", cfg.get("default_env", "local")),
+            branch=branch,
+            env=resolve_env(branch, env_policy),
             source=event.get("source", ""),
             stream_id=str(event.get("stream_id", "") or ""),
             meta={
@@ -97,6 +114,7 @@ class Task:
         """Create a task from triage-agent output plus the originating event."""
         from . import protocol
 
+        cfg = cfg or {}
         task = cls.from_event(event, cfg)
         fm = protocol.parse_frontmatter(text)
         if not fm:
@@ -107,13 +125,20 @@ class Task:
             raise ValueError("triage output is missing a task body")
 
         branch = str(fm.get("branch", task.branch)).strip()
-        env = str(fm.get("env", task.env)).strip()
+        env_policy = str(
+            fm.get(
+                "env",
+                event.get("env", cfg.get("env", cfg.get("default_env", "auto"))),
+            )
+        ).strip()
         status = str(fm.get("status", task.status)).strip()
 
         if not branch or branch == "new:":
             raise ValueError(f"invalid triage branch: {branch!r}")
-        if env not in ENV_TYPES:
-            raise ValueError(f"invalid triage env: {env!r}")
+        try:
+            env = resolve_env(branch, env_policy)
+        except ValueError as e:
+            raise ValueError(f"invalid triage env: {env_policy!r}") from e
         if status not in STATUSES:
             raise ValueError(f"invalid triage status: {status!r}")
 
@@ -205,9 +230,7 @@ class Task:
 
     @property
     def needs_worktree(self) -> bool:
-        return self.env == "worktree" or (
-            self.branch not in ("current",) and self.env != "docker"
-        )
+        return resolve_env(self.branch, self.env) == "worktree"
 
 
 def list_tasks(tasks_dir: Path, status: str | None = None) -> list[Task]:

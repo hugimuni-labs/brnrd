@@ -148,6 +148,7 @@ def test_run_worker_threads_stream_through_prompts(tmp_path, monkeypatch):
     assert triage_kwargs.get("stream") is not None
     assert daemon_kwargs.get("stream") is not None
     assert daemon_kwargs.get("event_body") == "follow up"
+    assert daemon_kwargs.get("context_path", "").endswith("/context.md")
 
 
 def test_run_worker_followup_in_same_thread_reuses_stream(tmp_path, monkeypatch):

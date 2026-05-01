@@ -56,7 +56,7 @@ def read_topic(topic: str, repo_root: Path | None = None) -> str | None:
 
 
 def format_listing(repo_root: Path | None = None) -> str:
-    """Human-readable listing for ``brr docs`` with no arguments."""
+    """Human-readable listing of bundled docs."""
     topics = list_topics(repo_root)
     if not topics:
         return "[brr] no bundled docs available"
@@ -68,5 +68,5 @@ def format_listing(repo_root: Path | None = None) -> str:
             note = "  (overridden)"
         lines.append(f"  {topic}{note}")
     lines.append("")
-    lines.append("Show a topic with: brr docs <topic>")
+    lines.append("These docs are bundled for prompts and project references.")
     return "\n".join(lines)

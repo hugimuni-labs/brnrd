@@ -111,6 +111,7 @@ class TestPromptBuilding:
             branch_name="brr/task-123",
             base_branch="feat/task-abstraction",
             runtime_dir="/repo/.brr",
+            context_path="/repo/.brr/runs/task-123/context.md",
             log_file="kb/log-task-123.md",
         )
         assert "Task ID: task-123" in prompt
@@ -119,6 +120,7 @@ class TestPromptBuilding:
         assert "Current branch: brr/task-123" in prompt
         assert "do not rebase or retarget to main" in prompt
         assert "Shared runtime dir: /repo/.brr" in prompt
+        assert "Run context file: /repo/.brr/runs/task-123/context.md" in prompt
         assert "kb/log-task-123.md" in prompt
         assert "Some runners capture your final response automatically" in prompt
         assert "fix it" in prompt
@@ -183,6 +185,20 @@ class TestPromptBuilding:
         assert "Workstream" not in prompt
         assert "Stage feedback requested: no" in prompt
         assert "Original event body" not in prompt
+
+    def test_bundled_daemon_prompt_is_command_free(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "do thing",
+            "evt-9",
+            "/tmp/r.md",
+            tmp_path,
+            task_id="task-9",
+            context_path="/repo/.brr/runs/task-9/context.md",
+        )
+        assert "Run context file: /repo/.brr/runs/task-9/context.md" in prompt
+        assert "brr inspect" not in prompt
+        assert "brr stream" not in prompt
+        assert "brr docs" not in prompt
 
     def test_triage_prompt(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

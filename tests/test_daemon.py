@@ -170,6 +170,12 @@ def test_run_worker_uses_triage_output_for_task(tmp_path, monkeypatch):
     assert "response_path" in persisted.meta
     assert "branch_name" in persisted.meta
     assert persisted.meta["branch_name"] == task.resolve_branch_name()
+    context_path = Path(persisted.meta["context_path"])
+    assert context_path.exists()
+    context_text = context_path.read_text(encoding="utf-8")
+    assert "brr Run Context" in context_text
+    assert "raw event body" in context_text
+    assert str(tmp_path / ".brr") in context_text
 
 
 def test_run_worker_executes_worktree_tasks_in_worktree_and_merges(tmp_path, monkeypatch):
@@ -313,6 +319,50 @@ def test_run_worker_marks_error_on_invalid_triage_output(tmp_path, monkeypatch):
     persisted = Task.from_file(tmp_path / ".brr" / "tasks" / f"{task.id}.md")
     assert persisted is not None
     assert persisted.status == "error"
+
+
+def test_run_worker_rejects_unimplemented_env_before_run(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    event = {
+        "id": "evt-docker",
+        "status": "pending",
+        "body": "run this in docker",
+        "source": "telegram",
+        "_path": tmp_path / ".brr" / "inbox" / "evt-docker.md",
+    }
+    event["_path"].write_text(
+        "---\nid: evt-docker\nstatus: pending\nsource: telegram\n---\nrun this in docker\n",
+        encoding="utf-8",
+    )
+    invocations = []
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _repo_root: "codex")
+    monkeypatch.setattr(
+        daemon.runner,
+        "build_triage_prompt",
+        lambda body, event_id, _repo_root, **_kwargs: f"TRIAGE {event_id}: {body}",
+    )
+
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
+        invocations.append(invocation.kind)
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="---\nbranch: current\nenv: docker\n---\nrefined task body\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
+
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert task.status == "error"
+    assert task.env == "docker"
+    assert invocations == ["triage"]
 
 
 def test_run_worker_preserves_named_branch_without_merge(tmp_path, monkeypatch):

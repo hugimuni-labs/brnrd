@@ -9,9 +9,16 @@ Read the event below and decide:
    - `<name>` — use an existing branch by name
    - `task` — use `brr/<task-id>` as the branch name
 
-2. **env** — Where should this task execute?
-   - `local` — in the main repo working directory (serial, simple tasks)
-   - `worktree` — in an isolated git worktree (concurrent, independent tasks)
+2. **env** — Usually leave this as `auto`.
+   - `auto` — brr chooses `local` for `branch: current` and `worktree`
+     for branch work.
+   - `local` — force the main repo working directory. Only use with
+     `branch: current`.
+   - `worktree` — force an isolated git worktree. Only use when you also
+     choose a non-current branch.
+   - Other env names, such as `docker`, `devcontainer`, or `ssh`, should
+     be used only when the event explicitly asks for that environment.
+     The daemon will reject envs that are not configured or implemented.
 
 3. **body** — Refine the task description if needed. You may add context,
    clarify ambiguity, or restructure — but preserve the user's intent.
@@ -28,11 +35,10 @@ env: <environment>
 ```
 
 Guidelines:
-- Default to `branch: current` and `env: local` unless the task clearly
+- Default to `branch: current` and `env: auto` unless the task clearly
   warrants isolation (touches multiple files, risky refactor, long-running).
-- Treat `branch` and `env` as related: `env: local` only makes sense with
-  `branch: current`; if you pick any other branch strategy, prefer
-  `env: worktree`.
+- Treat `branch` as the main decision. With `env: auto`, brr will run
+  current-branch work locally and branch work in a worktree.
 - `auto` / `task` branches are created from the currently checked-out
   branch where `brr up` is running. That branch is not necessarily
   `main`; do not assume `main` is the base unless the event says so.
