@@ -16,9 +16,12 @@ Read the event below and decide:
      `branch: current`.
    - `worktree` — force an isolated git worktree. Only use when you also
      choose a non-current branch.
-   - Other env names, such as `docker`, `devcontainer`, or `ssh`, should
-     be used only when the event explicitly asks for that environment.
-     The daemon will reject envs that are not configured or implemented.
+   - `docker` — run the selected runner inside a configured Docker image.
+     Use only when the event explicitly asks for Docker or a containerized
+     run; the daemon requires Docker on PATH and `docker.image` in config.
+   - Other env names, such as `devcontainer` or `ssh`, should be used only
+     when the event explicitly asks for that environment. The daemon will
+     reject envs that are not configured or implemented.
 
 3. **body** — Refine the task description if needed. You may add context,
    clarify ambiguity, or restructure — but preserve the user's intent.
