@@ -35,9 +35,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("gate", help="gate name (telegram, slack, git)")
     p.set_defaults(func=cmd_auth)
 
-    p = sub.add_parser("connect", help="bind repo to a gate")
+    p = sub.add_parser("bind", help="bind repo to a gate channel or watch")
     p.add_argument("gate", help="gate name (telegram, slack, git)")
-    p.set_defaults(func=cmd_connect)
+    p.set_defaults(func=cmd_bind)
 
     p = sub.add_parser("up", help="start the daemon")
     p.add_argument("--debug", action="store_true", default=None,
@@ -113,9 +113,9 @@ def cmd_auth(args):
     gate_mod.auth(_brr_dir())
 
 
-def cmd_connect(args):
+def cmd_bind(args):
     gate_mod = _load_gate(args.gate)
-    gate_mod.connect(_brr_dir())
+    gate_mod.bind(_brr_dir())
 
 
 def cmd_up(args):

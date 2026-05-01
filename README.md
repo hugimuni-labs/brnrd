@@ -41,8 +41,7 @@ uv run .brr-tool/brr init
 brr init                          # detect runner, create AGENTS.md + kb/
 brr run "fix the failing tests"   # run a task locally
 
-brr auth telegram                 # set up a gate
-brr connect telegram              # bind to a chat
+brr auth telegram                 # save a bot token
 brr up                            # start the daemon
 ```
 
@@ -87,6 +86,9 @@ Gates are transport adapters — they create event files and deliver responses.
 The daemon scans the inbox and runs workers.  The runner is whatever AI CLI
 you have installed.
 
+Telegram works with just a bot token.  Once the daemon is running, send the
+bot a message; brr records the chat ID from each message and replies there.
+
 ## CLI
 
 | Command                | What it does                          |
@@ -95,7 +97,7 @@ you have installed.
 | `brr run "<task>"`     | Run a task locally via runner         |
 | `brr status`           | Show project state + recent activity  |
 | `brr auth <gate>`      | Set credentials for a gate            |
-| `brr connect <gate>`   | Bind repo to a gate channel           |
+| `brr bind <gate>`      | Bind repo to a gate channel or watch  |
 | `brr up`               | Start the daemon (foreground)         |
 | `brr down`             | Stop the daemon                       |
 | `brr eject`            | Copy prompts to .brr/prompts/ to edit |

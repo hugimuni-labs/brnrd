@@ -7,6 +7,8 @@ with brr exclusively through the filesystem:
 - Outgoing replies  ← ``.brr/responses/`` response files
 
 Credentials and runtime state live in ``.brr/gates/telegram.json``.
+Telegram only requires a bot token; chat IDs are discovered from
+incoming messages and stored on each event.
 """
 
 from __future__ import annotations
@@ -107,16 +109,25 @@ def auth(brr_dir: Path) -> None:
         return
     state["token"] = token
     _save_state(brr_dir, state)
-    print("[brr] Token saved")
+    print("[brr] Token saved. Start the daemon, then send the bot a message.")
 
 
-def connect(brr_dir: Path) -> None:
-    """Bind to a Telegram chat/topic."""
+def bind(brr_dir: Path) -> None:
+    """Optionally restrict Telegram to a single chat/topic."""
     state = _load_state(brr_dir)
     if "token" not in state:
         print("[brr] Run `brr auth telegram` first.")
         return
-    chat_id = input("Chat ID (numeric): ").strip()
+    print("[brr] Telegram works with just `brr auth telegram`.")
+    chat_id = input(
+        "Optional chat ID to restrict to (leave empty to accept all): "
+    ).strip()
+    if not chat_id:
+        state.pop("chat_id", None)
+        state.pop("topic_id", None)
+        _save_state(brr_dir, state)
+        print("[brr] Telegram will accept messages from any chat.")
+        return
     try:
         state["chat_id"] = int(chat_id)
     except ValueError:
@@ -129,19 +140,21 @@ def connect(brr_dir: Path) -> None:
         except ValueError:
             print("[brr] Topic ID must be a number.")
             return
+    else:
+        state.pop("topic_id", None)
     try:
-        _send_message(state["token"], state["chat_id"], "brr connected.", state.get("topic_id"))
+        _send_message(state["token"], state["chat_id"], "brr bound.", state.get("topic_id"))
         print("[brr] Test message sent.")
     except Exception as e:
         print(f"[brr] Failed: {e}")
         return
     _save_state(brr_dir, state)
-    print("[brr] Connection saved")
+    print("[brr] Binding saved")
 
 
 def is_configured(brr_dir: Path) -> bool:
     state = _load_state(brr_dir)
-    return "token" in state and "chat_id" in state
+    return "token" in state
 
 
 # ── Gate loop ────────────────────────────────────────────────────────
@@ -167,8 +180,8 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     token = state["token"]
-    chat_id = state["chat_id"]
-    topic_id = state.get("topic_id")
+    configured_chat_id = state.get("chat_id")
+    configured_topic_id = state.get("topic_id")
     offset = state.get("offset", 0)
 
     updates = _api_call(token, "getUpdates", {
@@ -180,9 +193,13 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     for update in updates:
         offset = update["update_id"] + 1
         msg = update.get("message", {})
-        if msg.get("chat", {}).get("id") != chat_id:
+        chat_id = msg.get("chat", {}).get("id")
+        if chat_id is None:
             continue
-        if topic_id and msg.get("message_thread_id") != topic_id:
+        if configured_chat_id is not None and chat_id != configured_chat_id:
+            continue
+        topic_id = msg.get("message_thread_id")
+        if configured_topic_id and topic_id != configured_topic_id:
             continue
         text = msg.get("text", "").strip()
         if not text:
@@ -201,7 +218,10 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state["offset"] = offset
     _save_state(brr_dir, state)
 
-    _deliver_responses(brr_dir, inbox_dir, responses_dir, token, chat_id, topic_id)
+    _deliver_responses(
+        brr_dir, inbox_dir, responses_dir, token,
+        configured_chat_id, configured_topic_id,
+    )
 
 
 def _deliver_responses(
@@ -209,14 +229,19 @@ def _deliver_responses(
     inbox_dir: Path,
     responses_dir: Path,
     token: str,
-    chat_id: int,
-    topic_id: int | None,
+    default_chat_id: int | None = None,
+    default_topic_id: int | None = None,
 ) -> None:
     for event in protocol.list_done(inbox_dir, "telegram"):
         eid = event["id"]
         body = protocol.read_response(responses_dir, eid)
         if body is None:
             continue
+        chat_id = _event_int(event, "telegram_chat_id", default_chat_id)
+        if chat_id is None:
+            print(f"[brr:telegram] delivery error for {eid}: missing chat id")
+            continue
+        topic_id = _event_int(event, "telegram_topic_id", default_topic_id)
         try:
             _send_with_overflow(token, chat_id, topic_id, body)
         except Exception as e:
@@ -224,3 +249,18 @@ def _deliver_responses(
             continue
         resp_path = protocol.response_path(responses_dir, eid)
         protocol.cleanup(event["_path"], resp_path)
+
+
+def _event_int(event: dict, key: str, default: int | None = None) -> int | None:
+    if key not in event:
+        return default
+    return _coerce_optional_int(event.get(key))
+
+
+def _coerce_optional_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
