@@ -9,6 +9,7 @@ from brr.runner import RunnerResult
 def _mock_runner(monkeypatch, output=""):
     """Mock runner detection and execution to avoid calling real CLIs."""
     monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock-runner")
+    monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: ["mock-runner"])
     monkeypatch.setattr(
         "brr.runner.invoke_runner",
         lambda runner_name, invocation, cfg=None: RunnerResult(
@@ -80,6 +81,7 @@ def test_fails_without_runner(tmp_path, monkeypatch):
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     monkeypatch.chdir(repo)
     monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: None)
+    monkeypatch.setattr("brr.runner.detect_all_runners", lambda *a, **kw: [])
 
     import pytest
     with pytest.raises(SystemExit):

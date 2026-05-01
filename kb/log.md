@@ -357,3 +357,14 @@ follow-up reuse), and CLI/status output. Documented the model in
 updated `brr-internals.md` and `prompts/run.md` to surface the new
 commands and Task Context Bundle expectations.
 
+## [2026-05-01] fix | Remove runner auto-approve toggle
+
+Removed the `auto_approve` config path because brr's daemon runner needs
+non-interactive, approval-bypassing CLIs by design; sandboxing belongs to the
+execution environment rather than a per-runner prompt gate. Built-in Claude and
+Codex profiles now carry the required bypass flags directly, setup no longer
+asks about or writes `auto_approve`, and command-building tests cover the
+always-on behavior. While verifying the change, tightened adopt tests to mock
+the actual runner detection path so the suite cannot escape to a real local
+runner.
+
