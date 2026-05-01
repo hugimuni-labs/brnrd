@@ -211,12 +211,6 @@ def _build_cmd(
     profile = profiles.get(runner_name)
     if profile:
         cmd = str(profile.get("cmd", runner_name)).split()
-        approve = str(profile.get("approve", "")).strip()
-        if runner_name == "codex" and cfg.get("auto_approve"):
-            cmd = [part for part in cmd if part != "--full-auto"]
-            cmd.append("--dangerously-bypass-approvals-and-sandbox")
-        if cfg.get("auto_approve") and approve:
-            cmd.extend(approve.split())
         if runner_name == "codex" and response_path:
             cmd.extend(["--output-last-message", response_path])
         cmd.append(prompt)

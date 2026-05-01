@@ -68,13 +68,18 @@ class TestContextInjection:
 
 
 class TestPromptBuilding:
-    def test_build_cmd_uses_noninteractive_codex_exec(self):
+    def test_build_cmd_uses_approval_bypassing_codex_exec(self):
         cmd = _build_cmd("codex", "fix it", {})
-        assert cmd == ["codex", "exec", "--full-auto", "fix it"]
+        assert cmd == [
+            "codex",
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "fix it",
+        ]
 
-    def test_build_cmd_codex_auto_approve_adds_bypass_and_output_path(self):
+    def test_build_cmd_codex_adds_output_path(self):
         cmd = _build_cmd(
-            "codex", "fix it", {"auto_approve": True}, response_path="/tmp/resp.md",
+            "codex", "fix it", {}, response_path="/tmp/resp.md",
         )
         assert cmd == [
             "codex",

@@ -143,10 +143,6 @@ def _interactive_configure(available: list[str]) -> tuple[str, dict]:
 
     cfg["runner"] = runner_name
 
-    # auto-approve
-    auto = _confirm("Allow the runner to run without approval prompts?", default=True)
-    cfg["auto_approve"] = auto
-
     print()
     return runner_name, cfg
 
@@ -180,7 +176,6 @@ def _setup_brr_dir(repo_root: Path) -> None:
     if not config_path.exists():
         conf.write_config(repo_root, {
             "runner": "auto",
-            "auto_approve": True,
             "response_retries": 1,
         })
 
