@@ -22,6 +22,22 @@ def test_run_requires_instruction():
         main(["run"])
 
 
+def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeGate:
+        @staticmethod
+        def bind(brr_dir):
+            calls.append(brr_dir)
+
+    monkeypatch.setattr("brr.cli._load_gate", lambda name: FakeGate)
+    monkeypatch.setattr("brr.cli._brr_dir", lambda: tmp_path / ".brr")
+
+    main(["bind", "telegram"])
+
+    assert calls == [tmp_path / ".brr"]
+
+
 def test_inspect_task(tmp_path):
     from brr.status import inspect_task
     from brr.task import Task

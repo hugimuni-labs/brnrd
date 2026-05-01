@@ -66,7 +66,7 @@ def auth(brr_dir: Path) -> None:
     print("[brr:git] (or configure watch_dir in .brr/gates/git_gate.json).")
 
 
-def connect(brr_dir: Path) -> None:
+def bind(brr_dir: Path) -> None:
     state = _load_state(brr_dir)
     watch_dir = input("Watch directory (default: tasks/): ").strip() or "tasks/"
     state["watch_dir"] = watch_dir
