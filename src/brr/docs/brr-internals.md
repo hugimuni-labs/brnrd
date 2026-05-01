@@ -1,13 +1,12 @@
 # brr Internals
 
 Orientation for an agent running under brr. This document ships with
-the `brr` tool itself — it is not project-specific. To read it at
-runtime, run `brr docs brr-internals`.
+the `brr` tool itself — it is not project-specific.
 
 If you (the agent) are running and something about the environment is
 confusing (unfamiliar folders, unexpected metadata in your prompt, a
-per-task log file), consult this page or `brr docs execution-map`
-before guessing.
+per-task log file), consult the generated run context file before
+guessing.
 
 ## You might be running under brr
 
@@ -19,6 +18,8 @@ following signals in your prompt:
   `.brr/responses/<event-id>.md` path.
 - A `Write your log entry to kb/log-<task-id>.md` line (worktree mode).
 - A `Shared runtime dir:` pointing at the main checkout's `.brr/`.
+- A generated `.brr/runs/<task-id>/context.md` file named in the
+  Task Context Bundle.
 
 When you see these, you are not in a normal interactive session. You
 are one step of a pipeline. Behave accordingly:
@@ -40,46 +41,44 @@ gitignored; do not commit its contents.
 | `inbox/`     | Incoming events from gates, one markdown file per event            |
 | `tasks/`     | Parsed task manifests, one per event (source of truth post-triage) |
 | `responses/` | Agent final responses destined for gate replies                    |
+| `runs/`      | Generated per-task context files for daemon runner invocations     |
 | `streams/`   | Workstream manifests, append-only event/task/artifact records      |
 | `traces/`    | Prompt + stdout + meta for every runner invocation (debug mode)    |
 | `reviews/`   | Self-review notes the agent writes about its own runs              |
 | `worktrees/` | Isolated git worktrees for concurrent tasks                        |
 | `gates/`     | Per-gate auth/state JSON                                           |
-| `prompts/`   | User overrides of bundled prompt templates (see below)             |
+| `prompts/`   | Legacy per-repo prompt overrides                                   |
 | `docs/`      | User overrides of bundled docs (see below)                         |
 | `config`     | Key=value runtime config                                           |
 
-## Commands the agent can use
+## Agent recovery surface
 
-These are always available inside a brr-driven task:
+Agents should orient from the Task Context Bundle in the prompt. When
+they need to re-check runtime details, they should read the generated
+`.brr/runs/<task-id>/context.md` file named in the bundle. That file
+replaces the old command cheat sheet for task/event/stream recovery.
 
-- `brr status` — active daemon + recent tasks + active worktrees +
-  active streams.
-- `brr inspect <task-id>` — cross-linked manifest for a task (event,
-  branch, worktree, response, trace directories, stream link).
-- `brr streams` — list workstreams.
-- `brr stream show <id>` — manifest, recent tasks, artifacts.
-- `brr docs` — list bundled documentation topics.
-- `brr docs <topic>` — print a bundled doc (e.g. `execution-map`,
-  `streams`, `brr-internals`).
-
-The agent does not run `brr up`/`brr down`; the daemon is managed by
-the human operator.
+The agent does not run daemon lifecycle commands. `brr up` and
+`brr down` are managed by the human operator.
 
 ## Override model
 
-brr ships a set of templates and docs with the package. Users can
-override any of them by dropping a file with the same name into the
-corresponding `.brr/` folder:
+brr ships prompts and docs with the package. Lightweight runtime
+choices belong in `.brr/config`, especially `runner`, `runner_cmd`,
+and environment policy. Deep prompt or orchestration customization is
+done by using a local checkout, editable install, or fork of brr.
+
+Legacy per-repo override folders may still be read by the library, but
+there is no public command to seed them:
 
 | Bundled at                     | Per-repo override         |
 | ------------------------------ | ------------------------- |
 | `src/brr/prompts/<name>.md`    | `.brr/prompts/<name>.md`  |
 | `src/brr/docs/<name>.md`       | `.brr/docs/<name>.md`     |
 
-The runner and `brr docs` both check the override path first, then
-fall back to the bundled copy. `brr eject` copies all bundled prompts
-into `.brr/prompts/` as a starting point for customisation.
+The runner checks prompt overrides first, then falls back to the
+bundled copy. Docs helpers do the same for doc overrides when used
+internally.
 
 Project-specific knowledge belongs in `kb/` (the knowledge base),
 never in `.brr/`. The split is:
@@ -159,5 +158,5 @@ removes the worktree unless debug mode keeps it for inspection.
 - Worktrees are preserved after their task finishes instead of being
   removed — useful for post-mortem inspection.
 
-Reviewers can correlate `brr inspect <task-id>` output with the trace
-directories it lists.
+Reviewers can correlate a task's generated run context file with trace
+directories under `.brr/traces/`.
