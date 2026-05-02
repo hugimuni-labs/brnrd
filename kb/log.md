@@ -396,3 +396,13 @@ playbook keeps the scope to fresh fixture repos, the currently implemented
 1-5 scoring rubric, and copy-paste run/finding templates. Updated `kb/index.md`
 so the playbook is discoverable with the other agent ergonomics materials.
 
+## [2026-05-02] research | Repo dive-in map
+
+Added `kb/repo-dive-in-map.md` as a durable bottom-up guide for reading the
+repository file by file. The page uses branch-neutral relative links so it reads
+well in GitHub and GitHub mobile without pinning source references to `main`,
+and it captures the core runtime path, spiral reading order, main entities,
+module cross-references, runtime invariants, test-first reading path, and
+maintenance triggers for future updates. Updated `kb/index.md` so the guide is
+discoverable under Architecture.
+
