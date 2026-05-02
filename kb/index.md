@@ -9,6 +9,7 @@ This index only covers this repo's project-specific knowledge.
 
 ## Architecture
 
+- [Repo Dive-In Map](repo-dive-in-map.md) — bottom-up, GitHub-readable source map for understanding the repo file by file, with branch-neutral relative source/test links, core entity cross-references, runtime invariants, and recommended reading paths
 - [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) — v2: concurrent task execution via worktrees, task abstraction, per-task logs, env abstraction
 - [Branch Modes Plan](plan-branch-modes.md) — v2: branch as task property, agent-decided branching, needs-context status, execution environments
 - [Workstreams](../src/brr/docs/streams.md) — bundled tool doc covering the workstream model, runtime layout, lifecycle update packets, reply routing, and CLI surface (`brr streams`, `brr stream show`)
