@@ -211,6 +211,12 @@ def _build_cmd(
     profile = profiles.get(runner_name)
     if profile:
         cmd = str(profile.get("cmd", runner_name)).split()
+        approve = str(profile.get("approve", "")).strip()
+        if runner_name == "codex" and cfg.get("auto_approve"):
+            cmd = [part for part in cmd if part != "--full-auto"]
+            cmd.append("--dangerously-bypass-approvals-and-sandbox")
+        if cfg.get("auto_approve") and approve:
+            cmd.extend(approve.split())
         if runner_name == "codex" and response_path:
             cmd.extend(["--output-last-message", response_path])
         cmd.append(prompt)
@@ -623,12 +629,13 @@ def build_triage_prompt(
 ) -> str:
     """Build the prompt for the triage step — event → task conversion.
 
-    The triage agent reads the event and decides branch strategy and
-    execution environment.  Its output is parsed into a Task.
+    The triage agent reads the event and decides branch strategy.  It
+    usually leaves environment as auto so project config can resolve the
+    concrete backend.  Its output is parsed into a Task.
 
     Uses a reduced context window (last 3 log entries) compared to the
     full run prompt — triage only needs enough history to make a
-    branch/env decision, not full session continuity. When *stream* is
+    branch/environment decision, not full session continuity. When *stream* is
     provided, a compact workstream block is included; *stage_feedback*
     asks the triage agent to emit a structured stage note artifact.
     """

@@ -176,6 +176,7 @@ def _setup_brr_dir(repo_root: Path) -> None:
     if not config_path.exists():
         conf.write_config(repo_root, {
             "runner": "auto",
+            "environment": "auto",
             "response_retries": 1,
         })
 
