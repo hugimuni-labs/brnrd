@@ -629,9 +629,9 @@ def build_triage_prompt(
 ) -> str:
     """Build the prompt for the triage step — event → task conversion.
 
-    The triage agent reads the event and decides branch strategy.  It
-    usually leaves environment as auto so project config can resolve the
-    concrete backend.  Its output is parsed into a Task.
+    The triage agent reads the event and decides how brr should stage any
+    code changes.  It usually leaves environment as auto so project config
+    can resolve the concrete backend.  Its output is parsed into a Task.
 
     Uses a reduced context window (last 3 log entries) compared to the
     full run prompt — triage only needs enough history to make a

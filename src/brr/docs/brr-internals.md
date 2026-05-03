@@ -79,6 +79,12 @@ Use `environment` for the user-facing execution policy:
 The legacy `env` and `default_env` config keys are still accepted, but
 new config should use `environment`.
 
+`branch` stays in task files as staging/delivery state. It tells the
+daemon whether code changes should land in the current checkout, a
+generated task branch, or an explicitly named branch. It is not the main
+user-facing isolation setting; most users should configure
+`environment` and let triage choose branch behavior per task.
+
 Legacy per-repo override folders may still be read by the library, but
 there is no public command to seed them:
 
