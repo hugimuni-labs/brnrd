@@ -20,11 +20,11 @@ a body with the user's message.
 ### 2. Triage
 
 The daemon invokes the runner with `triage.md` to classify the event.
-The triage agent decides **branch strategy** and usually leaves
-`environment` as `auto`, then outputs a task spec (frontmatter +
-refined body). Environment policy is resolved deterministically from
-the event and `.brr/config`; triage should not guess just to optimize
-runtime.
+The triage agent decides how brr should stage any code changes
+(`branch`) and usually leaves `environment` as `auto`, then outputs a
+task spec (frontmatter + refined body). Environment policy is resolved
+deterministically from the event and `.brr/config`; triage should not
+guess just to optimize runtime.
 
 Triage runs with a reduced log context window (last 3 entries only) —
 it's a fast classifier, not an investigator.
@@ -37,6 +37,10 @@ env, status, source, and manifest metadata (response path, branch name,
 worktree path, run context path, trace directories). Task files still
 store the concrete backend as `env` for compatibility; user-facing
 config should prefer `environment`.
+
+`branch` is task-internal staging/delivery state. Users normally
+configure `environment`; brr chooses branch behavior unless a request
+explicitly names a branch or asks to work in the current checkout.
 
 ### 4. Execution
 
