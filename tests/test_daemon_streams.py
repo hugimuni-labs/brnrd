@@ -59,7 +59,7 @@ def _make_invoke_runner(*, response_text: str = "---\n---\nall done\n",
                        triage_stdout: str | None = None):
     """Build a fake invoke_runner that always succeeds."""
     triage_stdout = triage_stdout or (
-        "---\nbranch: current\nenv: local\n---\nrefined task body\n"
+        "---\nbranch: current\nenv: host\n---\nrefined task body\n"
     )
 
     def _fake(runner_name, invocation, cfg=None, *, trace=False):

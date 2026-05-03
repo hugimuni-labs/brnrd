@@ -321,7 +321,7 @@ def test_run_worker_marks_error_on_invalid_triage_output(tmp_path, monkeypatch):
     assert persisted.status == "error"
 
 
-def test_run_worker_rejects_unconfigured_docker_before_run(tmp_path, monkeypatch):
+def test_run_worker_rejects_unimplemented_env_before_run(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     event = {
         "id": "evt-docker",
@@ -337,7 +337,6 @@ def test_run_worker_rejects_unconfigured_docker_before_run(tmp_path, monkeypatch
     invocations = []
 
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _repo_root: "codex")
-    monkeypatch.setattr(daemon.envs.shutil, "which", lambda _name: "/usr/bin/docker")
     monkeypatch.setattr(
         daemon.runner,
         "build_triage_prompt",
@@ -492,7 +491,7 @@ def test_run_worker_retries_from_missing_required_output(tmp_path, monkeypatch):
                 invocation=invocation,
                 runner_name=runner_name,
                 command=["mock"],
-                stdout="---\nbranch: current\nenv: local\n---\nrefined task body\n",
+                stdout="---\nbranch: current\nenv: host\n---\nrefined task body\n",
                 stderr="",
                 returncode=0,
                 trace_dir=None,
@@ -777,7 +776,7 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
             return RunnerResult(
                 invocation=invocation, runner_name=runner_name,
                 command=["mock"],
-                stdout="---\nbranch: current\nenv: local\n---\nupdate docs\n",
+                stdout="---\nbranch: current\nenv: host\n---\nupdate docs\n",
                 stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
         if invocation.kind == "kb-maintenance":
@@ -847,7 +846,7 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
             return RunnerResult(
                 invocation=invocation, runner_name=runner_name,
                 command=["mock"],
-                stdout="---\nbranch: current\nenv: local\n---\nquick fix\n",
+                stdout="---\nbranch: current\nenv: host\n---\nquick fix\n",
                 stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
         if invocation.kind == "kb-maintenance":
@@ -910,7 +909,7 @@ def test_kb_maintenance_never_config(tmp_path, monkeypatch):
             return RunnerResult(
                 invocation=invocation, runner_name=runner_name,
                 command=["mock"],
-                stdout="---\nbranch: current\nenv: local\n---\ndocs\n",
+                stdout="---\nbranch: current\nenv: host\n---\ndocs\n",
                 stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
         if invocation.kind == "kb-maintenance":

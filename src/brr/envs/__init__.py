@@ -74,8 +74,8 @@ class EnvBackend(Protocol):
         ...
 
 
-class LocalEnv:
-    name = "local"
+class HostEnv:
+    name = "host"
 
     def prepare(
         self,
@@ -89,7 +89,7 @@ class LocalEnv:
         debug: bool = False,
     ) -> RunContext:
         if branch_name is not None:
-            raise RuntimeError("local env can only run on branch: current")
+            raise RuntimeError("host env can only run on branch: current")
         return RunContext(
             name=self.name,
             cwd=repo_root,
@@ -123,7 +123,7 @@ class LocalEnv:
         return task
 
 
-class WorktreeEnv(LocalEnv):
+class WorktreeEnv(HostEnv):
     name = "worktree"
 
     def prepare(
@@ -417,13 +417,13 @@ class DockerEnv(WorktreeEnv):
 
 _BUILTINS: dict[str, type[EnvBackend]] = {
     "docker": DockerEnv,
-    "local": LocalEnv,
+    "host": HostEnv,
     "worktree": WorktreeEnv,
 }
 
 
 def get_env(name: str) -> EnvBackend:
-    env_name = (name or "local").strip()
+    env_name = (name or "host").strip()
     backend = _BUILTINS.get(env_name)
     if backend is None:
         supported = ", ".join(sorted(_BUILTINS))

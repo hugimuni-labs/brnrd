@@ -118,8 +118,11 @@ for the spec and a bash example.
 `codex`, `gemini`.  Set `runner=<name>` in `.brr/config` or use any
 executable.
 
-**Environments** are daemon backends.  Today `local` and `worktree` are
-implemented; future backends such as `docker`, `devcontainer`, `ssh`,
+**Environments** are daemon backends.  Configure the user-facing policy
+with `environment=<auto|host|worktree|docker>` in `.brr/config`.
+`environment=auto` prefers configured Docker isolation, then falls back
+to worktree/host behavior.  The concrete built-ins today are `host`,
+`worktree`, and `docker`; future backends such as `devcontainer`, `ssh`,
 or service-specific plugins fit behind the same internal protocol.
 
 **Deep customization** should use a local checkout, editable install, or
