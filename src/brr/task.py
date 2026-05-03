@@ -22,14 +22,17 @@ from typing import Any
 
 # Valid values for each field
 BRANCH_STRATEGIES = ("current", "auto", "task")  # or arbitrary name / "new:<name>"
-ENV_TYPES = ("auto", "local", "worktree", "docker", "devcontainer", "ssh")
+ENV_TYPES = ("auto", "host", "worktree", "docker", "devcontainer", "ssh")
 STATUSES = ("pending", "running", "done", "needs_context", "error", "conflict")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
+    "environment", "stream_id",
+}
+_TASK_FIELDS = {
+    "id", "event_id", "branch", "env", "environment", "status", "source",
     "stream_id",
 }
-_TASK_FIELDS = {"id", "event_id", "branch", "env", "status", "source", "stream_id"}
 
 
 def _generate_task_id() -> str:
@@ -38,14 +41,44 @@ def _generate_task_id() -> str:
     return f"task-{ts}-{rand}"
 
 
-def resolve_env(branch: str, env_policy: str | None = None) -> str:
+def _cfg_environment_policy(cfg: dict[str, Any]) -> str:
+    return str(
+        cfg.get("environment", cfg.get("env", cfg.get("default_env", "auto")))
+    ).strip()
+
+
+def _event_environment_policy(event: dict[str, Any], cfg: dict[str, Any]) -> str:
+    return str(
+        event.get(
+            "environment",
+            event.get("env", _cfg_environment_policy(cfg)),
+        )
+    ).strip()
+
+
+def _docker_configured(cfg: dict[str, Any]) -> bool:
+    return bool(cfg.get("docker.image") or cfg.get("docker_image"))
+
+
+def _resolve_auto_env(branch: str, cfg: dict[str, Any]) -> str:
+    if _docker_configured(cfg):
+        return "docker"
+    return "host" if branch == "current" else "worktree"
+
+
+def resolve_env(
+    branch: str,
+    env_policy: str | None = None,
+    cfg: dict[str, Any] | None = None,
+) -> str:
     """Resolve an env policy into the concrete backend name for a branch."""
+    cfg = cfg or {}
     requested = (env_policy or "auto").strip()
     if not requested or requested == "auto":
-        return "local" if branch == "current" else "worktree"
+        return _resolve_auto_env(branch, cfg)
     if not _ENV_NAME_RE.match(requested):
         raise ValueError(f"invalid env: {requested!r}")
-    if requested == "local" and branch != "current":
+    if requested == "host" and branch != "current":
         return "worktree"
     return requested
 
@@ -60,7 +93,7 @@ class Task:
         body:     The task description / instruction for the agent.
         branch:   Branching strategy — "current", "auto", "task",
                   "<name>", or "new:<name>".
-        env:      Execution environment backend — "local", "worktree",
+        env:      Execution environment backend — "host", "worktree",
                   "docker", a future built-in, or a plugin name.
         status:   Lifecycle state — pending → running → done/needs_context/error.
         source:   The gate that produced the originating event.
@@ -71,7 +104,7 @@ class Task:
     event_id: str
     body: str
     branch: str = "current"
-    env: str = "local"
+    env: str = "host"
     status: str = "pending"
     source: str = ""
     stream_id: str = ""
@@ -89,13 +122,13 @@ class Task:
         cfg = cfg or {}
         task_id = _generate_task_id()
         branch = event.get("branch", cfg.get("default_branch", "current"))
-        env_policy = event.get("env", cfg.get("env", cfg.get("default_env", "auto")))
+        env_policy = _event_environment_policy(event, cfg)
         return cls(
             id=task_id,
             event_id=event.get("id", ""),
             body=event.get("body", ""),
             branch=branch,
-            env=resolve_env(branch, env_policy),
+            env=resolve_env(branch, env_policy, cfg),
             source=event.get("source", ""),
             stream_id=str(event.get("stream_id", "") or ""),
             meta={
@@ -125,18 +158,17 @@ class Task:
             raise ValueError("triage output is missing a task body")
 
         branch = str(fm.get("branch", task.branch)).strip()
-        env_policy = str(
-            fm.get(
-                "env",
-                event.get("env", cfg.get("env", cfg.get("default_env", "auto"))),
-            )
-        ).strip()
+        triage_env = str(fm.get("environment", fm.get("env", "auto"))).strip()
+        if not triage_env or triage_env == "auto":
+            env_policy = _event_environment_policy(event, cfg)
+        else:
+            env_policy = triage_env
         status = str(fm.get("status", task.status)).strip()
 
         if not branch or branch == "new:":
             raise ValueError(f"invalid triage branch: {branch!r}")
         try:
-            env = resolve_env(branch, env_policy)
+            env = resolve_env(branch, env_policy, cfg)
         except ValueError as e:
             raise ValueError(f"invalid triage env: {env_policy!r}") from e
         if status not in STATUSES:
@@ -189,7 +221,7 @@ class Task:
             event_id=fm.get("event_id", ""),
             body=body,
             branch=fm.get("branch", "current"),
-            env=fm.get("env", "local"),
+            env=fm.get("env", fm.get("environment", "host")),
             status=fm.get("status", "pending"),
             source=fm.get("source", ""),
             stream_id=str(fm.get("stream_id", "") or ""),

@@ -6,7 +6,7 @@ from brr.task import Task
 
 
 def test_get_env_returns_real_builtins():
-    assert envs.get_env("local").name == "local"
+    assert envs.get_env("host").name == "host"
     assert envs.get_env("worktree").name == "worktree"
     assert envs.get_env("docker").name == "docker"
 

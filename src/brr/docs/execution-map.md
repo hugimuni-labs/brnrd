@@ -20,8 +20,11 @@ a body with the user's message.
 ### 2. Triage
 
 The daemon invokes the runner with `triage.md` to classify the event.
-The triage agent decides **branch strategy** and usually leaves env as
-`auto`, then outputs a task spec (frontmatter + refined body).
+The triage agent decides **branch strategy** and usually leaves
+`environment` as `auto`, then outputs a task spec (frontmatter +
+refined body). Environment policy is resolved deterministically from
+the event and `.brr/config`; triage should not guess just to optimize
+runtime.
 
 Triage runs with a reduced log context window (last 3 entries only) —
 it's a fast classifier, not an investigator.
@@ -31,19 +34,22 @@ it's a fast classifier, not an investigator.
 The daemon parses triage output into a `Task` and saves it to
 `.brr/tasks/<task-id>.md`. The task file tracks: event ID, branch,
 env, status, source, and manifest metadata (response path, branch name,
-worktree path, run context path, trace directories).
+worktree path, run context path, trace directories). Task files still
+store the concrete backend as `env` for compatibility; user-facing
+config should prefer `environment`.
 
 ### 4. Execution
 
-- **local**: runner runs in the main repo checkout.
+- **host**: runner runs in the main repo checkout.
 - **worktree**: a git worktree is created under
   `.brr/worktrees/<task-id>`, the runner runs there, and the branch is
   merged back (for `auto`/`task` strategies) or preserved (for named
   branches) on success.
 - **docker**: the runner command is wrapped in `docker run` using
   `docker.image` from `.brr/config`. Current-branch tasks mount the main
-  checkout; branch tasks mount a brr worktree so the host checkout is not
-  disturbed. Docker containers are removed only after a clean non-debug run.
+  checkout; branch tasks use the same worktree setup as `worktree` so the
+  main checkout is not disturbed. Docker containers are removed only
+  after a clean non-debug run.
 - Other envs such as `devcontainer` or `ssh` are future backends/plugins
   and fail clearly until implemented or installed.
 

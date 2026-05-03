@@ -68,6 +68,17 @@ choices belong in `.brr/config`, especially `runner`, `runner_cmd`,
 and environment policy. Deep prompt or orchestration customization is
 done by using a local checkout, editable install, or fork of brr.
 
+Use `environment` for the user-facing execution policy:
+
+- `environment=auto` — prefer configured Docker isolation, then fall
+  back to worktree/host behavior.
+- `environment=docker` — require Docker and `docker.image`.
+- `environment=worktree` — run in a separate git worktree.
+- `environment=host` — run directly in the main checkout.
+
+The legacy `env` and `default_env` config keys are still accepted, but
+new config should use `environment`.
+
 Legacy per-repo override folders may still be read by the library, but
 there is no public command to seed them:
 
@@ -104,7 +115,7 @@ if policy == "auto":    run only if this task actually touched kb/
 ```
 
 The "did this task touch kb/" check is a git diff in the execution
-root (the worktree for worktree tasks, or the main checkout for local
+root (the worktree for worktree tasks, or the main checkout for host
 tasks):
 
 ```

@@ -11,7 +11,7 @@ class TestTaskFromEvent:
         assert task.body == "do stuff"
         assert task.source == "telegram"
         assert task.branch == "current"
-        assert task.env == "local"
+        assert task.env == "host"
         assert task.status == "pending"
         assert task.id.startswith("task-")
 
@@ -22,23 +22,48 @@ class TestTaskFromEvent:
         assert task.branch == "auto"
         assert task.env == "worktree"
 
-    def test_env_auto_selects_local_for_current_branch(self):
-        event = {"id": "evt-auto-local", "body": "answer question"}
+    def test_env_auto_selects_host_for_current_branch(self):
+        event = {"id": "evt-auto-host", "body": "answer question"}
         task = Task.from_event(event, {"env": "auto"})
         assert task.branch == "current"
-        assert task.env == "local"
+        assert task.env == "host"
 
     def test_env_auto_selects_worktree_for_branch_work(self):
         event = {"id": "evt-auto-wt", "body": "change code", "branch": "auto"}
         task = Task.from_event(event, {"env": "auto"})
         assert task.env == "worktree"
 
+    def test_environment_config_auto_prefers_configured_docker(self):
+        event = {"id": "evt-auto-docker", "body": "change code", "branch": "auto"}
+        task = Task.from_event(
+            event,
+            {"environment": "auto", "docker.image": "brr/test-runner:latest"},
+        )
+        assert task.env == "docker"
+
+    def test_environment_overrides_env_config(self):
+        event = {"id": "evt-env-override", "body": "answer question"}
+        task = Task.from_event(event, {"environment": "host", "env": "docker"})
+        assert task.env == "host"
+
+    def test_event_environment_overrides_config(self):
+        event = {
+            "id": "evt-event-env",
+            "body": "answer question",
+            "environment": "host",
+        }
+        task = Task.from_event(
+            event,
+            {"environment": "docker", "docker.image": "brr/test-runner:latest"},
+        )
+        assert task.env == "host"
+
     def test_event_overrides_config_defaults(self):
         event = {
             "id": "evt-2", "body": "fix bug",
             "branch": "new:feature/task", "env": "worktree",
         }
-        cfg = {"default_branch": "current", "default_env": "local"}
+        cfg = {"default_branch": "current", "default_env": "host"}
         task = Task.from_event(event, cfg)
         assert task.branch == "new:feature/task"
         assert task.env == "worktree"
@@ -104,6 +129,16 @@ class TestTaskFromEvent:
         task = Task.from_triage_output(text, event)
         assert task.env == "docker"
 
+    def test_triage_auto_respects_configured_environment_default(self):
+        event = {"id": "evt-8", "body": "raw event body"}
+        text = "---\nbranch: auto\nenv: auto\n---\nrefined task body\n"
+        task = Task.from_triage_output(
+            text,
+            event,
+            {"environment": "docker", "docker.image": "brr/test-runner:latest"},
+        )
+        assert task.env == "docker"
+
 
 class TestBranchResolution:
     def test_current(self):
@@ -128,8 +163,8 @@ class TestBranchResolution:
 
 
 class TestNeedsWorktree:
-    def test_local_current(self):
-        task = Task(id="t-1", event_id="e-1", body="x", branch="current", env="local")
+    def test_host_current(self):
+        task = Task(id="t-1", event_id="e-1", body="x", branch="current", env="host")
         assert not task.needs_worktree
 
     def test_worktree_env(self):
@@ -137,7 +172,7 @@ class TestNeedsWorktree:
         assert task.needs_worktree
 
     def test_branch_implies_worktree(self):
-        task = Task(id="t-1", event_id="e-1", body="x", branch="auto", env="local")
+        task = Task(id="t-1", event_id="e-1", body="x", branch="auto", env="host")
         assert task.needs_worktree
 
     def test_future_env_does_not_imply_worktree(self):
@@ -203,3 +238,21 @@ class TestPersistence:
         assert "branch: new:feat/x" in text
         assert "status: needs_context" in text
         assert "the body\nwith lines" in text
+
+    def test_from_file_accepts_environment_alias(self, tmp_path):
+        path = tmp_path / "task-env.md"
+        path.write_text(
+            "---\n"
+            "id: task-env\n"
+            "event_id: evt-env\n"
+            "branch: current\n"
+            "environment: docker\n"
+            "status: pending\n"
+            "---\n"
+            "body\n",
+            encoding="utf-8",
+        )
+
+        task = Task.from_file(path)
+        assert task is not None
+        assert task.env == "docker"
