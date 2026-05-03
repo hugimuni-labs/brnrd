@@ -415,3 +415,12 @@ understand what the existing system is trying to achieve, decide whether that
 goal remains necessary, question accidental complexity, and prefer the smallest
 change that leaves the project healthier.
 
+## [2026-05-03] research | Refresh repo dive-in map
+
+Updated `kb/repo-dive-in-map.md` after validating it against the commits that
+landed since the guide was introduced. The refresh captures the `local` →
+`host` backend rename, `environment` as the user-facing policy key, legacy
+`env`/`default_env` compatibility, Docker-preferred auto resolution when
+`docker.image` is configured, and the newer framing that branch strategy is
+task-internal staging/delivery state rather than the user's isolation control.
+

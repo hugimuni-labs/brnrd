@@ -14,12 +14,25 @@ When this guide says "source", read the linked file first, then read the linked
 tests immediately after. The tests are often the most compact description of
 the intended behavior.
 
+Last validated against `feat/task-abstraction` after the environment-policy and
+branch-strategy ownership changes (`7faf778`, `022a462`, `e7c1ca1`).
+
+## Current ownership snapshot
+
+These are the most important current-shape details to carry while reading:
+
+- Users choose execution isolation with `environment=<auto|host|worktree|docker>`.
+- `environment=auto` is deterministic: configured Docker first, then `host` for current-branch tasks and `worktree` for branch tasks.
+- Task files still persist the concrete backend as `env`; `env` and `default_env` remain legacy input aliases.
+- `branch` is internal staging/delivery state, not the primary user-facing isolation control.
+- The stewardship section in [AGENTS.md](../AGENTS.md) is part of the architecture: future changes should improve the underlying design instead of layering conditions onto weak abstractions.
+
 ## One-sentence model
 
 `brr` turns external messages into frontmatter-backed event files, triages them
-into task files, runs a configured AI CLI in a chosen execution environment,
-records the work in streams and traces, and delivers a response file back
-through the originating gate.
+into task files, resolves the user-facing environment policy into a concrete
+backend, runs a configured AI CLI there, records the work in streams and traces,
+and delivers a response file back through the originating gate.
 
 The whole runtime can be held as:
 
@@ -51,6 +64,7 @@ Read:
 
 - [pyproject.toml](../pyproject.toml)
 - [README](../README.md)
+- [AGENTS.md](../AGENTS.md)
 - [`src/brr/__init__.py`](../src/brr/__init__.py)
 - [`src/brr/__main__.py`](../src/brr/__main__.py)
 - [`src/brr/cli.py`](../src/brr/cli.py)
@@ -61,6 +75,7 @@ Keep in mind:
 - `python -m brr` delegates to the same CLI.
 - The public CLI is intentionally small: `init`, `run`, `auth`, `bind`, `up`, `down`.
 - Rich status/inspection helpers exist in [status.py](../src/brr/status.py), but the current CLI tests assert that older public diagnostic commands are not registered.
+- [AGENTS.md](../AGENTS.md) now has explicit stewardship guidance: reason from the project's long-term health before changing behavior or design.
 
 Tests:
 
@@ -106,7 +121,7 @@ Read:
 
 Keep in mind:
 
-- `Task` is the central work unit after triage. It carries the originating event, branch strategy, environment, status, source, stream, and metadata.
+- `Task` is the central work unit after triage. It carries the originating event, internal branch/staging state, concrete environment backend, status, source, stream, and metadata.
 - `StreamManifest` groups related events/tasks/artifacts into a line of work.
 - `UpdatePacket` is lifecycle telemetry for streams and optional gate renderers.
 - `run_context.py` writes a per-task context file under `.brr/runs/<task-id>/context.md` so an agent can recover orientation without poking around runtime state.
@@ -138,7 +153,9 @@ Keep in mind:
 - `RunnerResult` is more than an exit code; it also validates expected artifacts.
 - Daemon execution expects a response artifact. A runner can exit successfully and still fail validation if the response file is missing.
 - `RunContext` splits host-visible and environment-visible response paths.
-- Current built-in environment shape on this branch includes local/worktree execution and the first Docker slice. Design notes also discuss future `ssh` and `devcontainer` backends.
+- The user-facing policy key is `environment=<auto|host|worktree|docker>` in `.brr/config`; legacy `env` and `default_env` are still accepted.
+- Task files still store the concrete backend as `env`.
+- Current built-in backends on this branch are `host`, `worktree`, and `docker`. Design notes also discuss future `ssh` and `devcontainer` backends.
 
 Tests:
 
@@ -161,7 +178,7 @@ Read `_run_worker()` in passes rather than all at once:
 1. Resolve the incoming event to a stream.
 2. Emit stream/event lifecycle updates.
 3. Run triage and parse a `Task`.
-4. Resolve branch and environment.
+4. Resolve branch and environment policy into a concrete backend.
 5. Prepare the environment.
 6. Write the run context file.
 7. Build the daemon prompt.
@@ -177,6 +194,7 @@ Keep in mind:
 - Gate threads run beside it, but task execution itself is not a worker pool yet.
 - Triage and execution are two separate runner invocations.
 - `needs_context` is a valid terminal task state, not an exception.
+- `branch` is task-internal staging/delivery state. Users usually choose `environment`, not branch strategy.
 - Worktree/Docker branch tasks isolate the working directory while sharing the runtime `.brr/`.
 
 ### Ring 5: edges and operator views
@@ -251,6 +269,7 @@ Source:
 - [`Task`](../src/brr/task.py)
 - [`Task.from_event()`](../src/brr/task.py)
 - [`Task.from_triage_output()`](../src/brr/task.py)
+- [`resolve_env()`](../src/brr/task.py)
 - [`Task.resolve_branch_name()`](../src/brr/task.py)
 
 Referenced by:
@@ -269,12 +288,19 @@ Important fields:
 - `id`
 - `event_id`
 - `body`
-- `branch`
-- `env`
+- `branch` for internal staging/delivery behavior
+- `env` for the concrete backend (`host`, `worktree`, `docker`, or plugin/future name)
 - `status`
 - `source`
 - `stream_id`
 - freeform `meta`
+
+Environment policy details:
+
+- New config should use `environment`.
+- `environment=auto` prefers configured Docker isolation, then falls back to `host` for `branch: current` and `worktree` for branch work.
+- `env` and `default_env` are legacy aliases still accepted by the resolver.
+- Triage may output `environment`, but should usually leave it as `auto` unless the event explicitly asks for a concrete environment.
 
 Read with:
 
@@ -364,7 +390,7 @@ Source:
 Referenced by:
 
 - `adopt.py` for setup.
-- `runner.run_task()` for direct local `brr run`.
+- `runner.run_task()` for the direct `brr run` path.
 - `daemon.py` for triage, execution, and KB maintenance.
 - `envs` for environment-specific invocation.
 
@@ -423,7 +449,7 @@ Read with:
 Source:
 
 - [`EnvBackend`](../src/brr/envs/__init__.py)
-- [`LocalEnv`](../src/brr/envs/__init__.py)
+- [`HostEnv`](../src/brr/envs/__init__.py)
 - [`WorktreeEnv`](../src/brr/envs/__init__.py)
 - [`DockerEnv`](../src/brr/envs/__init__.py)
 - [`get_env()`](../src/brr/envs/__init__.py)
@@ -431,7 +457,7 @@ Source:
 Referenced by:
 
 - Daemon calls `get_env(task.env)`.
-- Local and worktree envs call into `runner`, `gitops`, and `worktree`.
+- Host and worktree envs call into `runner`, `gitops`, and `worktree`.
 - Docker wraps the runner command inside `docker run` and uses worktree behavior for non-current branches.
 
 Important phases:
@@ -566,7 +592,7 @@ Prompt files to read with it:
   - [`runner.py`](../src/brr/runner.py)
   - [`task.py`](../src/brr/task.py)
 
-Local execution:
+Host execution:
 
 - runs in the main repo checkout
 - requires `branch_name is None`
@@ -587,6 +613,14 @@ Docker execution on the current feature branch:
 - bind-mounts the repo at the same absolute path
 - uses worktree-backed branch behavior for non-current branches
 - tracks containers for cleanup or salvage
+
+Environment resolution:
+
+- User-facing config should use `environment`.
+- `environment=auto` defers to deterministic resolver behavior rather than triage guessing for speed.
+- If Docker is configured via `docker.image`, auto selects `docker`.
+- Without Docker, auto selects `host` for current-branch tasks and `worktree` for branch tasks.
+- If `host` is requested with a non-current branch, the resolver returns `worktree` because host execution cannot run on a separate branch without disturbing the checkout.
 
 ### Daemon
 
@@ -644,9 +678,24 @@ does not produce the required response file. Always track both:
 
 ### Triage and execution are separate agent calls
 
-The triage prompt classifies the event into a `Task`. The daemon prompt asks an
-agent to execute that task. This matters when reading tests: many daemon tests
-mock two runner calls.
+The triage prompt classifies the event into a `Task`. It decides how brr should
+stage code changes (`branch`) and usually leaves `environment` as `auto` so
+project config can resolve the backend. The daemon prompt asks an agent to
+execute that task. This matters when reading tests: many daemon tests mock two
+runner calls.
+
+### Environment is user-facing; branch is internal
+
+Most users should choose an environment policy:
+
+- `environment=auto`
+- `environment=host`
+- `environment=worktree`
+- `environment=docker`
+
+`branch` remains in task files because brr still needs staging/delivery state:
+current checkout, generated task branch, new named branch, or existing branch.
+It is not the main user-facing isolation control.
 
 ### `needs_context` is a first-class outcome
 
@@ -698,7 +747,7 @@ is shaped this way and where it is going:
 Use these heuristics while reading:
 
 - If a file talks about event files, jump to [protocol.py](../src/brr/protocol.py).
-- If a file talks about branch/env/status, jump to [task.py](../src/brr/task.py).
+- If a file talks about branch/environment/status, jump to [task.py](../src/brr/task.py).
 - If a file talks about thread continuity, reply route, or artifacts, jump to [stream.py](../src/brr/stream.py).
 - If a file talks about command execution or prompts, jump to [runner.py](../src/brr/runner.py).
 - If a file talks about cwd, worktrees, Docker, or response path translation, jump to [envs/__init__.py](../src/brr/envs/__init__.py).
