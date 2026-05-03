@@ -45,7 +45,7 @@ pip install git+https://github.com/you/brr.git
 
 ```bash
 brr init                          # detect runner, create AGENTS.md + kb/
-brr run "fix the failing tests"   # run a task locally
+brr run "fix the failing tests"   # run a task through the configured environment
 
 brr auth telegram                 # save a bot token
 brr up                            # start the daemon
@@ -100,7 +100,7 @@ bot a message; brr records the chat ID from each message and replies there.
 | Command                | What it does                          |
 |------------------------|---------------------------------------|
 | `brr init [url]`       | Create AGENTS.md + kb/, detect runner |
-| `brr run "<task>"`     | Run a task locally via runner         |
+| `brr run "<task>"`     | Run a task via the configured runner  |
 | `brr auth <gate>`      | Set credentials for a gate            |
 | `brr bind <gate>`      | Bind repo to a gate channel or watch  |
 | `brr up`               | Start the daemon (foreground)         |
@@ -124,6 +124,10 @@ with `environment=<auto|host|worktree|docker>` in `.brr/config`.
 to worktree/host behavior.  The concrete built-ins today are `host`,
 `worktree`, and `docker`; future backends such as `devcontainer`, `ssh`,
 or service-specific plugins fit behind the same internal protocol.
+
+Branching is mostly task-internal.  brr uses branches/worktrees to stage
+reviewable code changes or continue an explicitly named branch, but users
+usually only choose the environment policy.
 
 **Deep customization** should use a local checkout, editable install, or
 fork.  `.brr/config` is for lightweight runtime choices like runner and
