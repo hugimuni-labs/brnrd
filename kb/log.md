@@ -406,3 +406,12 @@ module cross-references, runtime invariants, test-first reading path, and
 maintenance triggers for future updates. Updated `kb/index.md` so the guide is
 discoverable under Architecture.
 
+## [2026-05-03] implement | Strengthen agent stewardship guidance
+
+Updated `AGENTS.md` with an explicit stewardship section that asks future agents
+to act like passionate maintainers of brr's viability and prosperity. The new
+guidance requires deeper reflection before each behavior or design change:
+understand what the existing system is trying to achieve, decide whether that
+goal remains necessary, question accidental complexity, and prefer the smallest
+change that leaves the project healthier.
+
