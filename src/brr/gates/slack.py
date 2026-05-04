@@ -6,8 +6,7 @@ live in ``.brr/gates/slack.json``.
 Required setup:
 - Create a Slack app with ``channels:history``, ``channels:read``,
   ``chat:write`` scopes.
-- Run ``brr auth slack`` to save the bot token, then ``brr bind slack``
-  to choose the channel.
+- Run ``brr setup slack`` to save the bot token and choose the channel.
 """
 
 from __future__ import annotations
@@ -104,6 +103,13 @@ def bind(brr_dir: Path) -> None:
         return
     _save_state(brr_dir, state)
     print("[brr] Binding saved")
+
+
+def setup(brr_dir: Path) -> None:
+    """Configure Slack credentials and channel in one interactive flow."""
+    auth(brr_dir)
+    if "token" in _load_state(brr_dir):
+        bind(brr_dir)
 
 
 def is_configured(brr_dir: Path) -> bool:

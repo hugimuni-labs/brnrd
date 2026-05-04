@@ -75,12 +75,19 @@ rm "$INBOX/$ID.md" "$RESPONSES/$ID.md"
 If you want your gate to run as a daemon thread, implement:
 
 ```python
-def auth(brr_dir: Path) -> None: ...
-def bind(brr_dir: Path) -> None: ...
 def is_configured(brr_dir: Path) -> bool: ...
 def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None: ...
 ```
 
-The CLI calls `auth` for credentials and `bind` for channel, chat, or watch
-selection.  The daemon imports configured gates and calls `run_loop` in a thread.
-See `telegram.py`, `slack.py`, or `git_gate.py` for examples.
+For CLI configuration, implement `setup` for the normal one-step flow:
+
+```python
+def setup(brr_dir: Path) -> None: ...
+```
+
+`auth` and `bind` remain available for credentials and channel, chat, or watch
+selection when a gate wants to expose them separately.  If `setup` is missing,
+the CLI falls back to calling `auth` and then `bind`.
+
+The daemon imports configured gates and calls `run_loop` in a thread.  See
+`telegram.py`, `slack.py`, or `git_gate.py` for examples.
