@@ -1,0 +1,427 @@
+"""Run progress — gate-agnostic projection over stream update records.
+
+Stream files (``events.ndjson``, ``tasks.ndjson``, ``artifacts.ndjson``)
+plus stream manifests already capture every fact the daemon emits about
+a task. This module turns those facts into a compact ``RunProgressView``
+that gates and local diagnostics can render the same way.
+
+The projection is read-only and does not mutate stream state. Renderers
+should treat it as the canonical view of a single task's execution.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from . import stream as stream_mod
+
+
+# ── States and phases ───────────────────────────────────────────────
+
+
+PHASES = (
+    "queued",
+    "triage",
+    "preparing",
+    "running",
+    "finalizing",
+    "delivering",
+    "delivered",
+    "needs_context",
+    "failed",
+    "conflict",
+)
+
+STATES = ("active", "succeeded", "failed", "needs_context")
+
+
+_PHASE_BY_PACKET: dict[str, str] = {
+    "stream_created": "queued",
+    "event_received": "queued",
+    "task_created": "triage",
+    "triage_done": "preparing",
+    "env_prepared": "preparing",
+    "container_started": "running",
+    "attempt_started": "running",
+    "attempt_failed": "running",
+    "retrying": "running",
+    "run_started": "running",
+    "artifact_created": "running",
+    "finalizing": "finalizing",
+    "container_preserved": "finalizing",
+    "push_started": "delivering",
+    "push_done": "delivered",
+    "done": "delivered",
+    "needs_context": "needs_context",
+    "failed": "failed",
+    "conflict": "conflict",
+}
+
+
+_TERMINAL_STATE: dict[str, str] = {
+    "done": "succeeded",
+    "needs_context": "needs_context",
+    "failed": "failed",
+    "conflict": "failed",
+}
+
+
+# ── View dataclass ──────────────────────────────────────────────────
+
+
+@dataclass
+class RunProgressView:
+    """Snapshot of a single task's execution, derived from stream records.
+
+    Renderers (gate cards, local diagnostics) consume this struct.
+    Treat fields as advisory — older streams may lack newer packets.
+    """
+
+    stream_id: str
+    task_id: str | None
+    title: str = ""
+    intent: str = ""
+    phase: str = "queued"
+    state: str = "active"
+    branch: str | None = None
+    branch_name: str | None = None
+    base_branch: str | None = None
+    env: str | None = None
+    attempt: int = 0
+    started_at: str | None = None
+    updated_at: str | None = None
+    detail: str = ""
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    container_ids: list[str] = field(default_factory=list)
+    response_path: str | None = None
+    error: str | None = None
+    gate_context: dict[str, Any] = field(default_factory=dict)
+    reply_route: dict[str, Any] = field(default_factory=dict)
+    event_id: str | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.state in {"succeeded", "failed", "needs_context"}
+
+    def status_label(self) -> str:
+        """Short human label, e.g. 'running', 'done', 'failed'."""
+        if self.state == "succeeded":
+            return "done"
+        if self.state == "failed":
+            return "failed" if self.phase != "conflict" else "conflict"
+        if self.state == "needs_context":
+            return "needs context"
+        return self.phase or "active"
+
+
+# ── Projection ──────────────────────────────────────────────────────
+
+
+def project_task(
+    brr_dir: Path,
+    stream_id: str,
+    task_id: str,
+) -> RunProgressView | None:
+    """Project the latest progress for a given (stream, task)."""
+    manifest = stream_mod.load_manifest(brr_dir, stream_id)
+    if manifest is None:
+        return None
+
+    events = stream_mod.read_events(brr_dir, stream_id)
+    tasks = stream_mod.read_tasks(brr_dir, stream_id)
+    artifacts = stream_mod.read_artifacts(brr_dir, stream_id)
+
+    return _project(manifest, events, tasks, artifacts, task_id=task_id)
+
+
+def project_stream_latest(
+    brr_dir: Path,
+    stream_id: str,
+) -> RunProgressView | None:
+    """Project the most recent task's progress for a stream.
+
+    Useful when a gate wants to show "what is currently happening" in
+    a thread without tracking individual task IDs.
+    """
+    manifest = stream_mod.load_manifest(brr_dir, stream_id)
+    if manifest is None:
+        return None
+    tasks = stream_mod.read_tasks(brr_dir, stream_id)
+    if not tasks:
+        return _empty_view(manifest)
+    latest_task_id = _latest_task_id(tasks)
+    if latest_task_id is None:
+        return _empty_view(manifest)
+
+    events = stream_mod.read_events(brr_dir, stream_id)
+    artifacts = stream_mod.read_artifacts(brr_dir, stream_id)
+    return _project(manifest, events, tasks, artifacts, task_id=latest_task_id)
+
+
+def _empty_view(manifest: stream_mod.StreamManifest) -> RunProgressView:
+    return RunProgressView(
+        stream_id=manifest.id,
+        task_id=None,
+        title=manifest.title,
+        intent=manifest.intent,
+        phase="queued",
+        state="active",
+        gate_context=dict(manifest.gate_context or {}),
+        reply_route=dict(manifest.reply_route or {}),
+    )
+
+
+def _latest_task_id(tasks: list[dict[str, Any]]) -> str | None:
+    for record in reversed(tasks):
+        tid = record.get("task_id")
+        if tid:
+            return str(tid)
+    return None
+
+
+def _project(
+    manifest: stream_mod.StreamManifest,
+    events: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+    *,
+    task_id: str,
+) -> RunProgressView:
+    view = RunProgressView(
+        stream_id=manifest.id,
+        task_id=task_id,
+        title=manifest.title,
+        intent=manifest.intent,
+        gate_context=dict(manifest.gate_context or {}),
+        reply_route=dict(manifest.reply_route or {}),
+    )
+
+    task_records = [t for t in tasks if t.get("task_id") == task_id]
+    if task_records:
+        latest = task_records[-1]
+        view.branch = latest.get("branch") or view.branch
+        view.branch_name = latest.get("branch_name") or view.branch_name
+        view.base_branch = latest.get("base_branch") or view.base_branch
+        view.env = latest.get("env") or view.env
+        view.event_id = latest.get("event_id") or view.event_id
+
+    artifact_records = [a for a in artifacts if a.get("task_id") == task_id]
+    view.artifacts = list(artifact_records)
+    for artifact in artifact_records:
+        if artifact.get("kind") == "response" and artifact.get("path"):
+            view.response_path = str(artifact["path"])
+
+    last_ts: str | None = None
+    for record in events:
+        payload_task = record.get("task_id")
+        if payload_task and payload_task != task_id:
+            continue
+        ptype = record.get("type")
+        if not ptype:
+            continue
+        ts = record.get("ts")
+        if ts:
+            view.updated_at = ts
+            last_ts = ts
+
+        if ptype == "task_created":
+            view.branch = record.get("branch") or view.branch
+            view.env = record.get("env") or view.env
+            view.event_id = record.get("event_id") or view.event_id
+        elif ptype == "triage_done":
+            view.branch = record.get("branch") or view.branch
+            view.env = record.get("env") or view.env
+        elif ptype == "env_prepared":
+            view.env = record.get("env") or view.env
+            view.branch_name = record.get("branch_name") or view.branch_name
+        elif ptype == "container_started":
+            cid = record.get("container")
+            if cid and cid not in view.container_ids:
+                view.container_ids.append(str(cid))
+        elif ptype == "container_preserved":
+            preserved = record.get("containers")
+            if isinstance(preserved, list):
+                for cid in preserved:
+                    if cid not in view.container_ids:
+                        view.container_ids.append(str(cid))
+            elif preserved and preserved not in view.container_ids:
+                view.container_ids.append(str(preserved))
+        elif ptype == "attempt_started":
+            attempt = record.get("attempt")
+            if isinstance(attempt, int):
+                view.attempt = attempt
+            view.started_at = view.started_at or ts
+        elif ptype == "run_started":
+            view.started_at = view.started_at or ts
+            view.attempt = view.attempt or 1
+        elif ptype == "attempt_failed":
+            reason = record.get("reason")
+            if reason:
+                view.detail = f"attempt {record.get('attempt', view.attempt)} failed: {reason}"
+        elif ptype == "retrying":
+            attempt = record.get("attempt")
+            if isinstance(attempt, int):
+                view.attempt = attempt
+            view.detail = f"retry attempt {view.attempt}"
+        elif ptype == "artifact_created":
+            label = record.get("label") or record.get("kind") or "artifact"
+            view.detail = f"artifact: {label}"
+        elif ptype == "finalizing":
+            stage = record.get("stage")
+            view.detail = f"finalizing ({stage})" if stage else "finalizing"
+        elif ptype == "push_started":
+            view.detail = "pushing changes"
+        elif ptype == "push_done":
+            commits = record.get("commits")
+            view.detail = (
+                f"pushed {commits} commit(s)" if commits else "pushed"
+            )
+        elif ptype == "needs_context":
+            view.state = "needs_context"
+            view.detail = "agent requested more context"
+        elif ptype == "failed":
+            view.state = "failed"
+            stage = record.get("stage")
+            err = record.get("error")
+            bits = []
+            if stage:
+                bits.append(f"stage={stage}")
+            if err:
+                bits.append(str(err))
+            view.detail = "; ".join(bits) or "failed"
+            view.error = err if isinstance(err, str) else view.error
+        elif ptype == "conflict":
+            view.state = "failed"
+            view.detail = (
+                f"merge conflict on {record.get('branch')}"
+                if record.get("branch") else "merge conflict"
+            )
+        elif ptype == "done":
+            view.state = "succeeded"
+            view.detail = view.detail or "done"
+
+        new_phase = _PHASE_BY_PACKET.get(ptype)
+        if new_phase is not None:
+            if view.state in {"succeeded", "failed", "needs_context"}:
+                view.phase = _PHASE_BY_PACKET.get(
+                    "done" if view.state == "succeeded"
+                    else "failed" if view.state == "failed"
+                    else "needs_context",
+                    view.phase,
+                )
+                if ptype in _TERMINAL_STATE:
+                    view.phase = new_phase
+            else:
+                view.phase = new_phase
+
+        if ptype in _TERMINAL_STATE:
+            view.state = _TERMINAL_STATE[ptype]
+
+    if last_ts and not view.updated_at:
+        view.updated_at = last_ts
+
+    return view
+
+
+# ── Rendering ───────────────────────────────────────────────────────
+
+
+def render_text(view: RunProgressView, *, compact: bool = True) -> str:
+    """Render a RunProgressView for human consumption.
+
+    *compact* mode is intended for chat surfaces (one short message).
+    The non-compact mode adds extra detail useful for terminal
+    troubleshooting.
+    """
+    lines: list[str] = []
+    header = _header_line(view)
+    lines.append(header)
+    if view.title:
+        lines.append(view.title)
+    if view.intent and view.intent != view.title:
+        lines.append(view.intent)
+
+    rows: list[tuple[str, str]] = []
+    rows.append(("phase", _phase_text(view)))
+    branch_text = _branch_text(view)
+    if branch_text:
+        rows.append(("branch", branch_text))
+    if view.env:
+        rows.append(("env", view.env))
+    if view.attempt and view.attempt > 1:
+        rows.append(("attempt", str(view.attempt)))
+    if view.detail:
+        rows.append(("last", view.detail))
+    if view.error and not compact:
+        rows.append(("error", view.error))
+    if view.container_ids and not compact:
+        rows.append(("containers", ", ".join(view.container_ids)))
+    if view.response_path and view.is_terminal:
+        rows.append(("response", view.response_path))
+
+    if rows:
+        lines.append("")
+        for key, value in rows:
+            lines.append(f"{key}: {value}")
+
+    if not compact and view.artifacts:
+        lines.append("")
+        lines.append(f"artifacts ({len(view.artifacts)}):")
+        for artifact in view.artifacts[-5:]:
+            label = artifact.get("label") or artifact.get("kind") or "artifact"
+            path = artifact.get("path", "")
+            lines.append(f"  - {label} -> {path}")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _header_line(view: RunProgressView) -> str:
+    bits = ["brr"]
+    if view.task_id:
+        bits.append(view.task_id)
+    bits.append(view.status_label())
+    return " · ".join(bits)
+
+
+def _phase_text(view: RunProgressView) -> str:
+    phase = view.phase or "queued"
+    if view.state == "succeeded":
+        return "delivered"
+    if view.state == "needs_context":
+        return "needs context"
+    if view.state == "failed":
+        return phase if phase in ("failed", "conflict") else "failed"
+    return phase
+
+
+def _branch_text(view: RunProgressView) -> str:
+    if view.branch_name and view.base_branch:
+        return f"{view.branch_name} <- {view.base_branch}"
+    if view.branch_name:
+        return view.branch_name
+    if view.branch:
+        return view.branch
+    return ""
+
+
+# ── Terminal-state introspection ────────────────────────────────────
+
+
+def is_terminal_packet(packet_type: str) -> bool:
+    """Return True if the packet type represents a terminal state."""
+    return packet_type in _TERMINAL_STATE
+
+
+def task_id_from_packet(packet: Any) -> str | None:
+    """Extract a task ID from an UpdatePacket (or compatible mapping)."""
+    payload = getattr(packet, "payload", None)
+    if payload is None and isinstance(packet, dict):
+        payload = packet
+    if not isinstance(payload, dict):
+        return None
+    tid = payload.get("task_id")
+    if tid:
+        return str(tid)
+    return None

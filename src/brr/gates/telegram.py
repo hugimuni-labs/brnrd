@@ -19,8 +19,9 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
+from typing import Any
 
-from .. import protocol
+from .. import protocol, run_progress, stream as stream_mod
 
 _API = "https://api.telegram.org/bot{token}/{method}"
 _MAX_TG_LEN = 3900
@@ -39,11 +40,24 @@ def _api_call(token: str, method: str, params: dict | None = None) -> dict:
         return json.loads(resp.read())
 
 
-def _send_message(token: str, chat_id: int, text: str, topic_id: int | None = None) -> None:
+def _send_message(token: str, chat_id: int, text: str, topic_id: int | None = None) -> dict:
     params: dict = {"chat_id": chat_id, "text": text}
     if topic_id:
         params["message_thread_id"] = topic_id
-    _api_call(token, "sendMessage", params)
+    return _api_call(token, "sendMessage", params)
+
+
+def _edit_message(
+    token: str,
+    chat_id: int,
+    message_id: int,
+    text: str,
+) -> dict:
+    return _api_call(token, "editMessageText", {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    })
 
 
 def _post_gist(content: str, filename: str = "result.md") -> str | None:
@@ -88,6 +102,30 @@ def _save_state(brr_dir: Path, state: dict) -> None:
     path = _state_path(brr_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def _progress_state_path(brr_dir: Path) -> Path:
+    return brr_dir / "gates" / "telegram_progress.json"
+
+
+def _load_progress_state(brr_dir: Path) -> dict:
+    path = _progress_state_path(brr_dir)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_progress_state(brr_dir: Path, state: dict) -> None:
+    path = _progress_state_path(brr_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _progress_key(stream_id: str, task_id: str) -> str:
+    return f"{stream_id}:{task_id}"
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -271,3 +309,95 @@ def _coerce_optional_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+# ── Live progress card ──────────────────────────────────────────────
+
+
+_RENDERABLE_PACKETS = {
+    "task_created",
+    "triage_done",
+    "env_prepared",
+    "container_started",
+    "container_preserved",
+    "run_started",
+    "attempt_started",
+    "attempt_failed",
+    "retrying",
+    "artifact_created",
+    "finalizing",
+    "push_started",
+    "push_done",
+    "needs_context",
+    "done",
+    "failed",
+    "conflict",
+}
+
+
+def render_update(brr_dir: Path, packet: Any) -> None:
+    """Send/edit a Telegram progress card for *packet*.
+
+    On ``task_created`` we send a fresh message in the originating chat
+    or topic and store the resulting ``message_id`` so later packets can
+    edit the same message via ``editMessageText``. Failures are swallowed
+    — the daemon must keep running even if Telegram is misconfigured.
+    """
+    ptype = getattr(packet, "type", None)
+    if ptype not in _RENDERABLE_PACKETS:
+        return
+
+    state = _load_state(brr_dir)
+    token = state.get("token")
+    if not token:
+        return
+
+    stream_id = getattr(packet, "stream_id", None)
+    task_id = run_progress.task_id_from_packet(packet)
+    if not stream_id or not task_id:
+        return
+
+    manifest = stream_mod.load_manifest(brr_dir, stream_id)
+    if manifest is None:
+        return
+    gate_ctx = manifest.gate_context or {}
+    if (gate_ctx.get("source") or "") != "telegram":
+        return
+    chat_id = _coerce_optional_int(gate_ctx.get("telegram_chat_id"))
+    if chat_id is None:
+        return
+    topic_id = _coerce_optional_int(gate_ctx.get("telegram_topic_id"))
+
+    view = run_progress.project_task(brr_dir, stream_id, task_id)
+    if view is None:
+        return
+    text = run_progress.render_text(view, compact=True)
+
+    progress_state = _load_progress_state(brr_dir)
+    key = _progress_key(stream_id, task_id)
+    entry = progress_state.get(key)
+
+    try:
+        if entry and entry.get("message_id"):
+            try:
+                _edit_message(token, chat_id, int(entry["message_id"]), text)
+                entry["last_render"] = ptype
+                progress_state[key] = entry
+                _save_progress_state(brr_dir, progress_state)
+                return
+            except Exception:
+                # Fall through to send a replacement message.
+                pass
+        resp = _send_message(token, chat_id, text, topic_id)
+        message_id = (resp.get("result") or {}).get("message_id")
+        if message_id is None:
+            return
+        progress_state[key] = {
+            "chat_id": chat_id,
+            "topic_id": topic_id,
+            "message_id": message_id,
+            "last_render": ptype,
+        }
+        _save_progress_state(brr_dir, progress_state)
+    except Exception:
+        return

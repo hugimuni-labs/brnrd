@@ -15,7 +15,10 @@ tests immediately after. The tests are often the most compact description of
 the intended behavior.
 
 Last validated against `feat/task-abstraction` after the environment-policy and
-branch-strategy ownership changes (`7faf778`, `022a462`, `e7c1ca1`).
+branch-strategy ownership changes (`7faf778`, `022a462`, `e7c1ca1`) and the
+run-progress-and-streams UX rework (`run_progress.py`, expanded daemon
+lifecycle packets, Telegram/Slack `render_update` live cards, and the demoted
+local `status.py`).
 
 ## Current ownership snapshot
 
@@ -24,7 +27,8 @@ These are the most important current-shape details to carry while reading:
 - Users choose execution isolation with `environment=<auto|host|worktree|docker>`.
 - `environment=auto` is deterministic: configured Docker first, then `host` for current-branch tasks and `worktree` for branch tasks.
 - Task files still persist the concrete backend as `env`; `env` and `default_env` remain legacy input aliases.
-- `branch` is internal staging/delivery state, not the primary user-facing isolation control.
+- `branch` is internal staging/delivery state, not the primary user-facing isolation control. The triage agent infers `branch` from the request; the resolver picks the concrete environment.
+- Live run UX is remote-first: gates render a per-task progress card from `UpdatePacket`s via the `run_progress` projection. Local `status` is now a troubleshooting view that shares the same projection.
 - The stewardship section in [AGENTS.md](../AGENTS.md) is part of the architecture: future changes should improve the underlying design instead of layering conditions onto weak abstractions.
 
 ## One-sentence model
@@ -117,21 +121,26 @@ Read:
 - [`src/brr/task.py`](../src/brr/task.py)
 - [`src/brr/stream.py`](../src/brr/stream.py)
 - [`src/brr/updates.py`](../src/brr/updates.py)
+- [`src/brr/run_progress.py`](../src/brr/run_progress.py)
 - [`src/brr/run_context.py`](../src/brr/run_context.py)
 
 Keep in mind:
 
 - `Task` is the central work unit after triage. It carries the originating event, internal branch/staging state, concrete environment backend, status, source, stream, and metadata.
 - `StreamManifest` groups related events/tasks/artifacts into a line of work.
-- `UpdatePacket` is lifecycle telemetry for streams and optional gate renderers.
+- `UpdatePacket` is lifecycle telemetry for streams and optional gate renderers. The packet vocabulary now covers env prep, attempts, retries, finalize, push, and Docker container births/preservations.
+- `RunProgressView` (in `run_progress.py`) folds stream records (manifest + events + tasks + artifacts) into a compact per-task projection that both gates and local diagnostics render. Adding new lifecycle UX should extend this projection, not reinvent rendering per gate.
 - `run_context.py` writes a per-task context file under `.brr/runs/<task-id>/context.md` so an agent can recover orientation without poking around runtime state.
 
 Tests:
 
 - [task tests](../tests/test_task.py)
 - [stream tests](../tests/test_stream.py)
+- [run-progress tests](../tests/test_run_progress.py)
 - [daemon-stream tests](../tests/test_daemon_streams.py)
+- [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
 - [status-stream tests](../tests/test_status_streams.py)
+- [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
 
 ### Ring 3: execution contract
 
@@ -199,8 +208,9 @@ Keep in mind:
 
 ### Ring 5: edges and operator views
 
-Purpose: understand how messages enter/leave the core and how humans inspect
-runtime state.
+Purpose: understand how messages enter/leave the core, how live progress is
+rendered into remote channels, and how humans inspect runtime state when
+something looks wrong.
 
 Read:
 
@@ -219,13 +229,19 @@ Keep in mind:
 - Gates are transport adapters. They should not know about daemon internals.
 - Gates create event files and deliver response files.
 - `updates.emit()` can call optional gate `render_update()` hooks, but gate-side failures are swallowed.
+- Telegram and Slack gates render a live per-task progress card via `render_update`: send-on-`task_created`, edit-on-progress through `editMessageText`/`chat.update`, fallback to a fresh send when the original message is gone. State lives at `.brr/gates/telegram_progress.json` and `.brr/gates/slack_progress.json`.
+- The Git gate is a deliberate no-op for live rendering — Git is not a great surface for live progress; commits and PRs remain its primary delivery.
+- `status.py` is now a troubleshooting helper, not the primary UX. It uses the same `RunProgressView` projection to keep local and remote views consistent.
 - Bundled docs live in `src/brr/docs/`; per-repo overrides live in `.brr/docs/`.
 - Project-specific durable knowledge lives in `kb/`, not `.brr/`.
 
 Tests:
 
 - [Telegram gate tests](../tests/test_telegram_gate.py)
+- [Telegram render-update tests](../tests/test_telegram_render_update.py)
+- [Slack render-update tests](../tests/test_slack_render_update.py)
 - [status-stream tests](../tests/test_status_streams.py)
+- [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
 - [docs tests](../tests/test_docs.py)
 
 ## Main entities
@@ -350,12 +366,15 @@ Source:
 
 - [`UpdatePacket`](../src/brr/updates.py)
 - [`emit()`](../src/brr/updates.py)
+- [`PACKET_TYPES`](../src/brr/updates.py)
 
 Referenced by:
 
-- Daemon emits lifecycle packets.
+- Daemon emits lifecycle packets at every meaningful step in `_run_worker`.
+- `_push_if_needed` emits push packets attributed to the most recent task's stream.
 - Stream event logs persist them.
 - Gates may render them if they expose `render_update`.
+- `run_progress.project_task` walks them to derive the per-task `RunProgressView`.
 
 Persistence:
 
@@ -367,8 +386,17 @@ Stable packet types include:
 - `event_received`
 - `task_created`
 - `triage_done`
+- `env_prepared`
+- `container_started`
+- `attempt_started`
+- `attempt_failed`
+- `retrying`
 - `run_started`
 - `artifact_created`
+- `finalizing`
+- `container_preserved`
+- `push_started`
+- `push_done`
 - `needs_context`
 - `done`
 - `failed`
@@ -378,6 +406,47 @@ Read with:
 
 - [updates source](../src/brr/updates.py)
 - [daemon-stream tests](../tests/test_daemon_streams.py)
+- [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
+
+### RunProgressView
+
+Source:
+
+- [`RunProgressView`](../src/brr/run_progress.py)
+- [`project_task()`](../src/brr/run_progress.py)
+- [`project_stream_latest()`](../src/brr/run_progress.py)
+- [`render_text()`](../src/brr/run_progress.py)
+
+Referenced by:
+
+- Telegram and Slack gates render compact cards from this view.
+- `status.get_status` uses it to surface the active task.
+- `status.show_stream` uses it to append the latest task's progress.
+- `status.inspect_task` uses it for the per-task progress block.
+
+Persistence:
+
+- Derived on demand from `.brr/streams/<stream-id>/{stream.md,events.ndjson,tasks.ndjson,artifacts.ndjson}`. The view itself is not persisted.
+
+Important fields:
+
+- `stream_id`, `task_id`
+- `phase` (queued, triage, preparing, running, finalizing, delivering, delivered, needs_context, failed, conflict)
+- `state` (active, succeeded, failed, needs_context)
+- `branch`, `branch_name`, `base_branch`, `env`, `attempt`
+- `started_at`, `updated_at`, `detail`
+- `artifacts`, `container_ids`, `response_path`
+- `gate_context`, `reply_route` (carried over from the stream manifest)
+
+Important rule:
+
+- New live UX should add packet types to `updates.py`, then teach `run_progress` to fold them into `RunProgressView`. Do not bypass the projection by reading `events.ndjson` directly from each gate.
+
+Read with:
+
+- [run-progress tests](../tests/test_run_progress.py)
+- [Telegram render-update tests](../tests/test_telegram_render_update.py)
+- [Slack render-update tests](../tests/test_slack_render_update.py)
 
 ### RunnerInvocation and RunnerResult
 
@@ -499,12 +568,19 @@ CLI setup hooks:
 
 Optional update hook:
 
-- `render_update(brr_dir, packet)`
+- `render_update(brr_dir, packet)` — gates that opt in render a per-task
+  progress card from the `RunProgressView` projection. Telegram does this
+  via `sendMessage` + `editMessageText`; Slack via `chat.postMessage` +
+  `chat.update`. Per-gate progress state lives at
+  `.brr/gates/<gate>_progress.json`. The Git gate skips this hook on
+  purpose (no live UX).
 
 Read with:
 
 - [gate protocol doc](../src/brr/gates/README.md)
 - [Telegram gate tests](../tests/test_telegram_gate.py)
+- [Telegram render-update tests](../tests/test_telegram_render_update.py)
+- [Slack render-update tests](../tests/test_slack_render_update.py)
 
 ## Module cross-reference map
 
@@ -552,15 +628,21 @@ This is one of the lowest-level modules. Read it early.
 - [`stream.py`](../src/brr/stream.py) is consumed by:
   - daemon
   - updates
+  - run_progress
   - status
 
-- [`updates.py`](../src/brr/updates.py) depends on stream helpers and is used by daemon.
+- [`updates.py`](../src/brr/updates.py) depends on stream helpers and is used by daemon. It also dispatches packets to gate `render_update` hooks.
+
+- [`run_progress.py`](../src/brr/run_progress.py) depends on `stream.py`. It is consumed by:
+  - Telegram and Slack gate `render_update` hooks
+  - status (`get_status`, `show_stream`, `inspect_task`)
 
 The key distinction:
 
 - `Task` answers "what unit of work are we executing?"
 - `StreamManifest` answers "what line of conversation/work does this task belong to?"
 - `UpdatePacket` answers "what happened in that line of work?"
+- `RunProgressView` answers "what is the live state of this task right now, in a form a gate or an operator can render?"
 
 ### Runner and prompts
 
@@ -639,14 +721,24 @@ nearly every core module because it owns the lifecycle:
 - triage
 - task persistence
 - env prepare/invoke/finalize
+- attempt loop with retries and lifecycle packets
 - response validation
 - optional KB maintenance
-- git push attempt
+- git push attempt with `push_started` / `push_done` packets
+
+The worker emits the full run-progress packet stream (`env_prepared`,
+`attempt_started`, `attempt_failed`, `retrying`, `finalizing`, plus
+`container_started` / `container_preserved` for the Docker env). Read these
+helpers in `daemon.py` next to the worker loop:
+
+- `_emit_new_containers` — diffs `env_ctx.env_state["docker_containers"]` between attempts.
+- `_emit_preserved_containers` — fires `container_preserved` when finalize left containers behind.
 
 When debugging behavior, read daemon tests before modifying daemon source:
 
 - [daemon tests](../tests/test_daemon.py)
 - [daemon-stream tests](../tests/test_daemon_streams.py)
+- [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
 
 ## Runtime invariants
 
@@ -682,11 +774,12 @@ does not produce the required response file. Always track both:
 
 ### Triage and execution are separate agent calls
 
-The triage prompt classifies the event into a `Task`. It decides how brr should
-stage code changes (`branch`) and usually leaves `environment` as `auto` so
-project config can resolve the backend. The daemon prompt asks an agent to
-execute that task. This matters when reading tests: many daemon tests mock two
-runner calls.
+The triage prompt classifies the event into a `Task`. It owns the `branch`
+inference: code-changing requests get `auto` (or a named branch when the user
+points to one), read-only/question requests stay on `current`. It usually
+leaves `environment` as `auto` so project config can resolve the backend.
+The daemon prompt asks an agent to execute that task. This matters when
+reading tests: many daemon tests mock two runner calls.
 
 ### Environment is user-facing; branch is internal
 
@@ -712,6 +805,20 @@ turning it into a generic error.
 Streams are runtime coordination state. They summarize related events and
 artifacts, but durable project knowledge still belongs in `kb/`.
 
+### Run progress is a projection, not state
+
+`RunProgressView` is derived on demand from stream records. The source of
+truth is still `events.ndjson` plus the manifest. Rendering UX (gates, local
+status) should always go through `run_progress`; introducing parallel
+ad-hoc derivations across modules is the path to drift.
+
+### Local status is troubleshooting
+
+The remote gate is the primary surface for run progress. `status.py` exists
+to answer "is the daemon healthy, what is the active task, and where are
+the trace/response/preserved-container files for a failed run?". It is no
+longer the place to add new product UX.
+
 ## Tests as a second reading path
 
 If source-first reading feels too abstract, run the test path instead:
@@ -719,20 +826,26 @@ If source-first reading feels too abstract, run the test path instead:
 1. [protocol tests](../tests/test_protocol.py)
 2. [task tests](../tests/test_task.py)
 3. [stream tests](../tests/test_stream.py)
-4. [runner tests](../tests/test_runner.py)
-5. [git/worktree tests](../tests/test_gitops.py)
-6. [env tests](../tests/test_envs.py)
-7. [daemon tests](../tests/test_daemon.py)
-8. [daemon-stream tests](../tests/test_daemon_streams.py)
-9. [gate tests](../tests/test_telegram_gate.py)
-10. [status-stream tests](../tests/test_status_streams.py)
-11. [adopt tests](../tests/test_adopt.py)
-12. [integration tests](../tests/test_integration.py)
-13. [CLI tests](../tests/test_cli.py)
-14. [docs tests](../tests/test_docs.py)
+4. [run-progress tests](../tests/test_run_progress.py)
+5. [runner tests](../tests/test_runner.py)
+6. [git/worktree tests](../tests/test_gitops.py)
+7. [env tests](../tests/test_envs.py)
+8. [daemon tests](../tests/test_daemon.py)
+9. [daemon-stream tests](../tests/test_daemon_streams.py)
+10. [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
+11. [gate tests](../tests/test_telegram_gate.py)
+12. [Telegram render-update tests](../tests/test_telegram_render_update.py)
+13. [Slack render-update tests](../tests/test_slack_render_update.py)
+14. [status-stream tests](../tests/test_status_streams.py)
+15. [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
+16. [adopt tests](../tests/test_adopt.py)
+17. [integration tests](../tests/test_integration.py)
+18. [CLI tests](../tests/test_cli.py)
+19. [docs tests](../tests/test_docs.py)
 
-This order mirrors dependency growth: file protocol, durable state, execution,
-orchestration, adapters, and finally CLI/bootstrap.
+This order mirrors dependency growth: file protocol, durable state, the
+run-progress projection, execution, orchestration, adapters (including their
+live-progress hooks), troubleshooting helpers, and finally CLI/bootstrap.
 
 ## Design history to read after source
 
@@ -753,6 +866,8 @@ Use these heuristics while reading:
 - If a file talks about event files, jump to [protocol.py](../src/brr/protocol.py).
 - If a file talks about branch/environment/status, jump to [task.py](../src/brr/task.py).
 - If a file talks about thread continuity, reply route, or artifacts, jump to [stream.py](../src/brr/stream.py).
+- If a file talks about lifecycle packets or `render_update`, jump to [updates.py](../src/brr/updates.py).
+- If a file talks about live progress phases, attempt counts, or rendering a per-task card, jump to [run_progress.py](../src/brr/run_progress.py).
 - If a file talks about command execution or prompts, jump to [runner.py](../src/brr/runner.py).
 - If a file talks about cwd, worktrees, Docker, or response path translation, jump to [envs/__init__.py](../src/brr/envs/__init__.py).
 - If a file talks about transport, auth, polling, or delivery, jump to [gates](../src/brr/gates/).

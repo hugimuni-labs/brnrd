@@ -155,6 +155,33 @@ Set to `always` if you want stricter kb/ hygiene at the cost of one
 extra runner invocation per task. Set to `never` if you prefer to do
 kb maintenance manually.
 
+## Run progress UX
+
+The daemon emits typed lifecycle packets through `brr.updates` for every
+task: `task_created`, `triage_done`, `env_prepared`,
+`container_started`, `attempt_started`, `attempt_failed`, `retrying`,
+`run_started`, `artifact_created`, `finalizing`, `container_preserved`,
+`push_started`, `push_done`, plus the terminal `done` / `failed` /
+`needs_context` / `conflict`.
+
+Gates may opt in to a `render_update(brr_dir, packet)` hook to surface
+progress to a human:
+
+- The Telegram gate sends one progress message per task in the
+  originating chat or topic on `task_created`, then edits the same
+  message via `editMessageText` for later packets. State lives at
+  `.brr/gates/telegram_progress.json`.
+- The Slack gate posts one threaded reply per task on `task_created`,
+  then updates it with `chat.update`. State lives at
+  `.brr/gates/slack_progress.json`.
+- The Git gate is a no-op for live progress. Git is not a great surface
+  for live status; commits and PRs remain its primary delivery path.
+
+Local commands (`status`, `inspect_task`) are now troubleshooting
+helpers. They render the same `RunProgressView` as gates so that if a
+remote run looks wrong, `brr status` shows the same view a Telegram
+card would.
+
 ## Concurrency model
 
 The daemon processes events serially in v1. Worktree-based tasks

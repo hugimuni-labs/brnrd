@@ -16,8 +16,9 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
+from typing import Any
 
-from .. import protocol
+from .. import protocol, run_progress, stream as stream_mod
 
 _BACKOFF_MAX = 120
 _POLL_INTERVAL = 5
@@ -61,6 +62,30 @@ def _save_state(brr_dir: Path, state: dict) -> None:
     path = _state_path(brr_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def _progress_state_path(brr_dir: Path) -> Path:
+    return brr_dir / "gates" / "slack_progress.json"
+
+
+def _load_progress_state(brr_dir: Path) -> dict:
+    path = _progress_state_path(brr_dir)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_progress_state(brr_dir: Path, state: dict) -> None:
+    path = _progress_state_path(brr_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _progress_key(stream_id: str, task_id: str) -> str:
+    return f"{stream_id}:{task_id}"
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -193,3 +218,102 @@ def _deliver_responses(
             continue
         resp_path = protocol.response_path(responses_dir, eid)
         protocol.cleanup(event["_path"], resp_path)
+
+
+# ── Live progress card ──────────────────────────────────────────────
+
+
+_RENDERABLE_PACKETS = {
+    "task_created",
+    "triage_done",
+    "env_prepared",
+    "container_started",
+    "container_preserved",
+    "run_started",
+    "attempt_started",
+    "attempt_failed",
+    "retrying",
+    "artifact_created",
+    "finalizing",
+    "push_started",
+    "push_done",
+    "needs_context",
+    "done",
+    "failed",
+    "conflict",
+}
+
+
+def render_update(brr_dir: Path, packet: Any) -> None:
+    """Send/edit a Slack progress card for *packet*.
+
+    On ``task_created`` we post a thread reply in the originating
+    channel/thread and store the resulting ``ts`` so later packets can
+    update the same message via ``chat.update``. Failures are swallowed
+    — the daemon must keep running even if Slack is misconfigured.
+    """
+    ptype = getattr(packet, "type", None)
+    if ptype not in _RENDERABLE_PACKETS:
+        return
+
+    state = _load_state(brr_dir)
+    token = state.get("token")
+    if not token:
+        return
+
+    stream_id = getattr(packet, "stream_id", None)
+    task_id = run_progress.task_id_from_packet(packet)
+    if not stream_id or not task_id:
+        return
+
+    manifest = stream_mod.load_manifest(brr_dir, stream_id)
+    if manifest is None:
+        return
+    gate_ctx = manifest.gate_context or {}
+    if (gate_ctx.get("source") or "") != "slack":
+        return
+    channel = gate_ctx.get("slack_channel") or state.get("channel")
+    if not channel:
+        return
+    thread_ts = gate_ctx.get("slack_thread_ts") or gate_ctx.get("slack_ts")
+
+    view = run_progress.project_task(brr_dir, stream_id, task_id)
+    if view is None:
+        return
+    text = run_progress.render_text(view, compact=True)
+
+    progress_state = _load_progress_state(brr_dir)
+    key = _progress_key(stream_id, task_id)
+    entry = progress_state.get(key)
+
+    try:
+        if entry and entry.get("ts"):
+            try:
+                _slack_api(token, "chat.update", {
+                    "channel": channel,
+                    "ts": entry["ts"],
+                    "text": text,
+                })
+                entry["last_render"] = ptype
+                progress_state[key] = entry
+                _save_progress_state(brr_dir, progress_state)
+                return
+            except Exception:
+                # Fall through to post a replacement message.
+                pass
+        params: dict = {"channel": channel, "text": text}
+        if thread_ts:
+            params["thread_ts"] = thread_ts
+        resp = _slack_api(token, "chat.postMessage", params)
+        ts = resp.get("ts")
+        if not ts:
+            return
+        progress_state[key] = {
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "ts": ts,
+            "last_render": ptype,
+        }
+        _save_progress_state(brr_dir, progress_state)
+    except Exception:
+        return
