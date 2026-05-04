@@ -482,18 +482,22 @@ Source:
 
 Referenced by:
 
-- CLI loads gates for `auth` and `bind`.
+- CLI loads gates for `setup`, `auth`, and `bind`.
 - Daemon starts configured gates.
 - Updates optionally dispatch lifecycle packets to gates.
 
-Required hook shape:
+Daemon hook shape:
 
-- `auth(brr_dir)`
-- `bind(brr_dir)`
 - `is_configured(brr_dir)`
 - `run_loop(brr_dir, inbox_dir, responses_dir)`
 
-Optional hook:
+CLI setup hooks:
+
+- `setup(brr_dir)` for the preferred one-step flow
+- `auth(brr_dir)` and `bind(brr_dir)` as split setup, or as fallback when
+  `setup` is missing
+
+Optional update hook:
 
 - `render_update(brr_dir, packet)`
 

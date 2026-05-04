@@ -47,7 +47,7 @@ pip install git+https://github.com/you/brr.git
 brr init                          # detect runner, create AGENTS.md + kb/
 brr run "fix the failing tests"   # run a task through the configured environment
 
-brr auth telegram                 # save a bot token
+brr setup telegram                # configure a remote input
 brr up                            # start the daemon
 ```
 
@@ -101,8 +101,9 @@ bot a message; brr records the chat ID from each message and replies there.
 |------------------------|---------------------------------------|
 | `brr init [url]`       | Create AGENTS.md + kb/, detect runner |
 | `brr run "<task>"`     | Run a task via the configured runner  |
-| `brr auth <gate>`      | Set credentials for a gate            |
-| `brr bind <gate>`      | Bind repo to a gate channel or watch  |
+| `brr setup <gate>`     | Configure a gate in one step          |
+| `brr auth <gate>`      | Set gate credentials                  |
+| `brr bind <gate>`      | Bind a gate channel or watch          |
 | `brr up`               | Start the daemon (foreground)         |
 | `brr down`             | Stop the daemon                       |
 

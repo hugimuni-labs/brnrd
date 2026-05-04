@@ -126,7 +126,8 @@ That's the whole control plane. No scheduling, no priorities, no queues — just
 Setup
 
 - `brr init [url]` — adopt or clone-and-adopt a repo; creates `AGENTS.md`, `kb/`, `.brr/`
-- `brr auth <gate>` · `brr bind <gate>` — bind a channel or watch
+- `brr setup <gate>` — configure a gate in one step
+- `brr auth <gate>` · `brr bind <gate>` — advanced split setup
 
 Run
 

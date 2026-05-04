@@ -40,6 +40,45 @@ def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):
     assert calls == [tmp_path / ".brr"]
 
 
+def test_setup_dispatches_to_gate_setup(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeGate:
+        @staticmethod
+        def setup(brr_dir):
+            calls.append(brr_dir)
+
+    monkeypatch.setattr("brr.cli._load_gate", lambda name: FakeGate)
+    monkeypatch.setattr("brr.cli._brr_dir", lambda: tmp_path / ".brr")
+
+    main(["setup", "telegram"])
+
+    assert calls == [tmp_path / ".brr"]
+
+
+def test_setup_falls_back_to_auth_then_bind(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeGate:
+        @staticmethod
+        def auth(brr_dir):
+            calls.append(("auth", brr_dir))
+
+        @staticmethod
+        def bind(brr_dir):
+            calls.append(("bind", brr_dir))
+
+    monkeypatch.setattr("brr.cli._load_gate", lambda name: FakeGate)
+    monkeypatch.setattr("brr.cli._brr_dir", lambda: tmp_path / ".brr")
+
+    main(["setup", "telegram"])
+
+    assert calls == [
+        ("auth", tmp_path / ".brr"),
+        ("bind", tmp_path / ".brr"),
+    ]
+
+
 def test_inspect_task(tmp_path):
     from brr.status import inspect_task
     from brr.task import Task

@@ -34,6 +34,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("gate", help="gate name (telegram, slack, git)")
     p.set_defaults(func=cmd_bind)
 
+    p = sub.add_parser("setup", help="configure a gate in one step")
+    p.add_argument("gate", help="gate name (telegram, slack, git)")
+    p.set_defaults(func=cmd_setup)
+
     p = sub.add_parser("up", help="start the daemon")
     p.add_argument("--debug", action="store_true", default=None,
                     help="keep worktrees and write traces for troubleshooting")
@@ -81,6 +85,17 @@ def cmd_auth(args):
 def cmd_bind(args):
     gate_mod = _load_gate(args.gate)
     gate_mod.bind(_brr_dir())
+
+
+def cmd_setup(args):
+    gate_mod = _load_gate(args.gate)
+    brr_dir = _brr_dir()
+    setup = getattr(gate_mod, "setup", None)
+    if setup is not None:
+        setup(brr_dir)
+        return
+    gate_mod.auth(brr_dir)
+    gate_mod.bind(brr_dir)
 
 
 def cmd_up(args):
