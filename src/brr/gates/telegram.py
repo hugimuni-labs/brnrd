@@ -152,6 +152,13 @@ def bind(brr_dir: Path) -> None:
     print("[brr] Binding saved")
 
 
+def setup(brr_dir: Path) -> None:
+    """Configure Telegram credentials and optional chat/topic restriction."""
+    auth(brr_dir)
+    if "token" in _load_state(brr_dir):
+        bind(brr_dir)
+
+
 def is_configured(brr_dir: Path) -> bool:
     state = _load_state(brr_dir)
     return "token" in state

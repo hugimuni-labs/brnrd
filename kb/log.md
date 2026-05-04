@@ -424,3 +424,13 @@ landed since the guide was introduced. The refresh captures the `local` →
 `docker.image` is configured, and the newer framing that branch strategy is
 task-internal staging/delivery state rather than the user's isolation control.
 
+## [2026-05-03] implement | Add one-step gate setup
+
+Added `brr setup <gate>` as the normal gate configuration command while keeping
+`auth` and `bind` available for split setup. Each built-in gate now exposes a
+`setup(brr_dir)` flow: Telegram saves a token and optionally restricts chat/topic,
+Slack saves a token and channel, and Git configures its watch source. Updated the
+README, gate protocol docs, repo map, and current-state deck so the public
+surface leads with setup rather than forcing every gate into the same auth/bind
+lifecycle.
+

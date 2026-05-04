@@ -80,6 +80,12 @@ def bind(brr_dir: Path) -> None:
     print(f"[brr:git] Watching '{watch_dir}' from commit {head[:8]}")
 
 
+def setup(brr_dir: Path) -> None:
+    """Configure the git watch source in one interactive flow."""
+    auth(brr_dir)
+    bind(brr_dir)
+
+
 def is_configured(brr_dir: Path) -> bool:
     state = _load_state(brr_dir)
     return "watch_dir" in state
