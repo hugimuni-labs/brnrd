@@ -43,14 +43,35 @@ The daemon then emits typed update packets through the run. Packet
 types are stable identifiers gates can branch on:
 
 ```
-stream_created event_received task_created triage_done run_started
-artifact_created needs_context done failed conflict
+stream_created event_received task_created triage_done env_prepared
+container_started attempt_started attempt_failed retrying run_started
+artifact_created finalizing container_preserved push_started push_done
+needs_context done failed conflict
 ```
 
 Packets are persisted to the stream's `events.ndjson` and offered to
 each gate's optional `render_update(brr_dir, packet)` hook. Gates may
-ignore them, render concise phase messages (Telegram), open a status
-check (git), or render to a dashboard later.
+ignore them, render concise phase messages (Telegram, Slack live cards),
+or render to a dashboard later. The Git gate is currently a no-op for
+live rendering — Git is not a great surface for live progress.
+
+## Run progress projection
+
+Reading the raw packet log directly is not great UX. The
+`brr.run_progress` module folds stream records (manifest + events +
+tasks + artifacts) into a compact `RunProgressView` per task: title,
+phase, branch, env, attempt, latest detail, and any preserved Docker
+container IDs.
+
+This projection is the single source of truth for how a run looks:
+
+- Telegram and Slack gates use it to render and edit a live progress
+  card per task in the originating chat or thread.
+- The local `status` and `inspect_task` helpers use it to show the
+  same view without duplicating render logic.
+
+If you want to add a new gate or a richer dashboard, render
+`RunProgressView` rather than re-deriving phases from raw packets.
 
 ## Reply routing
 

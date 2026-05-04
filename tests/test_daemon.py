@@ -947,5 +947,5 @@ def _write_repo_scaffold(repo_root: Path) -> None:
     (repo_root / ".brr" / "responses").mkdir(parents=True)
 
 
-def _stop_after_first_push(_repo_root: Path) -> None:
+def _stop_after_first_push(_repo_root: Path, **_kwargs) -> None:
     raise StopIteration

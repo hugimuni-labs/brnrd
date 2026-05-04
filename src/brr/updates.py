@@ -25,8 +25,17 @@ PACKET_TYPES = (
     "event_received",
     "task_created",
     "triage_done",
+    "env_prepared",
+    "container_started",
     "run_started",
+    "attempt_started",
+    "attempt_failed",
+    "retrying",
     "artifact_created",
+    "finalizing",
+    "container_preserved",
+    "push_started",
+    "push_done",
     "needs_context",
     "done",
     "failed",
@@ -50,7 +59,12 @@ class UpdatePacket:
         }
 
 
-_QUIET_TYPES = {"event_received", "artifact_created"}
+_QUIET_TYPES = {
+    "event_received",
+    "artifact_created",
+    "container_started",
+    "container_preserved",
+}
 
 
 def emit(brr_dir: Path, packet: UpdatePacket) -> None:

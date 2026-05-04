@@ -106,19 +106,53 @@ def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[th
 # ── Git push ─────────────────────────────────────────────────────────
 
 
-def _push_if_needed(repo_root: Path) -> None:
-    """Push to origin if there are unpushed commits."""
+def _push_if_needed(
+    repo_root: Path,
+    *,
+    stream_id: str | None = None,
+    task_id: str | None = None,
+) -> None:
+    """Push to origin if there are unpushed commits.
+
+    When *stream_id* is provided, emit ``push_started``/``push_done``
+    update packets so gates can render delivery progress.
+    """
     try:
         result = subprocess.run(
             ["git", "log", "@{u}..HEAD", "--oneline"],
             cwd=repo_root, capture_output=True, text=True, timeout=10,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            print("[brr] pushing changes...")
-            subprocess.run(
-                ["git", "push"], cwd=repo_root,
-                capture_output=True, text=True, timeout=60,
-            )
+        if not (result.returncode == 0 and result.stdout.strip()):
+            return
+        commits = [c for c in result.stdout.strip().splitlines() if c.strip()]
+        commit_count = len(commits)
+        brr_dir = gitops.shared_brr_dir(repo_root)
+        push_payload: dict = {"commits": commit_count}
+        if task_id:
+            push_payload["task_id"] = task_id
+        if stream_id:
+            updates.emit(brr_dir, updates.UpdatePacket(
+                type="push_started",
+                stream_id=stream_id,
+                payload=push_payload,
+            ))
+        print("[brr] pushing changes...")
+        push = subprocess.run(
+            ["git", "push"], cwd=repo_root,
+            capture_output=True, text=True, timeout=60,
+        )
+        if stream_id:
+            done_payload = dict(push_payload)
+            done_payload["ok"] = push.returncode == 0
+            if push.returncode != 0:
+                detail = (push.stderr or push.stdout or "").strip()
+                if detail:
+                    done_payload["error"] = detail[:500]
+            updates.emit(brr_dir, updates.UpdatePacket(
+                type="push_done",
+                stream_id=stream_id,
+                payload=done_payload,
+            ))
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
@@ -236,6 +270,16 @@ def _run_worker(
     if env_ctx.log_file:
         task.meta["log_file"] = env_ctx.log_file
 
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="env_prepared",
+        stream_id=stream_id,
+        payload={
+            "task_id": task.id,
+            "env": task.env,
+            "branch_name": branch_name,
+        },
+    ))
+
     stream_mod.append_task(
         brr_dir, stream_id,
         task_id=task.id, event_id=eid,
@@ -260,6 +304,7 @@ def _run_worker(
         stream_id=stream_id,
         payload={"task_id": task.id, "branch": branch_name, "env": task.env},
     ))
+    seen_containers: set[str] = set()
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = runner.build_daemon_prompt(
@@ -293,6 +338,15 @@ def _run_worker(
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
+        updates.emit(brr_dir, updates.UpdatePacket(
+            type="attempt_started",
+            stream_id=stream_id,
+            payload={
+                "task_id": task.id,
+                "event_id": eid,
+                "attempt": attempt,
+            },
+        ))
         result = env_backend.invoke(
             env_ctx,
             runner_name,
@@ -312,6 +366,9 @@ def _run_worker(
             ),
             cfg=cfg,
             trace=debug,
+        )
+        _emit_new_containers(
+            brr_dir, stream_id, task.id, env_ctx, seen_containers,
         )
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
@@ -336,9 +393,15 @@ def _run_worker(
                     stream_id=stream_id,
                     payload={"task_id": task.id, "event_id": eid},
                 ))
+                updates.emit(brr_dir, updates.UpdatePacket(
+                    type="finalizing",
+                    stream_id=stream_id,
+                    payload={"task_id": task.id, "stage": "needs_context"},
+                ))
                 task = env_backend.finalize(
                     env_ctx, task, tasks_dir, debug=debug,
                 )
+                _emit_preserved_containers(brr_dir, stream_id, task)
             else:
                 task.update_status("done", tasks_dir)
                 maintenance_trace = _maybe_kb_maintenance(
@@ -348,9 +411,15 @@ def _run_worker(
                     trace_dirs.append(maintenance_trace)
                     task.meta["trace_dirs"] = ", ".join(trace_dirs)
                     task.save(tasks_dir)
+                updates.emit(brr_dir, updates.UpdatePacket(
+                    type="finalizing",
+                    stream_id=stream_id,
+                    payload={"task_id": task.id, "stage": "done"},
+                ))
                 task = env_backend.finalize(
                     env_ctx, task, tasks_dir, debug=debug,
                 )
+                _emit_preserved_containers(brr_dir, stream_id, task)
                 if task.status == "conflict":
                     updates.emit(brr_dir, updates.UpdatePacket(
                         type="conflict",
@@ -366,8 +435,30 @@ def _run_worker(
             return task
 
         retry_reason = result.retry_reason()
-        if retry_reason and attempt <= max_retries:
+        will_retry = bool(retry_reason and attempt <= max_retries)
+        updates.emit(brr_dir, updates.UpdatePacket(
+            type="attempt_failed",
+            stream_id=stream_id,
+            payload={
+                "task_id": task.id,
+                "event_id": eid,
+                "attempt": attempt,
+                "reason": retry_reason or "unknown",
+                "will_retry": will_retry,
+            },
+        ))
+        if will_retry:
             print(f"[brr] worker {eid}: {retry_reason}, retrying...")
+            updates.emit(brr_dir, updates.UpdatePacket(
+                type="retrying",
+                stream_id=stream_id,
+                payload={
+                    "task_id": task.id,
+                    "event_id": eid,
+                    "attempt": attempt + 1,
+                    "reason": retry_reason,
+                },
+            ))
 
     print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
     if trace_dirs:
@@ -378,8 +469,73 @@ def _run_worker(
         stream_id=stream_id,
         payload={"task_id": task.id, "event_id": eid, "stage": "run"},
     ))
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="finalizing",
+        stream_id=stream_id,
+        payload={"task_id": task.id, "stage": "failed"},
+    ))
     task = env_backend.finalize(env_ctx, task, tasks_dir, debug=debug)
+    _emit_preserved_containers(brr_dir, stream_id, task)
     return task
+
+
+def _emit_new_containers(
+    brr_dir: Path,
+    stream_id: str,
+    task_id: str,
+    env_ctx: "envs.RunContext",
+    seen: set[str],
+) -> None:
+    """Emit container_started packets for any newly-launched env containers."""
+    state = env_ctx.env_state if isinstance(env_ctx.env_state, dict) else {}
+    raw_list = state.get("docker_containers", [])
+    if isinstance(raw_list, list):
+        candidates = [str(c) for c in raw_list if c]
+    elif raw_list:
+        candidates = [str(raw_list)]
+    else:
+        current = state.get("docker_container")
+        candidates = [str(current)] if current else []
+    for cid in candidates:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        updates.emit(brr_dir, updates.UpdatePacket(
+            type="container_started",
+            stream_id=stream_id,
+            payload={
+                "task_id": task_id,
+                "env": env_ctx.name,
+                "container": cid,
+            },
+        ))
+
+
+def _emit_preserved_containers(
+    brr_dir: Path,
+    stream_id: str,
+    task: Task,
+) -> None:
+    """Emit container_preserved when finalize left containers behind."""
+    raw = task.meta.get("docker_containers")
+    if not raw:
+        return
+    if isinstance(raw, str):
+        containers = [c.strip() for c in raw.split(",") if c.strip()]
+    elif isinstance(raw, list):
+        containers = [str(c) for c in raw if c]
+    else:
+        containers = [str(raw)]
+    if not containers:
+        return
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="container_preserved",
+        stream_id=stream_id,
+        payload={
+            "task_id": task.id,
+            "containers": containers,
+        },
+    ))
 
 
 def _wants_stage_feedback(event: dict) -> bool:
@@ -614,7 +770,11 @@ def start(repo_root: Path, *, debug: bool | None = None) -> None:
                 elif task.status == "error":
                     print(f"[brr] task {task.id}: failed")
 
-                _push_if_needed(repo_root)
+                _push_if_needed(
+                    repo_root,
+                    stream_id=task.stream_id,
+                    task_id=task.id,
+                )
             else:
                 time.sleep(_SCAN_INTERVAL)
 
