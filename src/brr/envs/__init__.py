@@ -313,12 +313,7 @@ class DockerEnv(WorktreeEnv):
             containers.append(container_name)
         ctx.env_state["docker_container"] = container_name
 
-        inner_cmd = runner._build_cmd(
-            runner_name,
-            invocation.prompt,
-            cfg,
-            response_path=str(ctx.response_path_env),
-        )
+        inner_cmd = runner._build_cmd(runner_name, invocation.prompt, cfg)
         command = [
             "docker", "run",
             "--name", container_name,
@@ -360,6 +355,9 @@ class DockerEnv(WorktreeEnv):
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
+
+        if invocation.response_path and returncode == 0 and stdout and stdout.strip():
+            runner._write_response_file(invocation.response_path, stdout)
 
         result = runner.RunnerResult(
             invocation=invocation,

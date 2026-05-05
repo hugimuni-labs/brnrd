@@ -72,14 +72,7 @@ def _success_invoke_runner(triage_branch: str = "current",
         return RunnerResult(
             invocation=invocation, runner_name=runner_name,
             command=["mock"], stdout="ok", stderr="",
-            returncode=0, trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{invocation.label}",
-                    exists=True, trace_copy=None,
-                )
-            ],
+            returncode=0, trace_dir=None, artifacts=[],
         )
 
     return _fake
@@ -137,26 +130,14 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
         if invocation.label.endswith("attempt-1"):
             return RunnerResult(
                 invocation=invocation, runner_name=runner_name,
-                command=["mock"], stdout="first try", stderr="",
-                returncode=0, trace_dir=None,
-                artifacts=[
-                    daemon.runner.RunnerArtifactRecord(
-                        path=response, label="response:evt-retry",
-                        exists=False, trace_copy=None,
-                    )
-                ],
+                command=["mock"], stdout="", stderr="",
+                returncode=0, trace_dir=None, artifacts=[],
             )
         response.write_text("---\n---\ndone\n", encoding="utf-8")
         return RunnerResult(
             invocation=invocation, runner_name=runner_name,
             command=["mock"], stdout="second try", stderr="",
-            returncode=0, trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=response, label="response:evt-retry",
-                    exists=True, trace_copy=None,
-                )
-            ],
+            returncode=0, trace_dir=None, artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", _retry_invoke)
@@ -191,15 +172,8 @@ def test_failure_after_retries_emits_failed_and_finalizing(tmp_path, monkeypatch
             )
         return RunnerResult(
             invocation=invocation, runner_name=runner_name,
-            command=["mock"], stdout="nope", stderr="",
-            returncode=0, trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{invocation.label}",
-                    exists=False, trace_copy=None,
-                )
-            ],
+            command=["mock"], stdout="", stderr="",
+            returncode=0, trace_dir=None, artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", _always_fail)
@@ -252,20 +226,10 @@ class _FakeDockerEnv:
         response = Path(invocation.response_path)
         if self.succeed:
             response.write_text("---\n---\ndocker ok\n", encoding="utf-8")
-            exists = True
-        else:
-            exists = False
         return RunnerResult(
             invocation=invocation, runner_name=runner_name,
-            command=["mock"], stdout="ok" if self.succeed else "bad", stderr="",
-            returncode=0, trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=response,
-                    label=f"response:{invocation.label}",
-                    exists=exists, trace_copy=None,
-                )
-            ],
+            command=["mock"], stdout="ok" if self.succeed else "", stderr="",
+            returncode=0, trace_dir=None, artifacts=[],
         )
 
     def finalize(self, ctx, task, tasks_dir, *, debug=False):
