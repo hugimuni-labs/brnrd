@@ -180,8 +180,8 @@ def test_inspect_task_partial_match(tmp_path):
     assert "task-12345-xyz" in output
 
 
-def test_inspect_task_includes_stream_context(tmp_path):
-    from brr import stream as stream_mod
+def test_inspect_task_includes_conversation_context(tmp_path):
+    from brr import conversations
     from brr.status import inspect_task
     from brr.task import Task
 
@@ -191,30 +191,22 @@ def test_inspect_task_includes_stream_context(tmp_path):
     (brr_dir / "responses").mkdir(parents=True)
     (brr_dir / "inbox").mkdir(parents=True)
 
-    manifest = stream_mod.StreamManifest(
-        id="stream-show-1",
-        title="Refactor auth",
-        status="active",
-        intent="Make login testable",
-    )
-    stream_mod.save_manifest(brr_dir, manifest)
-    stream_mod.append_artifact(
-        brr_dir, manifest.id,
+    conv_key = "telegram:42:"
+    conversations.append_artifact(
+        brr_dir, conv_key,
         kind="response", path=str(brr_dir / "responses" / "evt-x.md"),
-        task_id="task-stream-x", label="response:evt-x",
+        task_id="task-conv-x", label="response:evt-x",
     )
 
     task = Task(
-        id="task-stream-x", event_id="evt-x", body="fix",
+        id="task-conv-x", event_id="evt-x", body="fix",
         status="done", source="telegram",
-        stream_id=manifest.id,
+        conversation_key=conv_key,
     )
     task.save(tasks_dir)
 
-    output = inspect_task("task-stream-x", tmp_path)
-    assert "Stream:   stream-show-1" in output
-    assert "Refactor auth" in output
-    assert "Make login testable" in output
+    output = inspect_task("task-conv-x", tmp_path)
+    assert "Conv:     telegram:42:" in output
     assert "response:evt-x" in output
 
 

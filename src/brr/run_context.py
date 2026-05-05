@@ -15,7 +15,7 @@ def write_context_file(
     event: dict[str, Any],
     ctx: RunContext,
     *,
-    stream: Any = None,
+    recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
 ) -> Path:
     """Write `.brr/runs/<task-id>/context.md` and return its path."""
@@ -23,7 +23,11 @@ def write_context_file(
     context_dir.mkdir(parents=True, exist_ok=True)
     path = context_dir / "context.md"
     path.write_text(
-        render_context(task, event, ctx, stream=stream, event_body=event_body),
+        render_context(
+            task, event, ctx,
+            recent_conversation=recent_conversation,
+            event_body=event_body,
+        ),
         encoding="utf-8",
     )
     return path
@@ -34,7 +38,7 @@ def render_context(
     event: dict[str, Any],
     ctx: RunContext,
     *,
-    stream: Any = None,
+    recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
 ) -> str:
     lines: list[str] = [
@@ -62,6 +66,8 @@ def render_context(
         lines.append(f"- Current branch: {ctx.branch_name}")
     if ctx.log_file:
         lines.append(f"- Log file: {ctx.log_file}")
+    if task.conversation_key:
+        lines.append(f"- Conversation: {task.conversation_key}")
 
     lines.extend([
         "",
@@ -71,35 +77,10 @@ def render_context(
         f"- Response path on the host: {ctx.response_path_host}",
     ])
 
-    if stream is not None:
-        lines.extend(["", "## Workstream", ""])
-        lines.append(f"- Stream ID: {getattr(stream, 'id', '') or task.stream_id}")
-        for label, attr in (
-            ("Title", "title"),
-            ("Status", "status"),
-            ("Intent", "intent"),
-        ):
-            value = getattr(stream, attr, "") or ""
-            if value:
-                lines.append(f"- {label}: {value}")
-        summary = (getattr(stream, "summary", "") or "").strip()
-        if summary:
-            lines.extend(["", "### Current summary", "", summary])
-        open_questions = (getattr(stream, "open_questions", "") or "").strip()
-        if open_questions:
-            lines.extend(["", "### Open questions", "", open_questions])
-        reply_route = getattr(stream, "reply_route", None) or {}
-        if isinstance(reply_route, dict) and reply_route:
-            preferred = reply_route.get("preferred", "")
-            selected = reply_route.get("selected", preferred)
-            allowed = reply_route.get("allowed", [])
-            allowed_str = (
-                ", ".join(allowed) if isinstance(allowed, list) else str(allowed)
-            )
-            lines.append(
-                f"- Reply route: preferred={preferred} selected={selected} "
-                f"allowed=[{allowed_str}]"
-            )
+    if recent_conversation:
+        rendered = _render_recent_conversation(recent_conversation)
+        if rendered:
+            lines.extend(["", "## Recent in this conversation", "", rendered])
 
     body = (
         event_body if event_body is not None else event.get("body", "") or ""
@@ -116,12 +97,49 @@ def render_context(
         f"- Task file: {task_file}",
         f"- Response file: {ctx.response_path_host}",
     ])
-    if task.stream_id:
-        stream_dir = ctx.runtime_dir / "streams" / task.stream_id
-        lines.append(f"- Stream directory: {stream_dir}")
+    if task.conversation_key:
+        from . import conversations
+        conv_path = conversations.conversation_path(
+            ctx.runtime_dir, task.conversation_key,
+        )
+        lines.append(f"- Conversation log: {conv_path}")
     if ctx.env_state:
         lines.extend(["", "## Environment State", ""])
         for key, value in sorted(ctx.env_state.items()):
             lines.append(f"- {key}: {value}")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_recent_conversation(records: list[dict[str, Any]]) -> str:
+    """Format conversation records as a bullet list for the context file."""
+    bullets: list[str] = []
+    for record in records:
+        kind = record.get("kind")
+        ts = record.get("ts", "")
+        if kind == "event":
+            summary = (record.get("summary") or "").strip()
+            source = record.get("source") or ""
+            bullets.append(f"- {ts} event ({source}): {summary}".rstrip())
+        elif kind == "task":
+            tid = record.get("task_id", "")
+            status = record.get("status") or "pending"
+            branch = record.get("branch") or ""
+            bullets.append(
+                f"- {ts} task {tid} status={status} branch={branch}".rstrip()
+            )
+        elif kind == "update":
+            ptype = record.get("type") or ""
+            tid = record.get("task_id") or ""
+            stage = record.get("stage") or ""
+            bits = [f"- {ts} update {ptype}"]
+            if tid:
+                bits.append(f"task={tid}")
+            if stage:
+                bits.append(f"stage={stage}")
+            bullets.append(" ".join(bits))
+        elif kind == "artifact":
+            label = record.get("label") or record.get("artifact_kind") or ""
+            path = record.get("path") or ""
+            bullets.append(f"- {ts} artifact {label} {path}".rstrip())
+    return "\n".join(bullets)

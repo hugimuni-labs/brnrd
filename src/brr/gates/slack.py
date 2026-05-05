@@ -18,7 +18,8 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
-from .. import protocol, run_progress, stream as stream_mod
+from .. import protocol, run_progress
+from ..task import Task
 
 _BACKOFF_MAX = 120
 _POLL_INTERVAL = 5
@@ -84,8 +85,8 @@ def _save_progress_state(brr_dir: Path, state: dict) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _progress_key(stream_id: str, task_id: str) -> str:
-    return f"{stream_id}:{task_id}"
+def _progress_key(task_id: str) -> str:
+    return task_id
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -261,29 +262,26 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     if not token:
         return
 
-    stream_id = getattr(packet, "stream_id", None)
+    conv_key = getattr(packet, "conversation_key", "") or ""
     task_id = run_progress.task_id_from_packet(packet)
-    if not stream_id or not task_id:
+    if not conv_key or not task_id:
         return
 
-    manifest = stream_mod.load_manifest(brr_dir, stream_id)
-    if manifest is None:
+    task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
+    if task is None or task.source != "slack":
         return
-    gate_ctx = manifest.gate_context or {}
-    if (gate_ctx.get("source") or "") != "slack":
-        return
-    channel = gate_ctx.get("slack_channel") or state.get("channel")
+    channel = task.meta.get("slack_channel") or state.get("channel")
     if not channel:
         return
-    thread_ts = gate_ctx.get("slack_thread_ts") or gate_ctx.get("slack_ts")
+    thread_ts = task.meta.get("slack_thread_ts") or task.meta.get("slack_ts")
 
-    view = run_progress.project_task(brr_dir, stream_id, task_id)
+    view = run_progress.project_task(brr_dir, conv_key, task_id)
     if view is None:
         return
     text = run_progress.render_text(view, compact=True)
 
     progress_state = _load_progress_state(brr_dir)
-    key = _progress_key(stream_id, task_id)
+    key = _progress_key(task_id)
     entry = progress_state.get(key)
 
     try:

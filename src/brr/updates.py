@@ -1,10 +1,10 @@
-"""Lifecycle update packets — gate-agnostic stream events.
+"""Lifecycle update packets — gate-agnostic task progress events.
 
-The daemon emits typed packets for stream lifecycle moments. They are
-persisted to ``.brr/streams/<stream-id>/events.ndjson`` and optionally
-rendered by gates (Telegram, Slack, Git, CLI). The core stays gate-
-agnostic; gates may opt in to a ``render_update(brr_dir, packet)``
-hook.
+The daemon emits typed packets for task lifecycle moments. They are
+persisted to the conversation log
+(``.brr/conversations/<key>.ndjson``) and optionally rendered by gates
+(Telegram, Slack, Git, CLI). The core stays gate-agnostic; gates may
+opt in to a ``render_update(brr_dir, packet)`` hook.
 
 Packet types are stable identifiers — gates branch on them to decide
 how (or whether) to surface the event to a human.
@@ -17,11 +17,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import stream
+from . import conversations
 
 
 PACKET_TYPES = (
-    "stream_created",
     "event_received",
     "task_created",
     "triage_done",
@@ -45,16 +44,21 @@ PACKET_TYPES = (
 
 @dataclass
 class UpdatePacket:
-    """A single lifecycle update."""
+    """A single lifecycle update.
+
+    *conversation_key* is the gate-thread key (e.g. ``telegram:123:``)
+    used to route the packet to the right conversation log. May be
+    empty for orphan events; in that case the packet is rendered to
+    console but not persisted.
+    """
 
     type: str
-    stream_id: str
+    conversation_key: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
         return {
             "type": self.type,
-            "stream_id": self.stream_id,
             **self.payload,
         }
 
@@ -68,9 +72,9 @@ _QUIET_TYPES = {
 
 
 def emit(brr_dir: Path, packet: UpdatePacket) -> None:
-    """Persist *packet* to its stream's events log and notify gates.
+    """Persist *packet* to its conversation log and notify gates.
 
-    The packet is appended to the stream's append-only event log,
+    The packet is appended to the gate thread's append-only log,
     rendered to the daemon console for operator visibility, and then
     offered to any gate that exposes a ``render_update`` hook.
     Failures inside renderers are swallowed — lifecycle persistence
@@ -78,10 +82,13 @@ def emit(brr_dir: Path, packet: UpdatePacket) -> None:
     """
     if packet.type not in PACKET_TYPES:
         return
-    record = {"ts": stream._now_iso(), **packet.to_record()}
-    path = stream.events_path(brr_dir, packet.stream_id)
-    stream._append_jsonl(path, record)
-    stream.touch_manifest(brr_dir, packet.stream_id)
+    if packet.conversation_key:
+        conversations.append_update(
+            brr_dir,
+            packet.conversation_key,
+            type=packet.type,
+            payload=packet.payload or {},
+        )
     _render_console(packet)
     _dispatch_to_gates(brr_dir, packet)
 
@@ -95,7 +102,9 @@ def _render_console(packet: UpdatePacket) -> None:
     if packet.type in _QUIET_TYPES:
         return
     payload = packet.payload or {}
-    bits = [f"[brr:update] {packet.type}", f"stream={packet.stream_id}"]
+    bits = [f"[brr:update] {packet.type}"]
+    if packet.conversation_key:
+        bits.append(f"conv={packet.conversation_key}")
     for key in ("task_id", "event_id", "branch", "stage", "kind", "error"):
         if key in payload and payload[key] not in (None, ""):
             bits.append(f"{key}={payload[key]}")

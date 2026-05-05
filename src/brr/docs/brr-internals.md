@@ -42,7 +42,7 @@ gitignored; do not commit its contents.
 | `tasks/`     | Parsed task manifests, one per event (source of truth post-triage) |
 | `responses/` | Agent final responses destined for gate replies                    |
 | `runs/`      | Generated per-task context files for daemon runner invocations     |
-| `streams/`   | Workstream manifests, append-only event/task/artifact records      |
+| `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
 | `traces/`    | Prompt + stdout + meta for every runner invocation (debug mode)    |
 | `reviews/`   | Self-review notes the agent writes about its own runs              |
 | `worktrees/` | Isolated git worktrees for concurrent tasks                        |
@@ -56,7 +56,7 @@ gitignored; do not commit its contents.
 Agents should orient from the Task Context Bundle in the prompt. When
 they need to re-check runtime details, they should read the generated
 `.brr/runs/<task-id>/context.md` file named in the bundle. That file
-replaces the old command cheat sheet for task/event/stream recovery.
+replaces the old command cheat sheet for task/event recovery.
 
 The agent does not run daemon lifecycle commands. `brr up` and
 `brr down` are managed by the human operator.

@@ -27,11 +27,11 @@ STATUSES = ("pending", "running", "done", "needs_context", "error", "conflict")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
-    "environment", "stream_id",
+    "environment", "conversation_key",
 }
 _TASK_FIELDS = {
     "id", "event_id", "branch", "env", "environment", "status", "source",
-    "stream_id",
+    "conversation_key",
 }
 
 
@@ -107,7 +107,7 @@ class Task:
     env: str = "host"
     status: str = "pending"
     source: str = ""
-    stream_id: str = ""
+    conversation_key: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -130,7 +130,7 @@ class Task:
             branch=branch,
             env=resolve_env(branch, env_policy, cfg),
             source=event.get("source", ""),
-            stream_id=str(event.get("stream_id", "") or ""),
+            conversation_key=str(event.get("conversation_key", "") or ""),
             meta={
                 k: v for k, v in event.items()
                 if k not in _EVENT_META_FIELDS
@@ -194,8 +194,8 @@ class Task:
             f"status: {self.status}",
             f"source: {self.source}",
         ]
-        if self.stream_id:
-            lines.append(f"stream_id: {self.stream_id}")
+        if self.conversation_key:
+            lines.append(f"conversation_key: {self.conversation_key}")
         for k, v in self.meta.items():
             lines.append(f"{k}: {v}")
         lines.append("---")
@@ -224,7 +224,7 @@ class Task:
             env=fm.get("env", fm.get("environment", "host")),
             status=fm.get("status", "pending"),
             source=fm.get("source", ""),
-            stream_id=str(fm.get("stream_id", "") or ""),
+            conversation_key=str(fm.get("conversation_key", "") or ""),
             meta=meta,
         )
 
