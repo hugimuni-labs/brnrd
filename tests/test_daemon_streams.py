@@ -73,14 +73,7 @@ def _make_invoke_runner(*, response_text: str = "---\n---\nall done\n",
         return RunnerResult(
             invocation=invocation, runner_name=runner_name,
             command=["mock"], stdout="ok", stderr="",
-            returncode=0, trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{invocation.label}",
-                    exists=True, trace_copy=None,
-                )
-            ],
+            returncode=0, trace_dir=None, artifacts=[],
         )
 
     return _fake
