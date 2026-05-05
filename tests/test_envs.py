@@ -98,8 +98,7 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
 
     def fake_run(command, **_kwargs):
         commands.append(command)
-        response_path.write_text("---\n---\ndone\n", encoding="utf-8")
-        return envs.subprocess.CompletedProcess(command, 0, "ok", "")
+        return envs.subprocess.CompletedProcess(command, 0, "agent reply\n", "")
 
     monkeypatch.setattr(envs.subprocess, "run", fake_run)
     invocation = RunnerInvocation(
@@ -109,27 +108,25 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
         cwd=ctx.cwd,
         repo_root=tmp_path,
         response_path=str(response_path),
-        required_artifacts=[RunnerArtifactSpec(response_path, "response:evt-3")],
     )
 
     result = envs.get_env("docker").invoke(
         ctx,
         "mock-runner",
         invocation,
-        {"docker.image": "brr/test-runner:latest", "runner_cmd": ["mock", "--out", "{response_path}", "{prompt}"]},
+        {"docker.image": "brr/test-runner:latest", "runner_cmd": ["mock", "--flag", "{prompt}"]},
     )
 
     assert result.returncode == 0
     assert result.validation_ok
+    assert response_path.read_text(encoding="utf-8") == "agent reply\n"
     command = commands[0]
     assert command[:2] == ["docker", "run"]
     assert "--name" in command
     assert command[command.index("--network") + 1] == "bridge"
     assert command[command.index("-v") + 1] == f"{tmp_path}:{tmp_path}"
     assert command[command.index("-w") + 1] == str(tmp_path)
-    assert command[-5:] == [
-        "brr/test-runner:latest", "mock", "--out", str(response_path), "hello",
-    ]
+    assert command[-4:] == ["brr/test-runner:latest", "mock", "--flag", "hello"]
     assert ctx.env_state["docker_containers"] == ["brr-task-3-evt-3-attempt-1"]
 
 

@@ -159,9 +159,10 @@ Read:
 Keep in mind:
 
 - `RunnerInvocation` describes one external AI CLI call.
-- `RunnerResult` is more than an exit code; it also validates expected artifacts.
-- Daemon execution expects a response artifact. A runner can exit successfully and still fail validation if the response file is missing.
-- `RunContext` splits host-visible and environment-visible response paths.
+- `RunnerResult.validation_ok` combines three layers: subprocess exit, the optional `required_artifacts` check (used by `adopt` for AGENTS.md / kb files), and the `has_response` check that fires only when the invocation specifies a `response_path`.
+- The runner contract is "stdout is the response": `claude --print`, `codex exec`, and `gemini -p --yolo` all print only the final agent message to stdout. `invoke_runner` captures stdout and writes it to the task response file itself, so no per-runner output flag is needed.
+- Daemon retry triggers on empty stdout, not a missing file.
+- `RunContext` splits host-visible and environment-visible response paths so Docker invocations can resolve mount-aware paths even though brr (not the runner) writes the file.
 - The user-facing policy key is `environment=<auto|host|worktree|docker>` in `.brr/config`; legacy `env` and `default_env` are still accepted.
 - Task files still store the concrete backend as `env`.
 - Current built-in backends on this branch are `host`, `worktree`, and `docker`. Design notes also discuss future `ssh` and `devcontainer` backends.
@@ -191,8 +192,8 @@ Read `_run_worker()` in passes rather than all at once:
 5. Prepare the environment.
 6. Write the run context file.
 7. Build the daemon prompt.
-8. Invoke the runner, with retries for missing response artifacts.
-9. Parse response frontmatter for outcomes such as `needs_context`.
+8. Invoke the runner, with retries when the runner prints no final reply on stdout.
+9. Parse the response file (written from captured stdout) for outcomes such as `needs_context`.
 10. Optionally run KB maintenance.
 11. Finalize the environment.
 12. Update event/task/stream status.
@@ -466,13 +467,14 @@ Referenced by:
 Persistence:
 
 - Optional traces under `.brr/traces/<kind>/<label>-<timestamp>/`
-- Trace files include prompt, stdout, stderr, metadata, and copied required artifacts.
+- Trace files include prompt, stdout, stderr, metadata, and copies of any expected files registered through `required_artifacts` (today: adopt's AGENTS.md and kb files).
 
 Important rule:
 
 - `RunnerResult.ok` means subprocess exit code was zero.
-- `RunnerResult.validation_ok` means required artifacts exist.
-- The daemon cares about the response artifact, not just runner stdout.
+- `RunnerResult.has_response` means stdout was non-empty (only meaningful when `invocation.response_path` is set).
+- `RunnerResult.validation_ok` is the combined contract: exit zero, no missing required artifacts, and `has_response` whenever a response was requested.
+- For daemon-run invocations, the response file is written by `invoke_runner` from captured stdout; the agent does not write that file.
 
 Read with:
 
@@ -764,13 +766,18 @@ Relevant decision:
 
 - [Bundled Docs Location](decision-bundled-docs.md)
 
-### Runner success requires artifacts
+### Runner success has three layers
 
-The runner process can exit zero while still failing the daemon contract if it
-does not produce the required response file. Always track both:
+The runner contract has three layers, all checked by
+`RunnerResult.validation_ok`:
 
-- process result
-- required artifact validation
+- subprocess exit zero (`result.ok`)
+- `required_artifacts` all present (used by `adopt` for AGENTS.md and kb
+  scaffolding; daemon-run invocations don't register any)
+- `has_response` — non-empty stdout — when the invocation specifies a
+  `response_path`. brr captures stdout and writes the response file itself,
+  so empty stdout is the canonical failure signal for an unproductive run
+  and triggers daemon retry.
 
 ### Triage and execution are separate agent calls
 

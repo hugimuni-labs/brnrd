@@ -321,9 +321,8 @@ def _run_worker(
             )
         else:
             prompt = runner.build_daemon_prompt(
-                f"Previous attempt did not produce a response file. "
-                f"Please complete the task and write your response to "
-                f"{env_ctx.response_path_env}.\n\n"
+                f"Previous attempt printed no final reply on stdout. "
+                f"Print your full response as the final stdout message.\n\n"
                 f"Original task: {task.body}",
                 eid, str(env_ctx.response_path_env), run_root,
                 task_id=task.id,
@@ -357,12 +356,6 @@ def _run_worker(
                 cwd=run_root,
                 repo_root=repo_root,
                 response_path=str(env_ctx.response_path_host),
-                required_artifacts=[
-                    runner.RunnerArtifactSpec(
-                        env_ctx.response_path_host,
-                        f"response:{eid}",
-                    ),
-                ],
             ),
             cfg=cfg,
             trace=debug,

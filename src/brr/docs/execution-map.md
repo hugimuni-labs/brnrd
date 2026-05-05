@@ -66,9 +66,14 @@ its log entry to `kb/log-<task-id>.md` to avoid conflicts with the main log.
 
 ### 5. Response
 
-The agent's final response is written to `.brr/responses/<event-id>.md`.
-Some runners capture this automatically; the daemon prompt also instructs
-the agent to write it manually if needed.
+The agent's final reply is its last stdout message. brr captures stdout
+and writes it to `.brr/responses/<event-id>.md`. Runners are invoked
+headless (`claude --print`, `codex exec`, `gemini -p --yolo`); progress
+goes to stderr and only the final reply is on stdout, so no per-runner
+output flag is needed.
+
+If stdout is empty, the daemon retries up to `response_retries` times
+before failing the task.
 
 ### 6. KB maintenance (optional)
 

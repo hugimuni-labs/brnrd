@@ -138,14 +138,7 @@ def test_run_worker_uses_triage_output_for_task(tmp_path, monkeypatch):
             stderr="",
             returncode=0,
             trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{event['id']}",
-                    exists=True,
-                    trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
@@ -251,14 +244,7 @@ def test_run_worker_executes_worktree_tasks_in_worktree_and_merges(tmp_path, mon
             stderr="",
             returncode=0,
             trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{event['id']}",
-                    exists=True,
-                    trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
@@ -434,14 +420,7 @@ def test_run_worker_preserves_named_branch_without_merge(tmp_path, monkeypatch):
             stderr="",
             returncode=0,
             trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{event['id']}",
-                    exists=True,
-                    trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", _named_branch_invoke)
@@ -503,18 +482,11 @@ def test_run_worker_retries_from_missing_required_output(tmp_path, monkeypatch):
                 invocation=invocation,
                 runner_name=runner_name,
                 command=["mock"],
-                stdout="first try",
+                stdout="",
                 stderr="",
                 returncode=0,
                 trace_dir=None,
-                artifacts=[
-                    daemon.runner.RunnerArtifactRecord(
-                        path=response_path,
-                        label="response:evt-7",
-                        exists=False,
-                        trace_copy=None,
-                    )
-                ],
+                artifacts=[],
             )
         response_path.write_text("---\n---\nall done\n", encoding="utf-8")
         return RunnerResult(
@@ -525,14 +497,7 @@ def test_run_worker_retries_from_missing_required_output(tmp_path, monkeypatch):
             stderr="",
             returncode=0,
             trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=response_path,
-                    label="response:evt-7",
-                    exists=True,
-                    trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
@@ -613,14 +578,7 @@ def test_debug_mode_keeps_worktree_after_merge(tmp_path, monkeypatch):
             stderr="",
             returncode=0,
             trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{event['id']}",
-                    exists=True,
-                    trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
@@ -722,12 +680,7 @@ def test_no_debug_removes_worktree(tmp_path, monkeypatch):
         return RunnerResult(
             invocation=invocation, runner_name=runner_name, command=["mock"],
             stdout="ok", stderr="", returncode=0, trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{event['id']}", exists=True, trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
@@ -792,12 +745,7 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
             invocation=invocation, runner_name=runner_name,
             command=["mock"], stdout="ok", stderr="", returncode=0,
             trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{event['id']}", exists=True, trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke)
@@ -861,12 +809,7 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
             invocation=invocation, runner_name=runner_name,
             command=["mock"], stdout="ok", stderr="", returncode=0,
             trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{event['id']}", exists=True, trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke)
@@ -924,12 +867,7 @@ def test_kb_maintenance_never_config(tmp_path, monkeypatch):
             invocation=invocation, runner_name=runner_name,
             command=["mock"], stdout="ok", stderr="", returncode=0,
             trace_dir=None,
-            artifacts=[
-                daemon.runner.RunnerArtifactRecord(
-                    path=Path(invocation.response_path),
-                    label=f"response:{event['id']}", exists=True, trace_copy=None,
-                )
-            ],
+            artifacts=[],
         )
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke)

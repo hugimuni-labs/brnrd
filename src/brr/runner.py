@@ -104,14 +104,31 @@ class RunnerResult:
         return [artifact for artifact in self.artifacts if not artifact.exists]
 
     @property
+    def has_response(self) -> bool:
+        """True iff the runner emitted a non-empty final reply on stdout.
+
+        Only meaningful for invocations that ask brr to capture a
+        response file (``invocation.response_path is not None``).
+        """
+        return bool(self.stdout and self.stdout.strip())
+
+    @property
     def validation_ok(self) -> bool:
-        return not self.missing_artifacts
+        if not self.ok:
+            return False
+        if self.missing_artifacts:
+            return False
+        if self.invocation.response_path and not self.has_response:
+            return False
+        return True
 
     def retry_reason(self) -> str | None:
-        if not self.missing_artifacts:
-            return None
-        labels = ", ".join(artifact.label for artifact in self.missing_artifacts)
-        return f"missing required output(s): {labels}"
+        if self.missing_artifacts:
+            labels = ", ".join(artifact.label for artifact in self.missing_artifacts)
+            return f"missing required output(s): {labels}"
+        if self.invocation.response_path and not self.has_response:
+            return "runner produced no response on stdout"
+        return None
 
     def raise_for_error(self) -> None:
         if self.ok:
@@ -192,14 +209,16 @@ def _build_cmd(
     runner_name: str,
     prompt: str,
     cfg: dict[str, Any],
-    response_path: str | None = None,
 ) -> list[str]:
-    """Build subprocess argv for a built-in or named runner."""
+    """Build subprocess argv for a built-in or named runner.
+
+    Each runner is invoked headless with approvals bypassed (see
+    ``prompts/runners.md``) and prints its final reply on stdout. brr
+    captures stdout and writes it to the invocation's response file —
+    runners do not need to be told where the response file lives.
+    """
     def _replace_placeholders(parts: list[str]) -> list[str]:
-        replaced = [s.replace("{prompt}", prompt) for s in parts]
-        if response_path is not None:
-            replaced = [s.replace("{response_path}", response_path) for s in replaced]
-        return replaced
+        return [s.replace("{prompt}", prompt) for s in parts]
 
     custom = cfg.get("runner_cmd")
     if custom:
@@ -207,22 +226,26 @@ def _build_cmd(
             return _replace_placeholders(custom)
         return _replace_placeholders(str(custom).split())
 
-    profiles = _load_profiles()
-    profile = profiles.get(runner_name)
+    profile = _load_profiles().get(runner_name)
     if profile:
         cmd = str(profile.get("cmd", runner_name)).split()
-        approve = str(profile.get("approve", "")).strip()
-        if runner_name == "codex" and cfg.get("auto_approve"):
-            cmd = [part for part in cmd if part != "--full-auto"]
-            cmd.append("--dangerously-bypass-approvals-and-sandbox")
-        if cfg.get("auto_approve") and approve:
-            cmd.extend(approve.split())
-        if runner_name == "codex" and response_path:
-            cmd.extend(["--output-last-message", response_path])
         cmd.append(prompt)
         return cmd
 
     return [runner_name, prompt]
+
+
+def _write_response_file(response_path: str, stdout: str) -> None:
+    """Persist the runner's stdout as the captured response file.
+
+    The path is created relative to the host file system; brr always
+    runs inside (or with a bind mount of) the repo, so the parent
+    directory normally exists, but we mkdir defensively so a fresh
+    ``responses/`` subtree can be created on the first run.
+    """
+    target = Path(response_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(stdout, encoding="utf-8")
 
 
 def _copy_artifact_to_trace(
@@ -299,15 +322,16 @@ def invoke_runner(
     *,
     trace: bool = False,
 ) -> RunnerResult:
-    """Run a runner subprocess, validate outputs, and optionally persist a trace."""
+    """Run a runner subprocess, validate outputs, and optionally persist a trace.
+
+    If the invocation specifies a ``response_path``, captured stdout is
+    written there on success. Runners are expected to print only their
+    final reply to stdout (progress streams to stderr); brr has no need
+    to know per-runner output flags.
+    """
     global _active_proc
     cfg = cfg or {}
-    cmd = _build_cmd(
-        runner_name,
-        invocation.prompt,
-        cfg,
-        response_path=invocation.response_path,
-    )
+    cmd = _build_cmd(runner_name, invocation.prompt, cfg)
     stdout = ""
     stderr = ""
     returncode = 0
@@ -334,6 +358,9 @@ def invoke_runner(
     finally:
         with _proc_lock:
             _active_proc = None
+
+    if invocation.response_path and returncode == 0 and stdout and stdout.strip():
+        _write_response_file(invocation.response_path, stdout)
 
     result = RunnerResult(
         invocation=invocation,
@@ -580,13 +607,17 @@ def _build_task_context_bundle(
     sections.append("")
     sections.append("### Delivery contract")
     sections.append(
-        f"- Your final response must be the exact content to place in: {response_path}"
+        "- Your final reply is the response. Print the exact intended "
+        "content as your final stdout message — no preamble, no commentary "
+        "outside it. Stream progress, debug, and tool output to stderr."
     )
     sections.append(
-        "- Some runners capture your final response automatically; if not, write that exact content there yourself."
+        f"- brr captures stdout and stores it at {response_path}. Do not "
+        "write that file yourself."
     )
     sections.append(
-        "- Do not explore or modify any other files in .brr/ beyond what this task explicitly asks for."
+        "- Do not explore or modify any other files in .brr/ beyond what "
+        "this task explicitly asks for."
     )
     if branch_name and base_branch:
         sections.append(

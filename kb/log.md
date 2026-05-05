@@ -434,3 +434,39 @@ README, gate protocol docs, repo map, and current-state deck so the public
 surface leads with setup rather than forcing every gate into the same auth/bind
 lifecycle.
 
+## [2026-05-05] refactor | Generalise runner response capture via stdout
+
+Replaced per-runner specials in `_build_cmd` with a uniform "stdout is the
+response" contract. All three supported CLIs (claude, codex, gemini) print the
+final agent message to stdout in headless mode, so brr now captures stdout and
+writes it to the task response file itself instead of asking Codex for
+`--output-last-message` and asking the agent to also write the file as a
+backup.
+
+Side-fixes folded in:
+
+- Bundled Gemini profile updated from bare `gemini` to `gemini -p --yolo`. The
+  `-p` flag is required for non-interactive mode (Gemini CLI Jan 2026), and
+  `--yolo` is the equivalent of Claude's `--dangerously-skip-permissions` and
+  Codex's `--dangerously-bypass-approvals-and-sandbox`. brr's daemon cannot
+  function without auto-approval since runners would otherwise hang on tool
+  confirmation prompts.
+- Removed the dead `auto_approve` config path (deleted on 2026-05-01 but the
+  Codex-only branch was still appending `--dangerously-bypass-approvals-and-sandbox`
+  twice when set, which obsoletes the earlier same-day `Avoid duplicate Codex
+  approval bypass flag` fix).
+- Removed the `{response_path}` placeholder in `runner_cmd`. Custom runners
+  print to stdout like the built-ins; brr writes the file.
+- Daemon no longer registers the response file as a `required_artifacts` entry
+  on every run. `RunnerResult.validation_ok` now combines exit code, missing
+  artifacts (still used by adopt for AGENTS.md / kb files), and a new
+  `has_response` check that is only meaningful when the invocation supplies a
+  `response_path`. Retry trigger flips from "response file missing" to "stdout
+  was empty".
+- Daemon prompt "Delivery contract" simplified to a single contract sentence:
+  the final reply is the response, brr captures stdout and stores it.
+- Bundled `execution-map.md` updated to describe the stdout-capture flow.
+
+Refactor removes ~80 lines of conditional logic across `runner.py`,
+`envs/__init__.py`, and `daemon.py`. All 198 tests pass.
+
