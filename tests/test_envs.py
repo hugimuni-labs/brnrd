@@ -85,8 +85,24 @@ def test_docker_prepare_branch_uses_worktree(tmp_path, monkeypatch):
     assert created[0][0][:3] == (tmp_path, "task-2", "brr/task-2")
 
 
+def _isolate_docker_creds(monkeypatch, tmp_path):
+    """Make docker invocations independent of the test host's HOME.
+
+    Points HOME at an empty directory and clears all known runner env
+    vars so credential mounts and -e passthroughs only appear when a
+    test explicitly opts in.
+    """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(fake_home))
+    for name in envs._DOCKER_DEFAULT_PASSTHROUGH_ENV:
+        monkeypatch.delenv(name, raising=False)
+    return fake_home
+
+
 def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    _isolate_docker_creds(monkeypatch, tmp_path)
     response_path = tmp_path / ".brr" / "responses" / "evt-3.md"
     response_path.parent.mkdir(parents=True)
     task = Task(id="task-3", event_id="evt-3", body="run in docker")
@@ -128,6 +144,141 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     assert command[command.index("-w") + 1] == str(tmp_path)
     assert command[-4:] == ["brr/test-runner:latest", "mock", "--flag", "hello"]
     assert ctx.env_state["docker_containers"] == ["brr-task-3-evt-3-attempt-1"]
+    assert "-e" not in command
+
+
+def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-1"):
+    """Helper: prepare a DockerEnv ctx + invocation and capture the docker run argv."""
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    response_path = tmp_path / ".brr" / "responses" / "evt-x.md"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    task = Task(id=f"task-{label}", event_id="evt-x", body="run in docker")
+    cfg: dict = {"docker.image": "brr/test-runner:latest"}
+    if cfg_extra:
+        cfg.update(cfg_extra)
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, cfg,
+        branch_name=None, base_branch="main", response_path=response_path,
+    )
+    commands = []
+    monkeypatch.setattr(
+        envs.subprocess,
+        "run",
+        lambda command, **_kwargs: commands.append(command)
+        or envs.subprocess.CompletedProcess(command, 0, "ok\n", ""),
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label=label,
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+    )
+    envs.get_env("docker").invoke(
+        ctx, "mock-runner", invocation, {**cfg, "runner_cmd": ["mock", "{prompt}"]},
+    )
+    return commands[0]
+
+
+def test_docker_invoke_passes_known_runner_env_when_set(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    command = _build_docker_invoke(tmp_path, monkeypatch)
+
+    indices = [i for i, arg in enumerate(command) if arg == "-e"]
+    forwarded = [command[i + 1] for i in indices]
+    assert "OPENAI_API_KEY" in forwarded
+    assert "ANTHROPIC_API_KEY" not in forwarded
+    assert "GEMINI_API_KEY" not in forwarded
+    assert "GOOGLE_API_KEY" not in forwarded
+
+
+def test_docker_invoke_passes_no_env_when_none_set(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+
+    command = _build_docker_invoke(tmp_path, monkeypatch)
+
+    assert "-e" not in command
+
+
+def test_docker_invoke_passthrough_extra_env_keys(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    monkeypatch.setenv("CUSTOM_TOKEN", "tok-1")
+
+    command = _build_docker_invoke(
+        tmp_path, monkeypatch,
+        cfg_extra={"docker.env": "CUSTOM_TOKEN, MISSING_TOKEN"},
+    )
+
+    indices = [i for i, arg in enumerate(command) if arg == "-e"]
+    forwarded = [command[i + 1] for i in indices]
+    assert forwarded == ["CUSTOM_TOKEN"]
+
+
+def test_docker_invoke_extra_env_does_not_duplicate_defaults(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    command = _build_docker_invoke(
+        tmp_path, monkeypatch,
+        cfg_extra={"docker.env": "OPENAI_API_KEY,OPENAI_API_KEY"},
+    )
+
+    indices = [i for i, arg in enumerate(command) if arg == "-e"]
+    forwarded = [command[i + 1] for i in indices]
+    assert forwarded == ["OPENAI_API_KEY"]
+
+
+def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch):
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
+    (fake_home / ".claude").mkdir()
+    (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+    (fake_home / ".codex").mkdir()
+    # No ~/.gemini — confirms missing dirs don't show up.
+
+    command = _build_docker_invoke(tmp_path, monkeypatch)
+
+    mounts = [
+        command[i + 1] for i, arg in enumerate(command) if arg == "-v"
+    ]
+    assert f"{fake_home}/.claude:/root/.claude" in mounts
+    assert f"{fake_home}/.claude.json:/root/.claude.json" in mounts
+    assert f"{fake_home}/.codex:/root/.codex" in mounts
+    assert all(":/root/.gemini" not in m for m in mounts)
+    # Repo bind mount is the last -v so its assertion is stable.
+    assert mounts[-1] == f"{tmp_path}:{tmp_path}"
+
+
+def test_docker_invoke_skips_credential_mounts_when_disabled(tmp_path, monkeypatch):
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
+    (fake_home / ".claude").mkdir()
+
+    command = _build_docker_invoke(
+        tmp_path, monkeypatch,
+        cfg_extra={"docker.mount_credentials": False},
+    )
+
+    mounts = [
+        command[i + 1] for i, arg in enumerate(command) if arg == "-v"
+    ]
+    assert mounts == [f"{tmp_path}:{tmp_path}"]
+
+
+def test_docker_invoke_skips_credential_mounts_when_disabled_string(tmp_path, monkeypatch):
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
+    (fake_home / ".claude").mkdir()
+
+    command = _build_docker_invoke(
+        tmp_path, monkeypatch,
+        cfg_extra={"docker.mount_credentials": "false"},
+    )
+
+    mounts = [
+        command[i + 1] for i, arg in enumerate(command) if arg == "-v"
+    ]
+    assert mounts == [f"{tmp_path}:{tmp_path}"]
 
 
 def test_docker_finalize_removes_containers_after_success(tmp_path, monkeypatch):
