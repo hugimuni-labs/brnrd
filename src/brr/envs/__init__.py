@@ -7,6 +7,7 @@ runner invocation.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -209,6 +210,85 @@ def _docker_cfg(cfg: dict[str, Any], key: str, default: str = "") -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _docker_bool(cfg: dict[str, Any], key: str, default: bool) -> bool:
+    """Read a docker.<key> boolean, accepting native bool/int and string forms."""
+    raw = cfg.get(f"docker.{key}", cfg.get(f"docker_{key}", default))
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, int):
+        return bool(raw)
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in ("true", "1", "yes", "on"):
+            return True
+        if normalized in ("false", "0", "no", "off", ""):
+            return False
+    return default
+
+
+# Known runner credential env vars forwarded into the container when set on
+# the daemon's environment. Subscription users (Claude Pro/Max, ChatGPT
+# Plus/Pro, Gemini OAuth) won't have these — they're covered by the
+# credential dir mounts below.
+_DOCKER_DEFAULT_PASSTHROUGH_ENV: tuple[str, ...] = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+)
+
+
+# Per-runner credential paths under HOME. Each is mounted into /root/<basename>
+# when present on the host, so the in-container CLI finds tokens at the same
+# location it would on the host (assuming the container runs as root, which is
+# the docker env's current default).
+_DOCKER_DEFAULT_CRED_PATHS: tuple[str, ...] = (
+    ".claude",
+    ".claude.json",
+    ".codex",
+    ".gemini",
+)
+
+
+def _docker_extra_env_keys(cfg: dict[str, Any]) -> list[str]:
+    """Return user-supplied env-var names from ``docker.env=KEY1,KEY2,...``."""
+    raw = _docker_cfg(cfg, "env")
+    if not raw:
+        return []
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _docker_passthrough_env_args(cfg: dict[str, Any]) -> list[str]:
+    """Build ``-e NAME`` args for env vars that are set on the daemon."""
+    seen: set[str] = set()
+    args: list[str] = []
+    for name in (*_DOCKER_DEFAULT_PASSTHROUGH_ENV, *_docker_extra_env_keys(cfg)):
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        if os.environ.get(name):
+            args.extend(["-e", name])
+    return args
+
+
+def _docker_credential_mount_args(cfg: dict[str, Any]) -> list[str]:
+    """Build ``-v`` args for known runner credential paths under HOME.
+
+    Empty when ``docker.mount_credentials=false`` or the host has none of
+    the well-known credential paths. Mounts are read-write so refresh
+    tokens and updated session state on the host stay current.
+    """
+    if not _docker_bool(cfg, "mount_credentials", True):
+        return []
+    home = Path(os.path.expanduser("~"))
+    args: list[str] = []
+    for rel in _DOCKER_DEFAULT_CRED_PATHS:
+        host = home / rel
+        if host.exists():
+            args.extend(["-v", f"{host}:/root/{rel}"])
+    return args
+
+
 def _docker_container_name(task_id: str, label: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{task_id}-{label}").strip(".-_")
     if not slug or not slug[0].isalnum():
@@ -318,6 +398,8 @@ class DockerEnv(WorktreeEnv):
             "docker", "run",
             "--name", container_name,
             "--network", network,
+            *_docker_passthrough_env_args(cfg),
+            *_docker_credential_mount_args(cfg),
             "-v", f"{ctx.repo_root}:{ctx.repo_root}",
             "-w", str(invocation.cwd or ctx.cwd),
             image,
