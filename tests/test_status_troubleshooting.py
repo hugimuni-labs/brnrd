@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 
-from brr import status as status_mod, stream as stream_mod, updates
+from brr import conversations, status as status_mod, updates
 from brr.task import Task
 
 
@@ -22,37 +22,23 @@ def _init_repo(tmp_path):
     return repo
 
 
-def _seed_stream(brr_dir, **kwargs):
-    defaults = dict(
-        id="stream-trouble-1",
-        title="Refactor auth",
-        status="active",
-        intent="Make login testable",
-        gate_context={"source": "telegram", "telegram_chat_id": 7},
-    )
-    defaults.update(kwargs)
-    manifest = stream_mod.StreamManifest(**defaults)
-    stream_mod.save_manifest(brr_dir, manifest)
-    return manifest
-
-
 def test_get_status_shows_active_run_progress(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     brr_dir = repo / ".brr"
-    manifest = _seed_stream(brr_dir, id="stream-active-rp", title="Active work")
-    stream_mod.append_task(
-        brr_dir, manifest.id,
+    key = "telegram:7:"
+    conversations.append_task(
+        brr_dir, key,
         task_id="task-active", event_id="evt-active",
         branch="auto", env="docker", status="running",
         base_branch="main", branch_name="brr/task-active",
     )
     updates.emit(brr_dir, updates.UpdatePacket(
-        type="task_created", stream_id=manifest.id,
+        type="task_created", conversation_key=key,
         payload={"task_id": "task-active", "branch": "auto", "env": "docker"},
     ))
     updates.emit(brr_dir, updates.UpdatePacket(
-        type="run_started", stream_id=manifest.id,
+        type="run_started", conversation_key=key,
         payload={"task_id": "task-active"},
     ))
 
@@ -66,47 +52,23 @@ def test_get_status_omits_active_block_when_terminal(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     brr_dir = repo / ".brr"
-    manifest = _seed_stream(brr_dir, id="stream-done-rp")
-    stream_mod.append_task(
-        brr_dir, manifest.id,
+    key = "telegram:8:"
+    conversations.append_task(
+        brr_dir, key,
         task_id="task-done", event_id="evt-done",
         branch="current", env="host", status="done",
     )
     updates.emit(brr_dir, updates.UpdatePacket(
-        type="task_created", stream_id=manifest.id,
+        type="task_created", conversation_key=key,
         payload={"task_id": "task-done", "branch": "current", "env": "host"},
     ))
     updates.emit(brr_dir, updates.UpdatePacket(
-        type="done", stream_id=manifest.id,
+        type="done", conversation_key=key,
         payload={"task_id": "task-done"},
     ))
 
     out = status_mod.get_status()
     assert "active task:" not in out
-
-
-def test_show_stream_includes_run_progress_block(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path)
-    monkeypatch.chdir(repo)
-    brr_dir = repo / ".brr"
-    manifest = _seed_stream(brr_dir, id="stream-show-rp")
-    stream_mod.append_task(
-        brr_dir, manifest.id,
-        task_id="task-show", event_id="evt-show",
-        branch="auto", env="docker", status="running",
-    )
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="task_created", stream_id=manifest.id,
-        payload={"task_id": "task-show", "branch": "auto", "env": "docker"},
-    ))
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="run_started", stream_id=manifest.id,
-        payload={"task_id": "task-show"},
-    ))
-
-    out = status_mod.show_stream("stream-show-rp")
-    assert "Latest run progress:" in out
-    assert "task-show" in out
 
 
 def test_inspect_task_lists_preserved_docker_containers(tmp_path):

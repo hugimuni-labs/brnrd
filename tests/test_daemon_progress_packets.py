@@ -2,17 +2,14 @@
 
 These tests verify that the worker emits the new run-progress packets
 in the right order for happy-path, retry, and Docker-preserved-container
-scenarios. They reuse the lightweight scaffolding pattern from
-``test_daemon_streams.py``.
+scenarios. Records are read directly from the per-conversation log.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from brr import daemon, envs, stream as stream_mod
+from brr import conversations, daemon, envs
 from brr.runner import RunnerResult
 from brr.task import Task
 
@@ -78,8 +75,13 @@ def _success_invoke_runner(triage_branch: str = "current",
     return _fake
 
 
-def _packet_types(brr_dir: Path, sid: str) -> list[str]:
-    return [ev.get("type") for ev in stream_mod.read_events(brr_dir, sid)]
+def _update_records(brr_dir: Path, conv_key: str) -> list[dict]:
+    return [r for r in conversations.read_records(brr_dir, conv_key)
+            if r.get("kind") == "update"]
+
+
+def _packet_types(brr_dir: Path, conv_key: str) -> list[str]:
+    return [r.get("type") for r in _update_records(brr_dir, conv_key)]
 
 
 def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
@@ -96,7 +98,7 @@ def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
     )
 
     assert task.status == "done"
-    types = _packet_types(tmp_path / ".brr", task.stream_id)
+    types = _packet_types(tmp_path / ".brr", task.conversation_key)
     assert "task_created" in types
     assert "triage_done" in types
     assert "env_prepared" in types
@@ -147,18 +149,19 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
     )
 
     assert task.status == "done"
-    events = stream_mod.read_events(tmp_path / ".brr", task.stream_id)
-    types = [ev.get("type") for ev in events]
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    types = [r.get("type") for r in records]
     assert types.count("attempt_started") == 2
     assert "attempt_failed" in types
     assert "retrying" in types
-    failed = next(e for e in events if e.get("type") == "attempt_failed")
+    failed = next(r for r in records if r.get("type") == "attempt_failed")
     assert failed.get("will_retry") is True
 
 
 def test_failure_after_retries_emits_failed_and_finalizing(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, eid="evt-fail", body="never works")
+    event = _make_event(tmp_path, eid="evt-fail", body="never works",
+                        telegram_chat_id=30)
     _patch_runner(monkeypatch)
 
     triage_stdout = "---\nbranch: current\nenv: host\n---\nbody\n"
@@ -183,7 +186,7 @@ def test_failure_after_retries_emits_failed_and_finalizing(tmp_path, monkeypatch
     )
 
     assert task.status == "error"
-    types = _packet_types(tmp_path / ".brr", task.stream_id)
+    types = _packet_types(tmp_path / ".brr", task.conversation_key)
     assert "attempt_failed" in types
     assert "failed" in types
     assert types.index("failed") < types.index("finalizing")
@@ -250,7 +253,6 @@ def _triage_only_invoke(env_name: str = "docker"):
                 command=["mock"], stdout=triage_stdout, stderr="",
                 returncode=0, trace_dir=None, artifacts=[],
             )
-        # Daemon-run goes through the env backend; this path should be unused.
         raise AssertionError("env backend should handle invoke")
 
     return _fake
@@ -258,7 +260,8 @@ def _triage_only_invoke(env_name: str = "docker"):
 
 def test_docker_env_emits_container_started(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, eid="evt-docker", body="run docker")
+    event = _make_event(tmp_path, eid="evt-docker", body="run docker",
+                        telegram_chat_id=40)
     _patch_runner(monkeypatch)
 
     fake_env = _FakeDockerEnv(succeed=True)
@@ -270,18 +273,17 @@ def test_docker_env_emits_container_started(tmp_path, monkeypatch):
     )
 
     assert task.status == "done"
-    types = _packet_types(tmp_path / ".brr", task.stream_id)
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    types = [r.get("type") for r in records]
     assert "container_started" in types
-    container_event = next(
-        e for e in stream_mod.read_events(tmp_path / ".brr", task.stream_id)
-        if e.get("type") == "container_started"
-    )
+    container_event = next(r for r in records if r.get("type") == "container_started")
     assert container_event.get("container", "").startswith("brr-")
 
 
 def test_docker_failed_emits_container_preserved(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, eid="evt-docker-fail", body="never finishes")
+    event = _make_event(tmp_path, eid="evt-docker-fail", body="never finishes",
+                        telegram_chat_id=50)
     _patch_runner(monkeypatch)
 
     fake_env = _FakeDockerEnv(succeed=False)
@@ -293,13 +295,11 @@ def test_docker_failed_emits_container_preserved(tmp_path, monkeypatch):
     )
 
     assert task.status == "error"
-    types = _packet_types(tmp_path / ".brr", task.stream_id)
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    types = [r.get("type") for r in records]
     assert "failed" in types
     assert "container_preserved" in types
-    preserved = next(
-        e for e in stream_mod.read_events(tmp_path / ".brr", task.stream_id)
-        if e.get("type") == "container_preserved"
-    )
+    preserved = next(r for r in records if r.get("type") == "container_preserved")
     assert preserved.get("containers"), preserved
 
 
@@ -307,9 +307,7 @@ def test_push_emits_started_and_done_packets(tmp_path, monkeypatch):
     """_push_if_needed should emit push packets when commits are unpushed."""
     brr_dir = tmp_path / ".brr"
     brr_dir.mkdir()
-    sid = "stream-push-1"
-    manifest = stream_mod.StreamManifest(id=sid, title="Push test")
-    stream_mod.save_manifest(brr_dir, manifest)
+    conv_key = "telegram:99:"
 
     monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
 
@@ -331,8 +329,8 @@ def test_push_emits_started_and_done_packets(tmp_path, monkeypatch):
 
     monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
 
-    daemon._push_if_needed(tmp_path, stream_id=sid, task_id="task-push")
+    daemon._push_if_needed(tmp_path, conversation_key=conv_key, task_id="task-push")
 
-    types = _packet_types(brr_dir, sid)
+    types = _packet_types(brr_dir, conv_key)
     assert "push_started" in types
     assert "push_done" in types

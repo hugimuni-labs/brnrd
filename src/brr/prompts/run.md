@@ -5,10 +5,10 @@ Read kb/index.md to understand what knowledge exists before starting work.
 Write the completion log entry to kb/log.md unless task metadata says otherwise.
 
 If you see a `Task Context Bundle` below, you are running under the brr
-daemon. The bundle contains the workstream you belong to, the task
-metadata, and the delivery contract — read it once and orient from
-there. If the bundle points to a generated run context file, use that
-file as the read-only recovery surface for the original event,
-workstream state, runtime paths, and environment details. Do not
-explore or modify `.brr/` beyond the named run context file and any
-paths this task explicitly requires.
+daemon. The bundle contains the task metadata, the delivery contract,
+the original event body, and recent activity in this conversation —
+read it once and orient from there. If the bundle points to a
+generated run context file, use that file as the read-only recovery
+surface for the original event, runtime paths, and environment
+details. Do not explore or modify `.brr/` beyond the named run
+context file and any paths this task explicitly requires.

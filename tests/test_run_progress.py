@@ -1,72 +1,54 @@
-"""Tests for the gate-agnostic run progress projection."""
+"""Tests for the gate-agnostic run progress projection over conversation logs."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from brr import run_progress, stream as stream_mod, updates
+from brr import conversations, run_progress, updates
 
 
-def _seed_stream(brr_dir: Path, sid: str = "stream-rp-1") -> stream_mod.StreamManifest:
-    manifest = stream_mod.StreamManifest(
-        id=sid,
-        title="Refactor login flow",
-        status="active",
-        intent="Make login testable",
-        gate_context={"source": "telegram", "telegram_chat_id": 123},
-        reply_route={
-            "preferred": "input_gate",
-            "selected": "input_gate",
-            "allowed": ["input_gate", "git_pr"],
-        },
-    )
-    stream_mod.save_manifest(brr_dir, manifest)
-    return manifest
-
-
-def _emit(brr_dir: Path, sid: str, ptype: str, **payload):
+def _emit(brr_dir: Path, key: str, ptype: str, **payload):
     updates.emit(
         brr_dir,
-        updates.UpdatePacket(type=ptype, stream_id=sid, payload=payload),
+        updates.UpdatePacket(type=ptype, conversation_key=key, payload=payload),
     )
 
 
-def test_project_task_returns_none_when_stream_missing(tmp_path):
-    view = run_progress.project_task(tmp_path / ".brr", "stream-x", "task-x")
+def test_project_task_returns_none_when_conversation_missing(tmp_path):
+    view = run_progress.project_task(tmp_path / ".brr", "no-such", "task-x")
     assert view is None
 
 
 def test_project_task_succeeds_through_full_lifecycle(tmp_path):
     brr_dir = tmp_path / ".brr"
-    manifest = _seed_stream(brr_dir)
-    sid = manifest.id
-    stream_mod.append_task(
-        brr_dir, sid,
+    key = "telegram:1:"
+    conversations.append_task(
+        brr_dir, key,
         task_id="task-1", event_id="evt-1",
         branch="auto", env="docker", status="running",
         base_branch="main", branch_name="brr/task-1",
     )
-    _emit(brr_dir, sid, "task_created", task_id="task-1", event_id="evt-1",
+    _emit(brr_dir, key, "task_created", task_id="task-1", event_id="evt-1",
           branch="auto", env="docker")
-    _emit(brr_dir, sid, "triage_done", task_id="task-1", branch="auto", env="docker")
-    _emit(brr_dir, sid, "env_prepared", task_id="task-1", env="docker",
+    _emit(brr_dir, key, "triage_done", task_id="task-1", branch="auto", env="docker")
+    _emit(brr_dir, key, "env_prepared", task_id="task-1", env="docker",
           branch_name="brr/task-1")
-    _emit(brr_dir, sid, "container_started", task_id="task-1",
+    _emit(brr_dir, key, "container_started", task_id="task-1",
           env="docker", container="brr-task-1-evt-1-attempt-1")
-    _emit(brr_dir, sid, "attempt_started", task_id="task-1", attempt=1)
-    _emit(brr_dir, sid, "run_started", task_id="task-1", branch="brr/task-1",
+    _emit(brr_dir, key, "attempt_started", task_id="task-1", attempt=1)
+    _emit(brr_dir, key, "run_started", task_id="task-1", branch="brr/task-1",
           env="docker")
-    _emit(brr_dir, sid, "artifact_created", task_id="task-1", kind="response",
+    _emit(brr_dir, key, "artifact_created", task_id="task-1", kind="response",
           path="/tmp/r.md", label="response:evt-1")
-    stream_mod.append_artifact(
-        brr_dir, sid,
+    conversations.append_artifact(
+        brr_dir, key,
         kind="response", path="/tmp/r.md",
         task_id="task-1", label="response:evt-1",
     )
-    _emit(brr_dir, sid, "finalizing", task_id="task-1", stage="done")
-    _emit(brr_dir, sid, "done", task_id="task-1", event_id="evt-1")
+    _emit(brr_dir, key, "finalizing", task_id="task-1", stage="done")
+    _emit(brr_dir, key, "done", task_id="task-1", event_id="evt-1")
 
-    view = run_progress.project_task(brr_dir, sid, "task-1")
+    view = run_progress.project_task(brr_dir, key, "task-1")
     assert view is not None
     assert view.state == "succeeded"
     assert view.phase == "delivered"
@@ -77,31 +59,29 @@ def test_project_task_succeeds_through_full_lifecycle(tmp_path):
     assert view.attempt == 1
     assert view.response_path == "/tmp/r.md"
     assert "brr-task-1-evt-1-attempt-1" in view.container_ids
-    assert view.title == "Refactor login flow"
 
 
 def test_project_task_failed_with_retry(tmp_path):
     brr_dir = tmp_path / ".brr"
-    manifest = _seed_stream(brr_dir, "stream-rp-fail")
-    sid = manifest.id
-    stream_mod.append_task(
-        brr_dir, sid,
+    key = "telegram:2:"
+    conversations.append_task(
+        brr_dir, key,
         task_id="task-2", event_id="evt-2",
         branch="current", env="host", status="running",
     )
-    _emit(brr_dir, sid, "task_created", task_id="task-2", event_id="evt-2",
+    _emit(brr_dir, key, "task_created", task_id="task-2", event_id="evt-2",
           branch="current", env="host")
-    _emit(brr_dir, sid, "attempt_started", task_id="task-2", attempt=1)
-    _emit(brr_dir, sid, "attempt_failed", task_id="task-2", attempt=1,
+    _emit(brr_dir, key, "attempt_started", task_id="task-2", attempt=1)
+    _emit(brr_dir, key, "attempt_failed", task_id="task-2", attempt=1,
           reason="missing required output(s): response:evt-2", will_retry=True)
-    _emit(brr_dir, sid, "retrying", task_id="task-2", attempt=2,
+    _emit(brr_dir, key, "retrying", task_id="task-2", attempt=2,
           reason="missing required output(s): response:evt-2")
-    _emit(brr_dir, sid, "attempt_started", task_id="task-2", attempt=2)
-    _emit(brr_dir, sid, "attempt_failed", task_id="task-2", attempt=2,
+    _emit(brr_dir, key, "attempt_started", task_id="task-2", attempt=2)
+    _emit(brr_dir, key, "attempt_failed", task_id="task-2", attempt=2,
           reason="missing required output(s)", will_retry=False)
-    _emit(brr_dir, sid, "failed", task_id="task-2", event_id="evt-2", stage="run")
+    _emit(brr_dir, key, "failed", task_id="task-2", event_id="evt-2", stage="run")
 
-    view = run_progress.project_task(brr_dir, sid, "task-2")
+    view = run_progress.project_task(brr_dir, key, "task-2")
     assert view is not None
     assert view.state == "failed"
     assert view.phase == "failed"
@@ -110,12 +90,11 @@ def test_project_task_failed_with_retry(tmp_path):
 
 def test_project_task_needs_context(tmp_path):
     brr_dir = tmp_path / ".brr"
-    manifest = _seed_stream(brr_dir, "stream-rp-nc")
-    sid = manifest.id
-    _emit(brr_dir, sid, "task_created", task_id="task-3", branch="current", env="host")
-    _emit(brr_dir, sid, "needs_context", task_id="task-3", event_id="evt-3")
+    key = "telegram:3:"
+    _emit(brr_dir, key, "task_created", task_id="task-3", branch="current", env="host")
+    _emit(brr_dir, key, "needs_context", task_id="task-3", event_id="evt-3")
 
-    view = run_progress.project_task(brr_dir, sid, "task-3")
+    view = run_progress.project_task(brr_dir, key, "task-3")
     assert view is not None
     assert view.state == "needs_context"
     assert view.phase == "needs_context"
@@ -124,13 +103,12 @@ def test_project_task_needs_context(tmp_path):
 
 def test_project_task_conflict(tmp_path):
     brr_dir = tmp_path / ".brr"
-    manifest = _seed_stream(brr_dir, "stream-rp-conf")
-    sid = manifest.id
-    _emit(brr_dir, sid, "task_created", task_id="task-4", branch="auto", env="worktree")
-    _emit(brr_dir, sid, "done", task_id="task-4")  # finalize then conflict
-    _emit(brr_dir, sid, "conflict", task_id="task-4", branch="brr/task-4")
+    key = "telegram:4:"
+    _emit(brr_dir, key, "task_created", task_id="task-4", branch="auto", env="worktree")
+    _emit(brr_dir, key, "done", task_id="task-4")
+    _emit(brr_dir, key, "conflict", task_id="task-4", branch="brr/task-4")
 
-    view = run_progress.project_task(brr_dir, sid, "task-4")
+    view = run_progress.project_task(brr_dir, key, "task-4")
     assert view is not None
     assert view.state == "failed"
     assert view.phase == "conflict"
@@ -140,15 +118,14 @@ def test_project_task_conflict(tmp_path):
 
 def test_project_task_container_preserved(tmp_path):
     brr_dir = tmp_path / ".brr"
-    manifest = _seed_stream(brr_dir, "stream-rp-pres")
-    sid = manifest.id
-    _emit(brr_dir, sid, "task_created", task_id="task-5", branch="current",
+    key = "telegram:5:"
+    _emit(brr_dir, key, "task_created", task_id="task-5", branch="current",
           env="docker")
-    _emit(brr_dir, sid, "container_preserved", task_id="task-5",
+    _emit(brr_dir, key, "container_preserved", task_id="task-5",
           containers=["brr-task-5-attempt-1", "brr-task-5-attempt-2"])
-    _emit(brr_dir, sid, "failed", task_id="task-5", stage="run")
+    _emit(brr_dir, key, "failed", task_id="task-5", stage="run")
 
-    view = run_progress.project_task(brr_dir, sid, "task-5")
+    view = run_progress.project_task(brr_dir, key, "task-5")
     assert view is not None
     assert view.state == "failed"
     assert view.container_ids == [
@@ -157,67 +134,84 @@ def test_project_task_container_preserved(tmp_path):
     ]
 
 
-def test_project_stream_latest_picks_most_recent_task(tmp_path):
+def test_project_conversation_latest_picks_most_recent_task(tmp_path):
     brr_dir = tmp_path / ".brr"
-    manifest = _seed_stream(brr_dir, "stream-rp-latest")
-    sid = manifest.id
-    stream_mod.append_task(
-        brr_dir, sid,
+    key = "telegram:6:"
+    conversations.append_task(
+        brr_dir, key,
         task_id="task-old", event_id="evt-old",
         branch="current", env="host", status="done",
     )
-    stream_mod.append_task(
-        brr_dir, sid,
+    conversations.append_task(
+        brr_dir, key,
         task_id="task-new", event_id="evt-new",
         branch="auto", env="docker", status="running",
     )
-    _emit(brr_dir, sid, "task_created", task_id="task-new", branch="auto",
+    _emit(brr_dir, key, "task_created", task_id="task-new", branch="auto",
           env="docker")
-    _emit(brr_dir, sid, "run_started", task_id="task-new")
+    _emit(brr_dir, key, "run_started", task_id="task-new")
 
-    view = run_progress.project_stream_latest(brr_dir, sid)
+    view = run_progress.project_conversation_latest(brr_dir, key)
     assert view is not None
     assert view.task_id == "task-new"
     assert view.state == "active"
 
 
-def test_project_stream_latest_returns_empty_when_no_tasks(tmp_path):
+def test_project_conversation_latest_returns_none_when_no_tasks(tmp_path):
     brr_dir = tmp_path / ".brr"
-    manifest = _seed_stream(brr_dir, "stream-rp-empty")
-    view = run_progress.project_stream_latest(brr_dir, manifest.id)
-    assert view is not None
-    assert view.task_id is None
-    assert view.title == "Refactor login flow"
+    key = "telegram:7:"
+    conversations.append_event(brr_dir, key, {"id": "evt-1", "source": "telegram"})
+    view = run_progress.project_conversation_latest(brr_dir, key)
+    assert view is None
 
 
 def test_render_text_compact_includes_essentials(tmp_path):
     brr_dir = tmp_path / ".brr"
-    manifest = _seed_stream(brr_dir, "stream-rp-render")
-    sid = manifest.id
-    _emit(brr_dir, sid, "task_created", task_id="task-r", branch="auto",
+    key = "telegram:8:"
+    _emit(brr_dir, key, "task_created", task_id="task-r", branch="auto",
           env="docker")
-    _emit(brr_dir, sid, "env_prepared", task_id="task-r", env="docker",
+    _emit(brr_dir, key, "env_prepared", task_id="task-r", env="docker",
           branch_name="brr/task-r")
-    _emit(brr_dir, sid, "attempt_started", task_id="task-r", attempt=1)
-    _emit(brr_dir, sid, "run_started", task_id="task-r")
+    _emit(brr_dir, key, "attempt_started", task_id="task-r", attempt=1)
+    _emit(brr_dir, key, "run_started", task_id="task-r")
 
-    view = run_progress.project_task(brr_dir, sid, "task-r")
+    view = run_progress.project_task(brr_dir, key, "task-r")
     assert view is not None
     text = run_progress.render_text(view, compact=True)
     assert "brr" in text
     assert "task-r" in text
     assert "running" in text
-    assert "Refactor login flow" in text
     assert "phase: running" in text
     assert "branch: brr/task-r" in text
     assert "env: docker" in text
 
 
+def test_render_text_compact_does_not_inject_conversation_identity(tmp_path):
+    """Compact card must not surface arbitrary conversation strings.
+
+    This is the key regression from the dropped streams design — old
+    code rendered a frozen stream title/intent here. Now there is no
+    such field, so any conversation identifier must not leak into the
+    compact card unprompted.
+    """
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:99:USER CONTEXTUAL OVERRIDE"
+    _emit(brr_dir, key, "task_created", task_id="task-c", branch="auto",
+          env="docker")
+    _emit(brr_dir, key, "failed", task_id="task-c", stage="env",
+          error="docker env requires docker.image in .brr/config")
+
+    view = run_progress.project_task(brr_dir, key, "task-c")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    assert "USER CONTEXTUAL OVERRIDE" not in text
+
+
 def test_task_id_from_packet():
     packet = updates.UpdatePacket(
-        type="task_created", stream_id="s", payload={"task_id": "task-x"}
+        type="task_created", conversation_key="k", payload={"task_id": "task-x"},
     )
     assert run_progress.task_id_from_packet(packet) == "task-x"
 
-    empty = updates.UpdatePacket(type="event_received", stream_id="s")
+    empty = updates.UpdatePacket(type="event_received", conversation_key="k")
     assert run_progress.task_id_from_packet(empty) is None

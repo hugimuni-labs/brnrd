@@ -22,12 +22,12 @@ import time
 from pathlib import Path
 
 from . import config as conf
+from . import conversations
 from . import envs
 from . import gitops
 from . import protocol
 from . import run_context
 from . import runner
-from . import stream as stream_mod
 from . import updates
 from . import worktree
 from .task import Task
@@ -109,13 +109,13 @@ def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[th
 def _push_if_needed(
     repo_root: Path,
     *,
-    stream_id: str | None = None,
+    conversation_key: str | None = None,
     task_id: str | None = None,
 ) -> None:
     """Push to origin if there are unpushed commits.
 
-    When *stream_id* is provided, emit ``push_started``/``push_done``
-    update packets so gates can render delivery progress.
+    When *conversation_key* is provided, emit ``push_started``/
+    ``push_done`` update packets so gates can render delivery progress.
     """
     try:
         result = subprocess.run(
@@ -130,10 +130,10 @@ def _push_if_needed(
         push_payload: dict = {"commits": commit_count}
         if task_id:
             push_payload["task_id"] = task_id
-        if stream_id:
+        if conversation_key:
             updates.emit(brr_dir, updates.UpdatePacket(
                 type="push_started",
-                stream_id=stream_id,
+                conversation_key=conversation_key,
                 payload=push_payload,
             ))
         print("[brr] pushing changes...")
@@ -141,7 +141,7 @@ def _push_if_needed(
             ["git", "push"], cwd=repo_root,
             capture_output=True, text=True, timeout=60,
         )
-        if stream_id:
+        if conversation_key:
             done_payload = dict(push_payload)
             done_payload["ok"] = push.returncode == 0
             if push.returncode != 0:
@@ -150,7 +150,7 @@ def _push_if_needed(
                     done_payload["error"] = detail[:500]
             updates.emit(brr_dir, updates.UpdatePacket(
                 type="push_done",
-                stream_id=stream_id,
+                conversation_key=conversation_key,
                 payload=done_payload,
             ))
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -172,7 +172,7 @@ def _run_worker(
     """Run the runner for a single event, with retries.
 
     Creates a Task from the event, persists it to .brr/tasks/,
-    resolves the workstream context, and tracks status throughout
+    derives the conversation key, and tracks status throughout
     execution. Returns the Task.
     """
     eid = event["id"]
@@ -181,49 +181,43 @@ def _run_worker(
     runner_name = runner.resolve_runner(repo_root)
     base_branch = gitops.current_branch(repo_root)
 
-    resolution = stream_mod.resolve_for_event(brr_dir, event)
-    stream_id = resolution.stream_id
-    if resolution.created:
+    conv_key = conversations.conversation_key_for_event(event) or ""
+    if conv_key:
+        conversations.append_event(brr_dir, conv_key, event)
         updates.emit(brr_dir, updates.UpdatePacket(
-            type="stream_created",
-            stream_id=stream_id,
-            payload={"event_id": eid, "reason": resolution.reason},
+            type="event_received",
+            conversation_key=conv_key,
+            payload={"event_id": eid, "source": event.get("source", "")},
         ))
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="event_received",
-        stream_id=stream_id,
-        payload={"event_id": eid, "source": event.get("source", "")},
-    ))
-    stream_mod.append_event(brr_dir, stream_id, event)
 
     stage_feedback = _wants_stage_feedback(event)
 
     try:
         task, triage_trace = _triage_task(
-            event, repo_root, cfg, runner_name, stream_id,
+            event, repo_root, cfg, runner_name, conv_key,
             stage_feedback=stage_feedback,
             trace=debug,
         )
     except RuntimeError as e:
         print(f"[brr] task {eid}: triage error: {e}")
         task = Task.from_event(event, cfg)
-        task.stream_id = stream_id
+        task.conversation_key = conv_key
         task.update_status("error", tasks_dir)
         updates.emit(brr_dir, updates.UpdatePacket(
             type="failed",
-            stream_id=stream_id,
+            conversation_key=conv_key,
             payload={"event_id": eid, "task_id": task.id, "stage": "triage", "error": str(e)},
         ))
         return task
 
     updates.emit(brr_dir, updates.UpdatePacket(
         type="task_created",
-        stream_id=stream_id,
+        conversation_key=conv_key,
         payload={"task_id": task.id, "event_id": eid, "branch": task.branch, "env": task.env},
     ))
     updates.emit(brr_dir, updates.UpdatePacket(
         type="triage_done",
-        stream_id=stream_id,
+        conversation_key=conv_key,
         payload={"task_id": task.id, "branch": task.branch, "env": task.env},
     ))
 
@@ -239,7 +233,6 @@ def _run_worker(
         task.meta["branch_name"] = branch_name
     task.meta["base_branch"] = base_branch
 
-    stream_manifest = stream_mod.load_manifest(brr_dir, stream_id)
     event_body_for_prompt = event.get("body", "") or ""
 
     try:
@@ -258,7 +251,7 @@ def _run_worker(
         task.update_status("error", tasks_dir)
         updates.emit(brr_dir, updates.UpdatePacket(
             type="failed",
-            stream_id=stream_id,
+            conversation_key=conv_key,
             payload={"task_id": task.id, "stage": "env", "error": str(e)},
         ))
         return task
@@ -272,7 +265,7 @@ def _run_worker(
 
     updates.emit(brr_dir, updates.UpdatePacket(
         type="env_prepared",
-        stream_id=stream_id,
+        conversation_key=conv_key,
         payload={
             "task_id": task.id,
             "env": task.env,
@@ -280,11 +273,17 @@ def _run_worker(
         },
     ))
 
-    stream_mod.append_task(
-        brr_dir, stream_id,
-        task_id=task.id, event_id=eid,
-        branch=task.branch, env=task.env, status=task.status,
-        base_branch=base_branch, branch_name=branch_name,
+    if conv_key:
+        conversations.append_task(
+            brr_dir, conv_key,
+            task_id=task.id, event_id=eid,
+            branch=task.branch, env=task.env, status=task.status,
+            base_branch=base_branch, branch_name=branch_name,
+        )
+
+    recent_conversation = (
+        conversations.read_recent(brr_dir, conv_key, limit=10)
+        if conv_key else []
     )
 
     context_path = run_context.write_context_file(
@@ -292,7 +291,7 @@ def _run_worker(
         task,
         event,
         env_ctx,
-        stream=stream_manifest,
+        recent_conversation=recent_conversation,
         event_body=event_body_for_prompt,
     )
     task.meta["context_path"] = str(context_path)
@@ -301,7 +300,7 @@ def _run_worker(
     trace_dirs: list[str] = [triage_trace] if triage_trace else []
     updates.emit(brr_dir, updates.UpdatePacket(
         type="run_started",
-        stream_id=stream_id,
+        conversation_key=conv_key,
         payload={"task_id": task.id, "branch": branch_name, "env": task.env},
     ))
     seen_containers: set[str] = set()
@@ -315,7 +314,7 @@ def _run_worker(
                 runtime_dir=str(env_ctx.runtime_dir),
                 log_file=env_ctx.log_file,
                 context_path=str(context_path),
-                stream=stream_manifest,
+                recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
                 stage_feedback=stage_feedback,
             )
@@ -331,7 +330,7 @@ def _run_worker(
                 runtime_dir=str(env_ctx.runtime_dir),
                 log_file=env_ctx.log_file,
                 context_path=str(context_path),
-                stream=stream_manifest,
+                recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
                 stage_feedback=stage_feedback,
             )
@@ -339,7 +338,7 @@ def _run_worker(
         print(f"[brr] worker {eid}: attempt {attempt}")
         updates.emit(brr_dir, updates.UpdatePacket(
             type="attempt_started",
-            stream_id=stream_id,
+            conversation_key=conv_key,
             payload={
                 "task_id": task.id,
                 "event_id": eid,
@@ -361,7 +360,7 @@ def _run_worker(
             trace=debug,
         )
         _emit_new_containers(
-            brr_dir, stream_id, task.id, env_ctx, seen_containers,
+            brr_dir, conv_key, task.id, env_ctx, seen_containers,
         )
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
@@ -377,24 +376,24 @@ def _run_worker(
             resp_text = env_ctx.response_path_host.read_text(encoding="utf-8")
             resp_fm = protocol.parse_frontmatter(resp_text)
             _record_response_artifact(
-                brr_dir, stream_id, task, resp_path, resp_fm,
+                brr_dir, conv_key, task, resp_path, resp_fm,
             )
             if resp_fm.get("status") == "needs_context":
                 task.update_status("needs_context", tasks_dir)
                 updates.emit(brr_dir, updates.UpdatePacket(
                     type="needs_context",
-                    stream_id=stream_id,
+                    conversation_key=conv_key,
                     payload={"task_id": task.id, "event_id": eid},
                 ))
                 updates.emit(brr_dir, updates.UpdatePacket(
                     type="finalizing",
-                    stream_id=stream_id,
+                    conversation_key=conv_key,
                     payload={"task_id": task.id, "stage": "needs_context"},
                 ))
                 task = env_backend.finalize(
                     env_ctx, task, tasks_dir, debug=debug,
                 )
-                _emit_preserved_containers(brr_dir, stream_id, task)
+                _emit_preserved_containers(brr_dir, conv_key, task)
             else:
                 task.update_status("done", tasks_dir)
                 maintenance_trace = _maybe_kb_maintenance(
@@ -406,23 +405,23 @@ def _run_worker(
                     task.save(tasks_dir)
                 updates.emit(brr_dir, updates.UpdatePacket(
                     type="finalizing",
-                    stream_id=stream_id,
+                    conversation_key=conv_key,
                     payload={"task_id": task.id, "stage": "done"},
                 ))
                 task = env_backend.finalize(
                     env_ctx, task, tasks_dir, debug=debug,
                 )
-                _emit_preserved_containers(brr_dir, stream_id, task)
+                _emit_preserved_containers(brr_dir, conv_key, task)
                 if task.status == "conflict":
                     updates.emit(brr_dir, updates.UpdatePacket(
                         type="conflict",
-                        stream_id=stream_id,
+                        conversation_key=conv_key,
                         payload={"task_id": task.id, "branch": branch_name},
                     ))
                 else:
                     updates.emit(brr_dir, updates.UpdatePacket(
                         type="done",
-                        stream_id=stream_id,
+                        conversation_key=conv_key,
                         payload={"task_id": task.id, "event_id": eid},
                     ))
             return task
@@ -431,7 +430,7 @@ def _run_worker(
         will_retry = bool(retry_reason and attempt <= max_retries)
         updates.emit(brr_dir, updates.UpdatePacket(
             type="attempt_failed",
-            stream_id=stream_id,
+            conversation_key=conv_key,
             payload={
                 "task_id": task.id,
                 "event_id": eid,
@@ -444,7 +443,7 @@ def _run_worker(
             print(f"[brr] worker {eid}: {retry_reason}, retrying...")
             updates.emit(brr_dir, updates.UpdatePacket(
                 type="retrying",
-                stream_id=stream_id,
+                conversation_key=conv_key,
                 payload={
                     "task_id": task.id,
                     "event_id": eid,
@@ -459,22 +458,22 @@ def _run_worker(
     task.update_status("error", tasks_dir)
     updates.emit(brr_dir, updates.UpdatePacket(
         type="failed",
-        stream_id=stream_id,
+        conversation_key=conv_key,
         payload={"task_id": task.id, "event_id": eid, "stage": "run"},
     ))
     updates.emit(brr_dir, updates.UpdatePacket(
         type="finalizing",
-        stream_id=stream_id,
+        conversation_key=conv_key,
         payload={"task_id": task.id, "stage": "failed"},
     ))
     task = env_backend.finalize(env_ctx, task, tasks_dir, debug=debug)
-    _emit_preserved_containers(brr_dir, stream_id, task)
+    _emit_preserved_containers(brr_dir, conv_key, task)
     return task
 
 
 def _emit_new_containers(
     brr_dir: Path,
-    stream_id: str,
+    conversation_key: str,
     task_id: str,
     env_ctx: "envs.RunContext",
     seen: set[str],
@@ -495,7 +494,7 @@ def _emit_new_containers(
         seen.add(cid)
         updates.emit(brr_dir, updates.UpdatePacket(
             type="container_started",
-            stream_id=stream_id,
+            conversation_key=conversation_key,
             payload={
                 "task_id": task_id,
                 "env": env_ctx.name,
@@ -506,7 +505,7 @@ def _emit_new_containers(
 
 def _emit_preserved_containers(
     brr_dir: Path,
-    stream_id: str,
+    conversation_key: str,
     task: Task,
 ) -> None:
     """Emit container_preserved when finalize left containers behind."""
@@ -523,7 +522,7 @@ def _emit_preserved_containers(
         return
     updates.emit(brr_dir, updates.UpdatePacket(
         type="container_preserved",
-        stream_id=stream_id,
+        conversation_key=conversation_key,
         payload={
             "task_id": task.id,
             "containers": containers,
@@ -544,44 +543,28 @@ def _wants_stage_feedback(event: dict) -> bool:
 
 def _record_response_artifact(
     brr_dir: Path,
-    stream_id: str,
+    conversation_key: str,
     task: Task,
     response_path: Path,
     response_frontmatter: dict,
 ) -> None:
-    """Index the response artifact and apply any reply-route policy."""
+    """Index the response artifact on the conversation log."""
     label = f"response:{task.event_id}" if task.event_id else f"response:{task.id}"
-    stream_mod.append_artifact(
-        brr_dir, stream_id,
-        kind="response",
-        path=str(response_path),
-        task_id=task.id,
-        label=label,
-    )
-
-    requested = response_frontmatter.get("reply_route") if isinstance(response_frontmatter, dict) else None
-    if not isinstance(requested, dict):
-        requested = None
-
-    manifest = stream_mod.load_manifest(brr_dir, stream_id)
-    if manifest is None:
-        return
-    normalized = stream_mod.normalize_reply_route(
-        requested,
-        stream_route=manifest.reply_route,
-        source=task.source,
-    )
-    if normalized != manifest.reply_route:
-        manifest.reply_route = normalized
-        stream_mod.save_manifest(brr_dir, manifest)
-
+    if conversation_key:
+        conversations.append_artifact(
+            brr_dir, conversation_key,
+            kind="response",
+            path=str(response_path),
+            task_id=task.id,
+            label=label,
+        )
     updates.emit(brr_dir, updates.UpdatePacket(
         type="artifact_created",
-        stream_id=stream_id,
+        conversation_key=conversation_key,
         payload={
-            "task_id": task.id, "kind": "response",
+            "task_id": task.id,
+            "kind": "response",
             "path": str(response_path),
-            "selected_reply_route": normalized.get("selected"),
         },
     ))
 
@@ -650,7 +633,7 @@ def _triage_task(
     repo_root: Path,
     cfg: dict,
     runner_name: str,
-    stream_id: str | None = None,
+    conversation_key: str = "",
     *,
     stage_feedback: bool = False,
     trace: bool = False,
@@ -659,16 +642,18 @@ def _triage_task(
 
     Returns ``(task, triage_trace_dir_relative)`` where the trace dir
     is relative to ``.brr/`` (or ``None`` when tracing is off). When a
-    *stream_id* is provided the triage prompt is enriched with the
-    stream manifest so the triage agent can route consistently.
+    *conversation_key* is provided the triage prompt is enriched with
+    the recent conversation history so the triage agent can route
+    consistently with prior activity in the same gate thread.
     """
     brr_dir = gitops.shared_brr_dir(repo_root)
-    stream_manifest = (
-        stream_mod.load_manifest(brr_dir, stream_id) if stream_id else None
+    recent_conversation = (
+        conversations.read_recent(brr_dir, conversation_key, limit=10)
+        if conversation_key else []
     )
     prompt = runner.build_triage_prompt(
         event.get("body", ""), event["id"], repo_root,
-        stream=stream_manifest,
+        recent_conversation=recent_conversation,
         stage_feedback=stage_feedback,
     )
     result = runner.invoke_runner(
@@ -689,8 +674,8 @@ def _triage_task(
     except ValueError as e:
         raise RuntimeError(f"invalid triage output: {e}") from e
 
-    if stream_id:
-        task.stream_id = stream_id
+    if conversation_key:
+        task.conversation_key = conversation_key
 
     triage_trace: str | None = None
     if result.trace_dir:
@@ -765,7 +750,7 @@ def start(repo_root: Path, *, debug: bool | None = None) -> None:
 
                 _push_if_needed(
                     repo_root,
-                    stream_id=task.stream_id,
+                    conversation_key=task.conversation_key,
                     task_id=task.id,
                 )
             else:

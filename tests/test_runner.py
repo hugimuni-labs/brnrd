@@ -140,27 +140,26 @@ class TestPromptBuilding:
         assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
         assert "fix it" in prompt
 
-    def test_daemon_prompt_with_stream_context_bundle(self, tmp_path):
+    def test_daemon_prompt_with_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
         (prompts / "run.md").write_text("You are an agent.")
 
-        from brr.stream import StreamManifest
-
-        stream = StreamManifest(
-            id="stream-abc",
-            title="Refactor auth flow",
-            status="active",
-            intent="Make login testable",
-            summary="Found offending coupling",
-            open_questions="Keep cookie fallback?",
-            gate_context={"source": "telegram", "telegram_chat_id": 42},
-            reply_route={
-                "preferred": "input_gate",
-                "selected": "input_gate",
-                "allowed": ["input_gate", "git_pr"],
+        recent = [
+            {
+                "ts": "2026-05-05T20:00:00Z",
+                "kind": "event",
+                "event_id": "evt-prev",
+                "source": "telegram",
+                "summary": "earlier ping",
             },
-        )
+            {
+                "ts": "2026-05-05T20:00:05Z",
+                "kind": "update",
+                "type": "done",
+                "task_id": "task-prev",
+            },
+        ]
 
         prompt = build_daemon_prompt(
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
@@ -168,27 +167,24 @@ class TestPromptBuilding:
             branch_name="brr/task-123",
             base_branch="feat/task",
             runtime_dir="/repo/.brr",
-            stream=stream,
+            recent_conversation=recent,
             event_body="please fix the login flow",
             stage_feedback=True,
         )
         assert "Task Context Bundle" in prompt
-        assert "Stream ID: stream-abc" in prompt
-        assert "Refactor auth flow" in prompt
-        assert "Make login testable" in prompt
-        assert "Found offending coupling" in prompt
-        assert "Keep cookie fallback" in prompt
-        assert "telegram_chat_id=42" in prompt
-        assert "preferred=input_gate" in prompt
+        assert "Recent in this conversation" in prompt
+        assert "earlier ping" in prompt
+        assert "task-prev" in prompt
+        assert "update done" in prompt
         assert "Stage feedback requested: yes" in prompt
         assert "Original event body" in prompt
         assert "please fix the login flow" in prompt
-        # Backwards-compatible substrings preserved.
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
         assert "Base branch: feat/task" in prompt
+        assert "Workstream" not in prompt
 
-    def test_daemon_prompt_without_stream_context(self, tmp_path):
+    def test_daemon_prompt_without_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
         (prompts / "run.md").write_text("You are an agent.")
@@ -198,6 +194,7 @@ class TestPromptBuilding:
             task_id="task-9",
         )
         assert "Workstream" not in prompt
+        assert "Recent in this conversation" not in prompt
         assert "Stage feedback requested: no" in prompt
         assert "Original event body" not in prompt
 
@@ -224,28 +221,29 @@ class TestPromptBuilding:
         assert "triage agent" in prompt
         assert "add logging" in prompt
 
-    def test_triage_prompt_with_stream_and_stage_feedback(self, tmp_path):
+    def test_triage_prompt_with_conversation_history_and_stage_feedback(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
         (prompts / "triage.md").write_text("You are a triage agent.")
 
-        from brr.stream import StreamManifest
-
-        stream = StreamManifest(
-            id="stream-xyz",
-            title="Auth rework",
-            intent="Plan migration",
-        )
+        recent = [
+            {
+                "ts": "2026-05-05T19:00:00Z",
+                "kind": "event",
+                "event_id": "evt-prev",
+                "source": "telegram",
+                "summary": "earlier discussion",
+            },
+        ]
         prompt = build_triage_prompt(
             "kick off", "evt-2", tmp_path,
-            stream=stream,
+            recent_conversation=recent,
             stage_feedback=True,
         )
-        assert "Workstream" in prompt
-        assert "stream-xyz" in prompt
-        assert "Auth rework" in prompt
-        assert "Plan migration" in prompt
+        assert "Recent in this conversation" in prompt
+        assert "earlier discussion" in prompt
         assert "Stage feedback requested" in prompt
+        assert "Workstream" not in prompt
 
     def test_triage_prompt_uses_reduced_context(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

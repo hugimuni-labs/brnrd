@@ -21,7 +21,8 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
-from .. import protocol, run_progress, stream as stream_mod
+from .. import protocol, run_progress
+from ..task import Task
 
 _API = "https://api.telegram.org/bot{token}/{method}"
 _MAX_TG_LEN = 3900
@@ -124,8 +125,8 @@ def _save_progress_state(brr_dir: Path, state: dict) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _progress_key(stream_id: str, task_id: str) -> str:
-    return f"{stream_id}:{task_id}"
+def _progress_key(task_id: str) -> str:
+    return task_id
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -352,29 +353,26 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     if not token:
         return
 
-    stream_id = getattr(packet, "stream_id", None)
+    conv_key = getattr(packet, "conversation_key", "") or ""
     task_id = run_progress.task_id_from_packet(packet)
-    if not stream_id or not task_id:
+    if not conv_key or not task_id:
         return
 
-    manifest = stream_mod.load_manifest(brr_dir, stream_id)
-    if manifest is None:
+    task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
+    if task is None or task.source != "telegram":
         return
-    gate_ctx = manifest.gate_context or {}
-    if (gate_ctx.get("source") or "") != "telegram":
-        return
-    chat_id = _coerce_optional_int(gate_ctx.get("telegram_chat_id"))
+    chat_id = _coerce_optional_int(task.meta.get("telegram_chat_id"))
     if chat_id is None:
         return
-    topic_id = _coerce_optional_int(gate_ctx.get("telegram_topic_id"))
+    topic_id = _coerce_optional_int(task.meta.get("telegram_topic_id"))
 
-    view = run_progress.project_task(brr_dir, stream_id, task_id)
+    view = run_progress.project_task(brr_dir, conv_key, task_id)
     if view is None:
         return
     text = run_progress.render_text(view, compact=True)
 
     progress_state = _load_progress_state(brr_dir)
-    key = _progress_key(stream_id, task_id)
+    key = _progress_key(task_id)
     entry = progress_state.get(key)
 
     try:
