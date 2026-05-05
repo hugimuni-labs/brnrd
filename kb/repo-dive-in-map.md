@@ -14,11 +14,11 @@ When this guide says "source", read the linked file first, then read the linked
 tests immediately after. The tests are often the most compact description of
 the intended behavior.
 
-Last validated against `feat/task-abstraction` after the environment-policy and
-branch-strategy ownership changes (`7faf778`, `022a462`, `e7c1ca1`) and the
-run-progress-and-streams UX rework (`run_progress.py`, expanded daemon
-lifecycle packets, Telegram/Slack `render_update` live cards, and the demoted
-local `status.py`).
+Last validated against `feat/task-abstraction` after the environment-policy
+and branch-strategy ownership changes, the run-progress UX rework, and the
+2026-05-05 streams-to-conversations refactor that dropped `.brr/streams/`,
+the workstream manifest, and the corresponding CLI surfaces (see
+[decision-drop-streams.md](decision-drop-streams.md)).
 
 ## Current ownership snapshot
 
@@ -35,13 +35,13 @@ These are the most important current-shape details to carry while reading:
 
 `brr` turns external messages into frontmatter-backed event files, triages them
 into task files, resolves the user-facing environment policy into a concrete
-backend, runs a configured AI CLI there, records the work in streams and traces,
-and delivers a response file back through the originating gate.
+backend, runs a configured AI CLI there, appends every step to a per-gate-thread
+conversation log, and delivers a response file back through the originating gate.
 
 The whole runtime can be held as:
 
 ```text
-gate -> event -> stream -> triage -> task -> env -> runner -> response -> gate
+gate -> event -> conversation -> triage -> task -> env -> runner -> response -> gate
 ```
 
 ## Start here
@@ -52,10 +52,10 @@ Read these in order if you want the quickest useful mental model:
 2. [Gate protocol](../src/brr/gates/README.md) for the file-based I/O contract.
 3. [Protocol source](../src/brr/protocol.py) with [protocol tests](../tests/test_protocol.py).
 4. [Task model](../src/brr/task.py) with [task tests](../tests/test_task.py).
-5. [Stream model](../src/brr/stream.py) with [stream tests](../tests/test_stream.py).
+5. [Conversation log](../src/brr/conversations.py) with [conversation tests](../tests/test_conversations.py).
 6. [Runner plumbing](../src/brr/runner.py) with [runner tests](../tests/test_runner.py).
 7. [Environment backends](../src/brr/envs/__init__.py) with [env tests](../tests/test_envs.py).
-8. [Daemon worker](../src/brr/daemon.py) with [daemon tests](../tests/test_daemon.py) and [daemon-stream tests](../tests/test_daemon_streams.py).
+8. [Daemon worker](../src/brr/daemon.py) with [daemon tests](../tests/test_daemon.py) and [daemon-conversation tests](../tests/test_daemon_conversations.py).
 9. [Bundled execution map](../src/brr/docs/execution-map.md) to re-read the system top-down after seeing the parts.
 
 ## Spiral reading route
@@ -119,27 +119,26 @@ Purpose: learn the durable runtime entities before reading orchestration.
 Read:
 
 - [`src/brr/task.py`](../src/brr/task.py)
-- [`src/brr/stream.py`](../src/brr/stream.py)
+- [`src/brr/conversations.py`](../src/brr/conversations.py)
 - [`src/brr/updates.py`](../src/brr/updates.py)
 - [`src/brr/run_progress.py`](../src/brr/run_progress.py)
 - [`src/brr/run_context.py`](../src/brr/run_context.py)
 
 Keep in mind:
 
-- `Task` is the central work unit after triage. It carries the originating event, internal branch/staging state, concrete environment backend, status, source, stream, and metadata.
-- `StreamManifest` groups related events/tasks/artifacts into a line of work.
-- `UpdatePacket` is lifecycle telemetry for streams and optional gate renderers. The packet vocabulary now covers env prep, attempts, retries, finalize, push, and Docker container births/preservations.
-- `RunProgressView` (in `run_progress.py`) folds stream records (manifest + events + tasks + artifacts) into a compact per-task projection that both gates and local diagnostics render. Adding new lifecycle UX should extend this projection, not reinvent rendering per gate.
+- `Task` is the central work unit after triage. It carries the originating event, internal branch/staging state, concrete environment backend, status, source, conversation key, and metadata.
+- A conversation is just a per-gate-thread append-only ndjson log of events, tasks, artifacts, and lifecycle update packets. There is no manifest, no title, no intent — those leaky stream-identity fields were removed in the 2026-05-05 refactor (see [decision-drop-streams.md](decision-drop-streams.md)).
+- `UpdatePacket` is lifecycle telemetry routed to a conversation log and, optionally, gate `render_update` hooks. The packet vocabulary covers env prep, attempts, retries, finalize, push, and Docker container births/preservations.
+- `RunProgressView` (in `run_progress.py`) folds conversation records into a compact per-task projection that both gates and local diagnostics render. Adding new lifecycle UX should extend this projection, not reinvent rendering per gate.
 - `run_context.py` writes a per-task context file under `.brr/runs/<task-id>/context.md` so an agent can recover orientation without poking around runtime state.
 
 Tests:
 
 - [task tests](../tests/test_task.py)
-- [stream tests](../tests/test_stream.py)
+- [conversation tests](../tests/test_conversations.py)
 - [run-progress tests](../tests/test_run_progress.py)
-- [daemon-stream tests](../tests/test_daemon_streams.py)
+- [daemon-conversation tests](../tests/test_daemon_conversations.py)
 - [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
-- [status-stream tests](../tests/test_status_streams.py)
 - [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
 
 ### Ring 3: execution contract
@@ -181,22 +180,22 @@ Read:
 
 - [`src/brr/daemon.py`](../src/brr/daemon.py)
 - [daemon tests](../tests/test_daemon.py)
-- [daemon-stream tests](../tests/test_daemon_streams.py)
+- [daemon-conversation tests](../tests/test_daemon_conversations.py)
 
 Read `_run_worker()` in passes rather than all at once:
 
-1. Resolve the incoming event to a stream.
-2. Emit stream/event lifecycle updates.
-3. Run triage and parse a `Task`.
+1. Resolve the incoming event to a conversation key (gate-thread fingerprint).
+2. Append the event arrival and emit `event_received`.
+3. Run triage and parse a `Task`; emit `task_created` and `triage_done`.
 4. Resolve branch and environment policy into a concrete backend.
-5. Prepare the environment.
-6. Write the run context file.
-7. Build the daemon prompt.
+5. Prepare the environment; emit `env_prepared`.
+6. Write the run context file (with the recent conversation block).
+7. Build the daemon prompt (also threading the recent conversation block).
 8. Invoke the runner, with retries when the runner prints no final reply on stdout.
 9. Parse the response file (written from captured stdout) for outcomes such as `needs_context`.
 10. Optionally run KB maintenance.
 11. Finalize the environment.
-12. Update event/task/stream status.
+12. Update task status and append matching update packets to the conversation log.
 
 Keep in mind:
 
@@ -222,7 +221,7 @@ Read:
 - [`src/brr/status.py`](../src/brr/status.py)
 - [`src/brr/docs/__init__.py`](../src/brr/docs/__init__.py)
 - [`src/brr/docs/brr-internals.md`](../src/brr/docs/brr-internals.md)
-- [`src/brr/docs/streams.md`](../src/brr/docs/streams.md)
+- [`src/brr/docs/conversations.md`](../src/brr/docs/conversations.md)
 - [`src/brr/docs/active-task.md`](../src/brr/docs/active-task.md)
 
 Keep in mind:
@@ -239,9 +238,9 @@ Keep in mind:
 Tests:
 
 - [Telegram gate tests](../tests/test_telegram_gate.py)
+- [gate setup tests](../tests/test_gate_setup.py)
 - [Telegram render-update tests](../tests/test_telegram_render_update.py)
 - [Slack render-update tests](../tests/test_slack_render_update.py)
-- [status-stream tests](../tests/test_status_streams.py)
 - [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
 - [docs tests](../tests/test_docs.py)
 
@@ -260,7 +259,7 @@ Referenced by:
 - Gates create events.
 - Daemon scans events.
 - Task creation copies selected event metadata.
-- Streams record event summaries and gate thread keys.
+- Conversation logs record event summaries keyed by gate thread.
 
 Persistence:
 
@@ -309,8 +308,8 @@ Important fields:
 - `env` for the concrete backend (`host`, `worktree`, `docker`, or plugin/future name)
 - `status`
 - `source`
-- `stream_id`
-- freeform `meta`
+- `conversation_key` (gate-thread fingerprint, used to route lifecycle records and progress cards)
+- freeform `meta` (carries gate delivery info such as `telegram_chat_id` or `slack_channel`)
 
 Environment policy details:
 
@@ -324,42 +323,36 @@ Read with:
 - [task tests](../tests/test_task.py)
 - [daemon tests](../tests/test_daemon.py)
 
-### StreamManifest
+### Conversation log
 
 Source:
 
-- [`StreamManifest`](../src/brr/stream.py)
-- [`resolve_for_event()`](../src/brr/stream.py)
-- [`append_event()`](../src/brr/stream.py)
-- [`append_task()`](../src/brr/stream.py)
-- [`append_artifact()`](../src/brr/stream.py)
+- [`conversation_key_for_event()`](../src/brr/conversations.py)
+- [`append_event()` / `append_task()` / `append_artifact()` / `append_update()`](../src/brr/conversations.py)
+- [`read_records()` / `read_recent()` / `records_for_task()`](../src/brr/conversations.py)
 
 Referenced by:
 
-- Daemon resolves every event to a stream.
-- Runner prompt builders receive stream context.
-- Status helpers render streams.
-- Updates append lifecycle records to stream logs.
+- Daemon routes every event to a conversation key and appends lifecycle records.
+- Runner prompt builders receive recent records and render them under a `Recent in this conversation` block.
+- Status helpers project conversation records into `RunProgressView`.
+- Updates append lifecycle update packets to the same per-conversation log.
 
 Persistence:
 
-- `.brr/streams/index.json`
-- `.brr/streams/<stream-id>/stream.md`
-- `.brr/streams/<stream-id>/events.ndjson`
-- `.brr/streams/<stream-id>/tasks.ndjson`
-- `.brr/streams/<stream-id>/artifacts.ndjson`
+- `.brr/conversations/<safe-key>.ndjson` — one append-only ndjson per gate thread; `:` is encoded as `__` in filenames.
 
 Important concepts:
 
-- Explicit `stream_id` wins.
-- Related task stream can be reused.
-- Gate thread key can reuse a stream.
-- Otherwise a fallback stream is created.
+- Conversations have no manifest, no title, no intent. Identity is the bug we removed; see [decision-drop-streams.md](decision-drop-streams.md).
+- The conversation key is `telegram:<chat>:<topic>`, `slack:<channel>:<thread_ts>`, or `git:<file>` — a gate-thread fingerprint.
+- Each record carries `ts` and a `kind` discriminator (`event`, `task`, `artifact`, `update`).
+- Lines of work that span runs belong in `kb/`, not in a runtime field.
 
 Read with:
 
-- [stream tests](../tests/test_stream.py)
-- [streams doc](../src/brr/docs/streams.md)
+- [conversation tests](../tests/test_conversations.py)
+- [conversations doc](../src/brr/docs/conversations.md)
 
 ### UpdatePacket
 
@@ -372,27 +365,26 @@ Source:
 Referenced by:
 
 - Daemon emits lifecycle packets at every meaningful step in `_run_worker`.
-- `_push_if_needed` emits push packets attributed to the most recent task's stream.
-- Stream event logs persist them.
+- `_push_if_needed` emits push packets routed to the task's conversation.
+- Conversation logs persist packets as `kind=update` rows.
 - Gates may render them if they expose `render_update`.
 - `run_progress.project_task` walks them to derive the per-task `RunProgressView`.
 
 Persistence:
 
-- `.brr/streams/<stream-id>/events.ndjson`
+- `.brr/conversations/<safe-key>.ndjson` (records with `kind=update`)
 
-Stable packet types include:
+Stable packet types, in roughly chronological order (see `PACKET_TYPES` in `updates.py` for the canonical list):
 
-- `stream_created`
 - `event_received`
 - `task_created`
 - `triage_done`
 - `env_prepared`
 - `container_started`
+- `run_started`
 - `attempt_started`
 - `attempt_failed`
 - `retrying`
-- `run_started`
 - `artifact_created`
 - `finalizing`
 - `container_preserved`
@@ -406,7 +398,7 @@ Stable packet types include:
 Read with:
 
 - [updates source](../src/brr/updates.py)
-- [daemon-stream tests](../tests/test_daemon_streams.py)
+- [daemon-conversation tests](../tests/test_daemon_conversations.py)
 - [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
 
 ### RunProgressView
@@ -415,33 +407,31 @@ Source:
 
 - [`RunProgressView`](../src/brr/run_progress.py)
 - [`project_task()`](../src/brr/run_progress.py)
-- [`project_stream_latest()`](../src/brr/run_progress.py)
+- [`project_conversation_latest()`](../src/brr/run_progress.py)
 - [`render_text()`](../src/brr/run_progress.py)
 
 Referenced by:
 
 - Telegram and Slack gates render compact cards from this view.
-- `status.get_status` uses it to surface the active task.
-- `status.show_stream` uses it to append the latest task's progress.
+- `status.get_status` uses it to surface the active task across conversations.
 - `status.inspect_task` uses it for the per-task progress block.
 
 Persistence:
 
-- Derived on demand from `.brr/streams/<stream-id>/{stream.md,events.ndjson,tasks.ndjson,artifacts.ndjson}`. The view itself is not persisted.
+- Derived on demand from `.brr/conversations/<safe-key>.ndjson` filtered by `task_id`. The view itself is not persisted.
 
 Important fields:
 
-- `stream_id`, `task_id`
+- `conversation_key`, `task_id`, `event_id`
 - `phase` (queued, triage, preparing, running, finalizing, delivering, delivered, needs_context, failed, conflict)
 - `state` (active, succeeded, failed, needs_context)
 - `branch`, `branch_name`, `base_branch`, `env`, `attempt`
-- `started_at`, `updated_at`, `detail`
+- `started_at`, `updated_at`, `detail`, `error`
 - `artifacts`, `container_ids`, `response_path`
-- `gate_context`, `reply_route` (carried over from the stream manifest)
 
 Important rule:
 
-- New live UX should add packet types to `updates.py`, then teach `run_progress` to fold them into `RunProgressView`. Do not bypass the projection by reading `events.ndjson` directly from each gate.
+- New live UX should add packet types to `updates.py`, then teach `run_progress` to fold them into `RunProgressView`. Do not bypass the projection by reading the conversation log directly from each gate.
 
 Read with:
 
@@ -614,36 +604,37 @@ Tests:
   - daemon, to list and update events
   - runner, to parse runner profiles
   - task, to parse/persist task frontmatter
-  - stream, to parse stream manifests
   - status, to recover event body text
 
 This is one of the lowest-level modules. Read it early.
 
-### Task and stream state
+### Task and conversation state
 
 - [`task.py`](../src/brr/task.py) is consumed by:
   - daemon
   - envs
   - run_context
   - status
+  - gates (to look up delivery info from `task.meta`)
 
-- [`stream.py`](../src/brr/stream.py) is consumed by:
+- [`conversations.py`](../src/brr/conversations.py) is consumed by:
   - daemon
   - updates
   - run_progress
+  - run_context
   - status
 
-- [`updates.py`](../src/brr/updates.py) depends on stream helpers and is used by daemon. It also dispatches packets to gate `render_update` hooks.
+- [`updates.py`](../src/brr/updates.py) depends on `conversations` for routing packets and is used by daemon. It also dispatches packets to gate `render_update` hooks.
 
-- [`run_progress.py`](../src/brr/run_progress.py) depends on `stream.py`. It is consumed by:
+- [`run_progress.py`](../src/brr/run_progress.py) depends on `conversations`. It is consumed by:
   - Telegram and Slack gate `render_update` hooks
-  - status (`get_status`, `show_stream`, `inspect_task`)
+  - status (`get_status`, `inspect_task`)
 
 The key distinction:
 
 - `Task` answers "what unit of work are we executing?"
-- `StreamManifest` answers "what line of conversation/work does this task belong to?"
-- `UpdatePacket` answers "what happened in that line of work?"
+- The conversation log answers "what has happened in this gate thread, in order?"
+- `UpdatePacket` answers "what just changed for a particular task?"
 - `RunProgressView` answers "what is the live state of this task right now, in a form a gate or an operator can render?"
 
 ### Runner and prompts
@@ -719,7 +710,7 @@ nearly every core module because it owns the lifecycle:
 - PID file management
 - gate startup
 - inbox scan
-- stream resolution
+- conversation key derivation
 - triage
 - task persistence
 - env prepare/invoke/finalize
@@ -739,7 +730,7 @@ helpers in `daemon.py` next to the worker loop:
 When debugging behavior, read daemon tests before modifying daemon source:
 
 - [daemon tests](../tests/test_daemon.py)
-- [daemon-stream tests](../tests/test_daemon_streams.py)
+- [daemon-conversation tests](../tests/test_daemon_conversations.py)
 - [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
 
 ## Runtime invariants
@@ -747,8 +738,8 @@ When debugging behavior, read daemon tests before modifying daemon source:
 ### `.brr/` is runtime state
 
 Runtime files live in `.brr/` and are gitignored. They include inbox events,
-responses, tasks, runs, streams, traces, reviews, worktrees, gate state, prompt
-overrides, doc overrides, and config.
+responses, tasks, runs, conversations, traces, reviews, worktrees, gate state,
+prompt overrides, doc overrides, and config.
 
 Do not confuse `.brr/` with durable project knowledge.
 
@@ -807,17 +798,20 @@ If a task cannot be completed without more input, the response frontmatter can
 mark `status: needs_context`. The daemon preserves that task state instead of
 turning it into a generic error.
 
-### Streams are not KB
+### Conversations are not KB
 
-Streams are runtime coordination state. They summarize related events and
-artifacts, but durable project knowledge still belongs in `kb/`.
+Conversation logs are runtime coordination state. They record events and
+update packets, but durable project knowledge still belongs in `kb/`. The
+2026-05-05 refactor explicitly removed identity fields (title, intent) from
+runtime — see [decision-drop-streams.md](decision-drop-streams.md). If a
+line of work matters enough to name, it belongs as a `kb/` page.
 
 ### Run progress is a projection, not state
 
-`RunProgressView` is derived on demand from stream records. The source of
-truth is still `events.ndjson` plus the manifest. Rendering UX (gates, local
-status) should always go through `run_progress`; introducing parallel
-ad-hoc derivations across modules is the path to drift.
+`RunProgressView` is derived on demand from conversation records, filtered
+by `task_id`. The source of truth is the per-conversation ndjson. Rendering
+UX (gates, local status) should always go through `run_progress`; introducing
+parallel ad-hoc derivations across modules is the path to drift.
 
 ### Local status is troubleshooting
 
@@ -832,18 +826,18 @@ If source-first reading feels too abstract, run the test path instead:
 
 1. [protocol tests](../tests/test_protocol.py)
 2. [task tests](../tests/test_task.py)
-3. [stream tests](../tests/test_stream.py)
+3. [conversation tests](../tests/test_conversations.py)
 4. [run-progress tests](../tests/test_run_progress.py)
 5. [runner tests](../tests/test_runner.py)
 6. [git/worktree tests](../tests/test_gitops.py)
 7. [env tests](../tests/test_envs.py)
 8. [daemon tests](../tests/test_daemon.py)
-9. [daemon-stream tests](../tests/test_daemon_streams.py)
+9. [daemon-conversation tests](../tests/test_daemon_conversations.py)
 10. [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
 11. [gate tests](../tests/test_telegram_gate.py)
-12. [Telegram render-update tests](../tests/test_telegram_render_update.py)
-13. [Slack render-update tests](../tests/test_slack_render_update.py)
-14. [status-stream tests](../tests/test_status_streams.py)
+12. [gate setup tests](../tests/test_gate_setup.py)
+13. [Telegram render-update tests](../tests/test_telegram_render_update.py)
+14. [Slack render-update tests](../tests/test_slack_render_update.py)
 15. [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
 16. [adopt tests](../tests/test_adopt.py)
 17. [integration tests](../tests/test_integration.py)
@@ -862,7 +856,8 @@ is shaped this way and where it is going:
 - [Branch Modes Plan](plan-branch-modes.md)
 - [Concurrent Worktrees Plan](plan-concurrent-worktrees.md)
 - [Env Interface design](design-env-interface.md)
-- [Workstreams bundled doc](../src/brr/docs/streams.md)
+- [Conversations bundled doc](../src/brr/docs/conversations.md)
+- [Drop streams decision](decision-drop-streams.md)
 - [Deck: brr today](deck-brr-current.md)
 - [Deck: brr fleet and steering](deck-brr-fleet-steering.md)
 
@@ -872,7 +867,7 @@ Use these heuristics while reading:
 
 - If a file talks about event files, jump to [protocol.py](../src/brr/protocol.py).
 - If a file talks about branch/environment/status, jump to [task.py](../src/brr/task.py).
-- If a file talks about thread continuity, reply route, or artifacts, jump to [stream.py](../src/brr/stream.py).
+- If a file talks about thread continuity or per-thread history, jump to [conversations.py](../src/brr/conversations.py).
 - If a file talks about lifecycle packets or `render_update`, jump to [updates.py](../src/brr/updates.py).
 - If a file talks about live progress phases, attempt counts, or rendering a per-task card, jump to [run_progress.py](../src/brr/run_progress.py).
 - If a file talks about command execution or prompts, jump to [runner.py](../src/brr/runner.py).
@@ -885,7 +880,7 @@ Use these heuristics while reading:
 Update this page when any of these change:
 
 - public CLI commands
-- event/task/stream file formats
+- event/task/conversation file formats
 - environment backends
 - daemon lifecycle
 - runner artifact contract

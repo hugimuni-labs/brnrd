@@ -470,3 +470,61 @@ Side-fixes folded in:
 Refactor removes ~80 lines of conditional logic across `runner.py`,
 `envs/__init__.py`, and `daemon.py`. All 198 tests pass.
 
+## [2026-05-05] refactor | Drop streams; conversations are routing+history
+
+Removed the `.brr/streams/` runtime layer, the workstream manifest with
+its frozen `title`/`intent`/`status`/`gate_context`/`reply_route` fields,
+and every CLI/library surface that exposed them. Replaced with a thin
+per-gate-thread append-only conversation log under
+`.brr/conversations/<safe-key>.ndjson` carrying `kind=event|task|artifact|update`
+records. Trigger was the 2026-05-05 incident where a 10-day-old prompt-
+injection demo from Telegram was still being injected into triage prompts
+and progress cards as the "frozen intent" of that chat's stream — proof
+that auto-derived stream identity was a context-poisoning leak, not a
+useful abstraction.
+
+Code-level changes:
+
+- New `src/brr/conversations.py`; deleted `src/brr/stream.py`.
+- `Task.stream_id` → `Task.conversation_key`; the key is the gate-thread
+  fingerprint (`telegram:<chat>:<topic>`, `slack:<channel>:<thread_ts>`,
+  `git:<file>`).
+- `UpdatePacket.stream_id` → `UpdatePacket.conversation_key`. Dropped the
+  `stream_created` packet type. Persistence is one ndjson per conversation
+  with `kind=update` rows.
+- `run_progress.project_task` reads from a conversation log filtered by
+  `task_id`. Added `project_conversation_latest`. Dropped title/intent
+  from the view.
+- Daemon (`_run_worker`, `_push_if_needed`) routes everything via the
+  conversation key. Triage and daemon prompts now carry a
+  `Recent in this conversation` block fed by `read_recent` instead of a
+  frozen `## Workstream` block. Same for the per-task context file.
+- Telegram and Slack `render_update` now look up delivery info from the
+  task's `meta` (which already carries `telegram_chat_id`,
+  `slack_channel`, etc.), not from a stream manifest. Progress card
+  state is keyed by `task_id` alone.
+- `status.py` shrunk: dropped `list_streams`/`show_stream`. `get_status`
+  finds the active task by walking conversation keys directly.
+- Removed `src/brr/docs/streams.md`; added `src/brr/docs/conversations.md`.
+  Updated `src/brr/docs/active-task.md` and `src/brr/docs/brr-internals.md`
+  for the new `.brr/conversations/` directory.
+- Tests: deleted `test_stream.py`, `test_status_streams.py`,
+  `test_daemon_streams.py`. Added `test_conversations.py` and
+  `test_daemon_conversations.py`. Rewrote `test_run_progress.py`,
+  `test_telegram_render_update.py`, `test_slack_render_update.py`,
+  `test_status_troubleshooting.py`, `test_runner.py`, and
+  `test_daemon_progress_packets.py` to read/write the conversation log.
+
+The CLI didn't actually expose `brr streams` / `brr stream show`
+publicly — those commands existed only as library functions referenced
+from earlier kb pages. `brr status` and `brr inspect <task-id>` remain
+as dev-phase troubleshooting helpers; the primary user surface is the
+gate (Telegram), where the chat itself is the conversation history.
+
+Captured the reasoning, the lineage from the 2026-04-27 implementation
+entry and the 2026-04-28 follow-up reviews, and the deferred work
+(deliberate "lines of work" → `kb/` pages, no migration code, per-task
+log lifecycle still tracked separately) in
+[`kb/decision-drop-streams.md`](decision-drop-streams.md). Updated
+`kb/index.md` and `kb/repo-dive-in-map.md` to match. All 196 tests pass.
+

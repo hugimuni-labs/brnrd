@@ -1,25 +1,24 @@
 """Status — local troubleshooting helpers.
 
 Status is no longer the primary UX for brr; remote gates own the live
-progress story. This module survives as a small set of diagnostics that
-operators run from a terminal when something looks off:
+progress story. This module survives as a small set of dev-phase
+diagnostics that operators run from a terminal when something looks
+off:
 
-- ``get_status``       overall daemon health and the active task (if any).
-- ``list_streams``     short list of known streams.
-- ``show_stream``      stream details plus the latest run progress.
-- ``inspect_task``     deep dive on a specific task — useful when a
-                       remote run failed and you need traces, paths and
-                       any preserved Docker container IDs.
+- ``get_status``      overall daemon health and the active task (if any).
+- ``inspect_task``    deep dive on a specific task — useful when a
+                      remote run failed and you need traces, paths and
+                      any preserved Docker container IDs.
 
-All renderers route through ``run_progress`` for the per-task block so
-local diagnostics and remote cards stay consistent.
+Both renderers route through ``run_progress`` for the per-task block
+so local diagnostics and remote cards stay consistent.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import run_progress, stream as stream_mod
+from . import conversations, run_progress
 from .task import Task
 
 
@@ -52,18 +51,7 @@ def get_status() -> str:
     agents = repo_root / "AGENTS.md"
     lines.append(f"AGENTS.md: {'yes' if agents.exists() else 'missing'}")
 
-    streams = [s for s in stream_mod.list_streams(brr_dir) if s.status == "active"]
-    if streams:
-        lines.append(f"streams: {len(streams)} active")
-        for s in streams[:5]:
-            title = s.title or "(untitled)"
-            lines.append(f"  {s.id} \u2014 {title}")
-        if len(streams) > 5:
-            lines.append(f"  \u2026 and {len(streams) - 5} more")
-    else:
-        lines.append("streams: none")
-
-    active = _active_run_progress(brr_dir, streams)
+    active = _active_run_progress(brr_dir)
     if active is not None:
         lines.append("")
         lines.append("active task:")
@@ -73,148 +61,18 @@ def get_status() -> str:
     return "\n".join(lines)
 
 
-def _active_run_progress(
-    brr_dir: Path,
-    streams: list[stream_mod.StreamManifest],
-) -> run_progress.RunProgressView | None:
-    """Find the most recently-touched non-terminal task across active streams."""
+def _active_run_progress(brr_dir: Path) -> run_progress.RunProgressView | None:
+    """Find the most recently-touched non-terminal task across conversations."""
     candidates: list[tuple[str, run_progress.RunProgressView]] = []
-    for manifest in streams:
-        view = run_progress.project_stream_latest(brr_dir, manifest.id)
-        if view is None or view.task_id is None:
+    for key in conversations.list_conversations(brr_dir):
+        view = run_progress.project_conversation_latest(brr_dir, key)
+        if view is None or view.task_id is None or view.is_terminal:
             continue
-        if view.is_terminal:
-            continue
-        candidates.append((manifest.updated or "", view))
+        candidates.append((view.updated_at or "", view))
     if not candidates:
         return None
     candidates.sort(key=lambda item: item[0], reverse=True)
     return candidates[0][1]
-
-
-# ── Streams ─────────────────────────────────────────────────────────
-
-
-def list_streams() -> str:
-    """Render all known streams with high-level status."""
-    from . import gitops
-
-    try:
-        repo_root = gitops.ensure_git_repo()
-    except (RuntimeError, SystemExit):
-        return "[brr] not in a git repo"
-
-    brr_dir = gitops.shared_brr_dir(repo_root)
-    streams = stream_mod.list_streams(brr_dir)
-    if not streams:
-        return "No streams yet."
-
-    lines: list[str] = []
-    for manifest in streams:
-        tasks = stream_mod.read_tasks(brr_dir, manifest.id)
-        artifacts = stream_mod.read_artifacts(brr_dir, manifest.id)
-        title = manifest.title or "(untitled)"
-        lines.append(f"{manifest.id}  [{manifest.status}]  {title}")
-        if manifest.intent:
-            lines.append(f"  intent: {manifest.intent}")
-        lines.append(f"  tasks: {len(tasks)}  artifacts: {len(artifacts)}")
-        if manifest.updated:
-            lines.append(f"  updated: {manifest.updated}")
-        lines.append("")
-    return "\n".join(lines).rstrip()
-
-
-def show_stream(stream_id: str) -> str:
-    """Render a stream manifest plus the latest task's run progress."""
-    from . import gitops
-
-    try:
-        repo_root = gitops.ensure_git_repo()
-    except (RuntimeError, SystemExit):
-        return "[brr] not in a git repo"
-
-    brr_dir = gitops.shared_brr_dir(repo_root)
-    manifest = stream_mod.load_manifest(brr_dir, stream_id)
-    if manifest is None:
-        candidates = [m for m in stream_mod.list_streams(brr_dir) if stream_id in m.id]
-        if len(candidates) == 1:
-            manifest = candidates[0]
-            stream_id = manifest.id
-        elif candidates:
-            return (
-                f"Ambiguous stream ID '{stream_id}'. Matches:\n"
-                + "\n".join(f"  {m.id}" for m in candidates)
-            )
-        else:
-            return f"No stream matching '{stream_id}'"
-
-    lines = [
-        f"Stream:   {manifest.id}",
-        f"Title:    {manifest.title or '(untitled)'}",
-        f"Status:   {manifest.status}",
-    ]
-    if manifest.intent:
-        lines.append(f"Intent:   {manifest.intent}")
-    if manifest.created:
-        lines.append(f"Created:  {manifest.created}")
-    if manifest.updated:
-        lines.append(f"Updated:  {manifest.updated}")
-    if manifest.gate_context:
-        ctx_bits = [f"{k}={v}" for k, v in sorted(manifest.gate_context.items())]
-        lines.append(f"Gate:     {' '.join(ctx_bits)}")
-    if manifest.reply_route:
-        rr = manifest.reply_route
-        lines.append(
-            f"Reply:    preferred={rr.get('preferred')} "
-            f"selected={rr.get('selected')}"
-        )
-    if manifest.summary:
-        lines.append("")
-        lines.append("Current summary:")
-        for line in manifest.summary.splitlines():
-            lines.append(f"  {line}")
-    if manifest.open_questions:
-        lines.append("")
-        lines.append("Open questions:")
-        for line in manifest.open_questions.splitlines():
-            lines.append(f"  {line}")
-
-    tasks = stream_mod.read_tasks(brr_dir, stream_id)
-    if tasks:
-        lines.append("")
-        lines.append(f"Tasks ({len(tasks)}):")
-        for task in tasks[-10:]:
-            task_status = _current_task_status(brr_dir, task)
-            lines.append(
-                f"  {task.get('task_id')} [{task_status}] "
-                f"{task.get('branch')}/{task.get('env')}"
-            )
-
-    artifacts = stream_mod.read_artifacts(brr_dir, stream_id)
-    if artifacts:
-        lines.append("")
-        lines.append(f"Artifacts ({len(artifacts)}):")
-        for art in artifacts[-10:]:
-            label = art.get("label") or art.get("kind", "artifact")
-            lines.append(f"  {label} \u2192 {art.get('path', '')}")
-
-    latest_view = run_progress.project_stream_latest(brr_dir, stream_id)
-    if latest_view is not None and latest_view.task_id is not None:
-        lines.append("")
-        lines.append("Latest run progress:")
-        for line in run_progress.render_text(latest_view, compact=False).splitlines():
-            lines.append(f"  {line}")
-
-    return "\n".join(lines)
-
-
-def _current_task_status(brr_dir: Path, stream_task: dict) -> str:
-    task_id = stream_task.get("task_id")
-    if task_id:
-        task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
-        if task is not None:
-            return task.status
-    return str(stream_task.get("status", ""))
 
 
 # ── Per-task troubleshooting ────────────────────────────────────────
@@ -264,22 +122,20 @@ def inspect_task(
     ]
     if task.source:
         lines.append(f"Source:   {task.source}")
-    if task.stream_id:
-        lines.append(f"Stream:   {task.stream_id}")
-        manifest = stream_mod.load_manifest(brr_dir, task.stream_id)
-        if manifest:
-            if manifest.title:
-                lines.append(f"  title:   {manifest.title}")
-            if manifest.intent:
-                lines.append(f"  intent:  {manifest.intent}")
-            artifacts = stream_mod.read_artifacts(brr_dir, task.stream_id)
-            task_artifacts = [a for a in artifacts if a.get("task_id") == task.id]
-            if task_artifacts:
-                lines.append("  artifacts:")
-                for art in task_artifacts:
-                    label = art.get("label") or art.get("kind", "artifact")
-                    path = art.get("path", "")
-                    lines.append(f"    {label} \u2192 {path}")
+    if task.conversation_key:
+        lines.append(f"Conv:     {task.conversation_key}")
+        conv_artifacts = [
+            r for r in conversations.records_for_task(
+                brr_dir, task.conversation_key, task.id,
+            )
+            if r.get("kind") == "artifact"
+        ]
+        if conv_artifacts:
+            lines.append("  artifacts:")
+            for art in conv_artifacts:
+                label = art.get("label") or art.get("artifact_kind") or "artifact"
+                path = art.get("path", "")
+                lines.append(f"    {label} \u2192 {path}")
 
     event_file = brr_dir / "inbox" / f"{task.event_id}.md"
     lines.append(f"Event file: {event_file}{'' if event_file.exists() else ' (missing)'}")
@@ -342,8 +198,8 @@ def inspect_task(
         for k in sorted(extra_keys):
             lines.append(f"  {k}: {task.meta[k]}")
 
-    if task.stream_id:
-        view = run_progress.project_task(brr_dir, task.stream_id, task.id)
+    if task.conversation_key:
+        view = run_progress.project_task(brr_dir, task.conversation_key, task.id)
         if view is not None:
             lines.append("")
             lines.append("Run progress:")

@@ -1,12 +1,14 @@
-"""Run progress — gate-agnostic projection over stream update records.
+"""Run progress — gate-agnostic projection over conversation log records.
 
-Stream files (``events.ndjson``, ``tasks.ndjson``, ``artifacts.ndjson``)
-plus stream manifests already capture every fact the daemon emits about
-a task. This module turns those facts into a compact ``RunProgressView``
+Conversation logs (``.brr/conversations/<key>.ndjson``) capture every
+fact the daemon emits about an event/task: the event arrival, the
+triaged task row, lifecycle update packets, and artifact records.
+This module folds those records into a compact ``RunProgressView``
 that gates and local diagnostics can render the same way.
 
-The projection is read-only and does not mutate stream state. Renderers
-should treat it as the canonical view of a single task's execution.
+The projection is read-only and does not mutate conversation state.
+Renderers should treat it as the canonical view of a single task's
+execution.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import stream as stream_mod
+from . import conversations as conversations_mod
 
 
 # ── States and phases ───────────────────────────────────────────────
@@ -38,7 +40,6 @@ STATES = ("active", "succeeded", "failed", "needs_context")
 
 
 _PHASE_BY_PACKET: dict[str, str] = {
-    "stream_created": "queued",
     "event_received": "queued",
     "task_created": "triage",
     "triage_done": "preparing",
@@ -73,16 +74,15 @@ _TERMINAL_STATE: dict[str, str] = {
 
 @dataclass
 class RunProgressView:
-    """Snapshot of a single task's execution, derived from stream records.
+    """Snapshot of a single task's execution, derived from conversation
+    records.
 
     Renderers (gate cards, local diagnostics) consume this struct.
-    Treat fields as advisory — older streams may lack newer packets.
+    Treat fields as advisory — older logs may lack newer record types.
     """
 
-    stream_id: str
+    conversation_key: str
     task_id: str | None
-    title: str = ""
-    intent: str = ""
     phase: str = "queued"
     state: str = "active"
     branch: str | None = None
@@ -97,8 +97,6 @@ class RunProgressView:
     container_ids: list[str] = field(default_factory=list)
     response_path: str | None = None
     error: str | None = None
-    gate_context: dict[str, Any] = field(default_factory=dict)
-    reply_route: dict[str, Any] = field(default_factory=dict)
     event_id: str | None = None
 
     @property
@@ -121,60 +119,40 @@ class RunProgressView:
 
 def project_task(
     brr_dir: Path,
-    stream_id: str,
+    conversation_key: str,
     task_id: str,
 ) -> RunProgressView | None:
-    """Project the latest progress for a given (stream, task)."""
-    manifest = stream_mod.load_manifest(brr_dir, stream_id)
-    if manifest is None:
+    """Project the latest progress for a given (conversation, task)."""
+    if not conversation_key:
         return None
-
-    events = stream_mod.read_events(brr_dir, stream_id)
-    tasks = stream_mod.read_tasks(brr_dir, stream_id)
-    artifacts = stream_mod.read_artifacts(brr_dir, stream_id)
-
-    return _project(manifest, events, tasks, artifacts, task_id=task_id)
+    records = conversations_mod.read_records(brr_dir, conversation_key)
+    if not records:
+        return None
+    return _project(records, conversation_key=conversation_key, task_id=task_id)
 
 
-def project_stream_latest(
+def project_conversation_latest(
     brr_dir: Path,
-    stream_id: str,
+    conversation_key: str,
 ) -> RunProgressView | None:
-    """Project the most recent task's progress for a stream.
+    """Project the most recent task's progress for a conversation.
 
     Useful when a gate wants to show "what is currently happening" in
     a thread without tracking individual task IDs.
     """
-    manifest = stream_mod.load_manifest(brr_dir, stream_id)
-    if manifest is None:
+    if not conversation_key:
         return None
-    tasks = stream_mod.read_tasks(brr_dir, stream_id)
-    if not tasks:
-        return _empty_view(manifest)
-    latest_task_id = _latest_task_id(tasks)
+    records = conversations_mod.read_records(brr_dir, conversation_key)
+    latest_task_id = _latest_task_id(records)
     if latest_task_id is None:
-        return _empty_view(manifest)
-
-    events = stream_mod.read_events(brr_dir, stream_id)
-    artifacts = stream_mod.read_artifacts(brr_dir, stream_id)
-    return _project(manifest, events, tasks, artifacts, task_id=latest_task_id)
-
-
-def _empty_view(manifest: stream_mod.StreamManifest) -> RunProgressView:
-    return RunProgressView(
-        stream_id=manifest.id,
-        task_id=None,
-        title=manifest.title,
-        intent=manifest.intent,
-        phase="queued",
-        state="active",
-        gate_context=dict(manifest.gate_context or {}),
-        reply_route=dict(manifest.reply_route or {}),
+        return None
+    return _project(
+        records, conversation_key=conversation_key, task_id=latest_task_id,
     )
 
 
-def _latest_task_id(tasks: list[dict[str, Any]]) -> str | None:
-    for record in reversed(tasks):
+def _latest_task_id(records: list[dict[str, Any]]) -> str | None:
+    for record in reversed(records):
         tid = record.get("task_id")
         if tid:
             return str(tid)
@@ -182,49 +160,47 @@ def _latest_task_id(tasks: list[dict[str, Any]]) -> str | None:
 
 
 def _project(
-    manifest: stream_mod.StreamManifest,
-    events: list[dict[str, Any]],
-    tasks: list[dict[str, Any]],
-    artifacts: list[dict[str, Any]],
+    records: list[dict[str, Any]],
     *,
+    conversation_key: str,
     task_id: str,
 ) -> RunProgressView:
     view = RunProgressView(
-        stream_id=manifest.id,
+        conversation_key=conversation_key,
         task_id=task_id,
-        title=manifest.title,
-        intent=manifest.intent,
-        gate_context=dict(manifest.gate_context or {}),
-        reply_route=dict(manifest.reply_route or {}),
     )
 
-    task_records = [t for t in tasks if t.get("task_id") == task_id]
-    if task_records:
-        latest = task_records[-1]
-        view.branch = latest.get("branch") or view.branch
-        view.branch_name = latest.get("branch_name") or view.branch_name
-        view.base_branch = latest.get("base_branch") or view.base_branch
-        view.env = latest.get("env") or view.env
-        view.event_id = latest.get("event_id") or view.event_id
-
-    artifact_records = [a for a in artifacts if a.get("task_id") == task_id]
-    view.artifacts = list(artifact_records)
-    for artifact in artifact_records:
-        if artifact.get("kind") == "response" and artifact.get("path"):
-            view.response_path = str(artifact["path"])
-
     last_ts: str | None = None
-    for record in events:
-        payload_task = record.get("task_id")
-        if payload_task and payload_task != task_id:
+    for record in records:
+        if record.get("task_id") not in (None, task_id):
+            # Records that mention some other task are skipped.
             continue
+        kind = record.get("kind")
+        ts = record.get("ts")
+        if ts and record.get("task_id") == task_id:
+            view.updated_at = ts
+            last_ts = ts
+
+        if kind == "task":
+            view.branch = record.get("branch") or view.branch
+            view.branch_name = record.get("branch_name") or view.branch_name
+            view.base_branch = record.get("base_branch") or view.base_branch
+            view.env = record.get("env") or view.env
+            view.event_id = record.get("event_id") or view.event_id
+            continue
+
+        if kind == "artifact":
+            view.artifacts.append(record)
+            if record.get("artifact_kind") == "response" and record.get("path"):
+                view.response_path = str(record["path"])
+            continue
+
+        if kind != "update":
+            continue
+
         ptype = record.get("type")
         if not ptype:
             continue
-        ts = record.get("ts")
-        if ts:
-            view.updated_at = ts
-            last_ts = ts
 
         if ptype == "task_created":
             view.branch = record.get("branch") or view.branch
@@ -338,10 +314,6 @@ def render_text(view: RunProgressView, *, compact: bool = True) -> str:
     lines: list[str] = []
     header = _header_line(view)
     lines.append(header)
-    if view.title:
-        lines.append(view.title)
-    if view.intent and view.intent != view.title:
-        lines.append(view.intent)
 
     rows: list[tuple[str, str]] = []
     rows.append(("phase", _phase_text(view)))
@@ -370,7 +342,7 @@ def render_text(view: RunProgressView, *, compact: bool = True) -> str:
         lines.append("")
         lines.append(f"artifacts ({len(view.artifacts)}):")
         for artifact in view.artifacts[-5:]:
-            label = artifact.get("label") or artifact.get("kind") or "artifact"
+            label = artifact.get("label") or artifact.get("artifact_kind") or "artifact"
             path = artifact.get("path", "")
             lines.append(f"  - {label} -> {path}")
 

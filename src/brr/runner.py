@@ -496,16 +496,17 @@ def build_daemon_prompt(
     runtime_dir: str | None = None,
     context_path: str | None = None,
     log_file: str | None = None,
-    stream: Any = None,
+    recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
     stage_feedback: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
-    Same as run prompt but with event metadata, workstream context, and
-    a delivery contract assembled into a single ``Task Context Bundle``.
-    When *log_file* is set (e.g. for worktree mode), the agent is told
-    to write its log entry there instead of kb/log.md.
+    Same as run prompt but with event metadata, recent conversation
+    context, and a delivery contract assembled into a single
+    ``Task Context Bundle``. When *log_file* is set (e.g. for worktree
+    mode), the agent is told to write its log entry there instead of
+    kb/log.md.
     """
     preamble = _read_prompt("run.md", repo_root)
     bundle = _build_task_context_bundle(
@@ -518,7 +519,7 @@ def build_daemon_prompt(
         runtime_dir=runtime_dir,
         context_path=context_path,
         log_file=log_file,
-        stream=stream,
+        recent_conversation=recent_conversation,
         event_body=event_body,
         stage_feedback=stage_feedback,
     )
@@ -536,7 +537,7 @@ def _build_task_context_bundle(
     runtime_dir: str | None,
     context_path: str | None,
     log_file: str | None,
-    stream: Any,
+    recent_conversation: list[dict[str, Any]] | None,
     event_body: str | None,
     stage_feedback: bool,
 ) -> str:
@@ -547,44 +548,6 @@ def _build_task_context_bundle(
     prompt keeps working, while grouping them under semantic headings.
     """
     sections: list[str] = ["---", "## Task Context Bundle"]
-
-    if stream is not None:
-        sections.append("")
-        sections.append("### Workstream")
-        sections.append(f"- Stream ID: {getattr(stream, 'id', '') or ''}")
-        title = getattr(stream, "title", "") or ""
-        if title:
-            sections.append(f"- Title: {title}")
-        status = getattr(stream, "status", "") or ""
-        if status:
-            sections.append(f"- Status: {status}")
-        intent = getattr(stream, "intent", "") or ""
-        if intent:
-            sections.append(f"- Intent: {intent}")
-        summary = (getattr(stream, "summary", "") or "").strip()
-        if summary:
-            sections.append("- Current summary:")
-            for line in summary.splitlines():
-                sections.append(f"  {line}")
-        open_questions = (getattr(stream, "open_questions", "") or "").strip()
-        if open_questions:
-            sections.append("- Open questions:")
-            for line in open_questions.splitlines():
-                sections.append(f"  {line}")
-        gate_ctx = getattr(stream, "gate_context", None) or {}
-        if isinstance(gate_ctx, dict) and gate_ctx:
-            ctx_bits = [f"{k}={v}" for k, v in sorted(gate_ctx.items())]
-            sections.append(f"- Gate context: {' '.join(ctx_bits)}")
-        reply_route = getattr(stream, "reply_route", None) or {}
-        if isinstance(reply_route, dict) and reply_route:
-            preferred = reply_route.get("preferred", "")
-            selected = reply_route.get("selected", preferred)
-            allowed = reply_route.get("allowed", [])
-            allowed_str = ",".join(allowed) if isinstance(allowed, (list, tuple)) else str(allowed)
-            sections.append(
-                f"- Reply route: preferred={preferred} selected={selected} "
-                f"allowed=[{allowed_str}]"
-            )
 
     sections.append("")
     sections.append("### Task")
@@ -635,6 +598,13 @@ def _build_task_context_bundle(
             "structured stage note artifact alongside your main response."
         )
 
+    recent_block = _format_recent_conversation(recent_conversation)
+    if recent_block:
+        sections.append("")
+        sections.append("### Recent in this conversation")
+        sections.append("")
+        sections.append(recent_block)
+
     if event_body is not None:
         body = event_body.strip()
         if body:
@@ -648,6 +618,55 @@ def _build_task_context_bundle(
 
 
 _TRIAGE_LOG_ENTRIES = 3
+_RECENT_CONVERSATION_MAX = 8
+
+
+def _format_recent_conversation(
+    records: list[dict[str, Any]] | None,
+) -> str:
+    """Render the last few conversation records as human-readable bullets.
+
+    Excludes the current event itself (callers should append the event
+    body separately) so the recent block represents history *before*
+    the in-flight task. Returns an empty string when nothing useful is
+    available.
+    """
+    if not records:
+        return ""
+    bullets: list[str] = []
+    for record in records[-_RECENT_CONVERSATION_MAX:]:
+        kind = record.get("kind")
+        ts = record.get("ts", "")
+        line: str | None = None
+        if kind == "event":
+            summary = (record.get("summary") or "").strip()
+            source = record.get("source") or ""
+            line = f"- {ts} event ({source}): {summary}".rstrip()
+        elif kind == "task":
+            tid = record.get("task_id", "")
+            status = record.get("status") or "pending"
+            branch = record.get("branch") or ""
+            line = f"- {ts} task {tid} status={status} branch={branch}"
+        elif kind == "update":
+            ptype = record.get("type") or ""
+            tid = record.get("task_id") or ""
+            stage = record.get("stage") or ""
+            err = record.get("error") or ""
+            bits = [f"- {ts} update {ptype}"]
+            if tid:
+                bits.append(f"task={tid}")
+            if stage:
+                bits.append(f"stage={stage}")
+            if err:
+                bits.append(f"error={err}")
+            line = " ".join(bits)
+        elif kind == "artifact":
+            label = record.get("label") or record.get("artifact_kind") or ""
+            path = record.get("path") or ""
+            line = f"- {ts} artifact {label} {path}".rstrip()
+        if line:
+            bullets.append(line)
+    return "\n".join(bullets)
 
 
 def build_triage_prompt(
@@ -655,39 +674,31 @@ def build_triage_prompt(
     event_id: str,
     repo_root: Path,
     *,
-    stream: Any = None,
+    recent_conversation: list[dict[str, Any]] | None = None,
     stage_feedback: bool = False,
 ) -> str:
     """Build the prompt for the triage step — event → task conversion.
 
     The triage agent reads the event and decides how brr should stage any
-    code changes.  It usually leaves environment as auto so project config
-    can resolve the concrete backend.  Its output is parsed into a Task.
+    code changes. It usually leaves environment as auto so project
+    config can resolve the concrete backend. Its output is parsed into
+    a Task.
 
     Uses a reduced context window (last 3 log entries) compared to the
-    full run prompt — triage only needs enough history to make a
-    branch/environment decision, not full session continuity. When *stream* is
-    provided, a compact workstream block is included; *stage_feedback*
+    full run prompt. When *recent_conversation* is supplied, the last
+    few records from the same gate thread are included so the triage
+    agent can route consistently with prior activity. *stage_feedback*
     asks the triage agent to emit a structured stage note artifact.
     """
     triage = _read_prompt("triage.md", repo_root)
     parts = [triage]
-    if stream is not None:
-        block_lines = ["## Workstream"]
-        block_lines.append(f"- id: {getattr(stream, 'id', '')}")
-        title = getattr(stream, "title", "")
-        if title:
-            block_lines.append(f"- title: {title}")
-        status = getattr(stream, "status", "")
-        if status:
-            block_lines.append(f"- status: {status}")
-        intent = getattr(stream, "intent", "")
-        if intent:
-            block_lines.append(f"- intent: {intent}")
-        summary = (getattr(stream, "summary", "") or "").strip()
-        if summary:
-            block_lines.append(f"- current summary: {summary}")
-        parts.append("\n".join(block_lines))
+    recent_conv = _format_recent_conversation(recent_conversation)
+    if recent_conv:
+        parts.append(
+            "## Recent in this conversation\n\n"
+            "Most recent records from the same gate thread, oldest first.\n\n"
+            f"{recent_conv}"
+        )
     if stage_feedback:
         parts.append(
             "## Stage feedback requested\n\n"

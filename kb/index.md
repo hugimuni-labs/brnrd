@@ -12,11 +12,12 @@ This index only covers this repo's project-specific knowledge.
 - [Repo Dive-In Map](repo-dive-in-map.md) — bottom-up, GitHub-readable source map for understanding the repo file by file, with branch-neutral relative source/test links, core entity cross-references, runtime invariants, and recommended reading paths
 - [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) — v2: concurrent task execution via worktrees, task abstraction, per-task logs, env abstraction
 - [Branch Modes Plan](plan-branch-modes.md) — v2: branch as task property, agent-decided branching, needs-context status, execution environments
-- [Workstreams](../src/brr/docs/streams.md) — bundled tool doc covering the workstream model, runtime layout, lifecycle update packets, reply routing, and CLI surface (`brr streams`, `brr stream show`)
+- [Conversations](../src/brr/docs/conversations.md) — bundled tool doc on the per-gate-thread conversation log that replaced workstreams: routing anchor + append-only history, no identity, no manifest
 
 ## Decisions
 
 - [Bundled Docs Location](decision-bundled-docs.md) — why tool-level docs live in `src/brr/docs/` and ship with the package rather than in `kb/`
+- [Drop streams; conversations are routing+history, not identity](decision-drop-streams.md) — why the workstream layer was removed and replaced with a thin per-conversation log; lessons from the 2026-05-05 frozen-intent incident
 
 ## Design decks
 
