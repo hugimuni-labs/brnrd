@@ -195,10 +195,9 @@ removes the worktree unless debug mode keeps it for inspection. Docker
 branch tasks use the same worktree-backed branch behavior, with the
 runner command executed inside the configured container image.
 
-The built-in Docker env requires Docker on PATH and `docker.image` in
-`.brr/config`. It bind-mounts the repository at the same absolute path
-inside the container so prompt paths, response files, traces, and git
-metadata stay valid from both host and container.
+The full env story — built-ins, configuration knobs, the docker
+credential wiring, the durability contract, and the salvage rule —
+lives in [`envs.md`](envs.md).
 
 ## Debug mode
 

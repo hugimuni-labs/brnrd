@@ -528,3 +528,75 @@ log lifecycle still tracked separately) in
 [`kb/decision-drop-streams.md`](decision-drop-streams.md). Updated
 `kb/index.md` and `kb/repo-dive-in-map.md` to match. All 196 tests pass.
 
+## [2026-05-05] review | Check Docker execution environment
+
+Verified the live daemon task running with `Environment: docker`. The
+orchestration path now reaches the container because `.brr/config` contains
+`default_env=docker` and `docker.image=brr-runner:dev`, and the task context
+shows `env_prepared` for the Docker run. The container itself is not yet
+operational for normal brr project work: it lacks `python`, `python3`, `brr`,
+`pip`, `pytest`, `uv`, `docker`, and `rg`; Git is installed but refuses the
+mounted checkout as unsafe because the container runs as root while the repo is
+owned by uid/gid 1000. Reported that Docker launch is working, but the runner
+image needs Python/project tooling and a Git safe-directory/user fix before it
+can reliably execute brr daemon tasks.
+
+## [2026-05-06] implement | Make docker env beginner-friendly (slices 1–2)
+
+Sliced "make docker actually usable for new users" into three PRs and shipped
+the first two. Strategy and slicing rationale:
+
+- **Slice 1 — credential wiring** (`6df83c3` "fix docker", plus a follow-up
+  patch for the safe.directory issue surfaced by the verification task above).
+  `DockerEnv.invoke` now auto-forwards `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+  `GEMINI_API_KEY`, `GOOGLE_API_KEY` via `-e`; auto-mounts `~/.claude/`,
+  `~/.claude.json`, `~/.codex/`, `~/.gemini/` into `/root/<basename>` when
+  present; and unconditionally injects `safe.directory='*'` via git's
+  `GIT_CONFIG_*` env vars so git works against the bind-mounted repo
+  regardless of host vs container UID. New config keys: `docker.env=` to
+  extend the passthrough allowlist, `docker.mount_credentials=` (default
+  `true`) to opt out of cred mounts. Tests in `tests/test_envs.py` cover all
+  paths including opt-out, missing host dirs, dedupe with extra keys, and the
+  safe.directory wiring. End-to-end smoke-tested by reproducing the dubious-
+  ownership error without the env vars and confirming `git status` works
+  with them.
+
+- **Slice 2 — docs.** New `src/brr/docs/envs.md` is the canonical bundled
+  doc covering host/worktree/docker, the durability contract, the docker
+  credential story, image expectations, the minimum-viable Dockerfile, the
+  layering pattern for project tooling, and a troubleshooting block.
+  `execution-map.md` and `brr-internals.md` retired their inlined docker
+  bits and now cross-link `envs.md`. README's "Environments" paragraph got
+  a short docker-credential blurb pointing at the bundled doc. The design
+  doc (`kb/design-env-interface.md`) gained an "Implementation status"
+  callout in the docker section so readers know what shipped vs what's
+  still designed.
+
+- **Slice 3 — wildcard image + auto-resolve** (deferred). Drafted
+  `docker/Dockerfile` (untracked) bundling claude/codex/gemini on
+  `node:22-slim` with git, ripgrep, ca-certificates, and a baked-in
+  `safe.directory='*'` as defense in depth. Local build tagged
+  `brr-runner:dev` (~919MB) and used for the dogfooding above. Publishing
+  to GHCR + an auto-resolve of `docker.image=` waits on the `hugimuni`
+  org existing so we don't burn a name we'll have to migrate. The
+  Dockerfile-as-modified is ready to commit alongside the GHA workflow
+  whenever that lands.
+
+Decisions worth remembering:
+
+- Single wildcard image (all three runners) over per-runner images. Smaller
+  matrix to maintain, simpler `docker.image=` default once it's published,
+  marginal size cost.
+- Container runs as **root**; `--user` remap is a v2 problem. The cred-
+  mount target (`/root/<basename>`) is coherent with this. Trade-off is
+  files written inside the container land root-owned on the host if the
+  CLI does delete-and-recreate (rare in practice; flagged in the
+  troubleshooting block of `envs.md`).
+- `safe.directory='*'` via `GIT_CONFIG_*` env vars rather than baked into
+  the image. Means user-rolled images don't need to remember the line —
+  brr does the right thing automatically. Defense-in-depth: the slice 3
+  Dockerfile bakes it in too.
+
+Flagged but not addressed: the gate-side progress packets are repetitive
+("running" appears 3x for one task in the live test). Separate concern,
+lives in `src/brr/run_progress.py` and the gate `render_update` paths.

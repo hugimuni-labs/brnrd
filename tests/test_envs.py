@@ -144,7 +144,25 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     assert command[command.index("-w") + 1] == str(tmp_path)
     assert command[-4:] == ["brr/test-runner:latest", "mock", "--flag", "hello"]
     assert ctx.env_state["docker_containers"] == ["brr-task-3-evt-3-attempt-1"]
-    assert "-e" not in command
+    forwarded = [command[i + 1] for i, arg in enumerate(command) if arg == "-e"]
+    # The git safe.directory wiring is unconditional; runner credential
+    # env vars are only forwarded when set on the daemon (none here).
+    assert forwarded == [
+        "GIT_CONFIG_COUNT=1",
+        "GIT_CONFIG_KEY_0=safe.directory",
+        "GIT_CONFIG_VALUE_0=*",
+    ]
+
+
+def test_docker_invoke_injects_git_safe_directory(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+
+    command = _build_docker_invoke(tmp_path, monkeypatch)
+
+    forwarded = [command[i + 1] for i, arg in enumerate(command) if arg == "-e"]
+    assert "GIT_CONFIG_COUNT=1" in forwarded
+    assert "GIT_CONFIG_KEY_0=safe.directory" in forwarded
+    assert "GIT_CONFIG_VALUE_0=*" in forwarded
 
 
 def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-1"):
@@ -181,14 +199,29 @@ def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-
     return commands[0]
 
 
+def _passthrough_env_names(command: list[str]) -> list[str]:
+    """Filter the docker run command to credential-passthrough names only.
+
+    Credential passthroughs are emitted as ``-e NAME`` (no ``=`` — docker
+    reads the value from the parent environment). The git safe.directory
+    wiring uses ``-e KEY=VALUE``, which we exclude here so each test can
+    assert on credential behaviour without being entangled with
+    safe.directory.
+    """
+    return [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" not in command[i + 1]
+    ]
+
+
 def test_docker_invoke_passes_known_runner_env_when_set(tmp_path, monkeypatch):
     _isolate_docker_creds(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     command = _build_docker_invoke(tmp_path, monkeypatch)
 
-    indices = [i for i, arg in enumerate(command) if arg == "-e"]
-    forwarded = [command[i + 1] for i in indices]
+    forwarded = _passthrough_env_names(command)
     assert "OPENAI_API_KEY" in forwarded
     assert "ANTHROPIC_API_KEY" not in forwarded
     assert "GEMINI_API_KEY" not in forwarded
@@ -200,7 +233,7 @@ def test_docker_invoke_passes_no_env_when_none_set(tmp_path, monkeypatch):
 
     command = _build_docker_invoke(tmp_path, monkeypatch)
 
-    assert "-e" not in command
+    assert _passthrough_env_names(command) == []
 
 
 def test_docker_invoke_passthrough_extra_env_keys(tmp_path, monkeypatch):
@@ -212,9 +245,7 @@ def test_docker_invoke_passthrough_extra_env_keys(tmp_path, monkeypatch):
         cfg_extra={"docker.env": "CUSTOM_TOKEN, MISSING_TOKEN"},
     )
 
-    indices = [i for i, arg in enumerate(command) if arg == "-e"]
-    forwarded = [command[i + 1] for i in indices]
-    assert forwarded == ["CUSTOM_TOKEN"]
+    assert _passthrough_env_names(command) == ["CUSTOM_TOKEN"]
 
 
 def test_docker_invoke_extra_env_does_not_duplicate_defaults(tmp_path, monkeypatch):
@@ -226,9 +257,7 @@ def test_docker_invoke_extra_env_does_not_duplicate_defaults(tmp_path, monkeypat
         cfg_extra={"docker.env": "OPENAI_API_KEY,OPENAI_API_KEY"},
     )
 
-    indices = [i for i, arg in enumerate(command) if arg == "-e"]
-    forwarded = [command[i + 1] for i in indices]
-    assert forwarded == ["OPENAI_API_KEY"]
+    assert _passthrough_env_names(command) == ["OPENAI_API_KEY"]
 
 
 def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch):

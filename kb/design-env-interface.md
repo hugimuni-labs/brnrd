@@ -284,10 +284,21 @@ compose axis moves into a follow-up, not v1.
 
 ### `docker`
 
+> **Implementation status (2026-05-06):** `prepare`/`invoke`/`finalize`
+> shipped per this design. Credential wiring (env-var pass-through for
+> known runner keys, `~/.{claude,codex,gemini}` bind mounts when present,
+> and `safe.directory='*'` injection so git works against the
+> bind-mounted repo) added on top of the original spec to remove the
+> "your image must bake in tokens" hidden requirement. Still pending:
+> a first-party `brr-runner` image and an auto-resolve for blank
+> `docker.image=`. User-facing docs live in `src/brr/docs/envs.md`.
+
 - **prepare**:
   - Image: `docker.image` in `.brr/config`. Until brr ships a first-party
-    runner image, this is required so users choose an image that contains
-    their configured runner CLI and credentials.
+    runner image, this is required so users pick an image that contains
+    their configured runner CLI. brr now wires credentials at run time
+    (env-var pass-through plus host login-dir bind mounts), so the image
+    no longer needs an API key baked in.
   - Bind-mount `repo_root` at the same absolute path inside the container
     (read-write), so the prompt's host paths remain valid in the env.
   - Network: configurable (`cfg["docker"]["network"]`, default `bridge`).

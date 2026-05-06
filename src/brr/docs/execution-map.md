@@ -44,18 +44,12 @@ explicitly names a branch or asks to work in the current checkout.
 
 ### 4. Execution
 
-- **host**: runner runs in the main repo checkout.
-- **worktree**: a git worktree is created under
-  `.brr/worktrees/<task-id>`, the runner runs there, and the branch is
-  merged back (for `auto`/`task` strategies) or preserved (for named
-  branches) on success.
-- **docker**: the runner command is wrapped in `docker run` using
-  `docker.image` from `.brr/config`. Current-branch tasks mount the main
-  checkout; branch tasks use the same worktree setup as `worktree` so the
-  main checkout is not disturbed. Docker containers are removed only
-  after a clean non-debug run.
-- Other envs such as `devcontainer` or `ssh` are future backends/plugins
-  and fail clearly until implemented or installed.
+The daemon hands the task off to one of the env backends — `host`,
+`worktree`, or `docker` today. Each backend prepares the working
+directory, invokes the runner, and finalizes the result. See
+[`envs.md`](envs.md) for the full breakdown: when to pick each, the
+docker credential wiring, the durability contract, and the salvage
+rule.
 
 The runner receives `run.md` + recent `kb/log.md` context + daemon
 metadata (task ID, event ID, execution root, current branch, response
