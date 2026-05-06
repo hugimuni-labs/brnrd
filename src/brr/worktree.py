@@ -1,4 +1,17 @@
-"""Git worktree helpers for task-isolated execution."""
+"""Git worktree helpers for task-isolated execution.
+
+Each task gets a fresh worktree at ``.brr/worktrees/<task-id>/`` on a
+dedicated ``brr/<task-id>`` branch sprouted from the current HEAD. The
+agent runs inside that sandbox and decides how its work should land:
+
+- Leaving commits on ``brr/<task-id>`` opts into the auto-merge
+  contract — :func:`finalize` fast-forwards the branch back into the
+  base branch and deletes both the worktree and the temporary branch
+  on success.
+- Switching to a different branch (``git switch -c feat/foo`` or
+  ``git switch existing``) opts out of auto-merge — the branch is
+  preserved as-is on cleanup.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +39,11 @@ class WorktreeInfo:
     path: Path
     task_id: str
     branch: str
+
+
+def task_branch_name(task_id: str) -> str:
+    """Return the standard task branch name brr creates for a worktree."""
+    return f"brr/{task_id}"
 
 
 def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
@@ -89,24 +107,61 @@ def path_for(repo_root: Path, task_id: str) -> Path:
     return gitops.shared_brr_dir(repo_root) / "worktrees" / task_id
 
 
-def create(repo_root: Path, task_id: str, branch: str, create_branch: bool = True) -> Path:
-    """Create a task worktree and return its path."""
+def create(repo_root: Path, task_id: str) -> tuple[Path, str]:
+    """Create a fresh task worktree on a new ``brr/<task_id>`` branch.
+
+    Always sprouts a new branch from the current HEAD so worktree
+    creation never collides with a branch that's checked out
+    elsewhere. Returns ``(worktree_path, branch_name)``.
+    """
     worktree_path = path_for(repo_root, task_id)
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
     if worktree_path.exists():
         raise RuntimeError(f"worktree already exists: {worktree_path}")
 
-    args = ["worktree", "add", str(worktree_path)]
-    if create_branch:
-        args.extend(["-b", branch, "HEAD"])
-    else:
-        args.append(branch)
-
+    branch = task_branch_name(task_id)
+    args = ["worktree", "add", "-b", branch, str(worktree_path), "HEAD"]
     result = _git(repo_root, *args, check=False)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
-        raise RuntimeError(detail or f"failed to create worktree for {branch}")
-    return worktree_path
+        raise RuntimeError(detail or f"failed to create worktree {worktree_path}")
+    return worktree_path, branch
+
+
+def current_branch(worktree_path: Path) -> str | None:
+    """Return the branch HEAD points at inside *worktree_path*, or None.
+
+    Returns ``None`` for a detached HEAD (rare — only happens if the
+    agent explicitly detaches inside the worktree).
+    """
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    name = result.stdout.strip()
+    return name or None
+
+
+def has_commits_beyond(worktree_path: Path, base_ref: str) -> bool:
+    """Return True if the worktree HEAD has commits not reachable from *base_ref*."""
+    result = subprocess.run(
+        ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    try:
+        return int(result.stdout.strip() or "0") > 0
+    except ValueError:
+        return False
 
 
 def remove(
@@ -129,7 +184,7 @@ def remove(
             raise RuntimeError(detail or f"failed to remove worktree {worktree_path}")
 
     if delete_branch and branch:
-        result = _git(repo_root, "branch", "-d", branch, check=False)
+        result = _git(repo_root, "branch", "-D", branch, check=False)
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(detail or f"failed to delete branch {branch}")

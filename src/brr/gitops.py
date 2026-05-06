@@ -82,10 +82,25 @@ def branch_exists(repo_root: Path, branch: str) -> bool:
     return result.returncode == 0
 
 
-def merge_branch(repo_root: Path, branch: str, message: str | None = None) -> MergeResult:
-    """Merge *branch* into the currently checked-out branch."""
-    merge_args = ["merge", branch, "--no-ff"]
-    if message:
+def merge_branch(
+    repo_root: Path,
+    branch: str,
+    message: str | None = None,
+    *,
+    ff_only: bool = True,
+) -> MergeResult:
+    """Merge *branch* into the currently checked-out branch.
+
+    Defaults to ``--ff-only`` so the daemon's auto-land path keeps a
+    clean linear history; pass ``ff_only=False`` for an explicit merge
+    commit. On non-fast-forward refusals the working tree is left
+    untouched (no merge to abort).
+    """
+    if ff_only:
+        merge_args = ["merge", "--ff-only", branch]
+    else:
+        merge_args = ["merge", "--no-ff", branch]
+    if message and not ff_only:
         merge_args.extend(["-m", message])
 
     result = _git(repo_root, *merge_args, check=False)
@@ -93,11 +108,13 @@ def merge_branch(repo_root: Path, branch: str, message: str | None = None) -> Me
         head = _git(repo_root, "rev-parse", "HEAD").stdout.strip()
         return MergeResult(success=True, branch=branch, commit=head)
 
-    conflicts = _git(
-        repo_root, "diff", "--name-only", "--diff-filter=U", check=False,
-    ).stdout.splitlines()
-    _git(repo_root, "merge", "--abort", check=False)
+    conflicts: list[str] = []
     detail = result.stderr.strip() or result.stdout.strip()
+    if not ff_only:
+        conflicts = _git(
+            repo_root, "diff", "--name-only", "--diff-filter=U", check=False,
+        ).stdout.splitlines()
+        _git(repo_root, "merge", "--abort", check=False)
     return MergeResult(
         success=False,
         branch=branch,

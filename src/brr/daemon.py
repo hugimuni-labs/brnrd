@@ -29,7 +29,6 @@ from . import protocol
 from . import run_context
 from . import runner
 from . import updates
-from . import worktree
 from .task import Task
 
 _SCAN_INTERVAL = 3
@@ -190,47 +189,22 @@ def _run_worker(
             payload={"event_id": eid, "source": event.get("source", "")},
         ))
 
-    stage_feedback = _wants_stage_feedback(event)
-
-    try:
-        task, triage_trace = _triage_task(
-            event, repo_root, cfg, runner_name, conv_key,
-            stage_feedback=stage_feedback,
-            trace=debug,
-        )
-    except RuntimeError as e:
-        print(f"[brr] task {eid}: triage error: {e}")
-        task = Task.from_event(event, cfg)
-        task.conversation_key = conv_key
-        task.update_status("error", tasks_dir)
-        updates.emit(brr_dir, updates.UpdatePacket(
-            type="failed",
-            conversation_key=conv_key,
-            payload={"event_id": eid, "task_id": task.id, "stage": "triage", "error": str(e)},
-        ))
-        return task
+    task = Task.from_event(event, cfg)
+    task.conversation_key = conv_key
+    task.save(tasks_dir)
 
     updates.emit(brr_dir, updates.UpdatePacket(
         type="task_created",
         conversation_key=conv_key,
-        payload={"task_id": task.id, "event_id": eid, "branch": task.branch, "env": task.env},
-    ))
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="triage_done",
-        conversation_key=conv_key,
-        payload={"task_id": task.id, "branch": task.branch, "env": task.env},
+        payload={"task_id": task.id, "event_id": eid, "env": task.env},
     ))
 
     task.update_status("running", tasks_dir)
     resp_path = protocol.response_path(responses_dir, eid)
 
-    print(f"[brr] task {task.id} (event {eid}): branch={task.branch} env={task.env}")
-
-    branch_name = task.resolve_branch_name()
+    print(f"[brr] task {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)
-    if branch_name:
-        task.meta["branch_name"] = branch_name
     task.meta["base_branch"] = base_branch
 
     event_body_for_prompt = event.get("body", "") or ""
@@ -241,7 +215,6 @@ def _run_worker(
             task,
             repo_root,
             cfg,
-            branch_name=branch_name,
             base_branch=base_branch,
             response_path=resp_path,
             debug=debug,
@@ -277,7 +250,7 @@ def _run_worker(
         conversations.append_task(
             brr_dir, conv_key,
             task_id=task.id, event_id=eid,
-            branch=task.branch, env=task.env, status=task.status,
+            env=task.env, status=task.status,
             base_branch=base_branch, branch_name=branch_name,
         )
 
@@ -297,7 +270,7 @@ def _run_worker(
     task.meta["context_path"] = str(context_path)
     task.save(tasks_dir)
 
-    trace_dirs: list[str] = [triage_trace] if triage_trace else []
+    trace_dirs: list[str] = []
     updates.emit(brr_dir, updates.UpdatePacket(
         type="run_started",
         conversation_key=conv_key,
@@ -316,7 +289,6 @@ def _run_worker(
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
-                stage_feedback=stage_feedback,
             )
         else:
             prompt = runner.build_daemon_prompt(
@@ -332,7 +304,6 @@ def _run_worker(
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
-                stage_feedback=stage_feedback,
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
@@ -373,57 +344,44 @@ def _run_worker(
             print(f"[brr] worker {eid}: response ready")
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
-            resp_text = env_ctx.response_path_host.read_text(encoding="utf-8")
-            resp_fm = protocol.parse_frontmatter(resp_text)
-            _record_response_artifact(
-                brr_dir, conv_key, task, resp_path, resp_fm,
+            _record_response_artifact(brr_dir, conv_key, task, resp_path)
+            task.update_status("done", tasks_dir)
+            maintenance_trace = _maybe_kb_maintenance(
+                run_root, repo_root, cfg, runner_name, trace=debug,
             )
-            if resp_fm.get("status") == "needs_context":
-                task.update_status("needs_context", tasks_dir)
+            if maintenance_trace:
+                trace_dirs.append(maintenance_trace)
+                task.meta["trace_dirs"] = ", ".join(trace_dirs)
+                task.save(tasks_dir)
+            updates.emit(brr_dir, updates.UpdatePacket(
+                type="finalizing",
+                conversation_key=conv_key,
+                payload={"task_id": task.id, "stage": "done"},
+            ))
+            task = env_backend.finalize(
+                env_ctx, task, tasks_dir, debug=debug,
+            )
+            _emit_preserved_containers(brr_dir, conv_key, task)
+            preserved_branch = task.meta.get("preserved_branch")
+            if task.status == "conflict":
                 updates.emit(brr_dir, updates.UpdatePacket(
-                    type="needs_context",
+                    type="conflict",
                     conversation_key=conv_key,
-                    payload={"task_id": task.id, "event_id": eid},
+                    payload={
+                        "task_id": task.id,
+                        "branch": preserved_branch or branch_name,
+                    },
                 ))
-                updates.emit(brr_dir, updates.UpdatePacket(
-                    type="finalizing",
-                    conversation_key=conv_key,
-                    payload={"task_id": task.id, "stage": "needs_context"},
-                ))
-                task = env_backend.finalize(
-                    env_ctx, task, tasks_dir, debug=debug,
-                )
-                _emit_preserved_containers(brr_dir, conv_key, task)
             else:
-                task.update_status("done", tasks_dir)
-                maintenance_trace = _maybe_kb_maintenance(
-                    run_root, repo_root, cfg, runner_name, trace=debug,
-                )
-                if maintenance_trace:
-                    trace_dirs.append(maintenance_trace)
-                    task.meta["trace_dirs"] = ", ".join(trace_dirs)
-                    task.save(tasks_dir)
                 updates.emit(brr_dir, updates.UpdatePacket(
-                    type="finalizing",
+                    type="done",
                     conversation_key=conv_key,
-                    payload={"task_id": task.id, "stage": "done"},
+                    payload={
+                        "task_id": task.id,
+                        "event_id": eid,
+                        "preserved_branch": preserved_branch,
+                    },
                 ))
-                task = env_backend.finalize(
-                    env_ctx, task, tasks_dir, debug=debug,
-                )
-                _emit_preserved_containers(brr_dir, conv_key, task)
-                if task.status == "conflict":
-                    updates.emit(brr_dir, updates.UpdatePacket(
-                        type="conflict",
-                        conversation_key=conv_key,
-                        payload={"task_id": task.id, "branch": branch_name},
-                    ))
-                else:
-                    updates.emit(brr_dir, updates.UpdatePacket(
-                        type="done",
-                        conversation_key=conv_key,
-                        payload={"task_id": task.id, "event_id": eid},
-                    ))
             return task
 
         retry_reason = result.retry_reason()
@@ -530,23 +488,11 @@ def _emit_preserved_containers(
     ))
 
 
-def _wants_stage_feedback(event: dict) -> bool:
-    """Detect if the event explicitly asks for per-stage feedback artifacts."""
-    flag = event.get("stage_feedback")
-    if isinstance(flag, bool):
-        return flag
-    if isinstance(flag, str) and flag.strip().lower() in ("true", "yes", "1", "on"):
-        return True
-    body = (event.get("body") or "").lower()
-    return "stage feedback" in body or "per-stage feedback" in body
-
-
 def _record_response_artifact(
     brr_dir: Path,
     conversation_key: str,
     task: Task,
     response_path: Path,
-    response_frontmatter: dict,
 ) -> None:
     """Index the response artifact on the conversation log."""
     label = f"response:{task.event_id}" if task.event_id else f"response:{task.id}"
@@ -628,66 +574,6 @@ def _maybe_kb_maintenance(
     return None
 
 
-def _triage_task(
-    event: dict,
-    repo_root: Path,
-    cfg: dict,
-    runner_name: str,
-    conversation_key: str = "",
-    *,
-    stage_feedback: bool = False,
-    trace: bool = False,
-) -> tuple[Task, str | None]:
-    """Run the triage agent and parse its task output.
-
-    Returns ``(task, triage_trace_dir_relative)`` where the trace dir
-    is relative to ``.brr/`` (or ``None`` when tracing is off). When a
-    *conversation_key* is provided the triage prompt is enriched with
-    the recent conversation history so the triage agent can route
-    consistently with prior activity in the same gate thread.
-    """
-    brr_dir = gitops.shared_brr_dir(repo_root)
-    recent_conversation = (
-        conversations.read_recent(brr_dir, conversation_key, limit=10)
-        if conversation_key else []
-    )
-    prompt = runner.build_triage_prompt(
-        event.get("body", ""), event["id"], repo_root,
-        recent_conversation=recent_conversation,
-        stage_feedback=stage_feedback,
-    )
-    result = runner.invoke_runner(
-        runner_name,
-        runner.RunnerInvocation(
-            kind="triage",
-            label=event["id"],
-            prompt=prompt,
-            cwd=repo_root,
-            repo_root=repo_root,
-        ),
-        cfg=cfg,
-        trace=trace,
-    )
-    result.raise_for_error()
-    try:
-        task = Task.from_triage_output(result.output, event, cfg)
-    except ValueError as e:
-        raise RuntimeError(f"invalid triage output: {e}") from e
-
-    if conversation_key:
-        task.conversation_key = conversation_key
-
-    triage_trace: str | None = None
-    if result.trace_dir:
-        try:
-            triage_trace = str(result.trace_dir.relative_to(brr_dir))
-        except ValueError:
-            triage_trace = str(result.trace_dir)
-
-    task.save(brr_dir / "tasks")
-    return task, triage_trace
-
-
 # ── Main loop ────────────────────────────────────────────────────────
 
 
@@ -743,10 +629,10 @@ def start(repo_root: Path, *, debug: bool | None = None) -> None:
                 )
                 protocol.set_status(event, task.status)
 
-                if task.status == "needs_context":
-                    print(f"[brr] task {task.id}: needs more context")
-                elif task.status == "error":
+                if task.status == "error":
                     print(f"[brr] task {task.id}: failed")
+                elif task.status == "conflict":
+                    print(f"[brr] task {task.id}: branch preserved (cannot fast-forward)")
 
                 _push_if_needed(
                     repo_root,

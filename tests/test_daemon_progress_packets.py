@@ -1,7 +1,7 @@
-"""Tests for the expanded daemon lifecycle packets.
+"""Tests for the daemon lifecycle packets after triage was removed.
 
-These tests verify that the worker emits the new run-progress packets
-in the right order for happy-path, retry, and Docker-preserved-container
+These verify that the worker emits the run-progress packets in the
+right order for happy-path, retry, and Docker-preserved-container
 scenarios. Records are read directly from the per-conversation log.
 """
 
@@ -11,7 +11,6 @@ from pathlib import Path
 
 from brr import conversations, daemon, envs
 from brr.runner import RunnerResult
-from brr.task import Task
 
 
 def _write_repo_scaffold(repo_root: Path) -> None:
@@ -38,10 +37,7 @@ def _make_event(repo_root: Path, *, eid: str, body: str, **extra) -> dict:
 
 def _patch_runner(monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
-    monkeypatch.setattr(
-        daemon.runner, "build_triage_prompt",
-        lambda body, eid, _root, **_kw: f"TRIAGE {eid}: {body}",
-    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.runner, "build_daemon_prompt",
         lambda task, eid, rp, _root, **kw: f"RUN {eid}: {task} -> {rp}",
@@ -49,30 +45,33 @@ def _patch_runner(monkeypatch):
     monkeypatch.setattr(daemon, "_kb_changed", lambda _: False)
 
 
-def _success_invoke_runner(triage_branch: str = "current",
-                           triage_env: str = "host"):
-    triage_stdout = (
-        f"---\nbranch: {triage_branch}\nenv: {triage_env}\n---\n"
-        "refined task body\n"
-    )
+class _StubWorktreeEnv:
+    """Minimal env backend that the daemon worker can drive end-to-end."""
 
-    def _fake(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.prompt.startswith("TRIAGE"):
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name,
-                command=["mock"], stdout=triage_stdout, stderr="",
-                returncode=0, trace_dir=None, artifacts=[],
-            )
-        Path(invocation.response_path).write_text(
-            "---\n---\nall done\n", encoding="utf-8",
-        )
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name,
-            command=["mock"], stdout="ok", stderr="",
-            returncode=0, trace_dir=None, artifacts=[],
+    name = "worktree"
+
+    def __init__(self, *, invoke_fn) -> None:
+        self._invoke = invoke_fn
+
+    def prepare(self, task, repo_root, cfg, *, base_branch, response_path, debug=False):
+        return envs.RunContext(
+            name=self.name,
+            cwd=repo_root,
+            repo_root=repo_root,
+            runtime_dir=repo_root / ".brr",
+            response_path_host=response_path,
+            response_path_env=response_path,
+            branch_name=f"brr/{task.id}",
+            base_branch=base_branch,
+            log_file=f"kb/log-{task.id}.md",
+            env_state={"worktree_path": str(repo_root)},
         )
 
-    return _fake
+    def invoke(self, ctx, runner_name, invocation, cfg, *, trace=False):
+        return self._invoke(ctx, runner_name, invocation, cfg, trace=trace)
+
+    def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+        return task
 
 
 def _update_records(brr_dir: Path, conv_key: str) -> list[dict]:
@@ -84,6 +83,15 @@ def _packet_types(brr_dir: Path, conv_key: str) -> list[str]:
     return [r.get("type") for r in _update_records(brr_dir, conv_key)]
 
 
+def _success_invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
+    Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(invocation.response_path).write_text("all done\n", encoding="utf-8")
+    return RunnerResult(
+        invocation=invocation, runner_name=runner_name, command=["mock"],
+        stdout="all done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+    )
+
+
 def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     event = _make_event(
@@ -91,7 +99,10 @@ def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
         telegram_chat_id=10, telegram_topic_id=1,
     )
     _patch_runner(monkeypatch)
-    monkeypatch.setattr(daemon.runner, "invoke_runner", _success_invoke_runner())
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: _StubWorktreeEnv(invoke_fn=_success_invoke),
+    )
 
     task = daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
@@ -100,12 +111,12 @@ def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
     assert task.status == "done"
     types = _packet_types(tmp_path / ".brr", task.conversation_key)
     assert "task_created" in types
-    assert "triage_done" in types
     assert "env_prepared" in types
     assert "attempt_started" in types
     assert "run_started" in types
     assert "finalizing" in types
     assert "done" in types
+    assert "triage_done" not in types
     assert types.index("env_prepared") < types.index("attempt_started")
     assert types.index("attempt_started") < types.index("finalizing")
     assert types.index("finalizing") < types.index("done")
@@ -119,30 +130,23 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
     )
     _patch_runner(monkeypatch)
 
-    triage_stdout = "---\nbranch: current\nenv: host\n---\nbody\n"
-
-    def _retry_invoke(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.prompt.startswith("TRIAGE"):
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name,
-                command=["mock"], stdout=triage_stdout, stderr="",
-                returncode=0, trace_dir=None, artifacts=[],
-            )
-        response = Path(invocation.response_path)
+    def _retry_invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
         if invocation.label.endswith("attempt-1"):
             return RunnerResult(
-                invocation=invocation, runner_name=runner_name,
-                command=["mock"], stdout="", stderr="",
-                returncode=0, trace_dir=None, artifacts=[],
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="", stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
-        response.write_text("---\n---\ndone\n", encoding="utf-8")
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
         return RunnerResult(
-            invocation=invocation, runner_name=runner_name,
-            command=["mock"], stdout="second try", stderr="",
-            returncode=0, trace_dir=None, artifacts=[],
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
         )
 
-    monkeypatch.setattr(daemon.runner, "invoke_runner", _retry_invoke)
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: _StubWorktreeEnv(invoke_fn=_retry_invoke),
+    )
 
     task = daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
@@ -164,22 +168,16 @@ def test_failure_after_retries_emits_failed_and_finalizing(tmp_path, monkeypatch
                         telegram_chat_id=30)
     _patch_runner(monkeypatch)
 
-    triage_stdout = "---\nbranch: current\nenv: host\n---\nbody\n"
-
-    def _always_fail(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.prompt.startswith("TRIAGE"):
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name,
-                command=["mock"], stdout=triage_stdout, stderr="",
-                returncode=0, trace_dir=None, artifacts=[],
-            )
+    def _always_fail(_ctx, runner_name, invocation, _cfg, *, trace=False):
         return RunnerResult(
-            invocation=invocation, runner_name=runner_name,
-            command=["mock"], stdout="", stderr="",
-            returncode=0, trace_dir=None, artifacts=[],
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="", stderr="", returncode=0, trace_dir=None, artifacts=[],
         )
 
-    monkeypatch.setattr(daemon.runner, "invoke_runner", _always_fail)
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: _StubWorktreeEnv(invoke_fn=_always_fail),
+    )
 
     task = daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
@@ -201,8 +199,7 @@ class _FakeDockerEnv:
         self.succeed = succeed
         self.containers: list[str] = []
 
-    def prepare(self, task, repo_root, cfg, *, branch_name, base_branch,
-                response_path, debug=False):
+    def prepare(self, task, repo_root, cfg, *, base_branch, response_path, debug=False):
         ctx = envs.RunContext(
             name=self.name,
             cwd=repo_root,
@@ -228,11 +225,12 @@ class _FakeDockerEnv:
         self.containers.append(cid)
         response = Path(invocation.response_path)
         if self.succeed:
-            response.write_text("---\n---\ndocker ok\n", encoding="utf-8")
+            response.parent.mkdir(parents=True, exist_ok=True)
+            response.write_text("docker ok\n", encoding="utf-8")
         return RunnerResult(
             invocation=invocation, runner_name=runner_name,
-            command=["mock"], stdout="ok" if self.succeed else "", stderr="",
-            returncode=0, trace_dir=None, artifacts=[],
+            command=["mock"], stdout="docker ok\n" if self.succeed else "",
+            stderr="", returncode=0, trace_dir=None, artifacts=[],
         )
 
     def finalize(self, ctx, task, tasks_dir, *, debug=False):
@@ -243,21 +241,6 @@ class _FakeDockerEnv:
         return task
 
 
-def _triage_only_invoke(env_name: str = "docker"):
-    triage_stdout = f"---\nbranch: current\nenv: {env_name}\n---\nbody\n"
-
-    def _fake(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.prompt.startswith("TRIAGE"):
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name,
-                command=["mock"], stdout=triage_stdout, stderr="",
-                returncode=0, trace_dir=None, artifacts=[],
-            )
-        raise AssertionError("env backend should handle invoke")
-
-    return _fake
-
-
 def test_docker_env_emits_container_started(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     event = _make_event(tmp_path, eid="evt-docker", body="run docker",
@@ -265,8 +248,7 @@ def test_docker_env_emits_container_started(tmp_path, monkeypatch):
     _patch_runner(monkeypatch)
 
     fake_env = _FakeDockerEnv(succeed=True)
-    monkeypatch.setattr(envs, "get_env", lambda _name: fake_env)
-    monkeypatch.setattr(daemon.runner, "invoke_runner", _triage_only_invoke())
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: fake_env)
 
     task = daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
@@ -287,8 +269,7 @@ def test_docker_failed_emits_container_preserved(tmp_path, monkeypatch):
     _patch_runner(monkeypatch)
 
     fake_env = _FakeDockerEnv(succeed=False)
-    monkeypatch.setattr(envs, "get_env", lambda _name: fake_env)
-    monkeypatch.setattr(daemon.runner, "invoke_runner", _triage_only_invoke())
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: fake_env)
 
     task = daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,

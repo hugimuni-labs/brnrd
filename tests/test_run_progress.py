@@ -25,12 +25,11 @@ def test_project_task_succeeds_through_full_lifecycle(tmp_path):
     conversations.append_task(
         brr_dir, key,
         task_id="task-1", event_id="evt-1",
-        branch="auto", env="docker", status="running",
+        env="docker", status="running",
         base_branch="main", branch_name="brr/task-1",
     )
     _emit(brr_dir, key, "task_created", task_id="task-1", event_id="evt-1",
-          branch="auto", env="docker")
-    _emit(brr_dir, key, "triage_done", task_id="task-1", branch="auto", env="docker")
+          env="docker")
     _emit(brr_dir, key, "env_prepared", task_id="task-1", env="docker",
           branch_name="brr/task-1")
     _emit(brr_dir, key, "container_started", task_id="task-1",
@@ -53,7 +52,6 @@ def test_project_task_succeeds_through_full_lifecycle(tmp_path):
     assert view.state == "succeeded"
     assert view.phase == "delivered"
     assert view.is_terminal is True
-    assert view.branch == "auto"
     assert view.branch_name == "brr/task-1"
     assert view.env == "docker"
     assert view.attempt == 1
@@ -67,10 +65,10 @@ def test_project_task_failed_with_retry(tmp_path):
     conversations.append_task(
         brr_dir, key,
         task_id="task-2", event_id="evt-2",
-        branch="current", env="host", status="running",
+        env="worktree", status="running",
     )
     _emit(brr_dir, key, "task_created", task_id="task-2", event_id="evt-2",
-          branch="current", env="host")
+          env="worktree")
     _emit(brr_dir, key, "attempt_started", task_id="task-2", attempt=1)
     _emit(brr_dir, key, "attempt_failed", task_id="task-2", attempt=1,
           reason="missing required output(s): response:evt-2", will_retry=True)
@@ -88,23 +86,10 @@ def test_project_task_failed_with_retry(tmp_path):
     assert view.attempt == 2
 
 
-def test_project_task_needs_context(tmp_path):
-    brr_dir = tmp_path / ".brr"
-    key = "telegram:3:"
-    _emit(brr_dir, key, "task_created", task_id="task-3", branch="current", env="host")
-    _emit(brr_dir, key, "needs_context", task_id="task-3", event_id="evt-3")
-
-    view = run_progress.project_task(brr_dir, key, "task-3")
-    assert view is not None
-    assert view.state == "needs_context"
-    assert view.phase == "needs_context"
-    assert view.status_label() == "needs context"
-
-
 def test_project_task_conflict(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:4:"
-    _emit(brr_dir, key, "task_created", task_id="task-4", branch="auto", env="worktree")
+    _emit(brr_dir, key, "task_created", task_id="task-4", env="worktree")
     _emit(brr_dir, key, "done", task_id="task-4")
     _emit(brr_dir, key, "conflict", task_id="task-4", branch="brr/task-4")
 
@@ -119,7 +104,7 @@ def test_project_task_conflict(tmp_path):
 def test_project_task_container_preserved(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:5:"
-    _emit(brr_dir, key, "task_created", task_id="task-5", branch="current",
+    _emit(brr_dir, key, "task_created", task_id="task-5",
           env="docker")
     _emit(brr_dir, key, "container_preserved", task_id="task-5",
           containers=["brr-task-5-attempt-1", "brr-task-5-attempt-2"])
@@ -140,14 +125,14 @@ def test_project_conversation_latest_picks_most_recent_task(tmp_path):
     conversations.append_task(
         brr_dir, key,
         task_id="task-old", event_id="evt-old",
-        branch="current", env="host", status="done",
+        env="host", status="done",
     )
     conversations.append_task(
         brr_dir, key,
         task_id="task-new", event_id="evt-new",
-        branch="auto", env="docker", status="running",
+        env="docker", status="running",
     )
-    _emit(brr_dir, key, "task_created", task_id="task-new", branch="auto",
+    _emit(brr_dir, key, "task_created", task_id="task-new",
           env="docker")
     _emit(brr_dir, key, "run_started", task_id="task-new")
 
@@ -168,7 +153,7 @@ def test_project_conversation_latest_returns_none_when_no_tasks(tmp_path):
 def test_render_text_compact_includes_essentials(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:8:"
-    _emit(brr_dir, key, "task_created", task_id="task-r", branch="auto",
+    _emit(brr_dir, key, "task_created", task_id="task-r",
           env="docker")
     _emit(brr_dir, key, "env_prepared", task_id="task-r", env="docker",
           branch_name="brr/task-r")
@@ -196,7 +181,7 @@ def test_render_text_compact_does_not_inject_conversation_identity(tmp_path):
     """
     brr_dir = tmp_path / ".brr"
     key = "telegram:99:USER CONTEXTUAL OVERRIDE"
-    _emit(brr_dir, key, "task_created", task_id="task-c", branch="auto",
+    _emit(brr_dir, key, "task_created", task_id="task-c",
           env="docker")
     _emit(brr_dir, key, "failed", task_id="task-c", stage="env",
           error="docker env requires docker.image in .brr/config")

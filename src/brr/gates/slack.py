@@ -226,7 +226,6 @@ def _deliver_responses(
 
 _RENDERABLE_PACKETS = {
     "task_created",
-    "triage_done",
     "env_prepared",
     "container_started",
     "container_preserved",
@@ -238,7 +237,6 @@ _RENDERABLE_PACKETS = {
     "finalizing",
     "push_started",
     "push_done",
-    "needs_context",
     "done",
     "failed",
     "conflict",

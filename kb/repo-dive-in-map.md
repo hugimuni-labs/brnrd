@@ -15,36 +15,42 @@ tests immediately after. The tests are often the most compact description of
 the intended behavior.
 
 Last validated against `feat/task-abstraction` after the environment-policy
-and branch-strategy ownership changes, the run-progress UX rework, the
-2026-05-05 streams-to-conversations refactor that dropped `.brr/streams/`,
-the workstream manifest, and the corresponding CLI surfaces (see
-[decision-drop-streams.md](decision-drop-streams.md)), and the 2026-05-06
+ownership changes, the run-progress UX rework, the 2026-05-05
+streams-to-conversations refactor that dropped `.brr/streams/`, the
+workstream manifest, and the corresponding CLI surfaces (see
+[decision-drop-streams.md](decision-drop-streams.md)), the 2026-05-06
 docker beginner-friendly slice that added automatic credential wiring,
-host login-dir bind mounts, and the `safe.directory` injection — and shipped
-the new bundled [`envs.md`](../src/brr/docs/envs.md) doc.
+host login-dir bind mounts, and the `safe.directory` injection (and the
+bundled [`envs.md`](../src/brr/docs/envs.md) doc), and the 2026-05-06
+removal of the LLM-driven triage stage in favor of mechanical task
+construction, agent-owned branching, and plain-text responses (see
+[decision-remove-triage.md](decision-remove-triage.md)).
 
 ## Current ownership snapshot
 
 These are the most important current-shape details to carry while reading:
 
 - Users choose execution isolation with `environment=<auto|host|worktree|docker>`.
-- `environment=auto` is deterministic: configured Docker first, then `host` for current-branch tasks and `worktree` for branch tasks.
+- `environment=auto` is deterministic: configured Docker first, otherwise `worktree`. `host` is never auto-picked.
 - Task files still persist the concrete backend as `env`; `env` and `default_env` remain legacy input aliases.
-- `branch` is internal staging/delivery state, not the primary user-facing isolation control. The triage agent infers `branch` from the request; the resolver picks the concrete environment.
+- There is no LLM triage step. `Task.from_event` builds tasks mechanically from the inbox event and `.brr/config`.
+- The agent owns branching at runtime. Worktree/Docker tasks always start on a fresh `brr/<task-id>` branch sprouted from HEAD; commits there fast-forward back, switching to a new branch with `git switch -c` preserves it.
+- Responses are plain text — no frontmatter contract on `.brr/responses/`. If the agent can't complete the task, it explains why and the operator follows up in-thread.
 - Live run UX is remote-first: gates render a per-task progress card from `UpdatePacket`s via the `run_progress` projection. Local `status` is now a troubleshooting view that shares the same projection.
 - The stewardship section in [AGENTS.md](../AGENTS.md) is part of the architecture: future changes should improve the underlying design instead of layering conditions onto weak abstractions.
 
 ## One-sentence model
 
-`brr` turns external messages into frontmatter-backed event files, triages them
-into task files, resolves the user-facing environment policy into a concrete
-backend, runs a configured AI CLI there, appends every step to a per-gate-thread
-conversation log, and delivers a response file back through the originating gate.
+`brr` turns external messages into frontmatter-backed event files,
+constructs task files from them mechanically, resolves the user-facing
+environment policy into a concrete backend, runs a configured AI CLI
+there, appends every step to a per-gate-thread conversation log, and
+delivers a plain-text response file back through the originating gate.
 
 The whole runtime can be held as:
 
 ```text
-gate -> event -> conversation -> triage -> task -> env -> runner -> response -> gate
+gate -> event -> conversation -> task -> env -> runner -> response -> gate
 ```
 
 ## Start here
@@ -129,7 +135,7 @@ Read:
 
 Keep in mind:
 
-- `Task` is the central work unit after triage. It carries the originating event, internal branch/staging state, concrete environment backend, status, source, conversation key, and metadata.
+- `Task` is the central work unit constructed mechanically from an event. It carries the originating event, concrete environment backend, status, source, conversation key, and freeform metadata (worktree path, branch name, response path, etc.). There is no longer a `branch` field — branching is decided by the agent inside the worktree at runtime.
 - A conversation is just a per-gate-thread append-only ndjson log of events, tasks, artifacts, and lifecycle update packets. There is no manifest, no title, no intent — those leaky stream-identity fields were removed in the 2026-05-05 refactor (see [decision-drop-streams.md](decision-drop-streams.md)).
 - `UpdatePacket` is lifecycle telemetry routed to a conversation log and, optionally, gate `render_update` hooks. The packet vocabulary covers env prep, attempts, retries, finalize, push, and Docker container births/preservations.
 - `RunProgressView` (in `run_progress.py`) folds conversation records into a compact per-task projection that both gates and local diagnostics render. Adding new lifecycle UX should extend this projection, not reinvent rendering per gate.
@@ -155,7 +161,6 @@ Read:
 - [`src/brr/envs/__init__.py`](../src/brr/envs/__init__.py)
 - [`src/brr/prompts/runners.md`](../src/brr/prompts/runners.md)
 - [`src/brr/prompts/run.md`](../src/brr/prompts/run.md)
-- [`src/brr/prompts/triage.md`](../src/brr/prompts/triage.md)
 - [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
 
 Keep in mind:
@@ -190,25 +195,24 @@ Read `_run_worker()` in passes rather than all at once:
 
 1. Resolve the incoming event to a conversation key (gate-thread fingerprint).
 2. Append the event arrival and emit `event_received`.
-3. Run triage and parse a `Task`; emit `task_created` and `triage_done`.
-4. Resolve branch and environment policy into a concrete backend.
-5. Prepare the environment; emit `env_prepared`.
+3. Build the `Task` from the event with `Task.from_event`; emit `task_created`.
+4. Resolve the environment policy into a concrete backend.
+5. Prepare the environment (worktree creation included); emit `env_prepared`.
 6. Write the run context file (with the recent conversation block).
 7. Build the daemon prompt (also threading the recent conversation block).
 8. Invoke the runner, with retries when the runner prints no final reply on stdout.
-9. Parse the response file (written from captured stdout) for outcomes such as `needs_context`.
+9. Capture the plain-text response file (written from stdout).
 10. Optionally run KB maintenance.
-11. Finalize the environment.
+11. Finalize the environment — `WorktreeEnv.finalize` reads the worktree's git state to decide between fast-forward landing and branch preservation.
 12. Update task status and append matching update packets to the conversation log.
 
 Keep in mind:
 
 - The daemon is serial in v1: it processes one pending event at a time.
 - Gate threads run beside it, but task execution itself is not a worker pool yet.
-- Triage and execution are two separate runner invocations.
-- `needs_context` is a valid terminal task state, not an exception.
-- `branch` is task-internal staging/delivery state. Users usually choose `environment`, not branch strategy.
-- Worktree/Docker branch tasks isolate the working directory while sharing the runtime `.brr/`.
+- There is exactly one runner invocation per attempt — no separate triage call.
+- The agent owns branching: brr only decides whether to fast-forward back or preserve the branch as-is.
+- Worktree/Docker tasks isolate the working directory while sharing the runtime `.brr/`.
 
 ### Ring 5: edges and operator views
 
@@ -290,14 +294,12 @@ Source:
 
 - [`Task`](../src/brr/task.py)
 - [`Task.from_event()`](../src/brr/task.py)
-- [`Task.from_triage_output()`](../src/brr/task.py)
 - [`resolve_env()`](../src/brr/task.py)
-- [`Task.resolve_branch_name()`](../src/brr/task.py)
 
 Referenced by:
 
 - Daemon creates and updates tasks.
-- Environments use tasks to decide worktree/branch behavior.
+- Environments use tasks to set up the worktree and route the runner.
 - `run_context.py` renders task metadata into context files.
 - `status.py` reads persisted tasks for inspection.
 
@@ -310,19 +312,18 @@ Important fields:
 - `id`
 - `event_id`
 - `body`
-- `branch` for internal staging/delivery behavior
 - `env` for the concrete backend (`host`, `worktree`, `docker`, or plugin/future name)
 - `status`
 - `source`
 - `conversation_key` (gate-thread fingerprint, used to route lifecycle records and progress cards)
-- freeform `meta` (carries gate delivery info such as `telegram_chat_id` or `slack_channel`)
+- freeform `meta` (carries gate delivery info such as `telegram_chat_id` or `slack_channel`, plus runtime branch/worktree paths populated by env prepare/finalize)
 
 Environment policy details:
 
 - New config should use `environment`.
-- `environment=auto` prefers configured Docker isolation, then falls back to `host` for `branch: current` and `worktree` for branch work.
+- `environment=auto` prefers configured Docker isolation, otherwise picks `worktree`. `host` is never auto-picked.
 - `env` and `default_env` are legacy aliases still accepted by the resolver.
-- Triage may output `environment`, but should usually leave it as `auto` unless the event explicitly asks for a concrete environment.
+- The env is resolved deterministically when the task is built — there is no LLM in the loop.
 
 Read with:
 
@@ -384,7 +385,6 @@ Stable packet types, in roughly chronological order (see `PACKET_TYPES` in `upda
 
 - `event_received`
 - `task_created`
-- `triage_done`
 - `env_prepared`
 - `container_started`
 - `run_started`
@@ -396,7 +396,6 @@ Stable packet types, in roughly chronological order (see `PACKET_TYPES` in `upda
 - `container_preserved`
 - `push_started`
 - `push_done`
-- `needs_context`
 - `done`
 - `failed`
 - `conflict`
@@ -429,9 +428,9 @@ Persistence:
 Important fields:
 
 - `conversation_key`, `task_id`, `event_id`
-- `phase` (queued, triage, preparing, running, finalizing, delivering, delivered, needs_context, failed, conflict)
-- `state` (active, succeeded, failed, needs_context)
-- `branch`, `branch_name`, `base_branch`, `env`, `attempt`
+- `phase` (queued, preparing, running, finalizing, delivering, delivered, failed, conflict)
+- `state` (active, succeeded, failed)
+- `branch_name`, `base_branch`, `env`, `attempt`
 - `started_at`, `updated_at`, `detail`, `error`
 - `artifacts`, `container_ids`, `response_path`
 
@@ -457,7 +456,7 @@ Referenced by:
 
 - `adopt.py` for setup.
 - `runner.run_task()` for the direct `brr run` path.
-- `daemon.py` for triage, execution, and KB maintenance.
+- `daemon.py` for execution and KB maintenance.
 - `envs` for environment-specific invocation.
 
 Persistence:
@@ -665,7 +664,6 @@ Prompt files to read with it:
 - [`setup.md`](../src/brr/prompts/setup.md)
 - [`agents-template.md`](../src/brr/prompts/agents-template.md)
 - [`run.md`](../src/brr/prompts/run.md)
-- [`triage.md`](../src/brr/prompts/triage.md)
 - [`runners.md`](../src/brr/prompts/runners.md)
 - [`kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
 
@@ -685,18 +683,17 @@ Host execution:
 
 Worktree execution:
 
-- creates `.brr/worktrees/<task-id>`
-- runs on a concrete branch
+- creates `.brr/worktrees/<task-id>` on a fresh `brr/<task-id>` branch sprouted from HEAD
 - writes per-task log instructions through `RunContext.log_file`
-- merges and deletes auto/task branches after successful completion
+- finalize reads the worktree's git state: fast-forward back if the agent committed on the original branch, preserve otherwise
 - preserves worktree state in debug mode or non-done outcomes
 
-Docker execution on the current feature branch:
+Docker execution:
 
 - requires Docker CLI and `docker.image`
 - wraps the normal runner command in `docker run`
 - bind-mounts the repo at the same absolute path
-- uses worktree-backed branch behavior for non-current branches
+- always uses a worktree on a fresh `brr/<task-id>` branch, so the host's working tree stays clean
 - tracks containers for cleanup or salvage
 - forwards known runner env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`) and any names listed in `docker.env=` when set on the daemon
 - bind-mounts host login directories (`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini`) into `/root/<basename>` when present, unless `docker.mount_credentials=false`
@@ -705,10 +702,9 @@ Docker execution on the current feature branch:
 Environment resolution:
 
 - User-facing config should use `environment`.
-- `environment=auto` defers to deterministic resolver behavior rather than triage guessing for speed.
-- If Docker is configured via `docker.image`, auto selects `docker`.
-- Without Docker, auto selects `host` for current-branch tasks and `worktree` for branch tasks.
-- If `host` is requested with a non-current branch, the resolver returns `worktree` because host execution cannot run on a separate branch without disturbing the checkout.
+- `environment=auto` is deterministic: configured Docker first, otherwise `worktree`. `host` is never auto-picked.
+- If Docker is configured via `docker.image` and Docker is on PATH, auto selects `docker`.
+- Otherwise, auto selects `worktree`. Pick `host` explicitly if you want to forgo isolation.
 
 ### Daemon
 
@@ -720,7 +716,7 @@ nearly every core module because it owns the lifecycle:
 - gate startup
 - inbox scan
 - conversation key derivation
-- triage
+- mechanical task construction (`Task.from_event`)
 - task persistence
 - env prepare/invoke/finalize
 - attempt loop with retries and lifecycle packets
@@ -779,16 +775,32 @@ The runner contract has three layers, all checked by
   so empty stdout is the canonical failure signal for an unproductive run
   and triggers daemon retry.
 
-### Triage and execution are separate agent calls
+### Task construction is mechanical, not LLM-driven
 
-The triage prompt classifies the event into a `Task`. It owns the `branch`
-inference: code-changing requests get `auto` (or a named branch when the user
-points to one), read-only/question requests stay on `current`. It usually
-leaves `environment` as `auto` so project config can resolve the backend.
-The daemon prompt asks an agent to execute that task. This matters when
-reading tests: many daemon tests mock two runner calls.
+There is no triage prompt. `Task.from_event` builds the task directly
+from the inbox event and `.brr/config`. Daemon tests mock exactly one
+runner invocation per attempt — the execution call. See
+[decision-remove-triage.md](decision-remove-triage.md) for the
+rationale and what was removed (`prompts/triage.md`,
+`Task.from_triage_output`, the `branch` field, the `triage_done` /
+`needs_context` packets, the `needs_context` task status, and the
+frontmatter contract on response files).
 
-### Environment is user-facing; branch is internal
+### The agent owns branching at runtime
+
+Worktree and Docker tasks always start on a fresh `brr/<task-id>`
+branch sprouted from the current `HEAD`. The agent inside the worktree
+decides:
+
+- commit on the current branch and let brr fast-forward it back onto
+  the base branch (default for code that should land), or
+- `git switch -c <name>` before committing, so brr preserves the
+  branch as-is for human review or PR tooling.
+
+`WorktreeEnv.finalize` reads the worktree's git state to make that
+decision — there is no frozen branch strategy on the task file.
+
+### Environment is the user-facing isolation knob
 
 Most users should choose an environment policy:
 
@@ -797,15 +809,17 @@ Most users should choose an environment policy:
 - `environment=worktree`
 - `environment=docker`
 
-`branch` remains in task files because brr still needs staging/delivery state:
-current checkout, generated task branch, new named branch, or existing branch.
-It is not the main user-facing isolation control.
+The env is resolved deterministically when the task is built. There is
+no per-task `branch` field anymore — runtime branch state lives in
+`task.meta["branch_name"]` after `prepare`/`finalize`.
 
-### `needs_context` is a first-class outcome
+### Responses are plain text
 
-If a task cannot be completed without more input, the response frontmatter can
-mark `status: needs_context`. The daemon preserves that task state instead of
-turning it into a generic error.
+`.brr/responses/<event-id>.md` carries the agent's final stdout
+verbatim. There is no frontmatter contract. If the agent cannot
+complete the task (missing context, ambiguous request, unreachable
+service), it should say so plainly and stop. The operator sees the
+reply in the gate thread and follows up with another event.
 
 ### Conversations are not KB
 
@@ -867,6 +881,7 @@ is shaped this way and where it is going:
 - [Env Interface design](design-env-interface.md)
 - [Conversations bundled doc](../src/brr/docs/conversations.md)
 - [Drop streams decision](decision-drop-streams.md)
+- [Remove triage decision](decision-remove-triage.md)
 - [Deck: brr today](deck-brr-current.md)
 - [Deck: brr fleet and steering](deck-brr-fleet-steering.md)
 
@@ -875,7 +890,8 @@ is shaped this way and where it is going:
 Use these heuristics while reading:
 
 - If a file talks about event files, jump to [protocol.py](../src/brr/protocol.py).
-- If a file talks about branch/environment/status, jump to [task.py](../src/brr/task.py).
+- If a file talks about environment/status, jump to [task.py](../src/brr/task.py).
+- If a file talks about branching, jump to [worktree.py](../src/brr/worktree.py) and `WorktreeEnv` in [envs/__init__.py](../src/brr/envs/__init__.py) — the agent owns branching at runtime.
 - If a file talks about thread continuity or per-thread history, jump to [conversations.py](../src/brr/conversations.py).
 - If a file talks about lifecycle packets or `render_update`, jump to [updates.py](../src/brr/updates.py).
 - If a file talks about live progress phases, attempt counts, or rendering a per-task card, jump to [run_progress.py](../src/brr/run_progress.py).

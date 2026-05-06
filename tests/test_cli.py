@@ -100,18 +100,17 @@ def test_inspect_task(tmp_path):
         id="task-123-abc",
         event_id="evt-99",
         body="fix the bug",
-        branch="auto",
         env="worktree",
         status="done",
         source="telegram",
         meta={
             "branch_name": "brr/task-123-abc",
             "response_path": str(tmp_path / ".brr" / "responses" / "evt-99.md"),
-            "trace_dirs": "traces/triage/evt-99-xxx, traces/daemon-run/evt-99-attempt-1",
+            "trace_dirs": "traces/daemon-run/evt-99-attempt-1",
         },
     )
     task.save(tasks_dir)
-    (tmp_path / ".brr" / "responses" / "evt-99.md").write_text("---\n---\nresult\n")
+    (tmp_path / ".brr" / "responses" / "evt-99.md").write_text("result\n")
 
     output = inspect_task("task-123-abc", tmp_path)
     assert "task-123-abc" in output
@@ -119,7 +118,6 @@ def test_inspect_task(tmp_path):
     assert "done" in output
     assert "brr/task-123-abc" in output
     assert "Traces:" in output
-    assert "triage" in output
     assert "daemon-run" in output
     assert "Event file:" in output
     assert "Latest prompt:" in output
@@ -128,34 +126,6 @@ def test_inspect_task(tmp_path):
     assert "Event body:" in verbose
     assert "original event" in verbose
     assert "runner prompt" in verbose
-
-
-def test_inspect_task_recovers_event_body_from_triage_trace(tmp_path):
-    from brr.status import inspect_task
-    from brr.task import Task
-
-    tasks_dir = tmp_path / ".brr" / "tasks"
-    tasks_dir.mkdir(parents=True)
-    triage_trace = tmp_path / ".brr" / "traces" / "triage" / "evt-99-triage"
-    triage_trace.mkdir(parents=True)
-    (triage_trace / "prompt.md").write_text(
-        "triage prompt\n---\nEvent ID: evt-99\n\noriginal event from trace",
-        encoding="utf-8",
-    )
-    task = Task(
-        id="task-123-abc",
-        event_id="evt-99",
-        body="fix",
-        status="done",
-        meta={"trace_dirs": "traces/triage/evt-99-triage"},
-    )
-    task.save(tasks_dir)
-
-    output = inspect_task("task-123-abc", tmp_path, show_event_body=True)
-
-    assert "Event file:" in output
-    assert "(missing)" in output
-    assert "original event from trace" in output
 
 
 def test_inspect_task_not_found(tmp_path):

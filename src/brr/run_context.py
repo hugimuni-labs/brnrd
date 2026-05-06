@@ -54,7 +54,6 @@ def render_context(
         f"- Event ID: {task.event_id}",
         f"- Source: {task.source or event.get('source', '')}",
         f"- Status: {task.status}",
-        f"- Branch strategy: {task.branch}",
         f"- Environment: {ctx.name}",
         f"- Execution root: {ctx.cwd}",
         f"- Repository root: {ctx.repo_root}",

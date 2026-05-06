@@ -1,7 +1,7 @@
 import pytest
 
 from brr import envs
-from brr.runner import RunnerArtifactSpec, RunnerInvocation
+from brr.runner import RunnerInvocation
 from brr.task import Task
 
 
@@ -27,54 +27,33 @@ def test_docker_prepare_requires_cli_and_image(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Docker CLI"):
         backend.prepare(
             task, tmp_path, {},
-            branch_name=None, base_branch="main", response_path=response_path,
+            base_branch="main", response_path=response_path,
         )
 
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
     with pytest.raises(RuntimeError, match="docker.image"):
         backend.prepare(
             task, tmp_path, {},
-            branch_name=None, base_branch="main", response_path=response_path,
+            base_branch="main", response_path=response_path,
         )
 
 
-def test_docker_prepare_current_branch_uses_repo_root(tmp_path, monkeypatch):
+def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
-    (tmp_path / ".brr" / "responses").mkdir(parents=True)
-    response_path = tmp_path / ".brr" / "responses" / "evt-1.md"
-    task = Task(id="task-1", event_id="evt-1", body="run in docker")
-
-    ctx = envs.get_env("docker").prepare(
-        task, tmp_path, {"docker.image": "brr/test-runner:latest", "docker.network": "none"},
-        branch_name=None, base_branch="main", response_path=response_path,
-    )
-
-    assert ctx.name == "docker"
-    assert ctx.cwd == tmp_path
-    assert ctx.repo_root == tmp_path
-    assert ctx.response_path_host == response_path
-    assert ctx.response_path_env == response_path
-    assert ctx.env_state["docker_image"] == "brr/test-runner:latest"
-    assert ctx.env_state["docker_network"] == "none"
-    assert task.meta["docker_image"] == "brr/test-runner:latest"
-
-
-def test_docker_prepare_branch_uses_worktree(tmp_path, monkeypatch):
-    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
-    monkeypatch.setattr(envs.gitops, "branch_exists", lambda *_args: False)
     worktree_path = tmp_path / ".brr" / "worktrees" / "task-2"
     created = []
     monkeypatch.setattr(
         envs.worktree,
         "create",
-        lambda *args, **kwargs: created.append((args, kwargs)) or worktree_path,
+        lambda repo_root, task_id: created.append((repo_root, task_id))
+        or (worktree_path, f"brr/{task_id}"),
     )
-    task = Task(id="task-2", event_id="evt-2", body="change code", branch="auto")
+    task = Task(id="task-2", event_id="evt-2", body="change code")
     response_path = tmp_path / ".brr" / "responses" / "evt-2.md"
 
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "brr/test-runner:latest"},
-        branch_name="brr/task-2", base_branch="main", response_path=response_path,
+        base_branch="main", response_path=response_path,
     )
 
     assert ctx.name == "docker"
@@ -82,7 +61,8 @@ def test_docker_prepare_branch_uses_worktree(tmp_path, monkeypatch):
     assert ctx.branch_name == "brr/task-2"
     assert ctx.log_file == "kb/log-task-2.md"
     assert task.meta["worktree_path"] == str(worktree_path)
-    assert created[0][0][:3] == (tmp_path, "task-2", "brr/task-2")
+    assert task.meta["branch_name"] == "brr/task-2"
+    assert created == [(tmp_path, "task-2")]
 
 
 def _isolate_docker_creds(monkeypatch, tmp_path):
@@ -100,15 +80,26 @@ def _isolate_docker_creds(monkeypatch, tmp_path):
     return fake_home
 
 
+def _stub_worktree(monkeypatch, tmp_path):
+    """Replace worktree.create with a stub that just makes the dir."""
+    def _create(_repo_root, task_id):
+        path = tmp_path / ".brr" / "worktrees" / task_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path, f"brr/{task_id}"
+
+    monkeypatch.setattr(envs.worktree, "create", _create)
+
+
 def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
     _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
     response_path = tmp_path / ".brr" / "responses" / "evt-3.md"
     response_path.parent.mkdir(parents=True)
     task = Task(id="task-3", event_id="evt-3", body="run in docker")
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "brr/test-runner:latest"},
-        branch_name=None, base_branch="main", response_path=response_path,
+        base_branch="main", response_path=response_path,
     )
     commands = []
 
@@ -141,7 +132,7 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     assert "--name" in command
     assert command[command.index("--network") + 1] == "bridge"
     assert command[command.index("-v") + 1] == f"{tmp_path}:{tmp_path}"
-    assert command[command.index("-w") + 1] == str(tmp_path)
+    assert command[command.index("-w") + 1] == str(ctx.cwd)
     assert command[-4:] == ["brr/test-runner:latest", "mock", "--flag", "hello"]
     assert ctx.env_state["docker_containers"] == ["brr-task-3-evt-3-attempt-1"]
     forwarded = [command[i + 1] for i, arg in enumerate(command) if arg == "-e"]
@@ -156,6 +147,7 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
 
 def test_docker_invoke_injects_git_safe_directory(tmp_path, monkeypatch):
     _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
 
     command = _build_docker_invoke(tmp_path, monkeypatch)
 
@@ -176,7 +168,7 @@ def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-
         cfg.update(cfg_extra)
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, cfg,
-        branch_name=None, base_branch="main", response_path=response_path,
+        base_branch="main", response_path=response_path,
     )
     commands = []
     monkeypatch.setattr(
@@ -217,6 +209,7 @@ def _passthrough_env_names(command: list[str]) -> list[str]:
 
 def test_docker_invoke_passes_known_runner_env_when_set(tmp_path, monkeypatch):
     _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     command = _build_docker_invoke(tmp_path, monkeypatch)
@@ -230,6 +223,7 @@ def test_docker_invoke_passes_known_runner_env_when_set(tmp_path, monkeypatch):
 
 def test_docker_invoke_passes_no_env_when_none_set(tmp_path, monkeypatch):
     _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
 
     command = _build_docker_invoke(tmp_path, monkeypatch)
 
@@ -238,6 +232,7 @@ def test_docker_invoke_passes_no_env_when_none_set(tmp_path, monkeypatch):
 
 def test_docker_invoke_passthrough_extra_env_keys(tmp_path, monkeypatch):
     _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
     monkeypatch.setenv("CUSTOM_TOKEN", "tok-1")
 
     command = _build_docker_invoke(
@@ -250,6 +245,7 @@ def test_docker_invoke_passthrough_extra_env_keys(tmp_path, monkeypatch):
 
 def test_docker_invoke_extra_env_does_not_duplicate_defaults(tmp_path, monkeypatch):
     _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     command = _build_docker_invoke(
@@ -262,6 +258,7 @@ def test_docker_invoke_extra_env_does_not_duplicate_defaults(tmp_path, monkeypat
 
 def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch):
     fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
     (fake_home / ".claude").mkdir()
     (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
     (fake_home / ".codex").mkdir()
@@ -282,6 +279,7 @@ def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch
 
 def test_docker_invoke_skips_credential_mounts_when_disabled(tmp_path, monkeypatch):
     fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
     (fake_home / ".claude").mkdir()
 
     command = _build_docker_invoke(
@@ -297,6 +295,7 @@ def test_docker_invoke_skips_credential_mounts_when_disabled(tmp_path, monkeypat
 
 def test_docker_invoke_skips_credential_mounts_when_disabled_string(tmp_path, monkeypatch):
     fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
     (fake_home / ".claude").mkdir()
 
     command = _build_docker_invoke(
@@ -318,6 +317,8 @@ def test_docker_finalize_removes_containers_after_success(tmp_path, monkeypatch)
         lambda command, **_kwargs: commands.append(command)
         or envs.subprocess.CompletedProcess(command, 0, "", ""),
     )
+    # Avoid touching real git inside finalize.
+    monkeypatch.setattr(envs.worktree, "current_branch", lambda _path: None)
     task = Task(id="task-4", event_id="evt-4", body="done", status="done")
     ctx = envs.RunContext(
         name="docker",
@@ -326,12 +327,16 @@ def test_docker_finalize_removes_containers_after_success(tmp_path, monkeypatch)
         runtime_dir=tmp_path / ".brr",
         response_path_host=tmp_path / ".brr" / "responses" / "evt-4.md",
         response_path_env=tmp_path / ".brr" / "responses" / "evt-4.md",
-        env_state={"docker_containers": ["brr-task-4-evt-4-attempt-1"]},
+        branch_name="brr/task-4",
+        env_state={
+            "docker_containers": ["brr-task-4-evt-4-attempt-1"],
+            "worktree_path": str(tmp_path),
+        },
     )
 
     envs.get_env("docker").finalize(ctx, task, tmp_path / ".brr" / "tasks")
 
-    assert commands == [["docker", "rm", "-f", "brr-task-4-evt-4-attempt-1"]]
+    assert ["docker", "rm", "-f", "brr-task-4-evt-4-attempt-1"] in commands
 
 
 def test_docker_finalize_preserves_containers_on_error(tmp_path, monkeypatch):
@@ -342,6 +347,7 @@ def test_docker_finalize_preserves_containers_on_error(tmp_path, monkeypatch):
         lambda command, **_kwargs: commands.append(command)
         or envs.subprocess.CompletedProcess(command, 0, "", ""),
     )
+    monkeypatch.setattr(envs.worktree, "current_branch", lambda _path: None)
     task = Task(id="task-5", event_id="evt-5", body="failed", status="error")
     ctx = envs.RunContext(
         name="docker",
@@ -350,7 +356,11 @@ def test_docker_finalize_preserves_containers_on_error(tmp_path, monkeypatch):
         runtime_dir=tmp_path / ".brr",
         response_path_host=tmp_path / ".brr" / "responses" / "evt-5.md",
         response_path_env=tmp_path / ".brr" / "responses" / "evt-5.md",
-        env_state={"docker_containers": ["brr-task-5-evt-5-attempt-1"]},
+        branch_name="brr/task-5",
+        env_state={
+            "docker_containers": ["brr-task-5-evt-5-attempt-1"],
+            "worktree_path": str(tmp_path),
+        },
     )
 
     envs.get_env("docker").finalize(ctx, task, tmp_path / ".brr" / "tasks")

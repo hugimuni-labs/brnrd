@@ -25,7 +25,7 @@ def _seed_task(
     conv_key = f"slack:{channel}:" + (thread_ts or "")
     task = Task(
         id=task_id, event_id="evt-" + task_id, body="x",
-        branch="auto", env="docker", status="running",
+        env="docker", status="running",
         source=source, conversation_key=conv_key,
         meta=meta,
     )

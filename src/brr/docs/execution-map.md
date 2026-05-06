@@ -8,7 +8,7 @@ per-repo by dropping a file at `.brr/docs/execution-map.md`.
 ## Pipeline
 
 ```
-event (inbox) → triage (classify) → task (persisted) → context file → run env → response → traces/review
+event (inbox) → task (persisted) → context file → run env → response → traces/review
 ```
 
 ### 1. Event arrives
@@ -17,32 +17,24 @@ A gate (Telegram, Slack, Git) or a script writes a markdown file to
 `.brr/inbox/`. The file has frontmatter (`id`, `source`, `status`) and
 a body with the user's message.
 
-### 2. Triage
+### 2. Task created
 
-The daemon invokes the runner with `triage.md` to classify the event.
-The triage agent decides how brr should stage any code changes
-(`branch`) and usually leaves `environment` as `auto`, then outputs a
-task spec (frontmatter + refined body). Environment policy is resolved
-deterministically from the event and `.brr/config`; triage should not
-guess just to optimize runtime.
+The daemon constructs a `Task` directly from the event with
+`Task.from_event` — no LLM-driven triage step. Environment policy is
+resolved deterministically from the event source and `.brr/config`.
+The task is saved to `.brr/tasks/<task-id>.md` and tracks: event ID,
+env, status, source, and manifest metadata (response path, branch
+name, worktree path, run context path, trace directories). Task files
+still store the concrete backend as `env`; user-facing config should
+prefer `environment`.
 
-Triage runs with a reduced log context window (last 3 entries only) —
-it's a fast classifier, not an investigator.
+Branch behavior is no longer carried on the task. Worktree and Docker
+runs always start on a fresh `brr/<task-id>` branch sprouted from the
+current `HEAD`. The agent decides at runtime whether to commit there
+(brr fast-forwards back) or switch to a named branch (brr preserves
+it).
 
-### 3. Task persisted
-
-The daemon parses triage output into a `Task` and saves it to
-`.brr/tasks/<task-id>.md`. The task file tracks: event ID, branch,
-env, status, source, and manifest metadata (response path, branch name,
-worktree path, run context path, trace directories). Task files still
-store the concrete backend as `env` for compatibility; user-facing
-config should prefer `environment`.
-
-`branch` is task-internal staging/delivery state. Users normally
-configure `environment`; brr chooses branch behavior unless a request
-explicitly names a branch or asks to work in the current checkout.
-
-### 4. Execution
+### 3. Execution
 
 The daemon hands the task off to one of the env backends — `host`,
 `worktree`, or `docker` today. Each backend prepares the working
@@ -58,7 +50,7 @@ path, shared runtime dir, generated run context file).
 In worktree-backed modes, including Docker branch tasks, the agent writes
 its log entry to `kb/log-<task-id>.md` to avoid conflicts with the main log.
 
-### 5. Response
+### 4. Response
 
 The agent's final reply is its last stdout message. brr captures stdout
 and writes it to `.brr/responses/<event-id>.md`. Runners are invoked
@@ -66,20 +58,29 @@ headless (`claude --print`, `codex exec`, `gemini -p --yolo`); progress
 goes to stderr and only the final reply is on stdout, so no per-runner
 output flag is needed.
 
+Responses are plain text — there is no frontmatter contract. If the
+agent cannot complete the task (missing context, ambiguous request,
+unreachable service), it should say so plainly in the response and
+stop. The operator sees the reply in the gate thread and follows up
+with another event.
+
 If stdout is empty, the daemon retries up to `response_retries` times
 before failing the task.
 
-### 6. KB maintenance (optional)
+### 5. KB maintenance (optional)
 
 If the task modified files in `kb/`, a lightweight maintenance step runs
 to verify `kb/index.md` consistency and ensure a log entry exists.
 See `brr-internals.md` for the full trigger logic.
 
-### 7. Finalization
+### 6. Finalization
 
-For worktree tasks with `auto`/`task` branch strategy, the branch is
-merged back to the main checkout and the worktree is removed. For named
-branches, the worktree is removed but the branch is preserved.
+For worktree tasks, the daemon inspects the worktree's git state. If
+the agent left commits on the original `brr/<task-id>` branch and the
+base branch can fast-forward, the branch is folded back. Otherwise
+(the agent moved to another branch, or the merge would not be
+fast-forward), the branch is preserved as-is. The worktree is removed
+unless debug mode keeps it for inspection.
 
 ## Artifact locations
 

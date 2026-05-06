@@ -23,7 +23,6 @@ from . import conversations
 PACKET_TYPES = (
     "event_received",
     "task_created",
-    "triage_done",
     "env_prepared",
     "container_started",
     "run_started",
@@ -35,7 +34,6 @@ PACKET_TYPES = (
     "container_preserved",
     "push_started",
     "push_done",
-    "needs_context",
     "done",
     "failed",
     "conflict",

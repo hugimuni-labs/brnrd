@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from brr import conversations, daemon
+from brr import conversations, daemon, envs
 from brr.runner import RunnerResult
 
 
@@ -30,44 +30,60 @@ def _make_event(repo_root: Path, *, eid: str, body: str, **extra) -> dict:
     return event
 
 
+def _stub_env(monkeypatch, tmp_path):
+    """Stub env backend that just runs the runner and returns the task."""
+
+    class StubEnv:
+        name = "worktree"
+
+        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, debug=False):
+            return envs.RunContext(
+                name=self.name,
+                cwd=tmp_path,
+                repo_root=repo_root,
+                runtime_dir=tmp_path / ".brr",
+                response_path_host=response_path,
+                response_path_env=response_path,
+                branch_name=f"brr/{task.id}",
+                base_branch=base_branch,
+                log_file=f"kb/log-{task.id}.md",
+                env_state={"worktree_path": str(tmp_path)},
+            )
+
+        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(invocation.response_path).write_text("result\n", encoding="utf-8")
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="result\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+
+        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+            return task
+
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+
+
 def _patch_runner_minimal(monkeypatch, captured_prompts=None):
     captured_prompts = captured_prompts if captured_prompts is not None else []
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
-
-    def _build_triage(body, eid, _root, **kw):
-        captured_prompts.append(("triage", eid, kw.get("recent_conversation")))
-        return f"TRIAGE {eid}: {body}"
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
 
     def _build_daemon(task, eid, rp, _root, **kw):
         captured_prompts.append(("daemon", eid, kw.get("recent_conversation")))
         return f"RUN {eid}: {task} -> {rp}"
 
-    monkeypatch.setattr(daemon.runner, "build_triage_prompt", _build_triage)
     monkeypatch.setattr(daemon.runner, "build_daemon_prompt", _build_daemon)
     monkeypatch.setattr(daemon, "_kb_changed", lambda _: False)
+    monkeypatch.setattr(
+        daemon.runner,
+        "invoke_runner",
+        lambda *_a, **_kw: RunnerResult(
+            invocation=_a[1], runner_name=_a[0], command=["mock"],
+            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        ),
+    )
     return captured_prompts
-
-
-def _success_invoke():
-    triage = "---\nbranch: current\nenv: host\n---\nrefined body\n"
-
-    def _fake(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.prompt.startswith("TRIAGE"):
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name,
-                command=["mock"], stdout=triage, stderr="",
-                returncode=0, trace_dir=None, artifacts=[],
-            )
-        Path(invocation.response_path).write_text(
-            "---\n---\nresult\n", encoding="utf-8",
-        )
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name,
-            command=["mock"], stdout="ok", stderr="",
-            returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    return _fake
 
 
 def test_run_worker_routes_to_conversation_and_persists_records(tmp_path, monkeypatch):
@@ -77,7 +93,7 @@ def test_run_worker_routes_to_conversation_and_persists_records(tmp_path, monkey
         telegram_chat_id=42, telegram_topic_id=5,
     )
     _patch_runner_minimal(monkeypatch)
-    monkeypatch.setattr(daemon.runner, "invoke_runner", _success_invoke())
+    _stub_env(monkeypatch, tmp_path)
 
     task = daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
@@ -95,7 +111,7 @@ def test_run_worker_routes_to_conversation_and_persists_records(tmp_path, monkey
     assert "response" in artifact_kinds
 
 
-def test_run_worker_threads_recent_conversation_through_prompts(tmp_path, monkeypatch):
+def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     event = _make_event(
         tmp_path, eid="evt-thread-1", body="first",
@@ -104,24 +120,23 @@ def test_run_worker_threads_recent_conversation_through_prompts(tmp_path, monkey
 
     captured: list = []
     _patch_runner_minimal(monkeypatch, captured)
-    monkeypatch.setattr(daemon.runner, "invoke_runner", _success_invoke())
+    _stub_env(monkeypatch, tmp_path)
 
     daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
-    triage_records = next(c[2] for c in captured if c[0] == "triage")
     daemon_records = next(c[2] for c in captured if c[0] == "daemon")
-    assert triage_records is not None
-    assert any(r.get("event_id") == "evt-thread-1" for r in (triage_records or []))
+    # The daemon prompt receives the recent records gathered before the
+    # task row was appended — at minimum the inbound event entry.
     assert daemon_records is not None
-    assert any(r.get("kind") == "task" for r in (daemon_records or []))
+    assert any(r.get("event_id") == "evt-thread-1" for r in daemon_records)
 
 
 def test_run_worker_followup_in_same_thread_reuses_conversation(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     _patch_runner_minimal(monkeypatch)
-    monkeypatch.setattr(daemon.runner, "invoke_runner", _success_invoke())
+    _stub_env(monkeypatch, tmp_path)
 
     first = _make_event(
         tmp_path, eid="evt-thread-A", body="initial",
