@@ -11,8 +11,8 @@ by dropping a file at `.brr/docs/envs.md`.
 | Env         | Where the runner runs                       | Credentials       | Repo isolation                | Notes                                |
 | ----------- | ------------------------------------------- | ----------------- | ----------------------------- | ------------------------------------ |
 | `host`      | Main repo checkout, current process         | Inherited         | None                          | Default for trivial / Q&A tasks      |
-| `worktree`  | `.brr/worktrees/<task-id>/` (own branch)    | Inherited         | Working dir + branch          | Default for code work                |
-| `docker`    | A container, repo bind-mounted              | Auto-wired to host| Container + (worktree if branch) | New users start here for hardening |
+| `worktree`  | `.brr/worktrees/<task-id>/` (`brr/<task-id>` branch) | Inherited | Working dir + branch | Default for code work |
+| `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | New users start here for hardening |
 
 Other envs (`devcontainer`, `ssh`) are planned but not yet shipped. See
 `kb/design-env-interface.md` if you want to follow that work.
@@ -23,12 +23,13 @@ Resolution order in `.brr/config`:
 
 1. `environment=` — the user-facing policy. Use this when configuring.
 2. `env=` / `default_env=` — legacy aliases, still accepted.
-3. `auto` — the daemon picks: docker if `docker.image` is set and Docker
-   is on PATH, else worktree, else host.
+3. `auto` — the daemon picks: docker if `docker.image` is set and
+   Docker is on PATH, otherwise worktree. `host` is never auto-picked;
+   set it explicitly if you want to forgo isolation.
 
-At the task level, the triage agent may override based on the request,
-but it should not pick `docker` or `ssh` unless the event explicitly
-asks for that level of isolation.
+The env is resolved deterministically when the task is built — there
+is no LLM in the loop. If a request needs different isolation, change
+`.brr/config` or wire your gate to set `env=` on the event.
 
 ## `host`
 
@@ -39,25 +40,31 @@ where you want the change visible immediately.
 
 ## `worktree`
 
-The daemon creates a git worktree under `.brr/worktrees/<task-id>/` on
-a fresh task branch (`brr/<task-id>` for `auto`/`task` strategies, or
-the named branch you asked for). The runner cwd points at the worktree;
-your main checkout is untouched. After a successful run with
-`branch=auto|task`, the daemon `git merge --ff-only`s the branch back
-into the host's HEAD and removes the worktree. Named branches are
-preserved for human review or PR tooling.
+The daemon creates a git worktree under `.brr/worktrees/<task-id>/`
+on a fresh `brr/<task-id>` branch sprouted from the current `HEAD`.
+The runner cwd points at the worktree; your main checkout is
+untouched. After a successful run, the daemon inspects the worktree's
+git state:
+
+- Agent committed on the original `brr/<task-id>` branch and the base
+  branch can fast-forward → merge it back, remove the worktree.
+- Agent switched to or created another branch (`git switch -c …`),
+  or commits diverge from the base → leave the branch alone, remove
+  the worktree.
+- No commits beyond the base → drop the empty branch with the
+  worktree.
 
 This is the right default for code-modifying work. Combine with debug
-mode to inspect a worktree post-task.
+mode to keep a worktree around for inspection.
 
 ## `docker`
 
 The runner command is wrapped in `docker run`. The repo is bind-mounted
 into the container at the same absolute path it has on the host, so
 file references in prompts and traces remain valid in both directions.
-Branch tasks first set up the same worktree as the `worktree` env and
-mount that directory instead of the main checkout, keeping the host's
-working tree clean.
+Docker tasks first set up the same `brr/<task-id>` worktree as the
+`worktree` env and mount that directory instead of the main checkout,
+keeping the host's working tree clean.
 
 ### Required configuration
 
@@ -179,8 +186,9 @@ can inspect, re-run, or copy work out manually.
 
 Across all envs, brr only guarantees three kinds of output survive:
 
-1. **Git commits** on `task.branch_name`, reachable from the host's
-   `.git`.
+1. **Git commits** on whatever branch the agent left checked out in
+   the worktree (recorded in `task.meta["branch_name"]`), reachable
+   from the host's `.git`.
 2. **The response file** at `.brr/responses/<event-id>.md`, captured
    from the runner's stdout.
 3. **Trace artefacts** under `.brr/traces/<kind>/...`, written when

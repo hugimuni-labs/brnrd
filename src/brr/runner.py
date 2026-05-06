@@ -498,7 +498,6 @@ def build_daemon_prompt(
     log_file: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
-    stage_feedback: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
@@ -521,7 +520,6 @@ def build_daemon_prompt(
         log_file=log_file,
         recent_conversation=recent_conversation,
         event_body=event_body,
-        stage_feedback=stage_feedback,
     )
     return _join_prompt_parts(preamble, repo_root, f"{bundle}\nTask: {task}")
 
@@ -539,13 +537,12 @@ def _build_task_context_bundle(
     log_file: str | None,
     recent_conversation: list[dict[str, Any]] | None,
     event_body: str | None,
-    stage_feedback: bool,
 ) -> str:
     """Assemble the human-readable Task Context Bundle for the daemon prompt.
 
-    The bundle preserves the legacy ``Key: value`` lines (Task ID:,
-    Execution root:, Base branch:, etc.) so that any tool grepping the
-    prompt keeps working, while grouping them under semantic headings.
+    The bundle preserves the ``Key: value`` lines (Task ID:, Execution
+    root:, Base branch:, etc.) under semantic headings so any tool
+    grepping the prompt keeps working.
     """
     sections: list[str] = ["---", "## Task Context Bundle"]
 
@@ -563,9 +560,6 @@ def _build_task_context_bundle(
         sections.append(f"- Shared runtime dir: {runtime_dir}")
     if context_path:
         sections.append(f"- Run context file: {context_path}")
-    sections.append(
-        f"- Stage feedback requested: {'yes' if stage_feedback else 'no'}"
-    )
 
     sections.append("")
     sections.append("### Delivery contract")
@@ -584,18 +578,17 @@ def _build_task_context_bundle(
     )
     if branch_name and base_branch:
         sections.append(
-            "- Branching note: this task branch was created from the base branch "
-            "shown above. Keep your edits on Current branch; do not rebase or "
-            "retarget to main unless the task explicitly asks for it."
+            f"- You start on `{branch_name}`, sprouted from `{base_branch}`. "
+            "If this is read-only or a Q&A, just answer — do not commit. "
+            "If your work should land on the base branch, commit on the "
+            "current branch and brr will fast-forward it back. If you want "
+            "the work kept as a separate branch, run "
+            "`git switch -c <meaningful-name>` first; brr will preserve "
+            "whatever branch you end up on without merging."
         )
     if log_file:
         sections.append(
             f"- Write your log entry to {log_file} instead of kb/log.md."
-        )
-    if stage_feedback:
-        sections.append(
-            "- Stage feedback was explicitly requested: emit a short, "
-            "structured stage note artifact alongside your main response."
         )
 
     recent_block = _format_recent_conversation(recent_conversation)
@@ -617,7 +610,6 @@ def _build_task_context_bundle(
     return "\n".join(sections) + "\n"
 
 
-_TRIAGE_LOG_ENTRIES = 3
 _RECENT_CONVERSATION_MAX = 8
 
 
@@ -667,55 +659,6 @@ def _format_recent_conversation(
         if line:
             bullets.append(line)
     return "\n".join(bullets)
-
-
-def build_triage_prompt(
-    event_body: str,
-    event_id: str,
-    repo_root: Path,
-    *,
-    recent_conversation: list[dict[str, Any]] | None = None,
-    stage_feedback: bool = False,
-) -> str:
-    """Build the prompt for the triage step — event → task conversion.
-
-    The triage agent reads the event and decides how brr should stage any
-    code changes. It usually leaves environment as auto so project
-    config can resolve the concrete backend. Its output is parsed into
-    a Task.
-
-    Uses a reduced context window (last 3 log entries) compared to the
-    full run prompt. When *recent_conversation* is supplied, the last
-    few records from the same gate thread are included so the triage
-    agent can route consistently with prior activity. *stage_feedback*
-    asks the triage agent to emit a structured stage note artifact.
-    """
-    triage = _read_prompt("triage.md", repo_root)
-    parts = [triage]
-    recent_conv = _format_recent_conversation(recent_conversation)
-    if recent_conv:
-        parts.append(
-            "## Recent in this conversation\n\n"
-            "Most recent records from the same gate thread, oldest first.\n\n"
-            f"{recent_conv}"
-        )
-    if stage_feedback:
-        parts.append(
-            "## Stage feedback requested\n\n"
-            "The originating event asked for per-stage feedback. Emit a "
-            "short, structured stage note alongside your task spec — keep "
-            "it focused on the triage decision rationale, not a freeform "
-            "essay."
-        )
-    recent = _read_recent_log(repo_root, max_entries=_TRIAGE_LOG_ENTRIES)
-    if recent:
-        parts.append(
-            "## Recent Activity (last 3 entries)\n\n"
-            "Use this only to understand what kind of work has been done recently.\n\n"
-            f"{recent}"
-        )
-    parts.append(f"---\nEvent ID: {event_id}\n\n{event_body}")
-    return "\n\n".join(parts)
 
 
 def build_kb_maintenance_prompt(repo_root: Path) -> str:

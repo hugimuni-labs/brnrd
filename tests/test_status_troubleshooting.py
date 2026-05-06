@@ -30,7 +30,7 @@ def test_get_status_shows_active_run_progress(tmp_path, monkeypatch):
     conversations.append_task(
         brr_dir, key,
         task_id="task-active", event_id="evt-active",
-        branch="auto", env="docker", status="running",
+        env="docker", status="running",
         base_branch="main", branch_name="brr/task-active",
     )
     updates.emit(brr_dir, updates.UpdatePacket(
@@ -56,7 +56,7 @@ def test_get_status_omits_active_block_when_terminal(tmp_path, monkeypatch):
     conversations.append_task(
         brr_dir, key,
         task_id="task-done", event_id="evt-done",
-        branch="current", env="host", status="done",
+        env="host", status="done",
     )
     updates.emit(brr_dir, updates.UpdatePacket(
         type="task_created", conversation_key=key,

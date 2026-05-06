@@ -41,18 +41,30 @@ knowledge, and agents should not edit it.
   bundle gives you (worktree mode).
 - KB pages → `kb/<page>.md` only when the task warrants persistence
   (decisions, research, gotchas, lines of work that span runs).
-- Stage notes → only when the bundle says `stage feedback requested`.
-  Keep them short and structured.
 
 ## What not to do
 
 - Do not poke around `.brr/` beyond what the task asks for. It is
   runtime scratch, not project knowledge.
-- Do not retarget your branch unless the task says so.
 - Do not invent extra work to be helpful — proportionality wins.
 - Do not `commit --amend` upstream history; one task = one commit on
   the current branch.
 
+## Branching
+
+You start on a fresh `brr/<task-id>` branch sprouted from the base
+branch. Three valid outcomes:
+
+- **Q&A / read-only** — answer in the response file and stop. No
+  commit needed.
+- **Work that should land** — commit on the current branch. brr
+  fast-forwards it back onto the base branch after the run.
+- **Work to keep on its own branch** — run
+  `git switch -c <meaningful-name>` before committing. brr preserves
+  whatever branch you end up on without merging.
+
 If something feels off — unfamiliar metadata, a missing path, an
-ambiguous instruction — say so in the response and stop. The
-orchestrator prefers a clear `needs_context` over a guessing agent.
+ambiguous instruction, a service you cannot reach — say so in the
+response and stop. Reply with what you tried, what you need, and why
+you stopped. Do not guess; the operator will follow up with another
+event.
