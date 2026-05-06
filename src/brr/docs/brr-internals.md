@@ -39,7 +39,7 @@ gitignored; do not commit its contents.
 | Folder       | Purpose                                                            |
 | ------------ | ------------------------------------------------------------------ |
 | `inbox/`     | Incoming events from gates, one markdown file per event            |
-| `tasks/`     | Parsed task manifests, one per event (source of truth post-triage) |
+| `tasks/`     | Task manifests, one per event (source of truth for the worker)     |
 | `responses/` | Agent final responses destined for gate replies                    |
 | `runs/`      | Generated per-task context files for daemon runner invocations     |
 | `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
@@ -71,19 +71,20 @@ done by using a local checkout, editable install, or fork of brr.
 Use `environment` for the user-facing execution policy:
 
 - `environment=auto` — prefer configured Docker isolation, then fall
-  back to worktree/host behavior.
+  back to worktree behavior.
 - `environment=docker` — require Docker and `docker.image`.
 - `environment=worktree` — run in a separate git worktree.
-- `environment=host` — run directly in the main checkout.
+- `environment=host` — run directly in the main checkout (no isolation).
 
 The legacy `env` and `default_env` config keys are still accepted, but
 new config should use `environment`.
 
-`branch` stays in task files as staging/delivery state. It tells the
-daemon whether code changes should land in the current checkout, a
-generated task branch, or an explicitly named branch. It is not the main
-user-facing isolation setting; most users should configure
-`environment` and let triage choose branch behavior per task.
+Branching is no longer carried on the task file. Worktree and Docker
+runs always start on a fresh `brr/<task-id>` branch sprouted from the
+current `HEAD`. The agent decides at runtime whether the work should
+land back on the base branch (commit on the current branch, brr
+fast-forwards) or be preserved on its own branch (`git switch -c
+<name>` first, brr leaves it untouched).
 
 Legacy per-repo override folders may still be read by the library, but
 there is no public command to seed them:
@@ -137,11 +138,11 @@ failed maintenance pass is logged but never fails the parent task.
 ### Why this heuristic
 
 Earlier drafts used task-body heuristics ("does the instruction look
-big?") or triage-side classification. Those all require the triage
-agent to guess ahead of time. The git-diff check is post-hoc: it
-looks at what actually happened, not at what the agent was told to
-do. A one-line fix that happened to add a kb entry gets maintained; a
-big refactor that never touched kb/ doesn't pay the runner cost.
+big?") that required guessing ahead of time. The git-diff check is
+post-hoc: it looks at what actually happened, not at what the agent
+was told to do. A one-line fix that happened to add a kb entry gets
+maintained; a big refactor that never touched kb/ doesn't pay the
+runner cost.
 
 ### Configuring it
 
@@ -157,12 +158,12 @@ kb maintenance manually.
 
 ## Run progress UX
 
-The daemon emits typed lifecycle packets through `brr.updates` for every
-task: `task_created`, `triage_done`, `env_prepared`,
-`container_started`, `attempt_started`, `attempt_failed`, `retrying`,
-`run_started`, `artifact_created`, `finalizing`, `container_preserved`,
+The daemon emits typed lifecycle packets through `brr.updates` for
+every task: `task_created`, `env_prepared`, `container_started`,
+`attempt_started`, `attempt_failed`, `retrying`, `run_started`,
+`artifact_created`, `finalizing`, `container_preserved`,
 `push_started`, `push_done`, plus the terminal `done` / `failed` /
-`needs_context` / `conflict`.
+`conflict`.
 
 Gates may opt in to a `render_update(brr_dir, packet)` hook to surface
 progress to a human:
@@ -189,11 +190,15 @@ isolate the working directory and branch, but they do not yet run in
 parallel — the worker pool is single-threaded. See
 `kb/plan-concurrent-worktrees.md` for the roadmap in this repo.
 
-When a worktree-backed task finishes, the daemon merges the branch back
-(for `auto`/`task` strategies) or preserves it (named branches), then
-removes the worktree unless debug mode keeps it for inspection. Docker
-branch tasks use the same worktree-backed branch behavior, with the
-runner command executed inside the configured container image.
+When a worktree-backed task finishes, the daemon inspects the
+worktree's git state. If the agent left commits on the original
+`brr/<task-id>` branch and the base branch can fast-forward, the
+branch is folded back; otherwise (the agent created/checked out a
+different branch, or the merge would not be fast-forward) the branch
+is preserved as-is and the worktree is removed unless debug mode keeps
+it for inspection. Docker tasks use the same worktree-backed branch
+behavior, with the runner command executed inside the configured
+container image.
 
 The full env story — built-ins, configuration knobs, the docker
 credential wiring, the durability contract, and the salvage rule —

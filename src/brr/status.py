@@ -117,7 +117,6 @@ def inspect_task(
         f"Task:     {task.id}",
         f"Event:    {task.event_id}",
         f"Status:   {task.status}",
-        f"Branch:   {task.branch}",
         f"Env:      {task.env}",
     ]
     if task.source:
@@ -140,7 +139,7 @@ def inspect_task(
     event_file = brr_dir / "inbox" / f"{task.event_id}.md"
     lines.append(f"Event file: {event_file}{'' if event_file.exists() else ' (missing)'}")
 
-    branch_name = task.meta.get("branch_name") or task.resolve_branch_name()
+    branch_name = task.meta.get("branch_name")
     if branch_name:
         lines.append(f"Git branch: {branch_name}")
     base_branch = task.meta.get("base_branch")
@@ -210,8 +209,6 @@ def inspect_task(
     if event_file.exists():
         event_text = event_file.read_text(encoding="utf-8")
         event_body = protocol.frontmatter_body(event_text).strip()
-    elif show_event_body:
-        event_body = _event_body_from_trace_prompts(brr_dir, trace_dirs, task.event_id)
 
     if show_event_body and event_body:
         lines.append("")
@@ -257,23 +254,4 @@ def _latest_prompt_path(brr_dir: Path, trace_dirs: list[str]) -> Path | None:
         return daemon_prompts[-1]
     if candidates:
         return candidates[-1]
-    return None
-
-
-def _event_body_from_trace_prompts(
-    brr_dir: Path,
-    trace_dirs: list[str],
-    event_id: str,
-) -> str | None:
-    """Recover event body from the linked triage prompt when inbox was pruned."""
-    marker = f"---\nEvent ID: {event_id}\n\n"
-    for td in trace_dirs:
-        if not td.startswith("traces/triage/"):
-            continue
-        prompt = brr_dir / td / "prompt.md"
-        if not prompt.exists():
-            continue
-        text = prompt.read_text(encoding="utf-8")
-        if marker in text:
-            return text.split(marker, 1)[1].strip()
     return None

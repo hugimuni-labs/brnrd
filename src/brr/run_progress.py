@@ -2,9 +2,9 @@
 
 Conversation logs (``.brr/conversations/<key>.ndjson``) capture every
 fact the daemon emits about an event/task: the event arrival, the
-triaged task row, lifecycle update packets, and artifact records.
-This module folds those records into a compact ``RunProgressView``
-that gates and local diagnostics can render the same way.
+task row, lifecycle update packets, and artifact records. This module
+folds those records into a compact ``RunProgressView`` that gates and
+local diagnostics can render the same way.
 
 The projection is read-only and does not mutate conversation state.
 Renderers should treat it as the canonical view of a single task's
@@ -25,24 +25,21 @@ from . import conversations as conversations_mod
 
 PHASES = (
     "queued",
-    "triage",
     "preparing",
     "running",
     "finalizing",
     "delivering",
     "delivered",
-    "needs_context",
     "failed",
     "conflict",
 )
 
-STATES = ("active", "succeeded", "failed", "needs_context")
+STATES = ("active", "succeeded", "failed")
 
 
 _PHASE_BY_PACKET: dict[str, str] = {
     "event_received": "queued",
-    "task_created": "triage",
-    "triage_done": "preparing",
+    "task_created": "preparing",
     "env_prepared": "preparing",
     "container_started": "running",
     "attempt_started": "running",
@@ -55,7 +52,6 @@ _PHASE_BY_PACKET: dict[str, str] = {
     "push_started": "delivering",
     "push_done": "delivered",
     "done": "delivered",
-    "needs_context": "needs_context",
     "failed": "failed",
     "conflict": "conflict",
 }
@@ -63,7 +59,6 @@ _PHASE_BY_PACKET: dict[str, str] = {
 
 _TERMINAL_STATE: dict[str, str] = {
     "done": "succeeded",
-    "needs_context": "needs_context",
     "failed": "failed",
     "conflict": "failed",
 }
@@ -85,7 +80,6 @@ class RunProgressView:
     task_id: str | None
     phase: str = "queued"
     state: str = "active"
-    branch: str | None = None
     branch_name: str | None = None
     base_branch: str | None = None
     env: str | None = None
@@ -101,7 +95,7 @@ class RunProgressView:
 
     @property
     def is_terminal(self) -> bool:
-        return self.state in {"succeeded", "failed", "needs_context"}
+        return self.state in {"succeeded", "failed"}
 
     def status_label(self) -> str:
         """Short human label, e.g. 'running', 'done', 'failed'."""
@@ -109,8 +103,6 @@ class RunProgressView:
             return "done"
         if self.state == "failed":
             return "failed" if self.phase != "conflict" else "conflict"
-        if self.state == "needs_context":
-            return "needs context"
         return self.phase or "active"
 
 
@@ -182,7 +174,6 @@ def _project(
             last_ts = ts
 
         if kind == "task":
-            view.branch = record.get("branch") or view.branch
             view.branch_name = record.get("branch_name") or view.branch_name
             view.base_branch = record.get("base_branch") or view.base_branch
             view.env = record.get("env") or view.env
@@ -203,12 +194,8 @@ def _project(
             continue
 
         if ptype == "task_created":
-            view.branch = record.get("branch") or view.branch
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
-        elif ptype == "triage_done":
-            view.branch = record.get("branch") or view.branch
-            view.env = record.get("env") or view.env
         elif ptype == "env_prepared":
             view.env = record.get("env") or view.env
             view.branch_name = record.get("branch_name") or view.branch_name
@@ -254,9 +241,6 @@ def _project(
             view.detail = (
                 f"pushed {commits} commit(s)" if commits else "pushed"
             )
-        elif ptype == "needs_context":
-            view.state = "needs_context"
-            view.detail = "agent requested more context"
         elif ptype == "failed":
             view.state = "failed"
             stage = record.get("stage")
@@ -280,11 +264,9 @@ def _project(
 
         new_phase = _PHASE_BY_PACKET.get(ptype)
         if new_phase is not None:
-            if view.state in {"succeeded", "failed", "needs_context"}:
+            if view.state in {"succeeded", "failed"}:
                 view.phase = _PHASE_BY_PACKET.get(
-                    "done" if view.state == "succeeded"
-                    else "failed" if view.state == "failed"
-                    else "needs_context",
+                    "done" if view.state == "succeeded" else "failed",
                     view.phase,
                 )
                 if ptype in _TERMINAL_STATE:
@@ -361,8 +343,6 @@ def _phase_text(view: RunProgressView) -> str:
     phase = view.phase or "queued"
     if view.state == "succeeded":
         return "delivered"
-    if view.state == "needs_context":
-        return "needs context"
     if view.state == "failed":
         return phase if phase in ("failed", "conflict") else "failed"
     return phase
@@ -373,8 +353,6 @@ def _branch_text(view: RunProgressView) -> str:
         return f"{view.branch_name} <- {view.base_branch}"
     if view.branch_name:
         return view.branch_name
-    if view.branch:
-        return view.branch
     return ""
 
 

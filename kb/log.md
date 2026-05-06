@@ -600,3 +600,37 @@ Decisions worth remembering:
 Flagged but not addressed: the gate-side progress packets are repetitive
 ("running" appears 3x for one task in the live test). Separate concern,
 lives in `src/brr/run_progress.py` and the gate `render_update` paths.
+
+## [2026-05-06] plan | Reconsider frontmatter protocol shape
+
+Reviewed a live Telegram triage failure where the runner succeeded but its
+stdout did not begin with the required triage frontmatter, causing the daemon
+to reject the task before execution. The core finding: frontmatter is still a
+reasonable human-readable envelope for durable `.brr/` markdown artifacts, but
+it is too brittle as an AI output contract and the custom YAML-like parser is
+now carrying more operational risk than value. Preferred direction is to stop
+requiring parseable frontmatter from runner stdout: make triage deterministic
+or parse only a tiny structured side-channel, and keep final responses as plain
+captured text unless explicit lifecycle metadata is needed.
+
+## [2026-05-06] implement | Remove the triage stage
+
+Followed up on the frontmatter plan by removing the LLM-driven triage stage
+entirely. Tasks are now built mechanically from events with `Task.from_event`;
+the env policy resolves deterministically from `.brr/config` (`auto` →
+docker if configured, else worktree). `prompts/triage.md`, `_triage_task`,
+`Task.from_triage_output`, the `branch` field on `Task`, the `needs_context`
+lifecycle hook, and the `triage_done` / `needs_context` packets are gone.
+
+Worktree creation now always sprouts a fresh `brr/<task-id>` branch from
+HEAD; the agent decides at runtime whether to commit there (brr does an
+`ff_only` merge back) or `git switch -c <name>` to preserve a separate
+branch. `WorktreeEnv.finalize` reads the worktree's git state to make that
+choice — no more frozen `task.branch` driving the merge. Responses are now
+plain text; if the agent can't complete the task, it explains why and the
+operator follows up in-thread.
+
+Updated bundled docs (`brr-internals.md`, `execution-map.md`, `envs.md`,
+`active-task.md`, `conversations.md`), gate progress packet whitelists
+(Telegram, Slack), and reworked the daemon/env tests. Decision recorded in
+`kb/decision-remove-triage.md`. Full pytest run is green (176 passing).

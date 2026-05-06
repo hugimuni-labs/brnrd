@@ -1,12 +1,12 @@
 """Task — the unit of work between an event and execution.
 
-An event arrives via a gate (Telegram, Slack, Git, etc.).  A triage
-step — potentially agent-assisted — converts it into a Task.  The
-task carries everything the executor needs: what to do, how to branch,
-where to run, and what happened.
+An event arrives via a gate (Telegram, Slack, Git, etc.). brr converts
+it into a ``Task`` mechanically (no LLM step) and hands it to the env
+backend for execution. Branching decisions belong to the agent at run
+time; the daemon just owns env preparation and cleanup.
 
 Task files are persisted to ``.brr/tasks/`` for crash recovery and
-status inspection.  The format mirrors event files: frontmatter + body.
+status inspection. The format mirrors event files: frontmatter + body.
 """
 
 from __future__ import annotations
@@ -20,10 +20,8 @@ from pathlib import Path
 from typing import Any
 
 
-# Valid values for each field
-BRANCH_STRATEGIES = ("current", "auto", "task")  # or arbitrary name / "new:<name>"
 ENV_TYPES = ("auto", "host", "worktree", "docker", "devcontainer", "ssh")
-STATUSES = ("pending", "running", "done", "needs_context", "error", "conflict")
+STATUSES = ("pending", "running", "done", "error", "conflict")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
@@ -60,26 +58,22 @@ def _docker_configured(cfg: dict[str, Any]) -> bool:
     return bool(cfg.get("docker.image") or cfg.get("docker_image"))
 
 
-def _resolve_auto_env(branch: str, cfg: dict[str, Any]) -> str:
-    if _docker_configured(cfg):
-        return "docker"
-    return "host" if branch == "current" else "worktree"
-
-
 def resolve_env(
-    branch: str,
     env_policy: str | None = None,
     cfg: dict[str, Any] | None = None,
 ) -> str:
-    """Resolve an env policy into the concrete backend name for a branch."""
+    """Resolve an env policy into the concrete backend name.
+
+    ``auto`` (the default) prefers Docker when configured, falls back
+    to ``worktree`` otherwise. ``host`` is honoured only when explicitly
+    requested — the daemon assumes isolated execution by default.
+    """
     cfg = cfg or {}
     requested = (env_policy or "auto").strip()
     if not requested or requested == "auto":
-        return _resolve_auto_env(branch, cfg)
+        return "docker" if _docker_configured(cfg) else "worktree"
     if not _ENV_NAME_RE.match(requested):
         raise ValueError(f"invalid env: {requested!r}")
-    if requested == "host" and branch != "current":
-        return "worktree"
     return requested
 
 
@@ -88,23 +82,25 @@ class Task:
     """A unit of work derived from an event.
 
     Fields:
-        id:       Unique task identifier.
-        event_id: The originating event ID.
-        body:     The task description / instruction for the agent.
-        branch:   Branching strategy — "current", "auto", "task",
-                  "<name>", or "new:<name>".
-        env:      Execution environment backend — "host", "worktree",
-                  "docker", a future built-in, or a plugin name.
-        status:   Lifecycle state — pending → running → done/needs_context/error.
-        source:   The gate that produced the originating event.
-        meta:     Arbitrary metadata carried from the event.
+        id:               Unique task identifier.
+        event_id:         The originating event ID.
+        body:             The task description / instruction for the agent.
+        env:              Execution environment backend — ``host``,
+                          ``worktree``, ``docker``, or a future built-in.
+        status:           Lifecycle state — pending → running →
+                          done / error / conflict.
+        source:           The gate that produced the originating event.
+        conversation_key: Stable gate-thread fingerprint, when known.
+        meta:             Arbitrary metadata carried from the event plus
+                          runtime annotations (response path, branch
+                          name when finalize promotes one, trace dirs,
+                          etc.).
     """
 
     id: str
     event_id: str
     body: str
-    branch: str = "current"
-    env: str = "host"
+    env: str = "worktree"
     status: str = "pending"
     source: str = ""
     conversation_key: str = ""
@@ -114,21 +110,18 @@ class Task:
     def from_event(cls, event: dict[str, Any], cfg: dict[str, Any] | None = None) -> Task:
         """Create a task from an event dict, applying config defaults.
 
-        This is the mechanical conversion.  For agent-assisted triage
-        (where an agent decides branch strategy, priority, etc.), the
-        triage step runs first and its output feeds into this method
-        or modifies the resulting Task.
+        This is a pure mechanical conversion — no LLM call, no
+        external state. The agent decides any branching at run time
+        from inside its env.
         """
         cfg = cfg or {}
         task_id = _generate_task_id()
-        branch = event.get("branch", cfg.get("default_branch", "current"))
         env_policy = _event_environment_policy(event, cfg)
         return cls(
             id=task_id,
             event_id=event.get("id", ""),
             body=event.get("body", ""),
-            branch=branch,
-            env=resolve_env(branch, env_policy, cfg),
+            env=resolve_env(env_policy, cfg),
             source=event.get("source", ""),
             conversation_key=str(event.get("conversation_key", "") or ""),
             meta={
@@ -136,50 +129,6 @@ class Task:
                 if k not in _EVENT_META_FIELDS
             },
         )
-
-    @classmethod
-    def from_triage_output(
-        cls,
-        text: str,
-        event: dict[str, Any],
-        cfg: dict[str, Any] | None = None,
-    ) -> Task:
-        """Create a task from triage-agent output plus the originating event."""
-        from . import protocol
-
-        cfg = cfg or {}
-        task = cls.from_event(event, cfg)
-        fm = protocol.parse_frontmatter(text)
-        if not fm:
-            raise ValueError("triage output is missing frontmatter")
-
-        body = protocol.frontmatter_body(text).strip()
-        if not body:
-            raise ValueError("triage output is missing a task body")
-
-        branch = str(fm.get("branch", task.branch)).strip()
-        triage_env = str(fm.get("environment", fm.get("env", "auto"))).strip()
-        if not triage_env or triage_env == "auto":
-            env_policy = _event_environment_policy(event, cfg)
-        else:
-            env_policy = triage_env
-        status = str(fm.get("status", task.status)).strip()
-
-        if not branch or branch == "new:":
-            raise ValueError(f"invalid triage branch: {branch!r}")
-        try:
-            env = resolve_env(branch, env_policy, cfg)
-        except ValueError as e:
-            raise ValueError(f"invalid triage env: {env_policy!r}") from e
-        if status not in STATUSES:
-            raise ValueError(f"invalid triage status: {status!r}")
-
-        task.body = body
-        task.branch = branch
-        task.env = env
-        task.status = status
-        task.meta.update({k: v for k, v in fm.items() if k not in _TASK_FIELDS})
-        return task
 
     # ── Persistence ─────────────────────────────────────────────────
 
@@ -189,7 +138,6 @@ class Task:
             "---",
             f"id: {self.id}",
             f"event_id: {self.event_id}",
-            f"branch: {self.branch}",
             f"env: {self.env}",
             f"status: {self.status}",
             f"source: {self.source}",
@@ -220,8 +168,7 @@ class Task:
             id=fm["id"],
             event_id=fm.get("event_id", ""),
             body=body,
-            branch=fm.get("branch", "current"),
-            env=fm.get("env", fm.get("environment", "host")),
+            env=fm.get("env", fm.get("environment", "worktree")),
             status=fm.get("status", "pending"),
             source=fm.get("source", ""),
             conversation_key=str(fm.get("conversation_key", "") or ""),
@@ -241,28 +188,6 @@ class Task:
         """Update status in memory and on disk."""
         self.status = status
         self.save(tasks_dir)
-
-    # ── Branch resolution ───────────────────────────────────────────
-
-    def resolve_branch_name(self) -> str | None:
-        """Return the concrete branch name, or None for 'current'.
-
-        Doesn't touch git — just resolves the strategy to a name.
-        """
-        if self.branch == "current":
-            return None
-        if self.branch == "auto" or self.branch == "task":
-            return f"brr/{self.id}"
-        if self.branch.startswith("new:"):
-            return self.branch[4:]
-        # Explicit branch name
-        return self.branch
-
-    # ── Convenience ─────────────────────────────────────────────────
-
-    @property
-    def needs_worktree(self) -> bool:
-        return resolve_env(self.branch, self.env) == "worktree"
 
 
 def list_tasks(tasks_dir: Path, status: str | None = None) -> list[Task]:

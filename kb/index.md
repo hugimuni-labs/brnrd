@@ -18,6 +18,7 @@ This index only covers this repo's project-specific knowledge.
 
 - [Bundled Docs Location](decision-bundled-docs.md) — why tool-level docs live in `src/brr/docs/` and ship with the package rather than in `kb/`
 - [Drop streams; conversations are routing+history, not identity](decision-drop-streams.md) — why the workstream layer was removed and replaced with a thin per-conversation log; lessons from the 2026-05-05 frozen-intent incident
+- [Remove the triage stage](decision-remove-triage.md) — why the LLM-driven triage step and the frontmatter-as-stdout contract were removed in favor of mechanical task construction, agent-decided branching, and plain-text responses
 
 ## Design decks
 

@@ -31,7 +31,7 @@ def test_is_tracked(tmp_path, monkeypatch):
     assert is_tracked(Path("nonexistent.txt")) is False
 
 
-def test_merge_branch_merges_feature_commit(tmp_path):
+def test_merge_branch_fast_forwards_when_base_unmoved(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     main_branch = _init_repo(repo)
@@ -44,7 +44,7 @@ def test_merge_branch_merges_feature_commit(tmp_path):
     subprocess.run(["git", "commit", "-am", "feature"], cwd=repo, check=True, stdout=subprocess.PIPE)
     subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-    result = merge_branch(repo, "feature/worktree", "merge feature/worktree")
+    result = merge_branch(repo, "feature/worktree")
 
     assert result.success is True
     assert result.branch == "feature/worktree"
@@ -52,7 +52,31 @@ def test_merge_branch_merges_feature_commit(tmp_path):
     assert "feature" in (repo / "file.txt").read_text(encoding="utf-8")
 
 
-def test_merge_branch_reports_conflicts(tmp_path):
+def test_merge_branch_ff_only_refuses_diverged(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    main_branch = _init_repo(repo)
+    (repo / "file.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    subprocess.run(["git", "checkout", "-b", "feature/diverge"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "add", "feature.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "feature"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    (repo / "main.txt").write_text("main\n", encoding="utf-8")
+    subprocess.run(["git", "add", "main.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    result = merge_branch(repo, "feature/diverge", ff_only=True)
+
+    assert result.success is False
+    assert result.detail
+
+
+def test_merge_branch_explicit_no_ff_reports_conflicts(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     main_branch = _init_repo(repo)
@@ -68,7 +92,7 @@ def test_merge_branch_reports_conflicts(tmp_path):
     (repo / "file.txt").write_text("main change\n", encoding="utf-8")
     subprocess.run(["git", "commit", "-am", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-    result = merge_branch(repo, "feature/conflict", "merge feature/conflict")
+    result = merge_branch(repo, "feature/conflict", "merge feature/conflict", ff_only=False)
 
     assert result.success is False
     assert result.conflicts == ["file.txt"]
@@ -99,8 +123,9 @@ def test_list_worktrees_finds_brr_worktree(tmp_path):
         stdout=subprocess.PIPE,
     )
 
-    wt_path = create(repo, "task-42", "brr/task-42", create_branch=True)
+    wt_path, branch = create(repo, "task-42")
     assert wt_path.exists()
+    assert branch == "brr/task-42"
 
     wts = list_worktrees(repo)
     assert len(wts) == 1
@@ -124,7 +149,7 @@ def test_shared_brr_dir_uses_main_checkout_for_worktree(tmp_path):
     )
 
     (repo / ".brr").mkdir()
-    wt_path = create(repo, "task-42", "brr/task-42", create_branch=True)
+    wt_path, _branch = create(repo, "task-42")
     assert shared_brr_dir(repo) == repo / ".brr"
     assert shared_brr_dir(wt_path) == repo / ".brr"
     assert current_branch(wt_path) == "brr/task-42"
@@ -144,7 +169,7 @@ def test_worktree_branch_is_created_from_current_branch(tmp_path):
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "feature base"], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-    wt_path = create(repo, "task-43", "brr/task-43", create_branch=True)
+    wt_path, _branch = create(repo, "task-43")
     try:
         merge_base = subprocess.run(
             ["git", "merge-base", "feature/base", "brr/task-43"],

@@ -10,7 +10,6 @@ from brr.runner import (
     _build_context_block,
     build_run_prompt,
     build_daemon_prompt,
-    build_triage_prompt,
     RunnerArtifactSpec,
     RunnerInvocation,
     invoke_runner,
@@ -133,7 +132,7 @@ class TestPromptBuilding:
         assert f"Execution root: {tmp_path}" in prompt
         assert "Base branch: feat/task-abstraction" in prompt
         assert "Current branch: brr/task-123" in prompt
-        assert "do not rebase or retarget to main" in prompt
+        assert "git switch -c" in prompt
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "Run context file: /repo/.brr/runs/task-123/context.md" in prompt
         assert "kb/log-task-123.md" in prompt
@@ -169,20 +168,19 @@ class TestPromptBuilding:
             runtime_dir="/repo/.brr",
             recent_conversation=recent,
             event_body="please fix the login flow",
-            stage_feedback=True,
         )
         assert "Task Context Bundle" in prompt
         assert "Recent in this conversation" in prompt
         assert "earlier ping" in prompt
         assert "task-prev" in prompt
         assert "update done" in prompt
-        assert "Stage feedback requested: yes" in prompt
         assert "Original event body" in prompt
         assert "please fix the login flow" in prompt
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
         assert "Base branch: feat/task" in prompt
         assert "Workstream" not in prompt
+        assert "Triage" not in prompt
 
     def test_daemon_prompt_without_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -195,7 +193,6 @@ class TestPromptBuilding:
         )
         assert "Workstream" not in prompt
         assert "Recent in this conversation" not in prompt
-        assert "Stage feedback requested: no" in prompt
         assert "Original event body" not in prompt
 
     def test_bundled_daemon_prompt_is_command_free(self, tmp_path):
@@ -211,58 +208,6 @@ class TestPromptBuilding:
         assert "brr inspect" not in prompt
         assert "brr stream" not in prompt
         assert "brr docs" not in prompt
-
-    def test_triage_prompt(self, tmp_path):
-        prompts = tmp_path / ".brr" / "prompts"
-        prompts.mkdir(parents=True)
-        (prompts / "triage.md").write_text("You are a triage agent.")
-
-        prompt = build_triage_prompt("add logging", "evt-1", tmp_path)
-        assert "triage agent" in prompt
-        assert "add logging" in prompt
-
-    def test_triage_prompt_with_conversation_history_and_stage_feedback(self, tmp_path):
-        prompts = tmp_path / ".brr" / "prompts"
-        prompts.mkdir(parents=True)
-        (prompts / "triage.md").write_text("You are a triage agent.")
-
-        recent = [
-            {
-                "ts": "2026-05-05T19:00:00Z",
-                "kind": "event",
-                "event_id": "evt-prev",
-                "source": "telegram",
-                "summary": "earlier discussion",
-            },
-        ]
-        prompt = build_triage_prompt(
-            "kick off", "evt-2", tmp_path,
-            recent_conversation=recent,
-            stage_feedback=True,
-        )
-        assert "Recent in this conversation" in prompt
-        assert "earlier discussion" in prompt
-        assert "Stage feedback requested" in prompt
-        assert "Workstream" not in prompt
-
-    def test_triage_prompt_uses_reduced_context(self, tmp_path):
-        prompts = tmp_path / ".brr" / "prompts"
-        prompts.mkdir(parents=True)
-        (prompts / "triage.md").write_text("You are a triage agent.")
-        kb = tmp_path / "kb"
-        kb.mkdir()
-        entries = "\n\n".join(
-            f"## [2026-04-{i:02d}] implement | Entry {i}\n\nDid thing {i}."
-            for i in range(1, 11)
-        )
-        (kb / "log.md").write_text(f"# Log\n\n{entries}\n")
-
-        prompt = build_triage_prompt("add logging", "evt-1", tmp_path)
-        assert "Entry 10" in prompt
-        assert "Entry 9" in prompt
-        assert "Entry 8" in prompt
-        assert "Entry 7" not in prompt
-        assert "last 3 entries" in prompt
 
 
 class TestInvocationTracing:

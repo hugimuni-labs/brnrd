@@ -1,8 +1,13 @@
 """Execution environment backends for daemon tasks.
 
-The public CLI stays small; environments are daemon plumbing.  Each
-backend owns the task scratch location and cleanup rules around one
-runner invocation.
+The public CLI stays small; environments are daemon plumbing. Each
+backend owns the task scratch location (host checkout, git worktree,
+docker container) and the cleanup rules around one runner invocation.
+
+Branching is the agent's call now: every worktree starts on a fresh
+``brr/<task-id>`` branch, and the agent can either keep that branch
+(brr fast-forwards it back into the base on cleanup) or switch to
+some other branch (brr preserves it as-is).
 """
 
 from __future__ import annotations
@@ -46,7 +51,6 @@ class EnvBackend(Protocol):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        branch_name: str | None,
         base_branch: str | None,
         response_path: Path,
         debug: bool = False,
@@ -84,13 +88,10 @@ class HostEnv:
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        branch_name: str | None,
         base_branch: str | None,
         response_path: Path,
         debug: bool = False,
     ) -> RunContext:
-        if branch_name is not None:
-            raise RuntimeError("host env can only run on branch: current")
         return RunContext(
             name=self.name,
             cwd=repo_root,
@@ -133,20 +134,13 @@ class WorktreeEnv(HostEnv):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        branch_name: str | None,
         base_branch: str | None,
         response_path: Path,
         debug: bool = False,
     ) -> RunContext:
-        if branch_name is None:
-            raise RuntimeError("worktree env requires a non-current branch strategy")
-        run_root = worktree.create(
-            repo_root,
-            task.id,
-            branch_name,
-            create_branch=not gitops.branch_exists(repo_root, branch_name),
-        )
+        run_root, branch_name = worktree.create(repo_root, task.id)
         task.meta["worktree_path"] = str(run_root)
+        task.meta["branch_name"] = branch_name
         return RunContext(
             name=self.name,
             cwd=run_root,
@@ -168,41 +162,117 @@ class WorktreeEnv(HostEnv):
         *,
         debug: bool = False,
     ) -> Task:
-        branch_name = ctx.branch_name
-        if branch_name is None:
-            return task
+        worktree_path = Path(ctx.env_state.get("worktree_path") or ctx.cwd)
+        initial_branch = ctx.branch_name or worktree.task_branch_name(task.id)
 
         if task.status != "done":
             task.save(tasks_dir)
             return task
 
-        if task.branch in ("auto", "task"):
-            result = gitops.merge_branch(
-                ctx.repo_root,
-                branch_name,
-                f"merge {branch_name} for {task.id}",
+        final_branch = worktree.current_branch(worktree_path)
+        kept = self._land_or_preserve(
+            ctx, task, tasks_dir,
+            worktree_path=worktree_path,
+            initial_branch=initial_branch,
+            final_branch=final_branch,
+            debug=debug,
+        )
+        if final_branch:
+            task.meta["branch_name"] = final_branch
+        if kept:
+            task.save(tasks_dir)
+        return task
+
+    def _land_or_preserve(
+        self,
+        ctx: RunContext,
+        task: Task,
+        tasks_dir: Path,
+        *,
+        worktree_path: Path,
+        initial_branch: str,
+        final_branch: str | None,
+        debug: bool,
+    ) -> bool:
+        """Decide what to do with the agent's branch on cleanup.
+
+        Returns True when the worktree (or the kept branch) is
+        preserved beyond a clean teardown — so callers know to save
+        the task with updated metadata.
+        """
+        if final_branch is None:
+            # Agent detached HEAD; preserve everything for human salvage.
+            print(f"[brr] task {task.id}: detached HEAD inside worktree, preserving")
+            task.meta["preserved_branch"] = initial_branch
+            return True
+
+        agent_kept_default = final_branch == initial_branch
+        if not agent_kept_default:
+            # Agent switched off the auto-merge branch; preserve their branch.
+            print(
+                f"[brr] task {task.id}: agent landed on {final_branch}, "
+                "preserving (no auto-merge)"
             )
-            if not result.success:
-                print(f"[brr] task {task.id}: merge conflict on {branch_name}")
-                task.update_status("conflict", tasks_dir)
-                return task
+            task.meta["preserved_branch"] = final_branch
             if debug:
                 print(f"[brr] debug: keeping worktree for {task.id}")
             else:
                 worktree.remove(
-                    ctx.repo_root,
-                    task.id,
-                    branch=branch_name,
-                    delete_branch=True,
-                    force=True,
+                    ctx.repo_root, task.id, branch=initial_branch, force=True,
                 )
-            return task
+                if initial_branch != final_branch:
+                    self._delete_unused_initial_branch(ctx.repo_root, initial_branch)
+            return True
+
+        if not worktree.has_commits_beyond(worktree_path, ctx.base_branch or "HEAD"):
+            # Nothing to merge — clean up the throwaway branch silently.
+            if debug:
+                print(f"[brr] debug: keeping worktree for {task.id}")
+                return False
+            worktree.remove(
+                ctx.repo_root, task.id,
+                branch=initial_branch, delete_branch=True, force=True,
+            )
+            return False
+
+        result = gitops.merge_branch(ctx.repo_root, initial_branch, ff_only=True)
+        if not result.success:
+            print(
+                f"[brr] task {task.id}: cannot fast-forward {initial_branch} "
+                f"into base, preserving branch"
+            )
+            task.update_status("conflict", tasks_dir)
+            task.meta["preserved_branch"] = initial_branch
+            if not debug:
+                worktree.remove(
+                    ctx.repo_root, task.id, branch=initial_branch, force=True,
+                )
+            return True
 
         if debug:
             print(f"[brr] debug: keeping worktree for {task.id}")
-        else:
-            worktree.remove(ctx.repo_root, task.id, branch=branch_name, force=True)
-        return task
+            return False
+        worktree.remove(
+            ctx.repo_root, task.id,
+            branch=initial_branch, delete_branch=True, force=True,
+        )
+        return False
+
+    def _delete_unused_initial_branch(self, repo_root: Path, branch: str) -> None:
+        """Best-effort delete of the throwaway ``brr/<task-id>`` branch.
+
+        When the agent switched off it before committing, the branch
+        still points at the base commit and can be safely removed.
+        Failures are non-fatal — branches are cheap.
+        """
+        result = subprocess.run(
+            ["git", "branch", "-D", branch],
+            cwd=repo_root, capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            if detail:
+                print(f"[brr] warning: could not delete {branch}: {detail}")
 
 
 def _docker_cfg(cfg: dict[str, Any], key: str, default: str = "") -> str:
@@ -347,7 +417,6 @@ class DockerEnv(WorktreeEnv):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        branch_name: str | None,
         base_branch: str | None,
         response_path: Path,
         debug: bool = False,
@@ -358,28 +427,15 @@ class DockerEnv(WorktreeEnv):
         if not image:
             raise RuntimeError("docker env requires docker.image in .brr/config")
 
-        if branch_name is None:
-            ctx = RunContext(
-                name=self.name,
-                cwd=repo_root,
-                repo_root=repo_root,
-                runtime_dir=gitops.shared_brr_dir(repo_root),
-                response_path_host=response_path,
-                response_path_env=response_path,
-                branch_name=None,
-                base_branch=base_branch,
-            )
-        else:
-            ctx = super().prepare(
-                task,
-                repo_root,
-                cfg,
-                branch_name=branch_name,
-                base_branch=base_branch,
-                response_path=response_path,
-                debug=debug,
-            )
-            ctx.name = self.name
+        ctx = super().prepare(
+            task,
+            repo_root,
+            cfg,
+            base_branch=base_branch,
+            response_path=response_path,
+            debug=debug,
+        )
+        ctx.name = self.name
 
         ctx.env_state.update({
             "task_id": task.id,
@@ -525,7 +581,7 @@ _BUILTINS: dict[str, type[EnvBackend]] = {
 
 
 def get_env(name: str) -> EnvBackend:
-    env_name = (name or "host").strip()
+    env_name = (name or "worktree").strip()
     backend = _BUILTINS.get(env_name)
     if backend is None:
         supported = ", ".join(sorted(_BUILTINS))

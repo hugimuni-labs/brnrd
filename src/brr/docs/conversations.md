@@ -30,7 +30,7 @@ ndjson; every record carries a `ts` (UTC ISO 8601) and a `kind`:
 | `kind`   | What it captures                                          |
 |----------|-----------------------------------------------------------|
 | `event`  | An incoming event from the gate (with `event_id`, `summary`) |
-| `task`   | A triaged task row (`task_id`, `branch`, `env`, `status`) |
+| `task`   | A task row (`task_id`, `env`, `status`, plus runtime branch info) |
 | `update` | A lifecycle update packet for a task (typed via `type:`)  |
 | `artifact` | A produced artifact (response file, durable kb page, etc.) |
 
@@ -39,7 +39,8 @@ project a single task's lifecycle.
 
 ## Lifecycle
 
-Each incoming event is resolved to a conversation key before triage:
+Each incoming event is resolved to a conversation key before the
+worker runs:
 
 1. Explicit `conversation_key` carried on the event (rare).
 2. Gate-thread fingerprint based on the event's source (Telegram chat,
@@ -56,9 +57,9 @@ on the conversation log. Packet types are stable identifiers gates can
 branch on:
 
 ```
-event_received task_created triage_done env_prepared container_started
+event_received task_created env_prepared container_started
 attempt_started attempt_failed retrying run_started artifact_created
-finalizing container_preserved push_started push_done needs_context
+finalizing container_preserved push_started push_done
 done failed conflict
 ```
 
@@ -70,10 +71,10 @@ rendering — commits and PRs are its delivery path.
 ## Run progress projection
 
 `brr.run_progress` folds conversation records into a compact
-`RunProgressView` per task: phase, branch, env, attempt, latest
-detail, preserved Docker container IDs. This projection is the single
-source of truth for how a run looks; gate cards and `brr inspect` use
-the same view.
+`RunProgressView` per task: phase, env, attempt, latest detail,
+preserved Docker container IDs. This projection is the single source
+of truth for how a run looks; gate cards and `brr inspect` use the
+same view.
 
 ## Lines of work
 
