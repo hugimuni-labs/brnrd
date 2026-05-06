@@ -15,10 +15,13 @@ tests immediately after. The tests are often the most compact description of
 the intended behavior.
 
 Last validated against `feat/task-abstraction` after the environment-policy
-and branch-strategy ownership changes, the run-progress UX rework, and the
+and branch-strategy ownership changes, the run-progress UX rework, the
 2026-05-05 streams-to-conversations refactor that dropped `.brr/streams/`,
 the workstream manifest, and the corresponding CLI surfaces (see
-[decision-drop-streams.md](decision-drop-streams.md)).
+[decision-drop-streams.md](decision-drop-streams.md)), and the 2026-05-06
+docker beginner-friendly slice that added automatic credential wiring,
+host login-dir bind mounts, and the `safe.directory` injection — and shipped
+the new bundled [`envs.md`](../src/brr/docs/envs.md) doc.
 
 ## Current ownership snapshot
 
@@ -165,6 +168,7 @@ Keep in mind:
 - The user-facing policy key is `environment=<auto|host|worktree|docker>` in `.brr/config`; legacy `env` and `default_env` are still accepted.
 - Task files still store the concrete backend as `env`.
 - Current built-in backends on this branch are `host`, `worktree`, and `docker`. Design notes also discuss future `ssh` and `devcontainer` backends.
+- The Docker env auto-wires credentials so users don't have to bake them into images: known runner env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`) pass through, host login dirs (`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini`) bind-mount into `/root/<basename>` when present, and `safe.directory='*'` is injected via `GIT_CONFIG_*` env vars so git works against the bind-mounted repo regardless of UID. Toggles: `docker.env=KEY1,KEY2` and `docker.mount_credentials=false`. The bundled [`envs.md`](../src/brr/docs/envs.md) is the user-facing reference.
 
 Tests:
 
@@ -223,6 +227,8 @@ Read:
 - [`src/brr/docs/brr-internals.md`](../src/brr/docs/brr-internals.md)
 - [`src/brr/docs/conversations.md`](../src/brr/docs/conversations.md)
 - [`src/brr/docs/active-task.md`](../src/brr/docs/active-task.md)
+- [`src/brr/docs/envs.md`](../src/brr/docs/envs.md)
+- [`src/brr/docs/execution-map.md`](../src/brr/docs/execution-map.md)
 
 Keep in mind:
 
@@ -692,6 +698,9 @@ Docker execution on the current feature branch:
 - bind-mounts the repo at the same absolute path
 - uses worktree-backed branch behavior for non-current branches
 - tracks containers for cleanup or salvage
+- forwards known runner env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`) and any names listed in `docker.env=` when set on the daemon
+- bind-mounts host login directories (`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini`) into `/root/<basename>` when present, unless `docker.mount_credentials=false`
+- injects `safe.directory='*'` via git's `GIT_CONFIG_*` env vars so git works against the bind-mounted repo even though the container runs as root and the host repo is owned by another UID — no per-image baked-in config required
 
 Environment resolution:
 
@@ -871,7 +880,7 @@ Use these heuristics while reading:
 - If a file talks about lifecycle packets or `render_update`, jump to [updates.py](../src/brr/updates.py).
 - If a file talks about live progress phases, attempt counts, or rendering a per-task card, jump to [run_progress.py](../src/brr/run_progress.py).
 - If a file talks about command execution or prompts, jump to [runner.py](../src/brr/runner.py).
-- If a file talks about cwd, worktrees, Docker, or response path translation, jump to [envs/__init__.py](../src/brr/envs/__init__.py).
+- If a file talks about cwd, worktrees, Docker, response path translation, or runner credential wiring (env passthrough, login-dir mounts, git safe.directory), jump to [envs/__init__.py](../src/brr/envs/__init__.py).
 - If a file talks about transport, auth, polling, or delivery, jump to [gates](../src/brr/gates/).
 - If a file feels like "everything at once", you are probably in [daemon.py](../src/brr/daemon.py). Read it in lifecycle passes, not top-to-bottom once.
 
