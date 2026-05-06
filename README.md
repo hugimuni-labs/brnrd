@@ -126,6 +126,14 @@ to worktree/host behavior.  The concrete built-ins today are `host`,
 `worktree`, and `docker`; future backends such as `devcontainer`, `ssh`,
 or service-specific plugins fit behind the same internal protocol.
 
+Docker mode wires credentials automatically: brr forwards
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /
+`GOOGLE_API_KEY` from the daemon's environment, and bind-mounts your
+host's `~/.claude/`, `~/.codex/`, `~/.gemini/` (when present) into the
+container so subscription auth works without extra config. See
+`src/brr/docs/envs.md` for the full breakdown — image expectations, the
+minimum viable Dockerfile, and the durability contract.
+
 Branching is mostly task-internal.  brr uses branches/worktrees to stage
 reviewable code changes or continue an explicitly named branch, but users
 usually only choose the environment policy.

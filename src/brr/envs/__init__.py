@@ -289,6 +289,27 @@ def _docker_credential_mount_args(cfg: dict[str, Any]) -> list[str]:
     return args
 
 
+def _docker_git_safe_directory_args() -> list[str]:
+    """Inject ``safe.directory='*'`` git config inside the container.
+
+    The repo is bind-mounted at the same absolute path it has on the
+    host. The host directory is owned by the user running the daemon,
+    while the container runs as root by default. Without this, git
+    refuses to operate (``fatal: detected dubious ownership in
+    repository``, CVE-2022-24765), which breaks every branch task — the
+    agent can't even ``git status``.
+
+    Using git's env-var config (``GIT_CONFIG_COUNT/KEY/VALUE``, supported
+    since git 2.31) avoids requiring every image to bake the same line
+    into ``/etc/gitconfig`` and works for user-built images too.
+    """
+    return [
+        "-e", "GIT_CONFIG_COUNT=1",
+        "-e", "GIT_CONFIG_KEY_0=safe.directory",
+        "-e", "GIT_CONFIG_VALUE_0=*",
+    ]
+
+
 def _docker_container_name(task_id: str, label: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{task_id}-{label}").strip(".-_")
     if not slug or not slug[0].isalnum():
@@ -398,6 +419,7 @@ class DockerEnv(WorktreeEnv):
             "docker", "run",
             "--name", container_name,
             "--network", network,
+            *_docker_git_safe_directory_args(),
             *_docker_passthrough_env_args(cfg),
             *_docker_credential_mount_args(cfg),
             "-v", f"{ctx.repo_root}:{ctx.repo_root}",
