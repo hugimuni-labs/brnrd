@@ -22,27 +22,32 @@ Zero runtime dependencies.  Stdlib Python only.  No database, no cloud, no lock-
 pip install brr
 ```
 
-Or clone into a project for full prompt customization:
+Or run from a local checkout while developing or customizing brr itself:
 
 ```bash
-git clone https://github.com/user/brr .brr-tool
-.brr-tool/brr init
+git clone https://github.com/user/brr
+/path/to/brr/brr init
 ```
 
-If you have [uv](https://github.com/astral-sh/uv):
+For an editable install:
 
 ```bash
-uv run .brr-tool/brr init
+pip install -e /path/to/brr
+```
+
+Forks work with normal Python packaging too:
+
+```bash
+pip install git+https://github.com/you/brr.git
 ```
 
 ## Quick start
 
 ```bash
 brr init                          # detect runner, create AGENTS.md + kb/
-brr run "fix the failing tests"   # run a task locally
+brr run "fix the failing tests"   # run a task through the configured environment
 
-brr auth telegram                 # set up a gate
-brr connect telegram              # bind to a chat
+brr setup telegram                # configure a remote input
 brr up                            # start the daemon
 ```
 
@@ -87,18 +92,20 @@ Gates are transport adapters — they create event files and deliver responses.
 The daemon scans the inbox and runs workers.  The runner is whatever AI CLI
 you have installed.
 
+Telegram works with just a bot token.  Once the daemon is running, send the
+bot a message; brr records the chat ID from each message and replies there.
+
 ## CLI
 
 | Command                | What it does                          |
 |------------------------|---------------------------------------|
 | `brr init [url]`       | Create AGENTS.md + kb/, detect runner |
-| `brr run "<task>"`     | Run a task locally via runner         |
-| `brr status`           | Show project state + recent activity  |
-| `brr auth <gate>`      | Set credentials for a gate            |
-| `brr connect <gate>`   | Bind repo to a gate channel           |
+| `brr run "<task>"`     | Run a task via the configured runner  |
+| `brr setup <gate>`     | Configure a gate in one step          |
+| `brr auth <gate>`      | Set gate credentials                  |
+| `brr bind <gate>`      | Bind a gate channel or watch          |
 | `brr up`               | Start the daemon (foreground)         |
 | `brr down`             | Stop the daemon                       |
-| `brr eject`            | Copy prompts to .brr/prompts/ to edit |
 
 Gates: `telegram`, `slack`, `git`.
 
@@ -112,8 +119,28 @@ for the spec and a bash example.
 `codex`, `gemini`.  Set `runner=<name>` in `.brr/config` or use any
 executable.
 
-**Prompts** live in `src/brr/prompts/`.  Run `brr eject` to copy them
-to `.brr/prompts/` for per-repo customization.
+**Environments** are daemon backends.  Configure the user-facing policy
+with `environment=<auto|host|worktree|docker>` in `.brr/config`.
+`environment=auto` prefers configured Docker isolation, then falls back
+to worktree/host behavior.  The concrete built-ins today are `host`,
+`worktree`, and `docker`; future backends such as `devcontainer`, `ssh`,
+or service-specific plugins fit behind the same internal protocol.
+
+Docker mode wires credentials automatically: brr forwards
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /
+`GOOGLE_API_KEY` from the daemon's environment, and bind-mounts your
+host's `~/.claude/`, `~/.codex/`, `~/.gemini/` (when present) into the
+container so subscription auth works without extra config. See
+`src/brr/docs/envs.md` for the full breakdown — image expectations, the
+minimum viable Dockerfile, and the durability contract.
+
+Branching is mostly task-internal.  brr uses branches/worktrees to stage
+reviewable code changes or continue an explicitly named branch, but users
+usually only choose the environment policy.
+
+**Deep customization** should use a local checkout, editable install, or
+fork.  `.brr/config` is for lightweight runtime choices like runner and
+environment policy.
 
 ## Development
 
