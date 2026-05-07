@@ -113,7 +113,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 def _generate_id() -> str:
-    ts = int(time.time())
+    ts = time.time_ns()
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
     return f"evt-{ts}-{rand}"
 
@@ -160,12 +160,20 @@ def _read_event(path: Path) -> dict[str, Any] | None:
     return fm
 
 
+def _event_sort_key(entry: os.DirEntry) -> tuple[int, str]:
+    try:
+        mtime = entry.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    return (mtime, entry.name)
+
+
 def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
     """Return events with status pending or processing, oldest first."""
     if not inbox_dir.exists():
         return []
     events = []
-    for entry in sorted(os.scandir(inbox_dir), key=lambda e: e.name):
+    for entry in sorted(os.scandir(inbox_dir), key=_event_sort_key):
         if not entry.name.endswith(".md"):
             continue
         ev = _read_event(Path(entry.path))
@@ -179,7 +187,7 @@ def list_done(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
     if not inbox_dir.exists():
         return []
     events = []
-    for entry in sorted(os.scandir(inbox_dir), key=lambda e: e.name):
+    for entry in sorted(os.scandir(inbox_dir), key=_event_sort_key):
         if not entry.name.endswith(".md"):
             continue
         ev = _read_event(Path(entry.path))
@@ -212,7 +220,12 @@ def response_exists(responses_dir: Path, event_id: str) -> bool:
 
 
 def read_response(responses_dir: Path, event_id: str) -> str | None:
-    """Read the response body, or None if missing."""
+    """Read the response body, or None if missing.
+
+    Responses are plain markdown — what the runner printed on stdout.
+    For backwards compatibility we still strip a leading frontmatter
+    block if one happens to be present (it never is in normal flow).
+    """
     path = response_path(responses_dir, event_id)
     if not path.exists():
         return None
@@ -221,11 +234,17 @@ def read_response(responses_dir: Path, event_id: str) -> str | None:
 
 
 def write_response(responses_dir: Path, event_id: str, body: str) -> Path:
-    """Write a response file. Returns the file path."""
+    """Write a plain-text response file. Returns the file path.
+
+    The wire format is just the body — there is no frontmatter
+    contract on response files. ``event_id`` is preserved in the
+    filename so the daemon and gates can correlate without parsing.
+    """
     responses_dir.mkdir(parents=True, exist_ok=True)
-    content = f"---\nevent_id: {event_id}\n---\n{body}\n"
+    if not body.endswith("\n"):
+        body = body + "\n"
     path = response_path(responses_dir, event_id)
-    _atomic_write(path, content)
+    _atomic_write(path, body)
     return path
 
 

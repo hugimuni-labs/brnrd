@@ -11,7 +11,7 @@ class TestFrontmatter:
         assert fm["status"] == "pending"
 
     def test_parse_nested(self):
-        text = "---\nclaude:\n  cmd: claude --print\n  approve: --yes\n---\n"
+        text = "---\nclaude:\n  cmd: claude --print\n  extra: --yes\n---\n"
         fm = protocol.parse_frontmatter(text)
         assert fm["claude"]["cmd"] == "claude --print"
 

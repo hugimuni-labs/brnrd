@@ -8,10 +8,10 @@ def test_load_missing(tmp_path):
 
 
 def test_roundtrip(tmp_path):
-    write_config(tmp_path, {"runner": "codex", "auto_approve": True, "retries": 2})
+    write_config(tmp_path, {"runner": "codex", "enabled": True, "retries": 2})
     cfg = load_config(tmp_path)
     assert cfg["runner"] == "codex"
-    assert cfg["auto_approve"] is True
+    assert cfg["enabled"] is True
     assert cfg["retries"] == 2
 
 

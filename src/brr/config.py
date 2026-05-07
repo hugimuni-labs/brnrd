@@ -25,7 +25,9 @@ def _parse_value(val: str) -> Any:
 
 def load_config(repo_root: Path) -> dict[str, Any]:
     """Load brr config from ``.brr/config`` in the given repo root."""
-    path = repo_root / ".brr" / "config"
+    from . import gitops
+
+    path = gitops.shared_brr_dir(repo_root) / "config"
     if not path.exists():
         return {}
     result: dict[str, Any] = {}
@@ -42,7 +44,9 @@ def load_config(repo_root: Path) -> dict[str, Any]:
 
 def write_config(repo_root: Path, cfg: dict[str, Any]) -> None:
     """Write config to ``.brr/config``."""
-    path = repo_root / ".brr" / "config"
+    from . import gitops
+
+    path = gitops.shared_brr_dir(repo_root) / "config"
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"{k}={v}" for k, v in cfg.items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

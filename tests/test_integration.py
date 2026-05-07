@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from brr import adopt
+from brr.runner import RunnerResult
 
 
 def _git_init(path: Path) -> None:
@@ -12,16 +13,33 @@ def _git_init(path: Path) -> None:
 
 def _mock_runner_creates_files(monkeypatch):
     """Mock runner that creates AGENTS.md and kb/ like a real runner would."""
-    def _fake_run(runner_name, prompt, cwd=None, cfg=None):
-        if cwd:
-            (cwd / "AGENTS.md").write_text("# Project\n\nTest project.\n")
-            kb = cwd / "kb"
+    def _fake_run(runner_name, invocation, cfg=None):
+        if invocation.cwd:
+            (invocation.cwd / "AGENTS.md").write_text("# Project\n\nTest project.\n")
+            kb = invocation.cwd / "kb"
             kb.mkdir(exist_ok=True)
             (kb / "index.md").write_text("# Knowledge Base Index\n")
             (kb / "log.md").write_text("# Activity Log\n")
-        return ""
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[
+                adopt.runner.RunnerArtifactRecord(
+                    path=artifact.path,
+                    label=artifact.label or str(artifact.path),
+                    exists=True,
+                    trace_copy=None,
+                )
+                for artifact in invocation.required_artifacts
+            ],
+        )
     monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock")
-    monkeypatch.setattr("brr.runner.run_executor", _fake_run)
+    monkeypatch.setattr("brr.runner.invoke_runner", _fake_run)
 
 
 class TestEmptyRepo:
@@ -56,8 +74,30 @@ class TestRepoWithExistingAgentsMd:
         monkeypatch.chdir(tmp_path)
         calls = []
         monkeypatch.setattr("brr.runner.detect_runner", lambda *a, **kw: "mock")
-        monkeypatch.setattr("brr.runner.run_executor",
-                            lambda *a, **kw: calls.append(1) or "")
+        monkeypatch.setattr(
+            "brr.runner.invoke_runner",
+            lambda runner_name, invocation, cfg=None: (
+                calls.append(1),
+                RunnerResult(
+                    invocation=invocation,
+                    runner_name=runner_name,
+                    command=["mock"],
+                    stdout="",
+                    stderr="",
+                    returncode=0,
+                    trace_dir=None,
+                    artifacts=[
+                        adopt.runner.RunnerArtifactRecord(
+                            path=artifact.path,
+                            label=artifact.label or str(artifact.path),
+                            exists=True,
+                            trace_copy=None,
+                        )
+                        for artifact in invocation.required_artifacts
+                    ],
+                ),
+            )[1],
+        )
 
         adopt.init_repo()
         assert len(calls) == 1

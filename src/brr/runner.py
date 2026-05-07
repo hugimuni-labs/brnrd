@@ -9,9 +9,15 @@ class for serial task execution in a background thread.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import threading
+import time
+import random
+import string
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +29,125 @@ _active_proc: subprocess.Popen | None = None
 _proc_lock = threading.Lock()
 
 
+def _trace_id() -> str:
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    return f"{ts}-{rand}"
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
+    return slug or "invocation"
+
+
+@dataclass(frozen=True)
+class RunnerArtifactSpec:
+    """A file the runner invocation is expected to produce."""
+
+    path: Path
+    label: str | None = None
+    copy_to_trace: bool = True
+
+
+@dataclass(frozen=True)
+class RunnerArtifactRecord:
+    """Observed status for one expected runner artifact."""
+
+    path: Path
+    label: str
+    exists: bool
+    trace_copy: Path | None = None
+
+
+@dataclass(frozen=True)
+class RunnerInvocation:
+    """Single runner invocation plus its validation contract."""
+
+    kind: str
+    label: str
+    prompt: str
+    repo_root: Path
+    cwd: Path | None = None
+    response_path: str | None = None
+    required_artifacts: list[RunnerArtifactSpec] = field(default_factory=list)
+
+    @property
+    def trace_root(self) -> Path:
+        from . import gitops
+
+        return gitops.shared_brr_dir(self.repo_root) / "traces" / _slugify(self.kind)
+
+
+@dataclass
+class RunnerResult:
+    """Runner subprocess result plus trace and artifact validation."""
+
+    invocation: RunnerInvocation
+    runner_name: str
+    command: list[str]
+    stdout: str
+    stderr: str
+    returncode: int
+    trace_dir: Path | None
+    artifacts: list[RunnerArtifactRecord]
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
+
+    @property
+    def output(self) -> str:
+        return self.stdout
+
+    @property
+    def missing_artifacts(self) -> list[RunnerArtifactRecord]:
+        return [artifact for artifact in self.artifacts if not artifact.exists]
+
+    @property
+    def has_response(self) -> bool:
+        """True iff the runner emitted a non-empty final reply on stdout.
+
+        Only meaningful for invocations that ask brr to capture a
+        response file (``invocation.response_path is not None``).
+        """
+        return bool(self.stdout and self.stdout.strip())
+
+    @property
+    def validation_ok(self) -> bool:
+        if not self.ok:
+            return False
+        if self.missing_artifacts:
+            return False
+        if self.invocation.response_path and not self.has_response:
+            return False
+        return True
+
+    def retry_reason(self) -> str | None:
+        if self.missing_artifacts:
+            labels = ", ".join(artifact.label for artifact in self.missing_artifacts)
+            return f"missing required output(s): {labels}"
+        if self.invocation.response_path and not self.has_response:
+            return "runner produced no response on stdout"
+        return None
+
+    def raise_for_error(self) -> None:
+        if self.ok:
+            return
+        detail = self.stderr.strip() or self.stdout.strip()
+        if len(detail) > 500:
+            detail = detail[:500] + " …[truncated]"
+        raise RuntimeError(
+            f"{self.command[0]} failed (exit {self.returncode}): "
+            + (detail or "(no output)")
+        )
+
+
 def _read_prompt(name: str, repo_root: Path | None = None) -> str:
     """Read a prompt file, checking user overrides first."""
     if repo_root:
-        override = repo_root / ".brr" / "prompts" / name
+        from . import gitops
+
+        override = gitops.shared_brr_dir(repo_root) / "prompts" / name
         if override.exists():
             return override.read_text(encoding="utf-8")
     bundled = _PROMPTS_DIR / name
@@ -57,6 +178,11 @@ def detect_runner(repo_root: Path | None = None) -> str | None:
     return None
 
 
+def detect_all_runners(repo_root: Path | None = None) -> list[str]:
+    """Return all available runner CLI names found on PATH."""
+    return [name for name in _load_profiles(repo_root) if shutil.which(name)]
+
+
 def resolve_runner(repo_root: Path) -> str:
     """Determine which runner to use for this repo.
 
@@ -79,25 +205,185 @@ def resolve_runner(repo_root: Path) -> str:
     )
 
 
-def _build_cmd(runner_name: str, prompt: str, cfg: dict[str, Any]) -> list[str]:
-    """Build subprocess argv for a built-in or named runner."""
+def _build_cmd(
+    runner_name: str,
+    prompt: str,
+    cfg: dict[str, Any],
+) -> list[str]:
+    """Build subprocess argv for a built-in or named runner.
+
+    Each runner is invoked headless with approvals bypassed (see
+    ``prompts/runners.md``) and prints its final reply on stdout. brr
+    captures stdout and writes it to the invocation's response file —
+    runners do not need to be told where the response file lives.
+    """
+    def _replace_placeholders(parts: list[str]) -> list[str]:
+        return [s.replace("{prompt}", prompt) for s in parts]
+
     custom = cfg.get("runner_cmd")
     if custom:
         if isinstance(custom, list):
-            return [s.replace("{prompt}", prompt) for s in custom]
-        return [s.replace("{prompt}", prompt) for s in str(custom).split()]
+            return _replace_placeholders(custom)
+        return _replace_placeholders(str(custom).split())
 
-    profiles = _load_profiles()
-    profile = profiles.get(runner_name)
+    profile = _load_profiles().get(runner_name)
     if profile:
         cmd = str(profile.get("cmd", runner_name)).split()
-        approve = str(profile.get("approve", "")).strip()
-        if cfg.get("auto_approve") and approve:
-            cmd.extend(approve.split())
         cmd.append(prompt)
         return cmd
 
     return [runner_name, prompt]
+
+
+def _write_response_file(response_path: str, stdout: str) -> None:
+    """Persist the runner's stdout as the captured response file.
+
+    The path is created relative to the host file system; brr always
+    runs inside (or with a bind mount of) the repo, so the parent
+    directory normally exists, but we mkdir defensively so a fresh
+    ``responses/`` subtree can be created on the first run.
+    """
+    target = Path(response_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(stdout, encoding="utf-8")
+
+
+def _copy_artifact_to_trace(
+    trace_dir: Path,
+    artifact: RunnerArtifactSpec,
+    index: int,
+) -> Path | None:
+    if not artifact.copy_to_trace or not artifact.path.exists():
+        return None
+    artifacts_dir = trace_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    target = artifacts_dir / f"{index:02d}-{artifact.path.name}"
+    shutil.copy2(artifact.path, target)
+    return target
+
+
+def _write_trace(result: RunnerResult) -> Path | None:
+    trace_root = result.invocation.trace_root
+    try:
+        trace_dir = trace_root / f"{_slugify(result.invocation.label)}-{_trace_id()}"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    (trace_dir / "prompt.md").write_text(result.invocation.prompt, encoding="utf-8")
+    (trace_dir / "stdout.txt").write_text(result.stdout, encoding="utf-8")
+    (trace_dir / "stderr.txt").write_text(result.stderr, encoding="utf-8")
+
+    records = []
+    copied_artifacts = []
+    for index, artifact in enumerate(result.invocation.required_artifacts, start=1):
+        trace_copy = _copy_artifact_to_trace(trace_dir, artifact, index)
+        copied_artifacts.append(
+            RunnerArtifactRecord(
+                path=artifact.path,
+                label=artifact.label or str(artifact.path),
+                exists=artifact.path.exists(),
+                trace_copy=trace_copy,
+            )
+        )
+
+    result.artifacts = copied_artifacts
+    metadata = {
+        "runner": result.runner_name,
+        "kind": result.invocation.kind,
+        "label": result.invocation.label,
+        "cwd": str(result.invocation.cwd or ""),
+        "command": result.command,
+        "returncode": result.returncode,
+        "response_path": result.invocation.response_path,
+        "validation_ok": result.validation_ok,
+        "retry_reason": result.retry_reason(),
+        "artifacts": [
+            {
+                "label": artifact.label,
+                "path": str(artifact.path),
+                "exists": artifact.exists,
+                "trace_copy": str(artifact.trace_copy) if artifact.trace_copy else None,
+            }
+            for artifact in result.artifacts
+        ],
+    }
+    (trace_dir / "meta.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return trace_dir
+
+
+def invoke_runner(
+    runner_name: str,
+    invocation: RunnerInvocation,
+    cfg: dict[str, Any] | None = None,
+    *,
+    trace: bool = False,
+) -> RunnerResult:
+    """Run a runner subprocess, validate outputs, and optionally persist a trace.
+
+    If the invocation specifies a ``response_path``, captured stdout is
+    written there on success. Runners are expected to print only their
+    final reply to stdout (progress streams to stderr); brr has no need
+    to know per-runner output flags.
+    """
+    global _active_proc
+    cfg = cfg or {}
+    cmd = _build_cmd(runner_name, invocation.prompt, cfg)
+    stdout = ""
+    stderr = ""
+    returncode = 0
+    try:
+        with _proc_lock:
+            _active_proc = subprocess.Popen(
+                cmd,
+                cwd=invocation.cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        proc = _active_proc
+        stdout, stderr = proc.communicate(timeout=600)
+        returncode = proc.returncode
+    except FileNotFoundError:
+        stderr = f"executable '{cmd[0]}' not found on PATH"
+        returncode = 127
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        stderr = (stderr + "\n" if stderr else "") + "runner timed out after 600s"
+        returncode = 124
+    finally:
+        with _proc_lock:
+            _active_proc = None
+
+    if invocation.response_path and returncode == 0 and stdout and stdout.strip():
+        _write_response_file(invocation.response_path, stdout)
+
+    result = RunnerResult(
+        invocation=invocation,
+        runner_name=runner_name,
+        command=cmd,
+        stdout=stdout,
+        stderr=stderr,
+        returncode=returncode,
+        trace_dir=None,
+        artifacts=[],
+    )
+    if trace:
+        result.trace_dir = _write_trace(result)
+    else:
+        result.artifacts = [
+            RunnerArtifactRecord(
+                path=spec.path,
+                label=spec.label or str(spec.path),
+                exists=spec.path.exists(),
+            )
+            for spec in invocation.required_artifacts
+        ]
+    return result
 
 
 def run_executor(
@@ -105,38 +391,81 @@ def run_executor(
     prompt: str,
     cwd: Path | None = None,
     cfg: dict[str, Any] | None = None,
+    response_path: str | None = None,
 ) -> str:
     """Run a runner subprocess with the given prompt, return stdout."""
-    global _active_proc
-    cfg = cfg or {}
-    cmd = _build_cmd(runner_name, prompt, cfg)
-    try:
-        with _proc_lock:
-            _active_proc = subprocess.Popen(
-                cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-        proc = _active_proc
-        stdout, stderr = proc.communicate(timeout=600)
-        returncode = proc.returncode
-    except FileNotFoundError:
-        raise RuntimeError(f"executable '{cmd[0]}' not found on PATH")
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.communicate()
-        raise RuntimeError("runner timed out after 600s")
-    finally:
-        with _proc_lock:
-            _active_proc = None
+    if cwd is None:
+        raise RuntimeError("run_executor requires cwd to infer repo_root for tracing")
+    invocation = RunnerInvocation(
+        kind="executor",
+        label=runner_name,
+        prompt=prompt,
+        cwd=cwd,
+        repo_root=cwd,
+        response_path=response_path,
+    )
+    result = invoke_runner(runner_name, invocation, cfg=cfg)
+    result.raise_for_error()
+    return result.stdout
 
-    if returncode != 0:
-        detail = stderr.strip() or stdout.strip()
-        if len(detail) > 500:
-            detail = detail[:500] + " …[truncated]"
-        raise RuntimeError(
-            f"{cmd[0]} failed (exit {returncode}): "
-            + (detail or "(no output)")
-        )
-    return stdout
+
+# ── Context injection ────────────────────────────────────────────────
+
+_LOG_ENTRY_RE = re.compile(r"^## \[", re.MULTILINE)
+_MAX_LOG_ENTRIES = 10
+
+
+def _read_recent_log(repo_root: Path, max_entries: int = _MAX_LOG_ENTRIES) -> str:
+    """Read the most recent entries from kb/log.md.
+
+    Returns the raw markdown of the last *max_entries* entries, or
+    empty string if the log doesn't exist or is empty.  This gives
+    the agent conversation context from previous sessions without
+    unbounded growth in the prompt.
+    """
+    log_path = repo_root / "kb" / "log.md"
+    if not log_path.exists():
+        return ""
+    text = log_path.read_text(encoding="utf-8")
+    # Split on entry headers (## [YYYY-MM-DD] ...)
+    parts = _LOG_ENTRY_RE.split(text)
+    if len(parts) <= 1:
+        return ""
+    # parts[0] is the preamble, rest are entries (without the "## [" prefix)
+    entries = [f"## [{p}" for p in parts[1:]]
+    recent = entries[-max_entries:]
+    return "\n".join(recent).strip()
+
+
+def _build_context_block(repo_root: Path) -> str:
+    """Build the conversation context block for prompt injection.
+
+    Includes recent log entries so the agent has continuity with
+    previous sessions.  The log is maintained by agents (per AGENTS.md)
+    so it stays proportional.
+    """
+    recent = _read_recent_log(repo_root)
+    if not recent:
+        return ""
+    return (
+        "## Recent Activity (from kb/log.md)\n\n"
+        "This is your conversation context — what happened in previous sessions:\n\n"
+        f"{recent}"
+    )
+
+
+def _join_prompt_parts(
+    preamble: str,
+    repo_root: Path,
+    trailer: str,
+) -> str:
+    """Join a prompt preamble, optional recent context, and task-specific text."""
+    parts = [preamble]
+    context = _build_context_block(repo_root)
+    if context:
+        parts.append(context)
+    parts.append(trailer)
+    return "\n\n".join(parts)
 
 
 # ── Prompt construction ──────────────────────────────────────────────
@@ -152,7 +481,7 @@ def build_init_prompt(repo_root: Path) -> str:
 def build_run_prompt(task: str, repo_root: Path) -> str:
     """Build the prompt for ``brr run`` — run.md + task text."""
     preamble = _read_prompt("run.md", repo_root)
-    return f"{preamble}\n\n---\nTask: {task}"
+    return _join_prompt_parts(preamble, repo_root, f"---\nTask: {task}")
 
 
 def build_daemon_prompt(
@@ -160,18 +489,181 @@ def build_daemon_prompt(
     event_id: str,
     response_path: str,
     repo_root: Path,
+    *,
+    task_id: str | None = None,
+    branch_name: str | None = None,
+    base_branch: str | None = None,
+    runtime_dir: str | None = None,
+    context_path: str | None = None,
+    log_file: str | None = None,
+    recent_conversation: list[dict[str, Any]] | None = None,
+    event_body: str | None = None,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
-    Same as run prompt but with event metadata prepended to the task.
+    Same as run prompt but with event metadata, recent conversation
+    context, and a delivery contract assembled into a single
+    ``Task Context Bundle``. When *log_file* is set (e.g. for worktree
+    mode), the agent is told to write its log entry there instead of
+    kb/log.md.
     """
     preamble = _read_prompt("run.md", repo_root)
-    metadata = (
-        f"Event: {event_id}\n"
-        f"Write your final response to: {response_path}\n"
-        f"Do not explore or modify any other files in .brr/.\n"
+    bundle = _build_task_context_bundle(
+        event_id=event_id,
+        response_path=response_path,
+        repo_root=repo_root,
+        task_id=task_id,
+        branch_name=branch_name,
+        base_branch=base_branch,
+        runtime_dir=runtime_dir,
+        context_path=context_path,
+        log_file=log_file,
+        recent_conversation=recent_conversation,
+        event_body=event_body,
     )
-    return f"{preamble}\n\n---\n{metadata}\nTask: {task}"
+    return _join_prompt_parts(preamble, repo_root, f"{bundle}\nTask: {task}")
+
+
+def _build_task_context_bundle(
+    *,
+    event_id: str,
+    response_path: str,
+    repo_root: Path,
+    task_id: str | None,
+    branch_name: str | None,
+    base_branch: str | None,
+    runtime_dir: str | None,
+    context_path: str | None,
+    log_file: str | None,
+    recent_conversation: list[dict[str, Any]] | None,
+    event_body: str | None,
+) -> str:
+    """Assemble the human-readable Task Context Bundle for the daemon prompt.
+
+    The bundle preserves the ``Key: value`` lines (Task ID:, Execution
+    root:, Base branch:, etc.) under semantic headings so any tool
+    grepping the prompt keeps working.
+    """
+    sections: list[str] = ["---", "## Task Context Bundle"]
+
+    sections.append("")
+    sections.append("### Task")
+    sections.append(f"- Event: {event_id}")
+    if task_id:
+        sections.append(f"- Task ID: {task_id}")
+    sections.append(f"- Execution root: {repo_root}")
+    if base_branch:
+        sections.append(f"- Base branch: {base_branch}")
+    if branch_name:
+        sections.append(f"- Current branch: {branch_name}")
+    if runtime_dir:
+        sections.append(f"- Shared runtime dir: {runtime_dir}")
+    if context_path:
+        sections.append(f"- Run context file: {context_path}")
+
+    sections.append("")
+    sections.append("### Delivery contract")
+    sections.append(
+        "- Your final reply is the response. Print the exact intended "
+        "content as your final stdout message — no preamble, no commentary "
+        "outside it. Stream progress, debug, and tool output to stderr."
+    )
+    sections.append(
+        f"- brr captures stdout and stores it at {response_path}. Do not "
+        "write that file yourself."
+    )
+    sections.append(
+        "- Do not explore or modify any other files in .brr/ beyond what "
+        "this task explicitly asks for."
+    )
+    if branch_name and base_branch:
+        sections.append(
+            f"- You start on `{branch_name}`, sprouted from `{base_branch}`. "
+            "If this is read-only or a Q&A, just answer — do not commit. "
+            "If your work should land on the base branch, commit on the "
+            "current branch and brr will fast-forward it back. If you want "
+            "the work kept as a separate branch, run "
+            "`git switch -c <meaningful-name>` first; brr will preserve "
+            "whatever branch you end up on without merging."
+        )
+    if log_file:
+        sections.append(
+            f"- Write your log entry to {log_file} instead of kb/log.md."
+        )
+
+    recent_block = _format_recent_conversation(recent_conversation)
+    if recent_block:
+        sections.append("")
+        sections.append("### Recent in this conversation")
+        sections.append("")
+        sections.append(recent_block)
+
+    if event_body is not None:
+        body = event_body.strip()
+        if body:
+            sections.append("")
+            sections.append("### Original event body")
+            sections.append("")
+            sections.append(body)
+
+    sections.append("")
+    return "\n".join(sections) + "\n"
+
+
+_RECENT_CONVERSATION_MAX = 8
+
+
+def _format_recent_conversation(
+    records: list[dict[str, Any]] | None,
+) -> str:
+    """Render the last few conversation records as human-readable bullets.
+
+    Excludes the current event itself (callers should append the event
+    body separately) so the recent block represents history *before*
+    the in-flight task. Returns an empty string when nothing useful is
+    available.
+    """
+    if not records:
+        return ""
+    bullets: list[str] = []
+    for record in records[-_RECENT_CONVERSATION_MAX:]:
+        kind = record.get("kind")
+        ts = record.get("ts", "")
+        line: str | None = None
+        if kind == "event":
+            summary = (record.get("summary") or "").strip()
+            source = record.get("source") or ""
+            line = f"- {ts} event ({source}): {summary}".rstrip()
+        elif kind == "task":
+            tid = record.get("task_id", "")
+            status = record.get("status") or "pending"
+            branch = record.get("branch") or ""
+            line = f"- {ts} task {tid} status={status} branch={branch}"
+        elif kind == "update":
+            ptype = record.get("type") or ""
+            tid = record.get("task_id") or ""
+            stage = record.get("stage") or ""
+            err = record.get("error") or ""
+            bits = [f"- {ts} update {ptype}"]
+            if tid:
+                bits.append(f"task={tid}")
+            if stage:
+                bits.append(f"stage={stage}")
+            if err:
+                bits.append(f"error={err}")
+            line = " ".join(bits)
+        elif kind == "artifact":
+            label = record.get("label") or record.get("artifact_kind") or ""
+            path = record.get("path") or ""
+            line = f"- {ts} artifact {label} {path}".rstrip()
+        if line:
+            bullets.append(line)
+    return "\n".join(bullets)
+
+
+def build_kb_maintenance_prompt(repo_root: Path) -> str:
+    """Build a short prompt for the post-task KB consistency check."""
+    return _read_prompt("kb-maintenance.md", repo_root)
 
 
 # ── Task execution ───────────────────────────────────────────────────
@@ -189,7 +681,19 @@ def run_task(instruction: str) -> str:
 
     print(f"[brr] running: {instruction}")
     print(f"[brr] runner: {runner_name}")
-    output = run_executor(runner_name, prompt, cwd=repo_root, cfg=cfg)
+    result = invoke_runner(
+        runner_name,
+        RunnerInvocation(
+            kind="run",
+            label=instruction[:40],
+            prompt=prompt,
+            cwd=repo_root,
+            repo_root=repo_root,
+        ),
+        cfg=cfg,
+    )
+    result.raise_for_error()
+    output = result.output
     print(output)
     return output
 
