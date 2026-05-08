@@ -667,3 +667,56 @@ schema is stable), a `brr kb` CLI subnamespace (rejected — keep user-facing
 surface minimal, agent-facing info via prompt injection), and adopters'
 kb-seed conventions (revisit after brr's own kb evolves under the new
 framework for a few real tasks). No code changes; framework anchoring only.
+
+## [2026-05-09] implement | Phase 2: AGENTS.md restructure, delivery contract, bot UX, Docker init
+
+Landed Phase 2 of the kb-shape decision end-to-end.
+
+**AGENTS.md is now a single source.** Moved repo-root `AGENTS.md` to
+`src/brr/AGENTS.md`, symlinked at the root. Bundled in package_data so
+adopters' `brr init` reads brr's own playbook directly as the model
+(rewrote `setup.md` and `runner.build_init_prompt` to load it). Deleted
+the stale `src/brr/prompts/agents-template.md`. Rewrote AGENTS.md's
+universal sections to install the four-layer memory model, graph
+topology, lifecycle markers, link discipline, and subject genesis rule.
+Reworded the Stewardship section to be project-agnostic and functional —
+"surface contradictions and trade-offs before proceeding" replaces the
+older aspirational framing.
+
+**Delivery contract sharpened.** Removed the per-task `log_file` plumbing
+end-to-end: dropped `RunContext.log_file`, `WorktreeEnv.prepare`'s
+log-file assignment, `runner.build_daemon_prompt`'s `log_file` parameter,
+and `daemon.py`'s plumbing. Rewrote `prompts/run.md` and the Task
+Context Bundle's Delivery contract to make stdout the unambiguous chat
+reply, kb writes optional (only when material), and "if you wrote
+files, commit them" the universal rule (replacing the old "review = no
+commit" carve-out that left work unpushable).
+
+**Telegram message duplication fix.** Cached the last-rendered card text
+in `gates/telegram.py:render_update` and short-circuit on unchanged
+text. Added a typed `_TelegramNotModified` exception so `_api_call` can
+treat Telegram's 400 "message is not modified" as a success no-op
+instead of letting it fall through to `sendMessage` (the duplication
+bug). Same dedupe pattern in `gates/slack.py` for parity. Made
+`run_progress.render_text` compact mode terser — header + phase only,
+with attempt/error surfacing only when actionable; verbose mode keeps
+the full operator-facing detail.
+
+**Docker question in `brr init -i`.** Moved `docker/Dockerfile` to
+`src/brr/Dockerfile`, bundled in package_data. Added
+`adopt._configure_environment` that detects docker on PATH, asks
+yes/no, prompts for image (default `brr-runner:local`), and offers to
+auto-build from the bundled Dockerfile in a temp context. When user
+declines or docker is missing, writes `environment=worktree`
+explicitly so the choice is recorded.
+
+Tests: 176 → 188. Updated all stub envs to drop `log_file=...`, the
+runner-bundle test to assert no `kb/log-` mention, the compact
+progress test to assert the dropped fields are gone, plus new tests
+for dedupe, "not modified" handling, and the Docker question paths.
+
+Outstanding: Phase 3 (kb cleanup — reorganise index by subject hubs,
+add lifecycle markers, fold `kb/log-task-*.md` into `kb/log.md`,
+delete pages with no future value), Phase 4 (daemon maintenance
+becomes deterministic preflight + thin LLM redundancy pass), Phase 5
+(subjects accrete from real work). All anchored in `decision-kb-shape.md`.

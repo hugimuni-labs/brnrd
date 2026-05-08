@@ -150,7 +150,12 @@ def test_project_conversation_latest_returns_none_when_no_tasks(tmp_path):
     assert view is None
 
 
-def test_render_text_compact_includes_essentials(tmp_path):
+def test_render_text_compact_is_terse(tmp_path):
+    """Compact card is the chat surface — header + phase, nothing else.
+
+    Branch / env / response paths are dev-side noise in a chat reply;
+    they live in the verbose form for ``brr status`` and ``brr inspect``.
+    """
     brr_dir = tmp_path / ".brr"
     key = "telegram:8:"
     _emit(brr_dir, key, "task_created", task_id="task-r",
@@ -167,7 +172,43 @@ def test_render_text_compact_includes_essentials(tmp_path):
     assert "task-r" in text
     assert "running" in text
     assert "phase: running" in text
-    assert "branch: brr/task-r" in text
+    assert "branch:" not in text
+    assert "env:" not in text
+    assert "last:" not in text
+    assert "response:" not in text
+
+
+def test_render_text_compact_shows_attempt_only_during_retry(tmp_path):
+    """attempt: counter shows up only mid-flight, not after delivery."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:8b:"
+    _emit(brr_dir, key, "task_created", task_id="task-rt", env="worktree")
+    _emit(brr_dir, key, "attempt_started", task_id="task-rt", attempt=2)
+
+    view_active = run_progress.project_task(brr_dir, key, "task-rt")
+    assert view_active is not None
+    assert "attempt: 2" in run_progress.render_text(view_active, compact=True)
+
+    _emit(brr_dir, key, "done", task_id="task-rt")
+    view_done = run_progress.project_task(brr_dir, key, "task-rt")
+    assert view_done is not None
+    assert "attempt:" not in run_progress.render_text(view_done, compact=True)
+
+
+def test_render_text_verbose_keeps_dev_fields(tmp_path):
+    """Verbose mode (compact=False) keeps the operator-facing detail."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:8c:"
+    _emit(brr_dir, key, "task_created", task_id="task-v", env="docker")
+    _emit(brr_dir, key, "env_prepared", task_id="task-v", env="docker",
+          branch_name="brr/task-v")
+    _emit(brr_dir, key, "run_started", task_id="task-v")
+    _emit(brr_dir, key, "done", task_id="task-v")
+
+    view = run_progress.project_task(brr_dir, key, "task-v")
+    assert view is not None
+    text = run_progress.render_text(view, compact=False)
+    assert "branch: brr/task-v" in text
     assert "env: docker" in text
 
 

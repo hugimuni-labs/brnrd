@@ -1,9 +1,10 @@
 """Repository adoption — ``brr init``.
 
 Sets up the ``.brr/`` runtime directory, detects a runner, and
-delegates AGENTS.md + kb/ creation to the runner itself.  The runner
-receives setup.md + agents-template.md as a prompt and decides what
-work (if any) is needed based on the repo's current state.
+delegates AGENTS.md + kb/ creation to the runner itself. The runner
+receives ``setup.md`` plus brr's own ``AGENTS.md`` (the model) as a
+prompt and decides what work (if any) is needed based on the repo's
+current state.
 
 This module is intentionally thin — the intelligence lives in the
 prompt files, not here.
@@ -12,14 +13,20 @@ prompt files, not here.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import config as conf
 from . import runner
 from . import gitops
+
+
+_DEFAULT_DOCKER_IMAGE = "brr-runner:local"
+_BUNDLED_DOCKERFILE = Path(__file__).resolve().parent / "Dockerfile"
 
 
 # ── Timed input helper ──────────────────────────────────────────────
@@ -134,7 +141,6 @@ def _interactive_configure(available: list[str]) -> tuple[str, dict]:
     print("[brr] interactive setup")
     cfg: dict = {}
 
-    # runner
     if len(available) == 1:
         runner_name = available[0]
         print(f"\n  runner: {runner_name} (only one found)")
@@ -142,9 +148,78 @@ def _interactive_configure(available: list[str]) -> tuple[str, dict]:
         runner_name = _pick_option("Which runner?", available, available[0])
 
     cfg["runner"] = runner_name
+    cfg.update(_configure_environment())
 
     print()
     return runner_name, cfg
+
+
+def _configure_environment() -> dict:
+    """Resolve the task execution environment.
+
+    The ``environment=auto`` default (set by ``_setup_brr_dir``) silently
+    falls back to worktree when docker isn't fully configured, which is
+    surprising. Interactive setup makes the choice explicit so the
+    config records what the user actually picked.
+    """
+    if shutil.which("docker") is None:
+        print("\n  docker: not on PATH — using worktree environment")
+        return {"environment": "worktree"}
+
+    print()
+    if not _confirm("Use Docker for task execution?", default=True):
+        return {"environment": "worktree"}
+
+    image = _timed_input(
+        f"  docker image [default: {_DEFAULT_DOCKER_IMAGE}] (10s): ",
+        _DEFAULT_DOCKER_IMAGE,
+        timeout=10,
+    )
+    overrides: dict = {"environment": "docker", "docker.image": image}
+
+    if image == _DEFAULT_DOCKER_IMAGE and _BUNDLED_DOCKERFILE.exists():
+        if _confirm(
+            "Build the image now from brr's bundled Dockerfile?",
+            default=True,
+        ):
+            built = _build_default_docker_image()
+            if not built:
+                print(
+                    f"  [brr] image not built — brr will fail until "
+                    f"`{_DEFAULT_DOCKER_IMAGE}` exists locally."
+                )
+
+    return overrides
+
+
+def _build_default_docker_image() -> bool:
+    """Build brr's bundled runner image into ``brr-runner:local``.
+
+    The bundled Dockerfile only uses ``RUN`` steps (no ``COPY``/``ADD``),
+    so any directory works as the build context. Using a temp dir
+    avoids uploading the package install dir to the docker daemon and
+    keeps the build hermetic. Returns True iff the build succeeded.
+    """
+    if not _BUNDLED_DOCKERFILE.exists():
+        print("  [brr] bundled Dockerfile not found; cannot build")
+        return False
+
+    print(
+        f"  [brr] building {_DEFAULT_DOCKER_IMAGE} "
+        "(this can take a few minutes)…"
+    )
+    with tempfile.TemporaryDirectory(prefix="brr-build-") as ctx:
+        ctx_path = Path(ctx)
+        shutil.copy(_BUNDLED_DOCKERFILE, ctx_path / "Dockerfile")
+        result = subprocess.run(
+            ["docker", "build", "-t", _DEFAULT_DOCKER_IMAGE, str(ctx_path)],
+            check=False,
+        )
+    if result.returncode != 0:
+        print(f"  [brr] docker build failed (exit {result.returncode})")
+        return False
+    print(f"  [brr] image ready: {_DEFAULT_DOCKER_IMAGE}")
+    return True
 
 
 def _ensure_repo() -> Path:
