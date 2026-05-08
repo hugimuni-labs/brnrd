@@ -634,3 +634,36 @@ Updated bundled docs (`brr-internals.md`, `execution-map.md`, `envs.md`,
 `active-task.md`, `conversations.md`), gate progress packet whitelists
 (Telegram, Slack), and reworked the daemon/env tests. Decision recorded in
 `kb/decision-remove-triage.md`. Full pytest run is green (176 passing).
+
+## [2026-05-08] plan | kb shape — graph topology, semantic memory, cross-tool maintenance
+
+Recorded the framework decision in `kb/decision-kb-shape.md` after a live
+Telegram test on 2026-05-07 surfaced the chore-conflict symptom (the agent
+filed a substantive review at `kb/log-task-1778167445-bz4e.md` while
+returning a vacuous one-line acknowledgment as the chat reply, with nothing
+committed and nothing pushed). The decision aligns brr's kb with the
+[`llm-wiki.md`](llm-wiki.md) pattern by making the four memory layers
+(raw / episodic-thin / semantic+decisional / schema) explicit, framing the
+kb as a graph (entry point, edges, supersedence over deletion, splits and
+merges as normal operations), naming subject pages as the missing semantic
+layer (accreting naturally, not pre-seeded), and crucially moving the
+maintenance contract out of brr-specific code: AGENTS.md becomes the schema
+that all agents read (cursor sessions, claude code / codex CLI direct, brr
+remote runs all share it), and brr's `_maybe_kb_maintenance` is reframed as
+a redundancy pass on top of agent-driven maintenance.
+
+The page lays out a five-phase execution plan: (1) anchor, this decision;
+(2) chore removal + bot UX fixes (drop mandatory log entries and per-task
+log files, fix Telegram message duplication, terser progress card, Docker
+question in `brr init -i`); (3) one-time kb cleanup (reorganise index by
+subject, lifecycle markers on shipped plans, fold per-task log files into
+log.md); (4) daemon kb-maintenance phase becomes a thin redundancy lint
+with a deterministic preflight; (5) subject pages accrete from real work
+rather than top-down seeding.
+
+Explicitly defers vector/graph semantic indexing (future project), tool-
+specific hooks for cursor/claude code/codex (deferred until the AGENTS.md
+schema is stable), a `brr kb` CLI subnamespace (rejected — keep user-facing
+surface minimal, agent-facing info via prompt injection), and adopters'
+kb-seed conventions (revisit after brr's own kb evolves under the new
+framework for a few real tasks). No code changes; framework anchoring only.
