@@ -114,7 +114,7 @@ class TestPromptBuilding:
         assert "Bug fix" in prompt
         assert "do something" in prompt
 
-    def test_daemon_prompt_with_log_file(self, tmp_path):
+    def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
         (prompts / "run.md").write_text("You are an agent.")
@@ -126,7 +126,6 @@ class TestPromptBuilding:
             base_branch="feat/task-abstraction",
             runtime_dir="/repo/.brr",
             context_path="/repo/.brr/runs/task-123/context.md",
-            log_file="kb/log-task-123.md",
         )
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
@@ -135,9 +134,11 @@ class TestPromptBuilding:
         assert "git switch -c" in prompt
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "Run context file: /repo/.brr/runs/task-123/context.md" in prompt
-        assert "kb/log-task-123.md" in prompt
         assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
         assert "fix it" in prompt
+        # The per-task log-file chore is gone; the bundle should not
+        # mention an alternate log path or kb/log.md as a target.
+        assert "kb/log-" not in prompt
 
     def test_daemon_prompt_with_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

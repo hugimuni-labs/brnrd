@@ -63,7 +63,6 @@ class _StubWorktreeEnv:
             response_path_env=response_path,
             branch_name=f"brr/{task.id}",
             base_branch=base_branch,
-            log_file=f"kb/log-{task.id}.md",
             env_state={"worktree_path": str(repo_root)},
         )
 

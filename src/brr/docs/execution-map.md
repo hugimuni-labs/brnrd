@@ -45,10 +45,10 @@ rule.
 
 The runner receives `run.md` + recent `kb/log.md` context + daemon
 metadata (task ID, event ID, execution root, current branch, response
-path, shared runtime dir, generated run context file).
-
-In worktree-backed modes, including Docker branch tasks, the agent writes
-its log entry to `kb/log-<task-id>.md` to avoid conflicts with the main log.
+path, shared runtime dir, generated run context file). The bundle's
+delivery contract is explicit: stdout is the user's chat reply, kb
+writes are optional — agents log only when there's something worth
+logging (see AGENTS.md → Knowledge base).
 
 ### 4. Response
 
@@ -70,8 +70,10 @@ before failing the task.
 ### 5. KB maintenance (optional)
 
 If the task modified files in `kb/`, a lightweight maintenance step runs
-to verify `kb/index.md` consistency and ensure a log entry exists.
-See `brr-internals.md` for the full trigger logic.
+as a safety net to verify `kb/index.md` consistency and the graph
+invariants AGENTS.md describes. The primary maintenance contract lives
+in AGENTS.md; this hook is a redundancy pass. See `brr-internals.md`
+for the trigger logic.
 
 ### 6. Finalization
 

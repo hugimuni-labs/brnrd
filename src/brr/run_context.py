@@ -63,8 +63,6 @@ def render_context(
         lines.append(f"- Base branch: {ctx.base_branch}")
     if ctx.branch_name:
         lines.append(f"- Current branch: {ctx.branch_name}")
-    if ctx.log_file:
-        lines.append(f"- Log file: {ctx.log_file}")
     if task.conversation_key:
         lines.append(f"- Conversation: {task.conversation_key}")
 

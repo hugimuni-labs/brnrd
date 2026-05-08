@@ -33,12 +33,42 @@ _BACKOFF_MAX = 120
 # ── Bot API helpers ──────────────────────────────────────────────────
 
 
+class _TelegramNotModified(Exception):
+    """Telegram returned 400 "message is not modified" on editMessageText.
+
+    Surfaces as a typed exception so render_update can treat it as a
+    successful no-op instead of falling through to send a duplicate.
+    """
+
+
 def _api_call(token: str, method: str, params: dict | None = None) -> dict:
     url = _API.format(token=token, method=method)
     body = json.dumps(params or {}).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 400 and method == "editMessageText":
+            payload = _read_error_payload(exc)
+            description = str(payload.get("description", ""))
+            if "message is not modified" in description.lower():
+                raise _TelegramNotModified(description) from None
+        raise
+
+
+def _read_error_payload(exc: urllib.error.HTTPError) -> dict:
+    """Decode an HTTPError body into Telegram's JSON envelope, best-effort."""
+    try:
+        raw = exc.read()
+    except Exception:
+        return {}
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
 
 
 def _send_message(token: str, chat_id: int, text: str, topic_id: int | None = None) -> dict:
@@ -373,17 +403,46 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     key = _progress_key(task_id)
     entry = progress_state.get(key)
 
+    if entry and entry.get("last_text") == text:
+        # Identical to the last rendered message — nothing to do. Avoids
+        # the Telegram round-trip and the "message is not modified" 400
+        # that would come back if we sent it.
+        entry["last_render"] = ptype
+        progress_state[key] = entry
+        _save_progress_state(brr_dir, progress_state)
+        return
+
     try:
         if entry and entry.get("message_id"):
             try:
                 _edit_message(token, chat_id, int(entry["message_id"]), text)
-                entry["last_render"] = ptype
-                progress_state[key] = entry
+            except _TelegramNotModified:
+                # Server-side check agrees the message body didn't change;
+                # treat as a successful no-op rather than falling through
+                # to send a replacement (which is the duplication bug).
+                pass
+            except Exception:
+                # The message is genuinely gone (deleted, expired, etc.).
+                # Fall through to send a replacement.
+                resp = _send_message(token, chat_id, text, topic_id)
+                message_id = (resp.get("result") or {}).get("message_id")
+                if message_id is None:
+                    return
+                progress_state[key] = {
+                    "chat_id": chat_id,
+                    "topic_id": topic_id,
+                    "message_id": message_id,
+                    "last_render": ptype,
+                    "last_text": text,
+                }
                 _save_progress_state(brr_dir, progress_state)
                 return
-            except Exception:
-                # Fall through to send a replacement message.
-                pass
+            entry["last_render"] = ptype
+            entry["last_text"] = text
+            progress_state[key] = entry
+            _save_progress_state(brr_dir, progress_state)
+            return
+
         resp = _send_message(token, chat_id, text, topic_id)
         message_id = (resp.get("result") or {}).get("message_id")
         if message_id is None:
@@ -393,6 +452,7 @@ def render_update(brr_dir: Path, packet: Any) -> None:
             "topic_id": topic_id,
             "message_id": message_id,
             "last_render": ptype,
+            "last_text": text,
         }
         _save_progress_state(brr_dir, progress_state)
     except Exception:

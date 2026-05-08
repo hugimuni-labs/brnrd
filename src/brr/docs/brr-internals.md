@@ -14,9 +14,8 @@ You can tell you are running under a brr-driven invocation by the
 following signals in your prompt:
 
 - An `Event:` and/or `Task ID:` line in the metadata block.
-- An instruction to write a "final response" to a specific
-  `.brr/responses/<event-id>.md` path.
-- A `Write your log entry to kb/log-<task-id>.md` line (worktree mode).
+- A `### Delivery contract` block telling you stdout is the chat reply
+  and pointing at a specific `.brr/responses/<event-id>.md` path.
 - A `Shared runtime dir:` pointing at the main checkout's `.brr/`.
 - A generated `.brr/runs/<task-id>/context.md` file named in the
   Task Context Bundle.

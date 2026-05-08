@@ -233,8 +233,6 @@ def _run_worker(
     branch_name = env_ctx.branch_name
     if branch_name:
         task.meta["branch_name"] = branch_name
-    if env_ctx.log_file:
-        task.meta["log_file"] = env_ctx.log_file
 
     updates.emit(brr_dir, updates.UpdatePacket(
         type="env_prepared",
@@ -285,7 +283,6 @@ def _run_worker(
                 branch_name=branch_name,
                 base_branch=base_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
-                log_file=env_ctx.log_file,
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
@@ -300,7 +297,6 @@ def _run_worker(
                 branch_name=branch_name,
                 base_branch=base_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
-                log_file=env_ctx.log_file,
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,

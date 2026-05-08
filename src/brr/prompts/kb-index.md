@@ -1,16 +1,14 @@
 # Knowledge Base Index
 
-Pages are organized by category. Update this file whenever you create
-or remove a page.
+This index is the kb's entry point. The kb organises knowledge as a graph
+of subject hubs (`kb/subject-<name>.md`) plus supporting artifacts
+(`decision-*`, `plan-*`, `design-*`, `research-*`). See AGENTS.md for the
+four-layer model and link-discipline rules.
 
-## Architecture
+## Subjects
 
-(none yet)
+(none yet — accrete as work touches them)
 
-## Decisions
-
-(none yet)
-
-## Research
+## Artifacts
 
 (none yet)
