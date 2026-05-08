@@ -10,6 +10,9 @@ dist/
 # Local runtime state
 .brr/
 
+# Local scratch / contributor-specific
+.local/
+
 # Environment / editor settings
 .env
 .venv

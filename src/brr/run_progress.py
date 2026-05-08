@@ -289,9 +289,11 @@ def _project(
 def render_text(view: RunProgressView, *, compact: bool = True) -> str:
     """Render a RunProgressView for human consumption.
 
-    *compact* mode is intended for chat surfaces (one short message).
-    The non-compact mode adds extra detail useful for terminal
-    troubleshooting.
+    *compact* mode is the chat-surface card: header line plus the phase
+    and any genuinely actionable detail (retry count when retrying, error
+    message on failure). Branch / env / response paths are dev-side noise
+    in a chat reply — they live in the verbose form for ``brr status``
+    and ``brr inspect``.
     """
     lines: list[str] = []
     header = _header_line(view)
@@ -299,21 +301,33 @@ def render_text(view: RunProgressView, *, compact: bool = True) -> str:
 
     rows: list[tuple[str, str]] = []
     rows.append(("phase", _phase_text(view)))
-    branch_text = _branch_text(view)
-    if branch_text:
-        rows.append(("branch", branch_text))
-    if view.env:
-        rows.append(("env", view.env))
-    if view.attempt and view.attempt > 1:
-        rows.append(("attempt", str(view.attempt)))
-    if view.detail:
-        rows.append(("last", view.detail))
-    if view.error and not compact:
-        rows.append(("error", view.error))
-    if view.container_ids and not compact:
-        rows.append(("containers", ", ".join(view.container_ids)))
-    if view.response_path and view.is_terminal:
-        rows.append(("response", view.response_path))
+
+    if compact:
+        # Show retry-attempt counter only while the run is still active —
+        # once a task is delivered/failed, the chat reader doesn't need
+        # the attempt number.
+        if view.attempt > 1 and not view.is_terminal:
+            rows.append(("attempt", str(view.attempt)))
+        if view.error:
+            rows.append(("error", view.error))
+        elif view.state == "failed" and view.detail:
+            rows.append(("detail", view.detail))
+    else:
+        branch_text = _branch_text(view)
+        if branch_text:
+            rows.append(("branch", branch_text))
+        if view.env:
+            rows.append(("env", view.env))
+        if view.attempt and view.attempt > 1:
+            rows.append(("attempt", str(view.attempt)))
+        if view.detail:
+            rows.append(("last", view.detail))
+        if view.error:
+            rows.append(("error", view.error))
+        if view.container_ids:
+            rows.append(("containers", ", ".join(view.container_ids)))
+        if view.response_path and view.is_terminal:
+            rows.append(("response", view.response_path))
 
     if rows:
         lines.append("")

@@ -2,6 +2,8 @@
 
 import subprocess
 
+import pytest
+
 from brr import adopt
 from brr.runner import RunnerResult
 
@@ -94,3 +96,118 @@ def test_git_init_if_needed(tmp_path, monkeypatch):
 
     adopt.init_repo()
     assert (tmp_path / ".git").exists()
+
+
+class TestConfigureEnvironment:
+    """Interactive Docker question and worktree fallback."""
+
+    def test_no_docker_falls_back_to_worktree(self, monkeypatch):
+        monkeypatch.setattr(adopt.shutil, "which", lambda _name: None)
+        assert adopt._configure_environment() == {"environment": "worktree"}
+
+    def test_docker_available_user_declines(self, monkeypatch):
+        monkeypatch.setattr(adopt.shutil, "which", lambda _name: "/usr/bin/docker")
+        monkeypatch.setattr(adopt, "_confirm", lambda *_a, **_kw: False)
+
+        cfg = adopt._configure_environment()
+        assert cfg == {"environment": "worktree"}
+
+    def test_docker_available_user_accepts_default_image_no_build(self, monkeypatch):
+        """User opts in but declines the build — config still records docker."""
+        monkeypatch.setattr(adopt.shutil, "which", lambda _name: "/usr/bin/docker")
+        confirms = iter([True, False])
+        monkeypatch.setattr(adopt, "_confirm", lambda *_a, **_kw: next(confirms))
+        monkeypatch.setattr(
+            adopt, "_timed_input",
+            lambda prompt, default, timeout=10: default,
+        )
+        called: list = []
+        monkeypatch.setattr(
+            adopt, "_build_default_docker_image",
+            lambda: called.append(1) or True,
+        )
+
+        cfg = adopt._configure_environment()
+        assert cfg["environment"] == "docker"
+        assert cfg["docker.image"] == adopt._DEFAULT_DOCKER_IMAGE
+        assert called == [], "build helper must not run when user declines"
+
+    def test_docker_available_user_brings_own_image(self, monkeypatch):
+        """Custom image skips the build offer entirely."""
+        monkeypatch.setattr(adopt.shutil, "which", lambda _name: "/usr/bin/docker")
+        confirms = iter([True])
+        monkeypatch.setattr(adopt, "_confirm", lambda *_a, **_kw: next(confirms))
+        monkeypatch.setattr(
+            adopt, "_timed_input",
+            lambda prompt, default, timeout=10: "my/custom:tag",
+        )
+        called: list = []
+        monkeypatch.setattr(
+            adopt, "_build_default_docker_image",
+            lambda: called.append(1) or True,
+        )
+
+        cfg = adopt._configure_environment()
+        assert cfg["environment"] == "docker"
+        assert cfg["docker.image"] == "my/custom:tag"
+        assert called == [], "no build offer for user-supplied images"
+        # Also: the second confirm (for the build prompt) must not be
+        # consumed since we never reach it.
+        with pytest.raises(StopIteration):
+            next(confirms)
+
+    def test_docker_available_user_accepts_default_image_and_builds(self, monkeypatch):
+        monkeypatch.setattr(adopt.shutil, "which", lambda _name: "/usr/bin/docker")
+        confirms = iter([True, True])
+        monkeypatch.setattr(adopt, "_confirm", lambda *_a, **_kw: next(confirms))
+        monkeypatch.setattr(
+            adopt, "_timed_input",
+            lambda prompt, default, timeout=10: default,
+        )
+        built = []
+        monkeypatch.setattr(
+            adopt, "_build_default_docker_image",
+            lambda: built.append(1) or True,
+        )
+
+        cfg = adopt._configure_environment()
+        assert cfg == {
+            "environment": "docker",
+            "docker.image": adopt._DEFAULT_DOCKER_IMAGE,
+        }
+        assert built == [1]
+
+
+class TestBuildDefaultDockerImage:
+    def test_returns_false_when_dockerfile_missing(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(adopt, "_BUNDLED_DOCKERFILE", tmp_path / "missing")
+        assert adopt._build_default_docker_image() is False
+
+    def test_runs_docker_build_with_temp_context(self, monkeypatch, tmp_path):
+        bundled = tmp_path / "Dockerfile"
+        bundled.write_text("FROM alpine\n", encoding="utf-8")
+        monkeypatch.setattr(adopt, "_BUNDLED_DOCKERFILE", bundled)
+
+        captured: list = []
+
+        def _fake_run(command, **_kwargs):
+            captured.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(adopt.subprocess, "run", _fake_run)
+
+        assert adopt._build_default_docker_image() is True
+        cmd = captured[0]
+        assert cmd[:4] == ["docker", "build", "-t", adopt._DEFAULT_DOCKER_IMAGE]
+        ctx_dir = cmd[4]
+        assert ctx_dir != str(tmp_path), "context must be a temp dir, not the bundled location"
+
+    def test_returns_false_on_build_failure(self, monkeypatch, tmp_path):
+        bundled = tmp_path / "Dockerfile"
+        bundled.write_text("FROM alpine\n", encoding="utf-8")
+        monkeypatch.setattr(adopt, "_BUNDLED_DOCKERFILE", bundled)
+        monkeypatch.setattr(
+            adopt.subprocess, "run",
+            lambda command, **_kw: subprocess.CompletedProcess(command, 1, "", ""),
+        )
+        assert adopt._build_default_docker_image() is False

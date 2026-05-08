@@ -23,6 +23,7 @@ from typing import Any
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+_AGENTS_PATH = Path(__file__).resolve().parent / "AGENTS.md"
 _profiles_cache: dict[str, dict[str, Any]] | None = None
 
 _active_proc: subprocess.Popen | None = None
@@ -472,9 +473,15 @@ def _join_prompt_parts(
 
 
 def build_init_prompt(repo_root: Path) -> str:
-    """Build the prompt for ``brr init`` — setup.md + agents-template.md."""
+    """Build the prompt for ``brr init`` — setup.md + bundled AGENTS.md.
+
+    brr's own ``AGENTS.md`` (bundled inside the package) is the model
+    adopters' setup agent uses. Universal sections copy verbatim;
+    project-specific sections (Project, Build and run, Code guidelines,
+    Constraints) get rewritten for the adopter's repo.
+    """
     setup = _read_prompt("setup.md", repo_root)
-    template = _read_prompt("agents-template.md", repo_root)
+    template = _AGENTS_PATH.read_text(encoding="utf-8") if _AGENTS_PATH.exists() else ""
     return f"{setup}\n\n{template}"
 
 
@@ -495,7 +502,6 @@ def build_daemon_prompt(
     base_branch: str | None = None,
     runtime_dir: str | None = None,
     context_path: str | None = None,
-    log_file: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
 ) -> str:
@@ -503,9 +509,7 @@ def build_daemon_prompt(
 
     Same as run prompt but with event metadata, recent conversation
     context, and a delivery contract assembled into a single
-    ``Task Context Bundle``. When *log_file* is set (e.g. for worktree
-    mode), the agent is told to write its log entry there instead of
-    kb/log.md.
+    ``Task Context Bundle``.
     """
     preamble = _read_prompt("run.md", repo_root)
     bundle = _build_task_context_bundle(
@@ -517,7 +521,6 @@ def build_daemon_prompt(
         base_branch=base_branch,
         runtime_dir=runtime_dir,
         context_path=context_path,
-        log_file=log_file,
         recent_conversation=recent_conversation,
         event_body=event_body,
     )
@@ -534,7 +537,6 @@ def _build_task_context_bundle(
     base_branch: str | None,
     runtime_dir: str | None,
     context_path: str | None,
-    log_file: str | None,
     recent_conversation: list[dict[str, Any]] | None,
     event_body: str | None,
 ) -> str:
@@ -564,31 +566,33 @@ def _build_task_context_bundle(
     sections.append("")
     sections.append("### Delivery contract")
     sections.append(
-        "- Your final reply is the response. Print the exact intended "
-        "content as your final stdout message — no preamble, no commentary "
-        "outside it. Stream progress, debug, and tool output to stderr."
+        "- Your stdout is the user's chat reply. Print the exact intended "
+        "content as your final stdout message — no preamble, no meta "
+        "acknowledgment, no commentary outside it. Stream progress, debug, "
+        "and tool output to stderr."
     )
     sections.append(
-        f"- brr captures stdout and stores it at {response_path}. Do not "
-        "write that file yourself."
+        f"- brr captures stdout and stores it at {response_path}. Don't "
+        "write that file yourself, and don't substitute a file path for "
+        "the answer."
     )
     sections.append(
-        "- Do not explore or modify any other files in .brr/ beyond what "
+        "- If you wrote files (kb pages, code, fixtures, anything), commit "
+        "them on the current branch. The diff is the receipt that the work "
+        "happened — without a commit, the work disappears."
+    )
+    sections.append(
+        "- Don't explore or modify any other files in .brr/ beyond what "
         "this task explicitly asks for."
     )
     if branch_name and base_branch:
         sections.append(
             f"- You start on `{branch_name}`, sprouted from `{base_branch}`. "
-            "If this is read-only or a Q&A, just answer — do not commit. "
             "If your work should land on the base branch, commit on the "
             "current branch and brr will fast-forward it back. If you want "
             "the work kept as a separate branch, run "
             "`git switch -c <meaningful-name>` first; brr will preserve "
             "whatever branch you end up on without merging."
-        )
-    if log_file:
-        sections.append(
-            f"- Write your log entry to {log_file} instead of kb/log.md."
         )
 
     recent_block = _format_recent_conversation(recent_conversation)
