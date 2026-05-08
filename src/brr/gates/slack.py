@@ -282,6 +282,13 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     key = _progress_key(task_id)
     entry = progress_state.get(key)
 
+    if entry and entry.get("last_text") == text:
+        # Identical to the last rendered message — skip the round-trip.
+        entry["last_render"] = ptype
+        progress_state[key] = entry
+        _save_progress_state(brr_dir, progress_state)
+        return
+
     try:
         if entry and entry.get("ts"):
             try:
@@ -291,11 +298,13 @@ def render_update(brr_dir: Path, packet: Any) -> None:
                     "text": text,
                 })
                 entry["last_render"] = ptype
+                entry["last_text"] = text
                 progress_state[key] = entry
                 _save_progress_state(brr_dir, progress_state)
                 return
             except Exception:
-                # Fall through to post a replacement message.
+                # The message is genuinely gone (deleted, expired, etc.).
+                # Fall through to post a replacement.
                 pass
         params: dict = {"channel": channel, "text": text}
         if thread_ts:
@@ -309,6 +318,7 @@ def render_update(brr_dir: Path, packet: Any) -> None:
             "thread_ts": thread_ts,
             "ts": ts,
             "last_render": ptype,
+            "last_text": text,
         }
         _save_progress_state(brr_dir, progress_state)
     except Exception:

@@ -1,7 +1,13 @@
 # Activity Log
 
-Newest entries at the bottom.
+Curated chronological narrative. Newest entries at the bottom. Add an
+entry when a task produced a meaningful learning, decision, or shipped
+change. Format:
 
-Format: `## [YYYY-MM-DD] <type> | <title>`
+```
+## [YYYY-MM-DD] <type> | <title>
 
-Types: `implement`, `review`, `research`, `plan`, `fix`.
+<what was done, what was learned, outcome>
+```
+
+Types: `implement`, `review`, `research`, `plan`, `fix`, `decision`.

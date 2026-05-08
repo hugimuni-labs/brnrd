@@ -59,7 +59,6 @@ def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
     assert ctx.name == "docker"
     assert ctx.cwd == worktree_path
     assert ctx.branch_name == "brr/task-2"
-    assert ctx.log_file == "kb/log-task-2.md"
     assert task.meta["worktree_path"] == str(worktree_path)
     assert task.meta["branch_name"] == "brr/task-2"
     assert created == [(tmp_path, "task-2")]

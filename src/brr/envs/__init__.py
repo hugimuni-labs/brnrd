@@ -38,7 +38,6 @@ class RunContext:
     response_path_env: Path
     branch_name: str | None = None
     base_branch: str | None = None
-    log_file: str | None = None
     env_state: dict[str, Any] = field(default_factory=dict)
 
 
@@ -150,7 +149,6 @@ class WorktreeEnv(HostEnv):
             response_path_env=response_path,
             branch_name=branch_name,
             base_branch=base_branch,
-            log_file=f"kb/log-{task.id}.md",
             env_state={"worktree_path": str(run_root)},
         )
 

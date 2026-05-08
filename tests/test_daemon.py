@@ -58,7 +58,6 @@ def _stub_env_isolated(monkeypatch, tmp_path):
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
                 base_branch=base_branch,
-                log_file=f"kb/log-{task.id}.md",
                 env_state={"worktree_path": str(worktree_path)},
             )
 
@@ -173,7 +172,6 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
                 base_branch=base_branch,
-                log_file=f"kb/log-{task.id}.md",
                 env_state={"worktree_path": str(tmp_path)},
             )
 
@@ -302,7 +300,6 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
                 base_branch=base_branch,
-                log_file=f"kb/log-{task.id}.md",
                 env_state={"worktree_path": str(tmp_path)},
             )
 
@@ -359,7 +356,6 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
                 base_branch=base_branch,
-                log_file=f"kb/log-{task.id}.md",
                 env_state={"worktree_path": str(tmp_path)},
             )
 
