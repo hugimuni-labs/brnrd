@@ -11,9 +11,9 @@ Every daemon-driven task ships a `Task Context Bundle` near the top of
 the prompt. It contains:
 
 - The task itself: event id, task id, base branch, current branch,
-  shared runtime dir, response path, log file (in worktree mode).
-- The delivery contract: where to write the final response and how to
-  treat the branch.
+  shared runtime dir, generated run context file, and response path.
+- The delivery contract: stdout is the chat reply, brr captures it to
+  the response path, and the branch rules for this task.
 - A `Recent in this conversation` block when prior events from the
   same gate thread are available, so you can route consistently with
   what already happened.
@@ -36,9 +36,11 @@ knowledge, and agents should not edit it.
 
 ## What to write
 
-- Final response → exact path given as `response path` in the bundle.
-- Log entry → `kb/log.md` by default, or the `log file` path the
-  bundle gives you (worktree mode).
+- Final response → print the exact intended user-visible reply as stdout.
+  brr captures it to the response path; agents should not write that
+  response file directly.
+- Log entry → `kb/log.md` only when the task produced meaningful
+  project knowledge worth preserving.
 - KB pages → `kb/<page>.md` only when the task warrants persistence
   (decisions, research, gotchas, lines of work that span runs).
 

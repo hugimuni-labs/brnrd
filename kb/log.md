@@ -968,3 +968,33 @@ What changed in `repo-dive-in-map.md`:
   triggers for refreshing the dive-in-map.
 
 Preflight clean; 203 tests still green (no source changes).
+
+## [2026-05-09] fix | Reduce daemon prompt duplication and record runner ergonomics review
+
+Reviewed a live daemon-launched Codex task to measure how much context
+the agent had to recover before doing useful work. The kb index, recent
+log, run context file, and repo dive-in map were enough to orient without
+reading raw `.brr/` runtime logs, but the generated prompt repeated the
+current Telegram event as recent conversation, original event body, and a
+trailing `Task:` block.
+
+Fixed the prompt shape: daemon prompts now filter records for the
+in-flight event/task out of `Recent in this conversation`, and
+`build_daemon_prompt` suppresses a duplicate `Task:` block when it is
+identical to the original event body. Updated tests for the cleaner
+contract.
+
+Also fixed stale bundled docs that still described removed per-task kb
+log files and direct response-file writes (`active-task.md`,
+`execution-map.md`, `brr-internals.md`). Recorded the broader review in
+[`research-runner-context-ergonomics-2026-05-09.md`](research-runner-context-ergonomics-2026-05-09.md):
+context recovery mostly works, extra MCP was not needed, but the live
+Docker environment started without `rg`, Python, and pytest, so brr
+self-development needs either worktree/host execution or a
+project-layered Docker image before tests are ergonomic.
+
+While verifying the new kb page, a manual `kb_preflight.scan(Path("."))`
+call exposed a false-positive path bug: relative repo roots made every
+indexed page look missing because link targets were resolved absolute
+but `kb_dir` stayed relative. `scan` now resolves `repo_root` up front
+and has a regression test for relative roots.

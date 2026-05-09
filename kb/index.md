@@ -102,6 +102,11 @@ dive-in map) and are stable until something contradicts them.
 
 ## Research
 
+- [Daemon runner context ergonomics, 2026-05-09](research-runner-context-ergonomics-2026-05-09.md) —
+  point-in-time review of a live brr daemon run: how much context the
+  agent had to read, which prompt/runtime surfaces helped, where the
+  Task Context Bundle was noisy, stale bundled-doc contradictions, and
+  Docker image tooling gaps for brr self-work.
 - [brr vs gh-aw](research-brr-vs-gh-aw.md) — deep comparison with
   GitHub Agentic Workflows: substrate / transport / durability /
   security / fleet axes, market fit for the remote-controlled

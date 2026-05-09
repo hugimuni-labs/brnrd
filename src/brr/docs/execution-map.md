@@ -8,7 +8,7 @@ per-repo by dropping a file at `.brr/docs/execution-map.md`.
 ## Pipeline
 
 ```
-event (inbox) → task (persisted) → context file → run env → response → traces/review
+event (inbox) → task (persisted) → context file → run env → response → kb preflight → finalize
 ```
 
 ### 1. Event arrives
@@ -96,11 +96,15 @@ unless debug mode keeps it for inspection.
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
 | Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Yes (debug mode)                    |
-| Reviews       | `.brr/reviews/<event-id>.md`                | Yes                                 |
+| Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
 | Worktrees     | `.brr/worktrees/<task-id>/`                 | Removed after merge (kept in debug) |
 | Gate state    | `.brr/gates/<gate>.json`                    | Yes                                 |
 | Config        | `.brr/config`                               | Yes                                 |
-| Per-task logs | `kb/log-<task-id>.md` (in worktree)         | Merged into `kb/log.md`             |
+
+There are no per-task kb log files. Durable project knowledge goes in
+`kb/` only when the task produced material worth preserving; `kb/log.md`
+is the curated chronological narrative, not a mandatory completion
+receipt.
 
 ## Cross-linking
 

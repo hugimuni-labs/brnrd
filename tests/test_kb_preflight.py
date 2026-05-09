@@ -25,6 +25,18 @@ def test_scan_returns_empty_for_consistent_kb(tmp_path):
     assert kb_preflight.scan(tmp_path) == []
 
 
+def test_scan_accepts_relative_repo_root(tmp_path, monkeypatch):
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n"
+        "- [Subject](decision-foo.md) — desc\n"
+    ))
+    _write(tmp_path / "kb" / "decision-foo.md", "# Foo\n")
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert kb_preflight.scan(Path(".")) == []
+
+
 def test_scan_flags_pages_missing_from_index(tmp_path):
     _write(tmp_path / "kb" / "index.md", "# Index\n\n(no entries)\n")
     _write(tmp_path / "kb" / "decision-foo.md", "# Foo\n")

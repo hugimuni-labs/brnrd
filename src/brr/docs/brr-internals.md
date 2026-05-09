@@ -4,9 +4,9 @@ Orientation for an agent running under brr. This document ships with
 the `brr` tool itself — it is not project-specific.
 
 If you (the agent) are running and something about the environment is
-confusing (unfamiliar folders, unexpected metadata in your prompt, a
-per-task log file), consult the generated run context file before
-guessing.
+confusing (unfamiliar folders, unexpected metadata in your prompt,
+runtime paths you need to re-check), consult the generated run context
+file before guessing.
 
 ## You might be running under brr
 
@@ -43,7 +43,7 @@ gitignored; do not commit its contents.
 | `runs/`      | Generated per-task context files for daemon runner invocations     |
 | `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
 | `traces/`    | Prompt + stdout + meta for every runner invocation (debug mode)    |
-| `reviews/`   | Self-review notes the agent writes about its own runs              |
+| `reviews/`   | Reserved for explicit review artifacts; default tasks do not write here |
 | `worktrees/` | Isolated git worktrees for concurrent tasks                        |
 | `gates/`     | Per-gate auth/state JSON                                           |
 | `prompts/`   | Legacy per-repo prompt overrides                                   |

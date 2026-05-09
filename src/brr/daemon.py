@@ -255,7 +255,11 @@ def _run_worker(
         )
 
     recent_conversation = (
-        conversations.read_recent(brr_dir, conv_key, limit=10)
+        _recent_conversation_for_prompt(
+            conversations.read_recent(brr_dir, conv_key, limit=20),
+            event_id=eid,
+            task_id=task.id,
+        )
         if conv_key else []
     )
 
@@ -457,6 +461,23 @@ def _emit_new_containers(
                 "container": cid,
             },
         ))
+
+
+def _recent_conversation_for_prompt(
+    records: list[dict],
+    *,
+    event_id: str,
+    task_id: str,
+) -> list[dict]:
+    """Return prior conversation records, excluding the in-flight task."""
+    out: list[dict] = []
+    for record in records:
+        if record.get("event_id") == event_id:
+            continue
+        if record.get("task_id") == task_id:
+            continue
+        out.append(record)
+    return out
 
 
 def _emit_preserved_containers(
