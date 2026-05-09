@@ -134,6 +134,22 @@ class TestPromptBuilding:
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
 
+    def test_daemon_prompt_does_not_repeat_identical_event_body(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        body = "long telegram request"
+        prompt = build_daemon_prompt(
+            body, "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-123",
+            event_body=body,
+        )
+
+        assert "Original event body" in prompt
+        assert body in prompt
+        assert f"Task: {body}" not in prompt
+
     def test_daemon_prompt_without_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)

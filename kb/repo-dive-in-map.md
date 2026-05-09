@@ -1017,6 +1017,14 @@ Strategic decks:
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
   roadmap (env axis active; overlays / brnrd paused).
 
+Research:
+
+- [Daemon runner context ergonomics](research-runner-context-ergonomics-2026-05-09.md) —
+  point-in-time review of a live daemon run's prompt/context shape,
+  stale bundled-doc contradictions, and Docker tooling gaps.
+- [brr vs gh-aw](research-brr-vs-gh-aw.md) — deep comparison with
+  GitHub Agentic Workflows.
+
 Bundled docs to read alongside the source:
 
 - [Conversations bundled doc](../src/brr/docs/conversations.md)
