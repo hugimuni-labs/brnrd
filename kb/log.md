@@ -890,3 +890,30 @@ Outstanding: Phase 5 — when the next substantial work touches Envs /
 Gates / Daemon / Conversations / kb-itself, that work earns the
 subject hub page. (This commit is the substantial kb-itself work, so
 a kb subject hub follows next.)
+
+## [2026-05-09] implement | Phase 5: first subject hub — `subject-kb.md`
+
+The kb-shape arc (phases 1-4) produced enough material on the kb
+pattern that "what do we know about the kb?" had no single answer
+page. The schema lives in `AGENTS.md`; the *why* lives in
+`decision-kb-shape.md`; the framing reference is `llm-wiki.md`; the
+deterministic backbone is `kb_preflight.py`; the slashing/lifecycle
+norms are scattered across log entries. Synthesising those into one
+hub page now satisfies both halves of the subject-genesis rule (real
+density + no good place for the synthesis except a new page).
+
+Wrote `kb/subject-kb.md`. Structure: what the kb is for, the four
+memory layers as a single table, the graph topology with index
+reachability and lifecycle markers, when to create a subject hub
+(with this page as the worked example), cross-tool maintenance,
+slashing economics, what was rejected (the `brr kb` CLI subnamespace,
+auto-generated subject pages, vector indexing, wikilinks, per-task
+log files), and a priority-ordered "read these next" pointer list.
+
+Linked from `kb/index.md` under "Knowledge base itself" as the hub
+entry; `decision-kb-shape.md` now points at the synthesis hub from
+its status line so the decision page (point-in-time *why*) and the
+subject hub (evolving *what we know*) sit in their proper roles.
+
+Preflight clean; 203 tests still green (no source changes). The
+five-phase kb-shape execution plan is now fully landed.

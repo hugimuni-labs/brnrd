@@ -87,6 +87,11 @@ dive-in map) and are stable until something contradicts them.
 
 ## Knowledge base itself
 
+- **Hub: [the kb itself](subject-kb.md)** — synthesis of the kb
+  pattern in brr today: four memory layers, graph topology with
+  index reachability and lifecycle markers, when to create a subject
+  hub, cross-tool maintenance via AGENTS.md schema + brr's
+  preflight + LLM redundancy pass, what was tried and rejected.
 - [kb shape decision](decision-kb-shape.md) — four memory layers
   (raw / episodic-thin / semantic+decisional / schema), kb as a graph
   with explicit linking discipline, lifecycle markers, the subject
