@@ -39,7 +39,7 @@ def _patch_runner(monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
-        daemon.runner, "build_daemon_prompt",
+        daemon.prompts, "build_daemon_prompt",
         lambda task, eid, rp, _root, **kw: f"RUN {eid}: {task} -> {rp}",
     )
     monkeypatch.setattr(daemon, "_kb_changed", lambda _: False)

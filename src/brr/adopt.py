@@ -21,8 +21,9 @@ import tempfile
 from pathlib import Path
 
 from . import config as conf
-from . import runner
 from . import gitops
+from . import prompts
+from . import runner
 
 
 _DEFAULT_DOCKER_IMAGE = "brr-runner:local"
@@ -270,7 +271,7 @@ def _setup_brr_dir(repo_root: Path) -> None:
 
 def _run_setup(runner_name: str, repo_root: Path) -> None:
     """Call the runner with the init prompt to create AGENTS.md + kb/."""
-    prompt = runner.build_init_prompt(repo_root)
+    prompt = prompts.build_init_prompt(repo_root)
     cfg = conf.load_config(repo_root)
     invocation = runner.RunnerInvocation(
         kind="init",

@@ -25,6 +25,7 @@ from . import config as conf
 from . import conversations
 from . import envs
 from . import gitops
+from . import prompts
 from . import protocol
 from . import run_context
 from . import runner
@@ -277,7 +278,7 @@ def _run_worker(
     seen_containers: set[str] = set()
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
-            prompt = runner.build_daemon_prompt(
+            prompt = prompts.build_daemon_prompt(
                 task.body, eid, str(env_ctx.response_path_env), run_root,
                 task_id=task.id,
                 branch_name=branch_name,
@@ -288,7 +289,7 @@ def _run_worker(
                 event_body=event_body_for_prompt,
             )
         else:
-            prompt = runner.build_daemon_prompt(
+            prompt = prompts.build_daemon_prompt(
                 f"Previous attempt printed no final reply on stdout. "
                 f"Print your full response as the final stdout message.\n\n"
                 f"Original task: {task.body}",
@@ -544,7 +545,7 @@ def _maybe_kb_maintenance(
     if policy == "auto" and not _kb_changed(run_root):
         return None
 
-    prompt = runner.build_kb_maintenance_prompt(run_root)
+    prompt = prompts.build_kb_maintenance_prompt(run_root)
     if not prompt:
         return None
 
