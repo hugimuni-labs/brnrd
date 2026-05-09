@@ -998,3 +998,22 @@ call exposed a false-positive path bug: relative repo roots made every
 indexed page look missing because link targets were resolved absolute
 but `kb_dir` stayed relative. `scan` now resolves `repo_root` up front
 and has a regression test for relative roots.
+
+## [2026-05-09] design | Developer reload for the daemon
+
+Designed a brr self-development reload path without adding a broad
+user-facing restart feature. The recommended shape is an editable
+install (`pip install -e ".[dev]"`) plus an opt-in `brr up --dev-reload`
+mode that watches brr's package files and re-execs the foreground daemon
+only at safe boundaries: idle scans or after a task has delivered its
+response, finalized, run kb maintenance, and pushed. Rejected a public
+`brr restart`, chat-triggered restart, `.brr/` control marker, in-process
+`importlib.reload()`, and immediate supervisor work as the wrong layer
+for this development-only pain.
+
+The work also earned the daemon subject hub,
+[`subject-daemon.md`](subject-daemon.md), which synthesises the current
+foreground process model, gate/file-protocol boundary, serial worker
+lifecycle, local process-control contract, and deferred supervisor /
+cancellation / concurrency directions. Detailed reload design lives in
+[`design-daemon-dev-reload.md`](design-daemon-dev-reload.md).
