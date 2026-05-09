@@ -70,6 +70,7 @@ def scan(repo_root: Path) -> list[Finding]:
     ``broken-link`` sorted by source then target) so the formatted
     output is reproducible.
     """
+    repo_root = repo_root.resolve()
     kb_dir = repo_root / "kb"
     if not kb_dir.is_dir():
         return []
