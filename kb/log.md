@@ -1017,3 +1017,21 @@ foreground process model, gate/file-protocol boundary, serial worker
 lifecycle, local process-control contract, and deferred supervisor /
 cancellation / concurrency directions. Detailed reload design lives in
 [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md).
+
+## [2026-05-09] design | Explicit landing branch for daemon-produced commits
+
+Recorded the branch-policy issue exposed by kb-writing design tasks:
+the current daemon uses the host checkout's current `HEAD` as both the
+worktree seed and the auto-land target, so legitimate remote kb commits
+can land on whatever branch the operator happened to have checked out.
+The kb commit is not the bug; the ambient landing target is.
+
+Added [`subject-tasks-branching.md`](subject-tasks-branching.md) as the
+tasks/branching hub and
+[`design-daemon-landing-branch.md`](design-daemon-landing-branch.md) as
+the active design. The recommended direction is an explicit
+`landing_branch=` policy: task branches sprout from that ref,
+finalization fast-forwards that target rather than blindly merging into
+the current checkout, and push logic follows the landing branch's
+upstream. This keeps agent-owned runtime branching and durable kb
+commits while removing accidental dependence on host checkout state.

@@ -122,8 +122,12 @@ Read these in order when changing daemon behavior:
    for the user-facing pipeline contract.
 4. [`design-env-interface.md`](design-env-interface.md) for environment
    backend responsibilities.
-5. [`decision-drop-streams.md`](decision-drop-streams.md) and
+5. [`subject-tasks-branching.md`](subject-tasks-branching.md) and
+   [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
+   for task construction, branch landing, and the active fix for
+   ambient host-checkout coupling.
+6. [`decision-drop-streams.md`](decision-drop-streams.md) and
    [`decision-remove-triage.md`](decision-remove-triage.md) for the
    recent simplifications that keep daemon context lean.
-6. [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md) for the
+7. [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md) for the
    current development reload proposal.

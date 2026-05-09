@@ -139,6 +139,11 @@ triage frontmatter), and its own approval flow. The triage abstraction
 would not have been the right shape for it; we're not preserving it
 as a placeholder.
 
+A later follow-up, [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md),
+keeps the "agent owns branching at runtime" decision but removes the
+daemon's ambient dependency on whichever branch the host checkout has
+selected when a remote task lands commits.
+
 ## Lineage
 
 - 2026-05-06 chat: live Telegram triage failure (`evt-1778094865223203321-axoa`)

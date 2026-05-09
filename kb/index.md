@@ -53,6 +53,15 @@ dive-in map) and are stable until something contradicts them.
 
 ## Tasks & branching
 
+- **Hub: [tasks and branching](subject-tasks-branching.md)** —
+  synthesis of mechanical task construction, environment resolution,
+  agent-owned runtime branching, worktree finalization, and the active
+  landing-branch design that removes ambient host checkout state from
+  daemon-produced commits.
+- [Daemon landing branch design](design-daemon-landing-branch.md) —
+  *active*. Make the branch that receives daemon-produced commits an
+  explicit operator choice rather than whatever branch the host checkout
+  happens to be on when a remote task runs.
 - [Branch Modes Plan](plan-branch-modes.md) — *shipped, with
   revisions*. Branch and env are task properties, the agent owns
   branching at runtime. Triage and `needs_context` were reversed —
