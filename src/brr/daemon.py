@@ -25,6 +25,7 @@ from . import config as conf
 from . import conversations
 from . import envs
 from . import gitops
+from . import kb_preflight
 from . import prompts
 from . import protocol
 from . import run_context
@@ -538,18 +539,38 @@ def _maybe_kb_maintenance(
     *,
     trace: bool = False,
 ) -> str | None:
-    """Run KB maintenance if configured and KB was modified."""
+    """Run kb maintenance with deterministic preflight + LLM redundancy pass.
+
+    The preflight is cheap and runs every time. When kb is unchanged
+    *and* the preflight is clean, the LLM pass is skipped — kb
+    maintenance becomes a true safety net rather than a tax on every
+    task. When findings exist or kb has been touched, the LLM pass
+    runs with the preflight findings injected into the prompt.
+    """
     policy = str(cfg.get("kb_maintenance", "auto")).strip().lower()
     if policy == "never":
         return None
-    if policy == "auto" and not _kb_changed(run_root):
+
+    findings = kb_preflight.scan(run_root)
+    kb_changed = _kb_changed(run_root)
+    if policy == "auto" and not kb_changed and not findings:
         return None
 
-    prompt = prompts.build_kb_maintenance_prompt(run_root)
-    if not prompt:
+    base_prompt = prompts.build_kb_maintenance_prompt(run_root)
+    if not base_prompt:
         return None
 
-    print("[brr] running kb maintenance...")
+    findings_block = kb_preflight.format_findings(findings)
+    prompt = (
+        f"{base_prompt}\n\n{findings_block}".rstrip() + "\n"
+        if findings_block
+        else base_prompt
+    )
+
+    if findings:
+        print(f"[brr] running kb maintenance ({len(findings)} preflight finding(s))...")
+    else:
+        print("[brr] running kb maintenance (kb changed; preflight clean)...")
     result = runner.invoke_runner(
         runner_name,
         runner.RunnerInvocation(

@@ -106,50 +106,72 @@ never in `.brr/`. The split is:
 - `src/brr/docs/` (bundled) + `.brr/docs/` (override) — tool
   documentation, same across all repos unless a user overrides.
 
-## KB maintenance trigger
+## KB maintenance: preflight + redundancy pass
 
-After every successful task, the daemon decides whether to run a
-lightweight KB consistency pass (a second, short runner invocation
-with `prompts/kb-maintenance.md`). The decision logic is:
+After every successful task, the daemon runs a deterministic kb
+consistency scan (`brr.kb_preflight.scan(run_root)`) over `kb/` and
+*may* follow it with a short LLM redundancy pass invoked with
+`prompts/kb-maintenance.md`. The decision logic is:
 
 ```
 policy = cfg["kb_maintenance"]  # default: "auto"
 
-if policy == "never":   skip
-if policy == "always":  run
-if policy == "auto":    run only if this task actually touched kb/
+if policy == "never":   skip both preflight and LLM pass
+findings = kb_preflight.scan(run_root)
+kb_changed = git diff / ls-files in kb/
+
+if policy == "auto" and not kb_changed and not findings:
+    skip the LLM pass — the safety net is clean
+else:
+    inject findings into the maintenance prompt and run the LLM pass
 ```
 
-The "did this task touch kb/" check is a git diff in the execution
-root (the worktree for worktree tasks, or the main checkout for host
-tasks):
+The preflight is cheap and structural — it only flags things a
+deterministic scanner can be confident about:
+
+- `missing-from-index` — a kb page exists on disk but isn't linked
+  from `kb/index.md`.
+- `stale-index-entry` — `kb/index.md` links to a path that doesn't
+  exist on disk.
+- `broken-link` — any kb page (other than `log.md`) links relatively
+  to a path that doesn't exist.
+
+Lifecycle-marker drift, contradictions with the log, and other
+judgement calls are left to the LLM redundancy pass — they need
+synthesis the scanner can't do.
+
+### "Did this task touch kb/" check
 
 ```
-git diff --name-only -- kb/          # tracked-file changes
-git ls-files --others --exclude-standard -- kb/   # new untracked files
+git diff --name-only -- kb/                     # tracked-file changes
+git ls-files --others --exclude-standard -- kb/ # new untracked files
 ```
 
-If either output is non-empty, the KB was touched and maintenance
-runs. If the diff command fails (git missing, timeout) the check
-returns False and maintenance is skipped. It's best-effort — a
-failed maintenance pass is logged but never fails the parent task.
+If either output is non-empty, the kb was touched. If the git command
+fails (missing, timeout) the check returns False — the preflight
+findings still carry the maintenance pass on their own when needed.
 
-### Why this heuristic
+### Why preflight + redundancy
 
-Earlier drafts used task-body heuristics ("does the instruction look
-big?") that required guessing ahead of time. The git-diff check is
-post-hoc: it looks at what actually happened, not at what the agent
-was told to do. A one-line fix that happened to add a kb entry gets
-maintained; a big refactor that never touched kb/ doesn't pay the
-runner cost.
+Earlier drafts ran the LLM pass on every kb-touched task and skipped
+otherwise — a task-body heuristic. The preflight inverts the contract:
+deterministic checks are cheap enough to run every time, so they
+become the safety net that catches drift left by *previous* tasks too
+(say, a slashed page that another page still links to). The LLM pass
+is reserved for the synthesis-heavy work, with the concrete findings
+already in the prompt.
+
+A failed maintenance pass is logged but never fails the parent task.
 
 ### Configuring it
 
 In `.brr/config`:
 
-- `kb_maintenance=auto` (default) — run only when kb/ was modified.
-- `kb_maintenance=always` — run after every successful task.
-- `kb_maintenance=never` — never run the maintenance step.
+- `kb_maintenance=auto` (default) — preflight always; LLM pass only
+  when kb changed or the preflight has findings.
+- `kb_maintenance=always` — LLM pass after every successful task,
+  even with a clean kb and clean preflight.
+- `kb_maintenance=never` — skip both the preflight and the LLM pass.
 
 Set to `always` if you want stricter kb/ hygiene at the cost of one
 extra runner invocation per task. Set to `never` if you prefer to do

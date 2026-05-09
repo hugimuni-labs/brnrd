@@ -1,18 +1,18 @@
-You are a KB maintenance step. Your only job is to ensure the knowledge base
-is internally consistent after the preceding task. Do NOT perform or continue
+You are a kb consistency lint after the preceding task. Your only job
+is to keep the knowledge base coherent — do not perform or continue
 the original task.
 
-Check and fix:
+The universal rules live in **AGENTS.md → "Knowledge base shape"**:
+graph topology with `kb/index.md` as the entry point, lifecycle
+markers on plans/designs/decks, link discipline (every page reachable
+from the index), the log as curated narrative, and the subject
+genesis rule.
 
-1. **kb/index.md** — every page listed must exist on disk. Every `.md` file
-   in `kb/` (except `index.md` and `log.md`) should be listed. Add missing
-   entries, remove stale ones.
+A deterministic preflight already ran. If it produced findings, they
+are in the section below — address each one. If no findings section
+follows, do a brief redundancy pass: spot-check that recent kb
+changes from the preceding task respect those rules.
 
-2. **kb/log.md** — the preceding task should have a log entry. If it is
-   missing, add a brief one. Do not duplicate existing entries.
-
-3. **New pages** — if the task created new `.md` files in `kb/`, ensure
-   they are catalogued in `kb/index.md` with a one-line summary.
-
-If everything is already consistent, do nothing. Do not create commits —
-the orchestrator handles that.
+If everything is consistent and there's nothing to do, say so on
+stdout in one short line. Do not create commits — the orchestrator
+handles that.

@@ -67,13 +67,16 @@ with another event.
 If stdout is empty, the daemon retries up to `response_retries` times
 before failing the task.
 
-### 5. KB maintenance (optional)
+### 5. KB maintenance (preflight + optional LLM pass)
 
-If the task modified files in `kb/`, a lightweight maintenance step runs
-as a safety net to verify `kb/index.md` consistency and the graph
-invariants AGENTS.md describes. The primary maintenance contract lives
-in AGENTS.md; this hook is a redundancy pass. See `brr-internals.md`
-for the trigger logic.
+After a successful task, `brr.kb_preflight.scan` runs over `kb/` and
+returns structured findings (orphan pages, broken links, index
+drift). When findings exist or the task modified `kb/`, a short LLM
+redundancy pass runs with the findings injected into the prompt;
+otherwise the LLM pass is skipped. The primary maintenance contract
+lives in AGENTS.md (the universal kb shape rules every tool follows);
+this hook is the brr-side safety net. See `brr-internals.md` for the
+preflight check list and trigger logic.
 
 ### 6. Finalization
 
