@@ -29,6 +29,13 @@ dive-in map) and are stable until something contradicts them.
   understanding the repo file by file, with branch-neutral relative
   links, core entity cross-references, runtime invariants, and
   recommended reading paths.
+- **Hub: [daemon and process lifecycle](subject-daemon.md)** —
+  synthesis of the foreground `brr up` process, gate/file-protocol
+  boundary, serial worker lifecycle, local process control, and where
+  developer reload fits without becoming broad product UX.
+- [Developer daemon reload design](design-daemon-dev-reload.md) —
+  *active*. Opt-in brr self-development reload mode: editable install
+  plus quiescent re-exec between tasks when brr package files change.
 - [`AGENTS.md`](../AGENTS.md) — universal agent playbook (canonical
   copy lives at `src/brr/AGENTS.md`, symlinked here).
 

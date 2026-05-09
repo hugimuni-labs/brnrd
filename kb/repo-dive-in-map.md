@@ -984,6 +984,10 @@ Subject hub:
   cross-tool maintenance, what was rejected). The first hub page
   in brr's kb; expect more to accrete as substantial subject-level
   work lands.
+- [Subject: daemon and process lifecycle](subject-daemon.md) —
+  synthesis of the foreground `brr up` process, gate/file-protocol
+  boundary, serial worker lifecycle, local process control, and the
+  development reload direction.
 
 Decisions ("drop the noisy abstraction" trio in chronological order):
 
@@ -1008,6 +1012,9 @@ Other decisions:
 
 Designs and notes still open:
 
+- [Developer daemon reload design](design-daemon-dev-reload.md) —
+  active (editable install plus opt-in quiescent re-exec for brr
+  self-development).
 - [Env Interface design](design-env-interface.md) — in flight
   (3/5 envs shipped; durability contract partial).
 - [Notes: pondering fleet](notes-pondering-fleet.md) — paused.
@@ -1044,6 +1051,10 @@ Use these heuristics while reading:
 - If a file talks about lifecycle packets or `render_update`, jump to [updates.py](../src/brr/updates.py).
 - If a file talks about live progress phases, attempt counts, or rendering a per-task card, jump to [run_progress.py](../src/brr/run_progress.py).
 - If a file talks about prompt assembly (Task Context Bundle, `kb/log.md` injection, AGENTS.md bundling), jump to [prompts.py](../src/brr/prompts.py). If it talks about subprocess execution, runner detection, or trace persistence, jump to [runner.py](../src/brr/runner.py). The two used to be one file; they were split in phase 3a of the kb-shape arc.
+- If a file talks about daemon process lifecycle, PID files,
+  drain-and-stop behavior, or development reload, start with
+  [subject-daemon.md](subject-daemon.md) and then jump to
+  [daemon.py](../src/brr/daemon.py).
 - If a file talks about kb consistency, orphan pages, broken cross-links, or "should this kb-maintenance pass run?", jump to [kb_preflight.py](../src/brr/kb_preflight.py) and `_maybe_kb_maintenance` in [daemon.py](../src/brr/daemon.py). The maintenance contract itself lives in [AGENTS.md → "Knowledge base shape"](../src/brr/AGENTS.md), not in the brr daemon.
 - If a file talks about cwd, worktrees, Docker, response path translation, or runner credential wiring (env passthrough, login-dir mounts, git safe.directory), jump to [envs/__init__.py](../src/brr/envs/__init__.py).
 - If a file talks about transport, auth, polling, or delivery, jump to [gates](../src/brr/gates/).
