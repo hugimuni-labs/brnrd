@@ -14,16 +14,35 @@ When this guide says "source", read the linked file first, then read the linked
 tests immediately after. The tests are often the most compact description of
 the intended behavior.
 
-Last validated against `ux-imporvements` after Phase 2 of the
-[kb-shape decision](decision-kb-shape.md): `AGENTS.md` moved into the
-package at `src/brr/AGENTS.md` (symlinked at the root), per-task
-`kb/log-<task-id>.md` plumbing removed end-to-end, the delivery
-contract was sharpened to make stdout the chat reply with mandatory
-commits for any file writes, and the Telegram/Slack progress-card
-rendering deduplicates against the last-rendered text. Phase 3a then
-split `runner.py` — the prompt-assembly half lives in
-[`src/brr/prompts.py`](../src/brr/prompts.py); subprocess plumbing
-stays in [`runner.py`](../src/brr/runner.py).
+Last validated against `ux-imporvements` after the kb-shape arc
+([decision-kb-shape.md](decision-kb-shape.md)) landed end-to-end:
+
+- **Phase 2** — `AGENTS.md` moved into the package at
+  [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) (symlinked at the
+  repo root) and rewritten as the universal schema every tool reads;
+  per-task `kb/log-<task-id>.md` plumbing removed end-to-end; the
+  delivery contract sharpened so stdout is the chat reply with
+  mandatory commits for any file writes; Telegram/Slack progress
+  cards deduplicate against the last-rendered text. Adopter `brr
+  init -i` learned to detect Docker, prompt for an image, and offer
+  to build the bundled `Dockerfile`.
+- **Phase 3a** — split `runner.py`. Prompt assembly (Task Context
+  Bundle, conversation injection, AGENTS.md bundling) lives in
+  [`src/brr/prompts.py`](../src/brr/prompts.py); subprocess plumbing
+  stays in [`runner.py`](../src/brr/runner.py).
+- **Phase 3b** — one-time kb cleanup: nine stale pages slashed,
+  surviving plan/design/deck pages got lifecycle markers
+  (`shipped` / `in flight` / `blocked` / `paused` / `roadmap`),
+  decisions cross-link as siblings, `kb/index.md` reorganised by
+  subject area instead of artifact type.
+- **Phase 4** — kb-maintenance becomes a deterministic preflight
+  ([`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py)) plus a
+  thin LLM redundancy pass. Skip-fast: when both the preflight is
+  clean and `kb/` is unchanged, the LLM pass is skipped entirely.
+- **Phase 5** — first subject hub written:
+  [`subject-kb.md`](subject-kb.md) synthesises the kb pattern,
+  earned by the kb-shape arc itself being the substantial
+  kb-itself work.
 
 Earlier still-relevant changes carried forward: the environment-policy
 ownership rework, the 2026-05-05 streams-to-conversations refactor
@@ -48,7 +67,7 @@ These are the most important current-shape details to carry while reading:
 - The agent owns branching at runtime. Worktree/Docker tasks always start on a fresh `brr/<task-id>` branch sprouted from HEAD; commits there fast-forward back, switching to a new branch with `git switch -c` preserves it.
 - Responses are plain text — no frontmatter contract on `.brr/responses/`. If the agent can't complete the task, it explains why and the operator follows up in-thread.
 - Live run UX is remote-first: gates render a per-task progress card from `UpdatePacket`s via the `run_progress` projection. Local `status` is now a troubleshooting view that shares the same projection.
-- The stewardship section in [AGENTS.md](../AGENTS.md) is part of the architecture: future changes should improve the underlying design instead of layering conditions onto weak abstractions.
+- The [stewardship section in AGENTS.md](../AGENTS.md) is part of the architecture: treat the request as input, not as instructions; reason from first principles before changing behaviour; and **surface contradictions** between the request and the codebase rather than silently following either side. Functional, not aspirational — failing to bubble up a contradiction is a real bug in the workflow, not a stylistic miss.
 
 ## One-sentence model
 
@@ -99,7 +118,7 @@ Keep in mind:
 - `python -m brr` delegates to the same CLI.
 - The public CLI is intentionally small: `init`, `run`, `auth`, `bind`, `up`, `down`.
 - Rich status/inspection helpers exist in [status.py](../src/brr/status.py), but the current CLI tests assert that older public diagnostic commands are not registered.
-- [AGENTS.md](../AGENTS.md) now has explicit stewardship guidance: reason from the project's long-term health before changing behavior or design.
+- [AGENTS.md](../AGENTS.md) is the **universal schema** every tool follows (brr daemon, Cursor, Codex CLI, Claude Code) — its contract on commits, kb shape, lifecycle markers, and delivery is shared. The stewardship section names a workflow rule with teeth: surface contradictions between the request and the codebase, don't blindly follow either.
 
 Tests:
 
@@ -168,11 +187,13 @@ and how the chosen environment shapes that runner invocation.
 
 Read:
 
-- [`src/brr/runner.py`](../src/brr/runner.py)
+- [`src/brr/runner.py`](../src/brr/runner.py) — subprocess plumbing only (since phase 3a)
+- [`src/brr/prompts.py`](../src/brr/prompts.py) — prompt assembly, Task Context Bundle, conversation injection
 - [`src/brr/envs/__init__.py`](../src/brr/envs/__init__.py)
 - [`src/brr/prompts/runners.md`](../src/brr/prompts/runners.md)
 - [`src/brr/prompts/run.md`](../src/brr/prompts/run.md)
-- [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
+- [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md) — thin redundancy pass; pointer at AGENTS.md → "Knowledge base shape"
+- [`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py) — deterministic kb consistency scanner that feeds the maintenance prompt
 
 Keep in mind:
 
@@ -189,7 +210,9 @@ Keep in mind:
 Tests:
 
 - [runner tests](../tests/test_runner.py)
+- [prompt tests](../tests/test_prompts.py)
 - [env tests](../tests/test_envs.py)
+- [kb-preflight tests](../tests/test_kb_preflight.py)
 
 ### Ring 4: orchestration spine
 
@@ -210,10 +233,10 @@ Read `_run_worker()` in passes rather than all at once:
 4. Resolve the environment policy into a concrete backend.
 5. Prepare the environment (worktree creation included); emit `env_prepared`.
 6. Write the run context file (with the recent conversation block).
-7. Build the daemon prompt (also threading the recent conversation block).
+7. Build the daemon prompt via [`prompts.build_daemon_prompt`](../src/brr/prompts.py) — preamble, recent conversation block, Task Context Bundle, delivery contract.
 8. Invoke the runner, with retries when the runner prints no final reply on stdout.
 9. Capture the plain-text response file (written from stdout).
-10. Optionally run KB maintenance.
+10. Run [`kb_preflight.scan`](../src/brr/kb_preflight.py); if it has findings or `kb/` was touched, run the kb-maintenance LLM pass with findings injected. Otherwise skip — the pass is now a true safety net.
 11. Finalize the environment — `WorktreeEnv.finalize` reads the worktree's git state to decide between fast-forward landing and branch preservation.
 12. Update task status and append matching update packets to the conversation log.
 
@@ -513,8 +536,9 @@ Important fields:
 - `response_path_env`
 - `branch_name`
 - `base_branch`
-- `log_file`
 - `env_state`
+
+Note: there is no `log_file` field anymore — per-task `kb/log-<task-id>.md` plumbing was removed in phase 2 of the kb-shape arc. The per-task narrative now lands as a curated entry in `kb/log.md` when the session was substantial enough to record.
 
 Read with:
 
@@ -655,27 +679,67 @@ The key distinction:
 
 ### Runner and prompts
 
+The runner / prompts boundary was split in phase 3a of the kb-shape arc.
+They were one file before; the split keeps subprocess plumbing
+testable in isolation from prompt assembly.
+
 - [`runner.py`](../src/brr/runner.py) owns:
   - runner profile detection
   - command construction
   - subprocess execution
   - trace writing
-  - prompt construction
-  - recent KB log injection
+  - the `TaskRunner` worker thread for serial `brr run` execution
 
-It is called from:
+- [`prompts.py`](../src/brr/prompts.py) owns:
+  - reading bundled prompt templates (with `.brr/prompts/<name>.md` overrides)
+  - reading [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) and threading
+    it into init prompts
+  - assembling the **Task Context Bundle** (task body, env, branch,
+    delivery contract, recent conversation block)
+  - rendering recent `kb/log.md` entries into a conversation
+    context block
+  - exposing `build_init_prompt`, `build_run_prompt`,
+    `build_daemon_prompt`, `build_kb_maintenance_prompt`
 
-- [`adopt.py`](../src/brr/adopt.py)
-- [`daemon.py`](../src/brr/daemon.py)
-- [`envs/__init__.py`](../src/brr/envs/__init__.py)
-- [`cli.py`](../src/brr/cli.py)
+- [`kb_preflight.py`](../src/brr/kb_preflight.py) owns the
+  deterministic kb consistency scan that feeds the kb-maintenance
+  prompt: orphan detection, stale index entries, broken cross-links.
+  Synthesis-heavy checks (lifecycle drift, contradictions with the
+  log) are deferred to the LLM redundancy pass.
 
-Prompt files to read with it:
+`runner.py` is called from:
 
-- [`setup.md`](../src/brr/prompts/setup.md) — adopter setup; reads brr's own [`AGENTS.md`](../src/brr/AGENTS.md) as the model
-- [`run.md`](../src/brr/prompts/run.md)
-- [`runners.md`](../src/brr/prompts/runners.md)
-- [`kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
+- [`adopt.py`](../src/brr/adopt.py) for the `brr init` setup invocation
+- [`daemon.py`](../src/brr/daemon.py) for execution and the
+  kb-maintenance LLM pass
+- [`envs/__init__.py`](../src/brr/envs/__init__.py) for
+  environment-specific invocation
+- [`cli.py`](../src/brr/cli.py) for `brr run`
+
+`prompts.py` is called from:
+
+- [`adopt.py`](../src/brr/adopt.py) → `build_init_prompt`
+- [`daemon.py`](../src/brr/daemon.py) → `build_daemon_prompt`,
+  `build_kb_maintenance_prompt`
+- [`runner.py`](../src/brr/runner.py) → `build_run_prompt` (for
+  `brr run`)
+
+`kb_preflight.py` is called from:
+
+- [`daemon.py`](../src/brr/daemon.py) inside `_maybe_kb_maintenance`,
+  before deciding whether to invoke the LLM pass
+
+Prompt files to read alongside the modules:
+
+- [`setup.md`](../src/brr/prompts/setup.md) — adopter setup; reads
+  brr's own [`AGENTS.md`](../src/brr/AGENTS.md) as the model.
+- [`run.md`](../src/brr/prompts/run.md) — daemon-originated task
+  prompt; carries the delivery contract.
+- [`runners.md`](../src/brr/prompts/runners.md) — runner profile
+  registry.
+- [`kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md) —
+  thin redundancy pass; points at AGENTS.md → "Knowledge base shape"
+  for the rules.
 
 ### Execution environments
 
@@ -694,7 +758,6 @@ Host execution:
 Worktree execution:
 
 - creates `.brr/worktrees/<task-id>` on a fresh `brr/<task-id>` branch sprouted from HEAD
-- writes per-task log instructions through `RunContext.log_file`
 - finalize reads the worktree's git state: fast-forward back if the agent committed on the original branch, preserve otherwise
 - preserves worktree state in debug mode or non-done outcomes
 
@@ -731,7 +794,7 @@ nearly every core module because it owns the lifecycle:
 - env prepare/invoke/finalize
 - attempt loop with retries and lifecycle packets
 - response validation
-- optional KB maintenance
+- `kb_preflight.scan` plus a conditional kb-maintenance LLM pass (see the kb-consistency invariant below)
 - git push attempt with `push_started` / `push_done` packets
 
 The worker emits the full run-progress packet stream (`env_prepared`,
@@ -846,6 +909,29 @@ by `task_id`. The source of truth is the per-conversation ndjson. Rendering
 UX (gates, local status) should always go through `run_progress`; introducing
 parallel ad-hoc derivations across modules is the path to drift.
 
+### KB consistency is preflight + redundancy, not a primary gate
+
+After every successful task, `kb_preflight.scan(run_root)` walks `kb/`
+and returns structured findings — `missing-from-index`,
+`stale-index-entry`, `broken-link`. The findings drive whether the
+LLM kb-maintenance pass runs at all: if both the preflight is clean
+*and* `kb/` is unchanged, the pass is skipped. When findings exist
+or the task touched `kb/`, the maintenance prompt runs with findings
+injected.
+
+The LLM pass is deliberately thin — it points at AGENTS.md →
+"Knowledge base shape" for the rules and either addresses the
+findings or does a brief redundancy check. The primary maintenance
+contract lives in AGENTS.md so external tools (Cursor, Codex CLI,
+Claude Code) follow the same rules without needing brr's preflight.
+
+When adding a new structural kb invariant (a new lifecycle marker,
+a new naming convention, a new graph rule), prefer extending
+`kb_preflight.scan` over expanding the LLM prompt — deterministic
+checks are cheap, reproducible, and run on every task. Reserve the
+LLM pass for synthesis-heavy judgement (lifecycle drift,
+contradictions with the log, cross-subject coherence).
+
 ### Local status is troubleshooting
 
 The remote gate is the primary surface for run progress. `status.py` exists
@@ -862,38 +948,82 @@ If source-first reading feels too abstract, run the test path instead:
 3. [conversation tests](../tests/test_conversations.py)
 4. [run-progress tests](../tests/test_run_progress.py)
 5. [runner tests](../tests/test_runner.py)
-6. [git/worktree tests](../tests/test_gitops.py)
-7. [env tests](../tests/test_envs.py)
-8. [daemon tests](../tests/test_daemon.py)
-9. [daemon-conversation tests](../tests/test_daemon_conversations.py)
-10. [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
-11. [gate tests](../tests/test_telegram_gate.py)
-12. [gate setup tests](../tests/test_gate_setup.py)
-13. [Telegram render-update tests](../tests/test_telegram_render_update.py)
-14. [Slack render-update tests](../tests/test_slack_render_update.py)
-15. [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
-16. [adopt tests](../tests/test_adopt.py)
-17. [integration tests](../tests/test_integration.py)
-18. [CLI tests](../tests/test_cli.py)
-19. [docs tests](../tests/test_docs.py)
+6. [prompt tests](../tests/test_prompts.py)
+7. [git/worktree tests](../tests/test_gitops.py)
+8. [env tests](../tests/test_envs.py)
+9. [kb-preflight tests](../tests/test_kb_preflight.py)
+10. [daemon tests](../tests/test_daemon.py)
+11. [daemon-conversation tests](../tests/test_daemon_conversations.py)
+12. [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
+13. [gate tests](../tests/test_telegram_gate.py)
+14. [gate setup tests](../tests/test_gate_setup.py)
+15. [Telegram render-update tests](../tests/test_telegram_render_update.py)
+16. [Slack render-update tests](../tests/test_slack_render_update.py)
+17. [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
+18. [adopt tests](../tests/test_adopt.py)
+19. [integration tests](../tests/test_integration.py)
+20. [CLI tests](../tests/test_cli.py)
+21. [docs tests](../tests/test_docs.py)
 
 This order mirrors dependency growth: file protocol, durable state, the
-run-progress projection, execution, orchestration, adapters (including their
-live-progress hooks), troubleshooting helpers, and finally CLI/bootstrap.
+run-progress projection, execution (subprocess plumbing then prompt
+assembly), filesystem isolation, kb consistency, orchestration, adapters
+(including their live-progress hooks), troubleshooting helpers, and
+finally CLI/bootstrap.
 
 ## Design history to read after source
 
 The source tells you what is implemented. These KB pages explain why the system
-is shaped this way and where it is going:
+is shaped this way and where it is going. Lifecycle markers on each page
+say which parts are stable, in flight, or paused.
 
-- [Env Interface design](design-env-interface.md) — current, in flight
-- [Branch Modes Plan](plan-branch-modes.md) — shipped, with revisions
-- [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) — shipped
-- [Remove triage decision](decision-remove-triage.md)
-- [Drop streams decision](decision-drop-streams.md)
-- [kb shape decision](decision-kb-shape.md)
+Subject hub:
+
+- [Subject: the kb itself](subject-kb.md) — synthesis of the kb
+  pattern (four memory layers, graph topology, subject genesis,
+  cross-tool maintenance, what was rejected). The first hub page
+  in brr's kb; expect more to accrete as substantial subject-level
+  work lands.
+
+Decisions ("drop the noisy abstraction" trio in chronological order):
+
+- [Remove triage decision](decision-remove-triage.md) — the LLM
+  triage stage came off first.
+- [Drop streams decision](decision-drop-streams.md) — workstreams
+  came off next.
+- [kb shape decision](decision-kb-shape.md) — per-task log files
+  came off, AGENTS.md became universal schema, kb-maintenance
+  became preflight + redundancy.
+
+Other decisions:
+
+- [Bundled docs decision](decision-bundled-docs.md) — why bundled
+  `src/brr/docs/` + per-repo `.brr/docs/` overrides.
+- [Concurrent worktrees plan](plan-concurrent-worktrees.md) —
+  shipped (one-task-per-worktree slice; merge-coordinator path
+  abandoned).
+- [Branch modes plan](plan-branch-modes.md) — shipped, with
+  revisions (triage reversed, `needs_context` gone).
+- [Overlays plan](plan-overlays.md) — blocked.
+
+Designs and notes still open:
+
+- [Env Interface design](design-env-interface.md) — in flight
+  (3/5 envs shipped; durability contract partial).
+- [Notes: pondering fleet](notes-pondering-fleet.md) — paused.
+
+Strategic decks:
+
+- [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
+  roadmap (env axis active; overlays / brnrd paused).
+
+Bundled docs to read alongside the source:
+
 - [Conversations bundled doc](../src/brr/docs/conversations.md)
-- [Deck: brr fleet & steering](deck-brr-fleet-steering.md) — strategic, partially stale
+- [Envs bundled doc](../src/brr/docs/envs.md)
+- [Active task bundled doc](../src/brr/docs/active-task.md)
+- [Brr internals bundled doc](../src/brr/docs/brr-internals.md)
+- [Execution map bundled doc](../src/brr/docs/execution-map.md)
 
 ## Practical navigator notes
 
@@ -905,7 +1035,8 @@ Use these heuristics while reading:
 - If a file talks about thread continuity or per-thread history, jump to [conversations.py](../src/brr/conversations.py).
 - If a file talks about lifecycle packets or `render_update`, jump to [updates.py](../src/brr/updates.py).
 - If a file talks about live progress phases, attempt counts, or rendering a per-task card, jump to [run_progress.py](../src/brr/run_progress.py).
-- If a file talks about prompt assembly (Task Context Bundle, `kb/log.md` injection, AGENTS.md bundling), jump to [prompts.py](../src/brr/prompts.py). If it talks about subprocess execution / runner detection / trace persistence, jump to [runner.py](../src/brr/runner.py). The two used to be one file; they were split in phase 3a of the kb-shape arc.
+- If a file talks about prompt assembly (Task Context Bundle, `kb/log.md` injection, AGENTS.md bundling), jump to [prompts.py](../src/brr/prompts.py). If it talks about subprocess execution, runner detection, or trace persistence, jump to [runner.py](../src/brr/runner.py). The two used to be one file; they were split in phase 3a of the kb-shape arc.
+- If a file talks about kb consistency, orphan pages, broken cross-links, or "should this kb-maintenance pass run?", jump to [kb_preflight.py](../src/brr/kb_preflight.py) and `_maybe_kb_maintenance` in [daemon.py](../src/brr/daemon.py). The maintenance contract itself lives in [AGENTS.md → "Knowledge base shape"](../src/brr/AGENTS.md), not in the brr daemon.
 - If a file talks about cwd, worktrees, Docker, response path translation, or runner credential wiring (env passthrough, login-dir mounts, git safe.directory), jump to [envs/__init__.py](../src/brr/envs/__init__.py).
 - If a file talks about transport, auth, polling, or delivery, jump to [gates](../src/brr/gates/).
 - If a file feels like "everything at once", you are probably in [daemon.py](../src/brr/daemon.py). Read it in lifecycle passes, not top-to-bottom once.
@@ -921,4 +1052,7 @@ Update this page when any of these change:
 - runner artifact contract
 - gate hook surface
 - bundled docs vs KB ownership
+- kb consistency contract (preflight findings, kb-maintenance trigger, AGENTS.md kb schema)
+- module boundaries that affect "where do I jump?" routing (e.g. the runner / prompts split, kb_preflight)
+- subject hubs added or retired
 - test files that become the best behavioral reference for a module

@@ -917,3 +917,54 @@ subject hub (evolving *what we know*) sit in their proper roles.
 
 Preflight clean; 203 tests still green (no source changes). The
 five-phase kb-shape execution plan is now fully landed.
+
+## [2026-05-09] implement | repo-dive-in-map refresh for the full kb-shape arc
+
+Follow-up. Earlier per-phase commits had patched the dive-in-map only
+narrowly (phase 3b touched the validation header and one
+reading-route note; phase 4 patched a single broken
+`agents-template.md` link the preflight caught). A thorough sweep
+was overdue.
+
+What changed in `repo-dive-in-map.md`:
+
+- **Validation header** rewritten as a phase-by-phase summary of the
+  whole kb-shape arc (2 → 5).
+- **Stewardship paragraphs** rewritten — the description still
+  carried the old "improve the underlying design instead of layering
+  conditions" wording, while the actual AGENTS.md text is now about
+  surfacing contradictions between the request and the codebase.
+- **Ring 3 read list** now includes `prompts.py`, `kb_preflight.py`,
+  and the `test_prompts.py` / `test_kb_preflight.py` files.
+- **Worker pass steps** updated: step 7 names
+  `prompts.build_daemon_prompt` and the Task Context Bundle; step 10
+  describes the `kb_preflight.scan` + conditional kb-maintenance
+  pass instead of the old "optionally run KB maintenance."
+- **`RunContext` important fields** lost the `log_file` entry
+  (phase 2b had removed the field; the dive-in-map still listed
+  it). An explanatory note replaces it so cold readers coming from
+  older versions aren't confused.
+- **"Runner and prompts" cross-reference section** rewritten to
+  split runner / prompts / kb_preflight responsibilities, list each
+  module's callers separately, and group the prompt files alongside.
+- **Worktree execution bullet** lost the stale "writes per-task log
+  instructions through `RunContext.log_file`" line.
+- **New runtime invariant**: "KB consistency is preflight +
+  redundancy, not a primary gate" — names the contract for adding
+  new structural kb invariants (extend `kb_preflight.scan` over
+  expanding the LLM prompt; AGENTS.md is the universal schema).
+- **Design history** restructured by category: subject hub, decisions
+  trio, other decisions, designs/notes, decks, bundled docs. Each
+  entry carries its current lifecycle marker so a cold reader knows
+  what's stable, in flight, paused, blocked, or shipped.
+- **Practical navigator notes** now include "if a file talks about
+  kb consistency or orphan pages → `kb_preflight.py` +
+  `_maybe_kb_maintenance` in `daemon.py`; the maintenance contract
+  itself lives in AGENTS.md."
+- **Tests reading path** includes `test_prompts.py` and
+  `test_kb_preflight.py` in their dependency-correct positions.
+- **Maintenance rule for this guide** lists kb consistency contract,
+  module-boundary changes, and subject-hub additions/retirements as
+  triggers for refreshing the dive-in-map.
+
+Preflight clean; 203 tests still green (no source changes).
