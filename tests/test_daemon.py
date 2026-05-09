@@ -80,7 +80,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
-        daemon.runner,
+        daemon.prompts,
         "build_daemon_prompt",
         lambda task, eid, rp, root, **kw: f"PROMPT {eid} {kw.get('task_id')} -> {rp}",
     )
@@ -155,7 +155,7 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
-        daemon.runner,
+        daemon.prompts,
         "build_daemon_prompt",
         lambda task, eid, rp, root, **kw: f"P {eid}",
     )
@@ -277,13 +277,13 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
-        daemon.runner,
+        daemon.prompts,
         "build_daemon_prompt",
         lambda task, eid, rp, root, **kw: f"P {eid}",
     )
     monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
     monkeypatch.setattr(
-        daemon.runner,
+        daemon.prompts,
         "build_kb_maintenance_prompt",
         lambda _root: "KB MAINTENANCE",
     )
@@ -338,7 +338,7 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
-        daemon.runner,
+        daemon.prompts,
         "build_daemon_prompt",
         lambda task, eid, rp, root, **kw: f"P {eid}",
     )
