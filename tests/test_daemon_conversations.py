@@ -112,8 +112,12 @@ def test_run_worker_routes_to_conversation_and_persists_records(tmp_path, monkey
 
 def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
-    event = _make_event(
+    first = _make_event(
         tmp_path, eid="evt-thread-1", body="first",
+        telegram_chat_id=77,
+    )
+    second = _make_event(
+        tmp_path, eid="evt-thread-2", body="second",
         telegram_chat_id=77,
     )
 
@@ -122,14 +126,20 @@ def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeyp
     _stub_env(monkeypatch, tmp_path)
 
     daemon._run_worker(
-        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+        first, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+    daemon._run_worker(
+        second, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
     )
 
-    daemon_records = next(c[2] for c in captured if c[0] == "daemon")
-    # The daemon prompt receives the recent records gathered before the
-    # task row was appended — at minimum the inbound event entry.
+    daemon_records = [
+        c[2] for c in captured if c[0] == "daemon" and c[1] == "evt-thread-2"
+    ][0]
+    # The daemon prompt receives prior conversation records only. The
+    # in-flight event/task are rendered elsewhere in the Task Context Bundle.
     assert daemon_records is not None
     assert any(r.get("event_id") == "evt-thread-1" for r in daemon_records)
+    assert not any(r.get("event_id") == "evt-thread-2" for r in daemon_records)
 
 
 def test_run_worker_followup_in_same_thread_reuses_conversation(tmp_path, monkeypatch):
