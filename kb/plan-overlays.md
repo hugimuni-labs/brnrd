@@ -1,22 +1,23 @@
 # Plan: Overlays (Phase 1 of the fleet deck)
 
+**Status: blocked.** Overlays are paused behind the env work and a
+research gate. Do not start implementation until both are resolved.
+
 Concrete plan for user-level steering overlays: change agent behaviour
 across many repos without per-repo edits. Absorbs the personal-workflow
 variants idea and the `brr eject` retirement.
 
-Strategic context: see `deck-brr-fleet-steering.md` (Axis 1) and
-`notes-pondering-fleet.md` (open pondering).
+Strategic context: see [`deck-brr-fleet-steering.md`](deck-brr-fleet-steering.md)
+(Axis 1) and [`notes-pondering-fleet.md`](notes-pondering-fleet.md)
+(open pondering).
 
 ---
 
-## Status
+## Blocking conditions
 
-**Not in flight. Blocked** behind the env PR. See
-`design-env-interface.md` for the current active work.
-
-Implementation of this plan must not start until:
-
-1. The env PR is merged.
+1. The env PR (see [`design-env-interface.md`](design-env-interface.md))
+   ships. Three of five envs are in; durability contract enforcement
+   and the remaining two backends still need to land.
 2. The research gate below is resolved and committed as
    `kb/research-overlay-shape.md`.
 

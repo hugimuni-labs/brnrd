@@ -1,51 +1,104 @@
 # Knowledge Base Index
 
-Pages are organized by category. Update this file whenever you create
-or remove a page.
+Pages are grouped by **subject area** — Environments, Tasks &
+branching, Conversations & responses, Documentation strategy, Fleet &
+overlays, KB itself, Research. The grouping is editorial: the kb is
+ultimately a graph (see [`AGENTS.md`](../AGENTS.md) → "Knowledge base
+shape" and [`decision-kb-shape.md`](decision-kb-shape.md)). The index
+is the canonical entry point; once a subject accretes a real hub
+page, link it at the top of its section.
 
-Tool-level documentation (how brr itself works, pipeline/artifact
+Tool-level documentation (how brr itself works, pipeline / artifact
 map, internals) ships with the package. Run `brr docs` to list it.
-This index only covers this repo's project-specific knowledge.
+This index covers only this repo's project knowledge.
 
-## Architecture
+Lifecycle markers on a link reflect the page's current status:
 
-- [Repo Dive-In Map](repo-dive-in-map.md) — bottom-up, GitHub-readable source map for understanding the repo file by file, with branch-neutral relative source/test links, core entity cross-references, runtime invariants, and recommended reading paths
-- [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) — v2: concurrent task execution via worktrees, task abstraction, per-task logs, env abstraction
-- [Branch Modes Plan](plan-branch-modes.md) — v2: branch as task property, agent-decided branching, needs-context status, execution environments
-- [Conversations](../src/brr/docs/conversations.md) — bundled tool doc on the per-gate-thread conversation log that replaced workstreams: routing anchor + append-only history, no identity, no manifest
+- *active* — current state of thinking; safe to follow.
+- *shipped* — the work has landed; the page is now context for the
+  decisions that survive in the codebase.
+- *blocked* / *paused* — held behind another piece of work; the page
+  says what would unblock it.
 
-## Decisions
+Pages without a marker are reference (research, decisions, the
+dive-in map) and are stable until something contradicts them.
 
-- [Bundled Docs Location](decision-bundled-docs.md) — why tool-level docs live in `src/brr/docs/` and ship with the package rather than in `kb/`
-- [Drop streams; conversations are routing+history, not identity](decision-drop-streams.md) — why the workstream layer was removed and replaced with a thin per-conversation log; lessons from the 2026-05-05 frozen-intent incident
-- [Remove the triage stage](decision-remove-triage.md) — why the LLM-driven triage step and the frontmatter-as-stdout contract were removed in favor of mechanical task construction, agent-decided branching, and plain-text responses
-- [kb shape — graph topology, semantic memory, cross-tool maintenance](decision-kb-shape.md) — four memory layers, kb as a graph (entry point + edges + supersedence), subject pages as the missing semantic layer, AGENTS.md as the cross-tool maintenance schema with brr's daemon hook reframed as a redundancy pass; staged execution plan for chore removal + bot UX + kb cleanup
+## Architecture & orientation
 
-## Design decks
+- [Repo Dive-In Map](repo-dive-in-map.md) — bottom-up source map for
+  understanding the repo file by file, with branch-neutral relative
+  links, core entity cross-references, runtime invariants, and
+  recommended reading paths.
+- [`AGENTS.md`](../AGENTS.md) — universal agent playbook (canonical
+  copy lives at `src/brr/AGENTS.md`, symlinked here).
 
-- [Deck: brr today](deck-brr-current.md) — Marp bird's-eye of the current system (file protocol, pipeline, CLI surface, state layout, override model, pain points)
-- [Deck: brr fleet & steering](deck-brr-fleet-steering.md) — Marp three-axis design (overlays, `brnrd`, environments) with locked decisions, roadmap, and the minimum compelling slice
+## Environments
 
-## Active design
+- [Env Interface design](design-env-interface.md) — *in flight (3/5
+  envs shipped)*. `Env` Protocol, durability contract, decentralised
+  merging, and the plugin point. Tactical companion to the env slice
+  of the fleet deck.
+- [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) —
+  *shipped (one-task-per-worktree slice; merge-coordinator path
+  abandoned)*. Original architecture for parallel task execution;
+  read for the reasoning that informed the current `worktree.py` +
+  env protocol shape.
 
-- [Env Interface design](design-env-interface.md) — actionable spec for the in-flight worktree PR: `Env` Protocol, durability contract, `local`/`worktree`/`docker`/`ssh`/`devcontainer` built-ins, salvage rule on `error`/`conflict`, decentralised merging via `git merge --ff-only` + `conflict` status, dual plugin model (Python entry points + drop-in script envs)
-- [Overlays plan](plan-overlays.md) — **blocked** on the env PR and a research gate (`kb/research-overlay-shape.md`) picking single-file vs multi-file overlays; covers XDG paths, git-backed `~/.config/brr/`, `brr overlay init|sync|show`, and the staged `brr eject` retirement
+## Tasks & branching
 
-## Ideas / Follow-ups
+- [Branch Modes Plan](plan-branch-modes.md) — *shipped, with
+  revisions*. Branch and env are task properties, the agent owns
+  branching at runtime. Triage and `needs_context` were reversed —
+  see the decision below.
+- [Remove the triage stage](decision-remove-triage.md) — why the
+  LLM-driven triage step and the frontmatter-as-stdout contract were
+  removed in favour of mechanical task construction, agent-decided
+  branching, and plain-text responses.
 
-- [Personal Workflow Variants](idea-personal-workflow-variants.md) — absorbed into the fleet-&-steering deck as Axis 1; kept for provenance
-- [Notes: Fleet pondering](notes-pondering-fleet.md) — open thinking on overlays-as-single-file, dropping `brr eject`, self-maintaining repo registry, brnrd-as-agentic-operator, cross-platform supervisor, decentralised merge examples — capture-only while env work ships
+## Conversations & responses
+
+- [Drop streams; conversations are routing+history, not identity](decision-drop-streams.md) —
+  why the workstream layer was removed and replaced with a thin
+  per-conversation log; lessons from the 2026-05-05 frozen-intent
+  incident.
+- [Conversations bundled doc](../src/brr/docs/conversations.md) —
+  package documentation for the per-gate-thread conversation log.
+
+## Documentation strategy
+
+- [Bundled Docs Location](decision-bundled-docs.md) — why tool-level
+  docs live in `src/brr/docs/` and ship with the package rather than
+  in `kb/`.
+
+## Fleet & overlays *(paused — env axis is the only active strand)*
+
+- [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
+  *roadmap (env axis active, overlays/brnrd paused)*. Three-axis
+  framing (overlays · brnrd · environments); read for the strategic
+  shape, not as a current spec — see decision pages and the env
+  design for the live state.
+- [Overlays plan](plan-overlays.md) — *blocked* on the env work and
+  a research gate for single-file vs multi-file overlays.
+- [Notes: Fleet pondering](notes-pondering-fleet.md) — *paused*.
+  Capture-only thinking: open questions on overlays-as-single-file,
+  dropping `brr eject`, self-maintaining repo registry,
+  brnrd-as-agentic-operator, cross-platform supervisor, decentralised
+  merge.
+
+## Knowledge base itself
+
+- [kb shape decision](decision-kb-shape.md) — four memory layers
+  (raw / episodic-thin / semantic+decisional / schema), kb as a graph
+  with explicit linking discipline, lifecycle markers, the subject
+  genesis rule, brr's daemon kb-maintenance reframed as a redundancy
+  pass; staged execution plan.
+- [LLM Wiki framing](llm-wiki.md) — the source framing this project
+  takes inspiration from for the wiki/synthesis layer.
 
 ## Research
 
-- [PR #1 Review](review-pr-1.md) — deep review notes for task abstraction PR and follow-up notes after wiring the triage path
-- [Concurrency Follow-up Review](review-concurrency-followup-2026-04-14.md) — second review pass clarifying that concurrency scaffolding exists but the merge coordinator and worker pool are not implemented yet
-- [brr vs gh-aw](research-brr-vs-gh-aw.md) — deep comparison with GitHub Agentic Workflows: axes of opposition (substrate, transport, durability, security, fleet), market fit, verdict for the remote-controlled repo-first CLI runner use case, and which ideas brr could credibly adopt (`safe-outputs`, rate-limits, XPIA) vs. not (compile step, frontmatter DSL, GitHub-shaped worldview)
-
-## Agent ergonomics evaluations
-
-- [Clean-Slate Environment Testing Playbook](agent-ergonomics-evaluation/clean-slate-environment-testing-playbook.md) — manual playbook for comparing brr environment ergonomics on fresh repos without `AGENTS.md`, `kb/`, prior runtime state, or git history where possible; covers local, worktree, unsupported future envs, prompts, observation checklist, scoring rubric, and run-note templates
-- [Task Context Bundle runner review](agent-ergonomics-evaluation/task-context-bundle-runner-review-2026-04-28.md) — review from inside a live daemon worktree task after the workstream and Task Context Bundle changes, covering context recovery effort, stream/task artifact discoverability, per-task log lifecycle, prompt/docs clarity, and prioritized runner-UX recommendations
-- [Task log: Task Context Bundle runner review](log-task-1777333195-8ed7.md) — per-task log entry for the 2026-04-28 runner ergonomics evaluation
-- [Task Context Bundle v2 follow-up review](agent-ergonomics-evaluation/task-context-bundle-v2-followup-review-2026-04-28.md) — follow-up live daemon-worktree review covering current context recovery, stream/task state fidelity, worktree/status wording, per-task log lifecycle, and a scoped stream CLI freshness fix
-- [Task log: Task Context Bundle v2 follow-up review](log-task-1777378942-vr1a.md) — per-task log entry for the 2026-04-28 follow-up runner ergonomics evaluation
+- [brr vs gh-aw](research-brr-vs-gh-aw.md) — deep comparison with
+  GitHub Agentic Workflows: substrate / transport / durability /
+  security / fleet axes, market fit for the remote-controlled
+  repo-first CLI runner use case, which gh-aw ideas brr could
+  credibly adopt vs. not.

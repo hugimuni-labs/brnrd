@@ -1,5 +1,22 @@
 # Plan: Branch Modes, Execution Environments & Task Lifecycle
 
+**Status: shipped, with revisions.** What landed: branch and env are
+task properties (see [`task.py`](../src/brr/task.py)); `Task.from_event`
+constructs tasks mechanically; the agent owns branching at runtime
+inside a fresh `brr/<task-id>` branch which is fast-forwarded back if
+the agent stays on it, preserved if the agent switches off it. What
+was reversed: the LLM-driven triage stage (see
+[`decision-remove-triage.md`](decision-remove-triage.md)) and the
+per-task log files (see [`decision-kb-shape.md`](decision-kb-shape.md)
+and the delivery contract in [`AGENTS.md`](../AGENTS.md)). The
+`needs_context` status is gone too — the agent simply explains in its
+chat reply when more information is needed.
+
+Read [`task.py`](../src/brr/task.py) and
+[`envs/__init__.py`](../src/brr/envs/__init__.py) for the shipped
+behaviour; this page is kept for the design reasoning that informed
+the current shape.
+
 ## Revision History
 
 - v1 (2026-04-08): Initial plan — event-level `branch` field, two cases

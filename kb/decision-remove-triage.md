@@ -1,8 +1,15 @@
 # Decision: remove the triage stage
 
 Status: accepted, 2026-05-06.
-Supersedes: the `triage` step in `kb/repo-dive-in-map.md` and the
-prompt template at `src/brr/prompts/triage.md`.
+Supersedes: the `triage` step in `kb/repo-dive-in-map.md`, the
+triage prompt template at `src/brr/prompts/triage.md`, and the
+LLM-driven branching/env paths in
+[`plan-branch-modes.md`](plan-branch-modes.md).
+Sibling decisions in the same "drop the noisy abstraction" pattern:
+[`decision-drop-streams.md`](decision-drop-streams.md) (workstreams
+were the next layer to come off) and
+[`decision-kb-shape.md`](decision-kb-shape.md) (per-task log files
+came off after that).
 
 ## Context
 

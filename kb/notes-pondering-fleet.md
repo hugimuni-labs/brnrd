@@ -1,15 +1,16 @@
 # Notes: Fleet & Steering — open pondering
 
-Capture-only. Decisions in here are **not committed to**; this page
-exists so the thinking doesn't evaporate while we focus on
-`design-env-interface.md` and ship the worktree-PR.
+**Status: paused.** Companion to
+[`deck-brr-fleet-steering.md`](deck-brr-fleet-steering.md). Several
+items below were promoted into
+[`plan-overlays.md`](plan-overlays.md) — that plan is itself blocked
+behind the env work. The remaining notes are still capture-only:
+nothing here is committed to; the page just keeps the thinking from
+evaporating while the env axis is the only active strand.
 
-When any of these crystallise into something actionable, promote them
-into a deck or a `design-*.md` page and link from `kb/index.md`.
-
-Companion to `deck-brr-fleet-steering.md` — the deck holds the strategic
-"shape." This page holds the open questions and current-best-guess
-answers.
+When any of the unpromoted items crystallise into something
+actionable, promote them into a deck or a `design-*.md` page and link
+from [`kb/index.md`](index.md).
 
 ---
 

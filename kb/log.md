@@ -720,3 +720,117 @@ add lifecycle markers, fold `kb/log-task-*.md` into `kb/log.md`,
 delete pages with no future value), Phase 4 (daemon maintenance
 becomes deterministic preflight + thin LLM redundancy pass), Phase 5
 (subjects accrete from real work). All anchored in `decision-kb-shape.md`.
+
+## [2026-05-09] refactor | Phase 3a: split prompt assembly out of runner.py
+
+`runner.py` had quietly grown into the agent-facing surface — kb/log.md
+context injection, AGENTS.md bundling, the Task Context Bundle, the
+delivery-contract paragraphs — even though its docstring still claimed
+"this module is plumbing." A small wording change to the contract and a
+one-line subprocess fix were sharing the same module attention.
+
+Moved all prompt assembly into a new `src/brr/prompts.py` (307 lines):
+`read_prompt` (was `runner._read_prompt`), `_read_recent_log`,
+`_build_context_block`, `_join_prompt_parts`,
+`build_init_prompt` / `build_run_prompt` / `build_daemon_prompt` /
+`build_kb_maintenance_prompt`, `_build_task_context_bundle`,
+`_format_recent_conversation`, plus the `_PROMPTS_DIR`, `_AGENTS_PATH`,
+log-entry constants. `runner.py` is back to ~490 lines of subprocess
+plumbing. `_load_profiles` now calls `prompts.read_prompt` for
+`runners.md`, the only remaining file-IO crossover. `daemon.py` and
+`adopt.py` import `prompts` directly; tests follow
+(`monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", …)`), and
+the prompt-assembly tests live in a new `tests/test_prompts.py`.
+Pure refactor — public behaviour and prompt text are byte-identical;
+all 188 tests still green.
+
+## [2026-05-09] refactor | Phase 3b: kb cleanup pass (slash + lifecycle + index reshape)
+
+One-time hand work prescribed by `decision-kb-shape.md` § Phase 3.
+
+**Slashed nine pages with no future value.** The pages explicitly named
+in the kb-shape decision plus their orbit:
+
+- `idea-personal-workflow-variants.md` — already self-marked
+  "absorbed" into `deck-brr-fleet-steering.md` Axis 1; provenance is
+  git history, not a redirect page in `kb/`.
+- `review-pr-1.md` and `review-concurrency-followup-2026-04-14.md` —
+  point-in-time PR reviews whose findings have either landed in the
+  codebase or been reversed by `decision-remove-triage.md`. No
+  surviving recommendations.
+- `deck-brr-current.md` — bird's-eye of brr-from-a-few-months-ago,
+  built around triage and `brr eject` as the override flow. Both
+  removed/reshaped since. A future "brr today" deck can be re-derived
+  from current state when there's a reason to give one.
+- `agent-ergonomics-evaluation/task-context-bundle-runner-review-2026-04-28.md`
+  and its `v2-followup` — the two reviews that triggered the streams
+  removal and the kb-shape decision. Their synthesis is captured in
+  `decision-drop-streams.md` and `decision-kb-shape.md`; the original
+  reviews referenced workstreams, the per-task log override, and
+  stream/task duplication concerns that no longer exist.
+- `agent-ergonomics-evaluation/clean-slate-environment-testing-playbook.md` —
+  a 2026-05-01 manual procedure that referenced `local`/`worktree`/
+  `docker` policy concepts and stream/active-task surfaces that have
+  since been rationalised. The procedural shape can be re-derived
+  cheaply when the next ergonomics pass is needed.
+- `kb/log-task-1777333195-8ed7.md` and `log-task-1777378942-vr1a.md` —
+  the per-task companions of the two reviews. Three lines of summary
+  each, fully redundant with the now-canonical synthesis in the
+  decision pages.
+
+The `agent-ergonomics-evaluation/` directory is now empty and removed.
+
+**Lifecycle markers on what survives.**
+
+- `plan-concurrent-worktrees.md` → *shipped* (one-task-per-worktree
+  slice; the merge-coordinator path was abandoned in favour of
+  decentralised `git merge --ff-only` from the agent's branch).
+- `plan-branch-modes.md` → *shipped, with revisions* (triage and
+  `needs_context` reversed by `decision-remove-triage.md`).
+- `plan-overlays.md` → *blocked* (env work + a research gate; the
+  page already said so, this just makes the marker top-of-page).
+- `design-env-interface.md` → *in flight (3/5 envs shipped,
+  durability contract partial)*. Names what's outstanding (`ssh`,
+  `devcontainer`, plugin point, full durability enforcement).
+- `deck-brr-fleet-steering.md` → *roadmap* (env axis active,
+  overlays/brnrd paused). Added a header comment listing the
+  decisions that have overtaken specifics — triage removal,
+  workstream removal, per-task log removal — so a reader doesn't
+  treat it as a current spec.
+- `notes-pondering-fleet.md` → *paused*. Several items already
+  promoted to `plan-overlays.md`; the rest stays as capture-only.
+- Four decision pages (`decision-bundled-docs`, `decision-drop-streams`,
+  `decision-kb-shape`, `decision-remove-triage`) keep their existing
+  `Status: accepted` headers — those *are* lifecycle markers in the
+  decision-page format.
+
+**Reciprocal links between connected pages.** The three "drop the
+noisy abstraction" decisions (triage → streams → kb log files) now
+each cite the other two as siblings. `repo-dive-in-map.md`'s related-
+reading list and `research-brr-vs-gh-aw.md`'s sources lost their
+references to `deck-brr-current.md`.
+
+**`kb/index.md` reorganised by subject area** (Architecture &
+orientation, Environments, Tasks & branching, Conversations &
+responses, Documentation strategy, Fleet & overlays, Knowledge base
+itself, Research) instead of by artifact type (Decisions, Decks,
+Plans, Ideas). Every link gets a one-line "what it is" summary; pages
+with a meaningful lifecycle (in-flight, shipped, blocked, paused,
+roadmap) carry that marker inline. The index header explains the
+graph topology and the lifecycle-marker convention so a cold reader
+sees the rules of the road in one screen.
+
+**`repo-dive-in-map.md`** got a refreshed "Last validated against …"
+header pointing at this kb-shape arc, plus a reading-route entry that
+distinguishes prompt assembly (`prompts.py`) from subprocess plumbing
+(`runner.py`).
+
+Net: 23 → 13 subject pages plus index + log. No code changes; pure
+content/structure work. Index → files cross-reference is exact (every
+file present in `kb/` is linked from the index; every link in the
+index resolves). 188 tests still green (no source changes that would
+affect them).
+
+Outstanding: Phase 4 (daemon maintenance becomes deterministic
+preflight + thin LLM redundancy pass), Phase 5 (subjects accrete from
+real work).

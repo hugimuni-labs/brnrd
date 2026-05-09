@@ -482,5 +482,5 @@ than you'd gain by collapsing them.
 - `./local/gh-aw/docs/src/content/docs/patterns/{chat-ops,multi-repo-ops}.md`
 - GitHub Changelog, *"GitHub Agentic Workflows are now in technical preview"*, 2026-02-13
 - `github/gh-aw` discussions #20558, #23173, #27292, #27432 (internal audits, 2026-03 → 2026-04)
-- `kb/deck-brr-current.md`, `kb/deck-brr-fleet-steering.md`, `kb/design-env-interface.md`, `kb/notes-pondering-fleet.md`
+- `kb/deck-brr-fleet-steering.md`, `kb/design-env-interface.md`, `kb/notes-pondering-fleet.md`
 - `awesome-ai-agents-2026` for adjacent-project framing (Trigger.dev, OpenClaw, n8n)

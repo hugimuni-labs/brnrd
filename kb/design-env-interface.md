@@ -1,15 +1,24 @@
 # Design: Env Interface (PR scope)
 
-Focused, executable design for the in-flight worktree PR: extract the
-`Env` Protocol, codify the durability contract, add `docker`, `ssh`,
-and `devcontainer` built-ins, decentralise merging. The merge of this
-PR is the unlock for treating environments as the main brr value
-proposition.
+**Status: in flight (3/5 envs shipped, durability contract partial).**
+Shipped: the `Env` Protocol with three-phase `prepare → invoke →
+finalize`, plus `host` / `worktree` / `docker` backends in
+[`envs/__init__.py`](../src/brr/envs/__init__.py); decentralised
+fast-forward merge on cleanup; the agent-owned branching contract.
+Outstanding: `ssh` and `devcontainer` backends, full enforcement of
+the durability contract beyond the response-file check, and the
+plugin point (`brr.envs` entry points + drop-in script envs).
+
+Focused, executable design for the worktree PR: extract the `Env`
+Protocol, codify the durability contract, add `docker`, `ssh`, and
+`devcontainer` built-ins, decentralise merging. The merge of the env
+slice unlocked treating environments as the main brr value proposition.
 
 This page is **tactical**. Strategic context lives in
-`deck-brr-fleet-steering.md`. Open items the PR doesn't touch
-(overlays, brnrd, discovery, cross-platform supervisor, plugin
-candidates like Daytona) live in `notes-pondering-fleet.md`.
+[`deck-brr-fleet-steering.md`](deck-brr-fleet-steering.md). Open items
+the PR doesn't touch (overlays, brnrd, discovery, cross-platform
+supervisor, plugin candidates like Daytona) live in
+[`notes-pondering-fleet.md`](notes-pondering-fleet.md).
 
 ---
 

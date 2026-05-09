@@ -9,13 +9,18 @@ mechanism (`kb/log-task-<id>.md`, `RunContext.log_file`,
 [`prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
 phase as a redundant safety pass on top of agent-driven maintenance.
 
-Acknowledges
-[the 2026-04-28 runner review](agent-ergonomics-evaluation/task-context-bundle-runner-review-2026-04-28.md)
-and
-[its v2 follow-up](agent-ergonomics-evaluation/task-context-bundle-v2-followup-review-2026-04-28.md) —
-both raised "per-task log lifecycle is policy-ambiguous" as a P1 finding.
-Aligns the kb design with [`llm-wiki.md`](llm-wiki.md), the framing
-this project explicitly takes inspiration from.
+Sibling decisions in the same "drop the noisy abstraction" pattern:
+[`decision-remove-triage.md`](decision-remove-triage.md) (the LLM
+triage stage came off first) and
+[`decision-drop-streams.md`](decision-drop-streams.md) (the workstream
+manifest came off next).
+
+Triggered by two ergonomics reviews on 2026-04-28 (since slashed in
+phase 3b — synthesis lives here and in
+[`decision-drop-streams.md`](decision-drop-streams.md)). Both raised
+"per-task log lifecycle is policy-ambiguous" as a P1 finding. Aligns
+the kb design with [`llm-wiki.md`](llm-wiki.md), the framing this
+project explicitly takes inspiration from.
 
 ## Context
 
@@ -251,7 +256,7 @@ The bar throughout this phase: *would a future agent or human, reading this page
 - Reorganise [`kb/index.md`](index.md) by subject hubs (Envs, Gates, Daemon & runners, Conversations & kb, Fleet & overlays, Agent ergonomics). Pure reshuffle of existing entries at this step; no content rewrite.
 - Add lifecycle markers to plan / design pages that have shipped or been superseded: [`plan-branch-modes.md`](plan-branch-modes.md) and [`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) are largely realised by [`decision-remove-triage.md`](decision-remove-triage.md) and the env work; [`design-env-interface.md`](design-env-interface.md) needs an "implementation status" header refresh.
 - **Per-task log files (`kb/log-task-*.md`).** Where the content is a synthesis worth preserving, fold one curated entry into `kb/log.md`. Otherwise delete; they were transient operational scratch from when logging was mandatory and worktrees needed merge-conflict-avoidance.
-- **Slash pages with no future value.** Pages already explicitly absorbed into successors (e.g. [`idea-personal-workflow-variants.md`](idea-personal-workflow-variants.md) marked "absorbed"), reviews whose findings are fully addressed and add no synthesis ([`review-pr-1.md`](review-pr-1.md), [`review-concurrency-followup-2026-04-14.md`](review-concurrency-followup-2026-04-14.md)), and standalone notes that no longer relate to live work — delete rather than mark superseded. Use a brief `kb/log.md` entry to record what was deleted and why.
+- **Slash pages with no future value.** Pages already explicitly absorbed into successors (the personal-workflow-variants idea page, marked "absorbed" into the fleet deck), reviews whose findings are fully addressed and add no synthesis (the PR #1 review, the 2026-04-14 concurrency follow-up review, the 2026-04-28 ergonomics reviews), and standalone notes that no longer relate to live work — delete rather than mark superseded. Use a brief `kb/log.md` entry to record what was deleted and why.
 - Add reciprocal links between obviously connected pages — e.g. [`decision-drop-streams.md`](decision-drop-streams.md) ↔ [`decision-remove-triage.md`](decision-remove-triage.md) ↔ this decision, all instances of the same "drop the noisy abstraction" pattern; [`repo-dive-in-map.md`](repo-dive-in-map.md) gets refreshed for the new index shape (subject hubs) and the absent log mandate.
 
 ### Phase 4 — daemon maintenance phase becomes safety net

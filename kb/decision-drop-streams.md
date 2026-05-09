@@ -3,12 +3,18 @@
 Status: accepted, 2026-05-05.
 
 Supersedes: the `Workstream ergonomics — first slice` decision implicit
-in the [2026-04-27 implementation log entry](log.md). Acknowledges
-findings from [the 2026-04-28 runner review](agent-ergonomics-evaluation/task-context-bundle-runner-review-2026-04-28.md)
-and [its v2 follow-up](agent-ergonomics-evaluation/task-context-bundle-v2-followup-review-2026-04-28.md);
-both rated streams as "mostly working" but flagged a P3 to "let triage
-assign concise stream titles" — that recommendation is the visible tip
-of the deeper mismatch this decision addresses.
+in the [2026-04-27 implementation log entry](log.md). Triggered by two
+2026-04-28 ergonomics reviews (since slashed in phase 3b of the
+kb-shape cleanup; see [`decision-kb-shape.md`](decision-kb-shape.md)),
+which rated streams as "mostly working" but flagged a P3 to "let
+triage assign concise stream titles" — that recommendation is the
+visible tip of the deeper mismatch this decision addresses.
+
+Sibling decisions in the same "drop the noisy abstraction" pattern:
+[`decision-remove-triage.md`](decision-remove-triage.md) (the
+preceding simplification — frontmatter-as-stdout was the next-level
+mismatch) and [`decision-kb-shape.md`](decision-kb-shape.md) (the
+following one — per-task log files were the kb-side analogue).
 
 ## What we removed
 
