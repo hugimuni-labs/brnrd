@@ -672,8 +672,7 @@ It is called from:
 
 Prompt files to read with it:
 
-- [`setup.md`](../src/brr/prompts/setup.md)
-- [`agents-template.md`](../src/brr/prompts/agents-template.md)
+- [`setup.md`](../src/brr/prompts/setup.md) — adopter setup; reads brr's own [`AGENTS.md`](../src/brr/AGENTS.md) as the model
 - [`run.md`](../src/brr/prompts/run.md)
 - [`runners.md`](../src/brr/prompts/runners.md)
 - [`kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)

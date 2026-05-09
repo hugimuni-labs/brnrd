@@ -834,3 +834,59 @@ affect them).
 Outstanding: Phase 4 (daemon maintenance becomes deterministic
 preflight + thin LLM redundancy pass), Phase 5 (subjects accrete from
 real work).
+
+## [2026-05-09] implement | Phase 4: kb-maintenance becomes preflight + redundancy pass
+
+The brr-only kb-maintenance step used to be the *primary* contract:
+"every kb-touched task triggers an LLM pass that re-reads the rules
+and fixes drift." The kb-shape decision moved that contract into
+AGENTS.md so every tool (Cursor, Codex, Claude Code, brr) shares it.
+The brr daemon's hook had to follow — stop pretending to be the
+primary, become a safety net.
+
+**`src/brr/kb_preflight.py`** — new deterministic scanner. Every run,
+it walks `kb/` and reports structured findings:
+
+- `missing-from-index` — page exists on disk, no link from `kb/index.md`.
+- `stale-index-entry` — `kb/index.md` links to a path that doesn't exist.
+- `broken-link` — any kb page (other than `log.md`, which is
+  append-only narrative) links relatively to a missing path.
+
+`format_findings()` renders the findings as a Markdown block ready
+for prompt injection. Lifecycle-marker drift, contradictions with the
+log, and other synthesis-heavy checks are deliberately *not* in the
+preflight — they're judgement calls the LLM redundancy pass handles.
+
+**`daemon._maybe_kb_maintenance` rewritten.** Preflight always runs
+when policy is `auto` or `always`. When the kb is unchanged *and*
+the preflight is clean, the LLM pass is skipped — kb maintenance
+becomes a true skip-fast safety net rather than a tax on every run.
+When findings exist or kb has been touched, the maintenance prompt
+is built with the findings injected and the LLM pass runs.
+
+**`prompts/kb-maintenance.md` rewritten** to be a thin redundancy
+pass: short preamble, point at AGENTS.md → "Knowledge base shape" for
+the rules, address the injected findings or do a brief redundancy
+spot-check otherwise. Was 19 lines of duplicated rules; now 19 lines
+of pointer + scope + skip-fast contract.
+
+**The preflight earned its keep on first run.** Catching `kb/repo-dive-in-map.md`'s
+stale `agents-template.md` link — left over from the Phase 2
+template deletion — was the first finding in this commit's preflight.
+Fixed inline.
+
+**Docs.** `docs/brr-internals.md` and `docs/execution-map.md`
+rewritten for the preflight + redundancy shape. The `auto` /
+`always` / `never` config keys keep their meaning; the trigger logic
+is now described accurately.
+
+Tests: 188 → 203. New `tests/test_kb_preflight.py` (12 tests cover
+empty / consistent / each finding type / format helpers / stable
+ordering). Three new daemon tests: preflight findings on unchanged
+kb still trigger the pass; preflight clean + kb unchanged still
+skips; kb changed + preflight clean runs with the bare prompt.
+
+Outstanding: Phase 5 — when the next substantial work touches Envs /
+Gates / Daemon / Conversations / kb-itself, that work earns the
+subject hub page. (This commit is the substantial kb-itself work, so
+a kb subject hub follows next.)
