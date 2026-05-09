@@ -386,3 +386,208 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
 
     assert task.status == "done"
     assert maintenance == []
+
+
+def test_kb_maintenance_runs_on_preflight_findings_even_when_kb_unchanged(
+    tmp_path, monkeypatch,
+):
+    """Preflight is the safety net: if it sees inconsistencies left over
+    from an earlier task, the maintenance pass runs even when the
+    current task didn't touch ``kb/``.
+    """
+    _write_repo_scaffold(tmp_path)
+    event = _make_event(tmp_path, "evt-preflight", body="no kb changes here")
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: f"P {eid}",
+    )
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: False)
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_kb_maintenance_prompt",
+        lambda _root: "KB MAINTENANCE BASE",
+    )
+    monkeypatch.setattr(
+        daemon.kb_preflight,
+        "scan",
+        lambda _root: [
+            daemon.kb_preflight.Finding(
+                type="missing-from-index",
+                target="kb/decision-orphan.md",
+                description="needs an entry",
+            ),
+        ],
+    )
+
+    captured: list[str] = []
+
+    class StubEnv:
+        name = "worktree"
+
+        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, debug=False):
+            return envs.RunContext(
+                name=self.name, cwd=tmp_path, repo_root=repo_root,
+                runtime_dir=tmp_path / ".brr",
+                response_path_host=response_path,
+                response_path_env=response_path,
+                branch_name=f"brr/{task.id}",
+                base_branch=base_branch,
+                env_state={"worktree_path": str(tmp_path)},
+            )
+
+        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+
+        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+            return task
+
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
+        if invocation.kind == "kb-maintenance":
+            captured.append(invocation.prompt)
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
+
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert task.status == "done"
+    assert len(captured) == 1, captured
+    prompt = captured[0]
+    assert "KB MAINTENANCE BASE" in prompt
+    assert "Findings (deterministic preflight)" in prompt
+    assert "missing-from-index" in prompt
+    assert "kb/decision-orphan.md" in prompt
+
+
+def test_kb_maintenance_skipped_when_clean_and_unchanged(tmp_path, monkeypatch):
+    """Skip-fast: preflight clean + kb unchanged → no LLM pass at all."""
+    _write_repo_scaffold(tmp_path)
+    event = _make_event(tmp_path, "evt-clean", body="non-kb work")
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: f"P {eid}",
+    )
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: False)
+    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
+
+    captured: list[str] = []
+
+    class StubEnv:
+        name = "worktree"
+
+        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, debug=False):
+            return envs.RunContext(
+                name=self.name, cwd=tmp_path, repo_root=repo_root,
+                runtime_dir=tmp_path / ".brr",
+                response_path_host=response_path,
+                response_path_env=response_path,
+                branch_name=f"brr/{task.id}",
+                base_branch=base_branch,
+                env_state={"worktree_path": str(tmp_path)},
+            )
+
+        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+
+        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+            return task
+
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
+        if invocation.kind == "kb-maintenance":
+            captured.append(invocation.prompt)
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
+
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert captured == []
+
+
+def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monkeypatch):
+    """When kb changed but preflight is clean, run with the bare prompt."""
+    _write_repo_scaffold(tmp_path)
+    event = _make_event(tmp_path, "evt-touched", body="touched kb but cleanly")
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: f"P {eid}",
+    )
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_kb_maintenance_prompt",
+        lambda _root: "KB MAINTENANCE BASE",
+    )
+    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
+
+    captured: list[str] = []
+
+    class StubEnv:
+        name = "worktree"
+
+        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, debug=False):
+            return envs.RunContext(
+                name=self.name, cwd=tmp_path, repo_root=repo_root,
+                runtime_dir=tmp_path / ".brr",
+                response_path_host=response_path,
+                response_path_env=response_path,
+                branch_name=f"brr/{task.id}",
+                base_branch=base_branch,
+                env_state={"worktree_path": str(tmp_path)},
+            )
+
+        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+            )
+
+        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+            return task
+
+    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
+        if invocation.kind == "kb-maintenance":
+            captured.append(invocation.prompt)
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
+
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert captured == ["KB MAINTENANCE BASE"]
