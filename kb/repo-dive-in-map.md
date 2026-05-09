@@ -14,17 +14,28 @@ When this guide says "source", read the linked file first, then read the linked
 tests immediately after. The tests are often the most compact description of
 the intended behavior.
 
-Last validated against `feat/task-abstraction` after the environment-policy
-ownership changes, the run-progress UX rework, the 2026-05-05
-streams-to-conversations refactor that dropped `.brr/streams/`, the
-workstream manifest, and the corresponding CLI surfaces (see
-[decision-drop-streams.md](decision-drop-streams.md)), the 2026-05-06
+Last validated against `ux-imporvements` after Phase 2 of the
+[kb-shape decision](decision-kb-shape.md): `AGENTS.md` moved into the
+package at `src/brr/AGENTS.md` (symlinked at the root), per-task
+`kb/log-<task-id>.md` plumbing removed end-to-end, the delivery
+contract was sharpened to make stdout the chat reply with mandatory
+commits for any file writes, and the Telegram/Slack progress-card
+rendering deduplicates against the last-rendered text. Phase 3a then
+split `runner.py` — the prompt-assembly half lives in
+[`src/brr/prompts.py`](../src/brr/prompts.py); subprocess plumbing
+stays in [`runner.py`](../src/brr/runner.py).
+
+Earlier still-relevant changes carried forward: the environment-policy
+ownership rework, the 2026-05-05 streams-to-conversations refactor
+that dropped `.brr/streams/`, the workstream manifest, and the
+corresponding CLI surfaces (see
+[decision-drop-streams.md](decision-drop-streams.md)); the 2026-05-06
 docker beginner-friendly slice that added automatic credential wiring,
-host login-dir bind mounts, and the `safe.directory` injection (and the
-bundled [`envs.md`](../src/brr/docs/envs.md) doc), and the 2026-05-06
-removal of the LLM-driven triage stage in favor of mechanical task
-construction, agent-owned branching, and plain-text responses (see
-[decision-remove-triage.md](decision-remove-triage.md)).
+host login-dir bind mounts, and the `safe.directory` injection (and
+the bundled [`envs.md`](../src/brr/docs/envs.md) doc); and the
+2026-05-06 removal of the LLM-driven triage stage in favor of
+mechanical task construction, agent-owned branching, and plain-text
+responses (see [decision-remove-triage.md](decision-remove-triage.md)).
 
 ## Current ownership snapshot
 
@@ -62,7 +73,7 @@ Read these in order if you want the quickest useful mental model:
 3. [Protocol source](../src/brr/protocol.py) with [protocol tests](../tests/test_protocol.py).
 4. [Task model](../src/brr/task.py) with [task tests](../tests/test_task.py).
 5. [Conversation log](../src/brr/conversations.py) with [conversation tests](../tests/test_conversations.py).
-6. [Runner plumbing](../src/brr/runner.py) with [runner tests](../tests/test_runner.py).
+6. [Runner plumbing](../src/brr/runner.py) with [runner tests](../tests/test_runner.py), then [prompt assembly](../src/brr/prompts.py) with [prompt tests](../tests/test_prompts.py).
 7. [Environment backends](../src/brr/envs/__init__.py) with [env tests](../tests/test_envs.py).
 8. [Daemon worker](../src/brr/daemon.py) with [daemon tests](../tests/test_daemon.py) and [daemon-conversation tests](../tests/test_daemon_conversations.py).
 9. [Bundled execution map](../src/brr/docs/execution-map.md) to re-read the system top-down after seeing the parts.
@@ -876,14 +887,14 @@ live-progress hooks), troubleshooting helpers, and finally CLI/bootstrap.
 The source tells you what is implemented. These KB pages explain why the system
 is shaped this way and where it is going:
 
-- [Branch Modes Plan](plan-branch-modes.md)
-- [Concurrent Worktrees Plan](plan-concurrent-worktrees.md)
-- [Env Interface design](design-env-interface.md)
-- [Conversations bundled doc](../src/brr/docs/conversations.md)
-- [Drop streams decision](decision-drop-streams.md)
+- [Env Interface design](design-env-interface.md) — current, in flight
+- [Branch Modes Plan](plan-branch-modes.md) — shipped, with revisions
+- [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) — shipped
 - [Remove triage decision](decision-remove-triage.md)
-- [Deck: brr today](deck-brr-current.md)
-- [Deck: brr fleet and steering](deck-brr-fleet-steering.md)
+- [Drop streams decision](decision-drop-streams.md)
+- [kb shape decision](decision-kb-shape.md)
+- [Conversations bundled doc](../src/brr/docs/conversations.md)
+- [Deck: brr fleet & steering](deck-brr-fleet-steering.md) — strategic, partially stale
 
 ## Practical navigator notes
 
@@ -895,7 +906,7 @@ Use these heuristics while reading:
 - If a file talks about thread continuity or per-thread history, jump to [conversations.py](../src/brr/conversations.py).
 - If a file talks about lifecycle packets or `render_update`, jump to [updates.py](../src/brr/updates.py).
 - If a file talks about live progress phases, attempt counts, or rendering a per-task card, jump to [run_progress.py](../src/brr/run_progress.py).
-- If a file talks about command execution or prompts, jump to [runner.py](../src/brr/runner.py).
+- If a file talks about prompt assembly (Task Context Bundle, `kb/log.md` injection, AGENTS.md bundling), jump to [prompts.py](../src/brr/prompts.py). If it talks about subprocess execution / runner detection / trace persistence, jump to [runner.py](../src/brr/runner.py). The two used to be one file; they were split in phase 3a of the kb-shape arc.
 - If a file talks about cwd, worktrees, Docker, response path translation, or runner credential wiring (env passthrough, login-dir mounts, git safe.directory), jump to [envs/__init__.py](../src/brr/envs/__init__.py).
 - If a file talks about transport, auth, polling, or delivery, jump to [gates](../src/brr/gates/).
 - If a file feels like "everything at once", you are probably in [daemon.py](../src/brr/daemon.py). Read it in lifecycle passes, not top-to-bottom once.

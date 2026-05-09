@@ -1,5 +1,28 @@
 # Plan: Multi-Topic Concurrent Task Execution via Git Worktrees
 
+**Status: shipped (one-task-per-worktree slice; merge-coordinator path
+abandoned).** What landed: [`worktree.py`](../src/brr/worktree.py) for
+git-worktree lifecycle, the `Env` protocol with `host` / `worktree` /
+`docker` backends in [`envs/__init__.py`](../src/brr/envs/__init__.py),
+`Task` carrying `branch` and `env`, daemon execution inside a per-task
+worktree on a `brr/<task-id>` branch. What was abandoned: the explicit
+worker pool and merge coordinator. Decentralised merging via
+`git merge --ff-only` from the agent's branch back into the base
+replaces the coordinator (see
+[`design-env-interface.md`](design-env-interface.md) for the rationale
+and [`decision-remove-triage.md`](decision-remove-triage.md) for how
+the task pipeline simplified). The daemon remains serial in the v1
+shape.
+
+Per-task log files (`kb/log-<task-id>.md`) referenced below are gone —
+see [`decision-kb-shape.md`](decision-kb-shape.md). Stdout is the
+chat reply; commits are mandatory for any file write.
+
+This page is preserved for the architectural reasoning that survives;
+read [`design-env-interface.md`](design-env-interface.md) and the
+current [`envs/__init__.py`](../src/brr/envs/__init__.py) for the
+shipped behaviour.
+
 ## Revision History
 
 - v1 (2026-04-07): Initial plan — worktree manager, worker pool, daemon v2

@@ -3,6 +3,7 @@ marp: true
 paginate: true
 theme: default
 title: brr — fleet & steering
+status: roadmap (env axis active, overlays/brnrd paused)
 style: |
   section { font-size: 22px; line-height: 1.35; }
   h1 { color: #d14; margin-bottom: 0.2em; }
@@ -15,6 +16,22 @@ style: |
   section.lead { text-align: center; }
   .small { font-size: 18px; }
 ---
+
+<!--
+Status: roadmap — read for the three-axis frame, not as a current spec.
+Axis 3 (Environment) is in flight via design-env-interface.md;
+Axis 1 (Overlay) is paused behind the env work, see plan-overlays.md;
+Axis 2 (Fleet / brnrd) is future work.
+
+Some specifics in this deck have been overtaken by later decisions:
+  - the LLM triage stage was removed (decision-remove-triage.md);
+  - workstreams were removed in favour of the per-gate-thread
+    conversation log (decision-drop-streams.md);
+  - the per-task `kb/log-<task-id>.md` mechanism is gone
+    (decision-kb-shape.md).
+Read those decisions alongside this deck if you need the current shape.
+-->
+
 
 <!-- _class: lead -->
 
