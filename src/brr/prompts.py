@@ -159,7 +159,10 @@ def build_daemon_prompt(
         recent_conversation=recent_conversation,
         event_body=event_body,
     )
-    return _join_prompt_parts(preamble, repo_root, f"{bundle}\nTask: {task}")
+    trailer = bundle.rstrip()
+    if (event_body or "").strip() != task.strip():
+        trailer = f"{trailer}\nTask: {task}"
+    return _join_prompt_parts(preamble, repo_root, trailer)
 
 
 def build_kb_maintenance_prompt(repo_root: Path) -> str:
@@ -264,10 +267,9 @@ def _format_recent_conversation(
 ) -> str:
     """Render the last few conversation records as human-readable bullets.
 
-    Excludes the current event itself (callers should append the event
-    body separately) so the recent block represents history *before*
-    the in-flight task. Returns an empty string when nothing useful is
-    available.
+    Callers pass only prior records; the current event body is rendered
+    separately in the Task Context Bundle. Returns an empty string when
+    nothing useful is available.
     """
     if not records:
         return ""
