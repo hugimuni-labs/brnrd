@@ -1,11 +1,16 @@
-# Design: daemon landing branch policy
+# Design: daemon branch intent resolution
 
 Status: active
 
-Design note for removing the daemon's dependency on the operator's
-ambient host checkout branch while preserving the useful property that
-design, research, and implementation tasks can commit durable repo
-changes. This hangs off the tasks/branching hub,
+Revision: 2026-05-10. This supersedes this page's earlier
+`landing_branch=` recommendation. A single configured landing branch
+removed dependence on the host checkout, but it replaced that bug with
+hidden branch authority in config. The corrected design keeps the
+useful split between execution branch and durable branch while making
+branch authority derive from the task, the thread, or structured source
+metadata before falling back to policy.
+
+This hangs off the tasks/branching hub,
 [`subject-tasks-branching.md`](subject-tasks-branching.md), and refines
 the agent-owned branch contract introduced by
 [`decision-remove-triage.md`](decision-remove-triage.md).
@@ -26,114 +31,223 @@ daemon was running. If that branch is an unrelated feature branch,
 detached, dirty, behind upstream, or simply not the operator's intended
 inbox branch, brr made the wrong thing easy.
 
-The design task is only the symptom. The underlying issue is that brr
-does not distinguish the daemon's execution checkout from the branch
-that should receive daemon-produced commits.
+The first proposed fix was an explicit `landing_branch=` config key.
+That was still the wrong shape. It made the target stable, but it also
+made branch choice a hidden, repo-local ambient fact. A user can forget
+that `.brr/config` points at `feature/payment-refactor`, ask a remote
+agent to "update the README with the new setup steps", and get a
+silent commit on the wrong line of work. The remote-first model needs
+branch authority to come from the task and its source context, not from
+a forgotten daemon setting.
+
+The hard part is timing: brr must choose a ref to create the worktree
+before the worker agent runs, but we do not want to add back an LLM
+triage call just to predict branch intent.
 
 ## Goals
 
 - Keep kb-producing design/research tasks legitimate. Do not force
   durable findings back into ephemeral chat replies.
 - Do not reintroduce an LLM triage stage or task-type classifier.
-- Make the landing target explicit and stable across daemon runs.
 - Avoid mutating an unrelated user checkout just because it is the
   process cwd.
-- Preserve the simple fast-forward-only history and branch-preservation
-  escape hatch.
-- Keep brr self-development possible, including the developer reload
-  design that expects landed source changes to appear in the checkout
-  when the operator deliberately runs that way.
+- Avoid a hidden universal landing branch that can silently mutate an
+  unrelated feature branch.
+- Preserve the simple fast-forward-only auto-land path when branch
+  authority is clear.
+- Preserve the agent-owned runtime branch escape hatch: if the agent
+  switches branches, brr records and preserves that choice instead of
+  second-guessing it.
 
-## Recommendation
+## Branch Model
 
-Add an explicit daemon landing branch policy:
+Split the overloaded "base branch" idea into three separate concepts:
 
-```ini
-landing_branch=main
-```
+| Concept | Decided when | Meaning |
+| ------- | ------------ | ------- |
+| `seed_ref` | before env prep | The commit/ref used to create `brr/<task-id>`. |
+| `auto_land_branch` | before env prep, optional | The branch brr may fast-forward if the agent stays on `brr/<task-id>`. |
+| `final_branch` | after the agent exits | The branch HEAD points at in the worktree. This is the agent's runtime branch choice. |
 
-For backwards compatibility, an unset `landing_branch` can initially
-mean "the branch checked out when `brr up` starts", with a warning in
-daemon startup output. Interactive `brr init -i` should ask which
-branch remote tasks should land on and write the answer. That changes
-the normal path from ambient per-task state to a recorded operator
-choice without breaking existing repos immediately.
-
-Task preparation should sprout from the landing ref, not raw `HEAD`:
+The daemon prepares a `BranchPlan` mechanically:
 
 ```python
-worktree.create(repo_root, task.id, base_ref=f"refs/heads/{landing_branch}")
+@dataclass(frozen=True)
+class BranchPlan:
+    seed_ref: str
+    auto_land_branch: str | None
+    authority: str
+    host_context_branch: str | None
+    expected_old_oid: str | None
+    notes: list[str]
 ```
 
-The run context should name both:
+`seed_ref` is required because git needs a starting point. `auto_land_branch`
+is optional because "no clear landing authority" is a valid state. In
+that state the task still runs, but if the agent stays on the task
+branch, brr preserves that branch rather than pretending it knows where
+to land it.
 
-- **Execution root/current branch**: where the agent is running
-  (`.brr/worktrees/<task-id>`, `brr/<task-id>`).
-- **Landing branch**: where brr will attempt a fast-forward if the
-  agent stays on the task branch.
+## Resolution Order
 
-Finalization should fast-forward the landing branch, not the host
-checkout's current branch:
+Resolve the plan without an LLM call, using only structured event
+fields, conversation records, source metadata, git refs, and explicit
+policy.
 
-1. Record the landing branch's old OID before preparing the worktree.
-2. On finalize, get the task branch HEAD.
-3. Verify the old OID is an ancestor of task HEAD.
-4. If the host checkout is currently on the landing branch, use
-   `git merge --ff-only <task-branch>` so the working tree updates too.
-5. If the host checkout is on another branch and no worktree has the
-   landing branch checked out, advance `refs/heads/<landing_branch>`
-   with `git update-ref <ref> <task-head> <old-oid>`.
-6. If the landing branch is checked out somewhere else, or the expected
-   old OID no longer matches, mark the task `conflict` and preserve the
-   task branch.
+1. **Explicit structured instruction wins.** A gate or CLI can put a
+   branch target in event metadata (`branch=`, `target_branch=`,
+   `base_branch=`, or a future normalised `branch_target=`). That is
+   authoritative because it is already structured. For prose inside the
+   event body ("do this on feature/payment-refactor"), the worker agent
+   sees the instruction and can switch branches at runtime. The daemon
+   should not grow a brittle regex parser just to claim it understood
+   free text before the run.
+2. **Existing session/thread branch wins.** If the same gate thread has
+   an unambiguous recent durable branch, use it. This should be a
+   projection from conversation task/update rows such as
+   `landed_branch`, `preserved_branch`, or `branch_target`; it is not a
+   new stream manifest with title/intent/status. If the conversation key
+   is broad and the branch history is ambiguous, pass the candidate as
+   prompt context rather than auto-targeting it.
+3. **Issue/PR/task metadata wins.** Source-specific structured metadata
+   should map directly into the plan: PR head branch, issue-linked
+   branch, git-gate source ref, task-file frontmatter branch, etc. This
+   lets remote-first sources carry branch authority without asking the
+   daemon to infer it from prose.
+4. **Current branch is context.** `gitops.current_branch(repo_root)` is
+   still useful context and should be recorded as
+   `host_context_branch`, shown in the run context, and handed to the
+   agent. It should not be an automatic remote landing target unless
+   the event source is local/interactive or an explicit operator mode
+   says "this daemon run is intentionally bound to the current branch."
+5. **Policy decides fallback behavior.** Policy is allowed to decide
+   what happens when no branch authority exists; it should not be a
+   hidden universal feature-branch target. Reasonable fallback modes:
 
-The push path must follow the same explicit target. `_push_if_needed`
-currently checks `@{u}..HEAD`, which only works for the checked-out
-branch. Once brr can fast-forward a non-checked-out landing branch, the
-push helper needs a branch-aware mode that compares and pushes
-`landing_branch` against its upstream.
+   | Mode | Behavior |
+   | ---- | -------- |
+   | `preserve` | Seed from the repo default branch if known, otherwise current `HEAD`; set no auto-land target. Completed commits on `brr/<task-id>` are preserved for human routing. Safest remote default. |
+   | `inbox` | Seed from the repo default branch and fast-forward a conventional inbox branch such as `brr/inbox`. This keeps remote work out of feature branches while allowing automated push/PR flow. |
+   | `default` | Seed from and auto-land to the repository default branch. Suitable for repos where remote tasks are intended to commit directly to mainline. |
+   | `current` | Seed from and auto-land to the host current branch. This is compatibility/development behavior and should be opt-in with startup warnings. |
 
-## Operator modes
+The key correction is that config controls the no-authority fallback
+mode, not the branch target for every task.
 
-This design leaves two honest operator workflows:
+## No Extra Agent Call
 
-- **Remote-safe inbox branch.** Set `landing_branch=brr/inbox` or
-  another dedicated branch. The daemon can advance that branch without
-  touching the user's active feature checkout. The operator merges or
-  opens a PR when ready.
-- **Self-development branch.** Set `landing_branch=<current dev
-  branch>` and run the daemon from a clean checkout on that branch.
-  Finalization updates the working tree, so an editable install plus
-  daemon developer reload can pick up source changes after the task
-  completes.
+The resolver is deterministic and runs before env prep. It does not
+classify the task, parse free-text intent, or ask a model where to
+land work. It only gathers branch authority that already exists in
+structured state.
 
-Both modes are valid. The important change is that the operator chooses
-one explicitly rather than inheriting it from whatever branch happened
-to be active.
+The normal worker prompt then includes the branch plan:
 
-## Rejected alternatives
+- the task branch it starts on;
+- the seed ref and, if present, the auto-land target;
+- the authority source (`event`, `conversation`, `source-metadata`,
+  `fallback`, etc.);
+- the host current branch as context only;
+- the rule that explicit instructions in the task body can still
+  override the plan by switching branches before editing.
+
+That keeps the old "agent owns branching at runtime" contract. If the
+agent decides the work belongs somewhere else after reading the actual
+request, it uses git inside the worktree. brr learns that decision from
+`final_branch`, not from a second structured LLM output.
+
+## Finalization
+
+Finalization should use the branch plan plus the actual git state:
+
+1. Record `auto_land_branch`'s old OID, when one exists, before
+   preparing the worktree.
+2. Create `brr/<task-id>` from `seed_ref`.
+3. After the runner exits successfully, read `final_branch`.
+4. If `final_branch` is detached, preserve the worktree/branch and
+   mark the task for human salvage.
+5. If `final_branch != brr/<task-id>`, the agent made a runtime branch
+   choice. Do not merge it elsewhere. Record `preserved_branch`, update
+   conversation branch context, and let branch-aware push policy decide
+   whether to push it.
+6. If `final_branch == brr/<task-id>` and `auto_land_branch` exists,
+   fast-forward `auto_land_branch` to task HEAD only if the recorded
+   old OID still matches and the update is a fast-forward.
+7. If `final_branch == brr/<task-id>` and no auto-land branch exists,
+   mark the task done but preserve the task branch. The response should
+   name the branch so the operator can merge, PR, or continue the same
+   thread.
+
+When the host checkout is currently on the target branch, brr can use
+`git merge --ff-only <task-branch>` so the working tree updates. When
+the target is not checked out anywhere, brr should advance the ref
+with `git update-ref <ref> <task-head> <old-oid>`. If another worktree
+has the target branch checked out, or the expected OID changed, mark
+the task `conflict` and preserve the task branch.
+
+## Push Behavior
+
+`_push_if_needed` currently checks `@{u}..HEAD`, so it only works for
+the host checkout branch. Branch intent resolution requires a
+branch-aware push helper:
+
+- push `auto_land_branch` when finalization advanced it and it has an
+  upstream;
+- push `preserved_branch` when policy allows publishing preserved
+  branches, preferably setting upstream only for brr-owned namespaces
+  such as `brr/*`;
+- otherwise skip push and surface the local branch name in progress and
+  the final response.
+
+Delivery should follow the branch that actually changed, not whatever
+branch the daemon process has checked out.
+
+## Operator Modes
+
+This design leaves several honest workflows:
+
+- **Remote-safe default.** `branch_fallback=preserve` or `inbox`.
+  Unattributed remote work cannot mutate a random feature branch.
+- **Threaded work.** A Slack thread, Telegram topic, git task file, PR,
+  or issue carries branch continuity. Follow-ups land on or continue
+  the same branch without re-asking.
+- **Explicit branch work.** The user or source metadata names the
+  branch. Structured metadata is honoured before the run; prose
+  instructions are honoured by the worker agent through normal git
+  operations inside the worktree.
+- **Self-development branch.** The operator can make current-branch
+  binding explicit via a local/interactive source or a development mode
+  on `brr up`. That is an intentional mode, not a stale config value
+  quietly affecting unrelated remote tasks.
+
+## Rejected Alternatives
 
 | Alternative | Why not |
 | ----------- | ------- |
-| Make design/research tasks chat-only | Loses the durable kb value AGENTS.md is trying to create; the kb commit is not the bug. |
-| Ask agents to switch to a named branch for design tasks | Reintroduces a task classifier by prompt convention, and agents will apply it inconsistently. |
+| Fixed `landing_branch=` config | Removes host-checkout dependence but creates hidden branch authority. A stale config can silently route unrelated tasks into a feature branch. |
 | Keep using the current branch | Status quo; remote durable work remains coupled to host checkout state. |
-| Always land on a hard-coded `brr/daemon` branch | Safe for host checkouts, but surprising for implementation tasks and incompatible with self-development reload unless the operator manually merges every change. |
-| Bring back LLM triage to choose the branch | The triage-removal decision was about removing exactly this brittle, predictive classification step. |
+| Add a pre-run LLM branch selector | Reintroduces the triage-shaped latency, cost, and parse-failure class removed by [`decision-remove-triage.md`](decision-remove-triage.md). |
+| Parse free-text branch names in the daemon | Brittle and incomplete. Structured metadata is daemon-readable; free text belongs to the worker agent that already reads the task. |
+| Make design/research tasks chat-only | Loses the durable kb value AGENTS.md is trying to create; the kb commit is not the bug. |
+| Always land on a hard-coded `brr/inbox` branch | Reasonable as a fallback mode, wrong as universal branch authority because PR/thread/explicit branch work should route to its own branch. |
 
-## Implementation notes
+## Implementation Notes
 
+- Add a small branch-resolution module rather than spreading this logic
+  across `daemon.py`, `worktree.py`, and `envs/__init__.py`.
 - `worktree.create` needs a `base_ref` parameter and tests proving the
-  task branch starts from the configured landing branch, not the
-  current checkout.
-- `RunContext` should carry `landing_branch` and the expected base OID.
-  `base_branch` can either be renamed or kept as a compatibility alias
-  in prompts/status output until the wording is cleaned up.
+  task branch starts from the resolved seed ref, not necessarily the
+  host checkout.
+- `RunContext` should carry `BranchPlan` fields. `base_branch` should
+  become compatibility wording for `auto_land_branch` only while the
+  prompt/status copy is being migrated.
+- Conversation records should include enough branch facts to project a
+  thread branch later: `branch_target`, `landed_branch`,
+  `preserved_branch`, and the resolver authority.
 - `WorktreeEnv._land_or_preserve` should call a `gitops` helper that
-  fast-forwards a named local branch safely and reports why it refused.
-- `daemon._run_worker` should read the policy once per task from config
-  and put it in task metadata, conversation records, progress payloads,
-  and the generated run context.
-- `brr docs envs`, `execution-map`, `active-task`, and the daemon prompt
-  should describe "landing branch" instead of implying the base is
-  whatever the daemon checkout currently has selected.
+  safely fast-forwards a named local branch or reports why it refused.
+- `_push_if_needed` should accept the changed branch/ref explicitly
+  rather than assuming the host checkout's `HEAD`.
+- `brr docs envs`, `execution-map`, `active-task`, the daemon prompt,
+  and progress rendering should describe the branch plan: seed,
+  optional auto-land target, final branch, and authority source.

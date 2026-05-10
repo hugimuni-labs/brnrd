@@ -1035,3 +1035,19 @@ finalization fast-forwards that target rather than blindly merging into
 the current checkout, and push logic follows the landing branch's
 upstream. This keeps agent-owned runtime branching and durable kb
 commits while removing accidental dependence on host checkout state.
+
+## [2026-05-10] design | Branch intent resolver replaces fixed landing-branch config
+
+Revised [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
+after operator feedback that a fixed `landing_branch=` config merely
+moves the wrong-branch risk from the host checkout into hidden config.
+The corrected design separates `seed_ref`, optional
+`auto_land_branch`, and the agent-observed `final_branch`. A
+deterministic resolver chooses the pre-run branch plan from structured
+event metadata, existing thread branch context, issue/PR/task metadata,
+host current branch as context, and fallback policy; it does not add a
+pre-run LLM selector or parse free-text branch instructions in the
+daemon. If no safe landing authority exists, brr should preserve the
+task branch rather than silently routing durable work into a stale
+feature branch. Updated the tasks/branching and daemon hubs plus the
+index to point at this corrected shape.

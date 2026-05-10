@@ -41,7 +41,7 @@ preserves the branch for human follow-up. Docker uses the same
 worktree-backed branch contract, with the runner command executed in a
 container.
 
-## Ambient landing branch
+## Branch intent and landing
 
 The current weak point is not that design and research tasks can
 commit kb changes; that is intentional. The kb is durable project
@@ -54,12 +54,21 @@ processed the event.
 
 The active follow-up design is
 [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md).
-The direction is to make the landing target explicit and daemon-owned:
-tasks should sprout from a configured landing branch/ref, and
-finalization should fast-forward that target, not blindly merge into
-whatever branch the host checkout is on at that moment. That preserves
-the "agent owns branching" decision while removing ambient checkout
-state from the durable landing path.
+The direction is to resolve a branch plan mechanically before env prep:
+a seed ref for `brr/<task-id>`, an optional auto-land target, the
+authority source for that choice, and the host current branch as
+context. Authority comes from structured event metadata, existing
+thread branch context, source metadata such as PR/task refs, then
+policy fallback. The host current branch is context for remote tasks,
+not automatic authority, and a fixed `landing_branch=` config is now a
+rejected shape because it creates hidden branch authority.
+
+This preserves the "agent owns branching" decision. If the agent stays
+on the task branch, brr can fast-forward the resolved target when one
+exists or preserve the task branch when no safe target exists. If the
+agent switches branches after reading the actual request, finalization
+records that git state instead of asking a separate pre-run agent to
+predict it.
 
 ## Read next
 
@@ -70,4 +79,4 @@ state from the durable landing path.
 3. [`design-env-interface.md`](design-env-interface.md) for the env
    protocol and worktree/docker durability contract.
 4. [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-   for the active landing-target fix.
+   for the active branch-intent resolver design.
