@@ -1051,3 +1051,20 @@ daemon. If no safe landing authority exists, brr should preserve the
 task branch rather than silently routing durable work into a stale
 feature branch. Updated the tasks/branching and daemon hubs plus the
 index to point at this corrected shape.
+
+## [2026-05-10] implement | Developer reload for editable brr daemon runs
+
+Implemented the daemon reload design as explicit developer behaviour,
+not an unconditional `brr up` default. `brr up --dev-reload` and
+`dev_reload=true` now enable a package-file watcher over brr's installed
+package tree (`.py`, bundled markdown, `Dockerfile`, and visible
+source-layout `pyproject.toml`). When the watcher sees a change at a
+quiescent boundary, the daemon re-execs the same Python command with
+`BRR_REEXEC=1`; the PID-file guard permits only that same-PID re-entry.
+
+The option/default decision was recorded in
+[`design-daemon-dev-reload.md`](design-daemon-dev-reload.md): reload is
+process lifecycle policy, so normal packaged installs and externally
+supervised daemons keep the small `brr up` / `brr down` model. The
+explicit mode gives editable brr development the intended workflow
+without making local packaging shape a hidden restart policy.

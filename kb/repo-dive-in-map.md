@@ -94,7 +94,11 @@ Read these in order if you want the quickest useful mental model:
 5. [Conversation log](../src/brr/conversations.py) with [conversation tests](../tests/test_conversations.py).
 6. [Runner plumbing](../src/brr/runner.py) with [runner tests](../tests/test_runner.py), then [prompt assembly](../src/brr/prompts.py) with [prompt tests](../tests/test_prompts.py).
 7. [Environment backends](../src/brr/envs/__init__.py) with [env tests](../tests/test_envs.py).
-8. [Daemon worker](../src/brr/daemon.py) with [daemon tests](../tests/test_daemon.py) and [daemon-conversation tests](../tests/test_daemon_conversations.py).
+8. [Daemon worker](../src/brr/daemon.py) plus
+   [developer reload](../src/brr/dev_reload.py) with
+   [daemon tests](../tests/test_daemon.py),
+   [developer reload tests](../tests/test_dev_reload.py), and
+   [daemon-conversation tests](../tests/test_daemon_conversations.py).
 9. [Bundled execution map](../src/brr/docs/execution-map.md) to re-read the system top-down after seeing the parts.
 
 ## Spiral reading route
@@ -222,7 +226,9 @@ sense.
 Read:
 
 - [`src/brr/daemon.py`](../src/brr/daemon.py)
+- [`src/brr/dev_reload.py`](../src/brr/dev_reload.py)
 - [daemon tests](../tests/test_daemon.py)
+- [developer reload tests](../tests/test_dev_reload.py)
 - [daemon-conversation tests](../tests/test_daemon_conversations.py)
 
 Read `_run_worker()` in passes rather than all at once:
@@ -787,6 +793,7 @@ nearly every core module because it owns the lifecycle:
 - config loading
 - PID file management
 - gate startup
+- optional developer reload watcher (`dev_reload.py`)
 - inbox scan
 - conversation key derivation
 - mechanical task construction (`Task.from_event`)
@@ -796,6 +803,8 @@ nearly every core module because it owns the lifecycle:
 - response validation
 - `kb_preflight.scan` plus a conditional kb-maintenance LLM pass (see the kb-consistency invariant below)
 - git push attempt with `push_started` / `push_done` packets
+- quiescent re-exec after package-file changes when `--dev-reload` or
+  `dev_reload=true` is active
 
 The worker emits the full run-progress packet stream (`env_prepared`,
 `attempt_started`, `attempt_failed`, `retrying`, `finalizing`, plus
@@ -808,6 +817,7 @@ helpers in `daemon.py` next to the worker loop:
 When debugging behavior, read daemon tests before modifying daemon source:
 
 - [daemon tests](../tests/test_daemon.py)
+- [developer reload tests](../tests/test_dev_reload.py)
 - [daemon-conversation tests](../tests/test_daemon_conversations.py)
 - [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
 
@@ -1013,8 +1023,8 @@ Other decisions:
 Designs and notes still open:
 
 - [Developer daemon reload design](design-daemon-dev-reload.md) —
-  active (editable install plus opt-in quiescent re-exec for brr
-  self-development).
+  shipped (editable install plus explicit opt-in quiescent re-exec for
+  brr self-development).
 - [Env Interface design](design-env-interface.md) — in flight
   (3/5 envs shipped; durability contract partial).
 - [Notes: pondering fleet](notes-pondering-fleet.md) — paused.
@@ -1054,7 +1064,8 @@ Use these heuristics while reading:
 - If a file talks about daemon process lifecycle, PID files,
   drain-and-stop behavior, or development reload, start with
   [subject-daemon.md](subject-daemon.md) and then jump to
-  [daemon.py](../src/brr/daemon.py).
+  [daemon.py](../src/brr/daemon.py) and
+  [dev_reload.py](../src/brr/dev_reload.py).
 - If a file talks about kb consistency, orphan pages, broken cross-links, or "should this kb-maintenance pass run?", jump to [kb_preflight.py](../src/brr/kb_preflight.py) and `_maybe_kb_maintenance` in [daemon.py](../src/brr/daemon.py). The maintenance contract itself lives in [AGENTS.md → "Knowledge base shape"](../src/brr/AGENTS.md), not in the brr daemon.
 - If a file talks about cwd, worktrees, Docker, response path translation, or runner credential wiring (env passthrough, login-dir mounts, git safe.directory), jump to [envs/__init__.py](../src/brr/envs/__init__.py).
 - If a file talks about transport, auth, polling, or delivery, jump to [gates](../src/brr/gates/).

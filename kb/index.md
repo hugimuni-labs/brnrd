@@ -34,8 +34,9 @@ dive-in map) and are stable until something contradicts them.
   boundary, serial worker lifecycle, local process control, and where
   developer reload fits without becoming broad product UX.
 - [Developer daemon reload design](design-daemon-dev-reload.md) —
-  *active*. Opt-in brr self-development reload mode: editable install
-  plus quiescent re-exec between tasks when brr package files change.
+  *shipped*. Opt-in brr self-development reload mode: editable install
+  plus quiescent re-exec between tasks when brr package files change;
+  kept explicit via `--dev-reload` / `dev_reload=true`, not a default.
 - [`AGENTS.md`](../AGENTS.md) — universal agent playbook (canonical
   copy lives at `src/brr/AGENTS.md`, symlinked here).
 

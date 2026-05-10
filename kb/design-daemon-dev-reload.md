@@ -1,6 +1,6 @@
 # Design: developer reload for the brr daemon
 
-Status: active
+Status: shipped on 2026-05-10
 
 Design for making brr self-development less clumsy without adding a
 general user-facing "restart brr" product feature. This page hangs off
@@ -63,10 +63,14 @@ brr up --dev-reload           # opt-in brr-development mode
 ```
 
 `--dev-reload` watches brr's installed package directory for source and
-package-data changes. When a change is detected, the daemon records that
-a reload is pending. If the daemon is idle, it immediately re-execs
-itself. If a task is active, it waits until the task has fully finalized
-and the push path has run, then re-execs.
+package-data changes. When a change is detected before the next task
+starts, the daemon immediately re-execs itself. If a task changes brr's
+package files, the daemon waits until the task has fully finalized and
+the push path has run, then re-execs.
+
+The shipped implementation also accepts `dev_reload=true` in
+`.brr/config` for operators who always want this behaviour in a brr
+self-development checkout.
 
 The re-exec keeps the same terminal session and can keep the same PID by
 calling `os.execv`/`os.execve`; there is no shell supervisor required.
@@ -79,6 +83,23 @@ It can be documented in brr's own Development section and omitted from
 the quick-start command table. If exposed in argparse help, the label
 should be explicit: "developer: re-exec daemon when brr package files
 change".
+
+## Option vs default
+
+The implementation keeps reload explicit instead of making it an
+unconditional `brr up` default. The deciding boundary is process
+lifecycle: normal users and external supervisors should be able to treat
+`brr up` as a stable foreground daemon that only stops on signal or
+crash. Developer reload deliberately replaces the process image when
+package files change, which is useful in an editable brr checkout but
+surprising in packaged installs, supervised deployments, or repos where
+the operator is not actively developing brr itself.
+
+Auto-detecting editable installs was rejected as the default because it
+turns local packaging shape into hidden lifecycle policy. A developer
+who wants the behaviour can choose `--dev-reload` or `dev_reload=true`;
+everyone else keeps the small public model: `brr up`, `brr down`, and
+an external supervisor for uptime policy.
 
 ## Why editable install is the first fix
 
@@ -95,7 +116,7 @@ change, or the editable install itself is missing.
 
 ## Implementation sketch
 
-Add a small reload helper inside `daemon.py` or a tiny private module:
+The shipped code uses a small `dev_reload.py` helper:
 
 ```python
 class DevReloadWatcher:
@@ -118,16 +139,17 @@ repo root appears to be the brr source checkout. The point is not a
 perfect file watcher; it is a cheap polling guard evaluated on the same
 cadence as the daemon inbox scan.
 
-Daemon loop changes:
+Daemon loop shape:
 
 1. `brr up` accepts `--dev-reload` and passes `dev_reload=True` to
    `daemon.start`.
-2. `daemon.start` creates the watcher only when `dev_reload` is set.
-3. Each idle scan checks `watcher.changed()`. A change marks
-   `reload_pending=True`.
-4. After each task completes, after `_push_if_needed`, check the watcher
-   again and re-exec if `reload_pending` or a new change is observed.
-5. Re-exec with the same Python and argv:
+2. `daemon.start` creates the watcher only when `dev_reload` is set or
+   `dev_reload=true` appears in `.brr/config`.
+3. Each loop checks `watcher.changed()` before claiming a pending event.
+   A change at this boundary re-execs before the next task starts.
+4. After each task completes, after `_push_if_needed`, the daemon checks
+   the watcher again and re-execs if the task changed brr package files.
+5. Re-exec uses the same Python and argv:
 
    ```python
    env = os.environ.copy()
@@ -145,7 +167,7 @@ The existing signal behavior should remain unchanged. Ctrl-C and
 
 ## Tests
 
-Add focused tests rather than an end-to-end self-reexec test:
+Covered by focused tests rather than an end-to-end self-reexec test:
 
 - watcher detects `.py` and package-data changes and ignores unchanged
   snapshots;
@@ -175,7 +197,7 @@ a project-layered Docker image, as noted in
 | `importlib.reload()` | In-process reload is fragile with threads, module globals, and already-bound functions/classes. Re-exec is simpler and closer to how daemons normally reload code. |
 | systemd/launchd/brnrd supervisor now | Correct layer for production uptime and fleet management, but too much ceremony for one-repo development reload. |
 
-## Operator workflow after this lands
+## Operator workflow
 
 For brr self-development:
 

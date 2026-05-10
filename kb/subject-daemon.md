@@ -84,12 +84,13 @@ tasks; the generated run context and bundled internals doc both frame
 `brr up` / `brr down` as human-operator concerns.
 
 For brr self-development, the restart pain is real but narrower than a
-product restart feature. The current direction is captured in
+product restart feature. The shipped path is captured in
 [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md): use an
-editable install, then add an opt-in development reload mode that
-re-execs the foreground daemon between tasks when brr's own source files
-change. That reload path should be terminal-owned and quiescent-only,
-not a remote command.
+editable install, then run `brr up --dev-reload` (or set
+`dev_reload=true`) so the foreground daemon re-execs between tasks when
+brr's own package files change. The reload path remains terminal-owned
+and quiescent-only, not a remote command, and it stays explicit rather
+than becoming unconditional `brr up` behaviour.
 
 ## Status and troubleshooting
 
