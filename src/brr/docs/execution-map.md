@@ -87,6 +87,10 @@ base branch can fast-forward, the branch is folded back. Otherwise
 fast-forward), the branch is preserved as-is. The worktree is removed
 unless debug mode keeps it for inspection.
 
+When `brr up --dev-reload` or `dev_reload=true` is active, this is also
+the safe boundary where the daemon may re-exec itself if brr package
+files changed. Reload never interrupts a running worker.
+
 ## Artifact locations
 
 | Artifact      | Path                                        | Persists across runs                |
