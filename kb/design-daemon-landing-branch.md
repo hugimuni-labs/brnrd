@@ -187,9 +187,17 @@ the task `conflict` and preserve the task branch.
 
 ## Push Behavior
 
-`_push_if_needed` currently checks `@{u}..HEAD`, so it only works for
-the host checkout branch. Branch intent resolution requires a
-branch-aware push helper:
+Updated 2026-05-10: a narrow branch-aware push fix has shipped for the
+current finalization model. `_push_if_needed` can now inspect an
+explicit preserved branch and push it when it already tracks an
+upstream, so an agent that deliberately switches to `main` and commits
+there no longer leaves that branch local-only just because the daemon
+checkout is on another branch. This does not implement the full
+branch-intent resolver below; it closes the delivery bug for branches
+the agent actually changed and whose upstream already exists.
+
+Branch intent resolution still requires a richer branch-aware push
+helper:
 
 - push `auto_land_branch` when finalization advanced it and it has an
   upstream;

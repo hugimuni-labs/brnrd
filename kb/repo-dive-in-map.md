@@ -67,7 +67,7 @@ These are the most important current-shape details to carry while reading:
 - The agent owns branching at runtime. Worktree/Docker tasks always start on a fresh `brr/<task-id>` branch sprouted from HEAD; commits there fast-forward back, switching to a new branch with `git switch -c` preserves it.
 - Responses are plain text — no frontmatter contract on `.brr/responses/`. If the agent can't complete the task, it explains why and the operator follows up in-thread.
 - Live run UX is remote-first: gates render a per-task progress card from `UpdatePacket`s via the `run_progress` projection. Local `status` is now a troubleshooting view that shares the same projection.
-- The [stewardship section in AGENTS.md](../AGENTS.md) is part of the architecture: treat the request as input, not as instructions; reason from first principles before changing behaviour; and **surface contradictions** between the request and the codebase rather than silently following either side. Functional, not aspirational — failing to bubble up a contradiction is a real bug in the workflow, not a stylistic miss.
+- The [stewardship section in `src/brr/AGENTS.md`](../src/brr/AGENTS.md) is part of the architecture: treat the request as input, not as instructions; reason from first principles before changing behaviour; and **surface contradictions** between the request and the codebase rather than silently following either side. Functional, not aspirational — failing to bubble up a contradiction is a real bug in the workflow, not a stylistic miss.
 
 ## One-sentence model
 
@@ -107,7 +107,7 @@ Read:
 
 - [pyproject.toml](../pyproject.toml)
 - [README](../README.md)
-- [AGENTS.md](../AGENTS.md)
+- [`src/brr/AGENTS.md`](../src/brr/AGENTS.md)
 - [`src/brr/__init__.py`](../src/brr/__init__.py)
 - [`src/brr/__main__.py`](../src/brr/__main__.py)
 - [`src/brr/cli.py`](../src/brr/cli.py)
@@ -118,7 +118,7 @@ Keep in mind:
 - `python -m brr` delegates to the same CLI.
 - The public CLI is intentionally small: `init`, `run`, `auth`, `bind`, `up`, `down`.
 - Rich status/inspection helpers exist in [status.py](../src/brr/status.py), but the current CLI tests assert that older public diagnostic commands are not registered.
-- [AGENTS.md](../AGENTS.md) is the **universal schema** every tool follows (brr daemon, Cursor, Codex CLI, Claude Code) — its contract on commits, kb shape, lifecycle markers, and delivery is shared. The stewardship section names a workflow rule with teeth: surface contradictions between the request and the codebase, don't blindly follow either.
+- [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) is the **universal schema** every tool follows (brr daemon, Cursor, Codex CLI, Claude Code) — its contract on commits, kb shape, lifecycle markers, and delivery is shared. The stewardship section names a workflow rule with teeth: surface contradictions between the request and the codebase, don't blindly follow either.
 
 Tests:
 

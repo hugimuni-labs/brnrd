@@ -221,6 +221,11 @@ it for inspection. Docker tasks use the same worktree-backed branch
 behavior, with the runner command executed inside the configured
 container image.
 
+The push step follows the branch finalization actually changed. A
+folded task pushes the daemon checkout branch. A preserved branch is
+pushed only when it already tracks an upstream; brr does not invent an
+upstream for arbitrary agent-created branches.
+
 The full env story — built-ins, configuration knobs, the docker
 credential wiring, the durability contract, and the salvage rule —
 lives in [`envs.md`](envs.md).

@@ -271,6 +271,56 @@ def test_debug_mode_from_config(tmp_path, monkeypatch):
     assert seen_debug == [True], "debug=True from config should propagate to worker"
 
 
+def test_start_pushes_preserved_branch_after_worker_switches(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    event = {
+        "id": "evt-main",
+        "status": "pending",
+        "_path": tmp_path / ".brr" / "inbox" / "evt-main.md",
+    }
+    event["_path"].write_text(
+        "---\nid: evt-main\nstatus: pending\n---\nupdate main\n", encoding="utf-8",
+    )
+    statuses: list[str] = []
+    push_branches: list[str | None] = []
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(
+        daemon.protocol,
+        "list_pending",
+        lambda _inbox: [event] if not statuses else [],
+    )
+    monkeypatch.setattr(daemon.protocol, "set_status", lambda _ev, status: statuses.append(status))
+    monkeypatch.setattr(
+        daemon,
+        "_run_worker",
+        lambda *_a, **_k: Task(
+            id="task-main",
+            event_id="evt-main",
+            body="update main",
+            status="done",
+            meta={"preserved_branch": "main"},
+        ),
+    )
+
+    def capture_push(_repo_root, **kwargs):
+        push_branches.append(kwargs.get("branch"))
+        raise StopIteration
+
+    monkeypatch.setattr(daemon, "_push_if_needed", capture_push)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert statuses == ["processing", "done"]
+    assert push_branches == ["main"]
+
+
 def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     event = _make_event(tmp_path, "evt-kb", body="update docs")

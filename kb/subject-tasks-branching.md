@@ -37,9 +37,11 @@ On success, `WorktreeEnv.finalize` reads the final branch state. If the
 agent stayed on the original task branch and the base can fast-forward,
 brr lands the branch and deletes the throwaway worktree/branch. If the
 agent switched branches, detached HEAD, or cannot fast-forward, brr
-preserves the branch for human follow-up. Docker uses the same
-worktree-backed branch contract, with the runner command executed in a
-container.
+preserves the branch for human follow-up. The daemon push step follows
+that finalization result: folded work pushes the daemon checkout
+branch, while a preserved branch is pushed only if it already has an
+upstream. Docker uses the same worktree-backed branch contract, with
+the runner command executed in a container.
 
 ## Branch intent and landing
 

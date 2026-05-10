@@ -87,6 +87,11 @@ base branch can fast-forward, the branch is folded back. Otherwise
 fast-forward), the branch is preserved as-is. The worktree is removed
 unless debug mode keeps it for inspection.
 
+After finalization, push delivery follows the branch that actually
+changed. Folded work is pushed from the daemon checkout branch.
+Preserved branches are pushed only when they already have an upstream;
+local-only preserved branches remain local and named in task metadata.
+
 ## Artifact locations
 
 | Artifact      | Path                                        | Persists across runs                |

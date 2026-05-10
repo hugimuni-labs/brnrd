@@ -110,17 +110,33 @@ def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[th
 def _push_if_needed(
     repo_root: Path,
     *,
+    branch: str | None = None,
     conversation_key: str | None = None,
     task_id: str | None = None,
 ) -> None:
     """Push to origin if there are unpushed commits.
 
+    When *branch* is provided, inspect and push that local branch
+    instead of assuming the daemon checkout's ``HEAD`` is the branch
+    that changed.
+
     When *conversation_key* is provided, emit ``push_started``/
     ``push_done`` update packets so gates can render delivery progress.
     """
     try:
+        log_range = "@{u}..HEAD"
+        push_command = ["git", "push"]
+        push_branch = branch or gitops.current_branch(repo_root)
+        if branch:
+            upstream = _branch_upstream(repo_root, branch)
+            if upstream is None:
+                return
+            remote, merge_ref = upstream
+            log_range = f"{branch}@{{upstream}}..{branch}"
+            push_command = ["git", "push", remote, f"{branch}:{merge_ref}"]
+
         result = subprocess.run(
-            ["git", "log", "@{u}..HEAD", "--oneline"],
+            ["git", "log", log_range, "--oneline"],
             cwd=repo_root, capture_output=True, text=True, timeout=10,
         )
         if not (result.returncode == 0 and result.stdout.strip()):
@@ -128,7 +144,7 @@ def _push_if_needed(
         commits = [c for c in result.stdout.strip().splitlines() if c.strip()]
         commit_count = len(commits)
         brr_dir = gitops.shared_brr_dir(repo_root)
-        push_payload: dict = {"commits": commit_count}
+        push_payload: dict = {"commits": commit_count, "branch": push_branch}
         if task_id:
             push_payload["task_id"] = task_id
         if conversation_key:
@@ -139,7 +155,7 @@ def _push_if_needed(
             ))
         print("[brr] pushing changes...")
         push = subprocess.run(
-            ["git", "push"], cwd=repo_root,
+            push_command, cwd=repo_root,
             capture_output=True, text=True, timeout=60,
         )
         if conversation_key:
@@ -156,6 +172,33 @@ def _push_if_needed(
             ))
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+
+
+def _branch_upstream(repo_root: Path, branch: str) -> tuple[str, str] | None:
+    """Return ``(remote, merge_ref)`` for a local branch's upstream."""
+    remote = subprocess.run(
+        ["git", "config", "--get", f"branch.{branch}.remote"],
+        cwd=repo_root, capture_output=True, text=True, timeout=10,
+    )
+    merge = subprocess.run(
+        ["git", "config", "--get", f"branch.{branch}.merge"],
+        cwd=repo_root, capture_output=True, text=True, timeout=10,
+    )
+    if remote.returncode != 0 or merge.returncode != 0:
+        return None
+    remote_name = remote.stdout.strip()
+    merge_ref = merge.stdout.strip()
+    if not remote_name or not merge_ref:
+        return None
+    return remote_name, merge_ref
+
+
+def _push_branch_for_task(task: Task) -> str | None:
+    """Return the branch that finalization left unmerged, if any."""
+    preserved_branch = task.meta.get("preserved_branch")
+    if isinstance(preserved_branch, str) and preserved_branch.strip():
+        return preserved_branch.strip()
+    return None
 
 
 # ── Worker ───────────────────────────────────────────────────────────
@@ -675,6 +718,7 @@ def start(repo_root: Path, *, debug: bool | None = None) -> None:
 
                 _push_if_needed(
                     repo_root,
+                    branch=_push_branch_for_task(task),
                     conversation_key=task.conversation_key,
                     task_id=task.id,
                 )

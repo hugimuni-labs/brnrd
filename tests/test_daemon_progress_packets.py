@@ -314,3 +314,84 @@ def test_push_emits_started_and_done_packets(tmp_path, monkeypatch):
     types = _packet_types(brr_dir, conv_key)
     assert "push_started" in types
     assert "push_done" in types
+
+
+def test_push_can_target_preserved_branch_with_upstream(tmp_path, monkeypatch):
+    """A branch changed outside the daemon checkout should still be pushed."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    conv_key = "telegram:100:"
+
+    monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+
+    calls = []
+
+    class _Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(args, **kwargs):
+        calls.append(args)
+        if args[:3] == ["git", "config", "--get"]:
+            if args[-1] == "branch.main.remote":
+                return _Result(returncode=0, stdout="origin\n")
+            if args[-1] == "branch.main.merge":
+                return _Result(returncode=0, stdout="refs/heads/main\n")
+        if args[:2] == ["git", "log"]:
+            assert args[2] == "main@{upstream}..main"
+            return _Result(returncode=0, stdout="abc Docs\n")
+        if args[:2] == ["git", "push"]:
+            return _Result(returncode=0)
+        return _Result(returncode=1)
+
+    monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
+
+    daemon._push_if_needed(
+        tmp_path,
+        branch="main",
+        conversation_key=conv_key,
+        task_id="task-push",
+    )
+
+    assert ["git", "push", "origin", "main:refs/heads/main"] in calls
+    records = _update_records(brr_dir, conv_key)
+    push_started = next(r for r in records if r.get("type") == "push_started")
+    assert push_started["branch"] == "main"
+    assert "push_done" in [r.get("type") for r in records]
+
+
+def test_push_skips_preserved_branch_without_upstream(tmp_path, monkeypatch):
+    """Preserved local-only branches are surfaced locally, not invented upstreams."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    conv_key = "telegram:101:"
+
+    monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+
+    calls = []
+
+    class _Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(args, **kwargs):
+        calls.append(args)
+        if args[:3] == ["git", "config", "--get"]:
+            return _Result(returncode=1)
+        raise AssertionError(f"unexpected git call: {args}")
+
+    monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
+
+    daemon._push_if_needed(
+        tmp_path,
+        branch="experiment/no-upstream",
+        conversation_key=conv_key,
+        task_id="task-push",
+    )
+
+    assert all(args[:2] != ["git", "push"] for args in calls)
+    assert _packet_types(brr_dir, conv_key) == []

@@ -63,7 +63,9 @@ branch. Three valid outcomes:
   fast-forwards it back onto the base branch after the run.
 - **Work to keep on its own branch** — run
   `git switch -c <meaningful-name>` before committing. brr preserves
-  whatever branch you end up on without merging.
+  whatever branch you end up on without merging. If that branch already
+  tracks an upstream, brr attempts to push it; local-only preserved
+  branches stay local for human routing.
 
 If something feels off — unfamiliar metadata, a missing path, an
 ambiguous instruction, a service you cannot reach — say so in the

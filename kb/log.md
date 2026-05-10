@@ -1036,6 +1036,25 @@ the current checkout, and push logic follows the landing branch's
 upstream. This keeps agent-owned runtime branching and durable kb
 commits while removing accidental dependence on host checkout state.
 
+## [2026-05-10] fix | Push the branch a daemon task actually changed
+
+A live Telegram task asked the agent to update docs directly on
+`main`. The agent switched from the task branch to `main` and committed
+there, but daemon delivery still ran `git push` from the host checkout
+branch (`ux-imporvements`). Result: local `main` advanced, while
+`origin/main` stayed behind.
+
+Fixed the narrow delivery bug: `_push_if_needed` now accepts an
+explicit branch, computes unpushed commits against that branch's
+upstream, and pushes that branch/refspec. The daemon passes a task's
+`preserved_branch` after finalization, so agent-directed branch switches
+to existing upstream-tracking branches are delivered instead of left
+local-only. Local-only preserved branches still stay local for human
+routing; the broader branch-intent resolver design remains active. The
+repo dive-in map link fix was also applied on the current development
+branch, since the previous docs-only commit existed only on local
+`main`.
+
 ## [2026-05-10] design | Branch intent resolver replaces fixed landing-branch config
 
 Revised [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
