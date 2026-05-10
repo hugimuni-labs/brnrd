@@ -60,6 +60,27 @@ replaces the old command cheat sheet for task/event recovery.
 The agent does not run daemon lifecycle commands. `brr up` and
 `brr down` are managed by the human operator.
 
+## Developer reload
+
+For brr self-development, use an editable install and start the
+foreground daemon with:
+
+```
+brr up --dev-reload
+```
+
+This is an opt-in developer mode, not the default daemon lifecycle. It
+watches brr's installed package files (`.py`, bundled markdown,
+`Dockerfile`, and source-layout `pyproject.toml` when visible). When a
+change is detected, the daemon re-execs the same Python command at a
+safe boundary: before starting the next pending task, or after the
+current task has produced its response, run kb maintenance, finalized,
+and attempted push.
+
+The same mode can be enabled with `dev_reload=true` in `.brr/config`.
+Normal `brr up` stays a stable foreground process; use an external
+supervisor if you want restart policy outside local development.
+
 ## Override model
 
 brr ships prompts and docs with the package. Lightweight runtime
