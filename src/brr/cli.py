@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("up", help="start the daemon")
     p.add_argument("--debug", action="store_true", default=None,
                     help="keep worktrees and write traces for troubleshooting")
+    p.add_argument("--dev-reload", action="store_true", default=None,
+                   help="developer: re-exec daemon when brr package files change")
     p.set_defaults(func=cmd_up)
 
     p = sub.add_parser("down", help="stop the daemon")
@@ -101,7 +103,7 @@ def cmd_setup(args):
 def cmd_up(args):
     from . import daemon as daemon_mod
     root = _repo_root()
-    daemon_mod.start(root, debug=args.debug)
+    daemon_mod.start(root, debug=args.debug, dev_reload=args.dev_reload)
 
 
 def cmd_down(args):

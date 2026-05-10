@@ -151,6 +151,15 @@ pip install -e ".[dev]"
 pytest
 ```
 
+For remote-assisted brr development, run the daemon from the editable
+install with developer reload enabled:
+
+```bash
+brr up --dev-reload
+```
+
+The daemon re-execs itself between tasks when brr package files change.
+
 ## License
 
 MIT

@@ -271,6 +271,172 @@ def test_debug_mode_from_config(tmp_path, monkeypatch):
     assert seen_debug == [True], "debug=True from config should propagate to worker"
 
 
+def test_start_allows_same_pid_during_reexec(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    calls: list[str] = []
+
+    monkeypatch.setenv("BRR_REEXEC", "1")
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: daemon.os.getpid())
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: calls.append("write-pid"))
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: calls.append("clear-pid"))
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    def stop_on_scan(_inbox):
+        calls.append("scan")
+        raise StopIteration
+
+    monkeypatch.setattr(daemon.protocol, "list_pending", stop_on_scan)
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert calls == ["write-pid", "scan", "clear-pid"]
+
+
+def test_start_rejects_existing_pid_without_reexec(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    monkeypatch.delenv("BRR_REEXEC", raising=False)
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: daemon.os.getpid())
+
+    with pytest.raises(SystemExit) as exc:
+        daemon.start(tmp_path)
+
+    assert "daemon already running" in str(exc.value)
+
+
+def test_start_rejects_different_pid_during_reexec(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    monkeypatch.setenv("BRR_REEXEC", "1")
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: daemon.os.getpid() + 1)
+
+    with pytest.raises(SystemExit) as exc:
+        daemon.start(tmp_path)
+
+    assert "daemon already running" in str(exc.value)
+
+
+def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    order: list[str] = []
+
+    class FakeWatcher:
+        def changed(self):
+            order.append("watch")
+            return True
+
+    monkeypatch.setattr(
+        daemon.reload_mod.DevReloadWatcher,
+        "for_repo",
+        classmethod(lambda cls, _repo_root: order.append("watcher") or FakeWatcher()),
+    )
+    monkeypatch.setattr(
+        daemon.reload_mod,
+        "reexec",
+        lambda: (order.append("reexec") or (_ for _ in ()).throw(StopIteration)),
+    )
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: order.append("write-pid"))
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: order.append("clear-pid"))
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {"dev_reload": True})
+    monkeypatch.setattr(
+        daemon.protocol,
+        "list_pending",
+        lambda _inbox: (_ for _ in ()).throw(AssertionError("should reexec first")),
+    )
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert order == ["write-pid", "watcher", "watch", "reexec", "clear-pid"]
+
+
+def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
+    _write_repo_scaffold(tmp_path)
+    event = {
+        "id": "evt-reload",
+        "status": "pending",
+        "_path": tmp_path / ".brr" / "inbox" / "evt-reload.md",
+    }
+    event["_path"].write_text(
+        "---\nid: evt-reload\nstatus: pending\n---\nhelp\n",
+        encoding="utf-8",
+    )
+    order: list[str] = []
+
+    class FakeWatcher:
+        def __init__(self):
+            self.calls = 0
+
+        def changed(self):
+            self.calls += 1
+            order.append(f"watch:{self.calls}")
+            return self.calls == 2
+
+    watcher = FakeWatcher()
+    monkeypatch.setattr(
+        daemon.reload_mod.DevReloadWatcher,
+        "for_repo",
+        classmethod(lambda cls, _repo_root: watcher),
+    )
+    monkeypatch.setattr(
+        daemon.reload_mod,
+        "reexec",
+        lambda: (_ for _ in ()).throw(StopIteration),
+    )
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: order.append("write-pid"))
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: order.append("clear-pid"))
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(
+        daemon.protocol,
+        "list_pending",
+        lambda _inbox: [event],
+    )
+    monkeypatch.setattr(
+        daemon.protocol,
+        "set_status",
+        lambda _event, status: order.append(f"status:{status}"),
+    )
+    monkeypatch.setattr(
+        daemon,
+        "_run_worker",
+        lambda *_args, **_kwargs: (
+            order.append("worker")
+            or Task(
+                id="task-reload",
+                event_id="evt-reload",
+                body="help",
+                status="done",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        daemon,
+        "_push_if_needed",
+        lambda *_args, **_kwargs: order.append("push"),
+    )
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path, dev_reload=True)
+
+    assert order == [
+        "write-pid",
+        "watch:1",
+        "status:processing",
+        "worker",
+        "status:done",
+        "push",
+        "watch:2",
+        "clear-pid",
+    ]
+
+
 def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     event = _make_event(tmp_path, "evt-kb", body="update docs")
