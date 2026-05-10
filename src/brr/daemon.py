@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import config as conf
 from . import conversations
+from . import dev_reload as reload_mod
 from . import envs
 from . import gitops
 from . import kb_preflight
@@ -616,18 +617,28 @@ def _maybe_kb_maintenance(
 # ── Main loop ────────────────────────────────────────────────────────
 
 
-def start(repo_root: Path, *, debug: bool | None = None) -> None:
+def start(
+    repo_root: Path,
+    *,
+    debug: bool | None = None,
+    dev_reload: bool | None = None,
+) -> None:
     """Run the daemon main loop (blocking, foreground).
 
     *debug* enables trace persistence and worktree retention.  When
     ``None``, falls back to the ``debug`` key in ``.brr/config``.
+
+    *dev_reload* enables the brr-development re-exec watcher.  When
+    ``None``, falls back to the ``dev_reload`` key in ``.brr/config``.
     """
     brr_dir = gitops.shared_brr_dir(repo_root)
     inbox_dir = brr_dir / "inbox"
     responses_dir = brr_dir / "responses"
 
-    if read_pid(brr_dir):
+    existing_pid = read_pid(brr_dir)
+    if existing_pid and not reload_mod.is_reexec_for_current_process(existing_pid):
         raise SystemExit("[brr] daemon already running")
+    reload_mod.clear_reexec_marker()
     if not (repo_root / "AGENTS.md").exists():
         raise SystemExit("[brr] run `brr init` first")
 
@@ -644,6 +655,14 @@ def start(repo_root: Path, *, debug: bool | None = None) -> None:
     cfg = conf.load_config(repo_root)
     max_retries = int(cfg.get("response_retries", 1))
     debug_mode = debug if debug is not None else bool(cfg.get("debug", False))
+    dev_reload_mode = (
+        dev_reload if dev_reload is not None
+        else bool(cfg.get("dev_reload", False))
+    )
+    reload_watcher = (
+        reload_mod.DevReloadWatcher.for_repo(repo_root)
+        if dev_reload_mode else None
+    )
 
     gate_threads = _start_gates(brr_dir, inbox_dir, responses_dir)
     if not gate_threads:
@@ -651,10 +670,16 @@ def start(repo_root: Path, *, debug: bool | None = None) -> None:
 
     if debug_mode:
         print("[brr] debug mode enabled (traces + worktree retention)")
+    if reload_watcher is not None:
+        print("[brr] developer reload enabled")
     print(f"[brr] daemon started (pid {os.getpid()})")
 
     try:
         while running:
+            if reload_watcher is not None and reload_watcher.changed():
+                print("[brr] package files changed; re-execing daemon")
+                reload_mod.reexec()
+
             events = protocol.list_pending(inbox_dir)
             if events:
                 event = events[0]
@@ -678,6 +703,9 @@ def start(repo_root: Path, *, debug: bool | None = None) -> None:
                     conversation_key=task.conversation_key,
                     task_id=task.id,
                 )
+                if reload_watcher is not None and reload_watcher.changed():
+                    print("[brr] package files changed during task; re-execing daemon")
+                    reload_mod.reexec()
             else:
                 time.sleep(_SCAN_INTERVAL)
 
