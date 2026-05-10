@@ -56,12 +56,13 @@ dive-in map) and are stable until something contradicts them.
 - **Hub: [tasks and branching](subject-tasks-branching.md)** —
   synthesis of mechanical task construction, environment resolution,
   agent-owned runtime branching, worktree finalization, and the active
-  landing-branch design that removes ambient host checkout state from
-  daemon-produced commits.
-- [Daemon landing branch design](design-daemon-landing-branch.md) —
-  *active*. Make the branch that receives daemon-produced commits an
-  explicit operator choice rather than whatever branch the host checkout
-  happens to be on when a remote task runs.
+  branch-intent design that removes both ambient host checkout state and
+  hidden universal landing-branch config from daemon-produced commits.
+- [Daemon branch intent design](design-daemon-landing-branch.md) —
+  *active*. Resolve seed refs and optional auto-land targets from
+  explicit structured event data, conversation/thread branch context,
+  issue/PR/task metadata, host branch context, and fallback policy
+  without adding a pre-run LLM branch selector.
 - [Branch Modes Plan](plan-branch-modes.md) — *shipped, with
   revisions*. Branch and env are task properties, the agent owns
   branching at runtime. Triage and `needs_context` were reversed —

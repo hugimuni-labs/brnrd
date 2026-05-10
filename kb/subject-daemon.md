@@ -124,8 +124,8 @@ Read these in order when changing daemon behavior:
    backend responsibilities.
 5. [`subject-tasks-branching.md`](subject-tasks-branching.md) and
    [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-   for task construction, branch landing, and the active fix for
-   ambient host-checkout coupling.
+   for task construction, branch intent resolution, and the active fix
+   for ambient host-checkout and hidden landing-config coupling.
 6. [`decision-drop-streams.md`](decision-drop-streams.md) and
    [`decision-remove-triage.md`](decision-remove-triage.md) for the
    recent simplifications that keep daemon context lean.
