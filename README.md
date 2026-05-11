@@ -138,7 +138,7 @@ Docker mode wires credentials automatically: brr forwards
 host's `~/.claude/`, `~/.codex/`, `~/.gemini/` (when present) into the
 container so subscription auth works without extra config. See
 `src/brr/docs/envs.md` for the full breakdown — image expectations, the
-minimum viable Dockerfile, and the durability contract.
+bundled runner image, and the durability contract.
 
 Branching is mostly task-internal.  brr uses branches/worktrees to stage
 reviewable code changes or continue an explicitly named branch, but users

@@ -326,16 +326,16 @@ def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypa
             order.append("watch")
             return True
 
+    def _stop_after_reexec():
+        order.append("reexec")
+        raise StopIteration
+
     monkeypatch.setattr(
         daemon.reload_mod.DevReloadWatcher,
         "for_repo",
         classmethod(lambda cls, _repo_root: order.append("watcher") or FakeWatcher()),
     )
-    monkeypatch.setattr(
-        daemon.reload_mod,
-        "reexec",
-        lambda: (order.append("reexec") or (_ for _ in ()).throw(StopIteration)),
-    )
+    monkeypatch.setattr(daemon.reload_mod, "reexec", _stop_after_reexec)
     monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
     monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: order.append("write-pid"))
     monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: order.append("clear-pid"))
@@ -377,16 +377,16 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
             return self.calls == 2
 
     watcher = FakeWatcher()
+
+    def _stop_after_reexec():
+        raise StopIteration
+
     monkeypatch.setattr(
         daemon.reload_mod.DevReloadWatcher,
         "for_repo",
         classmethod(lambda cls, _repo_root: watcher),
     )
-    monkeypatch.setattr(
-        daemon.reload_mod,
-        "reexec",
-        lambda: (_ for _ in ()).throw(StopIteration),
-    )
+    monkeypatch.setattr(daemon.reload_mod, "reexec", _stop_after_reexec)
     monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
     monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: order.append("write-pid"))
     monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: order.append("clear-pid"))
