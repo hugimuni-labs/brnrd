@@ -78,15 +78,16 @@ rendering — commits and PRs are its delivery path.
 ## Run progress projection
 
 `brr.run_progress` folds conversation records into a `RunProgressView`
-per task: header fields (runner, env, branch ← base) plus a
+per task: header fields (runner, env, branch ← seed/target) plus a
 `phase_history` of `PhaseEntry` records (preparing / running [per
 attempt] / finalizing / delivered|failed|conflict). The projection is
 the single source of truth for how a run looks; gate cards and
 `brr inspect` render off the same view.
 
 `render_text(view, *, compact, style)` produces the visible card.
-Compact mode is the chat surface: the `runner · env · branch ← base`
-header above a vertical phase log where closed entries are wrapped in
+Compact mode is the chat surface: the `runner · env · branch ← seed`
+or `runner · env · branch ← target` header above a vertical phase log
+where closed entries are wrapped in
 the gate-supplied strike-through tokens (`<s>…</s>` for Telegram HTML,
 `~text~` for Slack mrkdwn) and the live entry shows its rolling
 elapsed (`running · 4m 02s`). Verbose mode (`compact=False`) is the

@@ -21,6 +21,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import branching
 from . import config as conf
 from . import conversations
 from . import dev_reload as reload_mod
@@ -115,25 +116,59 @@ def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[th
 def _push_if_needed(
     repo_root: Path,
     *,
+    branch: str | None = None,
     conversation_key: str | None = None,
     task_id: str | None = None,
 ) -> None:
-    """Push to origin if there are unpushed commits.
+    """Push the changed branch when there are commits to publish.
 
     When *conversation_key* is provided, emit ``push_started``/
     ``push_done`` update packets so gates can render delivery progress.
     """
+    branch_name = branch or gitops.current_branch(repo_root)
+    if not branch_name or branch_name == "HEAD":
+        return
+
     try:
-        result = subprocess.run(
-            ["git", "log", "@{u}..HEAD", "--oneline"],
-            cwd=repo_root, capture_output=True, text=True, timeout=10,
-        )
-        if not (result.returncode == 0 and result.stdout.strip()):
+        upstream = gitops.branch_upstream(repo_root, branch_name)
+        remote = gitops.branch_remote(repo_root, branch_name)
+        set_upstream = False
+
+        if upstream:
+            commits = _commits_between(repo_root, upstream, branch_name)
+            if not commits:
+                return
+            if not remote:
+                remote = upstream.split("/", 1)[0] if "/" in upstream else None
+            remote_branch = upstream.split("/", 1)[1] if "/" in upstream else branch_name
+            push_cmd = [
+                "git", "push", remote or "origin",
+                f"{branch_name}:{remote_branch}",
+            ]
+        else:
+            # Only publish new branches automatically for brr-owned task
+            # branches. Human-named branches without upstream may carry
+            # local-only intent, so leave them for the operator.
+            if not branch_name.startswith("brr/"):
+                return
+            remote = gitops.default_remote(repo_root)
+            if not remote:
+                return
+            commits = _commits_since_seed(repo_root, branch_name)
+            if not commits:
+                return
+            set_upstream = True
+            push_cmd = ["git", "push", "-u", remote, branch_name]
+
+        if not remote:
             return
-        commits = [c for c in result.stdout.strip().splitlines() if c.strip()]
         commit_count = len(commits)
         brr_dir = gitops.shared_brr_dir(repo_root)
-        push_payload: dict = {"commits": commit_count}
+        push_payload: dict = {
+            "commits": commit_count,
+            "branch": branch_name,
+            "set_upstream": set_upstream,
+        }
         if task_id:
             push_payload["task_id"] = task_id
         if conversation_key:
@@ -142,9 +177,9 @@ def _push_if_needed(
                 conversation_key=conversation_key,
                 payload=push_payload,
             ))
-        print("[brr] pushing changes...")
+        print(f"[brr] pushing {branch_name}...")
         push = subprocess.run(
-            ["git", "push"], cwd=repo_root,
+            push_cmd, cwd=repo_root,
             capture_output=True, text=True, timeout=60,
         )
         if conversation_key:
@@ -161,6 +196,33 @@ def _push_if_needed(
             ))
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+
+
+def _commits_between(repo_root: Path, base_ref: str, branch: str) -> list[str]:
+    result = subprocess.run(
+        ["git", "log", f"{base_ref}..{branch}", "--oneline"],
+        cwd=repo_root, capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        return []
+    return [c for c in result.stdout.splitlines() if c.strip()]
+
+
+def _commits_since_seed(repo_root: Path, branch: str) -> list[str]:
+    seed = gitops.default_branch(repo_root) or "HEAD"
+    merge_base = subprocess.run(
+        ["git", "merge-base", seed, branch],
+        cwd=repo_root, capture_output=True, text=True, timeout=10,
+    )
+    if merge_base.returncode == 0 and merge_base.stdout.strip():
+        return _commits_between(repo_root, merge_base.stdout.strip(), branch)
+    result = subprocess.run(
+        ["git", "log", branch, "--oneline"],
+        cwd=repo_root, capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        return []
+    return [c for c in result.stdout.splitlines() if c.strip()]
 
 
 # ── Worker ───────────────────────────────────────────────────────────
@@ -185,9 +247,20 @@ def _run_worker(
     brr_dir = gitops.shared_brr_dir(repo_root)
     tasks_dir = brr_dir / "tasks"
     runner_name = runner.resolve_runner(repo_root)
-    base_branch = gitops.current_branch(repo_root)
 
     conv_key = conversations.conversation_key_for_event(event) or ""
+    prior_conversation = (
+        conversations.read_recent(brr_dir, conv_key, limit=20)
+        if conv_key else []
+    )
+    branch_plan = branching.resolve_branch_plan(
+        repo_root,
+        event,
+        cfg,
+        conversation_records=prior_conversation,
+    )
+    base_branch = branch_plan.auto_land_branch
+
     if conv_key:
         conversations.append_event(brr_dir, conv_key, event)
         updates.emit(brr_dir, updates.UpdatePacket(
@@ -212,7 +285,7 @@ def _run_worker(
     print(f"[brr] task {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)
-    task.meta["base_branch"] = base_branch
+    task.meta.update(branch_plan.meta_items())
 
     event_body_for_prompt = event.get("body", "") or ""
 
@@ -223,6 +296,7 @@ def _run_worker(
             repo_root,
             cfg,
             base_branch=base_branch,
+            branch_plan=branch_plan,
             response_path=resp_path,
             debug=debug,
         )
@@ -248,6 +322,9 @@ def _run_worker(
             "task_id": task.id,
             "env": task.env,
             "branch_name": branch_name,
+            "seed_ref": branch_plan.seed_ref,
+            "auto_land_branch": branch_plan.auto_land_branch,
+            "branch_authority": branch_plan.authority,
         },
     ))
 
@@ -257,6 +334,10 @@ def _run_worker(
             task_id=task.id, event_id=eid,
             env=task.env, status=task.status,
             base_branch=base_branch, branch_name=branch_name,
+            seed_ref=branch_plan.seed_ref,
+            auto_land_branch=branch_plan.auto_land_branch,
+            branch_authority=branch_plan.authority,
+            host_context_branch=branch_plan.host_context_branch,
         )
 
     recent_conversation = (
@@ -286,6 +367,8 @@ def _run_worker(
         payload={
             "task_id": task.id,
             "branch": branch_name,
+            "seed_ref": branch_plan.seed_ref,
+            "auto_land_branch": branch_plan.auto_land_branch,
             "env": task.env,
             "runner": runner_name,
         },
@@ -299,6 +382,10 @@ def _run_worker(
                 task_id=task.id,
                 branch_name=branch_name,
                 base_branch=base_branch,
+                seed_ref=branch_plan.seed_ref,
+                auto_land_branch=branch_plan.auto_land_branch,
+                branch_authority=branch_plan.authority,
+                host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
@@ -313,6 +400,10 @@ def _run_worker(
                 task_id=task.id,
                 branch_name=branch_name,
                 base_branch=base_branch,
+                seed_ref=branch_plan.seed_ref,
+                auto_land_branch=branch_plan.auto_land_branch,
+                branch_authority=branch_plan.authority,
+                host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
@@ -410,6 +501,8 @@ def _run_worker(
             )
             _emit_preserved_containers(brr_dir, conv_key, task)
             preserved_branch = task.meta.get("preserved_branch")
+            landed_branch = task.meta.get("landed_branch")
+            changed_branch = task.meta.get("changed_branch")
             if task.status == "conflict":
                 updates.emit(brr_dir, updates.UpdatePacket(
                     type="conflict",
@@ -417,6 +510,7 @@ def _run_worker(
                     payload={
                         "task_id": task.id,
                         "branch": preserved_branch or branch_name,
+                        "preserved_branch": preserved_branch,
                     },
                 ))
             else:
@@ -427,6 +521,8 @@ def _run_worker(
                         "task_id": task.id,
                         "event_id": eid,
                         "preserved_branch": preserved_branch,
+                        "landed_branch": landed_branch,
+                        "changed_branch": changed_branch,
                     },
                 ))
             return task
@@ -830,6 +926,11 @@ def start(
 
                 _push_if_needed(
                     repo_root,
+                    branch=(
+                        task.meta.get("changed_branch")
+                        or task.meta.get("landed_branch")
+                        or task.meta.get("preserved_branch")
+                    ),
                     conversation_key=task.conversation_key,
                     task_id=task.id,
                 )

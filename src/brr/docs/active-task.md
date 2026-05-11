@@ -10,8 +10,9 @@ prompt. Use this page when you need a refresher.
 Every daemon-driven task ships a `Task Context Bundle` near the top of
 the prompt. It contains:
 
-- The task itself: event id, task id, base branch, current branch,
-  shared runtime dir, generated run context file, and response path.
+- The task itself: event id, task id, seed ref, optional auto-land
+  branch, current branch, shared runtime dir, generated run context
+  file, and response path.
 - The delivery contract: stdout is the chat reply, brr captures it to
   the response path, and the branch rules for this task.
 - A `Recent in this conversation` block when prior events from the
@@ -54,16 +55,19 @@ knowledge, and agents should not edit it.
 
 ## Branching
 
-You start on a fresh `brr/<task-id>` branch sprouted from the base
-branch. Three valid outcomes:
+You start on a fresh `brr/<task-id>` branch sprouted from the seed ref
+named in the Task Context Bundle. Three valid outcomes:
 
 - **Q&A / read-only** — answer in the response file and stop. No
   commit needed.
-- **Work that should land** — commit on the current branch. brr
-  fast-forwards it back onto the base branch after the run.
-- **Work to keep on its own branch** — run
-  `git switch -c <meaningful-name>` before committing. brr preserves
-  whatever branch you end up on without merging.
+- **Work with an auto-land target** — commit on the current branch.
+  brr fast-forwards the named target after the run.
+- **Work with no auto-land target** — commit on the current task
+  branch. brr preserves it for human routing and publishes it when a
+  remote is configured.
+- **Work for a different branch** — run `git switch -c <meaningful-name>`
+  before committing. brr preserves whatever branch you end up on without
+  merging.
 
 If something feels off — unfamiliar metadata, a missing path, an
 ambiguous instruction, a service you cannot reach — say so in the

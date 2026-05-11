@@ -3,7 +3,12 @@
 import subprocess
 from pathlib import Path
 
-from brr.gitops import current_branch, is_tracked, merge_branch, shared_brr_dir
+from brr.gitops import (
+    current_branch,
+    fast_forward_branch,
+    is_tracked,
+    shared_brr_dir,
+)
 from brr.worktree import list_worktrees, create, remove
 
 
@@ -31,7 +36,7 @@ def test_is_tracked(tmp_path, monkeypatch):
     assert is_tracked(Path("nonexistent.txt")) is False
 
 
-def test_merge_branch_fast_forwards_when_base_unmoved(tmp_path):
+def test_fast_forward_branch_updates_checked_out_target(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     main_branch = _init_repo(repo)
@@ -44,15 +49,15 @@ def test_merge_branch_fast_forwards_when_base_unmoved(tmp_path):
     subprocess.run(["git", "commit", "-am", "feature"], cwd=repo, check=True, stdout=subprocess.PIPE)
     subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-    result = merge_branch(repo, "feature/worktree")
+    result = fast_forward_branch(repo, main_branch, "feature/worktree")
 
     assert result.success is True
-    assert result.branch == "feature/worktree"
+    assert result.branch == main_branch
     assert result.commit
     assert "feature" in (repo / "file.txt").read_text(encoding="utf-8")
 
 
-def test_merge_branch_ff_only_refuses_diverged(tmp_path):
+def test_fast_forward_branch_refuses_diverged_target(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     main_branch = _init_repo(repo)
@@ -70,13 +75,13 @@ def test_merge_branch_ff_only_refuses_diverged(tmp_path):
     subprocess.run(["git", "add", "main.txt"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-    result = merge_branch(repo, "feature/diverge", ff_only=True)
+    result = fast_forward_branch(repo, main_branch, "feature/diverge")
 
     assert result.success is False
     assert result.detail
 
 
-def test_merge_branch_explicit_no_ff_reports_conflicts(tmp_path):
+def test_fast_forward_branch_updates_unchecked_out_branch(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     main_branch = _init_repo(repo)
@@ -84,18 +89,32 @@ def test_merge_branch_explicit_no_ff_reports_conflicts(tmp_path):
     subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-    subprocess.run(["git", "checkout", "-b", "feature/conflict"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    (repo / "file.txt").write_text("feature change\n", encoding="utf-8")
-    subprocess.run(["git", "commit", "-am", "feature"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "checkout", "-b", "target"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "checkout", "-b", "source"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    (repo / "source.txt").write_text("source\n", encoding="utf-8")
+    subprocess.run(["git", "add", "source.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "source"], cwd=repo, check=True, stdout=subprocess.PIPE)
     subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-    (repo / "file.txt").write_text("main change\n", encoding="utf-8")
-    subprocess.run(["git", "commit", "-am", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    result = fast_forward_branch(repo, "target", "source")
 
-    result = merge_branch(repo, "feature/conflict", "merge feature/conflict", ff_only=False)
-
-    assert result.success is False
-    assert result.conflicts == ["file.txt"]
+    assert result.success is True
+    target_head = subprocess.run(
+        ["git", "rev-parse", "target"],
+        cwd=repo,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    source_head = subprocess.run(
+        ["git", "rev-parse", "source"],
+        cwd=repo,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    assert target_head == source_head
 
 
 def test_list_worktrees_empty(tmp_path):
@@ -157,7 +176,7 @@ def test_shared_brr_dir_uses_main_checkout_for_worktree(tmp_path):
     remove(repo, "task-42", branch="brr/task-42", delete_branch=True, force=True)
 
 
-def test_worktree_branch_is_created_from_current_branch(tmp_path):
+def test_worktree_branch_defaults_to_current_head(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
@@ -189,3 +208,23 @@ def test_worktree_branch_is_created_from_current_branch(tmp_path):
         assert (wt_path / "feature.txt").exists()
     finally:
         remove(repo, "task-43", branch="brr/task-43", delete_branch=True, force=True)
+
+
+def test_worktree_branch_can_be_created_from_explicit_base_ref(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "file.txt").write_text("main\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "checkout", "-b", "feature/base"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    (repo / "feature.txt").write_text("feature\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "feature base"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    wt_path, _branch = create(repo, "task-44", base_ref="feature/base")
+    try:
+        assert (wt_path / "feature.txt").exists()
+    finally:
+        remove(repo, "task-44", branch="brr/task-44", delete_branch=True, force=True)

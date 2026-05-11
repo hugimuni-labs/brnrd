@@ -8,13 +8,12 @@ from pathlib import Path
 
 
 @dataclass
-class MergeResult:
-    """Result of merging a branch back into the current branch."""
+class BranchUpdateResult:
+    """Result of fast-forwarding a local branch to another ref."""
 
     success: bool
     branch: str
     commit: str = ""
-    conflicts: list[str] | None = None
     detail: str = ""
 
 
@@ -45,6 +44,15 @@ def current_branch(repo_root: Path) -> str:
     if result.returncode != 0:
         return "HEAD"
     return result.stdout.strip() or "HEAD"
+
+
+def rev_parse(repo_root: Path, ref: str) -> str | None:
+    """Return the commit OID for *ref*, or None when it cannot resolve."""
+    result = _git(repo_root, "rev-parse", "--verify", f"{ref}^{{commit}}", check=False)
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
 
 
 def shared_brr_dir(repo_root: Path) -> Path:
@@ -82,42 +90,174 @@ def branch_exists(repo_root: Path, branch: str) -> bool:
     return result.returncode == 0
 
 
-def merge_branch(
+def branch_head(repo_root: Path, branch: str) -> str | None:
+    """Return the OID for local *branch*, or None when it is missing."""
+    return rev_parse(repo_root, f"refs/heads/{branch}")
+
+
+def valid_branch_name(repo_root: Path, branch: str) -> bool:
+    """Return True when *branch* is acceptable as a local branch name."""
+    if not branch or branch == "HEAD":
+        return False
+    result = _git(repo_root, "check-ref-format", "--branch", branch, check=False)
+    return result.returncode == 0
+
+
+def default_branch(repo_root: Path) -> str | None:
+    """Best-effort local default branch name, falling back to current branch."""
+    remote_head = _git(
+        repo_root, "symbolic-ref", "--quiet", "--short",
+        "refs/remotes/origin/HEAD", check=False,
+    )
+    if remote_head.returncode == 0:
+        ref = remote_head.stdout.strip()
+        if "/" in ref:
+            candidate = ref.split("/", 1)[1]
+            if branch_exists(repo_root, candidate):
+                return candidate
+
+    for candidate in ("main", "master"):
+        if branch_exists(repo_root, candidate):
+            return candidate
+
+    current = current_branch(repo_root)
+    if current != "HEAD":
+        return current
+    return "HEAD" if rev_parse(repo_root, "HEAD") else None
+
+
+def branch_checkout_path(repo_root: Path, branch: str) -> Path | None:
+    """Return the worktree path where *branch* is checked out, if any."""
+    result = _git(repo_root, "worktree", "list", "--porcelain", check=False)
+    if result.returncode != 0:
+        return None
+
+    current_path: Path | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_path = Path(line.split(" ", 1)[1])
+        elif line.startswith("branch ") and current_path is not None:
+            ref = line.split(" ", 1)[1]
+            if ref == f"refs/heads/{branch}":
+                return current_path
+        elif line == "":
+            current_path = None
+    return None
+
+
+def is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
+    """Return True when *ancestor* is reachable from *descendant*."""
+    result = _git(
+        repo_root, "merge-base", "--is-ancestor", ancestor, descendant,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def fast_forward_branch(
     repo_root: Path,
     branch: str,
-    message: str | None = None,
+    source_ref: str,
     *,
-    ff_only: bool = True,
-) -> MergeResult:
-    """Merge *branch* into the currently checked-out branch.
+    expected_old_oid: str | None = None,
+) -> BranchUpdateResult:
+    """Fast-forward local *branch* to *source_ref* without guessing checkout state.
 
-    Defaults to ``--ff-only`` so the daemon's auto-land path keeps a
-    clean linear history; pass ``ff_only=False`` for an explicit merge
-    commit. On non-fast-forward refusals the working tree is left
-    untouched (no merge to abort).
+    If *branch* is checked out in the daemon's repo, use ``git merge
+    --ff-only`` so the worktree updates. If it is not checked out,
+    advance the ref directly with ``git update-ref``. A branch checked
+    out in some other worktree is refused because updating it behind
+    that worktree's back would leave a confusing checkout.
     """
-    if ff_only:
-        merge_args = ["merge", "--ff-only", branch]
-    else:
-        merge_args = ["merge", "--no-ff", branch]
-    if message and not ff_only:
-        merge_args.extend(["-m", message])
+    if not valid_branch_name(repo_root, branch):
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"invalid branch name: {branch}",
+        )
 
-    result = _git(repo_root, *merge_args, check=False)
+    source_oid = rev_parse(repo_root, source_ref)
+    if source_oid is None:
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"cannot resolve source ref: {source_ref}",
+        )
+
+    old_oid = branch_head(repo_root, branch)
+    if expected_old_oid is not None and old_oid != expected_old_oid:
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"{branch} changed while task was running",
+        )
+    if old_oid is not None and not is_ancestor(repo_root, old_oid, source_oid):
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"{source_ref} is not a fast-forward of {branch}",
+        )
+
+    if current_branch(repo_root) == branch:
+        result = _git(repo_root, "merge", "--ff-only", source_ref, check=False)
+        if result.returncode == 0:
+            commit = rev_parse(repo_root, "HEAD") or source_oid
+            return BranchUpdateResult(success=True, branch=branch, commit=commit)
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=result.stderr.strip() or result.stdout.strip(),
+        )
+
+    checkout_path = branch_checkout_path(repo_root, branch)
+    if checkout_path is not None and checkout_path.resolve() != repo_root.resolve():
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"{branch} is checked out at {checkout_path}",
+        )
+
+    ref = f"refs/heads/{branch}"
+    args = ["update-ref", ref, source_oid]
+    if old_oid is not None:
+        args.append(old_oid)
+    result = _git(repo_root, *args, check=False)
     if result.returncode == 0:
-        head = _git(repo_root, "rev-parse", "HEAD").stdout.strip()
-        return MergeResult(success=True, branch=branch, commit=head)
-
-    conflicts: list[str] = []
-    detail = result.stderr.strip() or result.stdout.strip()
-    if not ff_only:
-        conflicts = _git(
-            repo_root, "diff", "--name-only", "--diff-filter=U", check=False,
-        ).stdout.splitlines()
-        _git(repo_root, "merge", "--abort", check=False)
-    return MergeResult(
+        return BranchUpdateResult(success=True, branch=branch, commit=source_oid)
+    return BranchUpdateResult(
         success=False,
         branch=branch,
-        conflicts=conflicts,
-        detail=detail,
+        detail=result.stderr.strip() or result.stdout.strip(),
     )
+
+
+def branch_upstream(repo_root: Path, branch: str) -> str | None:
+    """Return the upstream ref for *branch*, e.g. ``origin/main``."""
+    result = _git(
+        repo_root, "rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}",
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def branch_remote(repo_root: Path, branch: str) -> str | None:
+    """Return the configured remote for *branch*, if one exists."""
+    result = _git(repo_root, "config", f"branch.{branch}.remote", check=False)
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
+def default_remote(repo_root: Path) -> str | None:
+    """Return ``origin`` if present, otherwise the first configured remote."""
+    result = _git(repo_root, "remote", check=False)
+    if result.returncode != 0:
+        return None
+    remotes = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if "origin" in remotes:
+        return "origin"
+    return remotes[0] if remotes else None

@@ -91,6 +91,27 @@ class TestPromptBuilding:
         assert "fix it" in prompt
         assert "kb/log-" not in prompt
 
+    def test_daemon_prompt_describes_preserved_task_branch(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        prompt = build_daemon_prompt(
+            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-123",
+            branch_name="brr/task-123",
+            seed_ref="main",
+            auto_land_branch=None,
+            branch_authority="fallback:preserve",
+            host_context_branch="feature/host",
+        )
+
+        assert "Seed ref: main" in prompt
+        assert "Auto-land branch: none" in prompt
+        assert "Branch authority: fallback:preserve" in prompt
+        assert "Host context branch: feature/host" in prompt
+        assert "preserve that branch" in prompt
+
     def test_daemon_prompt_with_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)

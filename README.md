@@ -122,9 +122,15 @@ executable.
 **Environments** are daemon backends.  Configure the user-facing policy
 with `environment=<auto|host|worktree|docker>` in `.brr/config`.
 `environment=auto` prefers configured Docker isolation, then falls back
-to worktree/host behavior.  The concrete built-ins today are `host`,
+to worktree behavior.  The concrete built-ins today are `host`,
 `worktree`, and `docker`; future backends such as `devcontainer`, `ssh`,
 or service-specific plugins fit behind the same internal protocol.
+
+Daemon git operations are branch-plan driven. With no structured branch
+target, `branch.fallback=preserve` is the default: work starts on
+`brr/<task-id>` from the repo default branch, and committed task branches
+are preserved for human routing and pushed when a remote is configured.
+Other fallback modes are `inbox`, `default`, and `current`.
 
 Docker mode wires credentials automatically: brr forwards
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /

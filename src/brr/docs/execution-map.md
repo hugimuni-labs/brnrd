@@ -28,11 +28,13 @@ name, worktree path, run context path, trace directories). Task files
 still store the concrete backend as `env`; user-facing config should
 prefer `environment`.
 
-Branch behavior is no longer carried on the task. Worktree and Docker
-runs always start on a fresh `brr/<task-id>` branch sprouted from the
-current `HEAD`. The agent decides at runtime whether to commit there
-(brr fast-forwards back) or switch to a named branch (brr preserves
-it).
+Branch behavior is no longer carried on the task. The daemon resolves a
+branch plan before env prep: seed ref, optional auto-land target, and
+authority. Worktree and Docker runs start on a fresh `brr/<task-id>`
+branch sprouted from the seed ref. If the plan has no auto-land target,
+commits on that task branch are preserved for human routing and
+published when a remote is configured. The agent can still switch to a
+named branch at runtime; brr preserves the branch it ends on.
 
 ### 3. Execution
 
@@ -44,8 +46,9 @@ docker credential wiring, the durability contract, and the salvage
 rule.
 
 The runner receives `run.md` + recent `kb/log.md` context + daemon
-metadata (task ID, event ID, execution root, current branch, response
-path, shared runtime dir, generated run context file). The bundle's
+metadata (task ID, event ID, execution root, seed ref, optional
+auto-land target, current branch, response path, shared runtime dir,
+generated run context file). The bundle's
 delivery contract is explicit: stdout is the user's chat reply, kb
 writes are optional — agents log only when there's something worth
 logging (see AGENTS.md → Knowledge base).
@@ -85,9 +88,10 @@ preflight check list and trigger logic.
 
 For worktree tasks, the daemon inspects the worktree's git state. If
 the agent left commits on the original `brr/<task-id>` branch and the
-base branch can fast-forward, the branch is folded back. Otherwise
-(the agent moved to another branch, or the merge would not be
-fast-forward), the branch is preserved as-is. The worktree is removed
+branch plan has an auto-land target, that target is fast-forwarded.
+With no target, or when the agent moved to another branch, the branch
+is preserved as-is. If the target cannot fast-forward, the task becomes
+`conflict` and the task branch is preserved. The worktree is removed
 unless debug mode keeps it for inspection.
 
 When `brr up --dev-reload` or `dev_reload=true` is active, this is also
@@ -120,6 +124,7 @@ Its frontmatter contains:
 
 - `event_id` → links to `.brr/inbox/` and `.brr/responses/`
 - `branch_name` → the git branch used
+- `seed_ref` / `auto_land_branch` → the resolved branch plan
 - `worktree_path` → the worktree directory (if applicable)
 - `context_path` → generated run context file
 - `response_path` → the response file
