@@ -234,6 +234,7 @@ _RENDERABLE_PACKETS = {
     "attempt_failed",
     "retrying",
     "artifact_created",
+    "heartbeat",
     "finalizing",
     "push_started",
     "push_done",
@@ -276,7 +277,9 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     view = run_progress.project_task(brr_dir, conv_key, task_id)
     if view is None:
         return
-    text = run_progress.render_text(view, compact=True)
+    text = run_progress.render_text(
+        view, compact=True, style=run_progress.SLACK_MRKDWN_STYLE,
+    )
 
     progress_state = _load_progress_state(brr_dir)
     key = _progress_key(task_id)
