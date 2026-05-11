@@ -71,10 +71,19 @@ def _read_error_payload(exc: urllib.error.HTTPError) -> dict:
         return {}
 
 
-def _send_message(token: str, chat_id: int, text: str, topic_id: int | None = None) -> dict:
+def _send_message(
+    token: str,
+    chat_id: int,
+    text: str,
+    topic_id: int | None = None,
+    *,
+    parse_mode: str | None = None,
+) -> dict:
     params: dict = {"chat_id": chat_id, "text": text}
     if topic_id:
         params["message_thread_id"] = topic_id
+    if parse_mode:
+        params["parse_mode"] = parse_mode
     return _api_call(token, "sendMessage", params)
 
 
@@ -83,12 +92,17 @@ def _edit_message(
     chat_id: int,
     message_id: int,
     text: str,
+    *,
+    parse_mode: str | None = None,
 ) -> dict:
-    return _api_call(token, "editMessageText", {
+    params: dict = {
         "chat_id": chat_id,
         "message_id": message_id,
         "text": text,
-    })
+    }
+    if parse_mode:
+        params["parse_mode"] = parse_mode
+    return _api_call(token, "editMessageText", params)
 
 
 def _post_gist(content: str, filename: str = "result.md") -> str | None:
@@ -355,6 +369,7 @@ _RENDERABLE_PACKETS = {
     "attempt_failed",
     "retrying",
     "artifact_created",
+    "heartbeat",
     "finalizing",
     "push_started",
     "push_done",
@@ -362,6 +377,71 @@ _RENDERABLE_PACKETS = {
     "failed",
     "conflict",
 }
+
+
+def _escape_html(text: str) -> str:
+    """Minimal HTML entity escape for Telegram's HTML parse_mode.
+
+    Telegram parses ``<`` / ``>`` / ``&`` and only the small allow-list
+    of formatting tags (``<b>``, ``<i>``, ``<s>``, ``<u>``, ``<code>``,
+    ``<pre>``, ``<a>``). Errors that surface in the failure detail can
+    contain arbitrary characters from runner stderr — escape them so
+    Telegram doesn't reject the edit with ``can't parse entities``.
+    """
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _build_card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
+    """Render the Telegram-flavoured progress card for a task, if any.
+
+    Returns None when the conversation has no record of the task yet
+    (e.g. heartbeat fired before task_created was persisted).
+    """
+    view = run_progress.project_task(brr_dir, conv_key, task_id)
+    if view is None:
+        return None
+    # Escape user-controlled content (errors, branch names, runner names)
+    # before render so the strike-through markers themselves stay valid
+    # HTML. Tags are inserted post-escape by the renderer's style.
+    sanitized = _sanitize_view_for_html(view)
+    return run_progress.render_text(
+        sanitized,
+        compact=True,
+        style=run_progress.TELEGRAM_HTML_STYLE,
+    )
+
+
+def _sanitize_view_for_html(view):
+    """Return a shallow copy of *view* with string fields HTML-escaped."""
+    from dataclasses import replace
+
+    def _esc(value):
+        return _escape_html(value) if isinstance(value, str) else value
+
+    new_history = [
+        run_progress.PhaseEntry(
+            name=entry.name,
+            started_at=entry.started_at,
+            ended_at=entry.ended_at,
+            attempt=entry.attempt,
+            detail=_esc(entry.detail),
+        )
+        for entry in view.phase_history
+    ]
+    return replace(
+        view,
+        runner_name=_esc(view.runner_name),
+        env=_esc(view.env),
+        branch_name=_esc(view.branch_name),
+        base_branch=_esc(view.base_branch),
+        detail=_esc(view.detail) if isinstance(view.detail, str) else view.detail,
+        error=_esc(view.error),
+        phase_history=new_history,
+    )
 
 
 def render_update(brr_dir: Path, packet: Any) -> None:
@@ -394,10 +474,9 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         return
     topic_id = _coerce_optional_int(task.meta.get("telegram_topic_id"))
 
-    view = run_progress.project_task(brr_dir, conv_key, task_id)
-    if view is None:
+    text = _build_card_text(brr_dir, conv_key, task_id)
+    if text is None:
         return
-    text = run_progress.render_text(view, compact=True)
 
     progress_state = _load_progress_state(brr_dir)
     key = _progress_key(task_id)
@@ -415,7 +494,10 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     try:
         if entry and entry.get("message_id"):
             try:
-                _edit_message(token, chat_id, int(entry["message_id"]), text)
+                _edit_message(
+                    token, chat_id, int(entry["message_id"]), text,
+                    parse_mode="HTML",
+                )
             except _TelegramNotModified:
                 # Server-side check agrees the message body didn't change;
                 # treat as a successful no-op rather than falling through
@@ -424,7 +506,9 @@ def render_update(brr_dir: Path, packet: Any) -> None:
             except Exception:
                 # The message is genuinely gone (deleted, expired, etc.).
                 # Fall through to send a replacement.
-                resp = _send_message(token, chat_id, text, topic_id)
+                resp = _send_message(
+                    token, chat_id, text, topic_id, parse_mode="HTML",
+                )
                 message_id = (resp.get("result") or {}).get("message_id")
                 if message_id is None:
                     return
@@ -443,7 +527,9 @@ def render_update(brr_dir: Path, packet: Any) -> None:
             _save_progress_state(brr_dir, progress_state)
             return
 
-        resp = _send_message(token, chat_id, text, topic_id)
+        resp = _send_message(
+            token, chat_id, text, topic_id, parse_mode="HTML",
+        )
         message_id = (resp.get("result") or {}).get("message_id")
         if message_id is None:
             return

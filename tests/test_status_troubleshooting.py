@@ -38,14 +38,23 @@ def test_get_status_shows_active_run_progress(tmp_path, monkeypatch):
         payload={"task_id": "task-active", "branch": "auto", "env": "docker"},
     ))
     updates.emit(brr_dir, updates.UpdatePacket(
+        type="attempt_started", conversation_key=key,
+        payload={"task_id": "task-active", "attempt": 1},
+    ))
+    updates.emit(brr_dir, updates.UpdatePacket(
         type="run_started", conversation_key=key,
-        payload={"task_id": "task-active"},
+        payload={"task_id": "task-active", "runner": "codex",
+                 "branch": "brr/task-active", "env": "docker"},
     ))
 
     out = status_mod.get_status()
     assert "active task:" in out
-    assert "task-active" in out
-    assert "phase: running" in out
+    # Compact card under ``brr status`` shows the runner-env-branch
+    # header plus the live phase log; task ID is dev-side noise so it
+    # lives in ``brr inspect``, not the dashboard.
+    assert "codex" in out
+    assert "brr/task-active" in out
+    assert "running" in out
 
 
 def test_get_status_omits_active_block_when_terminal(tmp_path, monkeypatch):

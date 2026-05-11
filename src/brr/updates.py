@@ -30,6 +30,7 @@ PACKET_TYPES = (
     "attempt_failed",
     "retrying",
     "artifact_created",
+    "heartbeat",
     "finalizing",
     "container_preserved",
     "push_started",
@@ -66,6 +67,10 @@ _QUIET_TYPES = {
     "artifact_created",
     "container_started",
     "container_preserved",
+    # Heartbeats fire every 30s during a run; logging each one would
+    # bury the meaningful packets. They still flow through the gate
+    # renderer (which folds them into the live elapsed counter).
+    "heartbeat",
 }
 
 
