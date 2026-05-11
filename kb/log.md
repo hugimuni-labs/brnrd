@@ -1139,3 +1139,24 @@ tasks/branching hub, and the branch-intent design status. Richer
 source-specific PR/issue metadata remains a future expansion point; the
 free-text task body still belongs to the worker agent, not a daemon
 regex parser.
+
+## [2026-05-11] implement | Baseline dev tools in the bundled Docker image
+
+The bundled `src/brr/Dockerfile` now treats Docker as a practical
+runner image for common daemon-launched development, not only a tiny
+AI-CLI wrapper. It still avoids repo-specific dependencies, but it now
+installs the tools agents routinely need to inspect, test, fetch, and
+commit work: Python (`python`, `python3`, `pip`, venv support), SSH
+client, `git`, `rg`, `curl`/`wget`, `jq`, `rsync`, zip tools, and a
+native build toolchain (`build-essential`, `pkg-config`). The image sets
+`PIP_BREAK_SYSTEM_PACKAGES=1` because the container is ephemeral and the
+playbook's direct `pip install -e ".[dev]"` workflow should work without
+forcing every agent through a venv first.
+
+Updated the bundled env docs, README pointer text, and env/design kb
+notes to distinguish baseline tools from project-specific dependencies.
+Added `tests/test_dockerfile.py` so the packaged Dockerfile cannot
+silently regress to an image without Python, SSH, git, or the common
+inspection/build tools. Full-suite verification also exposed and fixed
+three stale test harness issues around dev-reload reexec sentinels and
+Docker timeout monkeypatch ordering.

@@ -104,7 +104,7 @@ Read these in order if you want the quickest useful mental model:
 4. [Task model](../src/brr/task.py) with [task tests](../tests/test_task.py).
 5. [Conversation log](../src/brr/conversations.py) with [conversation tests](../tests/test_conversations.py).
 6. [Runner plumbing](../src/brr/runner.py) with [runner tests](../tests/test_runner.py), then [prompt assembly](../src/brr/prompts.py) with [prompt tests](../tests/test_prompts.py).
-7. [Environment backends](../src/brr/envs/__init__.py) with [env tests](../tests/test_envs.py).
+7. [Environment backends](../src/brr/envs/__init__.py) with [env tests](../tests/test_envs.py) and [Dockerfile tests](../tests/test_dockerfile.py).
 8. [Daemon worker](../src/brr/daemon.py) plus
    [developer reload](../src/brr/dev_reload.py) with
    [daemon tests](../tests/test_daemon.py),
@@ -227,6 +227,7 @@ Tests:
 - [runner tests](../tests/test_runner.py)
 - [prompt tests](../tests/test_prompts.py)
 - [env tests](../tests/test_envs.py)
+- [Dockerfile tests](../tests/test_dockerfile.py)
 - [kb-preflight tests](../tests/test_kb_preflight.py)
 
 ### Ring 4: orchestration spine
@@ -980,19 +981,20 @@ If source-first reading feels too abstract, run the test path instead:
 6. [prompt tests](../tests/test_prompts.py)
 7. [git/worktree tests](../tests/test_gitops.py)
 8. [env tests](../tests/test_envs.py)
-9. [kb-preflight tests](../tests/test_kb_preflight.py)
-10. [daemon tests](../tests/test_daemon.py)
-11. [daemon-conversation tests](../tests/test_daemon_conversations.py)
-12. [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
-13. [gate tests](../tests/test_telegram_gate.py)
-14. [gate setup tests](../tests/test_gate_setup.py)
-15. [Telegram render-update tests](../tests/test_telegram_render_update.py)
-16. [Slack render-update tests](../tests/test_slack_render_update.py)
-17. [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
-18. [adopt tests](../tests/test_adopt.py)
-19. [integration tests](../tests/test_integration.py)
-20. [CLI tests](../tests/test_cli.py)
-21. [docs tests](../tests/test_docs.py)
+9. [Dockerfile tests](../tests/test_dockerfile.py)
+10. [kb-preflight tests](../tests/test_kb_preflight.py)
+11. [daemon tests](../tests/test_daemon.py)
+12. [daemon-conversation tests](../tests/test_daemon_conversations.py)
+13. [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
+14. [gate tests](../tests/test_telegram_gate.py)
+15. [gate setup tests](../tests/test_gate_setup.py)
+16. [Telegram render-update tests](../tests/test_telegram_render_update.py)
+17. [Slack render-update tests](../tests/test_slack_render_update.py)
+18. [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
+19. [adopt tests](../tests/test_adopt.py)
+20. [integration tests](../tests/test_integration.py)
+21. [CLI tests](../tests/test_cli.py)
+22. [docs tests](../tests/test_docs.py)
 
 This order mirrors dependency growth: file protocol, durable state, the
 run-progress projection, execution (subprocess plumbing then prompt

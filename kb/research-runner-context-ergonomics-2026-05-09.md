@@ -122,6 +122,15 @@ self-work, use `environment=worktree`/host when verification matters, or
 run a project-layered Docker image that adds `python3`, `pip`, `pytest`,
 and `rg` on top of the runner image.
 
+**2026-05-11 update:** the bundled runner Dockerfile now includes the
+baseline OS/runtime tools this finding called out (`python`/`pip`, SSH
+client, `git`, `rg`, and common inspection/build utilities). It does
+not preinstall `pytest`; projects should still install their own dev
+dependencies so the test runner version comes from the repo. Stale
+local `brr-runner:*` tags can still reproduce the old symptom until
+rebuilt; project-layered images remain the right answer for
+repo-specific dependencies and service/tooling stacks.
+
 ### Extra tools or MCP were not the main gap
 
 No external MCP capability was needed for this task. The useful tools
@@ -162,9 +171,11 @@ start of `scan`, and a regression test covers relative repo roots.
    especially for Docker: runner CLI, git, `rg`, Python, and configured
    test command availability. This should be informational, not a hard
    gate.
-3. Build or configure a brr-specific development image for brr's own
-   daemon dogfooding. Keep the generic runner image small, but do not
-   use it for Python repo tasks that need tests.
+3. Rebuild the bundled runner image for brr's own daemon dogfooding.
+   The image now carries baseline development tools; run the repo's
+   normal dev install (`pip install -e ".[dev]"`) for `pytest`, and use
+   a project-layered image only when a task needs repo-specific services
+   or tooling beyond that baseline.
 4. Clarify in the run prompt that runtime paths listed in the generated
    context are read-only recovery pointers, not an invitation to browse
    `.brr/` broadly.
