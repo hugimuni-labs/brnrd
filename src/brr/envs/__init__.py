@@ -473,6 +473,12 @@ class DockerEnv(WorktreeEnv):
             "docker", "run",
             "--name", container_name,
             "--network", network,
+            # ``-i`` keeps the container's stdin connected to docker's
+            # stdin (which we tie to /dev/null below) so codex sees an
+            # immediate EOF instead of an open-but-silent pipe — without
+            # this, codex 0.128+'s "Reading additional input from stdin"
+            # path can block until our timeout fires.
+            "-i",
             *_docker_git_safe_directory_args(),
             *_docker_passthrough_env_args(cfg),
             *_docker_credential_mount_args(cfg),
@@ -482,15 +488,17 @@ class DockerEnv(WorktreeEnv):
             *inner_cmd,
         ]
 
+        timeout = runner.runner_timeout(cfg)
         stdout = ""
         stderr = ""
         returncode = 0
         try:
             completed = subprocess.run(
                 command,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
-                timeout=600,
+                timeout=timeout,
             )
             stdout = completed.stdout
             stderr = completed.stderr
@@ -501,7 +509,7 @@ class DockerEnv(WorktreeEnv):
         except subprocess.TimeoutExpired as exc:
             stdout = _subprocess_text(exc.stdout)
             stderr = _subprocess_text(exc.stderr)
-            stderr = (stderr + "\n" if stderr else "") + "runner timed out after 600s"
+            stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
             returncode = 124
             try:
                 subprocess.run(

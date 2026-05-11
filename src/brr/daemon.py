@@ -282,6 +282,7 @@ def _run_worker(
         payload={"task_id": task.id, "branch": branch_name, "env": task.env},
     ))
     seen_containers: set[str] = set()
+    last_failure: dict[str, object] | None = None
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = prompts.build_daemon_prompt(
@@ -342,6 +343,20 @@ def _run_worker(
             result.raise_for_error()
         except RuntimeError as e:
             print(f"[brr] worker {eid}: runner error: {e}")
+            last_failure = {
+                "exit_code": result.returncode,
+                "error": result.error_detail() or str(e),
+                "timed_out": result.returncode == 124,
+            }
+        else:
+            if not result.validation_ok and not result.retry_reason():
+                detail = result.error_detail()
+                if detail:
+                    last_failure = {
+                        "exit_code": result.returncode,
+                        "error": detail,
+                        "timed_out": False,
+                    }
 
         if result.validation_ok:
             print(f"[brr] worker {eid}: response ready")
@@ -389,16 +404,23 @@ def _run_worker(
 
         retry_reason = result.retry_reason()
         will_retry = bool(retry_reason and attempt <= max_retries)
+        attempt_payload: dict[str, object] = {
+            "task_id": task.id,
+            "event_id": eid,
+            "attempt": attempt,
+            "reason": retry_reason or (
+                last_failure.get("error") if last_failure else None
+            ) or "unknown",
+            "will_retry": will_retry,
+        }
+        if last_failure and not retry_reason:
+            attempt_payload["exit_code"] = last_failure["exit_code"]
+            if last_failure.get("timed_out"):
+                attempt_payload["timed_out"] = True
         updates.emit(brr_dir, updates.UpdatePacket(
             type="attempt_failed",
             conversation_key=conv_key,
-            payload={
-                "task_id": task.id,
-                "event_id": eid,
-                "attempt": attempt,
-                "reason": retry_reason or "unknown",
-                "will_retry": will_retry,
-            },
+            payload=attempt_payload,
         ))
         if will_retry:
             print(f"[brr] worker {eid}: {retry_reason}, retrying...")
@@ -412,16 +434,23 @@ def _run_worker(
                     "reason": retry_reason,
                 },
             ))
+            continue
+        # Hard failure (timeout / non-zero exit) — no retry, give up now
+        # rather than burning another expensive attempt. The give-up
+        # branch below carries the captured error up to the gate.
+        break
 
-    print(f"[brr] worker {eid}: gave up after {max_retries + 1} attempts")
+    if last_failure and last_failure.get("timed_out"):
+        print(f"[brr] worker {eid}: timed out, giving up")
+    else:
+        print(f"[brr] worker {eid}: gave up after {attempt} attempt(s)")
     if trace_dirs:
         task.meta["trace_dirs"] = ", ".join(trace_dirs)
     task.update_status("error", tasks_dir)
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="failed",
-        conversation_key=conv_key,
-        payload={"task_id": task.id, "event_id": eid, "stage": "run"},
-    ))
+    # finalize first so any preserved branches / containers are recorded
+    # on the task before the failure packet renders — the failure packet
+    # is what gates see last, so its payload must be the canonical
+    # explanation.
     updates.emit(brr_dir, updates.UpdatePacket(
         type="finalizing",
         conversation_key=conv_key,
@@ -429,6 +458,23 @@ def _run_worker(
     ))
     task = env_backend.finalize(env_ctx, task, tasks_dir, debug=debug)
     _emit_preserved_containers(brr_dir, conv_key, task)
+    failed_payload: dict[str, object] = {
+        "task_id": task.id,
+        "event_id": eid,
+        "stage": "run",
+        "attempts": attempt,
+    }
+    if last_failure:
+        failed_payload["exit_code"] = last_failure["exit_code"]
+        if last_failure.get("error"):
+            failed_payload["error"] = last_failure["error"]
+        if last_failure.get("timed_out"):
+            failed_payload["timed_out"] = True
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="failed",
+        conversation_key=conv_key,
+        payload=failed_payload,
+    ))
     return task
 
 

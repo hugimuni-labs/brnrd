@@ -64,8 +64,11 @@ unreachable service), it should say so plainly in the response and
 stop. The operator sees the reply in the gate thread and follows up
 with another event.
 
-If stdout is empty, the daemon retries up to `response_retries` times
-before failing the task.
+If the runner exits cleanly but stdout is empty, the daemon retries up
+to `response_retries` times before failing the task. Hard failures
+(non-zero exit, timeout — controlled by `runner.timeout_seconds`,
+default 3600s) are surfaced to the gate immediately with the captured
+error rather than burning another expensive attempt.
 
 ### 5. KB maintenance (preflight + optional LLM pass)
 

@@ -30,6 +30,30 @@ _active_proc: subprocess.Popen | None = None
 _proc_lock = threading.Lock()
 
 
+DEFAULT_RUNNER_TIMEOUT = 3600
+
+
+def runner_timeout(cfg: dict[str, Any] | None) -> int:
+    """Return the runner subprocess timeout in seconds.
+
+    Reads ``runner.timeout_seconds`` (or legacy ``runner_timeout_seconds``)
+    from *cfg*; falls back to :data:`DEFAULT_RUNNER_TIMEOUT`. xhigh-reasoning
+    models like gpt-5.5 routinely need 10+ minutes on a complex task, and the
+    old 600s default was killing live work mid-run; 3600s is a soft ceiling
+    rather than a target.
+    """
+    if not cfg:
+        return DEFAULT_RUNNER_TIMEOUT
+    raw = cfg.get("runner.timeout_seconds", cfg.get("runner_timeout_seconds"))
+    if raw is None:
+        return DEFAULT_RUNNER_TIMEOUT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_RUNNER_TIMEOUT
+    return value if value > 0 else DEFAULT_RUNNER_TIMEOUT
+
+
 def _trace_id() -> str:
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
@@ -124,12 +148,41 @@ class RunnerResult:
         return True
 
     def retry_reason(self) -> str | None:
+        """Return a retryable reason, or None.
+
+        Only clean exits are retryable: when the runner subprocess exits 0
+        but didn't produce the artifacts we expected, the next attempt may
+        succeed (a stochastic "ran past the deliverable" case). Hard
+        failures — non-zero exit, timeout — are not retryable here; the
+        daemon's give-up path surfaces them with the captured error
+        instead of paying for a duplicate expensive attempt.
+        """
+        if not self.ok:
+            return None
         if self.missing_artifacts:
             labels = ", ".join(artifact.label for artifact in self.missing_artifacts)
             return f"missing required output(s): {labels}"
         if self.invocation.response_path and not self.has_response:
             return "runner produced no response on stdout"
         return None
+
+    def error_detail(self, *, limit: int = 500) -> str | None:
+        """Truncated error text suitable for gate display, or None.
+
+        Used by the daemon to bubble the runner's actual failure
+        (stderr/stdout tail) up into the failed update packet so chat
+        gates can show the operator something more useful than
+        ``stage=run``.
+        """
+        if self.ok and self.validation_ok:
+            return None
+        detail = (self.stderr or self.stdout or "").strip()
+        if not detail:
+            return None
+        if len(detail) <= limit:
+            return detail
+        tail = detail[-limit:]
+        return f"…[truncated]{tail}" if len(detail) > limit else tail
 
     def raise_for_error(self) -> None:
         if self.ok:
@@ -320,6 +373,7 @@ def invoke_runner(
     global _active_proc
     cfg = cfg or {}
     cmd = _build_cmd(runner_name, invocation.prompt, cfg)
+    timeout = runner_timeout(cfg)
     stdout = ""
     stderr = ""
     returncode = 0
@@ -328,12 +382,13 @@ def invoke_runner(
             _active_proc = subprocess.Popen(
                 cmd,
                 cwd=invocation.cwd,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
         proc = _active_proc
-        stdout, stderr = proc.communicate(timeout=600)
+        stdout, stderr = proc.communicate(timeout=timeout)
         returncode = proc.returncode
     except FileNotFoundError:
         stderr = f"executable '{cmd[0]}' not found on PATH"
@@ -341,7 +396,7 @@ def invoke_runner(
     except subprocess.TimeoutExpired:
         proc.kill()
         stdout, stderr = proc.communicate()
-        stderr = (stderr + "\n" if stderr else "") + "runner timed out after 600s"
+        stderr = (stderr + "\n" if stderr else "") + f"runner timed out after {timeout}s"
         returncode = 124
     finally:
         with _proc_lock:

@@ -101,6 +101,32 @@ def test_project_task_conflict(tmp_path):
     assert "brr/task-4" in view.detail
 
 
+def test_project_task_failure_detail_survives_finalizing(tmp_path):
+    """The daemon emits ``finalizing(stage=failed)`` before ``failed`` so
+    the operator's view ends on the real error rather than the generic
+    "finalizing (failed)" placeholder. The projection should fold them
+    in that order and end with the failed packet's detail."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:f:"
+    _emit(brr_dir, key, "task_created", task_id="task-f", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-f", attempt=1)
+    _emit(brr_dir, key, "attempt_failed", task_id="task-f", attempt=1,
+          reason="timed out", will_retry=False, exit_code=124, timed_out=True)
+    _emit(brr_dir, key, "finalizing", task_id="task-f", stage="failed")
+    _emit(brr_dir, key, "failed", task_id="task-f", stage="run", attempts=1,
+          exit_code=124, timed_out=True,
+          error="runner timed out after 3600s")
+
+    view = run_progress.project_task(brr_dir, key, "task-f")
+    assert view is not None
+    assert view.state == "failed"
+    assert view.phase == "failed"
+    assert "timed out" in view.detail
+    assert "runner timed out after 3600s" in view.detail
+    assert "finalizing" not in view.detail
+    assert view.error == "runner timed out after 3600s"
+
+
 def test_project_task_container_preserved(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:5:"

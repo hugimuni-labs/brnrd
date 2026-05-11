@@ -161,7 +161,65 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
     assert failed.get("will_retry") is True
 
 
-def test_failure_after_retries_emits_failed_and_finalizing(tmp_path, monkeypatch):
+def test_hard_failure_does_not_retry_and_bubbles_error_to_failed_packet(
+    tmp_path, monkeypatch,
+):
+    """A timeout (or any non-zero exit) is unretryable: the daemon must
+    surface the real error to the gate immediately rather than burn
+    another expensive attempt on the same prompt."""
+    _write_repo_scaffold(tmp_path)
+    event = _make_event(tmp_path, eid="evt-timeout", body="big task",
+                        telegram_chat_id=40)
+    _patch_runner(monkeypatch)
+
+    attempts: list[str] = []
+
+    def _timed_out(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        attempts.append(invocation.label)
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="",
+            stderr="OpenAI Codex v0.128.0\nthinking…\nrunner timed out after 3600s",
+            returncode=124, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: _StubWorktreeEnv(invoke_fn=_timed_out),
+    )
+
+    # max_retries=3 — even with retries allowed, hard failure must skip
+    # them and give up immediately.
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 3,
+    )
+
+    assert task.status == "error"
+    assert attempts == ["evt-timeout-attempt-1"]
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    types = [r.get("type") for r in records]
+    assert "retrying" not in types
+    failed = next(r for r in records if r.get("type") == "failed")
+    assert failed.get("exit_code") == 124
+    assert failed.get("timed_out") is True
+    assert failed.get("attempts") == 1
+    assert "timed out after 3600s" in failed.get("error", "")
+    # finalizing fires before the canonical failed packet so projections
+    # show the real error rather than "finalizing (failed)".
+    assert types.index("finalizing") < types.index("failed")
+    attempt_failed = next(r for r in records if r.get("type") == "attempt_failed")
+    assert attempt_failed.get("will_retry") is False
+    assert attempt_failed.get("exit_code") == 124
+
+
+def test_failure_after_retries_emits_finalizing_then_failed(tmp_path, monkeypatch):
+    """The failed packet must be the last word.
+
+    Gates and the conversation projection replay updates in order and
+    take the most recent packet as the terminal explanation. If
+    ``finalizing(stage=failed)`` lands after ``failed``, its placeholder
+    detail ("finalizing (failed)") clobbers the real failure reason.
+    """
     _write_repo_scaffold(tmp_path)
     event = _make_event(tmp_path, eid="evt-fail", body="never works",
                         telegram_chat_id=30)
@@ -186,7 +244,7 @@ def test_failure_after_retries_emits_failed_and_finalizing(tmp_path, monkeypatch
     types = _packet_types(tmp_path / ".brr", task.conversation_key)
     assert "attempt_failed" in types
     assert "failed" in types
-    assert types.index("failed") < types.index("finalizing")
+    assert types.index("finalizing") < types.index("failed")
 
 
 class _FakeDockerEnv:
