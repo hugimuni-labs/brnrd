@@ -69,7 +69,9 @@ def test_render_update_posts_message_on_task_created(tmp_path, monkeypatch):
     params = posts[0][2]
     assert params["channel"] == "C12345"
     assert params["thread_ts"] == "1700000.0001"
-    assert task.id in params["text"]
+    assert "docker" in params["text"]
+    assert "preparing" in params["text"]
+    assert task.id not in params["text"]
     state = slack._load_progress_state(brr_dir)
     assert state[task.id]["ts"] == "1700000.0500"
 
@@ -93,7 +95,10 @@ def test_render_update_updates_existing_message(tmp_path, monkeypatch):
 
     _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
           branch="auto", env="host")
-    _emit(brr_dir, task.conversation_key, "run_started", task_id=task.id)
+    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+          attempt=1)
+    _emit(brr_dir, task.conversation_key, "finalizing", task_id=task.id,
+          stage="done")
     _emit(brr_dir, task.conversation_key, "done", task_id=task.id,
           event_id=task.event_id)
 
@@ -103,7 +108,10 @@ def test_render_update_updates_existing_message(tmp_path, monkeypatch):
     last_update = next(c for c in reversed(api_calls) if c[1] == "chat.update")
     assert last_update[2]["channel"] == "C12345"
     assert last_update[2]["ts"] == "1700000.0900"
-    assert "done" in last_update[2]["text"]
+    assert "delivered" in last_update[2]["text"]
+    # Slack rendering uses the mrkdwn ``~text~`` strike-through tokens
+    # for closed phase entries.
+    assert "~preparing" in last_update[2]["text"]
 
 
 def test_render_update_falls_back_to_post_when_update_fails(tmp_path, monkeypatch):
@@ -129,7 +137,10 @@ def test_render_update_falls_back_to_post_when_update_fails(tmp_path, monkeypatc
 
     _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
           branch="auto", env="host")
-    _emit(brr_dir, task.conversation_key, "run_started", task_id=task.id)
+    # attempt_started flips the card from "preparing" to a struck
+    # "preparing" + live "running", so the gate attempts an update.
+    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+          attempt=1)
 
     posts = [c for c in api_calls if c[1] == "chat.postMessage"]
     assert len(posts) == 2
