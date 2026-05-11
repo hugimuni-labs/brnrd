@@ -375,8 +375,6 @@ def test_docker_invoke_timeout_message_uses_configured_value(
             return _kill_run(command, **kwargs)
         return _timeout_run(command, **kwargs)
 
-    monkeypatch.setattr(envs.subprocess, "run", _dispatch)
-
     response_path = tmp_path / ".brr" / "responses" / "evt-to.md"
     response_path.parent.mkdir(parents=True)
     task = Task(id="task-to", event_id="evt-to", body="hi")
@@ -385,6 +383,7 @@ def test_docker_invoke_timeout_message_uses_configured_value(
         task, tmp_path, cfg,
         base_branch="main", response_path=response_path,
     )
+    monkeypatch.setattr(envs.subprocess, "run", _dispatch)
     invocation = RunnerInvocation(
         kind="daemon-run",
         label="evt-to-1",
