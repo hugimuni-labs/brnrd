@@ -59,7 +59,16 @@ def render_context(
         f"- Repository root: {ctx.repo_root}",
         f"- Shared runtime dir: {ctx.runtime_dir}",
     ]
-    if ctx.base_branch:
+    if ctx.branch_plan:
+        lines.append(f"- Seed ref: {ctx.branch_plan.seed_ref}")
+        if ctx.branch_plan.auto_land_branch:
+            lines.append(f"- Auto-land branch: {ctx.branch_plan.auto_land_branch}")
+        else:
+            lines.append("- Auto-land branch: none (task branch will be preserved)")
+        lines.append(f"- Branch authority: {ctx.branch_plan.authority}")
+        if ctx.branch_plan.host_context_branch:
+            lines.append(f"- Host context branch: {ctx.branch_plan.host_context_branch}")
+    elif ctx.base_branch:
         lines.append(f"- Base branch: {ctx.base_branch}")
     if ctx.branch_name:
         lines.append(f"- Current branch: {ctx.branch_name}")
@@ -121,7 +130,12 @@ def _render_recent_conversation(records: list[dict[str, Any]]) -> str:
         elif kind == "task":
             tid = record.get("task_id", "")
             status = record.get("status") or "pending"
-            branch = record.get("branch") or ""
+            branch = (
+                record.get("changed_branch")
+                or record.get("auto_land_branch")
+                or record.get("branch_name")
+                or ""
+            )
             bullets.append(
                 f"- {ts} task {tid} status={status} branch={branch}".rstrip()
             )

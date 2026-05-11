@@ -1113,3 +1113,29 @@ A new `heartbeat` packet fires every 30s while a runner is alive
 worker thread and ticks on the main thread). The packet itself is a
 no-op for the projection — it only re-triggers the gate render so the
 elapsed counter visibly bumps during silent runs.
+
+## [2026-05-11] implement | Branch intent resolver and branch-aware push
+
+Shipped the core branch-intent design. The daemon now resolves a
+`BranchPlan` before env prep instead of treating the host checkout as
+implicit branch authority. The resolver uses structured event branch
+fields, unambiguous conversation branch facts, then `branch.fallback`
+(`preserve` by default; also `inbox`, `default`, `current`). Worktree
+and Docker tasks sprout `brr/<task-id>` from `seed_ref`; with no
+auto-land target, committed task branches are preserved and can be
+published when a remote is configured instead of silently folding into
+whatever branch the daemon host happened to have checked out.
+
+Finalization now fast-forwards named targets through
+`gitops.fast_forward_branch`, using `git merge --ff-only` only when the
+target is the daemon checkout and `git update-ref` when the target is
+not checked out elsewhere. This avoids the worktree checkout collision
+that made local inspection awkward. `_push_if_needed` now receives the
+actual changed branch and pushes that branch, setting upstream for new
+brr-owned preserved branches.
+
+Updated agent-facing prompt/context text, bundled docs, the
+tasks/branching hub, and the branch-intent design status. Richer
+source-specific PR/issue metadata remains a future expansion point; the
+free-text task body still belongs to the worker agent, not a daemon
+regex parser.

@@ -53,7 +53,7 @@ class _StubWorktreeEnv:
     def __init__(self, *, invoke_fn) -> None:
         self._invoke = invoke_fn
 
-    def prepare(self, task, repo_root, cfg, *, base_branch, response_path, debug=False):
+    def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
         return envs.RunContext(
             name=self.name,
             cwd=repo_root,
@@ -256,7 +256,7 @@ class _FakeDockerEnv:
         self.succeed = succeed
         self.containers: list[str] = []
 
-    def prepare(self, task, repo_root, cfg, *, base_branch, response_path, debug=False):
+    def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
         ctx = envs.RunContext(
             name=self.name,
             cwd=repo_root,
@@ -348,6 +348,8 @@ def test_push_emits_started_and_done_packets(tmp_path, monkeypatch):
     conv_key = "telegram:99:"
 
     monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+    monkeypatch.setattr(daemon.gitops, "branch_upstream", lambda _r, b: f"origin/{b}")
+    monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: "origin")
 
     calls = []
 
@@ -367,8 +369,58 @@ def test_push_emits_started_and_done_packets(tmp_path, monkeypatch):
 
     monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
 
-    daemon._push_if_needed(tmp_path, conversation_key=conv_key, task_id="task-push")
+    daemon._push_if_needed(
+        tmp_path,
+        branch="main",
+        conversation_key=conv_key,
+        task_id="task-push",
+    )
 
     types = _packet_types(brr_dir, conv_key)
     assert "push_started" in types
     assert "push_done" in types
+
+
+def test_push_sets_upstream_for_new_brr_branch(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    conv_key = "telegram:100:"
+
+    monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+    monkeypatch.setattr(daemon.gitops, "branch_upstream", lambda _r, _b: None)
+    monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: None)
+    monkeypatch.setattr(daemon.gitops, "default_remote", lambda _r: "origin")
+    monkeypatch.setattr(daemon.gitops, "default_branch", lambda _r: "main")
+
+    calls = []
+
+    class _Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(args, **kwargs):
+        calls.append(args)
+        if "merge-base" in args:
+            return _Result(returncode=0, stdout="baseoid\n")
+        if "log" in args:
+            return _Result(returncode=0, stdout="abc Fix bug\n")
+        if "push" in args:
+            return _Result(returncode=0)
+        return _Result(returncode=0)
+
+    monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
+
+    daemon._push_if_needed(
+        tmp_path,
+        branch="brr/task-1",
+        conversation_key=conv_key,
+        task_id="task-push",
+    )
+
+    assert ["git", "push", "-u", "origin", "brr/task-1"] in calls
+    records = _update_records(brr_dir, conv_key)
+    started = next(r for r in records if r.get("type") == "push_started")
+    assert started.get("branch") == "brr/task-1"
+    assert started.get("set_upstream") is True

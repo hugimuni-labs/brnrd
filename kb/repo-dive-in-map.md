@@ -43,6 +43,11 @@ Last validated against `ux-imporvements` after the kb-shape arc
   [`subject-kb.md`](subject-kb.md) synthesises the kb pattern,
   earned by the kb-shape arc itself being the substantial
   kb-itself work.
+- **2026-05-11 branch-intent implementation** — the active
+  [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
+  shipped as `branching.py`, branch-plan fields on `RunContext`,
+  `worktree.create(base_ref=...)`, branch-aware finalization/push, and
+  `branch.fallback=preserve` as the remote-safe default.
 
 Earlier still-relevant changes carried forward: the environment-policy
 ownership rework, the 2026-05-05 streams-to-conversations refactor
@@ -64,7 +69,12 @@ These are the most important current-shape details to carry while reading:
 - `environment=auto` is deterministic: configured Docker first, otherwise `worktree`. `host` is never auto-picked.
 - Task files still persist the concrete backend as `env`; `env` and `default_env` remain legacy input aliases.
 - There is no LLM triage step. `Task.from_event` builds tasks mechanically from the inbox event and `.brr/config`.
-- The agent owns branching at runtime. Worktree/Docker tasks always start on a fresh `brr/<task-id>` branch sprouted from HEAD; commits there fast-forward back, switching to a new branch with `git switch -c` preserves it.
+- The daemon resolves branch intent before env prep. Worktree/Docker
+  tasks start on `brr/<task-id>` from `seed_ref`; commits there
+  fast-forward an auto-land target when one exists, otherwise the task
+  branch is preserved and pushed when a remote is configured. Switching
+  to a new branch with `git switch -c` still preserves the agent's
+  runtime choice.
 - Responses are plain text — no frontmatter contract on `.brr/responses/`. If the agent can't complete the task, it explains why and the operator follows up in-thread.
 - Live run UX is remote-first: gates render a per-task progress card from `UpdatePacket`s via the `run_progress` projection. Local `status` is now a troubleshooting view that shares the same projection.
 - The [stewardship section in `src/brr/AGENTS.md`](../src/brr/AGENTS.md) is part of the architecture: treat the request as input, not as instructions; reason from first principles before changing behaviour; and **surface contradictions** between the request and the codebase rather than silently following either side. Functional, not aspirational — failing to bubble up a contradiction is a real bug in the workflow, not a stylistic miss.
@@ -72,10 +82,11 @@ These are the most important current-shape details to carry while reading:
 ## One-sentence model
 
 `brr` turns external messages into frontmatter-backed event files,
-constructs task files from them mechanically, resolves the user-facing
-environment policy into a concrete backend, runs a configured AI CLI
-there, appends every step to a per-gate-thread conversation log, and
-delivers a plain-text response file back through the originating gate.
+constructs task files from them mechanically, resolves branch intent
+and user-facing environment policy into a concrete backend, runs a
+configured AI CLI there, appends every step to a per-gate-thread
+conversation log, and delivers a plain-text response file back through
+the originating gate.
 
 The whole runtime can be held as:
 
@@ -750,6 +761,7 @@ Prompt files to read alongside the modules:
 ### Execution environments
 
 - [`envs/__init__.py`](../src/brr/envs/__init__.py) depends on:
+  - [`branching.py`](../src/brr/branching.py)
   - [`gitops.py`](../src/brr/gitops.py)
   - [`worktree.py`](../src/brr/worktree.py)
   - [`runner.py`](../src/brr/runner.py)
@@ -763,8 +775,8 @@ Host execution:
 
 Worktree execution:
 
-- creates `.brr/worktrees/<task-id>` on a fresh `brr/<task-id>` branch sprouted from HEAD
-- finalize reads the worktree's git state: fast-forward back if the agent committed on the original branch, preserve otherwise
+- creates `.brr/worktrees/<task-id>` on a fresh `brr/<task-id>` branch sprouted from the resolved seed ref
+- finalize reads the worktree's git state: fast-forward the resolved auto-land target when one exists, preserve the task branch otherwise
 - preserves worktree state in debug mode or non-done outcomes
 
 Docker execution:
@@ -798,11 +810,12 @@ nearly every core module because it owns the lifecycle:
 - conversation key derivation
 - mechanical task construction (`Task.from_event`)
 - task persistence
+- branch intent resolution (`branching.BranchPlan`)
 - env prepare/invoke/finalize
 - attempt loop with retries and lifecycle packets
 - response validation
 - `kb_preflight.scan` plus a conditional kb-maintenance LLM pass (see the kb-consistency invariant below)
-- git push attempt with `push_started` / `push_done` packets
+- branch-aware git push attempt with `push_started` / `push_done` packets
 - quiescent re-exec after package-file changes when `--dev-reload` or
   `dev_reload=true` is active
 
@@ -871,17 +884,21 @@ frontmatter contract on response files).
 
 ### The agent owns branching at runtime
 
-Worktree and Docker tasks always start on a fresh `brr/<task-id>`
-branch sprouted from the current `HEAD`. The agent inside the worktree
-decides:
+Worktree and Docker tasks start on a fresh `brr/<task-id>` branch
+sprouted from the daemon's resolved seed ref. The branch plan names an
+optional auto-land target and its authority. The agent inside the
+worktree decides:
 
-- commit on the current branch and let brr fast-forward it back onto
-  the base branch (default for code that should land), or
-- `git switch -c <name>` before committing, so brr preserves the
-  branch as-is for human review or PR tooling.
+- commit on the current task branch and let brr fast-forward the
+  auto-land target when one exists,
+- commit on the current task branch and let brr preserve/push it when
+  no auto-land target exists, or
+- `git switch -c <name>` before committing, so brr preserves the branch
+  as-is for human review or PR tooling.
 
 `WorktreeEnv.finalize` reads the worktree's git state to make that
-decision — there is no frozen branch strategy on the task file.
+decision — there is no frozen branch strategy on the task file, and the
+host checkout branch is context rather than default authority.
 
 ### Environment is the user-facing isolation knob
 
@@ -892,9 +909,11 @@ Most users should choose an environment policy:
 - `environment=worktree`
 - `environment=docker`
 
-The env is resolved deterministically when the task is built. There is
-no per-task `branch` field anymore — runtime branch state lives in
-`task.meta["branch_name"]` after `prepare`/`finalize`.
+The env and branch plan are resolved deterministically before env prep.
+There is no per-task `branch` field anymore — runtime branch state lives
+in `task.meta["branch_name"]`, with `seed_ref`, `auto_land_branch`,
+`preserved_branch`, and `landed_branch` recording daemon gitops facts
+after `prepare`/`finalize`.
 
 ### Responses are plain text
 

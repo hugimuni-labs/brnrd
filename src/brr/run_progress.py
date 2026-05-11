@@ -218,7 +218,12 @@ def _project(
 
         if kind == "task":
             view.branch_name = record.get("branch_name") or view.branch_name
-            view.base_branch = record.get("base_branch") or view.base_branch
+            view.base_branch = (
+                record.get("auto_land_branch")
+                or record.get("seed_ref")
+                or record.get("base_branch")
+                or view.base_branch
+            )
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
             continue
@@ -243,6 +248,11 @@ def _project(
         elif ptype == "env_prepared":
             view.env = record.get("env") or view.env
             view.branch_name = record.get("branch_name") or view.branch_name
+            view.base_branch = (
+                record.get("auto_land_branch")
+                or record.get("seed_ref")
+                or view.base_branch
+            )
         elif ptype == "container_started":
             cid = record.get("container")
             if cid and cid not in view.container_ids:
@@ -266,6 +276,11 @@ def _project(
             view.attempt = view.attempt or 1
             view.runner_name = record.get("runner") or view.runner_name
             view.branch_name = record.get("branch") or view.branch_name
+            view.base_branch = (
+                record.get("auto_land_branch")
+                or record.get("seed_ref")
+                or view.base_branch
+            )
         elif ptype == "attempt_failed":
             reason = record.get("reason")
             if reason:
@@ -293,8 +308,10 @@ def _project(
                 view.detail = f"finalizing ({stage})" if stage else "finalizing"
                 _open_phase(view, "finalizing", ts)
         elif ptype == "push_started":
+            view.branch_name = record.get("branch") or view.branch_name
             view.detail = "pushing changes"
         elif ptype == "push_done":
+            view.branch_name = record.get("branch") or view.branch_name
             commits = record.get("commits")
             view.push_commits = int(commits) if isinstance(commits, int) else view.push_commits
             view.push_ok = bool(record.get("ok", True))
@@ -337,6 +354,11 @@ def _project(
                 name="failed", started_at=ts, detail=phase_detail,
             ))
         elif ptype == "conflict":
+            view.branch_name = (
+                record.get("preserved_branch")
+                or record.get("branch")
+                or view.branch_name
+            )
             view.state = "failed"
             view.detail = (
                 f"merge conflict on {record.get('branch')}"
@@ -347,6 +369,12 @@ def _project(
                 name="conflict", started_at=ts, detail=view.detail,
             ))
         elif ptype == "done":
+            view.branch_name = (
+                record.get("changed_branch")
+                or record.get("landed_branch")
+                or record.get("preserved_branch")
+                or view.branch_name
+            )
             view.state = "succeeded"
             view.detail = view.detail or "done"
             _close_open_phase(view, ts)

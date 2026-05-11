@@ -94,6 +94,15 @@ Concretely:
   the response in the gate (Telegram chat, Slack thread, etc.) and
   replies with another event. The conversation log already captures
   this loop.
+
+2026-05-11 refinement: the no-triage decision still stands, but branch
+authority is no longer "current HEAD/base branch by default." The daemon
+now resolves a deterministic `BranchPlan` before env prep: seed ref,
+optional auto-land target, authority, and host checkout as context.
+Worktrees still always start on `brr/<task-id>`, but from `seed_ref`;
+if no safe auto-land target exists, brr preserves the task branch and
+publishes it when a remote is configured rather than folding it into
+the ambient host checkout.
 - **Frontmatter stays where it earns its keep.** Event files
   (`.brr/inbox/<id>.md`) and task files (`.brr/tasks/<id>.md`) keep
   their human-readable `---` frontmatter. They are durable

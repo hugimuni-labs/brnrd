@@ -60,10 +60,11 @@ dive-in map) and are stable until something contradicts them.
   branch-intent design that removes both ambient host checkout state and
   hidden universal landing-branch config from daemon-produced commits.
 - [Daemon branch intent design](design-daemon-landing-branch.md) —
-  *active*. Resolve seed refs and optional auto-land targets from
+  *accepted*. Resolve seed refs and optional auto-land targets from
   explicit structured event data, conversation/thread branch context,
-  issue/PR/task metadata, host branch context, and fallback policy
-  without adding a pre-run LLM branch selector.
+  host branch context, and fallback policy without adding a pre-run LLM
+  branch selector; richer source-specific issue/PR/task metadata remains
+  a future expansion point.
 - [Branch Modes Plan](plan-branch-modes.md) — *shipped, with
   revisions*. Branch and env are task properties, the agent owns
   branching at runtime. Triage and `needs_context` were reversed —

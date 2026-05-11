@@ -23,45 +23,39 @@ is configured, otherwise a git worktree. `host` is explicit only. That
 choice keeps remote runs isolated by default without asking an LLM to
 classify "small" versus "large" tasks ahead of time.
 
-For worktree-backed tasks, brr creates `.brr/worktrees/<task-id>/` on a
-fresh `brr/<task-id>` branch. The runner starts there. The agent owns
-the runtime branching choice:
+For worktree-backed tasks, brr first resolves a deterministic branch
+plan: seed ref, optional auto-land branch, authority, host checkout
+branch as context, and expected old OID for safe fast-forwards. It then
+creates `.brr/worktrees/<task-id>/` on a fresh `brr/<task-id>` branch
+from the seed ref. The agent owns the runtime branching choice:
 
-- commit on the original `brr/<task-id>` branch when the work should
-  land automatically;
-- switch to a new or existing named branch when the work should be
-  preserved separately;
+- commit on the original `brr/<task-id>` branch when the branch plan is
+  right;
+- switch to a new or existing named branch when the task body overrides
+  the plan;
 - make no commits for read-only work.
 
 On success, `WorktreeEnv.finalize` reads the final branch state. If the
-agent stayed on the original task branch and the base can fast-forward,
-brr lands the branch and deletes the throwaway worktree/branch. If the
-agent switched branches, detached HEAD, or cannot fast-forward, brr
+agent stayed on the original task branch and an auto-land target exists,
+brr fast-forwards that target and deletes the throwaway worktree/branch.
+If no target exists, brr preserves the task branch for human routing and
+publishes it when a remote is configured. If the agent switched
+branches, detached HEAD, or cannot fast-forward the target, brr
 preserves the branch for human follow-up. Docker uses the same
 worktree-backed branch contract, with the runner command executed in a
 container.
 
 ## Branch intent and landing
 
-The current weak point is not that design and research tasks can
-commit kb changes; that is intentional. The kb is durable project
-memory, and AGENTS.md tells agents to commit material findings,
-decisions, and designs. The weak point is that the daemon currently
-uses the host checkout's current `HEAD` as both the branch seed and
-the auto-land target. That makes durable remote work depend on whatever
-branch the operator happened to have checked out when the daemon
-processed the event.
-
-The active follow-up design is
-[`design-daemon-landing-branch.md`](design-daemon-landing-branch.md).
-The direction is to resolve a branch plan mechanically before env prep:
-a seed ref for `brr/<task-id>`, an optional auto-land target, the
-authority source for that choice, and the host current branch as
-context. Authority comes from structured event metadata, existing
-thread branch context, source metadata such as PR/task refs, then
-policy fallback. The host current branch is context for remote tasks,
-not automatic authority, and a fixed `landing_branch=` config is now a
-rejected shape because it creates hidden branch authority.
+The branch-intent fix in
+[`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
+removed the old weak point: the daemon no longer uses the host
+checkout's current `HEAD` as both seed and auto-land target. Branch
+authority now comes from structured event metadata, unambiguous
+conversation branch facts, and then policy fallback. The host current
+branch is context for remote tasks, not automatic authority, and a
+fixed `landing_branch=` config remains rejected because it creates
+hidden branch authority.
 
 This preserves the "agent owns branching" decision. If the agent stays
 on the task branch, brr can fast-forward the resolved target when one
@@ -79,4 +73,5 @@ predict it.
 3. [`design-env-interface.md`](design-env-interface.md) for the env
    protocol and worktree/docker durability contract.
 4. [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-   for the active branch-intent resolver design.
+   for the accepted branch-intent resolver design and remaining future
+   source-metadata expansion points.

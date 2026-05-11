@@ -35,10 +35,10 @@ The daemon owns orchestration, not meaning:
 - Tasks are built mechanically from events. The decision to remove
   LLM-driven triage and frontmatter-as-stdout is recorded in
   [`decision-remove-triage.md`](decision-remove-triage.md).
-- Environments isolate execution. The daemon resolves the environment
-  policy, asks the selected backend to prepare and finalize, then lets
-  the agent decide branch ownership inside the run. The live env design
-  is [`design-env-interface.md`](design-env-interface.md).
+- Environments isolate execution. The daemon resolves branch intent and
+  environment policy, asks the selected backend to prepare and finalize,
+  then lets the agent make runtime branch choices inside the run. The
+  live env design is [`design-env-interface.md`](design-env-interface.md).
 
 The serial-v1 guarantee still matters. The old concurrent-worktree plan
 imagined a pool and merge coordinator, but the shipped system keeps one
@@ -51,7 +51,7 @@ one active task, one response, one push path.
 For each pending event, the daemon:
 
 1. marks the event `processing`;
-2. creates and persists a `Task`;
+2. resolves the branch plan, then creates and persists a `Task`;
 3. prepares the selected env backend (`host`, `worktree`, or `docker`);
 4. builds the daemon prompt with the Task Context Bundle;
 5. invokes the configured runner headlessly;
@@ -60,7 +60,7 @@ For each pending event, the daemon:
 8. runs kb preflight plus the optional redundancy pass after successful
    work;
 9. finalizes the environment, fast-forwarding or preserving branches;
-10. marks the event terminal and pushes any new commits.
+10. marks the event terminal and pushes the branch that actually changed.
 
 The durable user response is plain stdout captured by
 [`runner.invoke_runner`](../src/brr/runner.py), not a file the agent
@@ -125,7 +125,7 @@ Read these in order when changing daemon behavior:
    backend responsibilities.
 5. [`subject-tasks-branching.md`](subject-tasks-branching.md) and
    [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-   for task construction, branch intent resolution, and the active fix
+   for task construction, branch intent resolution, and the accepted fix
    for ambient host-checkout and hidden landing-config coupling.
 6. [`decision-drop-streams.md`](decision-drop-streams.md) and
    [`decision-remove-triage.md`](decision-remove-triage.md) for the

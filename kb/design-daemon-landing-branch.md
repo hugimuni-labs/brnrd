@@ -1,6 +1,6 @@
 # Design: daemon branch intent resolution
 
-Status: active
+Status: accepted on 2026-05-11
 
 Revision: 2026-05-10. This supersedes this page's earlier
 `landing_branch=` recommendation. A single configured landing branch
@@ -9,6 +9,16 @@ hidden branch authority in config. The corrected design keeps the
 useful split between execution branch and durable branch while making
 branch authority derive from the task, the thread, or structured source
 metadata before falling back to policy.
+
+Implementation note, 2026-05-11: the core resolver and daemon gitops
+path shipped. `branching.BranchPlan` resolves structured event branch
+fields, unambiguous conversation branch facts, and fallback modes
+(`preserve` default, `inbox`, `default`, `current`). Worktrees sprout
+from `seed_ref`; finalization fast-forwards named targets by ref or
+preserves `brr/<task-id>` when no target exists; `_push_if_needed`
+pushes the branch that actually changed and sets upstream for brr-owned
+new branches. Richer source-specific metadata (PR/issue/task refs)
+remains an expansion point, not a different design.
 
 This hangs off the tasks/branching hub,
 [`subject-tasks-branching.md`](subject-tasks-branching.md), and refines
@@ -21,7 +31,8 @@ After the kb-shape work, design and research tasks naturally create kb
 commits. That is good: the kb is semantic project memory, not chat
 scratch. The problem is where those commits land.
 
-Today the daemon captures `base_branch = gitops.current_branch(repo_root)`
+Before this design shipped, the daemon captured
+`base_branch = gitops.current_branch(repo_root)`
 when a task starts. `worktree.create` sprouts `brr/<task-id>` from
 `HEAD`, and `WorktreeEnv.finalize` fast-forwards the task branch into
 the branch currently checked out in the host repo. That means a remote
@@ -187,9 +198,9 @@ the task `conflict` and preserve the task branch.
 
 ## Push Behavior
 
-`_push_if_needed` currently checks `@{u}..HEAD`, so it only works for
-the host checkout branch. Branch intent resolution requires a
-branch-aware push helper:
+The old `_push_if_needed` checked `@{u}..HEAD`, so it only worked for
+the host checkout branch. Branch intent resolution required, and now
+uses, a branch-aware push helper:
 
 - push `auto_land_branch` when finalization advanced it and it has an
   upstream;
@@ -233,21 +244,19 @@ This design leaves several honest workflows:
 
 ## Implementation Notes
 
-- Add a small branch-resolution module rather than spreading this logic
-  across `daemon.py`, `worktree.py`, and `envs/__init__.py`.
-- `worktree.create` needs a `base_ref` parameter and tests proving the
-  task branch starts from the resolved seed ref, not necessarily the
-  host checkout.
-- `RunContext` should carry `BranchPlan` fields. `base_branch` should
-  become compatibility wording for `auto_land_branch` only while the
-  prompt/status copy is being migrated.
-- Conversation records should include enough branch facts to project a
-  thread branch later: `branch_target`, `landed_branch`,
-  `preserved_branch`, and the resolver authority.
-- `WorktreeEnv._land_or_preserve` should call a `gitops` helper that
-  safely fast-forwards a named local branch or reports why it refused.
-- `_push_if_needed` should accept the changed branch/ref explicitly
-  rather than assuming the host checkout's `HEAD`.
+- `branching.py` owns deterministic branch resolution.
+- `worktree.create(base_ref=...)` starts the task branch from the
+  resolved seed ref, not necessarily the host checkout.
+- `RunContext` carries `BranchPlan`; `base_branch` remains compatibility
+  wording for the auto-land branch while older renderers exist.
+- Conversation records and terminal update packets carry branch facts
+  such as `landed_branch`, `preserved_branch`, and `changed_branch` so
+  later thread tasks can resolve branch continuity.
+- `gitops.fast_forward_branch` safely advances a named local branch by
+  merge when it is the daemon checkout or by `update-ref` when it is not
+  checked out elsewhere.
+- `_push_if_needed` accepts the changed branch/ref explicitly rather
+  than assuming the host checkout's `HEAD`.
 - `brr docs envs`, `execution-map`, `active-task`, the daemon prompt,
-  and progress rendering should describe the branch plan: seed,
-  optional auto-land target, final branch, and authority source.
+  and progress rendering describe the branch plan: seed, optional
+  auto-land target, final branch, and authority source.

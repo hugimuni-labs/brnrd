@@ -380,10 +380,13 @@ Replacing the central merge coordinator we kept deferring.
 | `auto` / `task`      | best-effort `git merge --ff-only`; on conflict → status=`conflict`, branch kept |
 | `<name>` / `new:<x>` | nothing (human or PR tooling owns the merge)                               |
 
-That's the whole "coordinator". It's ~30 LOC (already mostly in
-`gitops.merge_branch` and `_finalize_worktree_task`). It moves into
-`WorktreeEnv.finalize()` and `DockerEnv.finalize()` (which both end
-up calling the same helper).
+That's the whole "coordinator". The original 2026-05 env slice assumed
+the helper would be `gitops.merge_branch` plus `_finalize_worktree_task`.
+As of 2026-05-11 the branch-intent implementation replaced that with
+`branching.BranchPlan`, `gitops.fast_forward_branch`, and
+`WorktreeEnv._land_or_preserve()` / `DockerEnv.finalize()`: finalization
+fast-forwards a resolved auto-land target or preserves the branch when
+no safe target exists.
 
 ### Concurrency note
 

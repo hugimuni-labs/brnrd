@@ -31,6 +31,17 @@ The env is resolved deterministically when the task is built — there
 is no LLM in the loop. If a request needs different isolation, change
 `.brr/config` or wire your gate to set `env=` on the event.
 
+Branch fallback is separate from environment selection. When no
+structured event/thread metadata names a branch target, `branch.fallback`
+or `branch_fallback` controls the daemon's branch plan:
+
+- `preserve` (default) — seed from the repo default branch and preserve
+  the `brr/<task-id>` branch for human routing.
+- `inbox` — seed from the default branch and auto-land to `brr/inbox`.
+- `default` — seed from and auto-land to the repo default branch.
+- `current` — compatibility/development mode: seed from and auto-land
+  to the daemon host checkout's current branch.
+
 ## `host`
 
 The runner runs in the main checkout, in the daemon's process. There is
@@ -41,17 +52,21 @@ where you want the change visible immediately.
 ## `worktree`
 
 The daemon creates a git worktree under `.brr/worktrees/<task-id>/`
-on a fresh `brr/<task-id>` branch sprouted from the current `HEAD`.
+on a fresh `brr/<task-id>` branch sprouted from the resolved seed ref.
 The runner cwd points at the worktree; your main checkout is
 untouched. After a successful run, the daemon inspects the worktree's
 git state:
 
-- Agent committed on the original `brr/<task-id>` branch and the base
-  branch can fast-forward → merge it back, remove the worktree.
+- Agent committed on the original `brr/<task-id>` branch and the branch
+  plan has an auto-land target → fast-forward that target, remove the
+  worktree.
+- Agent committed on the original `brr/<task-id>` branch and the branch
+  plan has no auto-land target → preserve the task branch, publish it
+  when a remote is configured, and remove the worktree.
 - Agent switched to or created another branch (`git switch -c …`),
-  or commits diverge from the base → leave the branch alone, remove
-  the worktree.
-- No commits beyond the base → drop the empty branch with the
+  or commits cannot fast-forward the target → leave the branch alone,
+  remove the worktree.
+- No commits beyond the seed ref → drop the empty branch with the
   worktree.
 
 This is the right default for code-modifying work. Combine with debug
