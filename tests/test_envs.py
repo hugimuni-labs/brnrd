@@ -1,7 +1,9 @@
+import subprocess
+
 import pytest
 
 from brr import envs
-from brr.runner import RunnerInvocation
+from brr.runner import DEFAULT_RUNNER_TIMEOUT, RunnerInvocation
 from brr.task import Task
 
 
@@ -154,6 +156,178 @@ def test_docker_invoke_injects_git_safe_directory(tmp_path, monkeypatch):
     assert "GIT_CONFIG_COUNT=1" in forwarded
     assert "GIT_CONFIG_KEY_0=safe.directory" in forwarded
     assert "GIT_CONFIG_VALUE_0=*" in forwarded
+
+
+def test_docker_invoke_attaches_stdin_devnull(tmp_path, monkeypatch):
+    """Codex 0.128+ prints "Reading additional input from stdin..." and
+    can block on an open-but-silent fd. We attach the container's stdin
+    to docker's stdin and pin docker's stdin to /dev/null so the inner
+    runner sees an immediate EOF instead of hanging until our timeout
+    fires."""
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    captured: dict = {}
+
+    def _fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["stdin"] = kwargs.get("stdin")
+        return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(envs.subprocess, "run", _fake_run)
+    response_path = tmp_path / ".brr" / "responses" / "evt-stdin.md"
+    response_path.parent.mkdir(parents=True)
+    task = Task(id="task-stdin", event_id="evt-stdin", body="hi")
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, {"docker.image": "img:latest"},
+        base_branch="main", response_path=response_path,
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label="evt-stdin-1",
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+    )
+    envs.get_env("docker").invoke(
+        ctx, "mock-runner", invocation,
+        {"docker.image": "img:latest", "runner_cmd": ["mock", "{prompt}"]},
+    )
+
+    assert captured["stdin"] == subprocess.DEVNULL
+    # -i must be present so the container's stdin is wired up to docker's
+    # stdin (which is /dev/null per the above), not left as an open pipe.
+    assert "-i" in captured["command"]
+
+
+def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
+    """The default runner timeout is 3600s — the historic 600s default
+    was killing live work mid-run for xhigh-reasoning models."""
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    captured: dict = {}
+
+    def _fake_run(command, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(envs.subprocess, "run", _fake_run)
+    response_path = tmp_path / ".brr" / "responses" / "evt-t.md"
+    response_path.parent.mkdir(parents=True)
+    task = Task(id="task-t", event_id="evt-t", body="hi")
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, {"docker.image": "img:latest"},
+        base_branch="main", response_path=response_path,
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label="evt-t-1",
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+    )
+    envs.get_env("docker").invoke(
+        ctx, "mock-runner", invocation,
+        {"docker.image": "img:latest", "runner_cmd": ["mock", "{prompt}"]},
+    )
+
+    assert captured["timeout"] == DEFAULT_RUNNER_TIMEOUT == 3600
+
+
+def test_docker_invoke_honours_configured_timeout(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    captured: dict = {}
+
+    def _fake_run(command, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return envs.subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(envs.subprocess, "run", _fake_run)
+    response_path = tmp_path / ".brr" / "responses" / "evt-cfg.md"
+    response_path.parent.mkdir(parents=True)
+    task = Task(id="task-cfg", event_id="evt-cfg", body="hi")
+    cfg = {"docker.image": "img:latest", "runner.timeout_seconds": 1200}
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, cfg,
+        base_branch="main", response_path=response_path,
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label="evt-cfg-1",
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+    )
+    envs.get_env("docker").invoke(
+        ctx, "mock-runner", invocation,
+        {**cfg, "runner_cmd": ["mock", "{prompt}"]},
+    )
+
+    assert captured["timeout"] == 1200
+
+
+def test_docker_invoke_timeout_message_uses_configured_value(
+    tmp_path, monkeypatch,
+):
+    """When the docker subprocess times out, the appended stderr line
+    must report the actual configured ceiling so operators reading the
+    failed packet can tell what the budget was."""
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+
+    def _timeout_run(command, **_kwargs):
+        raise envs.subprocess.TimeoutExpired(
+            cmd=command,
+            timeout=42,
+            output=b"",
+            stderr=b"partial",
+        )
+
+    # Stub the docker kill call so we don't try to invoke real docker.
+    kill_calls: list[list[str]] = []
+
+    def _kill_run(command, **_kwargs):
+        kill_calls.append(command)
+        return envs.subprocess.CompletedProcess(command, 0, "", "")
+
+    def _dispatch(command, **kwargs):
+        if command[:2] == ["docker", "kill"]:
+            return _kill_run(command, **kwargs)
+        return _timeout_run(command, **kwargs)
+
+    monkeypatch.setattr(envs.subprocess, "run", _dispatch)
+
+    response_path = tmp_path / ".brr" / "responses" / "evt-to.md"
+    response_path.parent.mkdir(parents=True)
+    task = Task(id="task-to", event_id="evt-to", body="hi")
+    cfg = {"docker.image": "img:latest", "runner.timeout_seconds": 42}
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, cfg,
+        base_branch="main", response_path=response_path,
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label="evt-to-1",
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+    )
+    result = envs.get_env("docker").invoke(
+        ctx, "mock-runner", invocation,
+        {**cfg, "runner_cmd": ["mock", "{prompt}"]},
+    )
+
+    assert result.returncode == 124
+    assert "runner timed out after 42s" in result.stderr
+    assert kill_calls  # docker kill <container> was attempted
 
 
 def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-1"):

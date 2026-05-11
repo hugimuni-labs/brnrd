@@ -233,7 +233,11 @@ def _project(
             view.detail = f"artifact: {label}"
         elif ptype == "finalizing":
             stage = record.get("stage")
-            view.detail = f"finalizing ({stage})" if stage else "finalizing"
+            # Don't clobber a terminal explanation: once the projection
+            # knows a task is failed/conflict, the failure detail is
+            # more useful to the operator than "finalizing (failed)".
+            if view.state == "active":
+                view.detail = f"finalizing ({stage})" if stage else "finalizing"
         elif ptype == "push_started":
             view.detail = "pushing changes"
         elif ptype == "push_done":
@@ -245,12 +249,18 @@ def _project(
             view.state = "failed"
             stage = record.get("stage")
             err = record.get("error")
-            bits = []
-            if stage:
+            exit_code = record.get("exit_code")
+            timed_out = bool(record.get("timed_out"))
+            bits: list[str] = []
+            if timed_out:
+                bits.append("timed out")
+            elif stage:
                 bits.append(f"stage={stage}")
+            if exit_code not in (None, "") and not timed_out:
+                bits.append(f"exit {exit_code}")
             if err:
                 bits.append(str(err))
-            view.detail = "; ".join(bits) or "failed"
+            view.detail = " · ".join(bits) or "failed"
             view.error = err if isinstance(err, str) else view.error
         elif ptype == "conflict":
             view.state = "failed"
