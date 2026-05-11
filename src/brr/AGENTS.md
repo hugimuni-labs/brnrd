@@ -70,8 +70,12 @@ pytest
 
 Commit directly on the current branch unless the task explicitly needs a
 feature branch. When brr's daemon runs the task, every worktree starts on a
-fresh `brr/<task-id>` branch — keep that branch (brr fast-forwards it back)
-or `git switch -c <name>` first if you want the work preserved as its own
+fresh `brr/<task-id>` branch from the seed ref named in the Task Context
+Bundle. If the bundle names an auto-land branch, staying on the task branch
+lets brr fast-forward that target after the run. If no auto-land branch is
+named, the default is to commit on `brr/<task-id>`; brr preserves and
+publishes that task branch for human routing when a remote is configured.
+Use `git switch -c <name>` first only when the work belongs on a different
 branch.
 
 One logical commit per task. The commit message should explain *why*, not

@@ -142,9 +142,24 @@ def inspect_task(
     branch_name = task.meta.get("branch_name")
     if branch_name:
         lines.append(f"Git branch: {branch_name}")
+    seed_ref = task.meta.get("seed_ref")
+    if seed_ref:
+        lines.append(f"Seed ref: {seed_ref}")
+    auto_land_branch = task.meta.get("auto_land_branch")
+    if auto_land_branch:
+        lines.append(f"Auto-land branch: {auto_land_branch}")
+    branch_authority = task.meta.get("branch_authority")
+    if branch_authority:
+        lines.append(f"Branch authority: {branch_authority}")
     base_branch = task.meta.get("base_branch")
-    if base_branch:
+    if base_branch and base_branch != auto_land_branch:
         lines.append(f"Base branch: {base_branch}")
+    preserved_branch = task.meta.get("preserved_branch")
+    if preserved_branch:
+        lines.append(f"Preserved branch: {preserved_branch}")
+    landed_branch = task.meta.get("landed_branch")
+    if landed_branch:
+        lines.append(f"Landed branch: {landed_branch}")
 
     resp = task.meta.get("response_path")
     if resp:
@@ -187,6 +202,17 @@ def inspect_task(
     extra_keys = set(task.meta) - {
         "base_branch",
         "branch_name",
+        "seed_ref",
+        "auto_land_branch",
+        "preserved_branch",
+        "landed_branch",
+        "changed_branch",
+        "branch_authority",
+        "host_context_branch",
+        "auto_land_old_oid",
+        "branch_notes",
+        "branch_error",
+        "landed_commit",
         "response_path",
         "trace_dirs",
         "worktree_path",

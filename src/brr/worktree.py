@@ -1,16 +1,15 @@
 """Git worktree helpers for task-isolated execution.
 
 Each task gets a fresh worktree at ``.brr/worktrees/<task-id>/`` on a
-dedicated ``brr/<task-id>`` branch sprouted from the current HEAD. The
+dedicated ``brr/<task-id>`` branch sprouted from the resolved seed ref. The
 agent runs inside that sandbox and decides how its work should land:
 
-- Leaving commits on ``brr/<task-id>`` opts into the auto-merge
-  contract — :func:`finalize` fast-forwards the branch back into the
-  base branch and deletes both the worktree and the temporary branch
-  on success.
+- Leaving commits on ``brr/<task-id>`` follows the daemon's branch
+  plan: finalization fast-forwards a resolved auto-land target, or
+  preserves the task branch when no safe target exists.
 - Switching to a different branch (``git switch -c feat/foo`` or
-  ``git switch existing``) opts out of auto-merge — the branch is
-  preserved as-is on cleanup.
+  ``git switch existing``) records a runtime branch choice, and the
+  branch is preserved as-is on cleanup.
 """
 
 from __future__ import annotations
@@ -107,12 +106,12 @@ def path_for(repo_root: Path, task_id: str) -> Path:
     return gitops.shared_brr_dir(repo_root) / "worktrees" / task_id
 
 
-def create(repo_root: Path, task_id: str) -> tuple[Path, str]:
+def create(repo_root: Path, task_id: str, *, base_ref: str = "HEAD") -> tuple[Path, str]:
     """Create a fresh task worktree on a new ``brr/<task_id>`` branch.
 
-    Always sprouts a new branch from the current HEAD so worktree
-    creation never collides with a branch that's checked out
-    elsewhere. Returns ``(worktree_path, branch_name)``.
+    Always sprouts a new branch from *base_ref* so worktree creation
+    never collides with a branch that's checked out elsewhere. Returns
+    ``(worktree_path, branch_name)``.
     """
     worktree_path = path_for(repo_root, task_id)
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +119,7 @@ def create(repo_root: Path, task_id: str) -> tuple[Path, str]:
         raise RuntimeError(f"worktree already exists: {worktree_path}")
 
     branch = task_branch_name(task_id)
-    args = ["worktree", "add", "-b", branch, str(worktree_path), "HEAD"]
+    args = ["worktree", "add", "-b", branch, str(worktree_path), base_ref]
     result = _git(repo_root, *args, check=False)
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
