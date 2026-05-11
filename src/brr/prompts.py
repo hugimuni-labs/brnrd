@@ -135,6 +135,10 @@ def build_daemon_prompt(
     task_id: str | None = None,
     branch_name: str | None = None,
     base_branch: str | None = None,
+    seed_ref: str | None = None,
+    auto_land_branch: str | None = None,
+    branch_authority: str | None = None,
+    host_context_branch: str | None = None,
     runtime_dir: str | None = None,
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
@@ -154,6 +158,10 @@ def build_daemon_prompt(
         task_id=task_id,
         branch_name=branch_name,
         base_branch=base_branch,
+        seed_ref=seed_ref,
+        auto_land_branch=auto_land_branch,
+        branch_authority=branch_authority,
+        host_context_branch=host_context_branch,
         runtime_dir=runtime_dir,
         context_path=context_path,
         recent_conversation=recent_conversation,
@@ -183,6 +191,10 @@ def _build_task_context_bundle(
     task_id: str | None,
     branch_name: str | None,
     base_branch: str | None,
+    seed_ref: str | None,
+    auto_land_branch: str | None,
+    branch_authority: str | None,
+    host_context_branch: str | None,
     runtime_dir: str | None,
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
@@ -191,7 +203,7 @@ def _build_task_context_bundle(
     """Assemble the human-readable Task Context Bundle for the daemon prompt.
 
     The bundle preserves the ``Key: value`` lines (Task ID:, Execution
-    root:, Base branch:, etc.) under semantic headings so any tool
+    root:, Current branch:, etc.) under semantic headings so any tool
     grepping the prompt keeps working.
     """
     sections: list[str] = ["---", "## Task Context Bundle"]
@@ -202,7 +214,17 @@ def _build_task_context_bundle(
     if task_id:
         sections.append(f"- Task ID: {task_id}")
     sections.append(f"- Execution root: {repo_root}")
-    if base_branch:
+    if seed_ref:
+        sections.append(f"- Seed ref: {seed_ref}")
+    if auto_land_branch:
+        sections.append(f"- Auto-land branch: {auto_land_branch}")
+    elif seed_ref:
+        sections.append("- Auto-land branch: none (preserve task branch)")
+    if branch_authority:
+        sections.append(f"- Branch authority: {branch_authority}")
+    if host_context_branch:
+        sections.append(f"- Host context branch: {host_context_branch}")
+    elif base_branch:
         sections.append(f"- Base branch: {base_branch}")
     if branch_name:
         sections.append(f"- Current branch: {branch_name}")
@@ -233,7 +255,26 @@ def _build_task_context_bundle(
         "- Don't explore or modify any other files in .brr/ beyond what "
         "this task explicitly asks for."
     )
-    if branch_name and base_branch:
+    if branch_name and seed_ref:
+        if auto_land_branch:
+            sections.append(
+                f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
+                f"Because `{auto_land_branch}` is the resolved auto-land "
+                "target, committing on the current branch lets brr "
+                "fast-forward that target after the run. If the task body "
+                "clearly belongs somewhere else, switch to that branch before "
+                "editing; brr will preserve the branch you end up on."
+            )
+        else:
+            sections.append(
+                f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
+                "No safe auto-land target was resolved, so commit on the "
+                "current task branch by default; brr will preserve that branch "
+                "for human routing and publish it when a remote is configured. "
+                "If the task body names a different branch, switch to it before "
+                "editing."
+            )
+    elif branch_name and base_branch:
         sections.append(
             f"- You start on `{branch_name}`, sprouted from `{base_branch}`. "
             "If your work should land on the base branch, commit on the "
@@ -285,7 +326,12 @@ def _format_recent_conversation(
         elif kind == "task":
             tid = record.get("task_id", "")
             status = record.get("status") or "pending"
-            branch = record.get("branch") or ""
+            branch = (
+                record.get("changed_branch")
+                or record.get("auto_land_branch")
+                or record.get("branch_name")
+                or ""
+            )
             line = f"- {ts} task {tid} status={status} branch={branch}"
         elif kind == "update":
             ptype = record.get("type") or ""

@@ -2,7 +2,7 @@ import subprocess
 
 import pytest
 
-from brr import envs
+from brr import branching, envs
 from brr.runner import DEFAULT_RUNNER_TIMEOUT, RunnerInvocation
 from brr.task import Task
 
@@ -47,7 +47,7 @@ def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
     monkeypatch.setattr(
         envs.worktree,
         "create",
-        lambda repo_root, task_id: created.append((repo_root, task_id))
+        lambda repo_root, task_id, base_ref="HEAD": created.append((repo_root, task_id, base_ref))
         or (worktree_path, f"brr/{task_id}"),
     )
     task = Task(id="task-2", event_id="evt-2", body="change code")
@@ -63,7 +63,7 @@ def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
     assert ctx.branch_name == "brr/task-2"
     assert task.meta["worktree_path"] == str(worktree_path)
     assert task.meta["branch_name"] == "brr/task-2"
-    assert created == [(tmp_path, "task-2")]
+    assert created == [(tmp_path, "task-2", "main")]
 
 
 def _isolate_docker_creds(monkeypatch, tmp_path):
@@ -83,12 +83,85 @@ def _isolate_docker_creds(monkeypatch, tmp_path):
 
 def _stub_worktree(monkeypatch, tmp_path):
     """Replace worktree.create with a stub that just makes the dir."""
-    def _create(_repo_root, task_id):
+    def _create(_repo_root, task_id, base_ref="HEAD"):
         path = tmp_path / ".brr" / "worktrees" / task_id
         path.mkdir(parents=True, exist_ok=True)
         return path, f"brr/{task_id}"
 
     monkeypatch.setattr(envs.worktree, "create", _create)
+
+
+def _init_repo(repo):
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    (repo / "file.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+
+def _commit_in(path, filename, text, message):
+    (path / filename).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "add", filename], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", message], cwd=path, check=True, stdout=subprocess.PIPE)
+
+
+def test_worktree_finalize_preserves_task_branch_without_auto_land(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    response_path = repo / ".brr" / "responses" / "evt-preserve.md"
+    task = Task(id="task-preserve", event_id="evt-preserve", body="change", status="done")
+    plan = branching.BranchPlan(
+        seed_ref="main",
+        auto_land_branch=None,
+        authority="fallback:preserve",
+        host_context_branch="main",
+    )
+    backend = envs.get_env("worktree")
+    ctx = backend.prepare(
+        task, repo, {},
+        base_branch=None, branch_plan=plan, response_path=response_path,
+    )
+    _commit_in(ctx.cwd, "change.txt", "change\n", "change")
+
+    backend.finalize(ctx, task, repo / ".brr" / "tasks")
+
+    assert task.meta["preserved_branch"] == "brr/task-preserve"
+    assert task.meta["changed_branch"] == "brr/task-preserve"
+    assert not ctx.cwd.exists()
+    assert envs.gitops.branch_exists(repo, "brr/task-preserve")
+    assert not (repo / "change.txt").exists()
+
+
+def test_worktree_finalize_fast_forwards_auto_land_target(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    old_main = envs.gitops.branch_head(repo, "main")
+    response_path = repo / ".brr" / "responses" / "evt-land.md"
+    task = Task(id="task-land", event_id="evt-land", body="change", status="done")
+    plan = branching.BranchPlan(
+        seed_ref="main",
+        auto_land_branch="main",
+        authority="fallback:current",
+        host_context_branch="main",
+        expected_old_oid=old_main,
+    )
+    backend = envs.get_env("worktree")
+    ctx = backend.prepare(
+        task, repo, {},
+        base_branch="main", branch_plan=plan, response_path=response_path,
+    )
+    _commit_in(ctx.cwd, "landed.txt", "landed\n", "landed")
+
+    backend.finalize(ctx, task, repo / ".brr" / "tasks")
+
+    assert task.meta["landed_branch"] == "main"
+    assert task.meta["changed_branch"] == "main"
+    assert (repo / "landed.txt").exists()
+    assert not ctx.cwd.exists()
+    assert not envs.gitops.branch_exists(repo, "brr/task-land")
 
 
 def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):

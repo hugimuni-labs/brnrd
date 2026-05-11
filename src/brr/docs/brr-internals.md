@@ -99,12 +99,17 @@ Use `environment` for the user-facing execution policy:
 The legacy `env` and `default_env` config keys are still accepted, but
 new config should use `environment`.
 
-Branching is no longer carried on the task file. Worktree and Docker
+Branching is no longer carried on the task file. Before env prep the
+daemon resolves a branch plan: seed ref, optional auto-land branch,
+authority, and host checkout branch as context. Worktree and Docker
 runs always start on a fresh `brr/<task-id>` branch sprouted from the
-current `HEAD`. The agent decides at runtime whether the work should
-land back on the base branch (commit on the current branch, brr
-fast-forwards) or be preserved on its own branch (`git switch -c
-<name>` first, brr leaves it untouched).
+seed ref. If the plan has an auto-land target, committing on the task
+branch lets brr fast-forward that target. If no target exists, brr
+preserves the task branch and publishes it when a remote is configured.
+`branch.fallback` (or the legacy spelling `branch_fallback`) controls
+the no-authority fallback:
+`preserve` by default, or `inbox`, `default`, or `current` when chosen
+explicitly.
 
 Legacy per-repo override folders may still be read by the library, but
 there is no public command to seed them:
@@ -234,13 +239,13 @@ parallel — the worker pool is single-threaded. See
 
 When a worktree-backed task finishes, the daemon inspects the
 worktree's git state. If the agent left commits on the original
-`brr/<task-id>` branch and the base branch can fast-forward, the
-branch is folded back; otherwise (the agent created/checked out a
-different branch, or the merge would not be fast-forward) the branch
-is preserved as-is and the worktree is removed unless debug mode keeps
-it for inspection. Docker tasks use the same worktree-backed branch
-behavior, with the runner command executed inside the configured
-container image.
+`brr/<task-id>` branch and the branch plan has an auto-land target,
+that target is fast-forwarded. If there is no target, or if the agent
+created/checked out a different branch, the resulting branch is
+preserved as-is. Conflicts preserve the task branch. The worktree is
+removed unless debug mode keeps it for inspection. Docker tasks use
+the same worktree-backed branch behavior, with the runner command
+executed inside the configured container image.
 
 The full env story — built-ins, configuration knobs, the docker
 credential wiring, the durability contract, and the salvage rule —
