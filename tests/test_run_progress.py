@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 
 from brr import conversations, run_progress, updates
@@ -176,59 +177,221 @@ def test_project_conversation_latest_returns_none_when_no_tasks(tmp_path):
     assert view is None
 
 
-def test_render_text_compact_is_terse(tmp_path):
-    """Compact card is the chat surface — header + phase, nothing else.
+def test_projection_captures_runner_name_from_run_started(tmp_path):
+    """``run_started`` carries the resolved runner name so the chat
+    card header can show ``codex``/``claude`` etc. without the gate
+    re-querying state."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:1:"
+    _emit(brr_dir, key, "task_created", task_id="task-rn", env="docker")
+    _emit(brr_dir, key, "run_started", task_id="task-rn",
+          runner="codex", branch="brr/task-rn", env="docker")
 
-    Branch / env / response paths are dev-side noise in a chat reply;
-    they live in the verbose form for ``brr status`` and ``brr inspect``.
-    """
+    view = run_progress.project_task(brr_dir, key, "task-rn")
+    assert view is not None
+    assert view.runner_name == "codex"
+    assert view.branch_name == "brr/task-rn"
+
+
+def test_projection_treats_heartbeat_as_no_op(tmp_path):
+    """Heartbeats must not push new phase entries — they only exist to
+    re-trigger gate renders so the live elapsed counter ticks."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:hb:"
+    _emit(brr_dir, key, "task_created", task_id="task-hb", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-hb", attempt=1)
+    before = run_progress.project_task(brr_dir, key, "task-hb")
+    assert before is not None
+    assert len(before.phase_history) == 2
+
+    _emit(brr_dir, key, "heartbeat", task_id="task-hb",
+          attempt=1, elapsed_seconds=30)
+    _emit(brr_dir, key, "heartbeat", task_id="task-hb",
+          attempt=1, elapsed_seconds=60)
+
+    after = run_progress.project_task(brr_dir, key, "task-hb")
+    assert after is not None
+    assert len(after.phase_history) == 2
+    # Phase shape unchanged: still on the live "running" entry.
+    assert after.phase_history[-1].name == "running"
+    assert after.phase_history[-1].ended_at is None
+
+
+def test_projection_records_separate_running_entries_per_attempt(tmp_path):
+    """Each attempt opens its own ``running`` entry so the strike-
+    through log ends up with one struck line per finished attempt."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:rt:"
+    _emit(brr_dir, key, "task_created", task_id="task-r", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-r", attempt=1)
+    _emit(brr_dir, key, "attempt_failed", task_id="task-r", attempt=1,
+          reason="missing required output(s)", will_retry=True)
+    _emit(brr_dir, key, "retrying", task_id="task-r", attempt=2)
+    _emit(brr_dir, key, "attempt_started", task_id="task-r", attempt=2)
+
+    view = run_progress.project_task(brr_dir, key, "task-r")
+    assert view is not None
+    running = [e for e in view.phase_history if e.name == "running"]
+    assert [e.attempt for e in running] == [1, 2]
+    # First running entry is closed (next attempt opened a fresh one),
+    # second is the live one.
+    assert running[0].ended_at is not None
+    assert running[1].ended_at is None
+
+
+def test_render_text_compact_has_runner_env_branch_header(tmp_path):
+    """Compact card opens with a sticky ``runner · env · branch ← base``
+    header naming the three things that don't change once a task starts.
+    Task ID is dev-side noise in a chat reply and stays out."""
     brr_dir = tmp_path / ".brr"
     key = "telegram:8:"
-    _emit(brr_dir, key, "task_created", task_id="task-r",
-          env="docker")
+    _emit(brr_dir, key, "task_created", task_id="task-r", env="docker")
     _emit(brr_dir, key, "env_prepared", task_id="task-r", env="docker",
           branch_name="brr/task-r")
     _emit(brr_dir, key, "attempt_started", task_id="task-r", attempt=1)
-    _emit(brr_dir, key, "run_started", task_id="task-r")
+    _emit(brr_dir, key, "run_started", task_id="task-r",
+          runner="codex", branch="brr/task-r", env="docker")
+    # Backfill the base branch the same way daemon._run_worker does
+    # via the task record (env_prepared doesn't carry base_branch).
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-r", event_id="evt-r",
+        env="docker", status="running",
+        base_branch="main", branch_name="brr/task-r",
+    )
 
     view = run_progress.project_task(brr_dir, key, "task-r")
     assert view is not None
     text = run_progress.render_text(view, compact=True)
-    assert "brr" in text
-    assert "task-r" in text
+    header = text.splitlines()[0]
+    assert header == "codex · docker · brr/task-r ← main"
+    # Phase log: no "phase:" labels (those belong to the verbose form),
+    # and the bare task ID never leaks in — task-r only appears as part
+    # of the branch name in the header.
+    assert "phase:" not in text
+    assert text.count("task-r") == 1  # only inside the branch name
     assert "running" in text
-    assert "phase: running" in text
-    assert "branch:" not in text
-    assert "env:" not in text
-    assert "last:" not in text
-    assert "response:" not in text
 
 
-def test_render_text_compact_shows_attempt_only_during_retry(tmp_path):
-    """attempt: counter shows up only mid-flight, not after delivery."""
+def test_render_text_compact_strikes_through_finished_phases(tmp_path):
+    """Closed phases get wrapped in the style's done-open/done-close
+    markers; the live current line stays unmarked. Plain text gets no
+    decoration so the log reads positionally."""
     brr_dir = tmp_path / ".brr"
-    key = "telegram:8b:"
+    key = "telegram:8a:"
+    _emit(brr_dir, key, "task_created", task_id="task-s", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-s", attempt=1)
+    _emit(brr_dir, key, "finalizing", task_id="task-s", stage="done")
+
+    view = run_progress.project_task(brr_dir, key, "task-s")
+    assert view is not None
+
+    plain = run_progress.render_text(view, compact=True)
+    assert "preparing" in plain
+    assert "running" in plain
+    assert plain.rstrip().endswith("finalizing")
+
+    html = run_progress.render_text(
+        view, compact=True, style=run_progress.TELEGRAM_HTML_STYLE,
+    )
+    assert "<s>preparing" in html
+    assert "</s>" in html
+    assert "<s>running" in html
+    # Live phase ("finalizing") must NOT be wrapped in <s>.
+    assert html.rstrip().endswith("finalizing")
+    assert "<s>finalizing" not in html
+
+
+def test_render_text_compact_running_shows_elapsed(tmp_path):
+    """The live ``running`` line bumps elapsed time at render time so
+    heartbeats produce visible motion in the chat card."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:8c:"
+    _emit(brr_dir, key, "task_created", task_id="task-e", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-e", attempt=1)
+
+    view = run_progress.project_task(brr_dir, key, "task-e")
+    assert view is not None
+    started = run_progress._parse_iso(view.phase_history[-1].started_at)
+    assert started is not None
+    later = started + datetime.timedelta(seconds=130)
+    text = run_progress.render_text(view, compact=True, now=later)
+    last_line = text.rstrip().splitlines()[-1]
+    assert last_line.startswith("running · ")
+    assert "2m 10s" in last_line
+
+
+def test_render_text_compact_attempt_label_only_when_multi(tmp_path):
+    """Single-attempt runs read as plain ``running``; once a second
+    attempt starts, every running entry gets an attempt suffix."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:8d:"
     _emit(brr_dir, key, "task_created", task_id="task-rt", env="worktree")
+    _emit(brr_dir, key, "attempt_started", task_id="task-rt", attempt=1)
+    view_one = run_progress.project_task(brr_dir, key, "task-rt")
+    assert view_one is not None
+    assert "attempt" not in run_progress.render_text(view_one, compact=True)
+
+    _emit(brr_dir, key, "attempt_failed", task_id="task-rt", attempt=1,
+          reason="missing required output(s)", will_retry=True)
+    _emit(brr_dir, key, "retrying", task_id="task-rt", attempt=2)
     _emit(brr_dir, key, "attempt_started", task_id="task-rt", attempt=2)
+    view_retry = run_progress.project_task(brr_dir, key, "task-rt")
+    assert view_retry is not None
+    text = run_progress.render_text(view_retry, compact=True)
+    assert "running (attempt 1)" in text
+    assert "running (attempt 2)" in text
 
-    view_active = run_progress.project_task(brr_dir, key, "task-rt")
-    assert view_active is not None
-    assert "attempt: 2" in run_progress.render_text(view_active, compact=True)
 
-    _emit(brr_dir, key, "done", task_id="task-rt")
-    view_done = run_progress.project_task(brr_dir, key, "task-rt")
-    assert view_done is not None
-    assert "attempt:" not in run_progress.render_text(view_done, compact=True)
+def test_render_text_compact_terminal_reports_total_elapsed(tmp_path):
+    """The terminal line names the total wall-clock time from event
+    arrival to delivery — that's the meaningful "how long did it take"."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:8e:"
+    _emit(brr_dir, key, "task_created", task_id="task-d", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-d", attempt=1)
+    _emit(brr_dir, key, "finalizing", task_id="task-d", stage="done")
+    _emit(brr_dir, key, "push_done", task_id="task-d", commits=2, ok=True)
+    _emit(brr_dir, key, "done", task_id="task-d", event_id="evt-d")
+
+    view = run_progress.project_task(brr_dir, key, "task-d")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    last_line = text.rstrip().splitlines()[-1]
+    assert last_line.startswith("delivered · ")
+    assert "pushed 2 commits" in last_line
+
+
+def test_render_text_compact_failed_keeps_error_below_struck_log(tmp_path):
+    """On hard failure the strike-through log ends with ``failed`` and
+    the actual error sits on the next line so the chat reader sees the
+    problem without having to parse markup."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:8f:"
+    _emit(brr_dir, key, "task_created", task_id="task-fail", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-fail", attempt=1)
+    _emit(brr_dir, key, "finalizing", task_id="task-fail", stage="failed")
+    _emit(brr_dir, key, "failed", task_id="task-fail", event_id="evt-fail",
+          stage="run", attempts=1, exit_code=124, timed_out=True,
+          error="runner timed out after 3600s")
+
+    view = run_progress.project_task(brr_dir, key, "task-fail")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    lines = text.rstrip().splitlines()
+    assert any(line.startswith("failed · ") for line in lines)
+    assert lines[-1] == "runner timed out after 3600s"
 
 
 def test_render_text_verbose_keeps_dev_fields(tmp_path):
     """Verbose mode (compact=False) keeps the operator-facing detail."""
     brr_dir = tmp_path / ".brr"
-    key = "telegram:8c:"
+    key = "telegram:8z:"
     _emit(brr_dir, key, "task_created", task_id="task-v", env="docker")
     _emit(brr_dir, key, "env_prepared", task_id="task-v", env="docker",
           branch_name="brr/task-v")
-    _emit(brr_dir, key, "run_started", task_id="task-v")
+    _emit(brr_dir, key, "run_started", task_id="task-v",
+          runner="codex", branch="brr/task-v", env="docker")
     _emit(brr_dir, key, "done", task_id="task-v")
 
     view = run_progress.project_task(brr_dir, key, "task-v")
@@ -236,6 +399,7 @@ def test_render_text_verbose_keeps_dev_fields(tmp_path):
     text = run_progress.render_text(view, compact=False)
     assert "branch: brr/task-v" in text
     assert "env: docker" in text
+    assert "runner: codex" in text
 
 
 def test_render_text_compact_does_not_inject_conversation_identity(tmp_path):
