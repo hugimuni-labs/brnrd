@@ -69,7 +69,14 @@ def test_render_update_sends_message_on_task_created(tmp_path, monkeypatch):
     params = sends[0][2]
     assert params["chat_id"] == 555
     assert params["message_thread_id"] == 7
-    assert task.id in params["text"]
+    # Compact card opens with the env in the header (no task ID — that's
+    # dev-side noise in a chat reply).
+    assert "docker" in params["text"]
+    assert "preparing" in params["text"]
+    assert task.id not in params["text"]
+    # Telegram-flavoured rendering: HTML parse_mode so the strike-
+    # through markup later in the lifecycle renders as the user expects.
+    assert params.get("parse_mode") == "HTML"
     state = telegram._load_progress_state(brr_dir)
     assert state[task.id]["message_id"] == 42
 
@@ -93,7 +100,10 @@ def test_render_update_edits_existing_message(tmp_path, monkeypatch):
 
     _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
           branch="auto", env="host")
-    _emit(brr_dir, task.conversation_key, "run_started", task_id=task.id)
+    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+          attempt=1)
+    _emit(brr_dir, task.conversation_key, "finalizing", task_id=task.id,
+          stage="done")
     _emit(brr_dir, task.conversation_key, "done", task_id=task.id,
           event_id=task.event_id)
 
@@ -103,7 +113,9 @@ def test_render_update_edits_existing_message(tmp_path, monkeypatch):
     last_edit = next(c for c in reversed(api_calls) if c[1] == "editMessageText")
     assert last_edit[2]["chat_id"] == 999
     assert last_edit[2]["message_id"] == 100
-    assert "done" in last_edit[2]["text"]
+    # Terminal phase reads as "delivered" in the new card layout.
+    assert "delivered" in last_edit[2]["text"]
+    assert last_edit[2].get("parse_mode") == "HTML"
 
 
 def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch):
@@ -129,7 +141,11 @@ def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch)
 
     _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
           branch="auto", env="host")
-    _emit(brr_dir, task.conversation_key, "run_started", task_id=task.id)
+    # attempt_started actually changes the rendered card (preparing →
+    # running), so the gate tries to edit; the stub raises, which forces
+    # the fall-back sendMessage.
+    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+          attempt=1)
 
     methods = [m for _, m, _ in api_calls]
     assert methods.count("sendMessage") == 2
@@ -170,17 +186,17 @@ def test_render_update_skips_when_token_missing(tmp_path, monkeypatch):
 
 
 def test_render_update_skips_api_when_text_unchanged(tmp_path, monkeypatch):
-    """Subsequent packets that project to identical text don't hit the API.
+    """Packets that don't change anything visible in the compact card
+    must be dropped before any HTTP request.
 
-    Regresses the duplication bug where a sequence of packets that
-    project to the same compact card triggered an editMessageText call,
-    received "message is not modified" 400, fell through to sendMessage,
-    and posted a duplicate.
+    Regresses the duplication bug where a sequence of packets projecting
+    to the same compact card triggered an editMessageText call, received
+    "message is not modified" 400, fell through to sendMessage, and
+    posted a duplicate. We dedupe before hitting the API.
 
-    The compact card shows phase only, so packets that don't change the
-    phase (env_prepared after task_created stays "preparing"; run_started
-    after attempt_started stays "running") must not produce any API
-    call at all.
+    container_started and artifact_created are tracked in the verbose
+    view but are intentionally invisible in the compact card, so they're
+    the natural "should produce zero traffic" cases.
     """
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
@@ -198,23 +214,62 @@ def test_render_update_skips_api_when_text_unchanged(tmp_path, monkeypatch):
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    # task_created → phase "preparing", header "preparing". Initial post.
+    # task_created → preparing card. Initial post.
     _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
           branch="auto", env="docker")
-    # env_prepared → still "preparing" → identical card → no API call.
-    _emit(brr_dir, task.conversation_key, "env_prepared", task_id=task.id,
-          env="docker", branch_name="brr/task-tg-dedupe")
-    # attempt_started → phase flips to "running" → one edit.
-    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
-          attempt=1)
-    # run_started → still "running" → identical card → no API call.
-    _emit(brr_dir, task.conversation_key, "run_started", task_id=task.id)
+    # container_started → no compact-card change → no API call.
+    _emit(brr_dir, task.conversation_key, "container_started",
+          task_id=task.id, env="docker", container="brr-task-tg-dedupe-x")
+    # artifact_created → also invisible in compact → no API call.
+    _emit(brr_dir, task.conversation_key, "artifact_created",
+          task_id=task.id, kind="response",
+          path="/tmp/r.md", label="response:evt-x")
 
     methods = [m for _, m, _ in api_calls]
-    # 1 send (task_created) + 1 edit (preparing → running) total. The two
-    # no-op packets are dropped before any HTTP request.
     assert methods.count("sendMessage") == 1
-    assert methods.count("editMessageText") == 1
+    assert methods.count("editMessageText") == 0
+
+
+def test_render_update_html_escapes_user_content(tmp_path, monkeypatch):
+    """Telegram parses HTML in the card text. Any user-controlled string
+    that lands in the failure detail (runner stderr, branch names with
+    ``<``, etc.) must be escaped before render so Telegram doesn't 400
+    on ``can't parse entities``."""
+    brr_dir = tmp_path / ".brr"
+    _save_token(brr_dir)
+    task = _seed_task(brr_dir, "task-tg-esc", chat_id=333)
+
+    api_calls: list[tuple] = []
+
+    def fake_api_call(token, method, params=None):
+        api_calls.append((token, method, params))
+        if method == "sendMessage":
+            return {"result": {"message_id": 700}}
+        if method == "editMessageText":
+            return {"result": {"message_id": 700}}
+        return {}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+
+    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+          branch="auto", env="docker")
+    _emit(brr_dir, task.conversation_key, "attempt_started",
+          task_id=task.id, attempt=1)
+    _emit(brr_dir, task.conversation_key, "finalizing",
+          task_id=task.id, stage="failed")
+    _emit(brr_dir, task.conversation_key, "failed",
+          task_id=task.id, event_id=task.event_id,
+          stage="run", attempts=1, exit_code=1,
+          error="docker run failed: <ulimit & oom-killer>")
+
+    last_edit = next(c for c in reversed(api_calls) if c[1] == "editMessageText")
+    text = last_edit[2]["text"]
+    # Raw < / & must not survive into the payload — they get escaped.
+    assert "<ulimit" not in text
+    assert "&lt;ulimit &amp; oom-killer&gt;" in text
+    # The strike-through tags themselves stay intact.
+    assert "<s>preparing" in text
+    assert last_edit[2].get("parse_mode") == "HTML"
 
 
 def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):

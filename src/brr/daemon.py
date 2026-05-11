@@ -36,6 +36,10 @@ from .task import Task
 
 _SCAN_INTERVAL = 3
 _BUILTIN_GATES = ["telegram", "slack", "git_gate"]
+# Cadence for the run-time heartbeat packet. 30s is short enough that
+# the chat card visibly bumps elapsed time during the long "running"
+# phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
+_HEARTBEAT_INTERVAL = 30.0
 
 
 # ── PID file ─────────────────────────────────────────────────────────
@@ -279,7 +283,12 @@ def _run_worker(
     updates.emit(brr_dir, updates.UpdatePacket(
         type="run_started",
         conversation_key=conv_key,
-        payload={"task_id": task.id, "branch": branch_name, "env": task.env},
+        payload={
+            "task_id": task.id,
+            "branch": branch_name,
+            "env": task.env,
+            "runner": runner_name,
+        },
     ))
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
@@ -320,7 +329,26 @@ def _run_worker(
                 "attempt": attempt,
             },
         ))
-        result = env_backend.invoke(
+
+        attempt_started_monotonic = time.monotonic()
+
+        def _emit_heartbeat() -> None:
+            elapsed = int(time.monotonic() - attempt_started_monotonic)
+            updates.emit(brr_dir, updates.UpdatePacket(
+                type="heartbeat",
+                conversation_key=conv_key,
+                payload={
+                    "task_id": task.id,
+                    "attempt": attempt,
+                    "elapsed_seconds": elapsed,
+                },
+            ))
+            _emit_new_containers(
+                brr_dir, conv_key, task.id, env_ctx, seen_containers,
+            )
+
+        result = _invoke_with_heartbeat(
+            env_backend,
             env_ctx,
             runner_name,
             runner.RunnerInvocation(
@@ -333,6 +361,7 @@ def _run_worker(
             ),
             cfg=cfg,
             trace=debug,
+            on_heartbeat=_emit_heartbeat,
         )
         _emit_new_containers(
             brr_dir, conv_key, task.id, env_ctx, seen_containers,
@@ -476,6 +505,61 @@ def _run_worker(
         payload=failed_payload,
     ))
     return task
+
+
+def _invoke_with_heartbeat(
+    env_backend,
+    env_ctx,
+    runner_name: str,
+    invocation: "runner.RunnerInvocation",
+    *,
+    cfg: dict,
+    trace: bool,
+    on_heartbeat,
+    interval: float = _HEARTBEAT_INTERVAL,
+) -> "runner.RunnerResult":
+    """Run *env_backend.invoke* in a thread, ticking *on_heartbeat* every
+    *interval* seconds while it's alive.
+
+    The runner subprocess can sit silent for many minutes — codex with
+    xhigh reasoning routinely chews for 5-10 min without emitting any
+    daemon-side packets. The heartbeat keeps the chat card alive: each
+    tick prompts gates to re-render with a fresh elapsed counter.
+    Heartbeat callbacks run on the daemon's main thread (synchronous
+    with the loop), not in the runner thread, so a misbehaving
+    callback can't corrupt the in-flight runner invocation.
+    """
+    import threading
+
+    holder: list = []
+
+    def _target() -> None:
+        try:
+            holder.append(env_backend.invoke(
+                env_ctx, runner_name, invocation, cfg=cfg, trace=trace,
+            ))
+        except BaseException as exc:  # noqa: BLE001
+            holder.append(exc)
+
+    worker = threading.Thread(
+        target=_target,
+        daemon=True,
+        name=f"runner-{invocation.label}",
+    )
+    worker.start()
+    while worker.is_alive():
+        worker.join(timeout=interval)
+        if worker.is_alive():
+            try:
+                on_heartbeat()
+            except Exception:
+                # Heartbeat is best-effort; never let it break a real run.
+                pass
+
+    outcome = holder[0]
+    if isinstance(outcome, BaseException):
+        raise outcome
+    return outcome
 
 
 def _emit_new_containers(

@@ -1068,3 +1068,48 @@ process lifecycle policy, so normal packaged installs and externally
 supervised daemons keep the small `brr up` / `brr down` model. The
 explicit mode gives editable brr development the intended workflow
 without making local packaging shape a hidden restart policy.
+
+## [2026-05-11] fix | Codex stdin hang and silent runner timeouts
+
+Diagnosed a recurring `docker failed (exit 124): Reading additional
+input from stdin...` failure: codex prints an stdin banner whenever its
+stdin is an open pipe, the brr daemon's `subprocess.Popen` left stdin
+open and inherited from the parent, and the runner timeout was hard-
+coded to 600s with three retries — so a long codex run was killed
+mid-flight, the misleading banner became the visible error, and the
+daemon then burned two more equally doomed retries.
+
+Fixed in three layers: (a) `runner.invoke_runner` and `DockerEnv.invoke`
+now pass `stdin=subprocess.DEVNULL` (and the docker container is
+launched with `-i` over a closed pipe), so codex sees real EOF and
+skips the banner; (b) the timeout is now a configurable
+`runner.runner_timeout(cfg)` defaulting to 3600s via
+`runner.timeout_seconds`; (c) `RunnerResult.retry_reason()` returns
+`None` for hard failures (timeouts, non-zero exits) so the daemon stops
+retrying anything that isn't a clean "missing response file" exit.
+`_run_worker` now collects per-attempt failure detail
+(`exit_code`/`error`/`timed_out`) and reorders packet emission so
+`finalizing` precedes the terminal `failed` packet — the projection
+keeps the real runner error instead of "finalizing (failed)".
+
+## [2026-05-11] implement | Strike-through phase log status card with heartbeat
+
+Rewrote the gate-rendered status card around a vertical phase log:
+sticky `runner · env · branch ← base` header, then closed phases as
+struck-through `~~preparing · 1s~~` lines with the live phase showing
+its rolling elapsed (e.g. `running · 4m 02s`). Multiple retry attempts
+each get their own line (`running (attempt 1)` / `running (attempt 2)`).
+The terminal entry reports total wall-clock from event arrival
+(`delivered · 4m 24s · pushed 2 commits`) and failed/conflict cases
+keep the runner's own error message on the line below the struck log.
+
+`render_text` takes a `RenderStyle` so each gate plugs in its own
+strike-through markup: Telegram uses HTML `<s>…</s>` (parse_mode=HTML)
+with user content HTML-escaped before render, Slack uses mrkdwn `~text~`,
+the CLI default is plain text where the log reads positionally.
+
+A new `heartbeat` packet fires every 30s while a runner is alive
+(`daemon._invoke_with_heartbeat` runs the env-backend invoke on a
+worker thread and ticks on the main thread). The packet itself is a
+no-op for the projection — it only re-triggers the gate render so the
+elapsed counter visibly bumps during silent runs.
