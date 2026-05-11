@@ -4,14 +4,19 @@ Prompt-assembly tests live in ``tests/test_prompts.py``.
 """
 
 import json
+import subprocess
 import sys
 
+from brr import runner as runner_mod
 from brr.runner import (
-    detect_runner,
-    _build_cmd,
+    DEFAULT_RUNNER_TIMEOUT,
     RunnerArtifactSpec,
     RunnerInvocation,
+    RunnerResult,
+    _build_cmd,
+    detect_runner,
     invoke_runner,
+    runner_timeout,
 )
 
 
@@ -186,3 +191,141 @@ class TestInvocationTracing:
         assert not result.validation_ok
         assert result.retry_reason() == "missing required output(s): expected.md"
         assert result.missing_artifacts[0].path == missing
+
+
+class TestTimeoutConfig:
+    def test_runner_timeout_defaults_to_one_hour(self):
+        assert runner_timeout(None) == DEFAULT_RUNNER_TIMEOUT == 3600
+
+    def test_runner_timeout_reads_dotted_config_key(self):
+        assert runner_timeout({"runner.timeout_seconds": 120}) == 120
+
+    def test_runner_timeout_accepts_string_int(self):
+        assert runner_timeout({"runner.timeout_seconds": "7200"}) == 7200
+
+    def test_runner_timeout_rejects_garbage(self):
+        assert runner_timeout({"runner.timeout_seconds": "soon"}) == DEFAULT_RUNNER_TIMEOUT
+
+    def test_runner_timeout_rejects_non_positive(self):
+        assert runner_timeout({"runner.timeout_seconds": 0}) == DEFAULT_RUNNER_TIMEOUT
+        assert runner_timeout({"runner.timeout_seconds": -5}) == DEFAULT_RUNNER_TIMEOUT
+
+    def test_invoke_runner_passes_configured_timeout_to_communicate(
+        self, tmp_path, monkeypatch,
+    ):
+        """The configured timeout must flow into ``proc.communicate`` so
+        long-reasoning models can finish; the historical hardcoded 600s
+        was killing live work mid-run."""
+        captured: dict[str, object] = {}
+
+        class _FakeProc:
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                captured["timeout"] = timeout
+                return ("ok\n", "")
+
+            def kill(self):  # pragma: no cover - not exercised here
+                pass
+
+        def _fake_popen(*_args, **kwargs):
+            captured["stdin"] = kwargs.get("stdin")
+            return _FakeProc()
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="executor",
+            label="cfg-timeout",
+            prompt="hi",
+            cwd=tmp_path,
+            repo_root=tmp_path,
+        )
+        result = invoke_runner(
+            "mock", invocation, cfg={"runner.timeout_seconds": 2400},
+        )
+
+        assert result.ok
+        assert captured["timeout"] == 2400
+        # stdin must be muted so codex's "Reading additional input from
+        # stdin..." path sees an immediate EOF rather than hanging on an
+        # open-but-silent fd inherited from the daemon's terminal.
+        assert captured["stdin"] == subprocess.DEVNULL
+
+    def test_invoke_runner_timeout_message_uses_configured_value(
+        self, tmp_path, monkeypatch,
+    ):
+        """The appended stderr line must report the actual configured
+        ceiling — operators reading the failed packet need to know what
+        the budget was, not a stale hardcoded number."""
+        class _Proc:
+            returncode = -9
+
+            def __init__(self) -> None:
+                self._raised = False
+
+            def communicate(self, timeout=None):
+                if not self._raised:
+                    self._raised = True
+                    raise subprocess.TimeoutExpired(cmd=["mock"], timeout=timeout)
+                return ("", "partial stderr")
+
+            def kill(self):
+                pass
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Proc())
+        invocation = RunnerInvocation(
+            kind="executor",
+            label="cfg-timeout-msg",
+            prompt="hi",
+            cwd=tmp_path,
+            repo_root=tmp_path,
+        )
+        result = invoke_runner(
+            "mock", invocation, cfg={"runner.timeout_seconds": 42},
+        )
+        assert result.returncode == 124
+        assert "runner timed out after 42s" in result.stderr
+
+
+class TestRetryReason:
+    def _result(self, *, returncode: int, stdout: str, response_path: str) -> RunnerResult:
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="x",
+            prompt="p",
+            cwd=None,
+            repo_root=None,  # type: ignore[arg-type]
+            response_path=response_path,
+        )
+        return RunnerResult(
+            invocation=invocation,
+            runner_name="mock",
+            command=["mock"],
+            stdout=stdout,
+            stderr="some failure tail",
+            returncode=returncode,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    def test_retry_reason_none_on_hard_failure(self, tmp_path):
+        """Non-zero exit (timeout, crash) is not retryable: the daemon
+        would just pay for another expensive attempt that fails the same
+        way. The give-up branch bubbles the captured error instead."""
+        result = self._result(
+            returncode=124,
+            stdout="",
+            response_path=str(tmp_path / "r.md"),
+        )
+        assert result.retry_reason() is None
+        assert result.error_detail() == "some failure tail"
+
+    def test_retry_reason_still_set_on_clean_empty_stdout(self, tmp_path):
+        """A clean exit with no stdout is the original retry-worthy
+        case — the runner ran fine but forgot to print the final reply."""
+        result = self._result(
+            returncode=0,
+            stdout="",
+            response_path=str(tmp_path / "r.md"),
+        )
+        assert result.retry_reason() == "runner produced no response on stdout"
