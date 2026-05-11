@@ -12,7 +12,7 @@ by dropping a file at `.brr/docs/envs.md`.
 | ----------- | ------------------------------------------- | ----------------- | ----------------------------- | ------------------------------------ |
 | `host`      | Main repo checkout, current process         | Inherited         | None                          | Default for trivial / Q&A tasks      |
 | `worktree`  | `.brr/worktrees/<task-id>/` (`brr/<task-id>` branch) | Inherited | Working dir + branch | Default for code work |
-| `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | New users start here for hardening |
+| `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | Bundled image includes common dev tools |
 
 Other envs (`devcontainer`, `ssh`) are planned but not yet shipped. See
 `kb/design-env-interface.md` if you want to follow that work.
@@ -136,6 +136,13 @@ The image must:
 - Have your configured runner CLI on `PATH` (`claude`, `codex`,
   `gemini`, or whatever you set `runner=` to).
 - Have `git` available — the agent commits inside the container.
+- Have the shell and repo tools your agents are expected to use. brr's
+  bundled runner image includes `bash`, `git`, `ssh`/`scp`, Python
+  (`python`, `python3`, `pip`, venv support), `rg`, `curl`, `wget`,
+  `jq`, `rsync`, `zip`/`unzip`, and a small native build toolchain
+  (`build-essential`, `pkg-config`) because those are common enough
+  across code-review, test, and package-install workflows to belong in
+  the default image.
 - Run as root, or have HOME set such that the credential mounts
   (`/root/.claude/` etc.) line up with where the runner CLI looks for
   tokens. If you change this, also pass `--user` and adjust HOME via a
@@ -143,8 +150,9 @@ The image must:
 
 It does *not* need:
 
-- Your project's tooling (test runners, language SDKs beyond what the
-  runner needs, build tools). See "Layering project tooling" below.
+- Your project's installed dependencies, databases, cloud CLIs, or
+  language SDKs beyond Node and Python. See "Layering project tooling"
+  below.
 - An API key baked in. brr wires credentials at run time.
 - A `safe.directory` config baked in. brr wires that at run time.
 
@@ -167,15 +175,16 @@ Build with `docker build -t my-brr-runner .` and set
 
 ### Layering project tooling
 
-Project-specific tooling (Python, pytest, language SDKs, repo CLIs)
-belongs *on top of* the runner image, not inside it. The runner image
-stays small and reusable; the project image carries what its tests and
-build need:
+Project-specific tooling still belongs *on top of* the runner image.
+The bundled image carries a common baseline, but the project image
+should carry what its tests and build need: repo dependencies, service
+CLIs, databases, browser drivers, extra language SDKs, and pinned test
+tools.
 
 ```dockerfile
-FROM ghcr.io/example/your-runner:tag
+FROM brr-runner:local
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip \
+    && apt-get install -y --no-install-recommends postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml ./
 RUN pip install -e ".[dev]"
@@ -230,6 +239,9 @@ so a human can recover work.
   the corresponding `*_API_KEY` is exported in the daemon's
   environment. Both paths surface in the `docker run` argv visible in
   trace mode.
+- **`python`, `ssh`, or `rg` is missing** — rebuild the local image
+  from the current bundled Dockerfile (`brr init -i` can do this during
+  setup). Older `brr-runner:*` images predate the baseline dev toolbox.
 - **File ownership leaked to root on host** — the runner CLI
   delete-and-recreated a token file inside the container (running as
   root). `chown` it back, and consider raising an issue against that

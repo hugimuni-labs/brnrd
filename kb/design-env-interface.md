@@ -298,16 +298,20 @@ compose axis moves into a follow-up, not v1.
 > known runner keys, `~/.{claude,codex,gemini}` bind mounts when present,
 > and `safe.directory='*'` injection so git works against the
 > bind-mounted repo) added on top of the original spec to remove the
-> "your image must bake in tokens" hidden requirement. Still pending:
-> a first-party `brr-runner` image and an auto-resolve for blank
+> "your image must bake in tokens" hidden requirement. The bundled
+> first-party Dockerfile now builds a practical runner image with the
+> three runner CLIs plus baseline dev tools (`python`/`pip`, SSH client,
+> `git`, `rg`, `curl`/`wget`, `jq`, `rsync`, zip tools, and native build
+> tooling). Still pending: publishing that image and auto-resolving blank
 > `docker.image=`. User-facing docs live in `src/brr/docs/envs.md`.
 
 - **prepare**:
-  - Image: `docker.image` in `.brr/config`. Until brr ships a first-party
-    runner image, this is required so users pick an image that contains
-    their configured runner CLI. brr now wires credentials at run time
-    (env-var pass-through plus host login-dir bind mounts), so the image
-    no longer needs an API key baked in.
+  - Image: `docker.image` in `.brr/config`. The bundled Dockerfile is
+    the local first-party path for a runner image, but this is still
+    required until brr publishes a default image and can safely resolve
+    blank `docker.image=`. brr wires credentials at run time (env-var
+    pass-through plus host login-dir bind mounts), so the image no
+    longer needs an API key baked in.
   - Bind-mount `repo_root` at the same absolute path inside the container
     (read-write), so the prompt's host paths remain valid in the env.
   - Network: configurable (`cfg["docker"]["network"]`, default `bridge`).

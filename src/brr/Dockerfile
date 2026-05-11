@@ -1,12 +1,11 @@
-# brr runner image — bundles claude, codex, and gemini CLIs alongside the
-# minimum tooling brr expects: git for commits, bash for shell-out,
-# ca-certificates for HTTPS. node:22-slim is the base because all three
-# runner CLIs are distributed via npm.
+# brr runner image — bundles claude, codex, and gemini CLIs alongside a
+# practical baseline toolbox for daemon-launched development work. node:22-slim
+# is the base because all three runner CLIs are distributed via npm.
 #
-# This image is intentionally minimal: it does NOT carry project tooling
-# (test runners, language SDKs beyond Node, build tools). Repos that need
-# more should either layer on top with their own Dockerfile FROM this
-# image, or use the `devcontainer` env which reuses the repo's own
+# This is still a runner image, not a project image: it does not preinstall
+# repo dependencies, databases, cloud CLIs, or language SDKs beyond Node and
+# Python. Repos that need those should layer on top with their own Dockerfile
+# FROM this image, or use the `devcontainer` env which reuses the repo's own
 # .devcontainer recipe.
 #
 # Container runs as root so the cred-dir mounts emitted by brr's docker
@@ -15,12 +14,29 @@
 
 FROM node:22-slim
 
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
+        build-essential \
         ca-certificates \
+        curl \
+        file \
         git \
+        jq \
+        openssh-client \
+        pkg-config \
+        python-is-python3 \
+        python3 \
+        python3-pip \
+        python3-venv \
         ripgrep \
+        rsync \
+        unzip \
+        wget \
+        zip \
+    && ln -sf /usr/bin/pip3 /usr/local/bin/pip \
     && rm -rf /var/lib/apt/lists/*
 
 # The container runs as root while the host repo is bind-mounted read-write

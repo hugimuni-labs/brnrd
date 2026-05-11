@@ -181,10 +181,11 @@ Covered by focused tests rather than an end-to-end self-reexec test:
   run;
 - regular `brr down` / Ctrl-C behavior remains drain-and-stop.
 
-The live Docker runner image used for brr self-work currently lacks
-Python, pytest, and `rg` in some sessions; that means this feature
-should be verified from a host/worktree brr development environment or
-a project-layered Docker image, as noted in
+Older live Docker runner images used for brr self-work lacked Python,
+pytest, and `rg` in some sessions. The bundled runner Dockerfile now
+includes the baseline tools needed to run brr's normal dev install
+inside the container, but verify against a freshly rebuilt image; stale
+local `brr-runner:*` tags can still reproduce the old limitation noted in
 [`research-runner-context-ergonomics-2026-05-09.md`](research-runner-context-ergonomics-2026-05-09.md).
 
 ## Rejected alternatives
