@@ -60,11 +60,10 @@ dive-in map) and are stable until something contradicts them.
   branch-intent design that removes both ambient host checkout state and
   hidden universal landing-branch config from daemon-produced commits.
 - [Daemon branch intent design](design-daemon-landing-branch.md) —
-  *accepted*. Resolve seed refs and optional auto-land targets from
-  explicit structured event data, conversation/thread branch context,
-  host branch context, and fallback policy without adding a pre-run LLM
-  branch selector; richer source-specific issue/PR/task metadata remains
-  a future expansion point.
+  *accepted, amended*. Resolve seed refs and optional auto-land targets
+  from explicit structured event data; conversation branch facts are
+  prompt context only after the 2026-05-12 amendment, not daemon-side
+  auto-land authority.
 - [Branch Modes Plan](plan-branch-modes.md) — *shipped, with
   revisions*. Branch and env are task properties, the agent owns
   branching at runtime. Triage and `needs_context` were reversed —
@@ -116,6 +115,10 @@ dive-in map) and are stable until something contradicts them.
   with explicit linking discipline, lifecycle markers, the subject
   genesis rule, brr's daemon kb-maintenance reframed as a redundancy
   pass; staged execution plan.
+- [State-first kb maintenance plan](plan-kb-state-first-maintenance.md) —
+  *active*. Refine the kb shape around current-state synthesis plus
+  short breadcrumbs to git history, and replace hidden post-task LLM
+  cleanup with explicit, first-class maintenance tasks.
 - [LLM Wiki framing](llm-wiki.md) — the source framing this project
   takes inspiration from for the wiki/synthesis layer.
 
