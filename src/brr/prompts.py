@@ -134,10 +134,9 @@ def build_daemon_prompt(
     *,
     task_id: str | None = None,
     branch_name: str | None = None,
-    base_branch: str | None = None,
     seed_ref: str | None = None,
     auto_land_branch: str | None = None,
-    branch_authority: str | None = None,
+    branch_source: str | None = None,
     host_context_branch: str | None = None,
     runtime_dir: str | None = None,
     context_path: str | None = None,
@@ -157,10 +156,9 @@ def build_daemon_prompt(
         repo_root=repo_root,
         task_id=task_id,
         branch_name=branch_name,
-        base_branch=base_branch,
         seed_ref=seed_ref,
         auto_land_branch=auto_land_branch,
-        branch_authority=branch_authority,
+        branch_source=branch_source,
         host_context_branch=host_context_branch,
         runtime_dir=runtime_dir,
         context_path=context_path,
@@ -190,10 +188,9 @@ def _build_task_context_bundle(
     repo_root: Path,
     task_id: str | None,
     branch_name: str | None,
-    base_branch: str | None,
     seed_ref: str | None,
     auto_land_branch: str | None,
-    branch_authority: str | None,
+    branch_source: str | None,
     host_context_branch: str | None,
     runtime_dir: str | None,
     context_path: str | None,
@@ -220,12 +217,10 @@ def _build_task_context_bundle(
         sections.append(f"- Auto-land branch: {auto_land_branch}")
     elif seed_ref:
         sections.append("- Auto-land branch: none (preserve task branch)")
-    if branch_authority:
-        sections.append(f"- Branch authority: {branch_authority}")
+    if branch_source:
+        sections.append(f"- Branch source: {branch_source}")
     if host_context_branch:
         sections.append(f"- Host context branch: {host_context_branch}")
-    elif base_branch:
-        sections.append(f"- Base branch: {base_branch}")
     if branch_name:
         sections.append(f"- Current branch: {branch_name}")
     if runtime_dir:
@@ -261,28 +256,20 @@ def _build_task_context_bundle(
                 f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
                 f"Because `{auto_land_branch}` is the resolved auto-land "
                 "target, committing on the current branch lets brr "
-                "fast-forward that target after the run. If the task body "
-                "clearly belongs somewhere else, switch to that branch before "
-                "editing; brr will preserve the branch you end up on."
+                "fast-forward that target after the run. If the task body or "
+                "recent conversation clearly point somewhere else, switch to "
+                "that branch before editing; brr will preserve the branch you "
+                "end up on."
             )
         else:
             sections.append(
                 f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
-                "No safe auto-land target was resolved, so commit on the "
-                "current task branch by default; brr will preserve that branch "
-                "for human routing and publish it when a remote is configured. "
-                "If the task body names a different branch, switch to it before "
-                "editing."
+                "No auto-land target was resolved, so commit on the current "
+                "task branch by default; brr will preserve that branch for "
+                "human routing and publish it when a remote is configured. If "
+                "the task body or recent conversation point to a specific "
+                "branch, switch to it before editing."
             )
-    elif branch_name and base_branch:
-        sections.append(
-            f"- You start on `{branch_name}`, sprouted from `{base_branch}`. "
-            "If your work should land on the base branch, commit on the "
-            "current branch and brr will fast-forward it back. If you want "
-            "the work kept as a separate branch, run "
-            "`git switch -c <meaningful-name>` first; brr will preserve "
-            "whatever branch you end up on without merging."
-        )
 
     recent_block = _format_recent_conversation(recent_conversation)
     if recent_block:

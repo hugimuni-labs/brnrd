@@ -48,7 +48,7 @@ def _stub_env_isolated(monkeypatch, tmp_path):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
             return envs.RunContext(
                 name=self.name,
                 cwd=worktree_path,
@@ -57,7 +57,6 @@ def _stub_env_isolated(monkeypatch, tmp_path):
                 response_path_host=response_path,
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
-                base_branch=base_branch,
                 env_state={"worktree_path": str(worktree_path)},
             )
 
@@ -164,14 +163,13 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
     class RetryEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
-                base_branch=base_branch,
                 env_state={"worktree_path": str(tmp_path)},
             )
 
@@ -458,14 +456,13 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
-                base_branch=base_branch,
                 env_state={"worktree_path": str(tmp_path)},
             )
 
@@ -514,14 +511,13 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
-                base_branch=base_branch,
                 env_state={"worktree_path": str(tmp_path)},
             )
 
@@ -593,14 +589,13 @@ def test_kb_maintenance_runs_on_preflight_findings_even_when_kb_unchanged(
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
-                base_branch=base_branch,
                 env_state={"worktree_path": str(tmp_path)},
             )
 
@@ -657,14 +652,13 @@ def test_kb_maintenance_skipped_when_clean_and_unchanged(tmp_path, monkeypatch):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
-                base_branch=base_branch,
                 env_state={"worktree_path": str(tmp_path)},
             )
 
@@ -720,14 +714,13 @@ def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monk
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, base_branch, response_path, branch_plan=None, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
                 branch_name=f"brr/{task.id}",
-                base_branch=base_branch,
                 env_state={"worktree_path": str(tmp_path)},
             )
 

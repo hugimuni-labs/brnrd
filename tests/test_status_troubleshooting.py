@@ -31,7 +31,8 @@ def test_get_status_shows_active_run_progress(tmp_path, monkeypatch):
         brr_dir, key,
         task_id="task-active", event_id="evt-active",
         env="docker", status="running",
-        base_branch="main", branch_name="brr/task-active",
+        seed_ref="main", auto_land_branch="main",
+        branch_name="brr/task-active",
     )
     updates.emit(brr_dir, updates.UpdatePacket(
         type="task_created", conversation_key=key,
