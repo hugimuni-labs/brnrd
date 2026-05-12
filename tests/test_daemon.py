@@ -234,6 +234,51 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
     assert statuses == ["processing", "error"]
 
 
+def _seed_trace_dir(brr_dir: Path, rel: str) -> Path:
+    path = brr_dir / rel
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "stdout.txt").write_text("ok\n", encoding="utf-8")
+    return path
+
+
+def test_cleanup_traces_on_success_removes_dirs_and_meta(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    tasks_dir = brr_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+    trace_a = _seed_trace_dir(brr_dir, "traces/daemon-run/evt-1-attempt-1")
+    trace_b = _seed_trace_dir(brr_dir, "traces/kb-maintenance/kb-1")
+    task = Task(id="task-clean", event_id="evt-1", body="x", status="done")
+    task.meta["trace_dirs"] = (
+        "traces/daemon-run/evt-1-attempt-1, traces/kb-maintenance/kb-1"
+    )
+    task.save(tasks_dir)
+
+    daemon._cleanup_traces_on_success(brr_dir, tasks_dir, task)
+
+    assert not trace_a.exists()
+    assert not trace_b.exists()
+    assert "trace_dirs" not in task.meta
+    reloaded = Task.from_file(tasks_dir / f"{task.id}.md")
+    assert reloaded is not None
+    assert "trace_dirs" not in reloaded.meta
+
+
+def test_cleanup_traces_on_success_keeps_on_failure(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    tasks_dir = brr_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+    trace = _seed_trace_dir(brr_dir, "traces/daemon-run/evt-2-attempt-1")
+    for status in ("error", "conflict"):
+        task = Task(id=f"task-{status}", event_id="evt-2", body="x", status=status)
+        task.meta["trace_dirs"] = "traces/daemon-run/evt-2-attempt-1"
+        task.save(tasks_dir)
+
+        daemon._cleanup_traces_on_success(brr_dir, tasks_dir, task)
+
+        assert trace.exists(), f"trace removed on status={status}"
+        assert task.meta.get("trace_dirs"), f"meta cleared on status={status}"
+
+
 def test_start_allows_same_pid_during_reexec(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     calls: list[str] = []

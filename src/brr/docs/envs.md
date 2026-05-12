@@ -229,15 +229,18 @@ Across all envs, brr only guarantees three kinds of output survive:
 2. **The response file** at `.brr/responses/<event-id>.md`, captured
    from the runner's stdout.
 3. **Trace artefacts** under `.brr/traces/<kind>/...`, written for
-   every runner invocation.
+   every runner invocation. Traces are forensic-only: they're kept
+   on `error` / `conflict` and removed on a clean `done`. On a
+   successful run the durable record is the git commit + response
+   file + kb updates; the trace would only repeat that information.
 
 Anything else an agent writes (untracked files, ephemeral state inside
 a container, files in a worktree that didn't get committed) is **not
 durable**. The corresponding scratch space — worktree, container,
 remote ssh dir — is torn down on a clean success. Salvage rule:
-scratch is preserved on `error` or `conflict`, and a worktree with
-untracked or unstaged files at finalize time is kept regardless of
-status, so a human can recover work.
+scratch and traces are preserved on `error` or `conflict`, and a
+worktree with untracked or unstaged files at finalize time is kept
+regardless of status, so a human can recover work.
 
 ## Troubleshooting
 
