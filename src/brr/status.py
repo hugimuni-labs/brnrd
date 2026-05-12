@@ -148,12 +148,9 @@ def inspect_task(
     auto_land_branch = task.meta.get("auto_land_branch")
     if auto_land_branch:
         lines.append(f"Auto-land branch: {auto_land_branch}")
-    branch_authority = task.meta.get("branch_authority")
-    if branch_authority:
-        lines.append(f"Branch authority: {branch_authority}")
-    base_branch = task.meta.get("base_branch")
-    if base_branch and base_branch != auto_land_branch:
-        lines.append(f"Base branch: {base_branch}")
+    branch_source = task.meta.get("branch_source") or task.meta.get("branch_authority")
+    if branch_source:
+        lines.append(f"Branch source: {branch_source}")
     preserved_branch = task.meta.get("preserved_branch")
     if preserved_branch:
         lines.append(f"Preserved branch: {preserved_branch}")
@@ -200,17 +197,16 @@ def inspect_task(
         lines.append(f"Docker containers (preserved): {docker_containers}")
 
     extra_keys = set(task.meta) - {
-        "base_branch",
         "branch_name",
         "seed_ref",
         "auto_land_branch",
         "preserved_branch",
         "landed_branch",
         "changed_branch",
+        "branch_source",
         "branch_authority",
         "host_context_branch",
         "auto_land_old_oid",
-        "branch_notes",
         "branch_error",
         "landed_commit",
         "response_path",

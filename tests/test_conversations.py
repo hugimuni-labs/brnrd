@@ -142,14 +142,19 @@ def test_append_task_includes_env_and_branch_name(tmp_path):
         tmp_path, "k",
         task_id="t-1", event_id="evt-1",
         env="worktree", status="pending",
-        base_branch="main", branch_name="brr/t-1",
+        seed_ref="main", auto_land_branch="main",
+        branch_source="event:target_branch",
+        branch_name="brr/t-1",
     )
     record = conversations.read_records(tmp_path, "k")[-1]
     assert record["task_id"] == "t-1"
     assert record["env"] == "worktree"
-    assert record["base_branch"] == "main"
+    assert record["seed_ref"] == "main"
+    assert record["auto_land_branch"] == "main"
+    assert record["branch_source"] == "event:target_branch"
     assert record["branch_name"] == "brr/t-1"
     assert "branch" not in record
+    assert "base_branch" not in record
 
 
 def test_append_artifact_records_kind_and_path(tmp_path):

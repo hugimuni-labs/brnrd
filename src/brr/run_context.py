@@ -65,11 +65,9 @@ def render_context(
             lines.append(f"- Auto-land branch: {ctx.branch_plan.auto_land_branch}")
         else:
             lines.append("- Auto-land branch: none (task branch will be preserved)")
-        lines.append(f"- Branch authority: {ctx.branch_plan.authority}")
+        lines.append(f"- Branch source: {ctx.branch_plan.source}")
         if ctx.branch_plan.host_context_branch:
             lines.append(f"- Host context branch: {ctx.branch_plan.host_context_branch}")
-    elif ctx.base_branch:
-        lines.append(f"- Base branch: {ctx.base_branch}")
     if ctx.branch_name:
         lines.append(f"- Current branch: {ctx.branch_name}")
     if task.conversation_key:
