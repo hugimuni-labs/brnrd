@@ -346,16 +346,22 @@ _DOCKER_DEFAULT_PASSTHROUGH_ENV: tuple[str, ...] = (
 )
 
 
-# Per-runner credential paths under HOME. Each is mounted into /root/<basename>
-# when present on the host, so the in-container CLI finds tokens at the same
-# location it would on the host (assuming the container runs as root, which is
-# the docker env's current default).
+# Per-runner credential paths under HOME. Each is mounted into the
+# container's HOME (``/brr-home/<basename>``) when present on the host,
+# so the in-container CLI finds tokens at ``$HOME/.codex`` etc. The
+# container runs as the host UID, so bind-mounted host paths keep their
+# host ownership and the in-container user can read/write them.
 _DOCKER_DEFAULT_CRED_PATHS: tuple[str, ...] = (
     ".claude",
     ".claude.json",
     ".codex",
     ".gemini",
+    ".gitconfig",
 )
+
+# HOME directory baked into the runner image, owned mode 1777 so any UID
+# the daemon hands the container can use it.
+_DOCKER_CONTAINER_HOME = "/brr-home"
 
 
 def _docker_extra_env_keys(cfg: dict[str, Any]) -> list[str]:
@@ -384,7 +390,9 @@ def _docker_credential_mount_args(cfg: dict[str, Any]) -> list[str]:
 
     Empty when ``docker.mount_credentials=false`` or the host has none of
     the well-known credential paths. Mounts are read-write so refresh
-    tokens and updated session state on the host stay current.
+    tokens and updated session state on the host stay current. Targets
+    land under the container's HOME, which the daemon also sets via
+    ``-e HOME=...`` so the CLIs find them at ``$HOME/.codex`` etc.
     """
     if not _docker_bool(cfg, "mount_credentials", True):
         return []
@@ -393,8 +401,24 @@ def _docker_credential_mount_args(cfg: dict[str, Any]) -> list[str]:
     for rel in _DOCKER_DEFAULT_CRED_PATHS:
         host = home / rel
         if host.exists():
-            args.extend(["-v", f"{host}:/root/{rel}"])
+            args.extend(["-v", f"{host}:{_DOCKER_CONTAINER_HOME}/{rel}"])
     return args
+
+
+def _docker_user_args() -> list[str]:
+    """Return ``-u UID:GID`` for the host user, when available.
+
+    Running the container under the host's UID is what stops bind-mounted
+    writes (notably ``.git/objects/``) from being created as root. We
+    intentionally use ``os.getuid`` rather than parsing ``$USER`` so the
+    daemon's actual effective UID is what reaches docker. The check
+    falls back gracefully on platforms without ``os.getuid`` (Windows).
+    """
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None:
+        return []
+    return ["-u", f"{getuid()}:{getgid()}"]
 
 
 def _docker_git_safe_directory_args() -> list[str]:
@@ -519,6 +543,13 @@ class DockerEnv(WorktreeEnv):
             # this, codex 0.128+'s "Reading additional input from stdin"
             # path can block until our timeout fires.
             "-i",
+            # Run as the host user so writes inside the bind-mounted
+            # repo (``.git/objects/`` chief among them) are owned by the
+            # host user, not by root. HOME points at the image's writable
+            # ``/brr-home``; credential and gitconfig mounts land there
+            # so the CLIs and git pick them up via ``$HOME``.
+            *_docker_user_args(),
+            "-e", f"HOME={_DOCKER_CONTAINER_HOME}",
             *_docker_git_safe_directory_args(),
             *_docker_passthrough_env_args(cfg),
             *_docker_credential_mount_args(cfg),

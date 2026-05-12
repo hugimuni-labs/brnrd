@@ -100,21 +100,29 @@ Two paths cover both API-key and subscription-only auth:
    and `GOOGLE_API_KEY` into the container. Add more with
    `docker.env=KEY1,KEY2`.
 2. **Login-dir bind mounts.** When `~/.claude/`, `~/.claude.json`,
-   `~/.codex/`, or `~/.gemini/` exists on the host, it's bind-mounted
-   read-write into `/root/<basename>` inside the container. This is
-   what makes Claude Pro/Max, ChatGPT Plus/Pro, and Gemini OAuth users
-   work without an API key.
+   `~/.codex/`, `~/.gemini/`, or `~/.gitconfig` exists on the host,
+   it's bind-mounted read-write into `$HOME/<basename>` inside the
+   container (i.e. `/brr-home/.codex`). This is what makes Claude
+   Pro/Max, ChatGPT Plus/Pro, and Gemini OAuth users work without an
+   API key, and what gives `git commit` your real author identity.
 
 You can opt out of the credential-dir mounts with
 `docker.mount_credentials=false`. The mounts are read-write so refresh
 tokens written inside the container land back on the host — your host
 CLI stays authenticated with whatever the agent saw last.
 
-### Git ownership inside the container
+### File ownership inside the container
 
-The container runs as root by default. The bind-mounted repo is owned
-by the host user. Without intervention, git refuses to operate on
-"dubious ownership" repos (CVE-2022-24765). brr passes
+The container runs as the **host user's UID**: brr passes
+`-u "$(id -u):$(id -g)"` and `-e HOME=/brr-home` to `docker run`, and
+the bundled image bakes a writable `/brr-home` (mode 1777) so any UID
+can use it as HOME. The bind-mounted repo's `.git/objects/` therefore
+collects host-owned files — there is no root-owned residue to clean
+up after the daemon runs.
+
+Without intervention, git would also refuse to operate on the
+bind-mounted repo because its on-disk owner doesn't match the
+container's UID register (CVE-2022-24765). brr passes
 `safe.directory='*'` via git's `GIT_CONFIG_*` env vars so the agent
 can `git status`, `git commit`, and `git diff` without per-image
 configuration. This works against any image — including ones you build
@@ -143,10 +151,14 @@ The image must:
   (`build-essential`, `pkg-config`) because those are common enough
   across code-review, test, and package-install workflows to belong in
   the default image.
-- Run as root, or have HOME set such that the credential mounts
-  (`/root/.claude/` etc.) line up with where the runner CLI looks for
-  tokens. If you change this, also pass `--user` and adjust HOME via a
-  custom image; brr does not expose a `docker.user` knob in v1.
+- Accept being run as an arbitrary UID (whatever `id -u` returns on
+  the host). The bundled image bakes a writable `/brr-home` and sets
+  `ENV HOME=/brr-home` so credential and gitconfig mounts work
+  regardless of whether the runtime UID has an `/etc/passwd` entry.
+  Custom images that hard-code `USER root` and write tokens to
+  `/root/...` won't see the credential mounts — either follow the
+  bundled image's `/brr-home` pattern or build with the same `HOME`
+  the daemon expects.
 
 It does *not* need:
 
@@ -242,7 +254,13 @@ so a human can recover work.
 - **`python`, `ssh`, or `rg` is missing** — rebuild the local image
   from the current bundled Dockerfile (`brr init -i` can do this during
   setup). Older `brr-runner:*` images predate the baseline dev toolbox.
-- **File ownership leaked to root on host** — the runner CLI
-  delete-and-recreated a token file inside the container (running as
-  root). `chown` it back, and consider raising an issue against that
-  CLI. Most CLIs do in-place edits and don't have this problem.
+- **File ownership leaked to root on host** — should not happen with
+  a recent brr-runner image, which runs as the host UID. If you see
+  it, you're likely on a stale image — rebuild from the current
+  bundled Dockerfile (`brr init -i`). One-shot recovery while you're
+  rebuilding: `sudo chown -R "$(id -un):$(id -gn)" .git`.
+- **Credentials not picked up inside the container** — confirm the
+  matching `~/.<runner>/` exists on host *and* the image runs with
+  `HOME=/brr-home`. Custom images that hard-code `USER root` and
+  expect `/root/...` won't see the mounts; bake your own writable
+  HOME or follow the bundled image's `/brr-home` pattern.
