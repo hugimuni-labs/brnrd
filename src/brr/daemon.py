@@ -146,17 +146,17 @@ def _push_if_needed(
                 f"{branch_name}:{remote_branch}",
             ]
         else:
-            # Only publish new branches automatically for brr-owned task
-            # branches. Human-named branches without upstream may carry
-            # local-only intent, so leave them for the operator.
-            if not branch_name.startswith("brr/"):
-                return
             remote = gitops.default_remote(repo_root)
             if not remote:
                 return
             commits = _commits_since_seed(repo_root, branch_name)
             if not commits:
                 return
+            # A new branch with no upstream: publish it the way a user
+            # would, with ``git push -u``. brr push behaviour stays
+            # parallel to manual push behaviour, regardless of whether
+            # the branch is in the brr namespace or one the agent
+            # named at runtime.
             set_upstream = True
             push_cmd = ["git", "push", "-u", remote, branch_name]
 
@@ -249,17 +249,7 @@ def _run_worker(
     runner_name = runner.resolve_runner(repo_root)
 
     conv_key = conversations.conversation_key_for_event(event) or ""
-    prior_conversation = (
-        conversations.read_recent(brr_dir, conv_key, limit=20)
-        if conv_key else []
-    )
-    branch_plan = branching.resolve_branch_plan(
-        repo_root,
-        event,
-        cfg,
-        conversation_records=prior_conversation,
-    )
-    base_branch = branch_plan.auto_land_branch
+    branch_plan = branching.resolve_branch_plan(repo_root, event, cfg)
 
     if conv_key:
         conversations.append_event(brr_dir, conv_key, event)
@@ -295,7 +285,6 @@ def _run_worker(
             task,
             repo_root,
             cfg,
-            base_branch=base_branch,
             branch_plan=branch_plan,
             response_path=resp_path,
             debug=debug,
@@ -324,7 +313,7 @@ def _run_worker(
             "branch_name": branch_name,
             "seed_ref": branch_plan.seed_ref,
             "auto_land_branch": branch_plan.auto_land_branch,
-            "branch_authority": branch_plan.authority,
+            "branch_source": branch_plan.source,
         },
     ))
 
@@ -333,10 +322,10 @@ def _run_worker(
             brr_dir, conv_key,
             task_id=task.id, event_id=eid,
             env=task.env, status=task.status,
-            base_branch=base_branch, branch_name=branch_name,
+            branch_name=branch_name,
             seed_ref=branch_plan.seed_ref,
             auto_land_branch=branch_plan.auto_land_branch,
-            branch_authority=branch_plan.authority,
+            branch_source=branch_plan.source,
             host_context_branch=branch_plan.host_context_branch,
         )
 
@@ -381,10 +370,9 @@ def _run_worker(
                 task.body, eid, str(env_ctx.response_path_env), run_root,
                 task_id=task.id,
                 branch_name=branch_name,
-                base_branch=base_branch,
                 seed_ref=branch_plan.seed_ref,
                 auto_land_branch=branch_plan.auto_land_branch,
-                branch_authority=branch_plan.authority,
+                branch_source=branch_plan.source,
                 host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
@@ -399,10 +387,9 @@ def _run_worker(
                 eid, str(env_ctx.response_path_env), run_root,
                 task_id=task.id,
                 branch_name=branch_name,
-                base_branch=base_branch,
                 seed_ref=branch_plan.seed_ref,
                 auto_land_branch=branch_plan.auto_land_branch,
-                branch_authority=branch_plan.authority,
+                branch_source=branch_plan.source,
                 host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),

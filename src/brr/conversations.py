@@ -186,11 +186,10 @@ def append_task(
     event_id: str,
     env: str,
     status: str,
-    base_branch: str | None = None,
     branch_name: str | None = None,
     seed_ref: str | None = None,
     auto_land_branch: str | None = None,
-    branch_authority: str | None = None,
+    branch_source: str | None = None,
     host_context_branch: str | None = None,
 ) -> None:
     """Record a task lifecycle row on the conversation log."""
@@ -199,7 +198,6 @@ def append_task(
         "task_id": task_id,
         "event_id": event_id,
         "branch_name": branch_name,
-        "base_branch": base_branch,
         "env": env,
         "status": status,
     }
@@ -207,8 +205,8 @@ def append_task(
         record["seed_ref"] = seed_ref
     if auto_land_branch:
         record["auto_land_branch"] = auto_land_branch
-    if branch_authority:
-        record["branch_authority"] = branch_authority
+    if branch_source:
+        record["branch_source"] = branch_source
     if host_context_branch:
         record["host_context_branch"] = host_context_branch
     append_record(brr_dir, key, record)

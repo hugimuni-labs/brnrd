@@ -27,7 +27,8 @@ def test_project_task_succeeds_through_full_lifecycle(tmp_path):
         brr_dir, key,
         task_id="task-1", event_id="evt-1",
         env="docker", status="running",
-        base_branch="main", branch_name="brr/task-1",
+        seed_ref="main", auto_land_branch="main",
+        branch_name="brr/task-1",
     )
     _emit(brr_dir, key, "task_created", task_id="task-1", event_id="evt-1",
           env="docker")
@@ -251,13 +252,14 @@ def test_render_text_compact_has_runner_env_branch_header(tmp_path):
     _emit(brr_dir, key, "attempt_started", task_id="task-r", attempt=1)
     _emit(brr_dir, key, "run_started", task_id="task-r",
           runner="codex", branch="brr/task-r", env="docker")
-    # Backfill the base branch the same way daemon._run_worker does
-    # via the task record (env_prepared doesn't carry base_branch).
+    # Backfill the display base the same way daemon._run_worker does
+    # via the task record (env_prepared doesn't carry seed_ref by name).
     conversations.append_task(
         brr_dir, key,
         task_id="task-r", event_id="evt-r",
         env="docker", status="running",
-        base_branch="main", branch_name="brr/task-r",
+        seed_ref="main", auto_land_branch="main",
+        branch_name="brr/task-r",
     )
 
     view = run_progress.project_task(brr_dir, key, "task-r")

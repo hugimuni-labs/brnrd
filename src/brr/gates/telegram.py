@@ -437,7 +437,7 @@ def _sanitize_view_for_html(view):
         runner_name=_esc(view.runner_name),
         env=_esc(view.env),
         branch_name=_esc(view.branch_name),
-        base_branch=_esc(view.base_branch),
+        display_base=_esc(view.display_base),
         detail=_esc(view.detail) if isinstance(view.detail, str) else view.detail,
         error=_esc(view.error),
         phase_history=new_history,

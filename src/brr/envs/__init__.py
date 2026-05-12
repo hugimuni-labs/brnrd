@@ -39,7 +39,6 @@ class RunContext:
     response_path_host: Path
     response_path_env: Path
     branch_name: str | None = None
-    base_branch: str | None = None
     branch_plan: branching.BranchPlan | None = None
     env_state: dict[str, Any] = field(default_factory=dict)
 
@@ -53,9 +52,8 @@ class EnvBackend(Protocol):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        base_branch: str | None,
+        branch_plan: branching.BranchPlan,
         response_path: Path,
-        branch_plan: branching.BranchPlan | None = None,
         debug: bool = False,
     ) -> RunContext:
         ...
@@ -91,9 +89,8 @@ class HostEnv:
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        base_branch: str | None,
+        branch_plan: branching.BranchPlan,
         response_path: Path,
-        branch_plan: branching.BranchPlan | None = None,
         debug: bool = False,
     ) -> RunContext:
         return RunContext(
@@ -104,7 +101,6 @@ class HostEnv:
             response_path_host=response_path,
             response_path_env=response_path,
             branch_name=None,
-            base_branch=base_branch,
             branch_plan=branch_plan,
         )
 
@@ -139,27 +135,16 @@ class WorktreeEnv(HostEnv):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        base_branch: str | None,
+        branch_plan: branching.BranchPlan,
         response_path: Path,
-        branch_plan: branching.BranchPlan | None = None,
         debug: bool = False,
     ) -> RunContext:
-        plan = branch_plan or branching.BranchPlan(
-            seed_ref=base_branch or "HEAD",
-            auto_land_branch=base_branch,
-            authority="legacy",
-            host_context_branch=None,
-            expected_old_oid=(
-                gitops.branch_head(repo_root, base_branch)
-                if base_branch else None
-            ),
-        )
         run_root, branch_name = worktree.create(
-            repo_root, task.id, base_ref=plan.seed_ref,
+            repo_root, task.id, base_ref=branch_plan.seed_ref,
         )
         task.meta["worktree_path"] = str(run_root)
         task.meta["branch_name"] = branch_name
-        task.meta.update(plan.meta_items())
+        task.meta.update(branch_plan.meta_items())
         return RunContext(
             name=self.name,
             cwd=run_root,
@@ -168,8 +153,7 @@ class WorktreeEnv(HostEnv):
             response_path_host=response_path,
             response_path_env=response_path,
             branch_name=branch_name,
-            base_branch=plan.auto_land_branch,
-            branch_plan=plan,
+            branch_plan=branch_plan,
             env_state={"worktree_path": str(run_root)},
         )
 
@@ -215,101 +199,102 @@ class WorktreeEnv(HostEnv):
     ) -> bool:
         """Decide what to do with the agent's branch on cleanup.
 
+        Cleanup is outcome-aware: a clean success with no uncommitted
+        files tears the worktree down (the branch ref + traces are the
+        durable artefact). A conflict, a detached HEAD, or any
+        untracked/unstaged files in the worktree keeps it alive so the
+        operator can inspect what the agent left behind. ``debug``
+        keeps the worktree even on clean success.
+
         Returns True when task metadata changed after the earlier status
         save, so callers know to persist it.
         """
+        plan = ctx.branch_plan
+        if plan is None:
+            raise RuntimeError(
+                f"task {task.id}: worktree finalize has no branch plan"
+            )
+
+        # ── Classify the run and record final branch metadata ──────
+        delete_branch = False
+        delete_unused_initial = False
+        keep_worktree = False
+        changed_metadata = True
+
         if final_branch is None:
-            # Agent detached HEAD; preserve everything for human salvage.
             print(f"[brr] task {task.id}: detached HEAD inside worktree, preserving")
             task.meta["preserved_branch"] = initial_branch
             task.meta["changed_branch"] = initial_branch
-            return True
-
-        agent_kept_default = final_branch == initial_branch
-        if not agent_kept_default:
-            # Agent switched off the task branch; preserve their branch.
+            keep_worktree = True
+        elif final_branch != initial_branch:
             print(
                 f"[brr] task {task.id}: agent landed on {final_branch}, "
                 "preserving (runtime branch choice)"
             )
             task.meta["preserved_branch"] = final_branch
             task.meta["changed_branch"] = final_branch
-            if debug:
-                print(f"[brr] debug: keeping worktree for {task.id}")
-            else:
-                worktree.remove(
-                    ctx.repo_root, task.id, branch=initial_branch, force=True,
-                )
-                if initial_branch != final_branch:
-                    self._delete_unused_initial_branch(ctx.repo_root, initial_branch)
-            return True
-
-        plan = ctx.branch_plan or branching.BranchPlan(
-            seed_ref=ctx.base_branch or "HEAD",
-            auto_land_branch=ctx.base_branch,
-            authority="legacy",
-            host_context_branch=None,
-        )
-
-        if not worktree.has_commits_beyond(worktree_path, plan.seed_ref):
-            # Nothing to merge — clean up the throwaway branch silently.
-            if debug:
-                print(f"[brr] debug: keeping worktree for {task.id}")
-                return False
-            worktree.remove(
-                ctx.repo_root, task.id,
-                branch=initial_branch, delete_branch=True, force=True,
-            )
-            return False
-
-        if not plan.auto_land_branch:
+            delete_unused_initial = True
+        elif not worktree.has_commits_beyond(worktree_path, plan.seed_ref):
+            # Throwaway task branch with no commits — drop both.
+            delete_branch = True
+            changed_metadata = False
+        elif not plan.auto_land_branch:
             print(
                 f"[brr] task {task.id}: preserving {initial_branch} "
                 "(no auto-land target)"
             )
             task.meta["preserved_branch"] = initial_branch
             task.meta["changed_branch"] = initial_branch
-            if debug:
-                print(f"[brr] debug: keeping worktree for {task.id}")
-            else:
-                worktree.remove(
-                    ctx.repo_root, task.id, branch=initial_branch, force=True,
-                )
-            return True
-
-        result = gitops.fast_forward_branch(
-            ctx.repo_root,
-            plan.auto_land_branch,
-            initial_branch,
-            expected_old_oid=plan.expected_old_oid,
-        )
-        if not result.success:
-            print(
-                f"[brr] task {task.id}: cannot fast-forward "
-                f"{plan.auto_land_branch}, preserving {initial_branch}"
+        else:
+            result = gitops.fast_forward_branch(
+                ctx.repo_root,
+                plan.auto_land_branch,
+                initial_branch,
+                expected_old_oid=plan.expected_old_oid,
             )
-            task.update_status("conflict", tasks_dir)
-            task.meta["preserved_branch"] = initial_branch
-            task.meta["changed_branch"] = initial_branch
-            if result.detail:
-                task.meta["branch_error"] = result.detail
-            if not debug:
-                worktree.remove(
-                    ctx.repo_root, task.id, branch=initial_branch, force=True,
+            if result.success:
+                task.meta["landed_branch"] = plan.auto_land_branch
+                task.meta["changed_branch"] = plan.auto_land_branch
+                task.meta["landed_commit"] = result.commit
+                delete_branch = True
+            else:
+                print(
+                    f"[brr] task {task.id}: cannot fast-forward "
+                    f"{plan.auto_land_branch}, preserving {initial_branch}"
                 )
-            return True
+                task.update_status("conflict", tasks_dir)
+                task.meta["preserved_branch"] = initial_branch
+                task.meta["changed_branch"] = initial_branch
+                if result.detail:
+                    task.meta["branch_error"] = result.detail
+                keep_worktree = True
 
-        task.meta["landed_branch"] = plan.auto_land_branch
-        task.meta["changed_branch"] = plan.auto_land_branch
-        task.meta["landed_commit"] = result.commit
+        # ── Decide whether to tear down the worktree directory ─────
         if debug:
             print(f"[brr] debug: keeping worktree for {task.id}")
-            return True
+            return changed_metadata
+        if keep_worktree:
+            print(
+                f"[brr] task {task.id}: keeping worktree at {worktree_path} "
+                "for inspection"
+            )
+            return changed_metadata
+        if worktree.has_uncommitted_changes(worktree_path):
+            print(
+                f"[brr] task {task.id}: keeping worktree at {worktree_path} "
+                "(uncommitted changes left behind)"
+            )
+            return changed_metadata
+
         worktree.remove(
             ctx.repo_root, task.id,
-            branch=initial_branch, delete_branch=True, force=True,
+            branch=initial_branch,
+            delete_branch=delete_branch,
+            force=True,
         )
-        return True
+        if delete_unused_initial and initial_branch != final_branch:
+            self._delete_unused_initial_branch(ctx.repo_root, initial_branch)
+        return changed_metadata
 
     def _delete_unused_initial_branch(self, repo_root: Path, branch: str) -> None:
         """Best-effort delete of the throwaway ``brr/<task-id>`` branch.
@@ -470,9 +455,8 @@ class DockerEnv(WorktreeEnv):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        base_branch: str | None,
+        branch_plan: branching.BranchPlan,
         response_path: Path,
-        branch_plan: branching.BranchPlan | None = None,
         debug: bool = False,
     ) -> RunContext:
         if shutil.which("docker") is None:
@@ -485,7 +469,6 @@ class DockerEnv(WorktreeEnv):
             task,
             repo_root,
             cfg,
-            base_branch=base_branch,
             branch_plan=branch_plan,
             response_path=response_path,
             debug=debug,

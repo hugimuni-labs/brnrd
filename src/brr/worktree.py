@@ -163,6 +163,29 @@ def has_commits_beyond(worktree_path: Path, base_ref: str) -> bool:
         return False
 
 
+def has_uncommitted_changes(worktree_path: Path) -> bool:
+    """Return True when the worktree has untracked, unstaged, or staged changes.
+
+    Used by finalization to decide whether the worktree directory can be
+    discarded safely. If the agent created files but didn't commit them,
+    those files are only present here — tearing the worktree down would
+    silently drop them, so we keep it for forensic inspection instead.
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # Conservatively assume there is something worth keeping when we
+        # can't read the status — better to leak a worktree than to drop
+        # uncommitted work.
+        return True
+    return bool(result.stdout.strip())
+
+
 def remove(
     repo_root: Path,
     task_id: str,
