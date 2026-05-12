@@ -121,6 +121,11 @@ dive-in map) and are stable until something contradicts them.
 
 ## Research
 
+- [Branch plan simplification, 2026-05-12](research-branch-plan-simplification-2026-05-12.md) —
+  follow-up critique of the accepted branch-intent implementation:
+  preserve the mechanical seed/auto-land/finalization contract, but
+  shrink branch planning back to landing defaults and stop treating
+  inferred conversation branch history as hidden auto-land authority.
 - [Daemon runner context ergonomics, 2026-05-09](research-runner-context-ergonomics-2026-05-09.md) —
   point-in-time review of a live brr daemon run: how much context the
   agent had to read, which prompt/runtime surfaces helped, where the

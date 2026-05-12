@@ -75,3 +75,7 @@ predict it.
 4. [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
    for the accepted branch-intent resolver design and remaining future
    source-metadata expansion points.
+5. [`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
+   for a follow-up critique of the current resolver surface, especially
+   the recommendation to keep mechanical landing defaults while demoting
+   inferred conversation branch history to runner context.

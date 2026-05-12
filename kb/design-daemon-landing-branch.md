@@ -20,6 +20,14 @@ pushes the branch that actually changed and sets upstream for brr-owned
 new branches. Richer source-specific metadata (PR/issue/task refs)
 remains an expansion point, not a different design.
 
+Follow-up note, 2026-05-12: the shipped finalization contract still
+looks sound, but
+[`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
+recommends simplifying the resolver surface by demoting inferred
+conversation branch facts from auto-land authority to prompt/run-context
+hints. That would keep explicit structured source metadata authoritative
+while avoiding stale chat history as hidden durable branch state.
+
 This hangs off the tasks/branching hub,
 [`subject-tasks-branching.md`](subject-tasks-branching.md), and refines
 the agent-owned branch contract introduced by

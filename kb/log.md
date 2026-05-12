@@ -1160,3 +1160,24 @@ silently regress to an image without Python, SSH, git, or the common
 inspection/build tools. Full-suite verification also exposed and fixed
 three stale test harness issues around dev-reload reexec sentinels and
 Docker timeout monkeypatch ordering.
+
+## [2026-05-12] research | Branch plan simplification review
+
+Reviewed the accepted branch-intent implementation against the operator's
+concern that it may still be too stateful for what is mostly a default
+branch setup for the runner. The core worktree finalization contract is
+still pulling its weight: seed a task branch, optionally fast-forward a
+known target, otherwise preserve the branch, and preserve any branch the
+agent switches to at runtime.
+
+The simplification target is the pre-run resolver surface. BranchPlan now
+mixes mechanical git defaults with inferred conversation branch memory,
+and the code still carries old `base_branch` compatibility beside the
+new `seed_ref` / `auto_land_branch` vocabulary. Captured the recommended
+direction in
+[`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md):
+keep structured event/source branch metadata as auto-land authority,
+demote inferred conversation branches to prompt context, retain
+`preserve` as the default, treat `current` as explicit dev/compat mode,
+and delete the legacy `base_branch` API path before adding more policy
+surface.
