@@ -15,6 +15,7 @@ No cancellation in v1 — the runner runs to completion.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -223,6 +224,30 @@ def _commits_since_seed(repo_root: Path, branch: str) -> list[str]:
     if result.returncode != 0:
         return []
     return [c for c in result.stdout.splitlines() if c.strip()]
+
+
+def _cleanup_traces_on_success(
+    brr_dir: Path, tasks_dir: Path, task: Task,
+) -> None:
+    """Remove every trace dir the task accumulated on a clean ``done``.
+
+    Symmetric with worktree and container cleanup: when the task
+    finished cleanly, the durable artefacts (git commits, response
+    file, kb updates) capture everything that matters. Traces only
+    earn their disk footprint on ``error`` / ``conflict``, where the
+    captured prompt/stdout/stderr is the only forensic handle left.
+    """
+    if task.status != "done":
+        return
+    raw = task.meta.get("trace_dirs", "")
+    if not raw:
+        return
+    for rel in (item.strip() for item in raw.split(",") if item.strip()):
+        path = brr_dir / rel
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+    task.meta.pop("trace_dirs", None)
+    task.save(tasks_dir)
 
 
 # ── Worker ───────────────────────────────────────────────────────────
@@ -481,6 +506,7 @@ def _run_worker(
                 payload={"task_id": task.id, "stage": "done"},
             ))
             task = env_backend.finalize(env_ctx, task, tasks_dir)
+            _cleanup_traces_on_success(brr_dir, tasks_dir, task)
             _emit_preserved_containers(brr_dir, conv_key, task)
             preserved_branch = task.meta.get("preserved_branch")
             landed_branch = task.meta.get("landed_branch")

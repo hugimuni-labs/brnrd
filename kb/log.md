@@ -1293,6 +1293,37 @@ What changed:
 
 Result: one fewer knob, traces always captured, the salvage rule
 runs automatically. 256 tests green.
+
+## [2026-05-12] refactor | clean up traces on successful task
+
+Closing the symmetry gap from the previous commit: worktrees and
+containers tear down on a clean ``done`` while traces stayed around
+forever. That left ``.brr/traces/`` as the only ``.brr/`` subtree
+without an outcome-aware contract — over weeks of successful daemon
+runs it would have grown unbounded for no forensic value (every
+durable artifact a successful run produces is already captured in
+the git commit + response file + kb updates).
+
+Changes:
+
+- ``daemon._cleanup_traces_on_success(brr_dir, tasks_dir, task)`` is
+  called after the success-path ``env_backend.finalize``. When
+  ``task.status == "done"``, every directory recorded in
+  ``task.meta["trace_dirs"]`` is removed and the key is dropped from
+  meta so the on-disk task file doesn't leave dangling pointers.
+- The failure-path finalize already sets ``status="error"`` before
+  finalize runs, so the same helper is a no-op there. ``conflict``
+  outcomes (auto-land collision) also keep traces because the status
+  is no longer ``done``.
+- Tests: ``test_cleanup_traces_on_success_removes_dirs_and_meta``
+  asserts the happy-path behavior; ``..._keeps_on_failure`` exercises
+  both ``error`` and ``conflict``.
+- Docs (``envs.md``, ``execution-map.md``, ``brr-internals.md``)
+  updated to describe traces as "forensic-only, cleaned on success".
+
+The full outcome-aware contract now reads identically across all
+three scratch artifacts: clean ``done`` removes, failures and dirty
+leftovers preserve.
 - Task IDs are now `task-YYMMDD-HHMM-<4 random>`. The old raw-unix
   timestamps sorted fine but read as noise.
 

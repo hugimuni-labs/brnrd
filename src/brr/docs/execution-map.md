@@ -108,7 +108,7 @@ files changed. Reload never interrupts a running worker.
 | Tasks         | `.brr/tasks/<task-id>.md`                   | Yes                                 |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
 | Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
-| Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Yes                                 |
+| Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Kept on `error` / `conflict`, removed on clean `done` |
 | Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
 | Worktrees     | `.brr/worktrees/<task-id>/`                 | Removed on clean success; kept on failure / conflict / uncommitted leftovers |
 | Gate state    | `.brr/gates/<gate>.json`                    | Yes                                 |
