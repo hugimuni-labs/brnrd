@@ -153,6 +153,17 @@ The phase 3b cleanup applied this to brr's own kb: 22 → 13 subject
 pages, every survivor with a clear status, no orphans, no broken
 references. The before/after is in the log entry for that phase.
 
+The active refinement is
+[`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md):
+subject hubs should read as current-state synthesis, decision pages
+should preserve only the rationale that still constrains future work,
+and deep implementation history should be recovered from git when
+needed. It also calls out a daemon contract bug in the current
+post-task LLM maintenance pass: because that pass runs after the user
+response and is told not to commit, it is not a reliable way to land
+cleanup. The proposed replacement is explicit maintenance as a normal
+task with a branch, response, and commit.
+
 ## What was deliberately rejected
 
 A few attractive ideas that have been considered and not pursued:
@@ -189,14 +200,17 @@ In priority order:
    universal rules every agent follows.
 2. [`decision-kb-shape.md`](decision-kb-shape.md) — why those rules,
    what triggered the rethink, what was deferred.
-3. [`llm-wiki.md`](llm-wiki.md) — the framing the kb pattern took
+3. [`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md)
+   — active refinement for keeping pages focused on the current shape
+   while using git as the deep-history layer.
+4. [`llm-wiki.md`](llm-wiki.md) — the framing the kb pattern took
    inspiration from. Skim for context, not as a spec.
-4. [`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py) and its
+5. [`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py) and its
    tests — the deterministic side of the maintenance contract; the
    shortest path to "what is structurally enforceable about the kb."
-5. [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
+6. [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
    — the LLM redundancy pass; short by design.
-6. The "drop the noisy abstraction" decision trio:
+7. The "drop the noisy abstraction" decision trio:
    [`decision-remove-triage.md`](decision-remove-triage.md) →
    [`decision-drop-streams.md`](decision-drop-streams.md) → this
    subject's triggering decision. Same pattern three times: when an

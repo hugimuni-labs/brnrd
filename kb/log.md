@@ -1332,3 +1332,22 @@ note covering the resolver cut and the trimmed fallback surface. The
 amendment explicitly supersedes resolution-order step 2 ("existing
 session/thread branch wins"). `subject-tasks-branching.md` and the
 dive-in map were synced. Full suite green (256 passing).
+
+## [2026-05-12] plan | State-first kb maintenance and regular grooming
+
+Evaluated the operator concern that the kb is still growing like an
+inline history log instead of a current-state synthesis layer. Captured
+the proposed refinement in
+[`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md):
+subject hubs should describe what is true now, decisions should keep
+only the rationale that still constrains future work, and deep
+implementation history should be recovered from git with short
+breadcrumbs left in the kb.
+
+The plan also surfaces a concrete flaw in the current daemon cleanup
+path: the post-task kb-maintenance LLM pass runs after the user response
+has been captured and is told not to commit, so any cleanup edits are
+not reliably delivered as a durable branch/commit. Recommended direction:
+keep deterministic preflight, but move semantic grooming into explicit
+first-class maintenance tasks scheduled at idle boundaries and processed
+through the same branch, response, commit, and push path as user work.
