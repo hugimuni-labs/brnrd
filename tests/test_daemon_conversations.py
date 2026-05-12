@@ -36,7 +36,7 @@ def _stub_env(monkeypatch, tmp_path):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
             return envs.RunContext(
                 name=self.name,
                 cwd=tmp_path,
@@ -56,7 +56,7 @@ def _stub_env(monkeypatch, tmp_path):
                 stdout="result\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
 
-        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+        def finalize(self, _ctx, task, _tasks_dir):
             return task
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())

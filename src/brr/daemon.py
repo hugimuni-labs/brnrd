@@ -234,8 +234,6 @@ def _run_worker(
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
-    *,
-    debug: bool = False,
 ) -> Task:
     """Run the runner for a single event, with retries.
 
@@ -287,7 +285,6 @@ def _run_worker(
             cfg,
             branch_plan=branch_plan,
             response_path=resp_path,
-            debug=debug,
         )
     except RuntimeError as e:
         print(f"[brr] task {task.id}: env setup failed: {e}")
@@ -438,7 +435,7 @@ def _run_worker(
                 response_path=str(env_ctx.response_path_host),
             ),
             cfg=cfg,
-            trace=debug,
+            trace=True,
             on_heartbeat=_emit_heartbeat,
         )
         _emit_new_containers(
@@ -472,7 +469,7 @@ def _run_worker(
             _record_response_artifact(brr_dir, conv_key, task, resp_path)
             task.update_status("done", tasks_dir)
             maintenance_trace = _maybe_kb_maintenance(
-                run_root, repo_root, cfg, runner_name, trace=debug,
+                run_root, repo_root, cfg, runner_name, trace=True,
             )
             if maintenance_trace:
                 trace_dirs.append(maintenance_trace)
@@ -483,9 +480,7 @@ def _run_worker(
                 conversation_key=conv_key,
                 payload={"task_id": task.id, "stage": "done"},
             ))
-            task = env_backend.finalize(
-                env_ctx, task, tasks_dir, debug=debug,
-            )
+            task = env_backend.finalize(env_ctx, task, tasks_dir)
             _emit_preserved_containers(brr_dir, conv_key, task)
             preserved_branch = task.meta.get("preserved_branch")
             landed_branch = task.meta.get("landed_branch")
@@ -568,7 +563,7 @@ def _run_worker(
         conversation_key=conv_key,
         payload={"task_id": task.id, "stage": "failed"},
     ))
-    task = env_backend.finalize(env_ctx, task, tasks_dir, debug=debug)
+    task = env_backend.finalize(env_ctx, task, tasks_dir)
     _emit_preserved_containers(brr_dir, conv_key, task)
     failed_payload: dict[str, object] = {
         "task_id": task.id,
@@ -833,13 +828,13 @@ def _maybe_kb_maintenance(
 def start(
     repo_root: Path,
     *,
-    debug: bool | None = None,
     dev_reload: bool | None = None,
 ) -> None:
     """Run the daemon main loop (blocking, foreground).
 
-    *debug* enables trace persistence and worktree retention.  When
-    ``None``, falls back to the ``debug`` key in ``.brr/config``.
+    Traces are always written and worktrees/containers are kept on
+    failure (or when uncommitted files are left behind) but discarded
+    on clean success — there is no operator-facing debug switch.
 
     *dev_reload* enables the brr-development re-exec watcher.  When
     ``None``, falls back to the ``dev_reload`` key in ``.brr/config``.
@@ -867,7 +862,6 @@ def start(
 
     cfg = conf.load_config(repo_root)
     max_retries = int(cfg.get("response_retries", 1))
-    debug_mode = debug if debug is not None else bool(cfg.get("debug", False))
     dev_reload_mode = (
         dev_reload if dev_reload is not None
         else bool(cfg.get("dev_reload", False))
@@ -881,8 +875,6 @@ def start(
     if not gate_threads:
         print("[brr] warning: no gates configured — inbox will only receive events from `brr run` or scripts")
 
-    if debug_mode:
-        print("[brr] debug mode enabled (traces + worktree retention)")
     if reload_watcher is not None:
         print("[brr] developer reload enabled")
     print(f"[brr] daemon started (pid {os.getpid()})")
@@ -902,7 +894,6 @@ def start(
 
                 task = _run_worker(
                     event, repo_root, responses_dir, cfg, max_retries,
-                    debug=debug_mode,
                 )
                 protocol.set_status(event, task.status)
 
