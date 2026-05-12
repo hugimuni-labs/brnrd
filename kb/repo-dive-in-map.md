@@ -482,7 +482,7 @@ Important fields:
 - `conversation_key`, `task_id`, `event_id`
 - `phase` (queued, preparing, running, finalizing, delivering, delivered, failed, conflict)
 - `state` (active, succeeded, failed)
-- `branch_name`, `base_branch`, `env`, `attempt`
+- `branch_name`, `display_base`, `env`, `attempt`
 - `started_at`, `updated_at`, `detail`, `error`
 - `artifacts`, `container_ids`, `response_path`
 
@@ -553,10 +553,10 @@ Important fields:
 - `response_path_host`
 - `response_path_env`
 - `branch_name`
-- `base_branch`
+- `branch_plan` (a `branching.BranchPlan`)
 - `env_state`
 
-Note: there is no `log_file` field anymore — per-task `kb/log-<task-id>.md` plumbing was removed in phase 2 of the kb-shape arc. The per-task narrative now lands as a curated entry in `kb/log.md` when the session was substantial enough to record.
+Note: there is no `log_file` field anymore — per-task `kb/log-<task-id>.md` plumbing was removed in phase 2 of the kb-shape arc. The per-task narrative now lands as a curated entry in `kb/log.md` when the session was substantial enough to record. The separate `base_branch` field was dropped on 2026-05-12; the auto-land target lives on the `branch_plan` and renderers read `branch_plan.auto_land_branch or branch_plan.seed_ref` when they need a "← base" display.
 
 Read with:
 

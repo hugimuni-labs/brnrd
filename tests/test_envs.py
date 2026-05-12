@@ -7,6 +7,16 @@ from brr.runner import DEFAULT_RUNNER_TIMEOUT, RunnerInvocation
 from brr.task import Task
 
 
+def _plan(seed: str = "main", target: str | None = "main") -> branching.BranchPlan:
+    """Convenience: build a plan for tests that don't care about resolver state."""
+    return branching.BranchPlan(
+        seed_ref=seed,
+        auto_land_branch=target,
+        source="test",
+        host_context_branch=seed,
+    )
+
+
 def test_get_env_returns_real_builtins():
     assert envs.get_env("host").name == "host"
     assert envs.get_env("worktree").name == "worktree"
@@ -29,14 +39,14 @@ def test_docker_prepare_requires_cli_and_image(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Docker CLI"):
         backend.prepare(
             task, tmp_path, {},
-            base_branch="main", response_path=response_path,
+            branch_plan=_plan(), response_path=response_path,
         )
 
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
     with pytest.raises(RuntimeError, match="docker.image"):
         backend.prepare(
             task, tmp_path, {},
-            base_branch="main", response_path=response_path,
+            branch_plan=_plan(), response_path=response_path,
         )
 
 
@@ -55,7 +65,7 @@ def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
 
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "brr/test-runner:latest"},
-        base_branch="main", response_path=response_path,
+        branch_plan=_plan(), response_path=response_path,
     )
 
     assert ctx.name == "docker"
@@ -115,13 +125,13 @@ def test_worktree_finalize_preserves_task_branch_without_auto_land(tmp_path):
     plan = branching.BranchPlan(
         seed_ref="main",
         auto_land_branch=None,
-        authority="fallback:preserve",
+        source="fallback:preserve",
         host_context_branch="main",
     )
     backend = envs.get_env("worktree")
     ctx = backend.prepare(
         task, repo, {},
-        base_branch=None, branch_plan=plan, response_path=response_path,
+        branch_plan=plan, response_path=response_path,
     )
     _commit_in(ctx.cwd, "change.txt", "change\n", "change")
 
@@ -144,14 +154,14 @@ def test_worktree_finalize_fast_forwards_auto_land_target(tmp_path):
     plan = branching.BranchPlan(
         seed_ref="main",
         auto_land_branch="main",
-        authority="fallback:current",
+        source="fallback:current",
         host_context_branch="main",
         expected_old_oid=old_main,
     )
     backend = envs.get_env("worktree")
     ctx = backend.prepare(
         task, repo, {},
-        base_branch="main", branch_plan=plan, response_path=response_path,
+        branch_plan=plan, response_path=response_path,
     )
     _commit_in(ctx.cwd, "landed.txt", "landed\n", "landed")
 
@@ -173,7 +183,7 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     task = Task(id="task-3", event_id="evt-3", body="run in docker")
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "brr/test-runner:latest"},
-        base_branch="main", response_path=response_path,
+        branch_plan=_plan(), response_path=response_path,
     )
     commands = []
 
@@ -253,7 +263,7 @@ def test_docker_invoke_attaches_stdin_devnull(tmp_path, monkeypatch):
     task = Task(id="task-stdin", event_id="evt-stdin", body="hi")
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "img:latest"},
-        base_branch="main", response_path=response_path,
+        branch_plan=_plan(), response_path=response_path,
     )
     invocation = RunnerInvocation(
         kind="daemon-run",
@@ -292,7 +302,7 @@ def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
     task = Task(id="task-t", event_id="evt-t", body="hi")
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "img:latest"},
-        base_branch="main", response_path=response_path,
+        branch_plan=_plan(), response_path=response_path,
     )
     invocation = RunnerInvocation(
         kind="daemon-run",
@@ -327,7 +337,7 @@ def test_docker_invoke_honours_configured_timeout(tmp_path, monkeypatch):
     cfg = {"docker.image": "img:latest", "runner.timeout_seconds": 1200}
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, cfg,
-        base_branch="main", response_path=response_path,
+        branch_plan=_plan(), response_path=response_path,
     )
     invocation = RunnerInvocation(
         kind="daemon-run",
@@ -381,7 +391,7 @@ def test_docker_invoke_timeout_message_uses_configured_value(
     cfg = {"docker.image": "img:latest", "runner.timeout_seconds": 42}
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, cfg,
-        base_branch="main", response_path=response_path,
+        branch_plan=_plan(), response_path=response_path,
     )
     monkeypatch.setattr(envs.subprocess, "run", _dispatch)
     invocation = RunnerInvocation(
@@ -413,7 +423,7 @@ def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-
         cfg.update(cfg_extra)
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, cfg,
-        base_branch="main", response_path=response_path,
+        branch_plan=_plan(), response_path=response_path,
     )
     commands = []
     monkeypatch.setattr(
@@ -573,6 +583,7 @@ def test_docker_finalize_removes_containers_after_success(tmp_path, monkeypatch)
         response_path_host=tmp_path / ".brr" / "responses" / "evt-4.md",
         response_path_env=tmp_path / ".brr" / "responses" / "evt-4.md",
         branch_name="brr/task-4",
+        branch_plan=_plan(),
         env_state={
             "docker_containers": ["brr-task-4-evt-4-attempt-1"],
             "worktree_path": str(tmp_path),

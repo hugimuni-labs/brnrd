@@ -24,45 +24,53 @@ choice keeps remote runs isolated by default without asking an LLM to
 classify "small" versus "large" tasks ahead of time.
 
 For worktree-backed tasks, brr first resolves a deterministic branch
-plan: seed ref, optional auto-land branch, authority, host checkout
-branch as context, and expected old OID for safe fast-forwards. It then
-creates `.brr/worktrees/<task-id>/` on a fresh `brr/<task-id>` branch
-from the seed ref. The agent owns the runtime branching choice:
+plan: seed ref, optional auto-land branch, resolver source string,
+host checkout branch as context, and expected old OID for safe
+fast-forwards. It then creates `.brr/worktrees/<task-id>/` on a fresh
+`brr/<task-id>` branch from the seed ref. The agent owns the runtime
+branching choice:
 
 - commit on the original `brr/<task-id>` branch when the branch plan is
   right;
-- switch to a new or existing named branch when the task body overrides
-  the plan;
+- switch to a new or existing named branch when the task body — or the
+  recent conversation context the prompt includes — overrides the plan;
 - make no commits for read-only work.
 
-On success, `WorktreeEnv.finalize` reads the final branch state. If the
-agent stayed on the original task branch and an auto-land target exists,
-brr fast-forwards that target and deletes the throwaway worktree/branch.
-If no target exists, brr preserves the task branch for human routing and
-publishes it when a remote is configured. If the agent switched
-branches, detached HEAD, or cannot fast-forward the target, brr
-preserves the branch for human follow-up. Docker uses the same
-worktree-backed branch contract, with the runner command executed in a
-container.
+On success, `WorktreeEnv.finalize` reads the final branch state and
+always tears down the worktree directory; persistent inspection rides
+on the branch ref and trace dirs, not on a live worktree pinning the
+branch. If the agent stayed on the original task branch and an
+auto-land target exists, brr fast-forwards that target and deletes the
+throwaway branch. If no target exists, brr preserves the task branch
+for human routing and publishes it when a remote is configured. If the
+agent switched branches, detached HEAD, or cannot fast-forward the
+target, brr preserves the branch for human follow-up. Docker uses the
+same worktree-backed branch contract, with the runner command executed
+in a container.
 
 ## Branch intent and landing
 
 The branch-intent fix in
 [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-removed the old weak point: the daemon no longer uses the host
-checkout's current `HEAD` as both seed and auto-land target. Branch
-authority now comes from structured event metadata, unambiguous
-conversation branch facts, and then policy fallback. The host current
-branch is context for remote tasks, not automatic authority, and a
-fixed `landing_branch=` config remains rejected because it creates
-hidden branch authority.
+removed the old weak point — the daemon no longer uses the host
+checkout's current `HEAD` as both seed and auto-land target. The
+2026-05-12 amendment of that same design also removed conversation
+mining from the resolver: branch authority now comes only from
+structured event metadata, otherwise the task branch is preserved.
 
-This preserves the "agent owns branching" decision. If the agent stays
-on the task branch, brr can fast-forward the resolved target when one
-exists or preserve the task branch when no safe target exists. If the
-agent switches branches after reading the actual request, finalization
-records that git state instead of asking a separate pre-run agent to
-predict it.
+The agent reads the recent conversation history from the prompt and
+can `git switch` inside the worktree whenever continuity is actually
+meant. That preserves the "agent owns branching" decision more
+honestly than pre-decoding a sparse-window branch fact into hidden
+durable authority. The host current branch remains context only; a
+fixed `landing_branch=` config remains rejected; and `current` is the
+opt-in development fallback.
+
+If the agent stays on the task branch and an explicit auto-land
+target was set, brr fast-forwards it. If no target exists, brr
+preserves the task branch. If the agent switches branches after
+reading the actual request, finalization records that git state
+instead of asking a separate pre-run agent to predict it.
 
 ## Read next
 

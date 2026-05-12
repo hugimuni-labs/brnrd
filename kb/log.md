@@ -1181,3 +1181,53 @@ demote inferred conversation branches to prompt context, retain
 `preserve` as the default, treat `current` as explicit dev/compat mode,
 and delete the legacy `base_branch` API path before adding more policy
 surface.
+
+## [2026-05-12] implement | Brutally simplify the branch plan
+
+Acted on the research above, with the operator's added direction that
+the daemon should not pre-decode any conversation branch facts at all —
+the agent already sees recent records in the prompt and can `git
+switch` itself if continuity is meant. Today's "merge conflict on
+brr/task-…-rtc8" was the proof of the over-engineering: a single recent
+`preserved_branch` row in the Telegram conversation was treated as
+unambiguous auto-land authority, so the resolver targeted a sibling
+task's preserved branch and the worktree-collision guard in
+`gitops.fast_forward_branch` correctly refused to update it.
+
+Cuts shipped in this commit:
+
+- `branching.resolve_branch_plan` no longer reads conversation
+  history. Structured event fields (`branch_target`, `target_branch`,
+  `base_branch`, legacy `branch`) are the only auto-land authority;
+  otherwise `preserve` (default) or `current` (opt-in dev/compat).
+  Fallback modes `inbox` and `default` were removed — no shipped
+  workflow used them.
+- `BranchPlan` trimmed: `display_base`, `notes` removed; `authority`
+  renamed to `source` (trace/observability only).
+- `base_branch` deleted as a parameter and `RunContext` field
+  end-to-end. `EnvBackend.prepare` now takes a required `branch_plan`;
+  prompts, run-context renderer, status renderer, conversation rows,
+  daemon update packets, gates, and tests follow. `run_progress.View`
+  renames its old `base_branch` display field to `display_base` so the
+  intent is clear.
+- `WorktreeEnv._land_or_preserve` is now outcome-aware. Clean success
+  with no uncommitted/untracked files tears the worktree down (the
+  branch ref + traces are the durable artefact). A conflict
+  (auto-land collision), a detached HEAD, or any
+  untracked/unstaged files left in the worktree keeps it alive for
+  inspection regardless of `--debug`. `--debug` shrinks to a
+  "force-keep even on clean success" override; it still preserves
+  trace dirs (versus only artifact records) and Docker containers.
+- `_push_if_needed` now publishes any new branch with `git push -u`
+  regardless of namespace. There's no good reason for the daemon's
+  push to differ from a user's manual push; agent-switched runtime
+  branches reach the remote with upstream set the way a human would
+  expect.
+- Task IDs are now `task-YYMMDD-HHMM-<4 random>`. The old raw-unix
+  timestamps sorted fine but read as noise.
+
+Amended `design-daemon-landing-branch.md` with a 2026-05-12 supersedure
+note covering the resolver cut and the trimmed fallback surface. The
+amendment explicitly supersedes resolution-order step 2 ("existing
+session/thread branch wins"). `subject-tasks-branching.md` and the
+dive-in map were synced. Full suite green (256 passing).

@@ -1,32 +1,46 @@
 # Design: daemon branch intent resolution
 
-Status: accepted on 2026-05-11
+Status: amended on 2026-05-12
 
-Revision: 2026-05-10. This supersedes this page's earlier
-`landing_branch=` recommendation. A single configured landing branch
-removed dependence on the host checkout, but it replaced that bug with
-hidden branch authority in config. The corrected design keeps the
-useful split between execution branch and durable branch while making
-branch authority derive from the task, the thread, or structured source
-metadata before falling back to policy.
+Revision history at the top so cold readers see the current shape
+first:
 
-Implementation note, 2026-05-11: the core resolver and daemon gitops
-path shipped. `branching.BranchPlan` resolves structured event branch
-fields, unambiguous conversation branch facts, and fallback modes
-(`preserve` default, `inbox`, `default`, `current`). Worktrees sprout
-from `seed_ref`; finalization fast-forwards named targets by ref or
-preserves `brr/<task-id>` when no target exists; `_push_if_needed`
-pushes the branch that actually changed and sets upstream for brr-owned
-new branches. Richer source-specific metadata (PR/issue/task refs)
-remains an expansion point, not a different design.
+- **2026-05-12 amendment.** Conversation-derived branch facts are no
+  longer auto-land authority. The resolver only sets
+  `auto_land_branch` from structured event metadata; otherwise it
+  preserves the task branch. Agents read recent conversation records
+  from the prompt and switch branches themselves when continuity is
+  actually meant. This supersedes resolution-order step 2 below.
+  Rationale: a single recent `preserved_branch` in a sparse window
+  was being treated as unambiguous authority and silently routed
+  unrelated tasks onto stale sibling branches — a worktree collision
+  on 2026-05-12 made this concrete. The fix is "empower the agent
+  with context, do not pre-decide on its behalf"; the daemon's job is
+  the mechanical safety contract, not branch intent inference. The
+  fallback-mode surface is also trimmed to `preserve` (default) and
+  `current` (explicit dev/compat); `inbox` and `default` had no
+  shipped workflow.
+- **2026-05-11 implementation note.** The core resolver and daemon
+  gitops path shipped. `branching.BranchPlan` resolved structured
+  event branch fields, conversation branch facts, and fallback modes
+  (`preserve` default, `inbox`, `default`, `current`). Worktrees
+  sprout from `seed_ref`; finalization fast-forwards named targets by
+  ref or preserves `brr/<task-id>` when no target exists;
+  `_push_if_needed` pushes the branch that actually changed and sets
+  upstream for brr-owned new branches.
+- **2026-05-10 revision.** Earlier `landing_branch=` recommendation
+  superseded. A single configured landing branch removed dependence
+  on the host checkout, but replaced that bug with hidden branch
+  authority in config. The corrected design kept the useful split
+  between execution branch and durable branch while making branch
+  authority derive from the task, the thread, or structured source
+  metadata before falling back to policy.
 
-Follow-up note, 2026-05-12: the shipped finalization contract still
-looks sound, but
-[`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
-recommends simplifying the resolver surface by demoting inferred
-conversation branch facts from auto-land authority to prompt/run-context
-hints. That would keep explicit structured source metadata authoritative
-while avoiding stale chat history as hidden durable branch state.
+Richer source-specific metadata (PR/issue/task refs) remains an
+expansion point, not a different design.
+
+Follow-up research that drove the 2026-05-12 amendment lives in
+[`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md).
 
 This hangs off the tasks/branching hub,
 [`subject-tasks-branching.md`](subject-tasks-branching.md), and refines
@@ -115,40 +129,40 @@ policy.
 
 1. **Explicit structured instruction wins.** A gate or CLI can put a
    branch target in event metadata (`branch=`, `target_branch=`,
-   `base_branch=`, or a future normalised `branch_target=`). That is
-   authoritative because it is already structured. For prose inside the
-   event body ("do this on feature/payment-refactor"), the worker agent
-   sees the instruction and can switch branches at runtime. The daemon
-   should not grow a brittle regex parser just to claim it understood
-   free text before the run.
-2. **Existing session/thread branch wins.** If the same gate thread has
-   an unambiguous recent durable branch, use it. This should be a
-   projection from conversation task/update rows such as
-   `landed_branch`, `preserved_branch`, or `branch_target`; it is not a
-   new stream manifest with title/intent/status. If the conversation key
-   is broad and the branch history is ambiguous, pass the candidate as
-   prompt context rather than auto-targeting it.
-3. **Issue/PR/task metadata wins.** Source-specific structured metadata
+   `branch_target=`). That is authoritative because it is already
+   structured. For prose inside the event body ("do this on
+   feature/payment-refactor"), the worker agent sees the instruction
+   and can switch branches at runtime. The daemon should not grow a
+   brittle regex parser just to claim it understood free text before
+   the run.
+2. **Issue/PR/task metadata wins.** Source-specific structured metadata
    should map directly into the plan: PR head branch, issue-linked
    branch, git-gate source ref, task-file frontmatter branch, etc. This
    lets remote-first sources carry branch authority without asking the
    daemon to infer it from prose.
-4. **Current branch is context.** `gitops.current_branch(repo_root)` is
-   still useful context and should be recorded as
-   `host_context_branch`, shown in the run context, and handed to the
-   agent. It should not be an automatic remote landing target unless
-   the event source is local/interactive or an explicit operator mode
-   says "this daemon run is intentionally bound to the current branch."
-5. **Policy decides fallback behavior.** Policy is allowed to decide
-   what happens when no branch authority exists; it should not be a
-   hidden universal feature-branch target. Reasonable fallback modes:
+3. **Current branch is context only.** `gitops.current_branch(repo_root)`
+   is still useful context and is recorded as `host_context_branch`,
+   shown in the run context, and handed to the agent. It is not an
+   automatic landing target. The `current` fallback mode opts into
+   "this daemon run is intentionally bound to the host current branch"
+   for self-development workflows.
+4. **Policy decides fallback behavior.** Policy is allowed to decide
+   what happens when no structured branch authority exists; it must
+   not be a hidden universal feature-branch target. The shipped
+   fallback modes are:
 
    | Mode | Behavior |
    | ---- | -------- |
    | `preserve` | Seed from the repo default branch if known, otherwise current `HEAD`; set no auto-land target. Completed commits on `brr/<task-id>` are preserved for human routing. Safest remote default. |
-   | `inbox` | Seed from the repo default branch and fast-forward a conventional inbox branch such as `brr/inbox`. This keeps remote work out of feature branches while allowing automated push/PR flow. |
-   | `default` | Seed from and auto-land to the repository default branch. Suitable for repos where remote tasks are intended to commit directly to mainline. |
-   | `current` | Seed from and auto-land to the host current branch. This is compatibility/development behavior and should be opt-in with startup warnings. |
+   | `current` | Seed from and auto-land to the host current branch. Opt-in compatibility/development behavior. |
+
+> **Superseded step:** an earlier draft had a "existing session/thread
+> branch wins" step between (1) and (2) that mined conversation records
+> for an unambiguous recent durable branch. The 2026-05-12 amendment
+> removed it — the agent reads conversation history from the prompt
+> itself and can switch branches at runtime when continuity is meant.
+> Pre-decoding a sparse-window branch fact as durable authority was a
+> stealth triage step the daemon should not own.
 
 The key correction is that config controls the no-authority fallback
 mode, not the branch target for every task.
@@ -164,10 +178,11 @@ The normal worker prompt then includes the branch plan:
 
 - the task branch it starts on;
 - the seed ref and, if present, the auto-land target;
-- the authority source (`event`, `conversation`, `source-metadata`,
-  `fallback`, etc.);
+- the resolver source (e.g. `event:branch_target`, `fallback:preserve`)
+  for trace/observability;
 - the host current branch as context only;
-- the rule that explicit instructions in the task body can still
+- the rule that explicit instructions in the task body — or relevant
+  conversation history in the recent activity section — can still
   override the plan by switching branches before editing.
 
 That keeps the old "agent owns branching at runtime" contract. If the
