@@ -42,7 +42,7 @@ gitignored; do not commit its contents.
 | `responses/` | Agent final responses destined for gate replies                    |
 | `runs/`      | Generated per-task context files for daemon runner invocations     |
 | `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
-| `traces/`    | Prompt + stdout + meta for every runner invocation (debug mode)    |
+| `traces/`    | Prompt + stdout + meta for every runner invocation                 |
 | `reviews/`   | Reserved for explicit review artifacts; default tasks do not write here |
 | `worktrees/` | Isolated git worktrees for concurrent tasks                        |
 | `gates/`     | Per-gate auth/state JSON                                           |
@@ -128,7 +128,8 @@ never in `.brr/`. The split is:
 
 - `kb/` — permanent, project-specific, committed to the repo. Owned by
   agents working in this repo.
-- `.brr/` — tool runtime. Ephemeral unless debug mode says otherwise.
+- `.brr/` — tool runtime. Ephemeral by default; traces and any task
+  failures/leftovers stay for inspection.
 - `src/brr/docs/` (bundled) + `.brr/docs/` (override) — tool
   documentation, same across all repos unless a user overrides.
 
@@ -243,22 +244,26 @@ worktree's git state. If the agent left commits on the original
 that target is fast-forwarded. If there is no target, or if the agent
 created/checked out a different branch, the resulting branch is
 preserved as-is. Conflicts preserve the task branch. The worktree is
-removed unless debug mode keeps it for inspection. Docker tasks use
-the same worktree-backed branch behavior, with the runner command
-executed inside the configured container image.
+removed only on a clean success with no uncommitted/untracked
+leftovers; failures, conflicts, and dirty leftovers keep the worktree
+for inspection. Docker tasks use the same worktree-backed branch
+behavior with the same outcome-aware cleanup applied to the container
+itself, and run the runner command inside the configured container
+image.
 
 The full env story — built-ins, configuration knobs, the docker
 credential wiring, the durability contract, and the salvage rule —
 lives in [`envs.md`](envs.md).
 
-## Debug mode
+## Traces and forensics
 
-`brr up --debug` (or `debug=true` in config) changes two behaviours:
+Every runner invocation writes a trace directory under
+`.brr/traces/<kind>/<label>-<timestamp>/` containing the prompt,
+stdout, stderr, meta JSON, and any artifacts the runner produced.
+Traces are always written — there is no operator switch. Reviewers
+can correlate a task's generated run context file with the
+corresponding trace dirs to reconstruct what the agent saw and said.
 
-- Traces are written for every runner invocation (prompt, stdout,
-  stderr, meta, artifacts) under `.brr/traces/<kind>/...`.
-- Worktrees and Docker containers are preserved after their task finishes
-  instead of being removed — useful for post-mortem inspection.
-
-Reviewers can correlate a task's generated run context file with trace
-directories under `.brr/traces/`.
+`.brr/` is gitignored, so traces stay local to whoever ran the
+daemon. Reclaim disk by removing `.brr/traces/` whenever you want;
+the durable record lives on git branches and `kb/`.

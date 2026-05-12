@@ -30,14 +30,14 @@ def test_up_dev_reload_flag_passes_to_daemon(monkeypatch, tmp_path):
     monkeypatch.setattr("brr.cli._repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         "brr.daemon.start",
-        lambda repo_root, *, debug=None, dev_reload=None: calls.append(
-            (repo_root, debug, dev_reload),
+        lambda repo_root, *, dev_reload=None: calls.append(
+            (repo_root, dev_reload),
         ),
     )
 
     main(["up", "--dev-reload"])
 
-    assert calls == [(tmp_path, None, True)]
+    assert calls == [(tmp_path, True)]
 
 
 def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):

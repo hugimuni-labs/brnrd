@@ -69,8 +69,10 @@ git state:
 - No commits beyond the seed ref → drop the empty branch with the
   worktree.
 
-This is the right default for code-modifying work. Combine with debug
-mode to keep a worktree around for inspection.
+This is the right default for code-modifying work. Worktrees that
+end up in a non-clean state (failures, conflicts, or untracked
+files left behind) are kept automatically so you can inspect what
+the agent did.
 
 ## `docker`
 
@@ -208,15 +210,14 @@ duplicating that recipe here.
 
 ### Container lifecycle
 
-| Outcome                  | Container is...                                   |
-| ------------------------ | ------------------------------------------------- |
-| `done` + not debug       | Removed (`docker rm -f`)                          |
-| `done` + debug           | Preserved (`task.meta.docker_containers` records names) |
-| `error` / `conflict`     | Preserved regardless of debug, for salvage        |
+| Outcome              | Container is...                                          |
+| -------------------- | -------------------------------------------------------- |
+| `done`               | Removed (`docker rm -f`)                                 |
+| `error` / `conflict` | Preserved (`task.meta.docker_containers` records names)  |
 
-Same rule as worktrees: clean teardown only when the task succeeded
-and the user isn't debugging. Otherwise we keep the artifact so you
-can inspect, re-run, or copy work out manually.
+Same rule as worktrees: clean teardown only on a successful run.
+Failures preserve the container so you can inspect, re-run, or copy
+work out manually.
 
 ## Durability contract
 
@@ -227,15 +228,16 @@ Across all envs, brr only guarantees three kinds of output survive:
    from the host's `.git`.
 2. **The response file** at `.brr/responses/<event-id>.md`, captured
    from the runner's stdout.
-3. **Trace artefacts** under `.brr/traces/<kind>/...`, written when
-   debug mode is on.
+3. **Trace artefacts** under `.brr/traces/<kind>/...`, written for
+   every runner invocation.
 
 Anything else an agent writes (untracked files, ephemeral state inside
 a container, files in a worktree that didn't get committed) is **not
 durable**. The corresponding scratch space — worktree, container,
-remote ssh dir — is torn down on a clean non-debug success. Salvage
-rule: scratch is preserved on `error` / `conflict` and in debug mode,
-so a human can recover work.
+remote ssh dir — is torn down on a clean success. Salvage rule:
+scratch is preserved on `error` or `conflict`, and a worktree with
+untracked or unstaged files at finalize time is kept regardless of
+status, so a human can recover work.
 
 ## Troubleshooting
 
