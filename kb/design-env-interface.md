@@ -213,7 +213,7 @@ Concrete rules every `Env.finalize()` must satisfy:
 |---------------------------------------------|----------------------------------------|------------------------------------------|
 | Git commits on `ctx.branch`                 | reachable in host's `.git`             | `ctx.branch is not None`                 |
 | Response file `<event-id>.md`               | `repo_root/.brr/responses/<id>.md`     | always (existing daemon contract)        |
-| Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | `debug=True`                             |
+| Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | always written; cleaned on clean `status=done` |
 | Per-task log                                | committed in branch as `kb/log-<id>.md`| worktree-style branches                  |
 | Env-private scratch teardown                | n/a — removed from env's territory     | clean `status=done` with no uncommitted files |
 
