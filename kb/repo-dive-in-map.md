@@ -778,7 +778,7 @@ Worktree execution:
 
 - creates `.brr/worktrees/<task-id>` on a fresh `brr/<task-id>` branch sprouted from the resolved seed ref
 - finalize reads the worktree's git state: fast-forward the resolved auto-land target when one exists, preserve the task branch otherwise
-- preserves worktree state in debug mode or non-done outcomes
+- outcome-aware cleanup: removes the worktree on clean success with nothing uncommitted, keeps it on `error` / `conflict` or when untracked/unstaged files remain
 
 Docker execution:
 

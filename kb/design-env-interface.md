@@ -215,7 +215,7 @@ Concrete rules every `Env.finalize()` must satisfy:
 | Response file `<event-id>.md`               | `repo_root/.brr/responses/<id>.md`     | always (existing daemon contract)        |
 | Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | `debug=True`                             |
 | Per-task log                                | committed in branch as `kb/log-<id>.md`| worktree-style branches                  |
-| Env-private scratch teardown                | n/a — removed from env's territory     | `status=done` **and** `debug=False`      |
+| Env-private scratch teardown                | n/a — removed from env's territory     | clean `status=done` with no uncommitted files |
 
 Anything an agent writes outside of a commit, the response file, or a
 trace, is **not durable** and the framework makes no guarantee about it.
@@ -223,10 +223,11 @@ This is documented in `prompts/run.md` and `docs/brr-internals.md`.
 
 **Salvage rule.** Env scratch state (worktrees, containers, remote ssh
 dirs, devcontainers) is torn down only when the task finished cleanly
-and we aren't in debug mode. On `error` / `conflict`, or whenever
-`debug=True`, the scratch is preserved so the user can inspect or
-salvage work. `brr inspect <task-id>` surfaces the preserved location
-via `task.meta`.
+with nothing left uncommitted in the worktree. On `error` /
+`conflict`, or when the worktree has untracked/unstaged files,
+scratch is preserved so the user can inspect or salvage work.
+`brr inspect <task-id>` surfaces the preserved location via
+`task.meta`.
 
 ### Enforcement
 
@@ -234,7 +235,7 @@ The daemon doesn't guess. After `finalize` returns its `FinalizeReport`,
 `daemon._run_worker()` does:
 
 ```python
-report = env.finalize(ctx, task, debug=debug_mode)
+report = env.finalize(ctx, task)
 if not report.response_written:
     # existing retry path; nothing new
     return retry_or_error()

@@ -48,7 +48,7 @@ def _stub_env_isolated(monkeypatch, tmp_path):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
             return envs.RunContext(
                 name=self.name,
                 cwd=worktree_path,
@@ -63,7 +63,7 @@ def _stub_env_isolated(monkeypatch, tmp_path):
         def invoke(self, ctx, runner_name, invocation, cfg=None, *, trace=False):
             raise NotImplementedError("override in test")
 
-        def finalize(self, ctx, task, tasks_dir, *, debug=False):
+        def finalize(self, ctx, task, tasks_dir):
             finalized.append(task.id)
             return task
 
@@ -163,7 +163,7 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
     class RetryEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
@@ -190,7 +190,7 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
                 artifacts=[],
             )
 
-        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+        def finalize(self, _ctx, task, _tasks_dir):
             return task
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: RetryEnv())
@@ -232,41 +232,6 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
         daemon.start(tmp_path)
 
     assert statuses == ["processing", "error"]
-
-
-def test_debug_mode_from_config(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = {"id": "evt-dbg", "status": "pending", "_path": tmp_path / ".brr" / "inbox" / "evt-dbg.md"}
-    event["_path"].write_text(
-        "---\nid: evt-dbg\nstatus: pending\n---\nhelp\n", encoding="utf-8",
-    )
-    statuses: list[str] = []
-    seen_debug: list[bool] = []
-
-    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
-    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {"debug": True})
-    monkeypatch.setattr(
-        daemon.protocol,
-        "list_pending",
-        lambda _inbox: [event] if not statuses else [],
-    )
-    monkeypatch.setattr(daemon.protocol, "set_status", lambda _ev, status: statuses.append(status))
-
-    def capturing_run_worker(*_args, **kwargs):
-        seen_debug.append(kwargs.get("debug", False))
-        return Task(id="task-dbg", event_id="evt-dbg", body="help", status="done")
-
-    monkeypatch.setattr(daemon, "_run_worker", capturing_run_worker)
-    monkeypatch.setattr(daemon, "_push_if_needed", _stop_after_first_push)
-    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
-
-    with pytest.raises(StopIteration):
-        daemon.start(tmp_path)
-
-    assert seen_debug == [True], "debug=True from config should propagate to worker"
 
 
 def test_start_allows_same_pid_during_reexec(tmp_path, monkeypatch):
@@ -456,7 +421,7 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
@@ -474,7 +439,7 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
                 stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
 
-        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+        def finalize(self, _ctx, task, _tasks_dir):
             return task
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
@@ -511,7 +476,7 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
@@ -529,7 +494,7 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
                 stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
 
-        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+        def finalize(self, _ctx, task, _tasks_dir):
             return task
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
@@ -589,7 +554,7 @@ def test_kb_maintenance_runs_on_preflight_findings_even_when_kb_unchanged(
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
@@ -607,7 +572,7 @@ def test_kb_maintenance_runs_on_preflight_findings_even_when_kb_unchanged(
                 stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
 
-        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+        def finalize(self, _ctx, task, _tasks_dir):
             return task
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
@@ -652,7 +617,7 @@ def test_kb_maintenance_skipped_when_clean_and_unchanged(tmp_path, monkeypatch):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
@@ -670,7 +635,7 @@ def test_kb_maintenance_skipped_when_clean_and_unchanged(tmp_path, monkeypatch):
                 stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
 
-        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+        def finalize(self, _ctx, task, _tasks_dir):
             return task
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
@@ -714,7 +679,7 @@ def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monk
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
@@ -732,7 +697,7 @@ def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monk
                 stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
             )
 
-        def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+        def finalize(self, _ctx, task, _tasks_dir):
             return task
 
     monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())

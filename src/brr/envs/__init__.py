@@ -54,7 +54,6 @@ class EnvBackend(Protocol):
         *,
         branch_plan: branching.BranchPlan,
         response_path: Path,
-        debug: bool = False,
     ) -> RunContext:
         ...
 
@@ -74,8 +73,6 @@ class EnvBackend(Protocol):
         ctx: RunContext,
         task: Task,
         tasks_dir: Path,
-        *,
-        debug: bool = False,
     ) -> Task:
         ...
 
@@ -91,7 +88,6 @@ class HostEnv:
         *,
         branch_plan: branching.BranchPlan,
         response_path: Path,
-        debug: bool = False,
     ) -> RunContext:
         return RunContext(
             name=self.name,
@@ -120,8 +116,6 @@ class HostEnv:
         ctx: RunContext,
         task: Task,
         tasks_dir: Path,
-        *,
-        debug: bool = False,
     ) -> Task:
         return task
 
@@ -137,7 +131,6 @@ class WorktreeEnv(HostEnv):
         *,
         branch_plan: branching.BranchPlan,
         response_path: Path,
-        debug: bool = False,
     ) -> RunContext:
         run_root, branch_name = worktree.create(
             repo_root, task.id, base_ref=branch_plan.seed_ref,
@@ -162,8 +155,6 @@ class WorktreeEnv(HostEnv):
         ctx: RunContext,
         task: Task,
         tasks_dir: Path,
-        *,
-        debug: bool = False,
     ) -> Task:
         worktree_path = Path(ctx.env_state.get("worktree_path") or ctx.cwd)
         initial_branch = ctx.branch_name or worktree.task_branch_name(task.id)
@@ -178,7 +169,6 @@ class WorktreeEnv(HostEnv):
             worktree_path=worktree_path,
             initial_branch=initial_branch,
             final_branch=final_branch,
-            debug=debug,
         )
         if final_branch:
             task.meta["branch_name"] = final_branch
@@ -195,7 +185,6 @@ class WorktreeEnv(HostEnv):
         worktree_path: Path,
         initial_branch: str,
         final_branch: str | None,
-        debug: bool,
     ) -> bool:
         """Decide what to do with the agent's branch on cleanup.
 
@@ -203,8 +192,7 @@ class WorktreeEnv(HostEnv):
         files tears the worktree down (the branch ref + traces are the
         durable artefact). A conflict, a detached HEAD, or any
         untracked/unstaged files in the worktree keeps it alive so the
-        operator can inspect what the agent left behind. ``debug``
-        keeps the worktree even on clean success.
+        operator can inspect what the agent left behind.
 
         Returns True when task metadata changed after the earlier status
         save, so callers know to persist it.
@@ -270,9 +258,6 @@ class WorktreeEnv(HostEnv):
                 keep_worktree = True
 
         # ── Decide whether to tear down the worktree directory ─────
-        if debug:
-            print(f"[brr] debug: keeping worktree for {task.id}")
-            return changed_metadata
         if keep_worktree:
             print(
                 f"[brr] task {task.id}: keeping worktree at {worktree_path} "
@@ -481,7 +466,6 @@ class DockerEnv(WorktreeEnv):
         *,
         branch_plan: branching.BranchPlan,
         response_path: Path,
-        debug: bool = False,
     ) -> RunContext:
         if shutil.which("docker") is None:
             raise RuntimeError("docker env requires the Docker CLI on PATH")
@@ -495,7 +479,6 @@ class DockerEnv(WorktreeEnv):
             cfg,
             branch_plan=branch_plan,
             response_path=response_path,
-            debug=debug,
         )
         ctx.name = self.name
 
@@ -617,36 +600,37 @@ class DockerEnv(WorktreeEnv):
         ctx: RunContext,
         task: Task,
         tasks_dir: Path,
-        *,
-        debug: bool = False,
     ) -> Task:
-        task = super().finalize(ctx, task, tasks_dir, debug=debug)
+        task = super().finalize(ctx, task, tasks_dir)
         containers = ctx.env_state.get("docker_containers", [])
         if not isinstance(containers, list):
             containers = []
 
-        if containers and (task.status != "done" or debug):
-            task.meta["docker_containers"] = ", ".join(str(c) for c in containers)
-            task.save(tasks_dir)
-            if debug:
-                print(f"[brr] debug: keeping docker container(s) for {task.id}")
+        # Outcome-aware container cleanup: keep on failure (so the
+        # operator can ``docker logs`` / ``docker exec`` to inspect),
+        # remove on clean success. Matches the worktree contract.
+        if task.status != "done":
+            if containers:
+                task.meta["docker_containers"] = ", ".join(
+                    str(c) for c in containers
+                )
+                task.save(tasks_dir)
             return task
 
-        if task.status == "done" and not debug:
-            for container in containers:
-                result = subprocess.run(
-                    ["docker", "rm", "-f", str(container)],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    check=False,
+        for container in containers:
+            result = subprocess.run(
+                ["docker", "rm", "-f", str(container)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                print(
+                    "[brr] warning: failed to remove docker container "
+                    f"{container}: {detail}"
                 )
-                if result.returncode != 0:
-                    detail = result.stderr.strip() or result.stdout.strip()
-                    print(
-                        "[brr] warning: failed to remove docker container "
-                        f"{container}: {detail}"
-                    )
         return task
 
 
