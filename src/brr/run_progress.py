@@ -98,7 +98,7 @@ class RunProgressView:
     phase: str = "queued"
     state: str = "active"
     branch_name: str | None = None
-    base_branch: str | None = None
+    display_base: str | None = None
     env: str | None = None
     runner_name: str | None = None
     attempt: int = 0
@@ -218,11 +218,10 @@ def _project(
 
         if kind == "task":
             view.branch_name = record.get("branch_name") or view.branch_name
-            view.base_branch = (
+            view.display_base = (
                 record.get("auto_land_branch")
                 or record.get("seed_ref")
-                or record.get("base_branch")
-                or view.base_branch
+                or view.display_base
             )
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
@@ -248,10 +247,10 @@ def _project(
         elif ptype == "env_prepared":
             view.env = record.get("env") or view.env
             view.branch_name = record.get("branch_name") or view.branch_name
-            view.base_branch = (
+            view.display_base = (
                 record.get("auto_land_branch")
                 or record.get("seed_ref")
-                or view.base_branch
+                or view.display_base
             )
         elif ptype == "container_started":
             cid = record.get("container")
@@ -276,10 +275,10 @@ def _project(
             view.attempt = view.attempt or 1
             view.runner_name = record.get("runner") or view.runner_name
             view.branch_name = record.get("branch") or view.branch_name
-            view.base_branch = (
+            view.display_base = (
                 record.get("auto_land_branch")
                 or record.get("seed_ref")
-                or view.base_branch
+                or view.display_base
             )
         elif ptype == "attempt_failed":
             reason = record.get("reason")
@@ -568,8 +567,8 @@ def _compact_header(view: RunProgressView) -> str:
         bits.append(view.env)
     if view.branch_name:
         bn = view.branch_name
-        if view.base_branch and view.base_branch != view.branch_name:
-            bn = f"{view.branch_name} ← {view.base_branch}"
+        if view.display_base and view.display_base != view.branch_name:
+            bn = f"{view.branch_name} ← {view.display_base}"
         bits.append(bn)
     return " · ".join(bits)
 
@@ -611,8 +610,8 @@ def _phase_text(view: RunProgressView) -> str:
 
 
 def _branch_text(view: RunProgressView) -> str:
-    if view.branch_name and view.base_branch:
-        return f"{view.branch_name} <- {view.base_branch}"
+    if view.branch_name and view.display_base:
+        return f"{view.branch_name} <- {view.display_base}"
     if view.branch_name:
         return view.branch_name
     return ""

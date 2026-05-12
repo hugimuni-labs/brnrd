@@ -34,9 +34,17 @@ _TASK_FIELDS = {
 
 
 def _generate_task_id() -> str:
-    ts = int(time.time())
+    """Return a sortable, human-readable task ID.
+
+    Shape: ``task-YYMMDD-HHMM-<4 random>``. The compact UTC date+minute
+    keeps IDs sortable and roughly self-documenting (you can read the
+    creation time at a glance) while leaving 4 random chars to
+    disambiguate same-minute tasks. Earlier IDs used the raw unix
+    timestamp, which sorted fine but read as noise to humans.
+    """
+    stamp = time.strftime("%y%m%d-%H%M", time.gmtime())
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-    return f"task-{ts}-{rand}"
+    return f"task-{stamp}-{rand}"
 
 
 def _cfg_environment_policy(cfg: dict[str, Any]) -> str:

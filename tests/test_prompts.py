@@ -76,15 +76,17 @@ class TestPromptBuilding:
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
             task_id="task-123",
             branch_name="brr/task-123",
-            base_branch="feat/task-abstraction",
+            seed_ref="feat/task-abstraction",
+            auto_land_branch="feat/task-abstraction",
+            branch_source="event:target_branch",
             runtime_dir="/repo/.brr",
             context_path="/repo/.brr/runs/task-123/context.md",
         )
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
-        assert "Base branch: feat/task-abstraction" in prompt
+        assert "Seed ref: feat/task-abstraction" in prompt
+        assert "Auto-land branch: feat/task-abstraction" in prompt
         assert "Current branch: brr/task-123" in prompt
-        assert "git switch -c" in prompt
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "Run context file: /repo/.brr/runs/task-123/context.md" in prompt
         assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
@@ -102,13 +104,13 @@ class TestPromptBuilding:
             branch_name="brr/task-123",
             seed_ref="main",
             auto_land_branch=None,
-            branch_authority="fallback:preserve",
+            branch_source="fallback:preserve",
             host_context_branch="feature/host",
         )
 
         assert "Seed ref: main" in prompt
         assert "Auto-land branch: none" in prompt
-        assert "Branch authority: fallback:preserve" in prompt
+        assert "Branch source: fallback:preserve" in prompt
         assert "Host context branch: feature/host" in prompt
         assert "preserve that branch" in prompt
 
@@ -137,7 +139,8 @@ class TestPromptBuilding:
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
             task_id="task-123",
             branch_name="brr/task-123",
-            base_branch="feat/task",
+            seed_ref="feat/task",
+            auto_land_branch="feat/task",
             runtime_dir="/repo/.brr",
             recent_conversation=recent,
             event_body="please fix the login flow",
@@ -151,7 +154,7 @@ class TestPromptBuilding:
         assert "please fix the login flow" in prompt
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
-        assert "Base branch: feat/task" in prompt
+        assert "Auto-land branch: feat/task" in prompt
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
 
