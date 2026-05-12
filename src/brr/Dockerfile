@@ -8,9 +8,11 @@
 # FROM this image, or use the `devcontainer` env which reuses the repo's own
 # .devcontainer recipe.
 #
-# Container runs as root so the cred-dir mounts emitted by brr's docker
-# env (e.g. ~/.codex -> /root/.codex) land where the CLIs look for
-# tokens. Don't override USER unless you also remap the mounts.
+# The image is designed to run as the *host* user's UID (passed via
+# ``docker run -u``) so files written into the bind-mounted repo are owned
+# by the host user, not by root. /brr-home is a writable HOME any UID can
+# use; the daemon mounts ~/.codex, ~/.claude, ~/.gemini, and ~/.gitconfig
+# into it at runtime.
 
 FROM node:22-slim
 
@@ -39,11 +41,12 @@ RUN apt-get update \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip \
     && rm -rf /var/lib/apt/lists/*
 
-# The container runs as root while the host repo is bind-mounted read-write
-# at the same absolute path it has on the host. Git refuses to operate on
-# repos owned by a different user (CVE-2022-24765) and the daemon mounts
-# the repo regardless of host ownership, so mark every path safe inside
-# the container. This config is image-local and does not leak to the host.
+# Git refuses to operate on repos owned by a different user
+# (CVE-2022-24765). The daemon mounts the host repo regardless of host
+# ownership, so mark every path safe inside the container. ``/etc/gitconfig``
+# is read by any UID, so this works whether the runtime UID has a passwd
+# entry or not. The daemon also exports the same setting via env vars
+# (``GIT_CONFIG_*``) as belt-and-braces for images that skip this line.
 RUN git config --system --add safe.directory '*'
 
 RUN npm install -g \
@@ -51,6 +54,15 @@ RUN npm install -g \
         @openai/codex \
         @google/gemini-cli \
     && npm cache clean --force
+
+# Writable HOME for whichever UID the daemon hands us. Mode 1777 is the
+# same shape /tmp uses — any UID can create files inside, but only the
+# owner can delete them. The CLIs (codex, claude, gemini) and git
+# discover credentials through ``$HOME``; the daemon mounts the host's
+# real credential dirs and ``.gitconfig`` here at runtime.
+RUN mkdir -p /brr-home \
+    && chmod 1777 /brr-home
+ENV HOME=/brr-home
 
 WORKDIR /work
 

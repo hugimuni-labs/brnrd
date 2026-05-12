@@ -220,9 +220,12 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     assert command[-4:] == ["brr/test-runner:latest", "mock", "--flag", "hello"]
     assert ctx.env_state["docker_containers"] == ["brr-task-3-evt-3-attempt-1"]
     forwarded = [command[i + 1] for i, arg in enumerate(command) if arg == "-e"]
-    # The git safe.directory wiring is unconditional; runner credential
-    # env vars are only forwarded when set on the daemon (none here).
+    # HOME is set so the in-container CLIs find credentials at
+    # ``$HOME/.codex`` etc. The git safe.directory wiring is
+    # unconditional; runner credential env vars are only forwarded when
+    # set on the daemon (none here).
     assert forwarded == [
+        "HOME=/brr-home",
         "GIT_CONFIG_COUNT=1",
         "GIT_CONFIG_KEY_0=safe.directory",
         "GIT_CONFIG_VALUE_0=*",
@@ -517,6 +520,7 @@ def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch
     (fake_home / ".claude").mkdir()
     (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
     (fake_home / ".codex").mkdir()
+    (fake_home / ".gitconfig").write_text("[user]\n", encoding="utf-8")
     # No ~/.gemini — confirms missing dirs don't show up.
 
     command = _build_docker_invoke(tmp_path, monkeypatch)
@@ -524,10 +528,11 @@ def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch
     mounts = [
         command[i + 1] for i, arg in enumerate(command) if arg == "-v"
     ]
-    assert f"{fake_home}/.claude:/root/.claude" in mounts
-    assert f"{fake_home}/.claude.json:/root/.claude.json" in mounts
-    assert f"{fake_home}/.codex:/root/.codex" in mounts
-    assert all(":/root/.gemini" not in m for m in mounts)
+    assert f"{fake_home}/.claude:/brr-home/.claude" in mounts
+    assert f"{fake_home}/.claude.json:/brr-home/.claude.json" in mounts
+    assert f"{fake_home}/.codex:/brr-home/.codex" in mounts
+    assert f"{fake_home}/.gitconfig:/brr-home/.gitconfig" in mounts
+    assert all(":/brr-home/.gemini" not in m for m in mounts)
     # Repo bind mount is the last -v so its assertion is stable.
     assert mounts[-1] == f"{tmp_path}:{tmp_path}"
 
