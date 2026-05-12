@@ -1223,6 +1223,41 @@ Cuts shipped in this commit:
   push to differ from a user's manual push; agent-switched runtime
   branches reach the remote with upstream set the way a human would
   expect.
+
+## [2026-05-12] refactor | docker container runs as host UID
+
+The Docker env left root-owned files in the host's `.git/objects/`
+after every run because the bundled image followed the standard
+"container runs as root, creds mount to `/root/`" pattern. Concrete
+symptom: `git commit` failed for the daemon's host user with
+`error: insufficient permission for adding an object to repository
+database .git/objects` after a few container-launched tasks.
+
+Fix shipped end-to-end:
+
+- The bundled image now bakes a world-writable `/brr-home` (mode 1777)
+  and sets `ENV HOME=/brr-home`. Any UID can use it as HOME, even one
+  with no `/etc/passwd` entry.
+- The daemon passes `-u "$(id -u):$(id -g)"` and
+  `-e HOME=/brr-home` on every `docker run`, so the container process
+  is the host user from the kernel's perspective. Bind-mounted writes
+  are host-owned; nothing leaks back as root.
+- `_docker_credential_mount_args` remaps cred targets from
+  `/root/<basename>` to `/brr-home/<basename>`, and now also mounts
+  `~/.gitconfig` when present so `git commit` uses the host user's
+  real author identity instead of the codex CLI's
+  `brr agent <brr-agent@example.invalid>` fallback.
+- `tests/test_envs.py` was updated for the new mount and env-arg
+  shape; a new `tests/test_dockerfile.py` assertion locks in the
+  `/brr-home` + `ENV HOME=/brr-home` contract for the bundled image.
+- `src/brr/docs/envs.md` and `kb/repo-dive-in-map.md` rewrote the
+  "container runs as root" section to reflect the new contract;
+  troubleshooting tips were updated.
+
+Verified by rebuilding the runner image and running a smoke container
+as the host UID — codex 0.130 starts, host creds are visible, and
+files written into the bind-mounted repo come back owned by the host
+user.
 - Task IDs are now `task-YYMMDD-HHMM-<4 random>`. The old raw-unix
   timestamps sorted fine but read as noise.
 
