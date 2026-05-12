@@ -48,3 +48,18 @@ def test_bundled_runner_image_has_baseline_dev_tools():
     assert required <= _apt_install_packages(text)
     assert "ENV PIP_BREAK_SYSTEM_PACKAGES=1" in text
     assert "ln -sf /usr/bin/pip3 /usr/local/bin/pip" in text
+
+
+def test_bundled_runner_image_supports_arbitrary_uid():
+    """The image must run as the host UID without root-only assumptions.
+
+    A writable ``/brr-home`` with mode 1777 means any UID can write
+    there; ``ENV HOME=/brr-home`` means the CLIs and git find their
+    config at ``$HOME/...`` regardless of whether the runtime UID has
+    a ``/etc/passwd`` entry. Together they keep bind-mounted host
+    paths owned by the host user.
+    """
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "mkdir -p /brr-home" in text
+    assert "chmod 1777 /brr-home" in text
+    assert "ENV HOME=/brr-home" in text
