@@ -53,7 +53,7 @@ class _StubWorktreeEnv:
     def __init__(self, *, invoke_fn) -> None:
         self._invoke = invoke_fn
 
-    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
         return envs.RunContext(
             name=self.name,
             cwd=repo_root,
@@ -68,7 +68,7 @@ class _StubWorktreeEnv:
     def invoke(self, ctx, runner_name, invocation, cfg, *, trace=False):
         return self._invoke(ctx, runner_name, invocation, cfg, trace=trace)
 
-    def finalize(self, _ctx, task, _tasks_dir, *, debug=False):
+    def finalize(self, _ctx, task, _tasks_dir):
         return task
 
 
@@ -255,7 +255,7 @@ class _FakeDockerEnv:
         self.succeed = succeed
         self.containers: list[str] = []
 
-    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path, debug=False):
+    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
         ctx = envs.RunContext(
             name=self.name,
             cwd=repo_root,
@@ -288,7 +288,7 @@ class _FakeDockerEnv:
             stderr="", returncode=0, trace_dir=None, artifacts=[],
         )
 
-    def finalize(self, ctx, task, tasks_dir, *, debug=False):
+    def finalize(self, ctx, task, tasks_dir):
         preserved = ctx.env_state.get("docker_containers", [])
         if preserved and task.status != "done":
             task.meta["docker_containers"] = ", ".join(preserved)

@@ -92,7 +92,9 @@ branch plan has an auto-land target, that target is fast-forwarded.
 With no target, or when the agent moved to another branch, the branch
 is preserved as-is. If the target cannot fast-forward, the task becomes
 `conflict` and the task branch is preserved. The worktree is removed
-unless debug mode keeps it for inspection.
+on a clean success with nothing uncommitted left behind; failures,
+conflicts, and uncommitted/untracked leftovers keep the worktree for
+inspection.
 
 When `brr up --dev-reload` or `dev_reload=true` is active, this is also
 the safe boundary where the daemon may re-exec itself if brr package
@@ -106,9 +108,9 @@ files changed. Reload never interrupts a running worker.
 | Tasks         | `.brr/tasks/<task-id>.md`                   | Yes                                 |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
 | Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
-| Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Yes (debug mode)                    |
+| Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Yes                                 |
 | Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
-| Worktrees     | `.brr/worktrees/<task-id>/`                 | Removed after merge (kept in debug) |
+| Worktrees     | `.brr/worktrees/<task-id>/`                 | Removed on clean success; kept on failure / conflict / uncommitted leftovers |
 | Gate state    | `.brr/gates/<gate>.json`                    | Yes                                 |
 | Config        | `.brr/config`                               | Yes                                 |
 
