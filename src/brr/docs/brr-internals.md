@@ -42,7 +42,7 @@ gitignored; do not commit its contents.
 | `responses/` | Agent final responses destined for gate replies                    |
 | `runs/`      | Generated per-task context files for daemon runner invocations     |
 | `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
-| `traces/`    | Prompt + stdout + meta for every runner invocation                 |
+| `traces/`    | Prompt + stdout + meta per runner invocation (cleaned on success)  |
 | `reviews/`   | Reserved for explicit review artifacts; default tasks do not write here |
 | `worktrees/` | Isolated git worktrees for concurrent tasks                        |
 | `gates/`     | Per-gate auth/state JSON                                           |
@@ -260,10 +260,14 @@ lives in [`envs.md`](envs.md).
 Every runner invocation writes a trace directory under
 `.brr/traces/<kind>/<label>-<timestamp>/` containing the prompt,
 stdout, stderr, meta JSON, and any artifacts the runner produced.
-Traces are always written — there is no operator switch. Reviewers
-can correlate a task's generated run context file with the
-corresponding trace dirs to reconstruct what the agent saw and said.
+Traces are always *written* — there is no operator switch — but
+they're forensic-only: the daemon removes them when the task
+finishes cleanly. Failures (`error`) and unmerged outcomes
+(`conflict`) keep their traces so you can correlate the run-context
+file with what the agent actually saw and said.
 
 `.brr/` is gitignored, so traces stay local to whoever ran the
-daemon. Reclaim disk by removing `.brr/traces/` whenever you want;
-the durable record lives on git branches and `kb/`.
+daemon. The durable record of a successful task is the git commit,
+the response file at `.brr/responses/<event-id>.md`, and any kb
+updates the agent committed — the trace would only repeat that
+information.
