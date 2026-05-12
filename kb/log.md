@@ -1258,6 +1258,41 @@ Verified by rebuilding the runner image and running a smoke container
 as the host UID — codex 0.130 starts, host creds are visible, and
 files written into the bind-mounted repo come back owned by the host
 user.
+
+## [2026-05-12] refactor | remove --debug, traces always on
+
+`--debug` had three jobs (force-keep worktrees, force-keep containers,
+write trace dirs). The earlier outcome-aware cleanup work already
+handles forensic salvage on its own — worktrees and containers stay
+on `error`, `conflict`, or when files were left uncommitted, and tear
+down on a clean success. That leaves `--debug` with only one real
+job: writing traces. But traces are tiny, gitignored, and the captured
+prompt/stdout/stderr snapshot is the actual forensic value, so
+defaulting them off was the wrong call.
+
+What changed:
+
+- The ``--debug`` CLI flag is gone. So is the ``debug=true``
+  config key.
+- The ``debug`` parameter is gone from ``daemon.start()``,
+  ``daemon._run_worker``, and every env backend's
+  ``prepare/invoke/finalize``. The runner-level ``trace=`` keyword
+  still exists for non-daemon callers (``adopt``, ``run_executor``)
+  but the daemon always passes ``trace=True``.
+- ``DockerEnv.finalize`` is now outcome-aware in the same shape as
+  worktree cleanup: clean ``done`` removes the container, anything
+  else preserves it and records the container ID in
+  ``task.meta["docker_containers"]``.
+- ``envs.md``, ``execution-map.md``, and ``brr-internals.md``
+  replaced their "debug mode" sections with the outcome-aware
+  contract. ``kb/design-env-interface.md`` and
+  ``kb/repo-dive-in-map.md`` updated to match.
+- ``tests/test_daemon.py::test_debug_mode_from_config`` deleted;
+  every fake-env mock signature trimmed; the ``test_cli`` daemon-start
+  signature trimmed.
+
+Result: one fewer knob, traces always captured, the salvage rule
+runs automatically. 256 tests green.
 - Task IDs are now `task-YYMMDD-HHMM-<4 random>`. The old raw-unix
   timestamps sorted fine but read as noise.
 
