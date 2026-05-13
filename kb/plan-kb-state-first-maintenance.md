@@ -1,6 +1,33 @@
 # Plan: state-first kb maintenance and regular grooming
 
-Status: active
+Status: shipped on 2026-05-13
+
+What landed:
+
+- The state-first principle is now part of the universal schema
+  (`AGENTS.md` → "State first, history in git"). Subject hubs,
+  decisions, and designs are rewritten to current state; deep
+  history lives in `git log` and `kb/log.md`; a single lineage
+  breadcrumb captures load-bearing changes.
+- `prompts._read_recent_log` switched from a fixed entry count to a
+  byte budget so a single verbose log entry can no longer dominate
+  the prompt.
+- `kb_preflight` carries severity (`error` / `warning` / `info`) and
+  four advisories: `oversized-page`, `missing-status-marker`,
+  `revision-history-heavy`, `recent-log-budget-exceeded`.
+- `kb_health.compute_graph_stats` feeds graph topology stats
+  (pages-by-kind, largest pages, peer-orphan candidates, log shape)
+  into the maintenance prompt.
+- The inline maintenance pass commits its kb edits on the task's
+  branch (as `brr maintenance <brr-maintenance@brr.local>` when the
+  agent leaves uncommitted edits) and emits a `kb_maintenance_done`
+  packet so the response card surfaces "maintenance: N kb commits"
+  or "maintenance: clean" instead of dropping the pass silently.
+- The proposed scheduled/proactive maintenance daemon job was
+  rejected as out-of-scope: branch targeting and push behaviour for
+  unattended grooming had no clean answer, and inline maintenance
+  plus the schema rewrite cover the same ground without adding
+  stale branches to the project.
 
 The current kb-shape decision made the knowledge base much healthier:
 it removed mandatory per-task logs, added subject hubs, made `AGENTS.md`

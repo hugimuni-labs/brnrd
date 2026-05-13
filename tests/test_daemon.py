@@ -1,5 +1,6 @@
 """Tests for the daemon worker after the triage stage was removed."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -760,3 +761,272 @@ def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monk
     daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert captured == ["KB MAINTENANCE BASE"]
+
+
+# ── _commit_kb_maintenance_edits ────────────────────────────────────
+
+
+def _init_real_repo(repo: Path) -> str:
+    """Initialise a real git repo with one commit; return its HEAD oid.
+
+    The maintenance commit step uses real git plumbing
+    (``git add``/``commit``/``rev-list``), so the unit tests need a
+    real repo rather than the stubs used elsewhere in this module.
+    """
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=repo, check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t.local"], cwd=repo, check=True,
+    )
+    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
+    (repo / "kb").mkdir()
+    (repo / "kb" / "subject-x.md").write_text(
+        "# Subject x\n\nInitial body.\n", encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=repo, check=True,
+        capture_output=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    )
+    return head.stdout.strip()
+
+
+def test_commit_kb_maintenance_edits_rolls_up_leftover_kb_changes(tmp_path):
+    """The agent may forget the 'commit your edits' instruction. The
+    daemon then stamps everything inside kb/ as one brr-maintenance
+    commit so cleanup rides on the task's branch instead of getting
+    swept under the worktree-salvage rug.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pre_head = _init_real_repo(repo)
+    # Simulate the maintenance pass touching kb/ without committing.
+    (repo / "kb" / "subject-x.md").write_text(
+        "# Subject x\n\nGroomed body.\n", encoding="utf-8",
+    )
+    (repo / "kb" / "decision-new.md").write_text(
+        "# New decision\n\nStatus: accepted on 2026-05-13\n",
+        encoding="utf-8",
+    )
+
+    commits, files = daemon._commit_kb_maintenance_edits(repo, pre_head)
+
+    assert commits == 1
+    assert files == 2
+    # The auto-rolled commit is authored as brr maintenance, not the
+    # repo's configured identity.
+    author = subprocess.run(
+        ["git", "log", "-1", "--format=%an <%ae>"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert author == "brr maintenance <brr-maintenance@brr.local>"
+
+
+def test_commit_kb_maintenance_edits_counts_agent_commits(tmp_path):
+    """If the maintenance agent committed on its own, the daemon
+    should count those commits without adding a redundant
+    brr-maintenance commit on top."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pre_head = _init_real_repo(repo)
+    # Simulate the agent committing its own edit cleanly.
+    (repo / "kb" / "subject-x.md").write_text(
+        "# Subject x\n\nGroomed by the agent.\n", encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "kb"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "kb: groom subject-x"], cwd=repo, check=True,
+        capture_output=True,
+    )
+
+    commits, files = daemon._commit_kb_maintenance_edits(repo, pre_head)
+
+    assert commits == 1
+    assert files == 1
+    # Only the agent's commit exists — no brr-maintenance commit.
+    log = subprocess.run(
+        ["git", "log", "--format=%an"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert "brr maintenance" not in log
+
+
+def test_commit_kb_maintenance_edits_quiet_when_clean(tmp_path):
+    """A clean working tree with no new commits since pre_head means
+    the maintenance pass had nothing to do. (0, 0) tells the daemon
+    to render 'maintenance: clean' on the card."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pre_head = _init_real_repo(repo)
+
+    commits, files = daemon._commit_kb_maintenance_edits(repo, pre_head)
+
+    assert (commits, files) == (0, 0)
+
+
+def test_commit_kb_maintenance_edits_leaves_non_kb_changes_alone(tmp_path):
+    """A maintenance pass that strayed outside its lane (touched
+    runtime code or anything outside kb/AGENTS.md) should NOT have
+    its stray edits absorbed into a kb commit. The worktree-salvage
+    rule preserves the worktree so the operator sees the violation.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pre_head = _init_real_repo(repo)
+    (repo / "src").mkdir()
+    (repo / "src" / "rogue.py").write_text("print('bad')\n", encoding="utf-8")
+    (repo / "kb" / "subject-x.md").write_text(
+        "# Subject x\n\nGroomed.\n", encoding="utf-8",
+    )
+
+    commits, files = daemon._commit_kb_maintenance_edits(repo, pre_head)
+
+    assert commits == 1
+    assert files == 1
+    # The rogue file is still uncommitted — visible to the salvage
+    # rule rather than silently absorbed.
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout
+    assert "src/rogue.py" in status
+
+
+# ── kb_maintenance_done packet ──────────────────────────────────────
+
+
+def test_maybe_kb_maintenance_emits_done_packet(tmp_path, monkeypatch):
+    """When brr_dir/conv_key are provided, ``_maybe_kb_maintenance``
+    emits a ``kb_maintenance_done`` packet carrying the commit/file
+    counts so gates can surface "maintenance: N kb commits" on the
+    response card. Without this packet the pass historically
+    appeared to silently drop edits."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_real_repo(repo)
+    brr_dir = repo / ".brr"
+    (brr_dir / "conversations").mkdir(parents=True)
+
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_kb_maintenance_prompt",
+        lambda _root: "KB MAINTENANCE",
+    )
+    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
+
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
+        # Simulate the maintenance agent groom: one kb edit, no commit.
+        (repo / "kb" / "subject-x.md").write_text(
+            "# Subject x\n\nGroomed.\n", encoding="utf-8",
+        )
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="groomed", stderr="", returncode=0, trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
+
+    daemon._maybe_kb_maintenance(
+        repo, repo, {}, "codex",
+        brr_dir=brr_dir, conv_key="telegram:1:", task_id="task-x",
+    )
+
+    from brr import conversations
+    log_path = conversations.conversation_path(brr_dir, "telegram:1:")
+    assert log_path.exists()
+    records = [
+        line for line in log_path.read_text(encoding="utf-8").splitlines()
+        if '"kb_maintenance_done"' in line
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert '"commits": 1' in record
+    assert '"files": 1' in record
+    assert '"ok": true' in record
+    assert '"task_id": "task-x"' in record
+
+
+def test_maybe_kb_maintenance_emits_clean_packet_when_no_edits(tmp_path, monkeypatch):
+    """A maintenance pass that ran but didn't change anything still
+    emits a packet, with commits/files = 0, so the renderer can show
+    'maintenance: clean'. Skipping the packet would hide the fact
+    that the pass executed."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_real_repo(repo)
+    brr_dir = repo / ".brr"
+    (brr_dir / "conversations").mkdir(parents=True)
+
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_kb_maintenance_prompt",
+        lambda _root: "KB MAINTENANCE",
+    )
+    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
+
+    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="nothing to do", stderr="", returncode=0, trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
+
+    daemon._maybe_kb_maintenance(
+        repo, repo, {}, "codex",
+        brr_dir=brr_dir, conv_key="telegram:1:", task_id="task-y",
+    )
+
+    from brr import conversations
+    log_path = conversations.conversation_path(brr_dir, "telegram:1:")
+    records = [
+        line for line in log_path.read_text(encoding="utf-8").splitlines()
+        if '"kb_maintenance_done"' in line
+    ]
+    assert len(records) == 1
+    assert '"commits": 0' in records[0]
+    assert '"files": 0' in records[0]
+
+
+def test_maybe_kb_maintenance_skips_packet_when_no_routing_info(tmp_path, monkeypatch):
+    """When the caller doesn't pass brr_dir/conv_key, packet emission
+    is suppressed — keeps the helper safe to call from contexts that
+    don't have routing info (none today, but a hedge against future
+    drift)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_real_repo(repo)
+    brr_dir = repo / ".brr"
+    (brr_dir / "conversations").mkdir(parents=True)
+
+    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_kb_maintenance_prompt",
+        lambda _root: "KB MAINTENANCE",
+    )
+    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
+    monkeypatch.setattr(
+        daemon.runner,
+        "invoke_runner",
+        lambda runner_name, invocation, cfg=None, *, trace=False: RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        ),
+    )
+
+    daemon._maybe_kb_maintenance(repo, repo, {}, "codex")
+
+    # No conversations log was created since no packet was emitted.
+    assert not any((brr_dir / "conversations").iterdir())

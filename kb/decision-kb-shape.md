@@ -4,11 +4,14 @@ Status: accepted, 2026-05-08. Synthesis of the resulting pattern lives
 in the [kb subject hub](subject-kb.md); this page is the point-in-time
 record of *why* that pattern.
 
-Active refinement: [`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md)
-evaluates a narrower state-first reading of this decision: current kb
-pages should keep concise lineage breadcrumbs while relying on git
-history for deep implementation history. Until that plan is accepted,
-this page remains the standing decision.
+**State-first refinement (2026-05-13).** Current kb pages describe
+the *current* shape; lineage breadcrumbs replace inline running diffs
+of past wording; deep history lives in git. The schema in
+[`AGENTS.md`](../src/brr/AGENTS.md) ("State first, history in git")
+is the canonical guidance now; the rest of this decision still holds
+as the originating rationale. The execution plan that drove this
+refinement lives in
+[`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md).
 
 Supersedes: the implicit "every task writes a `kb/log.md` entry" rule in
 [`prompts/run.md`](../src/brr/prompts/run.md) and the per-task log file

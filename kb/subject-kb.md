@@ -35,9 +35,12 @@ Concretely the kb covers four kinds of memory:
 | Schema       | The universal rules every agent follows. | [`AGENTS.md`](../AGENTS.md) (canonical at   |
 |              |                                          | `src/brr/AGENTS.md`, symlinked at the root) |
 
-The first two are append-only; the last two evolve. The split keeps
-the per-task chatter out of the synthesis layer and the synthesis
-out of the schema.
+The first two are append-only. The last two are **rewritten** to
+reflect the current state — subject hubs and decision pages describe
+how things are now, with concise lineage breadcrumbs when the *fact*
+of a change still matters. Deep history lives in `git log` and
+`kb/log.md`, not inline. The split keeps per-task chatter out of the
+synthesis layer and the synthesis out of the schema.
 
 ## The graph topology
 
@@ -153,16 +156,21 @@ The phase 3b cleanup applied this to brr's own kb: 22 → 13 subject
 pages, every survivor with a clear status, no orphans, no broken
 references. The before/after is in the log entry for that phase.
 
-The active refinement is
-[`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md):
-subject hubs should read as current-state synthesis, decision pages
-should preserve only the rationale that still constrains future work,
-and deep implementation history should be recovered from git when
-needed. It also calls out a daemon contract bug in the current
-post-task LLM maintenance pass: because that pass runs after the user
-response and is told not to commit, it is not a reliable way to land
-cleanup. The proposed replacement is explicit maintenance as a normal
-task with a branch, response, and commit.
+The state-first principle is now part of the schema (see
+[`AGENTS.md`](../AGENTS.md) → "State first, history in git"): pages
+describe the current shape, lineage breadcrumbs replace inline
+running diffs of past wording, and git is the deep-history layer.
+The execution plan is in
+[`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md).
+
+The inline maintenance pass
+([`daemon._maybe_kb_maintenance`](../src/brr/daemon.py) plus
+[`prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md))
+runs on the task's own branch after delivery so cleanup rides on the
+same branch as the work that triggered it. The plan also makes the
+pass commit its edits and surface a status packet so the operator
+sees that grooming happened, rather than the pass silently dropping
+edits (the current bug).
 
 ## What was deliberately rejected
 

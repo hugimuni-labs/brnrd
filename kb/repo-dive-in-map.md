@@ -14,52 +14,33 @@ When this guide says "source", read the linked file first, then read the linked
 tests immediately after. The tests are often the most compact description of
 the intended behavior.
 
-Last validated against `ux-imporvements` after the kb-shape arc
-([decision-kb-shape.md](decision-kb-shape.md)) landed end-to-end:
+Reflects the current `main`. The major architectural arcs this guide
+assumes you'll meet in the codebase are linked under the relevant
+ring — this header just names the ones that change the *reading* most:
 
-- **Phase 2** — `AGENTS.md` moved into the package at
-  [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) (symlinked at the
-  repo root) and rewritten as the universal schema every tool reads;
-  per-task `kb/log-<task-id>.md` plumbing removed end-to-end; the
-  delivery contract sharpened so stdout is the chat reply with
-  mandatory commits for any file writes; Telegram/Slack progress
-  cards deduplicate against the last-rendered text. Adopter `brr
-  init -i` learned to detect Docker, prompt for an image, and offer
-  to build the bundled `Dockerfile`.
-- **Phase 3a** — split `runner.py`. Prompt assembly (Task Context
-  Bundle, conversation injection, AGENTS.md bundling) lives in
-  [`src/brr/prompts.py`](../src/brr/prompts.py); subprocess plumbing
-  stays in [`runner.py`](../src/brr/runner.py).
-- **Phase 3b** — one-time kb cleanup: nine stale pages slashed,
-  surviving plan/design/deck pages got lifecycle markers
-  (`shipped` / `in flight` / `blocked` / `paused` / `roadmap`),
-  decisions cross-link as siblings, `kb/index.md` reorganised by
-  subject area instead of artifact type.
-- **Phase 4** — kb-maintenance becomes a deterministic preflight
-  ([`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py)) plus a
-  thin LLM redundancy pass. Skip-fast: when both the preflight is
-  clean and `kb/` is unchanged, the LLM pass is skipped entirely.
-- **Phase 5** — first subject hub written:
-  [`subject-kb.md`](subject-kb.md) synthesises the kb pattern,
-  earned by the kb-shape arc itself being the substantial
-  kb-itself work.
-- **2026-05-11 branch-intent implementation** — the active
-  [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-  shipped as `branching.py`, branch-plan fields on `RunContext`,
-  `worktree.create(base_ref=...)`, branch-aware finalization/push, and
-  `branch.fallback=preserve` as the remote-safe default.
+- `AGENTS.md` is the universal schema every tool reads; it lives in
+  the package at [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) and is
+  symlinked from the repo root.
+- Task construction is mechanical — no LLM triage step,
+  see [`decision-remove-triage.md`](decision-remove-triage.md).
+- Branch intent is deterministic and structured —
+  see [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md);
+  the agent owns runtime branching inside the worktree.
+- Environments are pluggable behind a three-phase `prepare → invoke →
+  finalize` protocol — see
+  [`design-env-interface.md`](design-env-interface.md). Worktree and
+  Docker scratch is outcome-aware: torn down on clean `done`,
+  preserved on `error`/`conflict`/uncommitted state.
+- The kb is the persistent semantic memory; the kb-shape pattern is
+  synthesised in [`subject-kb.md`](subject-kb.md). Maintenance is a
+  deterministic preflight ([`kb_preflight.py`](../src/brr/kb_preflight.py))
+  plus an inline LLM cleanup pass after task delivery.
 
-Earlier still-relevant changes carried forward: the environment-policy
-ownership rework, the 2026-05-05 streams-to-conversations refactor
-that dropped `.brr/streams/`, the workstream manifest, and the
-corresponding CLI surfaces (see
-[decision-drop-streams.md](decision-drop-streams.md)); the 2026-05-06
-docker beginner-friendly slice that added automatic credential wiring,
-host login-dir bind mounts, and the `safe.directory` injection (and
-the bundled [`envs.md`](../src/brr/docs/envs.md) doc); and the
-2026-05-06 removal of the LLM-driven triage stage in favor of
-mechanical task construction, agent-owned branching, and plain-text
-responses (see [decision-remove-triage.md](decision-remove-triage.md)).
+Past arcs (the kb-shape arc, the 2026-05-05 streams-to-conversations
+refactor, the 2026-05-06 triage removal, the 2026-05-12 branch-plan
+simplification, the Docker host-UID rework) live in `git log` and in
+their decision/design pages. The current shape is what this guide
+describes; lineage breadcrumbs sit on the relevant kb pages.
 
 ## Current ownership snapshot
 
@@ -556,7 +537,12 @@ Important fields:
 - `branch_plan` (a `branching.BranchPlan`)
 - `env_state`
 
-Note: there is no `log_file` field anymore — per-task `kb/log-<task-id>.md` plumbing was removed in phase 2 of the kb-shape arc. The per-task narrative now lands as a curated entry in `kb/log.md` when the session was substantial enough to record. The separate `base_branch` field was dropped on 2026-05-12; the auto-land target lives on the `branch_plan` and renderers read `branch_plan.auto_land_branch or branch_plan.seed_ref` when they need a "← base" display.
+Per-task narrative lands as a curated entry in `kb/log.md` when the
+session was substantial enough to record — there is no per-task
+`log_file` field. Branch state lives entirely on `branch_plan`; the
+auto-land target is `branch_plan.auto_land_branch` and renderers
+show "branch ← target" only when an auto-land target is explicitly
+set (seed_ref is setup context, not a landing target).
 
 Read with:
 

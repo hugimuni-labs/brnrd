@@ -28,6 +28,7 @@ from . import conversations
 from . import dev_reload as reload_mod
 from . import envs
 from . import gitops
+from . import kb_health
 from . import kb_preflight
 from . import prompts
 from . import protocol
@@ -494,7 +495,9 @@ def _run_worker(
             _record_response_artifact(brr_dir, conv_key, task, resp_path)
             task.update_status("done", tasks_dir)
             maintenance_trace = _maybe_kb_maintenance(
-                run_root, repo_root, cfg, runner_name, trace=True,
+                run_root, repo_root, cfg, runner_name,
+                brr_dir=brr_dir, conv_key=conv_key, task_id=task.id,
+                trace=True,
             )
             if maintenance_trace:
                 trace_dirs.append(maintenance_trace)
@@ -793,6 +796,9 @@ def _maybe_kb_maintenance(
     cfg: dict,
     runner_name: str,
     *,
+    brr_dir: Path | None = None,
+    conv_key: str | None = None,
+    task_id: str | None = None,
     trace: bool = False,
 ) -> str | None:
     """Run kb maintenance with deterministic preflight + LLM redundancy pass.
@@ -802,6 +808,14 @@ def _maybe_kb_maintenance(
     maintenance becomes a true safety net rather than a tax on every
     task. When findings exist or kb has been touched, the LLM pass
     runs with the preflight findings injected into the prompt.
+
+    Any leftover uncommitted kb edits after the runner exits get
+    rolled into one ``brr maintenance`` commit on the task's current
+    branch so cleanup lands in the same delivery (and PR, when one
+    exists) as the work that triggered it. A ``kb_maintenance_done``
+    packet is emitted when ``brr_dir`` and ``conv_key`` are provided,
+    so gates surface the outcome on the response card; without it
+    the pass historically dropped its edits silently.
     """
     policy = str(cfg.get("kb_maintenance", "auto")).strip().lower()
     if policy == "never":
@@ -817,9 +831,13 @@ def _maybe_kb_maintenance(
         return None
 
     findings_block = kb_preflight.format_findings(findings)
+    stats_block = kb_health.format_graph_stats(
+        kb_health.compute_graph_stats(run_root),
+    )
+    extras = "\n\n".join(block for block in (findings_block, stats_block) if block)
     prompt = (
-        f"{base_prompt}\n\n{findings_block}".rstrip() + "\n"
-        if findings_block
+        f"{base_prompt}\n\n{extras}".rstrip() + "\n"
+        if extras
         else base_prompt
     )
 
@@ -827,6 +845,7 @@ def _maybe_kb_maintenance(
         print(f"[brr] running kb maintenance ({len(findings)} preflight finding(s))...")
     else:
         print("[brr] running kb maintenance (kb changed; preflight clean)...")
+    pre_head = gitops.rev_parse(run_root, "HEAD")
     result = runner.invoke_runner(
         runner_name,
         runner.RunnerInvocation(
@@ -843,9 +862,108 @@ def _maybe_kb_maintenance(
         print("[brr] kb maintenance complete")
     else:
         print(f"[brr] kb maintenance failed (non-fatal): exit {result.returncode}")
+
+    commits, files = _commit_kb_maintenance_edits(run_root, pre_head)
+    if brr_dir is not None and conv_key:
+        updates.emit(brr_dir, updates.UpdatePacket(
+            type="kb_maintenance_done",
+            conversation_key=conv_key,
+            payload={
+                "task_id": task_id,
+                "commits": commits,
+                "files": files,
+                "ok": bool(result.ok),
+            },
+        ))
+
     if result.trace_dir:
         return str(result.trace_dir.relative_to(gitops.shared_brr_dir(repo_root)))
     return None
+
+
+# Files the maintenance pass is allowed to touch. Anything outside
+# this set is left alone — if the pass strayed (e.g. modified runtime
+# code or the daemon source), we don't paper over the contract
+# violation with a commit. The salvage rule preserves the worktree
+# on uncommitted state so the operator sees the stray edits.
+_KB_MAINTENANCE_PATHSPECS: tuple[str, ...] = (
+    "kb",
+    "AGENTS.md",
+    "src/brr/AGENTS.md",
+)
+
+# Author baked into automated commits made *for* the maintenance
+# pass. The agent's own commits keep its configured git identity;
+# this only stamps the daemon's roll-up of leftover edits so the
+# git log can answer "did a human or automated cleanup write this?".
+_KB_MAINTENANCE_AUTHOR_NAME = "brr maintenance"
+_KB_MAINTENANCE_AUTHOR_EMAIL = "brr-maintenance@brr.local"
+
+
+def _commit_kb_maintenance_edits(
+    run_root: Path, pre_head: str | None,
+) -> tuple[int, int]:
+    """Stamp leftover kb edits and count what landed on the branch.
+
+    Returns ``(commits, files)`` where ``commits`` is the number of
+    commits added between *pre_head* and the function's exit, and
+    ``files`` is the number of files touched across those commits.
+
+    The maintenance prompt asks the agent to commit its own edits;
+    this is the fallback for agents that don't. Anything outside
+    :data:`_KB_MAINTENANCE_PATHSPECS` is left uncommitted so a stray
+    edit surfaces via the worktree-salvage rule rather than being
+    silently absorbed into a kb commit.
+    """
+    try:
+        for pathspec in _KB_MAINTENANCE_PATHSPECS:
+            target = run_root / pathspec
+            if not target.exists():
+                continue
+            gitops._git(run_root, "add", "--", pathspec, check=False)
+        staged = gitops._git(
+            run_root, "diff", "--cached", "--name-only", check=False,
+        )
+        if staged.stdout.strip():
+            env = os.environ.copy()
+            env.update({
+                "GIT_AUTHOR_NAME": _KB_MAINTENANCE_AUTHOR_NAME,
+                "GIT_AUTHOR_EMAIL": _KB_MAINTENANCE_AUTHOR_EMAIL,
+                "GIT_COMMITTER_NAME": _KB_MAINTENANCE_AUTHOR_NAME,
+                "GIT_COMMITTER_EMAIL": _KB_MAINTENANCE_AUTHOR_EMAIL,
+            })
+            subprocess.run(
+                [
+                    "git", "commit",
+                    "-m", "chore(kb): inline maintenance pass",
+                ],
+                cwd=run_root, env=env, check=False,
+                capture_output=True,
+            )
+    except Exception:  # noqa: BLE001 — maintenance must not break delivery
+        pass
+
+    if pre_head is None:
+        return (0, 0)
+    head = gitops.rev_parse(run_root, "HEAD")
+    if not head or head == pre_head:
+        return (0, 0)
+    try:
+        count = gitops._git(
+            run_root, "rev-list", "--count", f"{pre_head}..{head}",
+            check=False,
+        )
+        commits = int((count.stdout or "0").strip() or "0")
+        name_only = gitops._git(
+            run_root, "diff", "--name-only", pre_head, head,
+            check=False,
+        )
+        files = sum(
+            1 for line in name_only.stdout.splitlines() if line.strip()
+        )
+        return (commits, files)
+    except Exception:  # noqa: BLE001
+        return (0, 0)
 
 
 # ── Main loop ────────────────────────────────────────────────────────

@@ -1,13 +1,16 @@
 # Design: Env Interface (PR scope)
 
-**Status: in flight (3/5 envs shipped, durability contract partial).**
+**Status: in flight (3/5 envs shipped).**
 Shipped: the `Env` Protocol with three-phase `prepare → invoke →
-finalize`, plus `host` / `worktree` / `docker` backends in
+finalize`; `host` / `worktree` / `docker` backends in
 [`envs/__init__.py`](../src/brr/envs/__init__.py); decentralised
-fast-forward merge on cleanup; the agent-owned branching contract.
-Outstanding: `ssh` and `devcontainer` backends, full enforcement of
-the durability contract beyond the response-file check, and the
-plugin point (`brr.envs` entry points + drop-in script envs).
+fast-forward merge on cleanup; the agent-owned branching contract;
+outcome-aware salvage rule (preserve worktrees/containers/traces on
+`error` / `conflict` / uncommitted state, tear down on clean
+`status=done`). Outstanding: `ssh` and `devcontainer` backends, full
+enforcement of the durability contract beyond the response-file
+check, and the plugin point (`brr.envs` entry points + drop-in script
+envs).
 
 Focused, executable design for the worktree PR: extract the `Env`
 Protocol, codify the durability contract, add `docker`, `ssh`, and
@@ -74,7 +77,7 @@ class Env(Protocol):
     def validate(self, cfg: dict) -> None: ...
     def prepare(self, task: Task, repo_root: Path, cfg: dict) -> RunContext: ...
     def invoke(self, ctx: RunContext, prompt: str, cfg: dict) -> RunnerResult: ...
-    def finalize(self, ctx: RunContext, task: Task, *, debug: bool) -> FinalizeReport: ...
+    def finalize(self, ctx: RunContext, task: Task) -> FinalizeReport: ...
 ```
 
 `invoke` keeps returning `RunnerResult` so the existing trace / retry
@@ -213,7 +216,7 @@ Concrete rules every `Env.finalize()` must satisfy:
 |---------------------------------------------|----------------------------------------|------------------------------------------|
 | Git commits on `ctx.branch`                 | reachable in host's `.git`             | `ctx.branch is not None`                 |
 | Response file `<event-id>.md`               | `repo_root/.brr/responses/<id>.md`     | always (existing daemon contract)        |
-| Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | always written; cleaned on clean `status=done` |
+| Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | always written; removed on clean `status=done`, kept on `error`/`conflict` |
 | Per-task log                                | committed in branch as `kb/log-<id>.md`| worktree-style branches                  |
 | Env-private scratch teardown                | n/a — removed from env's territory     | clean `status=done` with no uncommitted files |
 
@@ -271,7 +274,10 @@ This is the current `branch: current` path, refactored into the protocol.
 - **finalize** →
   - For `branch: auto | task`: attempt `git merge --ff-only <branch>` against the host's HEAD. On conflict → mark task `conflict` and *leave* the branch (decentralised merge — see below).
   - For named `branch:` strategies: leave branch alone.
-  - **Worktree teardown rule:** remove the worktree only when `status=done` and `debug=False`. If `status ∈ {error, conflict}` or `debug=True`, preserve the worktree so the user can salvage work or inspect what happened. This changes current behaviour for `status=error` (previously removed).
+  - **Worktree teardown rule:** outcome-aware. Remove the worktree on
+    clean `status=done` with nothing uncommitted. Preserve on
+    `status ∈ {error, conflict}` or when the worktree has
+    uncommitted/untracked files, so the user can inspect or salvage.
   - Response file is already on the host (worktree shares `.git` and `.brr/`).
 
 This is the current behaviour, just relocated and with the salvage rule
@@ -322,7 +328,7 @@ compose axis moves into a follow-up, not v1.
     directory. This keeps branch work from switching or dirtying the host's
     main checkout while keeping commits visible through the shared `.git`.
 - **invoke** → `docker run --name brr-<task-id>-<attempt> -v <repo>:<repo> -w <run-root> <image> <runner-cmd>`. The cmd line is built from the existing runner profile machinery. Note: **no `--rm`** — cleanup is `finalize`'s job so we can preserve the container for salvage and support retry diagnostics.
-- **finalize** → branch handling identical to worktree finalize. Container teardown rule matches `worktree`: `docker rm -f <container>` only when `status=done` and `debug=False`; preserve when `status ∈ {error, conflict}` or `debug=True`.
+- **finalize** → branch handling identical to worktree finalize. Container teardown matches the worktree salvage rule: `docker rm -f <container>` on clean `status=done`; preserve on `status ∈ {error, conflict}` or when the worktree has uncommitted/untracked files.
 
 For users who want **stronger isolation** (no shared `.git`), a
 sub-mode `docker.isolation=clone`: `prepare` clones the repo into a
@@ -341,8 +347,8 @@ and faster.
 - **finalize**:
   - Pull the branch back: `ssh remote 'cd <scratch>/<task-id> && git bundle create /tmp/<task-id>.bundle <branch>'` then `scp` the bundle and `git fetch` it locally to `<branch>`. Bundles handle disconnected transfer cleanly; no need to expose the host's repo over ssh-back.
   - Pull the response file: `scp remote:<scratch>/<task-id>/.brr/responses/<event-id>.md repo_root/.brr/responses/`
-  - Pull traces (if `debug`): `rsync remote:<scratch>/<task-id>/.brr/traces/ repo_root/.brr/traces/`
-  - Tear down: `ssh remote 'rm -rf <scratch>/<task-id>'` — only when `status=done` and `debug=False`. Otherwise preserve the remote scratch dir for salvage, matching the `worktree` and `docker` rule.
+  - Pull traces always: `rsync remote:<scratch>/<task-id>/.brr/traces/ repo_root/.brr/traces/`
+  - Tear down: `ssh remote 'rm -rf <scratch>/<task-id>'` on clean `status=done`. Preserve the remote scratch dir on `status ∈ {error, conflict}` for salvage, matching the worktree/docker rule.
 
 ssh is the most procedural env. It's also the proof that the contract
 generalises: anything that can hold a git repo + write a markdown file
@@ -361,7 +367,7 @@ maintain a parallel `docker.image` for brr.
   - `ctx.cwd = repo_root` on the host side; the devcontainer CLI handles the in-container path.
   - Same bind-mount story as `docker`: the repo is mounted in the container, so commits on `ctx.branch` are visible to the host immediately. `response_path_env` resolves to the in-container path; `response_path_host` stays the host's `.brr/responses/<id>.md`.
 - **invoke** → `devcontainer exec --workspace-folder <repo_root> -- <runner-cmd>`. Runner profile machinery unchanged.
-- **finalize** → branch handling identical to worktree/docker finalize. Container teardown: `devcontainer down` when `status=done` and `debug=False`; preserve when `status ∈ {error, conflict}` or `debug=True`. Mirrors the worktree salvage rule.
+- **finalize** → branch handling identical to worktree/docker finalize. Container teardown: `devcontainer down` on clean `status=done`; preserve on `status ∈ {error, conflict}`. Mirrors the worktree salvage rule.
 
 Gated at `validate()` time so triage can pick `devcontainer` only when
 the repo actually supports it. The triage prompt explicitly mentions
@@ -430,9 +436,10 @@ trivially defined. No bespoke conflict resolution.
 +         result = env.invoke(ctx, prompt, cfg)
 +         if result.validation_ok: break
 + finally:
-+     # finalize reads task.status, honours the salvage rule:
-+     # tear down only on done + not debug; preserve otherwise.
-+     report = env.finalize(ctx, task, debug=debug_mode)
++     # finalize reads task.status and honours the outcome-aware
++     # salvage rule: tear down on clean done, preserve on
++     # error/conflict or when work is left uncommitted.
++     report = env.finalize(ctx, task)
 + # contract checks (response_written, branch_pushed)
 ```
 
@@ -445,22 +452,14 @@ description.
 
 ---
 
-## Triage prompt update
+## Env selection
 
-`prompts/triage.md` currently knows `local | worktree | docker`. Add
-`ssh` and `devcontainer`, and clarify decision criteria:
-
-```
-- local         — current branch, current working dir. Default for trivial / Q&A.
-- worktree      — isolated working dir, shares git history. Default for code work.
-- docker        — container with a brr-managed image; use when tests need a clean env
-                  or host state shouldn't be touched.
-- devcontainer  — the repo's own .devcontainer/ recipe. Prefer over docker when
-                  the repo ships a devcontainer.json and the task needs that env.
-- ssh           — remote machine; use only if the event explicitly requests it
-                  (e.g. "run on the GPU box"). Triage shouldn't pick ssh
-                  by inference.
-```
+There is no LLM triage step. The daemon picks the env mechanically
+from `.brr/config` and event metadata: `environment=auto` resolves to
+`docker` when a Docker image is configured, otherwise `worktree`;
+`host` is explicit only; `ssh` and `devcontainer` are explicit. See
+[`decision-remove-triage.md`](decision-remove-triage.md) for why this
+shape replaced the earlier LLM triage idea.
 
 ---
 
