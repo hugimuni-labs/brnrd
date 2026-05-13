@@ -113,6 +113,10 @@ class RunProgressView:
     phase_history: list[PhaseEntry] = field(default_factory=list)
     push_commits: int | None = None
     push_ok: bool = True
+    maintenance_ran: bool = False
+    maintenance_commits: int = 0
+    maintenance_files: int = 0
+    maintenance_ok: bool = True
 
     @property
     def is_terminal(self) -> bool:
@@ -219,9 +223,7 @@ def _project(
         if kind == "task":
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
-                record.get("auto_land_branch")
-                or record.get("seed_ref")
-                or view.display_base
+                record.get("auto_land_branch") or view.display_base
             )
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
@@ -248,9 +250,7 @@ def _project(
             view.env = record.get("env") or view.env
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
-                record.get("auto_land_branch")
-                or record.get("seed_ref")
-                or view.display_base
+                record.get("auto_land_branch") or view.display_base
             )
         elif ptype == "container_started":
             cid = record.get("container")
@@ -276,9 +276,7 @@ def _project(
             view.runner_name = record.get("runner") or view.runner_name
             view.branch_name = record.get("branch") or view.branch_name
             view.display_base = (
-                record.get("auto_land_branch")
-                or record.get("seed_ref")
-                or view.display_base
+                record.get("auto_land_branch") or view.display_base
             )
         elif ptype == "attempt_failed":
             reason = record.get("reason")
@@ -317,6 +315,13 @@ def _project(
             view.detail = (
                 f"pushed {commits} commit(s)" if commits else "pushed"
             )
+        elif ptype == "kb_maintenance_done":
+            view.maintenance_ran = True
+            commits = record.get("commits")
+            files = record.get("files")
+            view.maintenance_commits = int(commits) if isinstance(commits, int) else view.maintenance_commits
+            view.maintenance_files = int(files) if isinstance(files, int) else view.maintenance_files
+            view.maintenance_ok = bool(record.get("ok", True))
         elif ptype == "failed":
             view.state = "failed"
             stage = record.get("stage")
@@ -586,10 +591,24 @@ def _phase_label(entry: PhaseEntry, multi_attempt: bool) -> str:
 
 def _terminal_extra(view: RunProgressView, entry: PhaseEntry) -> str:
     """Extra suffix for the terminal entry (delivered/failed/conflict)."""
+    parts: list[str] = []
     if entry.name == "delivered" and view.push_commits:
         plural = "" if view.push_commits == 1 else "s"
-        return f"pushed {view.push_commits} commit{plural}"
-    return ""
+        parts.append(f"pushed {view.push_commits} commit{plural}")
+    if entry.name == "delivered" and view.maintenance_ran:
+        # When the maintenance pass ran, surface it in the card so
+        # the operator sees that kb cleanup happened on the same
+        # branch. Without this packet the pass was historically a
+        # silent drop — the response card was the only place the
+        # operator looked, and it never reported maintenance state.
+        if view.maintenance_commits:
+            plural = "" if view.maintenance_commits == 1 else "s"
+            parts.append(
+                f"maintenance: {view.maintenance_commits} kb commit{plural}"
+            )
+        else:
+            parts.append("maintenance: clean")
+    return " · ".join(parts)
 
 
 def _legacy_header(view: RunProgressView) -> str:

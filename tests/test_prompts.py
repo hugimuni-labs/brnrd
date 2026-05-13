@@ -38,6 +38,47 @@ class TestContextInjection:
         assert "Entry 15" in result
         assert "Entry 1\n" not in result
 
+    def test_read_recent_log_byte_budget_stops_at_first_overflow(self, tmp_path):
+        """A byte budget caps how much the conversation block can grow.
+
+        Older entries are dropped (newest-first) once adding the next
+        one would exceed the budget. The newest entry is always
+        included so the most recent context never silently disappears,
+        even if it alone exceeds the budget.
+        """
+        kb = tmp_path / "kb"
+        kb.mkdir()
+        bulk = "x" * 600
+        entries = "\n\n".join(
+            f"## [2026-04-{i:02d}] implement | Entry {i}\n\n{bulk}"
+            for i in range(1, 6)
+        )
+        (kb / "log.md").write_text(f"# Log\n\n{entries}\n")
+        # ~700 bytes per entry → ~1500-byte budget admits exactly 2.
+        result = _read_recent_log(tmp_path, max_entries=10, max_bytes=1500)
+        assert "Entry 5" in result
+        assert "Entry 4" in result
+        assert "Entry 3" not in result
+        assert "Entry 1" not in result
+        # Oldest of the included pair comes first (natural reading order).
+        assert result.index("Entry 4") < result.index("Entry 5")
+
+    def test_read_recent_log_byte_budget_keeps_newest_even_when_oversized(
+        self, tmp_path,
+    ):
+        """When the single newest entry exceeds the budget, brr still
+        includes it. Silent dropping of the most recent context would
+        be worse than a slightly oversized prompt."""
+        kb = tmp_path / "kb"
+        kb.mkdir()
+        huge = "x" * 5000
+        (kb / "log.md").write_text(
+            "# Log\n\n## [2026-05-01] implement | Big\n\n" + huge + "\n"
+        )
+        result = _read_recent_log(tmp_path, max_bytes=512)
+        assert "Big" in result
+        assert huge in result
+
     def test_context_block_empty(self, tmp_path):
         assert _build_context_block(tmp_path) == ""
 
@@ -92,6 +133,9 @@ class TestPromptBuilding:
         assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
         assert "fix it" in prompt
         assert "kb/log-" not in prompt
+        # When an auto-land target is set, the daemon will fast-forward
+        # for us. No PR is needed, so the gh nudge stays out.
+        assert "gh pr create" not in prompt
 
     def test_daemon_prompt_describes_preserved_task_branch(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -113,6 +157,11 @@ class TestPromptBuilding:
         assert "Branch source: fallback:preserve" in prompt
         assert "Host context branch: feature/host" in prompt
         assert "preserve that branch" in prompt
+        # No auto-land target → nudge the agent to open a PR when gh is
+        # available. The nudge is intentionally conditional so custom
+        # images without gh, or non-GitHub remotes, can skip it.
+        assert "gh pr create --fill" in prompt
+        assert "Skip silently if `gh` is missing" in prompt
 
     def test_daemon_prompt_with_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

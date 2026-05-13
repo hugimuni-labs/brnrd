@@ -521,6 +521,7 @@ def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch
     (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
     (fake_home / ".codex").mkdir()
     (fake_home / ".gitconfig").write_text("[user]\n", encoding="utf-8")
+    (fake_home / ".config" / "gh").mkdir(parents=True)
     # No ~/.gemini — confirms missing dirs don't show up.
 
     command = _build_docker_invoke(tmp_path, monkeypatch)
@@ -532,6 +533,9 @@ def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch
     assert f"{fake_home}/.claude.json:/brr-home/.claude.json" in mounts
     assert f"{fake_home}/.codex:/brr-home/.codex" in mounts
     assert f"{fake_home}/.gitconfig:/brr-home/.gitconfig" in mounts
+    # gh auth state lands under $HOME/.config/gh so the in-container gh
+    # finds hosts.yml at the path it expects.
+    assert f"{fake_home}/.config/gh:/brr-home/.config/gh" in mounts
     assert all(":/brr-home/.gemini" not in m for m in mounts)
     # Repo bind mount is the last -v so its assertion is stable.
     assert mounts[-1] == f"{tmp_path}:{tmp_path}"
