@@ -1,45 +1,30 @@
-# Design: Env Interface (PR scope)
+# Design: env protocol, durability contract, and decentralised merging
 
-**Status: in flight (3/5 envs shipped).**
-Shipped: the `Env` Protocol with three-phase `prepare → invoke →
-finalize`; `host` / `worktree` / `docker` backends in
-[`envs/__init__.py`](../src/brr/envs/__init__.py); decentralised
-fast-forward merge on cleanup; the agent-owned branching contract;
-outcome-aware salvage rule (preserve worktrees/containers/traces on
-`error` / `conflict` / uncommitted state, tear down on clean
-`status=done`). Outstanding: `ssh` and `devcontainer` backends, full
-enforcement of the durability contract beyond the response-file
-check, and the plugin point (`brr.envs` entry points + drop-in script
-envs).
+Status: accepted on 2026-05-06
 
-Focused, executable design for the worktree PR: extract the `Env`
-Protocol, codify the durability contract, add `docker`, `ssh`, and
-`devcontainer` built-ins, decentralise merging. The merge of the env
-slice unlocked treating environments as the main brr value proposition.
-
-This page is **tactical**. Strategic context lives in
-[`deck-brr-fleet-steering.md`](deck-brr-fleet-steering.md). Open items
-the PR doesn't touch (overlays, brnrd, discovery, cross-platform
-supervisor, plugin candidates like Daytona) live in
+This page is the design spec for environments — the `Env` Protocol,
+the durability contract, the per-env mechanics, the plugin model, and
+the decentralised merge framing. Current rollout status (which envs
+ship, which don't, what the salvage rule looks like) lives one level
+up in [`subject-envs.md`](subject-envs.md); start there if you want
+the synthesis. Strategic context for the fleet axis is in
+[`deck-brr-fleet-steering.md`](deck-brr-fleet-steering.md), and open
+items adjacent to envs (overlays, brnrd, cross-platform supervisor,
+third-party plugin candidates) live in
 [`notes-pondering-fleet.md`](notes-pondering-fleet.md).
 
----
+## Scope
 
-## Goals (what this PR ships)
-
-1. **`Env` Protocol** — single abstraction with three phases:
-   `prepare → invoke → finalize`.
-2. **Five built-ins** behind it: `local`, `worktree`, `docker`, `ssh`,
-   `devcontainer`. All tested. All documented in `src/brr/docs/`.
-3. **Durability contract** — explicit, enforced by the daemon.
-4. **Decentralised "coordinator"** — branch-and-PR is the model;
-   merging is a thin best-effort post-task step, not a component.
-5. **Plugin point** — third-party envs via either Python entry points
-   (`brr.envs`) or drop-in script envs under `~/.config/brr/envs/` or
-   `.brr/envs/`. Both dispatch paths share the same protocol.
-
-Non-goals: actual concurrent execution, overlays, `brnrd`, env-specific
-secret handling beyond what gates already do.
+The design covers a single three-phase abstraction (`prepare → invoke
+→ finalize`) used by five built-in envs (`local`, `worktree`,
+`docker`, `ssh`, `devcontainer`), an explicit durability contract the
+daemon enforces from the host, the decentralised branch-and-PR merge
+model that replaced an earlier merge-coordinator sketch, and a dual
+plugin point — Python entry points under `brr.envs` and drop-in
+script envs in `~/.config/brr/envs/` or `.brr/envs/`. Concurrent
+execution, overlays, `brnrd`, and env-specific secret handling beyond
+what gates already do are explicitly out of scope and live in their
+own designs / notes.
 
 ---
 
@@ -484,37 +469,48 @@ repo.
 
 ---
 
-## Tests to add (per env)
+## Test shape (per env)
 
-Each env gets the same test shape:
+Each env gets the same test shape so the protocol stays observable
+from outside:
 
-1. `prepare` returns a usable `RunContext` (dirs exist, branch exists if requested; `response_path_env` vs `response_path_host` agrees with the table).
-2. `invoke` is called with a stub runner (existing `runner.invoke_runner` mocking pattern); stdout/stderr propagate.
+1. `prepare` returns a usable `RunContext` (dirs exist, branch exists
+   if requested; `response_path_env` vs `response_path_host` agrees
+   with the table above).
+2. `invoke` is called with a stub runner (existing
+   `runner.invoke_runner` mocking pattern); stdout/stderr propagate.
 3. `finalize` produces a `FinalizeReport` with the right fields:
-   - response file present → `response_written=True`
-   - branch with N commits → `commits=N`, `branch_pushed=True`
-   - empty branch → `commits=0`
-4. Daemon-level integration: a fake event end-to-end through the env, asserting durability artefacts on the host and cleanup of the env-private state.
+   response file present → `response_written=True`; branch with N
+   commits → `commits=N`, `branch_pushed=True`; empty branch →
+   `commits=0`.
+4. Daemon-level integration: a fake event end-to-end through the env,
+   asserting durability artefacts on the host and cleanup of the
+   env-private state.
 
-Additional cross-cutting cases required by the refinements:
+The salvage rule has dedicated coverage on top of that: a task whose
+worker errors out leaves the worktree / container / remote scratch
+dir intact, and `task.meta` points at the preserved location. The
+script-env dispatch path is exercised with stub executables in
+`.brr/envs/<name>/` to verify the JSON-on-stdio protocol round-trips,
+and registry-precedence tests pin built-in > script > entry-point
+resolution.
 
-- **Worktree salvage on error.** Run a task whose worker errors out; assert the worktree directory still exists afterwards and `task.meta` points at it. Same test shape for `conflict` status. Equivalent cases for `docker` (container preserved, `docker rm` not called) and `ssh` (remote scratch dir not removed; subprocess mock records absence of `rm -rf`).
-- **`devcontainer` unit test.** Mock the `devcontainer` CLI via a shim on `PATH`. Assert `validate()` raises when CLI is absent or `.devcontainer/devcontainer.json` is missing; assert `prepare → invoke → finalize` issues `devcontainer up / exec / down` in order when the shim is present. Gate integration tests on `DEVCONTAINER_AVAILABLE`.
-- **Script-env dispatch.** Create a `.brr/envs/myenv/` directory with the four stub executables (bash, emitting static JSON). Assert `get_env("myenv", repo_root)` returns a `ScriptEnvAdapter`, the protocol round-trips through JSON-on-stdio, and stderr from the script lands in the trace.
-- **Registry precedence.** Built-in beats script-env beats entry-point; verify with stubs registered at each layer using the same env name.
-
-For `docker`, `ssh`, `devcontainer`, gate integration tests on
-`DOCKER_AVAILABLE` / `SSH_TEST_HOST` / `DEVCONTAINER_AVAILABLE`
-env vars; unit tests stub subprocess calls so CI doesn't need a
-docker daemon, a remote box, or a devcontainer host.
+Docker, ssh, and devcontainer integration tests gate on
+`DOCKER_AVAILABLE` / `SSH_TEST_HOST` / `DEVCONTAINER_AVAILABLE` so CI
+doesn't need a docker daemon, a remote box, or a devcontainer host;
+unit tests stub subprocess calls everywhere else.
 
 ---
 
-## Docs to add
+## Reference docs
 
-- `src/brr/docs/envs.md` — the five built-ins, when to use each, the durability contract, the response-path split, the salvage rule, the entry-point plugin recipe, and the script-env protocol.
-- Update `src/brr/docs/execution-map.md` to reference `envs.md` instead of inlining worktree behaviour.
-- Update `src/brr/docs/brr-internals.md` "concurrency model" section to point at the decentralised-merge framing.
+User-facing reference lives in
+[`src/brr/docs/envs.md`](../src/brr/docs/envs.md) (when to pick each
+env, configuration keys, troubleshooting). The execution map
+([`src/brr/docs/execution-map.md`](../src/brr/docs/execution-map.md))
+and the internals doc
+([`src/brr/docs/brr-internals.md`](../src/brr/docs/brr-internals.md))
+point at the same protocol from above.
 
 ---
 
@@ -554,30 +550,40 @@ source directory.
 
 ---
 
-## Out of scope (intentionally)
+## Boundary
 
-- Concurrent execution (still serial v1; mutex is documented as the v2 unlock).
-- Overlays (Phase 1 of the fleet deck; see `plan-overlays.md`).
-- `brnrd` (separate project; see `notes-pondering-fleet.md`).
-- Auto-`git push` to a remote on `auto`/`task` branches (deferred — daemon already pushes after merge succeeds; explicit per-branch push policy is a follow-up).
-- `brr env init` scaffolding command (sketched above; sketch only).
-- Compose-oriented envs like `docker-worktree` (see "Why worktree stays a flat env in v1").
-- First-party Daytona or E2B plugins (they ship outside core as dogfood; see `notes-pondering-fleet.md` §10).
+These adjacent concerns sit outside the design on purpose and have
+their own homes:
 
----
+- Concurrent execution (deferred; the daemon stays serial and the v2
+  unlock is a host-HEAD mutex, not a coordinator).
+- Overlays — see [`plan-overlays.md`](plan-overlays.md).
+- `brnrd` — separate project, see
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md).
+- Compose-oriented envs like `docker-worktree` — see "Why worktree
+  stays a flat env in v1" above.
+- First-party plugins (Daytona, Firecracker, E2B) — ship outside core
+  as dogfood, see
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §10.
+- Auto-`git push` policy on auto/task branches — the daemon publishes
+  branches when a remote is configured; explicit per-branch push
+  policy is a follow-up captured alongside the branch-intent design.
 
-## Done definition
+## Lineage
 
-- All five built-in envs implemented behind the protocol.
-- `RunContext` carries the `response_path_env` / `response_path_host` split and envs populate it correctly.
-- `ScriptEnvAdapter` dispatches to `.brr/envs/<name>` and `~/.config/brr/envs/<name>`.
-- `daemon._run_worker` calls only `env.{validate, prepare, invoke, finalize}`.
-- `FinalizeReport` checked at the daemon level; salvage rule honoured on `error`/`conflict`.
-- New tests green (including the worktree-salvage-on-error, devcontainer stub, and script-env dispatch cases); existing tests untouched or trivially adjusted.
-- `src/brr/docs/envs.md` shipped; triage prompt updated.
-- PR description summarises the durability contract, decentralised merge framing, salvage rule, and dual plugin model.
-- Branch merged.
-
-After merge, the next focus moves to overlays — see
-[plan-overlays.md](plan-overlays.md). Plugin candidates (Daytona etc.)
-are captured in `notes-pondering-fleet.md` §10.
+- **2026-05-13** — split current-state synthesis out into
+  [`subject-envs.md`](subject-envs.md); compressed the proposal
+  scaffolding (Goals, Done definition, Docs/Tests to add) into a
+  short scope paragraph and a test-shape section. The design itself
+  is unchanged; this is a state-first cleanup so the page reads as a
+  reference rather than a PR plan.
+- **2026-05-11** — branch-intent rewrite (see
+  [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md))
+  replaced the original `gitops.merge_branch` /
+  `_finalize_worktree_task` mechanics with `branching.BranchPlan`,
+  `gitops.fast_forward_branch`, and
+  `WorktreeEnv._land_or_preserve` / `DockerEnv.finalize`.
+- **2026-05-06** — accepted; `prepare`/`invoke`/`finalize` and the
+  `host`/`worktree`/`docker` built-ins shipped; outcome-aware salvage
+  rule added on top of the original spec so failures stay
+  inspectable.

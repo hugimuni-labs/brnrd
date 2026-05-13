@@ -1400,3 +1400,41 @@ preflight pass on `kb/` left two known advisories — `oversized-page`
 on `repo-dive-in-map.md` (intentional reading guide, listed for
 later splitting) and a stale-status fix on `decision-bundled-docs.md`
 that was applied during the pass.
+
+## [2026-05-13] implement | Hub-coverage advisory + env subject hub
+
+Review-driven follow-up to the state-first kb work. Two new
+deterministic advisories in `kb_preflight` and a structural fix to
+the kb itself:
+
+- `hub-coverage` (info): an `index.md` section with at least two
+  design / plan / decision / deck pages and no `subject-*.md` is a
+  soft nudge to write a synthesis hub. Skipped when the section
+  already lists a subject page or contains only research / notes
+  material. Reports the clean section title (decoration stripped).
+- `proposal-scaffolding` (info): a page whose `Status:` line is
+  `accepted` or `shipped` but still carries two or more
+  Goals / Non-goals / Alternatives / Why this PR / Proposed
+  approach / Open questions headers gets a nudge to compress to
+  current state plus, if warranted, a short Rejected alternatives
+  appendix.
+- Promoted `design-env-interface.md` to a slim spec + new
+  `subject-envs.md` hub. The hub carries the current state (which
+  envs ship, durability contract, salvage rule, decentralised
+  merging) so the design page can stop reporting "in flight" status
+  and stand as the accepted protocol spec. Dropped the design's
+  proposal-shape sections (Goals, Done definition, Docs/Tests to
+  add) into a tight Scope paragraph and a Test shape block; added a
+  Lineage breadcrumb covering the 2026-05-06 acceptance, the
+  2026-05-11 branch-intent rewrite, and today's split.
+- Retargeted high-value inbound links (`subject-tasks-branching.md`,
+  `subject-daemon.md`, `repo-dive-in-map.md`,
+  [`kb/index.md`](index.md) Environments section) at the new hub.
+
+After the change the preflight is down to one intentional
+`oversized-page` warning on `repo-dive-in-map.md`, plus one expected
+`hub-coverage` advisory on the paused "Fleet & overlays" section
+(legitimate gap; the strand is dormant) and one expected
+`proposal-scaffolding` advisory on `design-daemon-dev-reload.md`
+that the next grooming pass will pick up. Full test suite is green
+(295 passing, up from 288).

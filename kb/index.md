@@ -42,10 +42,16 @@ dive-in map) and are stable until something contradicts them.
 
 ## Environments
 
-- [Env Interface design](design-env-interface.md) — *in flight (3/5
-  envs shipped)*. `Env` Protocol, durability contract, decentralised
-  merging, and the plugin point. Tactical companion to the env slice
-  of the fleet deck.
+- **Hub: [environments](subject-envs.md)** — synthesis of the `Env`
+  Protocol (three-phase `prepare → invoke → finalize`), the durability
+  contract enforced from the host, the outcome-aware salvage rule,
+  decentralised fast-forward merging, and which envs ship today
+  (`local` / `worktree` / `docker`) versus designed-but-pending
+  (`ssh` / `devcontainer`).
+- [Env protocol design](design-env-interface.md) — *accepted on
+  2026-05-06*. Full protocol, per-env mechanics, response-path split,
+  plugin / script-env model, and configuration surface. Tactical
+  companion to the env slice of the fleet deck.
 - [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) —
   *shipped (one-task-per-worktree slice; merge-coordinator path
   abandoned)*. Original architecture for parallel task execution;
