@@ -19,12 +19,12 @@ Each finding carries a ``severity``:
 - ``warning``: a heuristic advisory the maintenance pass should act
   on when proportional. Types: ``oversized-page``,
   ``missing-status-marker``, ``revision-history-heavy``.
-- ``info``: a soft hint for the maintenance pass. Type:
-  ``recent-log-budget-exceeded``.
+- ``info``: a soft hint for the maintenance pass. Types:
+  ``recent-log-budget-exceeded``, ``hub-coverage``,
+  ``proposal-scaffolding``.
 
-Lifecycle-marker drift, subject-hub coverage, contradiction with the
-log, and similar judgement calls live in the LLM redundancy pass on
-top — they need synthesis the scanner can't do.
+Contradictions with the log and similar judgement calls live in the
+LLM redundancy pass on top — they need synthesis the scanner can't do.
 """
 
 from __future__ import annotations
@@ -103,9 +103,51 @@ _REVISION_HEAVY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^>\s+\*\*Superseded\b", re.MULTILINE),
 )
 
+# Hub-coverage advisory: an index.md section with this many design /
+# plan / decision / deck pages *and no* subject-*.md page is a soft
+# nudge to synthesise a hub. The threshold is deliberately low (two
+# load-bearing artifacts is enough material to be worth a paragraph
+# of synthesis) so the nudge fires before the section becomes
+# unwieldy, not after.
+_HUB_COVERAGE_THRESHOLD = 2
+_HUB_COVERAGE_ARTIFACT_PREFIXES: tuple[str, ...] = (
+    "design-", "plan-", "decision-", "deck-",
+)
+
+# Header signatures that read as proposal scaffolding on an accepted
+# or shipped page. A single ``## Goals`` block on a shipped design is
+# usually fine; two or more proposal-shape headers together is the
+# pattern that warrants compression to current-state synthesis.
+_PROPOSAL_SCAFFOLDING_THRESHOLD = 2
+_PROPOSAL_SCAFFOLDING_HEADERS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^##\s+Goals\b", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^##\s+Non-?goals\b", re.MULTILINE | re.IGNORECASE),
+    re.compile(
+        r"^##\s+Alternatives(?:\s+considered)?\b",
+        re.MULTILINE | re.IGNORECASE,
+    ),
+    re.compile(r"^##\s+Why this PR\b", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^##\s+Proposed approach\b", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^##\s+Open questions\b", re.MULTILINE | re.IGNORECASE),
+)
+
+# Status values that indicate the page is no longer in-flight, and the
+# proposal scaffolding should have been compressed by now.
+_PROPOSAL_SCAFFOLDING_LANDED_STATUSES: tuple[str, ...] = (
+    "accepted", "shipped",
+)
+
 # Severity rank for stable sort: errors first, then warnings, then
 # informational hints.
 _SEVERITY_RANK = {"error": 0, "warning": 1, "info": 2}
+
+# Match Markdown H2 headings used as index.md section dividers. The
+# pattern intentionally captures everything after ``## `` so the caller
+# can strip italic / bracketed decoration like ``*(paused)*``.
+_H2_HEADING_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$", re.MULTILINE)
+# Strip italic-wrapped suffix decoration commonly used in index.md to
+# annotate a section's status, e.g. ``Fleet & overlays *(paused …)*``.
+_SECTION_DECORATION_RE = re.compile(r"\s*\*\([^)]*\)\*\s*$")
 
 
 # Match Markdown inline links like ``[text](path)`` and reference-style
@@ -167,6 +209,8 @@ def scan(repo_root: Path) -> list[Finding]:
     findings.extend(_check_missing_status_marker(kb_dir, pages))
     findings.extend(_check_revision_history_heavy(kb_dir, pages))
     findings.extend(_check_recent_log_budget(kb_dir))
+    findings.extend(_check_hub_coverage(kb_dir, index_path))
+    findings.extend(_check_proposal_scaffolding(kb_dir, pages))
 
     findings.sort(key=lambda f: (
         _SEVERITY_RANK.get(f.severity, 99),
@@ -419,13 +463,146 @@ def _check_recent_log_budget(kb_dir: Path) -> list[Finding]:
     )]
 
 
-def _has_status_marker(page: Path) -> bool:
-    """Return True when *page* has a ``Status:`` line near the top.
+def _check_hub_coverage(kb_dir: Path, index_path: Path) -> list[Finding]:
+    """Flag index sections that accumulate artifacts without a hub.
 
-    We tolerate Markdown emphasis around the marker (``**Status:**``)
-    and stray indentation, and stop after
-    :data:`_STATUS_SEARCH_LINES` non-blank lines to avoid scanning
-    the whole page for a header that ought to be at the top.
+    An ``index.md`` H2 section that lists several design / plan /
+    decision / deck pages but no ``subject-*.md`` page is a soft
+    nudge to synthesise. The kb-shape rule
+    (`AGENTS.md` → "Subject pages") asks for a hub when *new work
+    plus existing related material* can form a useful synthesis;
+    this advisory surfaces sections where the existing material has
+    already accumulated past the comfortable threshold so the next
+    agent working in that area knows to consider it.
+
+    The advisory is intentionally one entry per *section*, not per
+    page: the action is to write or extend a hub for that section,
+    which is a single decision regardless of how many artifact pages
+    sit under it.
+    """
+    if not index_path.exists():
+        return []
+    findings: list[Finding] = []
+    for title, kb_targets in _index_sections(index_path, kb_dir):
+        has_hub = any(t.startswith("subject-") for t in kb_targets)
+        if has_hub:
+            continue
+        artifact_count = sum(
+            1
+            for t in kb_targets
+            if t.startswith(_HUB_COVERAGE_ARTIFACT_PREFIXES)
+        )
+        if artifact_count < _HUB_COVERAGE_THRESHOLD:
+            continue
+        findings.append(Finding(
+            type="hub-coverage",
+            target=f"kb/index.md §{title}",
+            description=(
+                f"section has {artifact_count} design/plan/decision "
+                "pages but no `subject-*.md` hub; consider writing a "
+                "subject page that synthesises the current shape of "
+                "this area and links to the artifacts as receipts "
+                "(see AGENTS.md → \"Subject pages\")."
+            ),
+            severity="info",
+        ))
+    return findings
+
+
+def _check_proposal_scaffolding(
+    kb_dir: Path, pages: list[Path],
+) -> list[Finding]:
+    """Flag accepted/shipped pages still carrying proposal scaffolding.
+
+    Goals / Non-goals / Alternatives considered / Why this PR /
+    Proposed approach / Open questions sections all belong to a page
+    while it is *in flight*. Once the design ships or the decision
+    is accepted, those sections describe history rather than current
+    state — AGENTS.md → "State first, history in git" asks that they
+    be compressed into a one-line rationale plus, if warranted, a
+    short ``## Rejected alternatives`` appendix.
+
+    The advisory fires only when two or more of those headers are
+    present together. A single ``## Goals`` block on a shipped
+    design is usually a fine paragraph of context; the pattern that
+    matters is the *retained proposal shape*.
+    """
+    findings: list[Finding] = []
+    for page in pages:
+        status = _status_marker_value(page)
+        if status is None:
+            continue
+        if not any(s in status for s in _PROPOSAL_SCAFFOLDING_LANDED_STATUSES):
+            continue
+        text = page.read_text(encoding="utf-8")
+        hits = sum(
+            1 for pat in _PROPOSAL_SCAFFOLDING_HEADERS if pat.search(text)
+        )
+        if hits < _PROPOSAL_SCAFFOLDING_THRESHOLD:
+            continue
+        rel = page.relative_to(kb_dir).as_posix()
+        findings.append(Finding(
+            type="proposal-scaffolding",
+            target=f"kb/{rel}",
+            description=(
+                f"page is {status.strip()} but still carries {hits} "
+                "proposal-shape sections (Goals / Alternatives / "
+                "Why this PR / etc.); compress to current-state "
+                "synthesis and, if needed, a short Rejected "
+                "alternatives appendix."
+            ),
+            severity="info",
+        ))
+    return findings
+
+
+def _index_sections(
+    index_path: Path, kb_dir: Path,
+) -> Iterable[tuple[str, list[str]]]:
+    """Yield ``(section_title, [kb_relative_target,…])`` for index.md.
+
+    Sections are delimited by H2 headings. Targets are the kb-relative
+    paths the section's links resolve to; non-kb / external links and
+    fragment-only links are dropped. The H1 prelude before the first
+    H2 is omitted because the index's prelude is editorial, not a
+    section.
+    """
+    text = index_path.read_text(encoding="utf-8")
+    headings = list(_H2_HEADING_RE.finditer(text))
+    for i, match in enumerate(headings):
+        title = _SECTION_DECORATION_RE.sub("", match.group("title")).strip()
+        if not title:
+            continue
+        start = match.end()
+        end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
+        body = text[start:end]
+        targets: list[str] = []
+        for raw in _INLINE_LINK_RE.findall(body):
+            resolved = _resolve_relative(index_path, raw)
+            if resolved is None:
+                continue
+            try:
+                rel = resolved.relative_to(kb_dir).as_posix()
+            except ValueError:
+                continue
+            targets.append(rel)
+        for raw in _REFERENCE_LINK_RE.findall(body):
+            resolved = _resolve_relative(index_path, raw)
+            if resolved is None:
+                continue
+            try:
+                rel = resolved.relative_to(kb_dir).as_posix()
+            except ValueError:
+                continue
+            targets.append(rel)
+        yield title, targets
+
+
+def _status_marker_value(page: Path) -> str | None:
+    """Return the lowercased text after ``Status:`` near the top of *page*.
+
+    Returns ``None`` if no Status marker is found within the first
+    :data:`_STATUS_SEARCH_LINES` non-blank lines.
     """
     looked = 0
     for raw in page.read_text(encoding="utf-8").splitlines():
@@ -433,11 +610,22 @@ def _has_status_marker(page: Path) -> bool:
         if not line:
             continue
         looked += 1
-        if line.lower().startswith("status:"):
-            return True
+        lower = line.lower()
+        if lower.startswith("status:"):
+            return lower[len("status:"):].strip("* ").strip()
         if looked >= _STATUS_SEARCH_LINES:
             break
-    return False
+    return None
+
+
+def _has_status_marker(page: Path) -> bool:
+    """Return True when *page* has a ``Status:`` line near the top.
+
+    Thin wrapper over :func:`_status_marker_value` so the structural
+    check (does it exist?) and the value-extracting check (what does
+    it say?) share the same parser and emphasis-tolerance rules.
+    """
+    return _status_marker_value(page) is not None
 
 
 def _kb_targets_linked_from(page: Path, kb_dir: Path) -> set[str]:
