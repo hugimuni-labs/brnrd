@@ -353,6 +353,174 @@ def test_format_findings_renders_findings_block():
     assert "broken-link" in block
 
 
+def test_scan_flags_hub_coverage_when_section_lacks_subject_page(tmp_path):
+    """An index section with at least two design/plan/decision/deck
+    pages but no subject hub gets a soft nudge to synthesise."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n"
+        "## Environments\n\n"
+        "- [Design](design-env-interface.md) — desc\n"
+        "- [Plan](plan-concurrent-worktrees.md) — desc\n"
+    ))
+    _write(
+        tmp_path / "kb" / "design-env-interface.md",
+        "# Env interface\n\nStatus: active\n\nBody.\n",
+    )
+    _write(
+        tmp_path / "kb" / "plan-concurrent-worktrees.md",
+        "# Worktrees\n\nStatus: shipped on 2026-04-01\n\nBody.\n",
+    )
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    coverage = [f for f in findings if f.type == "hub-coverage"]
+    assert len(coverage) == 1
+    assert coverage[0].severity == "info"
+    assert "Environments" in coverage[0].target
+
+
+def test_scan_suppresses_hub_coverage_when_subject_present(tmp_path):
+    """A section that already has a ``subject-*.md`` link is covered
+    even if it also lists several artifacts."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n"
+        "## Tasks & branching\n\n"
+        "- [Hub](subject-tasks-branching.md) — synthesis\n"
+        "- [Design](design-daemon-landing-branch.md) — desc\n"
+        "- [Plan](plan-branch-modes.md) — desc\n"
+        "- [Decision](decision-remove-triage.md) — desc\n"
+    ))
+    for name in (
+        "subject-tasks-branching.md",
+        "design-daemon-landing-branch.md",
+        "plan-branch-modes.md",
+        "decision-remove-triage.md",
+    ):
+        _write(
+            tmp_path / "kb" / name,
+            f"# {name}\n\nStatus: accepted on 2026-04-01\n\nBody.\n",
+        )
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "hub-coverage" for f in findings), findings
+
+
+def test_scan_does_not_flag_hub_coverage_for_research_only_sections(tmp_path):
+    """A section that only lists research / notes pages stays quiet;
+    research-shaped material doesn't aggregate into a hub by itself."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n"
+        "## Research\n\n"
+        "- [Research one](research-one.md) — desc\n"
+        "- [Research two](research-two.md) — desc\n"
+        "- [Notes](notes-foo.md) — desc\n"
+    ))
+    _write(tmp_path / "kb" / "research-one.md", "# 1\n\nBody.\n")
+    _write(tmp_path / "kb" / "research-two.md", "# 2\n\nBody.\n")
+    _write(tmp_path / "kb" / "notes-foo.md", "# notes\n\nBody.\n")
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "hub-coverage" for f in findings), findings
+
+
+def test_scan_strips_decoration_from_section_titles(tmp_path):
+    """Index headings often carry a parenthesised italic status — the
+    hub-coverage advisory should report the clean title."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n"
+        "## Fleet & overlays *(paused — env axis is the only active strand)*\n\n"
+        "- [Deck](deck-x.md) — desc\n"
+        "- [Plan](plan-x.md) — desc\n"
+    ))
+    _write(
+        tmp_path / "kb" / "deck-x.md",
+        "# Deck\n\nStatus: paused\n\nBody.\n",
+    )
+    _write(
+        tmp_path / "kb" / "plan-x.md",
+        "# Plan\n\nStatus: blocked\n\nBody.\n",
+    )
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    coverage = [f for f in findings if f.type == "hub-coverage"]
+    assert len(coverage) == 1
+    assert "Fleet & overlays" in coverage[0].target
+    assert "paused" not in coverage[0].target
+
+
+def test_scan_flags_proposal_scaffolding_on_shipped_pages(tmp_path):
+    """A shipped or accepted page that still carries multiple
+    proposal-shape sections gets a nudge to compress to current
+    state."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Design](design-x.md) — desc\n"
+    ))
+    _write(tmp_path / "kb" / "design-x.md", (
+        "# Design x\n\n"
+        "Status: shipped on 2026-05-10\n\n"
+        "## Goals\n\nWhat we wanted.\n\n"
+        "## Non-goals\n\nWhat we ruled out.\n\n"
+        "## Alternatives considered\n\nOther shapes we looked at.\n\n"
+        "## Current shape\n\nWhat we built.\n"
+    ))
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    scaffold = [f for f in findings if f.type == "proposal-scaffolding"]
+    assert len(scaffold) == 1
+    assert scaffold[0].severity == "info"
+    assert scaffold[0].target == "kb/design-x.md"
+
+
+def test_scan_does_not_flag_proposal_scaffolding_when_in_flight(tmp_path):
+    """A page still ``Status: active`` or ``in flight`` is allowed to
+    carry proposal scaffolding — that's exactly what proposals look
+    like before they ship."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Design](design-x.md) — desc\n"
+    ))
+    _write(tmp_path / "kb" / "design-x.md", (
+        "# Design x\n\n"
+        "Status: active\n\n"
+        "## Goals\n\nWhat we want.\n\n"
+        "## Alternatives considered\n\nOther shapes.\n\n"
+        "## Open questions\n\nStill thinking.\n"
+    ))
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "proposal-scaffolding" for f in findings), findings
+
+
+def test_scan_does_not_flag_single_goals_block_on_shipped_page(tmp_path):
+    """One ``## Goals`` block on a shipped design is usually a fine
+    paragraph of context. The advisory fires only on the *retained
+    proposal shape* — two or more scaffolding sections together."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Design](design-x.md) — desc\n"
+    ))
+    _write(tmp_path / "kb" / "design-x.md", (
+        "# Design x\n\n"
+        "Status: shipped on 2026-05-10\n\n"
+        "## Goals\n\nOne paragraph of context.\n\n"
+        "## Current shape\n\nWhat we built.\n"
+    ))
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "proposal-scaffolding" for f in findings), findings
+
+
 def test_scan_finding_order_is_stable(tmp_path):
     _write(tmp_path / "kb" / "index.md", (
         "# Index\n\n"
