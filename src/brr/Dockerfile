@@ -11,8 +11,8 @@
 # The image is designed to run as the *host* user's UID (passed via
 # ``docker run -u``) so files written into the bind-mounted repo are owned
 # by the host user, not by root. /brr-home is a writable HOME any UID can
-# use; the daemon mounts ~/.codex, ~/.claude, ~/.gemini, and ~/.gitconfig
-# into it at runtime.
+# use; the daemon mounts ~/.codex, ~/.claude, ~/.gemini, ~/.gitconfig, and
+# ~/.config/gh into it at runtime.
 
 FROM node:22-slim
 
@@ -39,6 +39,21 @@ RUN apt-get update \
         wget \
         zip \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI via the official upstream APT source. Debian's own ``gh``
+# package is sometimes years out of date (e.g. 2.46.x), and ``gh pr
+# create`` adds flags often. Keeping the upstream feed gets us the
+# current release without pinning. Authentication is supplied at run
+# time by mounting ~/.config/gh from the host.
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
 # Git refuses to operate on repos owned by a different user

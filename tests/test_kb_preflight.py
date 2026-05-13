@@ -19,7 +19,10 @@ def test_scan_returns_empty_for_consistent_kb(tmp_path):
         "# Index\n\n"
         "- [Subject](decision-foo.md) — desc\n"
     ))
-    _write(tmp_path / "kb" / "decision-foo.md", "# Foo\n")
+    _write(
+        tmp_path / "kb" / "decision-foo.md",
+        "# Foo\n\nStatus: accepted on 2026-04-01\n\nBody.\n",
+    )
     _write(tmp_path / "kb" / "log.md", "# Log\n")
 
     assert kb_preflight.scan(tmp_path) == []
@@ -30,7 +33,10 @@ def test_scan_accepts_relative_repo_root(tmp_path, monkeypatch):
         "# Index\n\n"
         "- [Subject](decision-foo.md) — desc\n"
     ))
-    _write(tmp_path / "kb" / "decision-foo.md", "# Foo\n")
+    _write(
+        tmp_path / "kb" / "decision-foo.md",
+        "# Foo\n\nStatus: accepted on 2026-04-01\n\nBody.\n",
+    )
     _write(tmp_path / "kb" / "log.md", "# Log\n")
     monkeypatch.chdir(tmp_path)
 
@@ -109,6 +115,7 @@ def test_scan_ignores_external_urls(tmp_path):
         "# Index\n\n- [Page](decision-foo.md) — has external links\n"
     ))
     _write(tmp_path / "kb" / "decision-foo.md", (
+        "Status: accepted on 2026-04-01\n\n"
         "See [docs](https://example.com/foo) and "
         "[mailto](mailto:a@b.c) — these aren't kb pages.\n"
     ))
@@ -124,6 +131,7 @@ def test_scan_ignores_anchor_only_fragments(tmp_path):
         "# Index\n\n- [Foo](decision-foo.md) — desc\n"
     ))
     _write(tmp_path / "kb" / "decision-foo.md", (
+        "Status: accepted on 2026-04-01\n\n"
         "Jump to [section](#some-anchor) within this page.\n"
     ))
     _write(tmp_path / "kb" / "log.md", "# Log\n")
@@ -131,6 +139,192 @@ def test_scan_ignores_anchor_only_fragments(tmp_path):
     findings = kb_preflight.scan(tmp_path)
 
     assert findings == []
+
+
+def test_scan_flags_oversized_pages_as_warning(tmp_path):
+    """Pages past the readability threshold get an advisory so the
+    maintenance pass can consider splitting or compressing them.
+    ``log.md`` is exempt because it grows monotonically by design.
+    """
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Big](subject-big.md) — desc\n"
+    ))
+    # Generate a page comfortably past the 32K threshold.
+    big_body = "x " * 20_000
+    _write(
+        tmp_path / "kb" / "subject-big.md",
+        f"# Big subject\n\nStatus: accepted on 2026-04-01\n\n{big_body}\n",
+    )
+    _write(tmp_path / "kb" / "log.md", "# Log\n" + ("y " * 20_000))
+
+    findings = kb_preflight.scan(tmp_path)
+
+    oversized = [f for f in findings if f.type == "oversized-page"]
+    assert len(oversized) == 1
+    assert oversized[0].severity == "warning"
+    assert oversized[0].target == "kb/subject-big.md"
+    # log.md is exempt regardless of size.
+    assert all(f.target != "kb/log.md" for f in oversized)
+
+
+def test_scan_flags_missing_status_marker_on_lifecycle_pages(tmp_path):
+    """plan-/design-/decision-/deck- pages without a Status line get
+    flagged. A subject hub without one stays quiet — subjects are not
+    lifecycle pages."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n"
+        "- [Plan](plan-foo.md) — desc\n"
+        "- [Subject](subject-bar.md) — desc\n"
+    ))
+    _write(
+        tmp_path / "kb" / "plan-foo.md",
+        "# Plan foo\n\nBody without a status marker.\n",
+    )
+    _write(
+        tmp_path / "kb" / "subject-bar.md",
+        "# Subject bar\n\nNo status, but subjects don't need one.\n",
+    )
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    missing = [f for f in findings if f.type == "missing-status-marker"]
+    assert len(missing) == 1
+    assert missing[0].target == "kb/plan-foo.md"
+    assert missing[0].severity == "warning"
+
+
+def test_scan_accepts_emphasized_status_marker(tmp_path):
+    """``**Status:** active`` should count the same as ``Status: active``.
+    Page authors often emphasize the marker; the scanner shouldn't
+    nag them about formatting."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Plan](plan-foo.md) — desc\n"
+    ))
+    _write(
+        tmp_path / "kb" / "plan-foo.md",
+        "# Plan\n\n**Status:** active\n\nBody.\n",
+    )
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "missing-status-marker" for f in findings)
+
+
+def test_scan_flags_revision_history_heavy_pages(tmp_path):
+    """A page whose body reads like a running diff of its own past
+    wording gets a warning so the maintenance pass can compress it
+    to a single lineage breadcrumb."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Design](design-x.md) — desc\n"
+    ))
+    body = (
+        "# Design x\n\n"
+        "Status: accepted on 2026-05-12\n\n"
+        "## Revision history\n\n"
+        "- **2026-05-12 amendment.** Removed the old shape.\n"
+        "- **2026-05-11 implementation note.** Shipped revision A.\n"
+        "- **2026-05-10 revision.** Earlier draft superseded.\n"
+        "\n"
+        "Previously we did Y; originally Z; the old code did W.\n"
+    )
+    _write(tmp_path / "kb" / "design-x.md", body)
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    heavy = [f for f in findings if f.type == "revision-history-heavy"]
+    assert len(heavy) == 1
+    assert heavy[0].target == "kb/design-x.md"
+    assert heavy[0].severity == "warning"
+
+
+def test_scan_does_not_flag_clean_lineage_breadcrumb(tmp_path):
+    """A page with a single dated lineage bullet at the bottom is
+    fine — that's the *recommended* shape, not the bloat we're
+    flagging. Below the threshold."""
+    _write(tmp_path / "kb" / "index.md", (
+        "# Index\n\n- [Design](design-x.md) — desc\n"
+    ))
+    body = (
+        "# Design x\n\n"
+        "Status: accepted on 2026-05-12\n\n"
+        "Current shape paragraph one.\n\nCurrent shape paragraph two.\n\n"
+        "## Lineage\n\n"
+        "- **2026-05-12** rewrote the resolver for state-first.\n"
+    )
+    _write(tmp_path / "kb" / "design-x.md", body)
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "revision-history-heavy" for f in findings)
+
+
+def test_scan_flags_recent_log_entry_over_budget(tmp_path):
+    """When the newest log entry exceeds the prompt byte budget it
+    silently pushes older entries out of the conversation context
+    block. The maintenance pass should compress it."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    bulk = "x " * 3000  # ~6000 bytes, comfortably over the 4KB budget.
+    _write(
+        tmp_path / "kb" / "log.md",
+        f"# Log\n\n## [2026-05-13] implement | Big entry\n\n{bulk}\n",
+    )
+
+    findings = kb_preflight.scan(tmp_path)
+
+    over = [f for f in findings if f.type == "recent-log-budget-exceeded"]
+    assert len(over) == 1
+    assert over[0].severity == "info"
+    assert "kb/log.md" in over[0].target
+
+
+def test_scan_does_not_flag_recent_log_within_budget(tmp_path):
+    """A small newest entry stays quiet so the maintenance pass
+    doesn't churn over routine activity."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(
+        tmp_path / "kb" / "log.md",
+        "# Log\n\n## [2026-05-13] implement | Small\n\nDid a thing.\n",
+    )
+
+    findings = kb_preflight.scan(tmp_path)
+
+    assert all(f.type != "recent-log-budget-exceeded" for f in findings)
+
+
+def test_format_findings_renders_severity_prefix_for_advisories():
+    """Errors keep the existing bullet format; advisories get a
+    bracketed severity prefix so a human reader can triage at a
+    glance and the LLM prompt sees the distinction clearly."""
+    findings = [
+        kb_preflight.Finding(
+            type="broken-link",
+            target="kb/x.md → y.md",
+            description="missing",
+        ),
+        kb_preflight.Finding(
+            type="oversized-page",
+            target="kb/big.md",
+            description="too big",
+            severity="warning",
+        ),
+        kb_preflight.Finding(
+            type="recent-log-budget-exceeded",
+            target="kb/log.md",
+            description="big entry",
+            severity="info",
+        ),
+    ]
+
+    block = kb_preflight.format_findings(findings)
+
+    assert "**broken-link**" in block
+    assert "[warning]" not in block.split("**broken-link**", 1)[0]
+    assert "**oversized-page** [warning]" in block
+    assert "**recent-log-budget-exceeded** [info]" in block
 
 
 def test_format_findings_returns_empty_string_when_clean(tmp_path):
@@ -166,13 +360,19 @@ def test_scan_finding_order_is_stable(tmp_path):
         "- [Stale](decision-stale.md) — desc\n"
     ))
     _write(tmp_path / "kb" / "decision-foo.md", (
+        "Status: accepted on 2026-04-01\n\n"
         "[broken](missing-1.md), [broken-too](missing-2.md)\n"
     ))
-    _write(tmp_path / "kb" / "decision-orphan.md", "# Orphan\n")
+    _write(
+        tmp_path / "kb" / "decision-orphan.md",
+        "# Orphan\n\nStatus: accepted on 2026-04-01\n",
+    )
     _write(tmp_path / "kb" / "log.md", "# Log\n")
 
-    types_in_order = [f.type for f in kb_preflight.scan(tmp_path)]
-
-    assert types_in_order == sorted(types_in_order, key=lambda t: (
-        ["missing-from-index", "stale-index-entry", "broken-link"].index(t)
-    )), types_in_order
+    findings = kb_preflight.scan(tmp_path)
+    # Errors come before warnings/info regardless of type ordering;
+    # within a severity, (type, target) sort lexicographically.
+    severities = [f.severity for f in findings]
+    assert severities == sorted(severities, key=lambda s: (
+        ["error", "warning", "info"].index(s)
+    )), severities

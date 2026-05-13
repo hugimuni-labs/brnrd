@@ -102,11 +102,13 @@ Two paths cover both API-key and subscription-only auth:
    and `GOOGLE_API_KEY` into the container. Add more with
    `docker.env=KEY1,KEY2`.
 2. **Login-dir bind mounts.** When `~/.claude/`, `~/.claude.json`,
-   `~/.codex/`, `~/.gemini/`, or `~/.gitconfig` exists on the host,
-   it's bind-mounted read-write into `$HOME/<basename>` inside the
-   container (i.e. `/brr-home/.codex`). This is what makes Claude
-   Pro/Max, ChatGPT Plus/Pro, and Gemini OAuth users work without an
-   API key, and what gives `git commit` your real author identity.
+   `~/.codex/`, `~/.gemini/`, `~/.gitconfig`, or `~/.config/gh/` exists
+   on the host, it's bind-mounted read-write into the matching path
+   under `$HOME` inside the container (i.e. `/brr-home/.codex`,
+   `/brr-home/.config/gh`). This is what makes Claude Pro/Max,
+   ChatGPT Plus/Pro, and Gemini OAuth users work without an API key,
+   what gives `git commit` your real author identity, and what lets
+   `gh pr create` open PRs as your GitHub user from inside a task.
 
 You can opt out of the credential-dir mounts with
 `docker.mount_credentials=false`. The mounts are read-write so refresh

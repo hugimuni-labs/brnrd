@@ -50,6 +50,19 @@ def test_bundled_runner_image_has_baseline_dev_tools():
     assert "ln -sf /usr/bin/pip3 /usr/local/bin/pip" in text
 
 
+def test_bundled_runner_image_installs_github_cli():
+    """``gh`` is part of the runner toolbox so agents can open PRs when
+    a task lacks an auto-land target. We pull from GitHub's upstream APT
+    repo rather than Debian's to track current ``gh`` features (Debian
+    sometimes lags by years). Authentication comes from the host's
+    ``~/.config/gh`` mount, mirroring how we ship Codex/Claude tokens.
+    """
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "cli.github.com/packages" in text
+    assert "githubcli-archive-keyring.gpg" in text
+    assert "apt-get install -y --no-install-recommends gh" in text
+
+
 def test_bundled_runner_image_supports_arbitrary_uid():
     """The image must run as the host UID without root-only assumptions.
 

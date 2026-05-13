@@ -331,17 +331,19 @@ _DOCKER_DEFAULT_PASSTHROUGH_ENV: tuple[str, ...] = (
 )
 
 
-# Per-runner credential paths under HOME. Each is mounted into the
-# container's HOME (``/brr-home/<basename>``) when present on the host,
-# so the in-container CLI finds tokens at ``$HOME/.codex`` etc. The
-# container runs as the host UID, so bind-mounted host paths keep their
-# host ownership and the in-container user can read/write them.
+# Per-runner credential paths under HOME, relative to ``~``. Each is
+# mounted into the container's HOME at ``/brr-home/<rel>`` when present
+# on the host, so the in-container CLI finds tokens at ``$HOME/.codex``,
+# ``$HOME/.config/gh``, etc. The container runs as the host UID, so
+# bind-mounted host paths keep their host ownership and the in-container
+# user can read/write them.
 _DOCKER_DEFAULT_CRED_PATHS: tuple[str, ...] = (
     ".claude",
     ".claude.json",
     ".codex",
     ".gemini",
     ".gitconfig",
+    ".config/gh",
 )
 
 # HOME directory baked into the runner image, owned mode 1777 so any UID

@@ -50,16 +50,32 @@ def read_prompt(name: str, repo_root: Path | None = None) -> str:
 # ── Context injection ────────────────────────────────────────────────
 
 _LOG_ENTRY_RE = re.compile(r"^## \[", re.MULTILINE)
+
+# Soft cap on the size of the conversation-continuity block injected
+# into every task prompt. Older "last N entries" cap let a single
+# verbose entry blow the prompt up; bytes are what actually cost
+# tokens. The entry-count cap stays as a defensive ceiling so a flood
+# of one-line entries still doesn't dominate the prompt.
 _MAX_LOG_ENTRIES = 10
+_MAX_LOG_BYTES = 4096
 
 
-def _read_recent_log(repo_root: Path, max_entries: int = _MAX_LOG_ENTRIES) -> str:
+def _read_recent_log(
+    repo_root: Path,
+    max_entries: int = _MAX_LOG_ENTRIES,
+    max_bytes: int = _MAX_LOG_BYTES,
+) -> str:
     """Read the most recent entries from ``kb/log.md``.
 
-    Returns the raw markdown of the last *max_entries* entries, or an
-    empty string if the log is missing/empty. This is conversation
-    continuity for the agent — bounded so the prompt doesn't grow
-    unbounded over a long-lived repo.
+    Walks entries newest-first, including each one as long as the
+    accumulated UTF-8 byte size stays at or below ``max_bytes`` and we
+    haven't hit ``max_entries``. The newest entry is always included
+    even if it alone exceeds the budget, so the most recent context
+    never silently disappears.
+
+    Returns the raw markdown of the included entries (oldest of the
+    included set first, for natural reading order), or an empty string
+    if the log is missing or has no entries.
     """
     log_path = repo_root / "kb" / "log.md"
     if not log_path.exists():
@@ -68,9 +84,24 @@ def _read_recent_log(repo_root: Path, max_entries: int = _MAX_LOG_ENTRIES) -> st
     parts = _LOG_ENTRY_RE.split(text)
     if len(parts) <= 1:
         return ""
-    entries = [f"## [{p}" for p in parts[1:]]
-    recent = entries[-max_entries:]
-    return "\n".join(recent).strip()
+    entries = [f"## [{p}".rstrip() for p in parts[1:]]
+    # Walk newest → oldest, accumulate within budget.
+    picked: list[str] = []
+    used = 0
+    sep_bytes = len(b"\n\n")
+    for entry in reversed(entries):
+        if len(picked) >= max_entries:
+            break
+        entry_bytes = len(entry.encode("utf-8"))
+        projected = used + entry_bytes + (sep_bytes if picked else 0)
+        if picked and projected > max_bytes:
+            break
+        picked.append(entry)
+        used = projected
+    if not picked:
+        return ""
+    picked.reverse()
+    return "\n\n".join(picked).strip()
 
 
 def _build_context_block(repo_root: Path) -> str:
@@ -269,6 +300,14 @@ def _build_task_context_bundle(
                 "human routing and publish it when a remote is configured. If "
                 "the task body or recent conversation point to a specific "
                 "branch, switch to it before editing."
+            )
+            sections.append(
+                "- If `gh` is available and the remote is a GitHub repo, you "
+                "may open a pull request after your commits with "
+                "`git push -u origin HEAD && gh pr create --fill` so the user "
+                "gets a reviewable link in chat. Skip silently if `gh` is "
+                "missing, unauthenticated, or the remote isn't GitHub — brr "
+                "will still publish the branch."
             )
 
     recent_block = _format_recent_conversation(recent_conversation)
