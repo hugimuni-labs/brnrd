@@ -50,27 +50,29 @@ in a container.
 
 ## Branch intent and landing
 
-The branch-intent fix in
-[`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-removed the old weak point — the daemon no longer uses the host
-checkout's current `HEAD` as both seed and auto-land target. The
-2026-05-12 amendment of that same design also removed conversation
-mining from the resolver: branch authority now comes only from
-structured event metadata, otherwise the task branch is preserved.
+The seed ref comes from the configured `auto_land_branch`, then the
+event's `target_branch` metadata, then a fixed config seed, then the
+host checkout's current branch as last resort. Auto-land target comes
+only from structured event metadata; when absent, brr preserves the
+task branch without trying to infer a target.
 
-The agent reads the recent conversation history from the prompt and
-can `git switch` inside the worktree whenever continuity is actually
-meant. That preserves the "agent owns branching" decision more
-honestly than pre-decoding a sparse-window branch fact into hidden
-durable authority. The host current branch remains context only; a
-fixed `landing_branch=` config remains rejected; and `current` is the
-opt-in development fallback.
+The host's current branch travels into the prompt as context but is
+never treated as an auto-land target — agents need to know what
+branch the user was looking at, but the resolver doesn't infer
+landing intent from it.
 
 If the agent stays on the task branch and an explicit auto-land
 target was set, brr fast-forwards it. If no target exists, brr
-preserves the task branch. If the agent switches branches after
-reading the actual request, finalization records that git state
-instead of asking a separate pre-run agent to predict it.
+preserves the task branch. If the agent switched branches or detached
+HEAD, finalization records whatever git state was left and pushes the
+agent-chosen branch.
+
+The full design and the design's lineage live in
+[`design-daemon-landing-branch.md`](design-daemon-landing-branch.md);
+the most recent rewrite (2026-05-12) trimmed the resolver to
+event-metadata-only branch authority — see
+[`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
+for the rationale.
 
 ## Read next
 

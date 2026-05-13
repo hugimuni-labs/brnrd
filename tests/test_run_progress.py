@@ -275,6 +275,133 @@ def test_render_text_compact_has_runner_env_branch_header(tmp_path):
     assert "running" in text
 
 
+def test_render_text_compact_surfaces_kb_maintenance_done(tmp_path):
+    """When the inline maintenance pass committed kb edits, the
+    response card surfaces it on the terminal line so the operator
+    sees that cleanup landed on the task's branch. Without this,
+    maintenance was historically a silent drop."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:9:"
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-m", event_id="evt-m",
+        env="docker", status="running",
+        seed_ref="main", auto_land_branch=None,
+        branch_name="brr/task-m",
+    )
+    _emit(brr_dir, key, "task_created", task_id="task-m", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-m", attempt=1)
+    _emit(brr_dir, key, "kb_maintenance_done", task_id="task-m",
+          commits=2, files=3, ok=True)
+    _emit(brr_dir, key, "finalizing", task_id="task-m", stage="done")
+    _emit(brr_dir, key, "push_done", task_id="task-m", branch="brr/task-m",
+          commits=1, ok=True)
+    _emit(brr_dir, key, "done", task_id="task-m", event_id="evt-m")
+
+    view = run_progress.project_task(brr_dir, key, "task-m")
+    assert view is not None
+    assert view.maintenance_ran is True
+    assert view.maintenance_commits == 2
+    text = run_progress.render_text(view, compact=True)
+    # delivered line carries both push and maintenance summaries.
+    delivered = [
+        line for line in text.splitlines() if line.startswith("delivered")
+    ]
+    assert delivered, text
+    assert "pushed 1 commit" in delivered[0]
+    assert "maintenance: 2 kb commits" in delivered[0]
+
+
+def test_render_text_compact_shows_maintenance_clean_when_no_commits(tmp_path):
+    """A maintenance pass that ran with nothing to do still appears
+    on the card as 'maintenance: clean'. Suppressing the line would
+    hide the fact that brr did the cleanup check at all."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:9a:"
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-mc", event_id="evt-mc",
+        env="docker", status="running",
+        seed_ref="main", auto_land_branch=None,
+        branch_name="brr/task-mc",
+    )
+    _emit(brr_dir, key, "task_created", task_id="task-mc", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-mc", attempt=1)
+    _emit(brr_dir, key, "kb_maintenance_done", task_id="task-mc",
+          commits=0, files=0, ok=True)
+    _emit(brr_dir, key, "finalizing", task_id="task-mc", stage="done")
+    _emit(brr_dir, key, "done", task_id="task-mc", event_id="evt-mc")
+
+    view = run_progress.project_task(brr_dir, key, "task-mc")
+    text = run_progress.render_text(view, compact=True)
+
+    delivered = [
+        line for line in text.splitlines() if line.startswith("delivered")
+    ]
+    assert delivered, text
+    assert "maintenance: clean" in delivered[0]
+
+
+def test_render_text_compact_skips_maintenance_when_not_run(tmp_path):
+    """If the maintenance pass was skipped (no findings, kb
+    untouched), no packet was emitted; the card stays quiet."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:9b:"
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-mn", event_id="evt-mn",
+        env="docker", status="running",
+        seed_ref="main", auto_land_branch=None,
+        branch_name="brr/task-mn",
+    )
+    _emit(brr_dir, key, "task_created", task_id="task-mn", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-mn", attempt=1)
+    _emit(brr_dir, key, "finalizing", task_id="task-mn", stage="done")
+    _emit(brr_dir, key, "done", task_id="task-mn", event_id="evt-mn")
+
+    view = run_progress.project_task(brr_dir, key, "task-mn")
+    text = run_progress.render_text(view, compact=True)
+
+    assert view.maintenance_ran is False
+    assert "maintenance" not in text
+
+
+def test_render_text_compact_omits_arrow_without_auto_land_branch(tmp_path):
+    """When there is no explicit auto-land target, the header shows just the
+    branch name. The seed_ref (where the branch was cut from) is a setup
+    detail and should NOT be rendered as a landing target.
+
+    Previously ``display_base`` fell back to ``seed_ref``, which made every
+    task card claim it was landing on `main` even when the agent picked its
+    own branch with no auto-merge intent. That was misleading enough to
+    surface a real merge surprise in chat.
+    """
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:8b:"
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-na", event_id="evt-na",
+        env="docker", status="running",
+        seed_ref="main", auto_land_branch=None,
+        branch_name="brr/task-na",
+    )
+    _emit(brr_dir, key, "task_created", task_id="task-na", env="docker")
+    _emit(brr_dir, key, "env_prepared", task_id="task-na", env="docker",
+          branch_name="brr/task-na", seed_ref="main")
+    _emit(brr_dir, key, "attempt_started", task_id="task-na", attempt=1)
+    _emit(brr_dir, key, "run_started", task_id="task-na",
+          runner="codex", branch="brr/task-na", env="docker",
+          seed_ref="main")
+
+    view = run_progress.project_task(brr_dir, key, "task-na")
+    assert view is not None
+    assert view.display_base is None
+    text = run_progress.render_text(view, compact=True)
+    header = text.splitlines()[0]
+    assert header == "codex · docker · brr/task-na"
+    assert "←" not in header
+
+
 def test_render_text_compact_strikes_through_finished_phases(tmp_path):
     """Closed phases get wrapped in the style's done-open/done-close
     markers; the live current line stays unmarked. Plain text gets no

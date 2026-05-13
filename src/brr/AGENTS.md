@@ -104,6 +104,32 @@ to the repo. It compounds across sessions. Maintenance is everyone's job —
 brr's daemon, ad-hoc Cursor sessions, direct Claude Code or Codex
 invocations, anyone editing the repo.
 
+### State first, history in git
+
+The kb describes **how things are now**. Deep history lives in `git log` and
+`kb/log.md`; the rest of the kb is current-state synthesis.
+
+When work refines a subject hub, decision, or design page, **rewrite** the
+page so a cold reader sees the current shape — don't append a "before /
+after" diff inline. The git history already records the change with diffs
+and dates; duplicating that in the page just dilutes signal.
+
+When the *fact that something changed* still matters for understanding the
+current shape (a decision was reversed; a design was superseded; an
+abstraction was removed because of a footgun), leave a one-line **lineage
+breadcrumb** that says what changed, when, and why, and points at the
+successor or the commit. The full prior text doesn't need to stay.
+
+Concretely:
+
+- Bad (changelog-style):  
+  `_push_if_needed previously checked the brr/* namespace and refused to push outside it; we removed the check on 2026-05-11 because…`
+- Good (state + breadcrumb):  
+  `_push_if_needed always pushes with -u when the branch has no upstream, mirroring how a user would publish a new branch. (Earlier versions restricted pushes to the brr/* namespace; removed 2026-05-11, see commit abc1234, when agent-named branches became routine.)`
+
+If a breadcrumb wouldn't load-bear for anyone reading the page today, just
+delete the old paragraph. Git keeps it.
+
 ### Memory layers
 
 The kb has four layers, each with a distinct job:
@@ -112,12 +138,14 @@ The kb has four layers, each with a distinct job:
 |-------|---------|----------|
 | Raw | What was said / what happened, verbatim | `.brr/conversations/`, `.brr/tasks/`, `.brr/traces/` (gitignored) |
 | Episodic | Curated chronological narrative | `kb/log.md` |
-| Semantic + decisional | What we know / why we chose it | `kb/subject-*.md`, `kb/decision-*.md`, `kb/research-*.md`, `kb/plan-*.md`, `kb/design-*.md` |
+| Semantic + decisional | Current-state synthesis of what we know / why we chose it | `kb/subject-*.md`, `kb/decision-*.md`, `kb/research-*.md`, `kb/plan-*.md`, `kb/design-*.md` |
 | Schema | How the kb is structured + how to maintain it | this file, `src/brr/docs/` |
 
 The split matters because conflating them produces noise. A chronological
 log is not a synthesis. A research page is not a hub. A decision is not a
-work-in-flight plan.
+work-in-flight plan. The semantic + decisional layer in particular is **not
+append-only** — it gets rewritten to reflect the current shape, not grown
+with each new layer of edits.
 
 ### Graph topology
 
@@ -195,13 +223,14 @@ didn't, don't.
 ### What to persist
 
 - **Decisions** — context, alternatives considered, why this option was
-  chosen. Update in place when later work refines or reverses them, with a
-  dated note.
+  chosen. Rewrite to the current choice when later work refines or
+  reverses them, with a lineage breadcrumb.
 - **Discoveries** — non-obvious gotchas, undocumented dependencies, patterns
   that would save time next run.
 - **Research** — investigation results, comparisons, analysis.
 - **Architecture / subjects** — system overviews, data flows, component
-  maps, hubs synthesising what we know about a major area.
+  maps, hubs synthesising what we know about a major area *as it stands
+  today*.
 
 ### What not to persist
 
@@ -212,13 +241,19 @@ didn't, don't.
   copy.
 - Empty hubs. A subject page with three sentences and a TODO list is worse
   than no page; either fill it with real synthesis or don't create it.
+- "Originally we did X, then Y, now Z" running diffs of a page's own
+  earlier wording. Collapse to current state plus a one-line breadcrumb;
+  the diff lives in git.
 
 ### Contradiction handling
 
-If new work contradicts a previous decision, update the decision page in
-place — note what changed, why, and when. Don't silently overwrite; the
-history of why decisions evolved is as valuable as the decisions
-themselves.
+If new work contradicts a previous decision, **rewrite** the decision page
+to reflect the current choice, and leave a one-line lineage breadcrumb
+(see "State first, history in git") noting what changed, when, and why,
+with a link to the successor or commit. Don't silently overwrite, and
+don't preserve the entire prior page inline — the breadcrumb load-bears
+for readers who remember the old shape; the diff load-bears for
+historians, and git already has it.
 
 ### Health checks
 
@@ -232,6 +267,9 @@ When resuming work or between tasks, scan `kb/` for:
   has shipped and contains canonical knowledge for an area without a
   subject hub — promote it).
 - Orphans (pages with no inbound link from any subject hub or peer).
+- Pages reading like running diffs of their own past wording ("originally
+  X, then Y, now Z") instead of describing the current shape with a
+  lineage breadcrumb. Compress.
 
 Clean up as you go. If a page no longer adds value — operational scratch
 absorbed by a successor, a review whose findings are addressed and never

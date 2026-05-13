@@ -1351,3 +1351,52 @@ not reliably delivered as a durable branch/commit. Recommended direction:
 keep deterministic preflight, but move semantic grooming into explicit
 first-class maintenance tasks scheduled at idle boundaries and processed
 through the same branch, response, commit, and push path as user work.
+
+## [2026-05-13] implement | KB/Telegram/PR follow-ups
+
+Shipped the bundle accepted off the previous plan, plus the
+state-first refinement on top of `decision-kb-shape.md`:
+
+- Telegram cards drop the `← seed_ref` fallback. The branch arrow
+  now only appears when an explicit `auto_land_branch` is set, so
+  the card no longer claims `main` is the landing target when the
+  agent will pick its own branch.
+- The runner image installs GitHub CLI (`gh`) from upstream and the
+  daemon mounts `~/.config/gh` into `/brr-home/.config/gh`. The
+  no-auto-land branch prompt gains a conditional nudge to
+  `git push -u && gh pr create --fill` so an agent that finishes a
+  task on a fresh branch can open a PR for review on its own.
+- `AGENTS.md` grew a "State first, history in git" section. Pages
+  are rewritten to current shape; running-diff blocks (`previously
+  X, now Y`) collapse into one lineage breadcrumb. `prompts._read_recent_log`
+  swapped a fixed-N entry cap for a byte budget so a single verbose
+  log entry can't push older breadcrumbs out of the prompt.
+- Manual grooming pass: rewrote `design-daemon-landing-branch.md`,
+  `subject-tasks-branching.md`, the repo-dive-in-map header, and
+  refreshed `subject-kb.md` / `decision-kb-shape.md` to align with
+  the new principle. Trimmed the `design-env-interface.md`
+  durability/teardown wording so it matches the shipped
+  outcome-aware salvage rule.
+- `kb_preflight` carries severity (`error` / `warning` / `info`)
+  and four advisories: `oversized-page`, `missing-status-marker`,
+  `revision-history-heavy`, `recent-log-budget-exceeded`. New
+  `kb_health.compute_graph_stats` feeds graph topology stats
+  (pages-by-kind, largest pages, peer-orphan candidates, log shape)
+  into the maintenance prompt alongside the findings.
+- Inline kb maintenance now commits leftover kb edits onto the
+  task's branch as `brr maintenance <brr-maintenance@brr.local>`
+  and emits a `kb_maintenance_done` packet so the response card
+  shows "maintenance: N kb commits" (or "clean"). Closes the silent
+  drop where cleanup edits never reached the operator.
+
+Rejected: scheduled / proactive maintenance jobs. Inline maintenance
+plus the schema rewrite cover the same ground without spawning stale
+branches or unclear push semantics. The `AGENTS.md` rewrite is the
+key lever for Cursor and other non-daemon sessions because they read
+the same schema brr-managed runs do.
+
+Tests: full suite is green (288 passing, up from 262). Manual
+preflight pass on `kb/` left two known advisories — `oversized-page`
+on `repo-dive-in-map.md` (intentional reading guide, listed for
+later splitting) and a stale-status fix on `decision-bundled-docs.md`
+that was applied during the pass.

@@ -1,5 +1,7 @@
 # Decision: Bundled Docs Location
 
+Status: accepted on 2026-04-30
+
 ## Context
 
 brr needed a stable home for tool-level agent documentation —
