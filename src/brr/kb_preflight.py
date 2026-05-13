@@ -1,10 +1,9 @@
 """Deterministic kb consistency scan for the post-task maintenance pass.
 
 The preflight reads the on-disk shape of ``kb/`` and produces a list
-of structured findings — orphaned pages, broken cross-links, index
-drift. It does not modify anything; the LLM-driven kb-maintenance
-prompt either acts on the findings or explains why no action is
-needed.
+of structured findings. It does not modify anything; the LLM-driven
+kb-maintenance prompt either acts on the findings or explains why no
+action is needed.
 
 Skip-fast contract: when the preflight returns no findings *and*
 ``kb/`` was untouched by the preceding task, the maintenance pass can
@@ -12,15 +11,16 @@ be skipped entirely. That keeps the daemon's hot path cheap and
 turns kb-maintenance into a true safety net rather than a tax on
 every run.
 
-Findings only cover things a deterministic scanner can be confident
-about:
+Each finding carries a ``severity``:
 
-- ``missing-from-index``: a kb page exists on disk but is not linked
-  from ``kb/index.md``.
-- ``stale-index-entry``: ``kb/index.md`` links to a path that doesn't
-  exist on disk.
-- ``broken-link``: any kb page links (relatively) to a path that
-  doesn't exist on disk.
+- ``error``: a structural inconsistency the scanner is confident
+  about. Existing types: ``missing-from-index``, ``stale-index-entry``,
+  ``broken-link``, ``missing-index``.
+- ``warning``: a heuristic advisory the maintenance pass should act
+  on when proportional. Types: ``oversized-page``,
+  ``missing-status-marker``, ``revision-history-heavy``.
+- ``info``: a soft hint for the maintenance pass. Type:
+  ``recent-log-budget-exceeded``.
 
 Lifecycle-marker drift, subject-hub coverage, contradiction with the
 log, and similar judgement calls live in the LLM redundancy pass on
@@ -40,6 +40,73 @@ from typing import Iterable
 # log is curated narrative, not a target page in the index sense.
 _INDEX_BASENAMES_EXEMPT_FROM_INDEX = frozenset({"index.md", "log.md"})
 
+# Page-size advisory threshold. Pages this big are hard to read in one
+# sitting and usually indicate accumulated layers — either split into
+# a hub plus daughter pages, or compress to current state. ``log.md``
+# grows monotonically and is exempt.
+_OVERSIZED_PAGE_BYTES = 32_768
+
+# Names that don't make sense to size-check or to require a Status
+# line. The index is structural; the log is chronological narrative;
+# the wiki/notes pages are by-design discursive.
+_OVERSIZED_PAGE_EXEMPT = frozenset({"log.md"})
+
+# Page-name prefixes that should carry a ``Status:`` line near the
+# top so a cold reader knows whether the page is live or historical.
+_STATUS_REQUIRED_PREFIXES: tuple[str, ...] = (
+    "plan-", "design-", "decision-", "deck-",
+)
+
+# How many non-blank lines we'll look at to find a Status marker
+# before giving up. Generous enough to allow a paragraph of preamble.
+_STATUS_SEARCH_LINES = 12
+
+# Soft mirror of ``prompts._MAX_LOG_BYTES``. Duplicated here so the
+# preflight module stays free of prompt-layer imports; if they ever
+# drift, the maintenance pass will surface the discrepancy.
+_RECENT_LOG_BYTES = 4096
+
+# Heuristic for running-diff bloat. A single dated lineage breadcrumb
+# is the *recommended* shape (AGENTS.md → "State first, history in
+# git"), so we count match instances across multiple signals — a page
+# crossing the threshold is reliably a scrapbook, not just a page
+# with a healthy breadcrumb. ``## Lineage``-style sections with terse
+# dated bullets stay clean because the bullets aren't labelled
+# "amendment" / "revision" / "note".
+_REVISION_HEAVY_THRESHOLD = 5
+_REVISION_HEAVY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # A "Revision history" or "Amendments" section header at the top
+    # of a page — AGENTS.md asks for a single Lineage breadcrumb at
+    # the bottom instead.
+    re.compile(
+        r"^## (Revision history|Amendments)\b",
+        re.MULTILINE | re.IGNORECASE,
+    ),
+    # Dated bullets explicitly labelled "amendment" / "revision" /
+    # "note". A handful of these in one page is the running-diff
+    # pattern; a single Lineage bullet without the label is fine.
+    re.compile(
+        r"^- \*\*\d{4}-\d{2}-\d{2} (amendment|revision|note)\b",
+        re.MULTILINE | re.IGNORECASE,
+    ),
+    # Inline "the YYYY-MM-DD amendment" prose mentioning past
+    # amendments inline rather than rewriting to current state.
+    re.compile(r"\bthe \d{4}-\d{2}-\d{2} amendment\b", re.IGNORECASE),
+    # Dated `## [YYYY-MM-DD]` section headers outside of log.md
+    # (those belong in the log; here they're inline changelog).
+    re.compile(r"^## \[\d{4}-\d{2}-\d{2}\]", re.MULTILINE),
+    # Inline "the old X" mentions and "previously / originally" —
+    # one of these is fine for context, several is bloat.
+    re.compile(r"\bthe old\b", re.IGNORECASE),
+    re.compile(r"\bpreviously\b", re.IGNORECASE),
+    re.compile(r"\boriginally\b", re.IGNORECASE),
+    re.compile(r"^>\s+\*\*Superseded\b", re.MULTILINE),
+)
+
+# Severity rank for stable sort: errors first, then warnings, then
+# informational hints.
+_SEVERITY_RANK = {"error": 0, "warning": 1, "info": 2}
+
 
 # Match Markdown inline links like ``[text](path)`` and reference-style
 # links ``[text]: path``. We capture the URL/path component; anchors
@@ -47,28 +114,42 @@ _INDEX_BASENAMES_EXEMPT_FROM_INDEX = frozenset({"index.md", "log.md"})
 _INLINE_LINK_RE = re.compile(r"\[(?:[^\]]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 _REFERENCE_LINK_RE = re.compile(r"^\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
 
+_LOG_ENTRY_RE = re.compile(r"^## \[", re.MULTILINE)
+
 
 @dataclass(frozen=True)
 class Finding:
-    """A single deterministic kb consistency observation."""
+    """A single deterministic kb consistency observation.
+
+    ``severity`` is one of ``error`` / ``warning`` / ``info``. Errors
+    are structural inconsistencies the scanner is confident about;
+    warnings are heuristic advisories the maintenance pass should
+    act on when proportional; info is a soft hint.
+    """
 
     type: str
     target: str
     description: str
+    severity: str = "error"
 
     def render(self) -> str:
-        """Return the bullet form used inside the maintenance prompt."""
-        return f"- **{self.type}** `{self.target}` — {self.description}"
+        """Return the bullet form used inside the maintenance prompt.
+
+        ``error`` findings render with their type prominent so the
+        existing prompt format stays familiar. Advisories prefix the
+        severity so a reader can triage at a glance.
+        """
+        sev = "" if self.severity == "error" else f" [{self.severity}]"
+        return f"- **{self.type}**{sev} `{self.target}` — {self.description}"
 
 
 def scan(repo_root: Path) -> list[Finding]:
     """Return all kb consistency findings for *repo_root*.
 
     Returns an empty list when ``kb/`` is missing or when the kb is
-    fully consistent. The order of findings is stable
-    (``missing-from-index`` first, then ``stale-index-entry``, then
-    ``broken-link`` sorted by source then target) so the formatted
-    output is reproducible.
+    fully consistent. Findings are stable-sorted by
+    ``(severity_rank, type, target)`` so the formatted output is
+    reproducible and structural errors appear before advisories.
     """
     repo_root = repo_root.resolve()
     kb_dir = repo_root / "kb"
@@ -82,6 +163,16 @@ def scan(repo_root: Path) -> list[Finding]:
     findings.extend(_check_index_coverage(kb_dir, index_path, pages))
     findings.extend(_check_index_targets_exist(repo_root, index_path))
     findings.extend(_check_broken_links(repo_root, kb_dir, pages))
+    findings.extend(_check_oversized_pages(kb_dir, pages))
+    findings.extend(_check_missing_status_marker(kb_dir, pages))
+    findings.extend(_check_revision_history_heavy(kb_dir, pages))
+    findings.extend(_check_recent_log_budget(kb_dir))
+
+    findings.sort(key=lambda f: (
+        _SEVERITY_RANK.get(f.severity, 99),
+        f.type,
+        f.target,
+    ))
     return findings
 
 
@@ -191,8 +282,162 @@ def _check_broken_links(
                     "remove the link or fix the target."
                 ),
             ))
-    findings.sort(key=lambda f: (f.type, f.target))
     return findings
+
+
+def _check_oversized_pages(kb_dir: Path, pages: list[Path]) -> list[Finding]:
+    """Pages bigger than the readability threshold get a soft advisory.
+
+    The kb is a graph of pages a cold reader should be able to hold
+    in one sitting. Past ~32KB the page is usually doing more than
+    one thing — either it's a hub that's grown daughter material, or
+    it's accumulated running-diff bloat. Either way, the maintenance
+    pass should consider splitting or compressing.
+
+    ``log.md`` is exempt because it's append-only chronological
+    narrative; size grows monotonically and that is the point.
+    """
+    findings: list[Finding] = []
+    for page in pages:
+        if page.name in _OVERSIZED_PAGE_EXEMPT:
+            continue
+        size = page.stat().st_size
+        if size <= _OVERSIZED_PAGE_BYTES:
+            continue
+        rel = page.relative_to(kb_dir).as_posix()
+        findings.append(Finding(
+            type="oversized-page",
+            target=f"kb/{rel}",
+            description=(
+                f"page is {size} bytes (threshold {_OVERSIZED_PAGE_BYTES}); "
+                "consider splitting into a hub plus daughter pages, or "
+                "compressing accumulated history into a lineage breadcrumb."
+            ),
+            severity="warning",
+        ))
+    return findings
+
+
+def _check_missing_status_marker(
+    kb_dir: Path, pages: list[Path],
+) -> list[Finding]:
+    """Plan, design, decision, and deck pages must carry a Status line.
+
+    A cold reader needs to know whether a page is live, shipped, or
+    historical at a glance. The Status line lives near the top so it
+    can't be missed; we scan the first
+    :data:`_STATUS_SEARCH_LINES` non-blank lines.
+    """
+    findings: list[Finding] = []
+    for page in pages:
+        name = page.name
+        if not name.startswith(_STATUS_REQUIRED_PREFIXES):
+            continue
+        if not _has_status_marker(page):
+            rel = page.relative_to(kb_dir).as_posix()
+            findings.append(Finding(
+                type="missing-status-marker",
+                target=f"kb/{rel}",
+                description=(
+                    "page lacks a `Status:` line near the top; add "
+                    "`Status: active|accepted on YYYY-MM-DD|"
+                    "shipped on YYYY-MM-DD|superseded by <link> on "
+                    "YYYY-MM-DD` so a cold reader can triage at a "
+                    "glance."
+                ),
+                severity="warning",
+            ))
+    return findings
+
+
+def _check_revision_history_heavy(
+    kb_dir: Path, pages: list[Path],
+) -> list[Finding]:
+    """Pages that read like running diffs of their own past wording.
+
+    Multiple dated-amendment bullets, dated section headers, or
+    "Superseded step" blockquotes inside a single page usually mean
+    the page is accumulating a changelog instead of being rewritten
+    to current state. AGENTS.md → "State first, history in git" asks
+    that this be compressed to a lineage breadcrumb. ``log.md`` is
+    exempt — it *is* the chronological narrative.
+    """
+    findings: list[Finding] = []
+    for page in pages:
+        if page.name == "log.md":
+            continue
+        text = page.read_text(encoding="utf-8")
+        hits = sum(len(pat.findall(text)) for pat in _REVISION_HEAVY_PATTERNS)
+        if hits < _REVISION_HEAVY_THRESHOLD:
+            continue
+        rel = page.relative_to(kb_dir).as_posix()
+        findings.append(Finding(
+            type="revision-history-heavy",
+            target=f"kb/{rel}",
+            description=(
+                f"page shows {hits} signs of running-diff / amendment "
+                "wording; rewrite to current state and leave a single "
+                "lineage breadcrumb at the bottom (see AGENTS.md → "
+                "\"State first, history in git\")."
+            ),
+            severity="warning",
+        ))
+    return findings
+
+
+def _check_recent_log_budget(kb_dir: Path) -> list[Finding]:
+    """Flag when the newest log entry is bigger than the prompt budget.
+
+    Recent log entries are injected into every task prompt, capped
+    by a byte budget (see :mod:`brr.prompts`). When the most recent
+    entry alone exceeds that budget, it pushes older entries out
+    silently and consumes context that would otherwise carry kb
+    breadcrumbs. The maintenance pass should compress the entry.
+    """
+    log_path = kb_dir / "log.md"
+    if not log_path.exists():
+        return []
+    text = log_path.read_text(encoding="utf-8")
+    parts = _LOG_ENTRY_RE.split(text)
+    if len(parts) <= 1:
+        return []
+    newest = f"## [{parts[-1]}".rstrip()
+    size = len(newest.encode("utf-8"))
+    if size <= _RECENT_LOG_BYTES:
+        return []
+    header = newest.splitlines()[0]
+    return [Finding(
+        type="recent-log-budget-exceeded",
+        target=f"kb/log.md ({header})",
+        description=(
+            f"newest log entry is {size} bytes (prompt budget "
+            f"{_RECENT_LOG_BYTES}); compress to its load-bearing "
+            "facts so older entries still fit in the conversation "
+            "context block."
+        ),
+        severity="info",
+    )]
+
+
+def _has_status_marker(page: Path) -> bool:
+    """Return True when *page* has a ``Status:`` line near the top.
+
+    We tolerate Markdown emphasis around the marker (``**Status:**``)
+    and stray indentation, and stop after
+    :data:`_STATUS_SEARCH_LINES` non-blank lines to avoid scanning
+    the whole page for a header that ought to be at the top.
+    """
+    looked = 0
+    for raw in page.read_text(encoding="utf-8").splitlines():
+        line = raw.strip().lstrip("*").lstrip()
+        if not line:
+            continue
+        looked += 1
+        if line.lower().startswith("status:"):
+            return True
+        if looked >= _STATUS_SEARCH_LINES:
+            break
+    return False
 
 
 def _kb_targets_linked_from(page: Path, kb_dir: Path) -> set[str]:
