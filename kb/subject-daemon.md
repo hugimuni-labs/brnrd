@@ -38,7 +38,8 @@ The daemon owns orchestration, not meaning:
 - Environments isolate execution. The daemon resolves branch intent and
   environment policy, asks the selected backend to prepare and finalize,
   then lets the agent make runtime branch choices inside the run. The
-  live env design is [`design-env-interface.md`](design-env-interface.md).
+  env synthesis hub is [`subject-envs.md`](subject-envs.md); the protocol
+  spec lives in [`design-env-interface.md`](design-env-interface.md).
 
 The serial-v1 guarantee still matters. The old concurrent-worktree plan
 imagined a pool and merge coordinator, but the shipped system keeps one
@@ -121,8 +122,9 @@ Read these in order when changing daemon behavior:
 2. [`src/brr/daemon.py`](../src/brr/daemon.py) for the actual loop.
 3. [`src/brr/docs/execution-map.md`](../src/brr/docs/execution-map.md)
    for the user-facing pipeline contract.
-4. [`design-env-interface.md`](design-env-interface.md) for environment
-   backend responsibilities.
+4. [`subject-envs.md`](subject-envs.md) for environment backend
+   responsibilities; [`design-env-interface.md`](design-env-interface.md)
+   for the underlying protocol spec.
 5. [`subject-tasks-branching.md`](subject-tasks-branching.md) and
    [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
    for task construction, branch intent resolution, and the accepted fix

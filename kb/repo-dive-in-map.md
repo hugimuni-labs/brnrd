@@ -1033,8 +1033,13 @@ Designs and notes still open:
 - [Developer daemon reload design](design-daemon-dev-reload.md) —
   shipped (editable install plus explicit opt-in quiescent re-exec for
   brr self-development).
-- [Env Interface design](design-env-interface.md) — in flight
-  (3/5 envs shipped; durability contract partial).
+- [Subject: environments](subject-envs.md) — synthesis hub for the
+  current env shape (`local`/`worktree`/`docker` shipped,
+  `ssh`/`devcontainer` designed, plugin point and durability contract
+  explained).
+- [Env protocol design](design-env-interface.md) — accepted on
+  2026-05-06; the protocol spec, per-env mechanics, plugin model, and
+  decentralised merge framing that the hub above synthesises.
 - [Notes: pondering fleet](notes-pondering-fleet.md) — paused.
 
 Strategic decks:

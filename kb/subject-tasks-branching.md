@@ -80,8 +80,10 @@ for the rationale.
    task construction is mechanical and branching moved to runtime.
 2. [`plan-branch-modes.md`](plan-branch-modes.md) for the older design
    history and discarded per-task branch fields.
-3. [`design-env-interface.md`](design-env-interface.md) for the env
-   protocol and worktree/docker durability contract.
+3. [`subject-envs.md`](subject-envs.md) for the env protocol,
+   durability contract, and salvage rule the worktree/docker
+   finalizers implement; [`design-env-interface.md`](design-env-interface.md)
+   for the underlying design.
 4. [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
    for the accepted branch-intent resolver design and remaining future
    source-metadata expansion points.
