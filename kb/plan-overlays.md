@@ -1,25 +1,31 @@
 # Plan: Overlays (Phase 1 of the fleet deck)
 
-**Status: blocked.** Overlays are paused behind the env work and a
-research gate. Do not start implementation until both are resolved.
+**Status: blocked.** Overlays are paused until the research gate below
+chooses a shape. The broad env blocker has narrowed now that the core
+`local` / `worktree` / `docker` `Env` protocol ships; check
+[`subject-envs.md`](subject-envs.md) before reviving any env-dependent
+overlay requirement.
 
 Concrete plan for user-level steering overlays: change agent behaviour
 across many repos without per-repo edits. Absorbs the personal-workflow
 variants idea and the `brr eject` retirement.
 
-Strategic context: see [`deck-brr-fleet-steering.md`](deck-brr-fleet-steering.md)
-(Axis 1) and [`notes-pondering-fleet.md`](notes-pondering-fleet.md)
-(open pondering).
+Current synthesis: [`subject-fleet-overlays.md`](subject-fleet-overlays.md).
+Strategic context: see
+[`deck-brr-fleet-steering.md`](deck-brr-fleet-steering.md) (Axis 1) and
+[`notes-pondering-fleet.md`](notes-pondering-fleet.md) (open pondering).
 
 ---
 
 ## Blocking conditions
 
-1. The env PR (see [`design-env-interface.md`](design-env-interface.md))
-   ships. Three of five envs are in; durability contract enforcement
-   and the remaining two backends still need to land.
-2. The research gate below is resolved and committed as
+1. The research gate below is resolved and committed as
    `kb/research-overlay-shape.md`.
+2. Any env dependency introduced by that research is checked against
+   [`subject-envs.md`](subject-envs.md) and
+   [`design-env-interface.md`](design-env-interface.md). The remaining
+   `ssh` / `devcontainer` backends are not automatic blockers unless the
+   chosen overlay shape depends on them.
 
 ---
 
@@ -57,7 +63,7 @@ receives. Never replaces a bundled prompt — only augments.
   AGENTS.md"; composable (one rule once, lifted into every invocation);
   minimal lookup logic (no name matching, no precedence across prompts).
 - Cons: can't fully replace a bundled prompt (e.g. user hates
-  `triage.md` → still needs per-repo override); overlay content is paid
+  `run.md` -> still needs per-repo override); overlay content is paid
   for on every invocation (prompt-size tax).
 
 ### Option B — Multi-file lookup chain
