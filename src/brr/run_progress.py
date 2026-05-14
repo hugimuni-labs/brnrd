@@ -113,6 +113,7 @@ class RunProgressView:
     phase_history: list[PhaseEntry] = field(default_factory=list)
     push_commits: int | None = None
     push_ok: bool = True
+    view_url: str | None = None
     maintenance_ran: bool = False
     maintenance_commits: int = 0
     maintenance_files: int = 0
@@ -312,6 +313,9 @@ def _project(
             commits = record.get("commits")
             view.push_commits = int(commits) if isinstance(commits, int) else view.push_commits
             view.push_ok = bool(record.get("ok", True))
+            view_url = record.get("view_url")
+            if isinstance(view_url, str) and view_url:
+                view.view_url = view_url
             view.detail = (
                 f"pushed {commits} commit(s)" if commits else "pushed"
             )
@@ -507,6 +511,12 @@ def _render_compact(
             lines.append(line)
             if entry.detail and entry.name in {"failed", "conflict"}:
                 lines.append(entry.detail)
+            if entry.name == "delivered" and view.view_url:
+                # The forge URL goes on its own line so the terminal
+                # line stays readable on narrow chat surfaces. Bare
+                # URLs auto-link on every gate we render to, so no
+                # markdown wrapping is needed.
+                lines.append(f"view: {view.view_url}")
         elif is_active:
             elapsed = _elapsed_seconds(entry.started_at, _to_iso(now))
             if elapsed is not None and elapsed >= 1:

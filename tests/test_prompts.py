@@ -157,11 +157,38 @@ class TestPromptBuilding:
         assert "Branch source: fallback:preserve" in prompt
         assert "Host context branch: feature/host" in prompt
         assert "preserve that branch" in prompt
-        # No auto-land target → nudge the agent to open a PR when gh is
-        # available. The nudge is intentionally conditional so custom
-        # images without gh, or non-GitHub remotes, can skip it.
-        assert "gh pr create --fill" in prompt
-        assert "Skip silently if `gh` is missing" in prompt
+        # No auto-land target → nudge the agent to rename the branch to
+        # something descriptive so the forge URL brr will publish reads
+        # well on the forge's branch list.
+        assert "rename the branch" in prompt
+        assert "brr/<short-slug>" in prompt
+        # The forge-locked `gh pr create` nudge is gone — brr now emits
+        # a forge URL in the response card automatically, and PR
+        # creation is forge-specific behaviour that doesn't belong in
+        # the default prompt.
+        assert "gh pr create" not in prompt
+
+    def test_daemon_prompt_warns_against_local_paths_in_chat_reply(self, tmp_path):
+        """The agent shouldn't tell the remote user to click on a
+        worktree path that only exists on the host running brr.
+        Telegram in particular doesn't render those as links and the
+        user can't reach them anyway."""
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        prompt = build_daemon_prompt(
+            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-123",
+            branch_name="brr/task-123",
+            seed_ref="main",
+            auto_land_branch=None,
+        )
+
+        assert "remotely" in prompt
+        assert "basename only" in prompt
+        assert ".brr/worktrees/" in prompt  # cited as the bad pattern
+        assert "forge-hosted branch URL" in prompt
 
     def test_daemon_prompt_with_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

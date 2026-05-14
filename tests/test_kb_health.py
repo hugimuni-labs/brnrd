@@ -193,3 +193,57 @@ def test_format_graph_stats_includes_load_bearing_sections(tmp_path):
     assert "kb/log.md:" in block
     assert "largest pages" in block
     assert "most-referenced pages" in block
+
+
+def test_compute_graph_stats_records_task_touched_count(tmp_path):
+    """When the caller passes the list of files the preceding task
+    changed, the snapshot records the count so the formatter can
+    surface it."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(tmp_path / "kb" / "subject-hub.md", "# Hub\n")
+
+    stats = kb_health.compute_graph_stats(
+        tmp_path,
+        task_touched=["kb/subject-hub.md", "kb/log.md", "AGENTS.md"],
+    )
+
+    assert stats.task_touched_count == 3
+
+
+def test_compute_graph_stats_task_touched_defaults_to_zero(tmp_path):
+    """Callers that don't pass the list (older sites, the
+    skip-fast path) get a zero count and the formatter omits the
+    line entirely."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(tmp_path / "kb" / "subject-hub.md", "# Hub\n")
+
+    stats = kb_health.compute_graph_stats(tmp_path)
+
+    assert stats.task_touched_count == 0
+
+
+def test_format_graph_stats_surfaces_task_touched_count(tmp_path):
+    """A non-zero touched count appears as a one-line context cue
+    alongside the structural stats so the agent sees both views."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(tmp_path / "kb" / "subject-hub.md", "# Hub\n")
+
+    stats = kb_health.compute_graph_stats(
+        tmp_path,
+        task_touched=["kb/subject-hub.md", "kb/log.md"],
+    )
+    block = kb_health.format_graph_stats(stats)
+
+    assert "task touched 2 kb / AGENTS.md pages this run" in block
+
+
+def test_format_graph_stats_omits_touched_line_when_zero(tmp_path):
+    """Skip-fast and zero-touch runs shouldn't see a stale
+    'task touched 0 ...' bullet."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(tmp_path / "kb" / "subject-hub.md", "# Hub\n")
+
+    stats = kb_health.compute_graph_stats(tmp_path)
+    block = kb_health.format_graph_stats(stats)
+
+    assert "task touched" not in block
