@@ -18,17 +18,40 @@ and **AGENTS.md → "State first, history in git"**:
 - every kb page (except `index.md` and `log.md`) is linked from
   `kb/index.md` and from at least one peer.
 
-A deterministic preflight already ran. The Findings section below
-lists what to act on: errors are structural failures; warnings are
-heuristic advisories; info-level entries are soft hints. Address the
-errors and warnings; treat info entries as nudges. If a Graph stats
-section follows, use it as context — large pages are candidates for
-compression, peer orphans are candidates for absorption into a
-subject hub.
+## Always do this
 
-If no findings section follows, do a brief redundancy pass: spot-check
-that recent kb changes from the preceding task respect the rules
-above.
+**Review what the preceding task wrote.** If a `Task-touched kb pages`
+section appears below, start there: open each listed page, read the
+diff in the current commits on this branch, and check that the
+changes respect the rules above. The pattern to watch for is
+historical narrative — sentences that describe *what changed* or
+*what we used to think* — leaking into pages that should be reading
+as current-state synthesis. Rewrite those passages to the principle
+they're trying to convey, leave a one-line lineage breadcrumb if the
+fact-of-change still matters, and let git history hold the rest.
+
+This always-on review is the primary job; the deterministic preflight
+below gives you additional concrete targets, not a replacement.
+
+## Then act on findings
+
+A deterministic preflight already ran. The Findings section below
+lists what it caught:
+
+- **error** — structural failures (missing index entries, broken
+  links). Always fix.
+- **warning** — heuristic advisories (oversized pages, missing
+  status markers, running-diff bloat). Act when proportional.
+- **info** — soft hints (hub-coverage gaps, proposal scaffolding on
+  shipped pages, recent-log budget). Treat as nudges; promote to
+  action when they overlap with the work you just reviewed.
+
+If a Graph stats section follows, use it as context — large pages
+are candidates for compression, peer orphans are candidates for
+absorption into a subject hub, areas with several artifact pages
+and no hub are subject-hub candidates.
+
+## Commit and exit
 
 Save your edits with one commit per logical change on the current
 branch — the daemon stays on the task's branch so your cleanup rides
@@ -37,5 +60,5 @@ triggered it. Commits should be terse and explain *why*, not *what*:
 "compress design page to current state" or "absorb plan-foo into
 subject-bar". Don't push; the daemon does that.
 
-If everything is consistent and there's nothing to do, say so on
+If the review and the findings turn up nothing actionable, say so on
 stdout in one short line and exit without committing.

@@ -1030,3 +1030,147 @@ def test_maybe_kb_maintenance_skips_packet_when_no_routing_info(tmp_path, monkey
 
     # No conversations log was created since no packet was emitted.
     assert not any((brr_dir / "conversations").iterdir())
+
+
+# ── Forge URL inference ──────────────────────────────────────────────
+
+
+def test_forge_view_url_returns_link_for_known_remote(tmp_path):
+    """When ``origin`` points at a recognised forge, ``_forge_view_url``
+    constructs the branch view URL from the live remote so gates can
+    show a clickable link in chat."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_real_repo(repo)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
+        cwd=repo, check=True,
+    )
+
+    url = daemon._forge_view_url(repo, "origin", "brr/task-xyz")
+
+    assert url == "https://github.com/Gurio/brr/tree/brr/task-xyz"
+
+
+def test_forge_view_url_returns_none_for_unknown_remote(tmp_path):
+    """A bare internal host without ``forge.kind`` configured stays
+    quiet — better silent than a guessed URL."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_real_repo(repo)
+    subprocess.run(
+        ["git", "remote", "add", "origin",
+         "git@git.example.com:team/repo.git"],
+        cwd=repo, check=True,
+    )
+
+    assert daemon._forge_view_url(repo, "origin", "main") is None
+
+
+def test_forge_view_url_honors_brr_config_forge_kind(tmp_path):
+    """``forge.kind = gitlab`` in ``.brr/config`` teaches brr which
+    template to apply to an internal host the default patterns
+    don't recognise."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_real_repo(repo)
+    subprocess.run(
+        ["git", "remote", "add", "origin",
+         "git@git.internal.example.com:team/repo.git"],
+        cwd=repo, check=True,
+    )
+    (repo / ".brr").mkdir(exist_ok=True)
+    (repo / ".brr" / "config").write_text(
+        "forge.kind=gitlab\n", encoding="utf-8",
+    )
+
+    url = daemon._forge_view_url(repo, "origin", "feature/foo")
+
+    assert url == (
+        "https://git.internal.example.com/team/repo/-/tree/feature/foo"
+    )
+
+
+def test_forge_view_url_returns_none_for_missing_remote(tmp_path):
+    """If the remote isn't configured at all, the helper returns
+    ``None`` rather than raising — the push has already happened and
+    the link is just polish."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_real_repo(repo)
+
+    assert daemon._forge_view_url(repo, "origin", "main") is None
+
+
+# ── Task-touched kb pages ────────────────────────────────────────────
+
+
+def test_kb_pages_touched_since_lists_changed_paths(tmp_path):
+    """``_kb_pages_touched_since`` returns the kb / AGENTS.md files a
+    task changed relative to the seed-ref OID so the maintenance
+    pass has a concrete review target."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pre_head = _init_real_repo(repo)
+    (repo / "kb").mkdir(exist_ok=True)
+    (repo / "kb" / "subject-x.md").write_text("# X\n", encoding="utf-8")
+    (repo / "AGENTS.md").write_text("# Agents v2\n", encoding="utf-8")
+    (repo / "src").mkdir()
+    (repo / "src" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "task work"], cwd=repo, check=True,
+        capture_output=True,
+    )
+
+    touched = daemon._kb_pages_touched_since(repo, pre_head)
+
+    # Only kb/ and AGENTS.md paths appear — src/ is filtered out.
+    assert touched == ["AGENTS.md", "kb/subject-x.md"]
+
+
+def test_kb_pages_touched_since_returns_empty_without_pre_head(tmp_path):
+    """A missing seed-ref OID falls back to an empty list rather
+    than triggering a "diff against HEAD" that would always return
+    the working tree's full set."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_real_repo(repo)
+
+    assert daemon._kb_pages_touched_since(repo, None) == []
+
+
+def test_kb_pages_touched_since_skips_non_kb_changes(tmp_path):
+    """Non-kb edits don't show up — the review target is intentionally
+    narrow to keep the maintenance agent in its lane."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pre_head = _init_real_repo(repo)
+    (repo / "src").mkdir()
+    (repo / "src" / "foo.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "code change"], cwd=repo, check=True,
+        capture_output=True,
+    )
+
+    assert daemon._kb_pages_touched_since(repo, pre_head) == []
+
+
+def test_format_touched_block_renders_paths_when_present():
+    """The block uses the header cue the maintenance prompt
+    references ('Task-touched kb pages') and lists each path on its
+    own line."""
+    block = daemon._format_touched_block(
+        ["kb/subject-x.md", "AGENTS.md"]
+    )
+
+    assert "## Task-touched kb pages" in block
+    assert "- `kb/subject-x.md`" in block
+    assert "- `AGENTS.md`" in block
+
+
+def test_format_touched_block_empty_when_no_paths():
+    """An empty list collapses to ``""`` so callers can join without
+    leaking an empty header into the prompt."""
+    assert daemon._format_touched_block([]) == ""

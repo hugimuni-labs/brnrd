@@ -75,24 +75,42 @@ class GraphStats:
     peer_orphans: list[str] = field(default_factory=list)
     log_entry_count: int = 0
     log_bytes: int = 0
+    task_touched_count: int = 0
 
 
-def compute_graph_stats(repo_root: Path) -> GraphStats:
+def compute_graph_stats(
+    repo_root: Path,
+    *,
+    task_touched: list[str] | None = None,
+) -> GraphStats:
     """Return a :class:`GraphStats` snapshot for ``repo_root/kb``.
 
     Returns an all-zero ``GraphStats`` when ``kb/`` does not exist;
     the maintenance pass can format that block trivially and the
     skip-fast contract from :mod:`brr.kb_preflight` still drops it
     when ``kb/`` was untouched.
+
+    When *task_touched* is supplied, the snapshot records the count
+    of kb / AGENTS.md pages the preceding task changed. The
+    formatter surfaces this as a one-line context cue ("task touched
+    N pages this run") so the maintenance agent's primary review
+    target is visible alongside the structural stats.
     """
     repo_root = repo_root.resolve()
     kb_dir = repo_root / "kb"
+    touched_count = len(task_touched) if task_touched else 0
     if not kb_dir.is_dir():
-        return GraphStats(total_pages=0, total_bytes=0)
+        return GraphStats(
+            total_pages=0, total_bytes=0,
+            task_touched_count=touched_count,
+        )
 
     pages = sorted(p for p in kb_dir.rglob("*.md") if p.is_file())
     if not pages:
-        return GraphStats(total_pages=0, total_bytes=0)
+        return GraphStats(
+            total_pages=0, total_bytes=0,
+            task_touched_count=touched_count,
+        )
 
     # Total bytes excludes log.md because the log is by-design
     # monotonically-growing chronological narrative; mixing it into
@@ -146,6 +164,7 @@ def compute_graph_stats(repo_root: Path) -> GraphStats:
         peer_orphans=peer_orphans,
         log_entry_count=log_entry_count,
         log_bytes=log_bytes,
+        task_touched_count=touched_count,
     )
 
 
@@ -164,6 +183,16 @@ def format_graph_stats(stats: GraphStats) -> str:
         f"- {stats.total_pages} pages, {stats.total_bytes} bytes "
         "(excluding log.md)"
     )
+    if stats.task_touched_count > 0:
+        # Surface the review-target count alongside the structural
+        # stats so the agent has both "what's in the kb now" and "what
+        # the preceding task changed" in one place. The detailed list
+        # lives in the Task-touched kb pages section above.
+        plural = "" if stats.task_touched_count == 1 else "s"
+        lines.append(
+            f"- task touched {stats.task_touched_count} kb / AGENTS.md "
+            f"page{plural} this run"
+        )
     if stats.pages_by_kind:
         kinds = ", ".join(
             f"{kind}={count}"
