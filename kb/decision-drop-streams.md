@@ -106,15 +106,18 @@ for that line of work. There is no special CLI for them.
 
 | Command            | Status                                                |
 |--------------------|-------------------------------------------------------|
-| `brr status`       | trimmed: daemon health, runner, AGENTS.md, active task |
-| `brr inspect <id>` | unchanged in spirit; drops stream cross-references    |
+| `brr status`       | removed from the public CLI                           |
+| `brr inspect <id>` | removed from the public CLI                           |
 | `brr streams`      | removed                                               |
 | `brr stream show`  | removed                                               |
 
-`brr status` and `brr inspect` are dev-phase troubleshooting tools.
-The primary user surface stays the gate (Telegram), which already
-shows per-task progress cards. The chat history is the conversation
-history — there is no separate "what happened" UI, by design.
+The primary user surface stays the gate (Telegram/Slack), which shows
+per-task progress cards. The chat history is the conversation history
+— there is no separate "what happened" UI, by design.
+
+Earlier versions kept private `status.py` helpers after this decision
+removed the stream commands; those helpers were removed on 2026-05-14
+once the only importers were tests and stale docs.
 
 ## What this decision deliberately defers
 
