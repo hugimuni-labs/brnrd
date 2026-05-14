@@ -342,6 +342,96 @@ def test_render_text_compact_shows_maintenance_clean_when_no_commits(tmp_path):
     assert "maintenance: clean" in delivered[0]
 
 
+def test_push_done_carries_forge_view_url_into_view(tmp_path):
+    """A ``push_done`` packet that includes a forge URL stores it on
+    the projection so renderers can surface a clickable link."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:9c:"
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-fv", event_id="evt-fv",
+        env="docker", status="running",
+        seed_ref="main", auto_land_branch=None,
+        branch_name="brr/task-fv",
+    )
+    _emit(brr_dir, key, "task_created", task_id="task-fv", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-fv", attempt=1)
+    _emit(brr_dir, key, "finalizing", task_id="task-fv", stage="done")
+    _emit(
+        brr_dir, key, "push_done", task_id="task-fv",
+        branch="brr/task-fv", commits=2, ok=True,
+        view_url="https://github.com/Gurio/brr/tree/brr/task-fv",
+    )
+    _emit(brr_dir, key, "done", task_id="task-fv", event_id="evt-fv")
+
+    view = run_progress.project_task(brr_dir, key, "task-fv")
+    assert view is not None
+    assert view.view_url == "https://github.com/Gurio/brr/tree/brr/task-fv"
+
+
+def test_render_text_compact_emits_view_url_under_delivered(tmp_path):
+    """The forge link gets its own line below the delivered header so
+    long URLs don't wrap the duration / push summary. Bare URLs
+    auto-link on every gate we render to today, so no markdown
+    wrapping is needed."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:9d:"
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-fl", event_id="evt-fl",
+        env="docker", status="running",
+        seed_ref="main", auto_land_branch=None,
+        branch_name="brr/task-fl",
+    )
+    _emit(brr_dir, key, "task_created", task_id="task-fl", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-fl", attempt=1)
+    _emit(brr_dir, key, "finalizing", task_id="task-fl", stage="done")
+    _emit(
+        brr_dir, key, "push_done", task_id="task-fl",
+        branch="brr/task-fl", commits=1, ok=True,
+        view_url="https://github.com/Gurio/brr/tree/brr/task-fl",
+    )
+    _emit(brr_dir, key, "done", task_id="task-fl", event_id="evt-fl")
+
+    view = run_progress.project_task(brr_dir, key, "task-fl")
+    text = run_progress.render_text(view, compact=True)
+
+    lines = text.splitlines()
+    delivered_idx = next(
+        i for i, line in enumerate(lines) if line.startswith("delivered")
+    )
+    assert lines[delivered_idx + 1] == (
+        "view: https://github.com/Gurio/brr/tree/brr/task-fl"
+    )
+
+
+def test_render_text_compact_omits_view_line_without_url(tmp_path):
+    """When push_done has no view_url, the renderer stays quiet — no
+    trailing empty line, no placeholder."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:9e:"
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-fn", event_id="evt-fn",
+        env="docker", status="running",
+        seed_ref="main", auto_land_branch=None,
+        branch_name="brr/task-fn",
+    )
+    _emit(brr_dir, key, "task_created", task_id="task-fn", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-fn", attempt=1)
+    _emit(brr_dir, key, "finalizing", task_id="task-fn", stage="done")
+    _emit(
+        brr_dir, key, "push_done", task_id="task-fn",
+        branch="brr/task-fn", commits=1, ok=True,
+    )
+    _emit(brr_dir, key, "done", task_id="task-fn", event_id="evt-fn")
+
+    view = run_progress.project_task(brr_dir, key, "task-fn")
+    text = run_progress.render_text(view, compact=True)
+
+    assert "view:" not in text
+
+
 def test_render_text_compact_skips_maintenance_when_not_run(tmp_path):
     """If the maintenance pass was skipped (no findings, kb
     untouched), no packet was emitted; the card stays quiet."""
