@@ -273,6 +273,17 @@ def _build_task_context_bundle(
         "the answer."
     )
     sections.append(
+        "- The user reads your reply remotely (Telegram / Slack / etc.). "
+        "Refer to files by basename only — `subject-envs.md`, "
+        "`run_progress.py` — never with absolute or worktree-relative "
+        "paths like `/home/.../.brr/worktrees/task-.../kb/foo.md` or "
+        "`.brr/worktrees/task-.../kb/foo.md`. Those paths exist on the "
+        "host running brr, not on the user's machine, and chat clients "
+        "won't render or link them. brr already appends a "
+        "forge-hosted branch URL to the response card when one is "
+        "available; you don't need to fabricate a link."
+    )
+    sections.append(
         "- If you wrote files (kb pages, code, fixtures, anything), commit "
         "them on the current branch. The diff is the receipt that the work "
         "happened — without a commit, the work disappears."
@@ -302,12 +313,15 @@ def _build_task_context_bundle(
                 "branch, switch to it before editing."
             )
             sections.append(
-                "- If `gh` is available and the remote is a GitHub repo, you "
-                "may open a pull request after your commits with "
-                "`git push -u origin HEAD && gh pr create --fill` so the user "
-                "gets a reviewable link in chat. Skip silently if `gh` is "
-                "missing, unauthenticated, or the remote isn't GitHub — brr "
-                "will still publish the branch."
+                f"- The placeholder branch name `{branch_name}` is opaque on "
+                "a forge branch list. If your work has a clear theme — a "
+                "feature, a fix, a refactor — rename the branch before "
+                "committing to something descriptive like "
+                "`brr/<short-slug>` (e.g. `brr/remove-status-module`, "
+                "`brr/forge-url-inference`). Keep the `brr/` prefix so the "
+                "branch is recognisable as brr-originated. Read-only, "
+                "research, or pure-discussion tasks can keep the "
+                "placeholder name."
             )
 
     recent_block = _format_recent_conversation(recent_conversation)

@@ -261,3 +261,19 @@ def default_remote(repo_root: Path) -> str | None:
     if "origin" in remotes:
         return "origin"
     return remotes[0] if remotes else None
+
+
+def remote_url(repo_root: Path, remote: str) -> str | None:
+    """Return the URL configured for *remote*, or ``None``.
+
+    Wraps ``git remote get-url <remote>``. Returns ``None`` for
+    unknown remotes or any git failure so callers can fall through to
+    "no link" without raising.
+    """
+    if not remote:
+        return None
+    result = _git(repo_root, "remote", "get-url", remote, check=False)
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None

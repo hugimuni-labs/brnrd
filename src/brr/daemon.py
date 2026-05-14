@@ -27,6 +27,7 @@ from . import config as conf
 from . import conversations
 from . import dev_reload as reload_mod
 from . import envs
+from . import forges
 from . import gitops
 from . import kb_health
 from . import kb_preflight
@@ -191,6 +192,15 @@ def _push_if_needed(
                 detail = (push.stderr or push.stdout or "").strip()
                 if detail:
                     done_payload["error"] = detail[:500]
+            elif remote:
+                # On a successful push, try to derive a clickable view
+                # URL so the gate can put a real link in front of the
+                # operator. Failures stay quiet — the push already
+                # happened, the branch is reachable, the link is just
+                # a nice-to-have.
+                view = _forge_view_url(repo_root, remote, branch_name)
+                if view:
+                    done_payload["view_url"] = view
             updates.emit(brr_dir, updates.UpdatePacket(
                 type="push_done",
                 conversation_key=conversation_key,
@@ -198,6 +208,32 @@ def _push_if_needed(
             ))
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+
+
+def _forge_view_url(
+    repo_root: Path, remote: str, branch: str,
+) -> str | None:
+    """Compute the forge "view branch" URL or ``None`` when not derivable.
+
+    The path is intentionally tolerant: any failure (missing remote,
+    unparseable URL, unknown forge, missing config) returns ``None``
+    and the caller emits a packet without the link. The push has
+    already succeeded by the time we're here; a missing link is never
+    worth failing the task over.
+    """
+    try:
+        url = gitops.remote_url(repo_root, remote)
+        if not url:
+            return None
+        cfg = conf.load_config(repo_root)
+        return forges.view_branch_url(
+            url,
+            branch,
+            override_kind=cfg.get("forge.kind") or None,
+            override_url_base=cfg.get("forge.url_base") or None,
+        )
+    except Exception:
+        return None
 
 
 def _commits_between(repo_root: Path, base_ref: str, branch: str) -> list[str]:
@@ -326,6 +362,19 @@ def _run_worker(
     branch_name = env_ctx.branch_name
     if branch_name:
         task.meta["branch_name"] = branch_name
+
+    # Pin the OID the task branch sprouted from so the post-task
+    # maintenance pass can ask "which kb / AGENTS.md pages did the
+    # preceding work touch?" — that's the concrete review target the
+    # maintenance agent needs to spot historical-narrative leakage on
+    # pages the task edited. Resolving the seed ref against the run
+    # root catches the case where the host's view of the ref has
+    # since moved.
+    task_pre_head = (
+        gitops.rev_parse(run_root, branch_plan.seed_ref)
+        if branch_plan.seed_ref
+        else None
+    )
 
     updates.emit(brr_dir, updates.UpdatePacket(
         type="env_prepared",
@@ -497,6 +546,7 @@ def _run_worker(
             maintenance_trace = _maybe_kb_maintenance(
                 run_root, repo_root, cfg, runner_name,
                 brr_dir=brr_dir, conv_key=conv_key, task_id=task.id,
+                task_pre_head=task_pre_head,
                 trace=True,
             )
             if maintenance_trace:
@@ -790,6 +840,67 @@ def _kb_changed(run_root: Path) -> bool:
         return False
 
 
+# Pathspecs the task-touched-pages query and the maintenance commit
+# scope both respect. ``kb/`` covers the synthesis layer; the two
+# ``AGENTS.md`` paths cover the universal schema (the symlink at the
+# repo root and the canonical copy bundled with the package).
+_KB_TOUCHED_PATHSPECS: tuple[str, ...] = (
+    "kb",
+    "AGENTS.md",
+    "src/brr/AGENTS.md",
+)
+
+
+def _kb_pages_touched_since(
+    run_root: Path, pre_head: str | None,
+) -> list[str]:
+    """Return kb/AGENTS.md files changed between *pre_head* and ``HEAD``.
+
+    Returns an empty list when *pre_head* is missing or git refuses to
+    diff (worktree without git, bare repos, etc.). Paths are relative
+    to the repo root and sorted for deterministic output. The
+    maintenance prompt injects the list so the agent has a concrete
+    review target rather than "the whole kb".
+    """
+    if not pre_head:
+        return []
+    try:
+        result = subprocess.run(
+            [
+                "git", "diff", "--name-only", "-z",
+                f"{pre_head}..HEAD", "--", *_KB_TOUCHED_PATHSPECS,
+            ],
+            cwd=run_root, capture_output=True, text=True, timeout=10,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+    if result.returncode != 0:
+        return []
+    raw = result.stdout
+    if not raw:
+        return []
+    paths = [p for p in raw.split("\0") if p]
+    return sorted(set(paths))
+
+
+def _format_touched_block(touched: list[str]) -> str:
+    """Render *touched* as a Markdown block for the maintenance prompt.
+
+    Returns ``""`` when the list is empty so callers can drop the
+    block entirely. The header matches the cue the maintenance prompt
+    references ("Task-touched kb pages") so the agent can recognise
+    it deterministically.
+    """
+    if not touched:
+        return ""
+    lines = ["## Task-touched kb pages", ""]
+    for path in touched:
+        lines.append(f"- `{path}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _maybe_kb_maintenance(
     run_root: Path,
     repo_root: Path,
@@ -799,6 +910,7 @@ def _maybe_kb_maintenance(
     brr_dir: Path | None = None,
     conv_key: str | None = None,
     task_id: str | None = None,
+    task_pre_head: str | None = None,
     trace: bool = False,
 ) -> str | None:
     """Run kb maintenance with deterministic preflight + LLM redundancy pass.
@@ -808,6 +920,15 @@ def _maybe_kb_maintenance(
     maintenance becomes a true safety net rather than a tax on every
     task. When findings exist or kb has been touched, the LLM pass
     runs with the preflight findings injected into the prompt.
+
+    When *task_pre_head* is supplied (typically the seed-ref OID the
+    task branch sprouted from), the prompt also gets a
+    ``Task-touched kb pages`` block listing the kb / AGENTS.md files
+    the preceding task changed. The maintenance agent reviews those
+    pages as its primary job; the deterministic findings are
+    additional concrete targets. Without this list the agent was
+    historically left to "scan the whole kb for anything weird",
+    which it reliably skipped.
 
     Any leftover uncommitted kb edits after the runner exits get
     rolled into one ``brr maintenance`` commit on the task's current
@@ -830,11 +951,17 @@ def _maybe_kb_maintenance(
     if not base_prompt:
         return None
 
+    task_touched = _kb_pages_touched_since(run_root, task_pre_head)
     findings_block = kb_preflight.format_findings(findings)
     stats_block = kb_health.format_graph_stats(
-        kb_health.compute_graph_stats(run_root),
+        kb_health.compute_graph_stats(run_root, task_touched=task_touched),
     )
-    extras = "\n\n".join(block for block in (findings_block, stats_block) if block)
+    touched_block = _format_touched_block(task_touched)
+    extras = "\n\n".join(
+        block
+        for block in (touched_block, findings_block, stats_block)
+        if block
+    )
     prompt = (
         f"{base_prompt}\n\n{extras}".rstrip() + "\n"
         if extras
