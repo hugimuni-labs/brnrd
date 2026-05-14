@@ -122,11 +122,15 @@ than becoming unconditional `brr up` behaviour.
 
 ## Status and troubleshooting
 
-Remote gates are the primary progress surface. Local status helpers are
-for troubleshooting: answer whether the daemon is running, what task is
-active, and where to inspect traces, responses, worktrees, or preserved
-Docker containers after a failure. New product UX should not accrete in
-`status.py`; the repo dive-in map records this as a runtime invariant.
+Remote gates are the primary progress surface. Troubleshooting follows
+the generated run context, persisted task and conversation files,
+traces, response artifacts, and preserved worktree/container metadata
+rather than a separate local status module. New lifecycle UX should
+extend update packets, `RunProgressView`, and gate renderers.
+
+Earlier versions kept private `status.py` helpers after removing the
+public `brr status` / `brr inspect` commands; those helpers were
+removed on 2026-05-14 once the only importers were tests and stale docs.
 
 ## Deferred directions
 

@@ -1516,3 +1516,12 @@ Tests: 353 passing (up from 295). New coverage:
 - `tests/test_prompts.py` — one case for the no-local-paths bullet;
   the existing PR-nudge case rewritten for the branch-rename
   bullet.
+
+## [2026-05-14] implement | Remove the unused status module
+
+Deleted `src/brr/status.py` after checking that it had no runtime or CLI
+callers; the only importers were direct tests for the private helper
+module. Removed those obsolete tests, kept the CLI coverage that asserts
+`status` and `inspect` are not public commands, and updated bundled docs
+plus kb pages so run progress is described as remote-first through
+`updates.py`, `run_progress.py`, and gate renderers.
