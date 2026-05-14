@@ -1525,3 +1525,10 @@ module. Removed those obsolete tests, kept the CLI coverage that asserts
 `status` and `inspect` are not public commands, and updated bundled docs
 plus kb pages so run progress is described as remote-first through
 `updates.py`, `run_progress.py`, and gate renderers.
+
+## [2026-05-14] fix | Fleet hub and dev-reload synthesis
+
+Added `subject-fleet-overlays.md` so the paused overlays / brnrd material
+has a current-state hub, narrowed the overlays blocker to its research
+gate, and compressed the shipped dev-reload design out of proposal
+scaffolding into a current reference.

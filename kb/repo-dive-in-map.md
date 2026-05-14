@@ -1000,6 +1000,10 @@ Subject hub:
   synthesis of the foreground `brr up` process, gate/file-protocol
   boundary, serial worker lifecycle, local process control, and the
   development reload direction.
+- [Subject: fleet and overlays](subject-fleet-overlays.md) —
+  synthesis of the three-axis fleet agenda: overlays for user-level
+  steering, `brnrd` as a future operator above many repos, and
+  environments as the active axis delegated to the env hub.
 
 Decisions ("drop the noisy abstraction" trio in chronological order):
 
