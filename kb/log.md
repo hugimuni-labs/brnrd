@@ -1438,3 +1438,81 @@ After the change the preflight is down to one intentional
 `proposal-scaffolding` advisory on `design-daemon-dev-reload.md`
 that the next grooming pass will pick up. Full test suite is green
 (295 passing, up from 288).
+
+## [2026-05-14] implement | Forge-aware response card + tighter kb maintenance loop
+
+End-to-end follow-up driven by the live "remove `status.py`" test
+run: the response card was leaking local worktree paths to remote
+operators, the post-task kb maintenance pass was reviewing the wrong
+files, and the previous PR-creation nudge baked in GitHub-specific
+tooling.
+
+Forge URL inference (Layer 1). New `brr.forges` module parses an
+`origin` remote URL and produces a clickable branch URL for the
+four big forge families: GitHub, GitLab (incl. `gitlab.<corp>`
+self-hosts), Bitbucket Cloud, and Gitea / Forgejo (incl.
+`codeberg.org`). For internal hosts the pattern table doesn't
+recognise, two `.brr/config` keys override detection
+(`forge.kind`, `forge.url_base`). The daemon embeds the URL in
+`push_done` after a successful push; `RunProgressView` stores it on
+the projection; the compact card renders a `view: <url>` line under
+`delivered`. Detection failures stay silent — no guessed URLs.
+
+Maintenance prompt rewritten to lead with the task. The old
+prompt's conditional "redundancy spot-check only when findings are
+absent" had the polarity backwards: a noisy `oversized-page`
+finding would crowd out the always-on review of the task's actual
+edits, which is why the `status.py` run only compressed
+`repo-dive-in-map.md` and missed the historical-narrative drift in
+`decision-drop-streams.md`. New shape:
+
+- "Always do this" section names the primary job — read the diff
+  for every page in the new `Task-touched kb pages` block and check
+  for historical-narrative leakage. Findings and graph stats are
+  named explicitly as *additional* concrete targets.
+- The daemon pins `task_pre_head` (the seed-ref OID resolved
+  against the run root) right after env prep and threads it into
+  `_maybe_kb_maintenance`, which runs `git diff --name-only
+  <pre_head>..HEAD -- kb AGENTS.md src/brr/AGENTS.md` and renders
+  the result as a Markdown block above the findings and stats.
+- `kb_health.compute_graph_stats` gained an opt-in `task_touched`
+  parameter so the rendered stats block surfaces
+  "task touched N kb / AGENTS.md pages this run" alongside the
+  structural stats. Older call sites that don't pass the list get a
+  zero count and the line is omitted.
+
+Delivery-contract prompt fixes. Two bullets added to
+`prompts.build_daemon_prompt` so agents stop generating chat replies
+remote users can't act on:
+
+- An explicit "users read this remotely; refer to files by basename
+  only" rule, citing `.brr/worktrees/...` as the bad pattern. The
+  rule also tells the agent that brr already publishes a forge URL
+  in the response card so they don't need to fabricate a link.
+- A meaningful-branch-name nudge replacing the previous
+  GitHub-specific `gh pr create --fill` snippet on the
+  no-auto-land-target path. When the work has a clear theme the
+  agent renames `brr/task-…` to `brr/<short-slug>` before
+  committing; read-only / discussion runs keep the placeholder.
+  Brr's finalize logic already follows the final branch name, so
+  this is a prompt-only change with zero daemon code.
+
+Deferred: post-task hooks for PR / MR creation. The forge URL on
+the card closes the immediate "clickable link in chat" UX gap; the
+hook protocol (JSON contract, timeouts, security framing) deserves
+its own design pass.
+
+Tests: 353 passing (up from 295). New coverage:
+
+- `tests/test_forges.py` — 41 cases covering remote URL parsing,
+  forge detection, and URL emission for the four families plus the
+  override paths.
+- `tests/test_daemon.py` — four cases for `_forge_view_url` and
+  five for `_kb_pages_touched_since` / `_format_touched_block`.
+- `tests/test_run_progress.py` — three cases covering `view_url`
+  storage and the `view:` render line.
+- `tests/test_kb_health.py` — four cases for the `task_touched`
+  parameter and its rendered line.
+- `tests/test_prompts.py` — one case for the no-local-paths bullet;
+  the existing PR-nudge case rewritten for the branch-rename
+  bullet.

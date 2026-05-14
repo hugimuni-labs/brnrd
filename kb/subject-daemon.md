@@ -69,6 +69,33 @@ writes manually. This contract is documented in
 [`execution-map.md`](../src/brr/docs/execution-map.md) and enforced by
 the daemon prompt assembled in [`prompts.py`](../src/brr/prompts.py).
 
+## Forge-aware response card
+
+After a successful push the daemon derives a clickable branch URL
+from the configured `origin` remote and embeds it in the `push_done`
+packet under `view_url`. The response card renders the URL on its
+own `view: <url>` line below the `delivered` header so remote
+operators get a link they can actually click — local worktree paths
+in chat replies don't resolve on the user's machine. The inference
+lives in [`forges.py`](../src/brr/forges.py) and covers GitHub,
+GitLab (including `gitlab.<corp>` self-hosts), Bitbucket Cloud, and
+Gitea/Forgejo (including `codeberg.org`) out of the box. For
+internal hosts the host-pattern table doesn't recognise, two
+`.brr/config` keys override detection:
+
+- `forge.kind = github | gitlab | bitbucket | gitea` — force the
+  template that should apply to this host.
+- `forge.url_base = gitlab.internal.example.com` — replace the web
+  host in the resulting URL when the SSH remote and the web UI live
+  at different domains.
+
+The module is intentionally observational: any failure (missing
+remote, unparseable URL, unknown forge) returns `None` and the card
+emits without the link rather than guessing. Action-shaped behaviour
+like opening a PR / MR belongs to a post-task hook, deferred so its
+contract can be designed honestly rather than wedged into the
+default prompt.
+
 ## Process control
 
 Process control is deliberately local:
