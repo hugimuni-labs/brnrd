@@ -1,6 +1,7 @@
 # Notes: Fleet & Steering — open pondering
 
 **Status: paused.** Companion to
+[`subject-fleet-overlays.md`](subject-fleet-overlays.md) and
 [`deck-brr-fleet-steering.md`](deck-brr-fleet-steering.md). Several
 items below were promoted into
 [`plan-overlays.md`](plan-overlays.md) — that plan is itself blocked
@@ -79,7 +80,7 @@ Pros:
 
 Cons:
 - Can't fully replace a bundled prompt (only add to it). If a user
-  hates the bundled `triage.md`, they still need per-repo override.
+  hates the bundled `run.md`, they still need per-repo override.
 - Prompt size grows; overlay content is paid for on every invocation.
 
 ### B. Single file with sections that target specific prompts
@@ -95,11 +96,11 @@ applies_to: [run, triage]      # sections targeted to specific prompts
 - prefer prose-style log entries
 
 ---
-prompt: triage
+prompt: run
 ---
 
-# Triage hint
-- treat anything with the word "spike" as branch=auto, env=worktree
+# Runner hint
+- when a task says "spike", prefer branch=auto and env=worktree
 ```
 
 Slightly more powerful, much more complex parsing. Probably not worth
@@ -186,7 +187,10 @@ it uses (see brnrd notes below). The brr-side groundwork is just:
 **Brr-side TODO when this lands:**
 - `adopt.init_repo` appends to `~/.local/state/brr/repos.json` after success.
 - New `brr forget` (or `brr init --remove`) command for explicit removal.
-- `brr status --json` for machine-readable status (brnrd needs this anyway).
+- A future machine-readable health surface for brnrd. Earlier notes
+  called this `brr status --json`, but public `status` / `inspect`
+  commands and the private status helper were removed on 2026-05-14;
+  redesign from the current task/conversation/run-progress artifacts.
 
 ---
 
@@ -201,7 +205,7 @@ brnrd is the agent that takes over that role.
 
 What brnrd *uses* (existing brr surface, mostly):
 - `~/.local/state/brr/repos.json` — fleet inventory.
-- `brr status --json` per repo — health, recent tasks, pending events.
+- A brr-side health API per repo — health, recent tasks, pending events.
 - Writing to each brr's `.brr/inbox/` (brnrd is essentially a "meta gate" — could even register itself as one).
 - Reading each brr's `.brr/responses/` and `kb/`.
 - Triggering `brr run` for one-shot tasks.
@@ -220,8 +224,8 @@ It is not a per-machine local process.
 
 Three small things, none of which are urgent but all of which are cheap:
 
-1. **`brr status --json`** — machine-readable status. Existing `brr status`
-   stays human-formatted; `--json` flag adds the structured form.
+1. **Machine-readable repo health** — a new API/command shape, not the
+   removed `brr status` helper by default.
 2. **Self-maintaining registry** (see #5).
 3. **A "remote gate" stub idea** — document that anything writing to
    `.brr/inbox/` over any transport is a valid gate. brnrd will write a

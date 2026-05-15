@@ -81,8 +81,8 @@ rendering — commits and PRs are its delivery path.
 per task: header fields (runner, env, branch ← seed/target) plus a
 `phase_history` of `PhaseEntry` records (preparing / running [per
 attempt] / finalizing / delivered|failed|conflict). The projection is
-the single source of truth for how a run looks; gate cards and
-`brr inspect` render off the same view.
+the single source of truth for how a run looks; gate cards render off
+this view.
 
 `render_text(view, *, compact, style)` produces the visible card.
 Compact mode is the chat surface: the `runner · env · branch ← seed`
@@ -91,9 +91,8 @@ where closed entries are wrapped in
 the gate-supplied strike-through tokens (`<s>…</s>` for Telegram HTML,
 `~text~` for Slack mrkdwn) and the live entry shows its rolling
 elapsed (`running · 4m 02s`). Verbose mode (`compact=False`) is the
-dev surface used by `brr status` and `brr inspect` and keeps the
-operator-facing rows (branch, env, runner, container IDs, response
-path, artifact list).
+expanded diagnostic renderer and keeps operator-facing rows (branch,
+env, runner, container IDs, response path, artifact list).
 
 ## Lines of work
 

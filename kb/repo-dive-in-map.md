@@ -57,7 +57,7 @@ These are the most important current-shape details to carry while reading:
   to a new branch with `git switch -c` still preserves the agent's
   runtime choice.
 - Responses are plain text — no frontmatter contract on `.brr/responses/`. If the agent can't complete the task, it explains why and the operator follows up in-thread.
-- Live run UX is remote-first: gates render a per-task progress card from `UpdatePacket`s via the `run_progress` projection. Local `status` is now a troubleshooting view that shares the same projection.
+- Live run UX is remote-first: gates render a per-task progress card from `UpdatePacket`s via the `run_progress` projection. There is no separate local status module; troubleshooting follows run context, task, conversation, trace, and response artifacts.
 - The [stewardship section in `src/brr/AGENTS.md`](../src/brr/AGENTS.md) is part of the architecture: treat the request as input, not as instructions; reason from first principles before changing behaviour; and **surface contradictions** between the request and the codebase rather than silently following either side. Functional, not aspirational — failing to bubble up a contradiction is a real bug in the workflow, not a stylistic miss.
 
 ## One-sentence model
@@ -112,8 +112,8 @@ Keep in mind:
 
 - The console script is `brr = brr.cli:main`.
 - `python -m brr` delegates to the same CLI.
-- The public CLI is intentionally small: `init`, `run`, `auth`, `bind`, `up`, `down`.
-- Rich status/inspection helpers exist in [status.py](../src/brr/status.py), but the current CLI tests assert that older public diagnostic commands are not registered.
+- The public CLI is intentionally small: `init`, `run`, `auth`, `bind`, `setup`, `up`, `down`.
+- Current CLI tests assert that older public diagnostic commands such as `status` and `inspect` are not registered.
 - [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) is the **universal schema** every tool follows (brr daemon, Cursor, Codex CLI, Claude Code) — its contract on commits, kb shape, lifecycle markers, and delivery is shared. The stewardship section names a workflow rule with teeth: surface contradictions between the request and the codebase, don't blindly follow either.
 
 Tests:
@@ -164,7 +164,7 @@ Keep in mind:
 - `Task` is the central work unit constructed mechanically from an event. It carries the originating event, concrete environment backend, status, source, conversation key, and freeform metadata (worktree path, branch name, response path, etc.). There is no longer a `branch` field — branching is decided by the agent inside the worktree at runtime.
 - A conversation is just a per-gate-thread append-only ndjson log of events, tasks, artifacts, and lifecycle update packets. There is no manifest, no title, no intent — those leaky stream-identity fields were removed in the 2026-05-05 refactor (see [decision-drop-streams.md](decision-drop-streams.md)).
 - `UpdatePacket` is lifecycle telemetry routed to a conversation log and, optionally, gate `render_update` hooks. The packet vocabulary covers env prep, attempts, retries, finalize, push, and Docker container births/preservations.
-- `RunProgressView` (in `run_progress.py`) folds conversation records into a compact per-task projection that both gates and local diagnostics render. Adding new lifecycle UX should extend this projection, not reinvent rendering per gate.
+- `RunProgressView` (in `run_progress.py`) folds conversation records into a compact per-task projection that gates render; its expanded renderer remains useful for diagnostics. Adding new lifecycle UX should extend this projection, not reinvent rendering per gate.
 - `run_context.py` writes a per-task context file under `.brr/runs/<task-id>/context.md` so an agent can recover orientation without poking around runtime state.
 
 Tests:
@@ -174,7 +174,6 @@ Tests:
 - [run-progress tests](../tests/test_run_progress.py)
 - [daemon-conversation tests](../tests/test_daemon_conversations.py)
 - [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
-- [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
 
 ### Ring 3: execution contract
 
@@ -259,7 +258,6 @@ Read:
 - [`src/brr/gates/telegram.py`](../src/brr/gates/telegram.py)
 - [`src/brr/gates/slack.py`](../src/brr/gates/slack.py)
 - [`src/brr/gates/git_gate.py`](../src/brr/gates/git_gate.py)
-- [`src/brr/status.py`](../src/brr/status.py)
 - [`src/brr/docs/__init__.py`](../src/brr/docs/__init__.py)
 - [`src/brr/docs/brr-internals.md`](../src/brr/docs/brr-internals.md)
 - [`src/brr/docs/conversations.md`](../src/brr/docs/conversations.md)
@@ -274,7 +272,7 @@ Keep in mind:
 - `updates.emit()` can call optional gate `render_update()` hooks, but gate-side failures are swallowed.
 - Telegram and Slack gates render a live per-task progress card via `render_update`: send-on-`task_created`, edit-on-progress through `editMessageText`/`chat.update`, fallback to a fresh send when the original message is gone. State lives at `.brr/gates/telegram_progress.json` and `.brr/gates/slack_progress.json`.
 - The Git gate is a deliberate no-op for live rendering — Git is not a great surface for live progress; commits and PRs remain its primary delivery.
-- `status.py` is now a troubleshooting helper, not the primary UX. It uses the same `RunProgressView` projection to keep local and remote views consistent.
+- There is no local status module. Keep live progress in `updates.py`, `run_progress.py`, and gate renderers instead of adding transport-specific lifecycle views.
 - Bundled docs live in `src/brr/docs/`; per-repo overrides live in `.brr/docs/`.
 - Project-specific durable knowledge lives in `kb/`, not `.brr/`.
 
@@ -284,7 +282,6 @@ Tests:
 - [gate setup tests](../tests/test_gate_setup.py)
 - [Telegram render-update tests](../tests/test_telegram_render_update.py)
 - [Slack render-update tests](../tests/test_slack_render_update.py)
-- [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
 - [docs tests](../tests/test_docs.py)
 
 ## Main entities
@@ -334,7 +331,6 @@ Referenced by:
 - Daemon creates and updates tasks.
 - Environments use tasks to set up the worktree and route the runner.
 - `run_context.py` renders task metadata into context files.
-- `status.py` reads persisted tasks for inspection.
 
 Persistence:
 
@@ -375,7 +371,7 @@ Referenced by:
 
 - Daemon routes every event to a conversation key and appends lifecycle records.
 - Runner prompt builders receive recent records and render them under a `Recent in this conversation` block.
-- Status helpers project conversation records into `RunProgressView`.
+- `run_progress.py` projects conversation records into `RunProgressView`.
 - Updates append lifecycle update packets to the same per-conversation log.
 
 Persistence:
@@ -451,8 +447,7 @@ Source:
 Referenced by:
 
 - Telegram and Slack gates render compact cards from this view.
-- `status.get_status` uses it to surface the active task across conversations.
-- `status.inspect_task` uses it for the per-task progress block.
+- `render_text(..., compact=False)` remains available as an expanded diagnostic renderer for tests and ad hoc debugging.
 
 Persistence:
 
@@ -658,7 +653,6 @@ This is one of the lowest-level modules. Read it early.
   - daemon
   - envs
   - run_context
-  - status
   - gates (to look up delivery info from `task.meta`)
 
 - [`conversations.py`](../src/brr/conversations.py) is consumed by:
@@ -666,13 +660,12 @@ This is one of the lowest-level modules. Read it early.
   - updates
   - run_progress
   - run_context
-  - status
 
 - [`updates.py`](../src/brr/updates.py) depends on `conversations` for routing packets and is used by daemon. It also dispatches packets to gate `render_update` hooks.
 
 - [`run_progress.py`](../src/brr/run_progress.py) depends on `conversations`. It is consumed by:
   - Telegram and Slack gate `render_update` hooks
-  - status (`get_status`, `inspect_task`)
+  - expanded diagnostics via `render_text(..., compact=False)`
 
 The key distinction:
 
@@ -949,12 +942,14 @@ checks are cheap, reproducible, and run on every task. Reserve the
 LLM pass for synthesis-heavy judgement (lifecycle drift,
 contradictions with the log, cross-subject coherence).
 
-### Local status is troubleshooting
+### Troubleshooting is artifact-first
 
-The remote gate is the primary surface for run progress. `status.py` exists
-to answer "is the daemon healthy, what is the active task, and where are
-the trace/response/preserved-container files for a failed run?". It is no
-longer the place to add new product UX.
+The remote gate is the primary surface for run progress. There is no local
+status module; when a run needs debugging, use the generated run context,
+task metadata, conversation records, traces, response files, and preserved
+worktree/container metadata. Earlier versions kept private `status.py`
+helpers after removing the public commands; those helpers were removed on
+2026-05-14 after they had no runtime callers.
 
 ## Tests as a second reading path
 
@@ -977,11 +972,10 @@ If source-first reading feels too abstract, run the test path instead:
 15. [gate setup tests](../tests/test_gate_setup.py)
 16. [Telegram render-update tests](../tests/test_telegram_render_update.py)
 17. [Slack render-update tests](../tests/test_slack_render_update.py)
-18. [status-troubleshooting tests](../tests/test_status_troubleshooting.py)
-19. [adopt tests](../tests/test_adopt.py)
-20. [integration tests](../tests/test_integration.py)
-21. [CLI tests](../tests/test_cli.py)
-22. [docs tests](../tests/test_docs.py)
+18. [adopt tests](../tests/test_adopt.py)
+19. [integration tests](../tests/test_integration.py)
+20. [CLI tests](../tests/test_cli.py)
+21. [docs tests](../tests/test_docs.py)
 
 This order mirrors dependency growth: file protocol, durable state, the
 run-progress projection, execution (subprocess plumbing then prompt
@@ -1006,6 +1000,10 @@ Subject hub:
   synthesis of the foreground `brr up` process, gate/file-protocol
   boundary, serial worker lifecycle, local process control, and the
   development reload direction.
+- [Subject: fleet and overlays](subject-fleet-overlays.md) —
+  synthesis of the three-axis fleet agenda: overlays for user-level
+  steering, `brnrd` as a future operator above many repos, and
+  environments as the active axis delegated to the env hub.
 
 Decisions ("drop the noisy abstraction" trio in chronological order):
 

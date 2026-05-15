@@ -19,6 +19,7 @@ style: |
 
 <!--
 Status: roadmap — read for the three-axis frame, not as a current spec.
+Current synthesis: [subject-fleet-overlays.md](subject-fleet-overlays.md).
 Axis 3 (Environment) is in flight via design-env-interface.md;
 Axis 1 (Overlay) is paused behind the env work, see plan-overlays.md;
 Axis 2 (Fleet / brnrd) is future work.

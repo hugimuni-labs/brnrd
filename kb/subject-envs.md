@@ -46,8 +46,8 @@ Env scratch is outcome-aware. On clean `status=done` with nothing
 uncommitted left in the worktree, brr tears down the worktree,
 container, or remote scratch dir. On `status ∈ {error, conflict}`, or
 when the worktree has untracked/unstaged files, brr preserves the
-scratch state so the user can inspect or salvage. `brr inspect
-<task-id>` surfaces the preserved location via `task.meta`.
+scratch state so the user can inspect or salvage. Persisted task
+metadata records the preserved location in `task.meta`.
 
 Traces follow the same rule: removed on clean done, kept on
 error/conflict so the failure is debuggable.
