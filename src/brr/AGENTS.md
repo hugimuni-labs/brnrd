@@ -3,7 +3,8 @@
 brr is a structured AI agent playbook tool with remote execution. It produces
 `AGENTS.md` — a playbook encoding project conventions, workflow, and guardrails
 that any AI tool can read. A daemon layer adds remote execution via gates
-(Telegram, Slack, Git). Pure stdlib Python (>=3.10), zero runtime dependencies.
+(Telegram, Slack) and keeps the host checkout fresh against the remote between
+tasks. Pure stdlib Python (>=3.10), zero runtime dependencies.
 
 This file is the source of truth for both brr's own development and the
 playbook adopters receive when they run `brr init`. It lives at
@@ -65,6 +66,28 @@ pytest
    context on what happened before this session.
 3. If a task is provided, proceed. If resuming, continue where the last
    session left off based on the log.
+
+### Daemon freshness
+
+Before resolving the branch plan for a task, the daemon runs
+`sync.refresh_before_task`: a single `git fetch <default-remote>` plus
+a best-effort fast-forward of the local default branch (and any
+structured branch named in the event, e.g. a PR head branch carried by
+a forge gate). Fast-forward is `--ff-only`, so it never destroys local
+commits and quietly skips on a dirty working tree, diverged history,
+or any branch checked out in another worktree.
+
+The invariant this gives task code: the seed ref the worktree sprouts
+from reflects the remote at task start, not whatever the host last
+pulled. Sync outcomes ride on the progress card as a short
+`synced: ff main -> abc1234` line; no card noise on the no-op path.
+
+Two opt-out knobs in `.brr/config`, both default-on:
+
+- `sync.fetch_before_task=false` — never touch the network.
+- `sync.fast_forward_default=false` — fetch but leave local refs
+  alone (for users sharing the daemon's checkout with active dev
+  work).
 
 ### Commits
 

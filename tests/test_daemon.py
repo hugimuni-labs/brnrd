@@ -202,6 +202,133 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
     assert attempts == ["evt-3-attempt-1", "evt-3-attempt-2"]
 
 
+def test_run_worker_calls_sync_before_resolving_branch_plan(
+    tmp_path, monkeypatch,
+):
+    """Pre-task fetch+ff fires before the daemon picks a seed ref."""
+    _write_repo_scaffold(tmp_path)
+    event = _make_event(tmp_path, "evt-sync-order")
+    _stub_env_isolated(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+
+    call_order: list[str] = []
+    captured_targets: list[list[str]] = []
+
+    def fake_refresh(_repo, *, target_branches, cfg=None):
+        call_order.append("sync")
+        captured_targets.append(list(target_branches))
+        return daemon.sync.SyncResult(fetched=True)
+
+    real_resolve = daemon.branching.resolve_branch_plan
+
+    def wrapped_resolve(repo_root, ev, cfg):
+        call_order.append("resolve")
+        return real_resolve(repo_root, ev, cfg)
+
+    monkeypatch.setattr(daemon.sync, "refresh_before_task", fake_refresh)
+    monkeypatch.setattr(daemon.branching, "resolve_branch_plan", wrapped_resolve)
+
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert call_order[:2] == ["sync", "resolve"]
+    # When the event carries no structured branch field, we still
+    # ask sync to consider the host's default branch (or whatever
+    # gitops returns there) — empty is acceptable for a repo without
+    # a default branch but the call must happen.
+    assert captured_targets, "sync.refresh_before_task was not called"
+
+
+def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
+    """A sync error never blocks task execution."""
+    _write_repo_scaffold(tmp_path)
+    event = _make_event(tmp_path, "evt-sync-fail")
+    _stub_env_isolated(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    monkeypatch.setattr(
+        daemon.sync, "refresh_before_task",
+        lambda _repo, *, target_branches, cfg=None: daemon.sync.SyncResult(
+            error="git fetch origin: simulated network failure",
+        ),
+    )
+
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert task.status == "done"
+
+
+def test_branches_to_refresh_includes_default_and_structured(monkeypatch, tmp_path):
+    """The helper merges the local default branch with structured event keys."""
+    _write_repo_scaffold(tmp_path)
+    monkeypatch.setattr(daemon.gitops, "default_branch", lambda _root: "main")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(daemon.gitops, "valid_branch_name", lambda _root, _b: True)
+
+    targets = daemon._branches_to_refresh(
+        tmp_path,
+        {
+            "branch_target": "feature-x",
+            "target_branch": "release",
+            "branch": "auto",
+        },
+    )
+
+    assert targets[0] == "main"
+    assert "feature-x" in targets
+    assert "release" in targets
+    # ``branch=auto`` is a no-op sentinel and must not appear.
+    assert "auto" not in targets
+
+
 def test_start_preserves_error_event_status(tmp_path, monkeypatch):
     _write_repo_scaffold(tmp_path)
     event = {"id": "evt-err", "status": "pending", "_path": tmp_path / ".brr" / "inbox" / "evt-err.md"}
