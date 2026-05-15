@@ -96,6 +96,10 @@ dive-in map) and are stable until something contradicts them.
 
 ## Fleet & overlays *(paused — env axis is the only active strand)*
 
+- **Hub: [fleet and overlays](subject-fleet-overlays.md)** —
+  synthesis of the three-axis split: overlays as user-level steering,
+  `brnrd` as a future fleet operator outside repo-local brr, and
+  environments as the active axis now handled by the env hub.
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
   *roadmap (env axis active, overlays/brnrd paused)*. Three-axis
   framing (overlays · brnrd · environments); read for the strategic

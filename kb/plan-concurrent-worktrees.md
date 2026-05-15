@@ -16,7 +16,10 @@ shape.
 
 Per-task log files (`kb/log-<task-id>.md`) referenced below are gone —
 see [`decision-kb-shape.md`](decision-kb-shape.md). Stdout is the
-chat reply; commits are mandatory for any file write.
+chat reply; commits are mandatory for any file write. The `status.py`
+work item below is also historical; the private status helper module
+was removed on 2026-05-14 after public status/inspect commands were
+already gone and no runtime callers remained.
 
 This page is preserved for the architectural reasoning that survives;
 read [`design-env-interface.md`](design-env-interface.md) and the
