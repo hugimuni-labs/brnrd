@@ -223,8 +223,9 @@ progress to a human:
 - The Slack gate posts one threaded reply per task on `task_created`,
   then updates it with `chat.update`. State lives at
   `.brr/gates/slack_progress.json`.
-- The Git gate is a no-op for live progress. Git is not a great surface
-  for live status; commits and PRs remain its primary delivery path.
+- Non-chat gates (script gates, future forge gates posting on issues
+  or PRs) typically skip live progress and let the durable artifact —
+  a commit, a comment, a delivered file — speak for the run.
 
 Live progress is remote-first. There is no public local status or
 inspect command; new lifecycle UX should flow through update packets,

@@ -1,4 +1,4 @@
-from brr.gates import git_gate, slack, telegram
+from brr.gates import slack, telegram
 
 
 def test_telegram_setup_saves_token_and_accepts_any_chat(tmp_path, monkeypatch):
@@ -43,17 +43,3 @@ def test_slack_setup_saves_token_and_channel(tmp_path, monkeypatch):
     ]
 
 
-def test_git_setup_saves_watch_configuration(tmp_path, monkeypatch):
-    brr_dir = tmp_path / ".brr"
-    inputs = iter(["incoming/", "y"])
-
-    monkeypatch.setattr("builtins.input", lambda prompt: next(inputs))
-    monkeypatch.setattr(git_gate, "_run_git", lambda *args, cwd=None: "abc123def")
-
-    git_gate.setup(brr_dir)
-
-    assert git_gate._load_state(brr_dir) == {
-        "watch_dir": "incoming/",
-        "use_pull": True,
-        "last_commit": "abc123def",
-    }

@@ -90,4 +90,14 @@ selection when a gate wants to expose them separately.  If `setup` is missing,
 the CLI falls back to calling `auth` and then `bind`.
 
 The daemon imports configured gates and calls `run_loop` in a thread.  See
-`telegram.py`, `slack.py`, or `git_gate.py` for examples.
+`telegram.py` or `slack.py` for examples.
+
+### Folder-watcher gates
+
+If you want a "drop a markdown file into a folder and brr picks it up"
+flow — for example over Obsidian git-sync, the GitHub web editor, or a
+script that drops files into a watched dir — write it as a bash script
+gate using the protocol above. The minimal example earlier in this file
+covers everything needed: the file watcher and the diff/commit logic
+should reflect your actual workflow rather than being hidden behind a
+generic built-in.

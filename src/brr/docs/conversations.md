@@ -72,8 +72,9 @@ for many minutes).
 
 Gates may opt in to a `render_update(brr_dir, packet)` hook. The
 Telegram and Slack gates render a live progress card per task and
-edit it as new packets arrive. The Git gate is a no-op for live
-rendering — commits and PRs are its delivery path.
+edit it as new packets arrive. Non-chat gates typically skip the
+hook and let the delivered artifact (a commit, a comment, a file)
+speak for the run.
 
 ## Run progress projection
 
