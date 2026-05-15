@@ -1,12 +1,12 @@
 # Design: git layer rework
 
-Status: active
+Status: shipped on 2026-05-15.
 
 This page covers brr's git layer in three phases: daemon-side
 freshness, a real GitHub gate, and a prompt-level mitigation for
-runner thoughtfulness on design-loaded tasks. Phase 1 and Phase 2
-have shipped; Phase 3 is queued on the same plan and will amend
-this page in place as it lands.
+runner thoughtfulness on design-loaded tasks. All three phases have
+shipped; the page now reads as the canonical synthesis of the
+current shape, not a plan.
 
 The page hangs off [`subject-daemon.md`](subject-daemon.md) and
 [`subject-tasks-branching.md`](subject-tasks-branching.md). The
@@ -217,23 +217,31 @@ no abstract base class.
 
 ## Phase 3 — Runner thoughtfulness
 
-Status: planned, not yet shipped.
+Status: shipped on 2026-05-15.
 
 Three small sharpenings of the existing single-pass runner surface,
 not a pre-task plan stage:
 
-- Trigger-phrase guidance in [`prompts/run.md`](../src/brr/prompts/run.md)
-  naming the failure mode and authorizing a chat-only response when
-  the task body uses revisit/reconsider signals.
-- "No commit" as a first-class outcome for revisit/discussion tasks
-  (the diff-as-receipt rule does not apply when there is no clear edit
-  to make yet).
+- A *"When the task asks you to reconsider"* section in
+  [`prompts/run.md`](../src/brr/prompts/run.md) names the trigger
+  phrases verbatim (`revisit`, `not great`, `wdyt`, `is this the
+  right shape`, etc.) and tells the runner what to do about them:
+  re-read the relevant code and design pages, surface contradictions
+  per Stewardship before resolving them, and prefer a chat-only
+  reply over a half-fitting commit when the right next step isn't
+  clear yet.
+- "Chat-only reply" is named explicitly as a complete and successful
+  task outcome for those signals. The diff-as-receipt rule does
+  *not* apply when there is no clear edit to make yet — shipping a
+  half-fitting commit just to have a diff is the failure mode this
+  guidance exists to prevent.
 - One new self-review bullet in [`AGENTS.md`](../src/brr/AGENTS.md)
-  asking "if the task contained a contradiction, did you surface it
-  before resolving it?" Maps directly to the existing Stewardship
-  section.
+  asks: *"If the task contained a contradiction with the current
+  code, design notes, or guardrails — did you surface it before
+  resolving it? (See Stewardship.)"* Maps the Stewardship section
+  from prose into a concrete checklist item.
 
-Why not a stage:
+### Why not a plan stage
 
 - No latency cost for normal tasks. The 95% case (clear implement /
   fix / Q&A) is unchanged.
@@ -247,8 +255,21 @@ Why not a stage:
   (lint-style checks). A pre-task plan stage would not be mechanical,
   so the analogy doesn't carry over.
 
-Guardrail tests in `tests/test_prompts.py` will pin the new bullets
-so future prompt edits that drop them fail loudly.
+### Tests
+
+[`tests/test_prompts.py`](../tests/test_prompts.py) ships three new
+guardrail tests in `TestRevisitSignalGuardrails`: the run prompt
+contains the section header and a representative subset of the
+trigger phrases, the chat-only-reply outcome is named verbatim, and
+the AGENTS.md self-review bullet references the Stewardship section
+it maps onto. They read the bundled `run.md` and `AGENTS.md`
+directly rather than going through `build_run_prompt`, so they pin
+the shipped content rather than test-fixture overrides.
+
+These are the kind of guardrails the original
+`brr/git-gate-defaults` failure should have had — silent prompt
+drift that drops the trigger-phrase list re-opens the same path-of-
+least-resistance hole.
 
 ## Boundary
 
