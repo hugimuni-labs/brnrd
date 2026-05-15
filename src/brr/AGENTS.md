@@ -3,8 +3,8 @@
 brr is a structured AI agent playbook tool with remote execution. It produces
 `AGENTS.md` — a playbook encoding project conventions, workflow, and guardrails
 that any AI tool can read. A daemon layer adds remote execution via gates
-(Telegram, Slack) and keeps the host checkout fresh against the remote between
-tasks. Pure stdlib Python (>=3.10), zero runtime dependencies.
+(Telegram, Slack, GitHub) and keeps the host checkout fresh against the remote
+between tasks. Pure stdlib Python (>=3.10), zero runtime dependencies.
 
 This file is the source of truth for both brr's own development and the
 playbook adopters receive when they run `brr init`. It lives at
