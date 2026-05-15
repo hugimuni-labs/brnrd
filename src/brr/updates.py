@@ -22,6 +22,7 @@ from . import conversations
 
 PACKET_TYPES = (
     "event_received",
+    "synced",
     "task_created",
     "env_prepared",
     "container_started",
@@ -122,7 +123,7 @@ def _render_console(packet: UpdatePacket) -> None:
 def _dispatch_to_gates(brr_dir: Path, packet: UpdatePacket) -> None:
     from .gates import import_gate
 
-    for name in ("telegram", "slack", "git_gate"):
+    for name in ("telegram", "slack"):
         try:
             mod = import_gate(name)
         except ImportError:

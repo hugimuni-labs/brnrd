@@ -33,6 +33,12 @@ dive-in map) and are stable until something contradicts them.
   synthesis of the foreground `brr up` process, gate/file-protocol
   boundary, serial worker lifecycle, local process control, and where
   developer reload fits without becoming broad product UX.
+- [Git layer rework design](design-git-layer-rework.md) — *active
+  (Phase 1 shipped, Phase 2 + 3 queued)*. Reframes the deleted
+  tasks-folder gate around what it was conflating: daemon-side
+  freshness (shipped), a real GitHub gate (planned), and a
+  prompt-level mitigation for runner thoughtfulness on design-loaded
+  tasks (planned).
 - [Developer daemon reload design](design-daemon-dev-reload.md) —
   *shipped*. Opt-in brr self-development reload mode: editable install
   plus quiescent re-exec between tasks when brr package files change;

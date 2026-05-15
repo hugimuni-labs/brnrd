@@ -30,12 +30,16 @@ from typing import Any
 from . import gitops
 
 
-_STRUCTURED_BRANCH_KEYS = (
+STRUCTURED_BRANCH_KEYS = (
     "branch_target",
     "target_branch",
     "base_branch",
     "branch",
 )
+# Backwards-compat alias for in-tree callers that still read the
+# private name; exposed publicly so daemon-side helpers (e.g. the
+# sync hook) can reuse the same key list without duplication.
+_STRUCTURED_BRANCH_KEYS = STRUCTURED_BRANCH_KEYS
 
 
 @dataclass(frozen=True)

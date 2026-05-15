@@ -25,10 +25,10 @@ current task before exiting rather than trying to cancel the runner.
 
 The daemon owns orchestration, not meaning:
 
-- Gates are transport adapters. Telegram, Slack, Git, and any custom
-  gate communicate through the file protocol under `.brr/inbox/` and
-  `.brr/responses/`. Gate-specific routing and live progress rendering
-  stay in the gate modules.
+- Gates are transport adapters. Telegram, Slack, future forge gates,
+  and any custom script gate communicate through the file protocol
+  under `.brr/inbox/` and `.brr/responses/`. Gate-specific routing and
+  live progress rendering stay in the gate modules.
 - Conversation history is append-only routing context, not a workstream
   identity. The decision to drop workstreams is recorded in
   [`decision-drop-streams.md`](decision-drop-streams.md).
@@ -52,16 +52,21 @@ one active task, one response, one push path.
 For each pending event, the daemon:
 
 1. marks the event `processing`;
-2. resolves the branch plan, then creates and persists a `Task`;
-3. prepares the selected env backend (`host`, `worktree`, or `docker`);
-4. builds the daemon prompt with the Task Context Bundle;
-5. invokes the configured runner headlessly;
-6. captures the runner's final stdout as the response file;
-7. retries if no response was produced;
-8. runs kb preflight plus the optional redundancy pass after successful
+2. fetches the default remote and best-effort fast-forwards the local
+   default branch (and any structured branch named on the event) via
+   [`sync.refresh_before_task`](../src/brr/sync.py) — the seed-ref
+   invariant is described in
+   [`design-git-layer-rework.md`](design-git-layer-rework.md);
+3. resolves the branch plan, then creates and persists a `Task`;
+4. prepares the selected env backend (`host`, `worktree`, or `docker`);
+5. builds the daemon prompt with the Task Context Bundle;
+6. invokes the configured runner headlessly;
+7. captures the runner's final stdout as the response file;
+8. retries if no response was produced;
+9. runs kb preflight plus the optional redundancy pass after successful
    work;
-9. finalizes the environment, fast-forwarding or preserving branches;
-10. marks the event terminal and pushes the branch that actually changed.
+10. finalizes the environment, fast-forwarding or preserving branches;
+11. marks the event terminal and pushes the branch that actually changed.
 
 The durable user response is plain stdout captured by
 [`runner.invoke_runner`](../src/brr/runner.py), not a file the agent
@@ -160,8 +165,12 @@ Read these in order when changing daemon behavior:
    [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
    for task construction, branch intent resolution, and the accepted fix
    for ambient host-checkout and hidden landing-config coupling.
-6. [`decision-drop-streams.md`](decision-drop-streams.md) and
+6. [`design-git-layer-rework.md`](design-git-layer-rework.md) for the
+   pre-task fetch+ff invariant, the boundary between pure git refs
+   (daemon) and forge concepts (per-provider gates), and the staged
+   Phase 1 / 2 / 3 plan.
+7. [`decision-drop-streams.md`](decision-drop-streams.md) and
    [`decision-remove-triage.md`](decision-remove-triage.md) for the
    recent simplifications that keep daemon context lean.
-7. [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md) for the
+8. [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md) for the
    current development reload proposal.
