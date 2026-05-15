@@ -346,12 +346,17 @@ on to what you can do.
 Before marking a task complete:
 
 1. Re-read the original task. Does your work actually address it?
-2. Review every changed file. Look for leftover debug code, TODOs you forgot
+2. If the task contained a contradiction with the current code, design
+   notes, or guardrails — did you surface it before resolving it? (See
+   Stewardship.) Path-of-least-resistance compliance on a request that
+   was actually asking for pushback is the failure mode this question
+   exists to catch.
+3. Review every changed file. Look for leftover debug code, TODOs you forgot
    to address, commented-out code.
-3. Run tests if available and applicable.
-4. If you created or removed kb pages, check that `kb/index.md` is current
+4. Run tests if available and applicable.
+5. If you created or removed kb pages, check that `kb/index.md` is current
    and the new pages are linked from a subject hub or peer.
-5. If your work produced a substantive learning, decision, or shipped
+6. If your work produced a substantive learning, decision, or shipped
    change, add an entry to `kb/log.md`. If it didn't, leave the log alone.
 
 ## Work re-review
