@@ -453,9 +453,8 @@ def render_text(
     counter — heartbeats trigger re-renders, the elapsed counter ticks,
     and the gate's duplicate-text guard suppresses any no-op edits.
 
-    *compact=False* is the dev-side troubleshooting form used by
-    ``brr status`` / ``brr inspect``: it adds branch, env, response
-    paths, container IDs, and the artifact list.
+    *compact=False* is the expanded diagnostic form: it adds branch,
+    env, response paths, container IDs, and the artifact list.
     """
     style = style or PLAIN_STYLE
     if compact:
