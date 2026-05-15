@@ -9,8 +9,8 @@ the agent-owned branch contract introduced by
 
 ## Why this exists
 
-Remote task sources (Telegram, Slack, git gate) can submit work without
-the operator standing at the host checkout. brr therefore cannot
+Remote task sources (Telegram, Slack, future forge gates) can submit
+work without the operator standing at the host checkout. brr therefore cannot
 overload the daemon's `gitops.current_branch(repo_root)` as both "where
 to sprout the task" and "where to land the work". Doing so couples
 remote durable work — kb pages, design notes, code commits — to

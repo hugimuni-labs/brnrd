@@ -257,7 +257,6 @@ Read:
 - [`src/brr/gates/__init__.py`](../src/brr/gates/__init__.py)
 - [`src/brr/gates/telegram.py`](../src/brr/gates/telegram.py)
 - [`src/brr/gates/slack.py`](../src/brr/gates/slack.py)
-- [`src/brr/gates/git_gate.py`](../src/brr/gates/git_gate.py)
 - [`src/brr/docs/__init__.py`](../src/brr/docs/__init__.py)
 - [`src/brr/docs/brr-internals.md`](../src/brr/docs/brr-internals.md)
 - [`src/brr/docs/conversations.md`](../src/brr/docs/conversations.md)
@@ -271,7 +270,6 @@ Keep in mind:
 - Gates create event files and deliver response files.
 - `updates.emit()` can call optional gate `render_update()` hooks, but gate-side failures are swallowed.
 - Telegram and Slack gates render a live per-task progress card via `render_update`: send-on-`task_created`, edit-on-progress through `editMessageText`/`chat.update`, fallback to a fresh send when the original message is gone. State lives at `.brr/gates/telegram_progress.json` and `.brr/gates/slack_progress.json`.
-- The Git gate is a deliberate no-op for live rendering — Git is not a great surface for live progress; commits and PRs remain its primary delivery.
 - There is no local status module. Keep live progress in `updates.py`, `run_progress.py`, and gate renderers instead of adding transport-specific lifecycle views.
 - Bundled docs live in `src/brr/docs/`; per-repo overrides live in `.brr/docs/`.
 - Project-specific durable knowledge lives in `kb/`, not `.brr/`.
@@ -578,7 +576,6 @@ Source:
 - [`gates/__init__.py`](../src/brr/gates/__init__.py)
 - [`gates/telegram.py`](../src/brr/gates/telegram.py)
 - [`gates/slack.py`](../src/brr/gates/slack.py)
-- [`gates/git_gate.py`](../src/brr/gates/git_gate.py)
 
 Referenced by:
 
@@ -603,8 +600,10 @@ Optional update hook:
   progress card from the `RunProgressView` projection. Telegram does this
   via `sendMessage` + `editMessageText`; Slack via `chat.postMessage` +
   `chat.update`. Per-gate progress state lives at
-  `.brr/gates/<gate>_progress.json`. The Git gate skips this hook on
-  purpose (no live UX).
+  `.brr/gates/<gate>_progress.json`. Gates that aren't a chat surface
+  (script gates, forge gates posting comments, etc.) typically skip the
+  hook — the durable artifact (a comment, a commit, a file) is the
+  delivery.
 
 Read with:
 

@@ -1532,3 +1532,50 @@ Added `subject-fleet-overlays.md` so the paused overlays / brnrd material
 has a current-state hub, narrowed the overlays blocker to its research
 gate, and compressed the shipped dev-reload design out of proposal
 scaffolding into a current reference.
+
+## [2026-05-15] implement | Daemon freshness + delete tasks-folder gate
+
+Phase 1 of the git layer rework (see `design-git-layer-rework.md`).
+The daemon now runs `sync.refresh_before_task` before resolving each
+task's branch plan: a single `git fetch <default-remote>` plus a
+best-effort `--ff-only` advance of the local default branch and any
+structured branch named on the event (`branch_target`,
+`target_branch`, `base_branch`, legacy `branch`). Outcomes ride the
+progress card on a new `synced` packet that stays quiet on the no-op
+path. Two opt-out config knobs in `.brr/config`:
+`sync.fetch_before_task` and `sync.fast_forward_default`, both
+default-on; the second is the safety valve for users sharing the
+daemon's checkout with active local dev work.
+
+The seed-ref invariant after this change: the daemon's local view of
+each named target branch is at least as fresh as the remote was at
+task start, or the result records why it isn't (dirty tree,
+divergence, fetch failure, opt-out). Worker code can rely on the
+seed ref reflecting that view rather than the operator's last manual
+`git pull`. The fast-forward is `--ff-only`, so it never destroys
+local commits, and the call never raises — any unexpected exception
+is captured into `SyncResult.error` so a flaky network can't block a
+task.
+
+Deleted `src/brr/gates/git_gate.py` and removed it from
+`_BUILTIN_GATES`, the CLI gate map, the bundled gate README, and
+several kb / bundled-doc references. The tasks-folder watcher was a
+niche workflow with an awkward primitive (always-empty tracked
+directory; concurrent execution model unclear; overlapping with
+`.brr/tasks/`). Anyone wanting a folder watcher can write one with
+the bash protocol example in `gates/README.md`. Stale
+`.brr/gates/git_gate.json` on existing installs becomes inert: the
+daemon's `import_gate` catches `ImportError` and skips.
+
+Tests: 370 passing (up from 345). New coverage in
+`tests/test_sync.py` (23 cases for fetch+ff scenarios, config
+opt-outs, error capture, render summary) and three new cases in
+`tests/test_daemon.py` for the sync hook ordering, soft-failure
+propagation, and the `_branches_to_refresh` helper. The
+`test_git_setup_saves_watch_configuration` case in
+`tests/test_gate_setup.py` was deleted alongside the gate.
+
+Phase 2 (real GitHub gate) and Phase 3 (prompt-level mitigation for
+runner thoughtfulness on revisit-loaded tasks) are queued on the
+same plan and design page; the design page will amend in place as
+each lands.
