@@ -35,11 +35,12 @@ from . import prompts
 from . import protocol
 from . import run_context
 from . import runner
+from . import sync
 from . import updates
 from .task import Task
 
 _SCAN_INTERVAL = 3
-_BUILTIN_GATES = ["telegram", "slack", "git_gate"]
+_BUILTIN_GATES = ["telegram", "slack"]
 # Cadence for the run-time heartbeat packet. 30s is short enough that
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
@@ -287,6 +288,35 @@ def _cleanup_traces_on_success(
     task.save(tasks_dir)
 
 
+# ── Sync hook helpers ────────────────────────────────────────────────
+
+
+def _branches_to_refresh(repo_root: Path, event: dict) -> list[str]:
+    """Return local branch names worth refreshing before this task.
+
+    Always includes the local default branch (the typical seed for new
+    work). Adds any structured event branch fields the daemon already
+    knows about (``branch_target``, ``target_branch``, ``base_branch``,
+    ``branch``), filtered through the same validation
+    ``branching.resolve_branch_plan`` uses so we don't hand the sync
+    layer "auto" / "current" sentinels.
+    """
+    out: list[str] = []
+    default = gitops.default_branch(repo_root)
+    if default and default != "HEAD":
+        out.append(default)
+
+    host_branch = gitops.current_branch(repo_root)
+    host_context = host_branch if host_branch != "HEAD" else None
+    for key in branching.STRUCTURED_BRANCH_KEYS:
+        candidate = branching._event_branch_candidate(
+            repo_root, key, event.get(key), host_context,
+        )
+        if candidate and candidate not in out:
+            out.append(candidate)
+    return out
+
+
 # ── Worker ───────────────────────────────────────────────────────────
 
 
@@ -309,6 +339,17 @@ def _run_worker(
     runner_name = runner.resolve_runner(repo_root)
 
     conv_key = conversations.conversation_key_for_event(event) or ""
+
+    # Refresh local refs before resolving the branch plan so the task
+    # seeds from a current view of the world. Computing target_branches
+    # off the raw event (rather than the resolved plan) avoids a chicken-
+    # and-egg loop and lets a future github-gate event for a PR comment
+    # name its head branch via ``branch_target`` for free.
+    sync_targets = _branches_to_refresh(repo_root, event)
+    sync_result = sync.refresh_before_task(
+        repo_root, target_branches=sync_targets, cfg=cfg,
+    )
+
     branch_plan = branching.resolve_branch_plan(repo_root, event, cfg)
 
     if conv_key:
@@ -318,6 +359,19 @@ def _run_worker(
             conversation_key=conv_key,
             payload={"event_id": eid, "source": event.get("source", "")},
         ))
+        sync_summary = sync.render_summary(sync_result)
+        if sync_summary or sync_result.error:
+            updates.emit(brr_dir, updates.UpdatePacket(
+                type="synced",
+                conversation_key=conv_key,
+                payload={
+                    "event_id": eid,
+                    "summary": sync_summary,
+                    "ff_branches": dict(sync_result.ff_branches),
+                    "skipped": dict(sync_result.skipped),
+                    "error": sync_result.error,
+                },
+            ))
 
     task = Task.from_event(event, cfg)
     task.conversation_key = conv_key
