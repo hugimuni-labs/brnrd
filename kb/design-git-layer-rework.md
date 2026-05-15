@@ -4,9 +4,9 @@ Status: active
 
 This page covers brr's git layer in three phases: daemon-side
 freshness, a real GitHub gate, and a prompt-level mitigation for
-runner thoughtfulness on design-loaded tasks. The first phase has
-shipped; the other two are queued on the same plan and will amend
-this page in place as they land.
+runner thoughtfulness on design-loaded tasks. Phase 1 and Phase 2
+have shipped; Phase 3 is queued on the same plan and will amend
+this page in place as it lands.
 
 The page hangs off [`subject-daemon.md`](subject-daemon.md) and
 [`subject-tasks-branching.md`](subject-tasks-branching.md). The
@@ -128,28 +128,92 @@ must not block the task).
 
 ## Phase 2 — GitHub gate
 
-Status: planned, not yet shipped.
+Status: shipped on 2026-05-15.
 
-A real provider-aware input gate that replaces the deleted
-tasks-folder watcher. Stdlib `urllib` only against
-`https://api.github.com`, mirroring the existing slack/telegram
-shape. Two configurable triggers — issue label and comment mention —
-both opt-in at setup. Authenticates via `gh auth token` shell-out
-where available, falling back to `GITHUB_TOKEN` and finally an
-interactive paste stored in `.brr/gates/github.json`. Polls; no
-webhooks (those need a public URL and a separate auth model).
+[`gates/github.py`](../src/brr/gates/github.py) is a built-in gate that
+talks to `https://api.github.com` over stdlib `urllib`. Mirrors
+slack/telegram in shape: `is_configured`, `run_loop`, `setup`, `auth`,
+`bind`. State at `.brr/gates/github.json`: token (when stored),
+`bot_login`, `repo`, `triggers`, polling cursors.
 
-The seam back to Phase 1: PR-comment events set `branch_target` to
-the PR head branch. Phase 1's `_branches_to_refresh` picks that up
-unchanged, so "comment `@brr fix the failing test` on a PR" Just
-Works without any github-gate-specific branch handling. That's the
-concrete validation that the seed-ref invariant composes cleanly
-with provider-aware events.
+### Triggers
+
+Two opt-in trigger types; both can run at once:
+
+- **`label-on-issue`**: polls `GET /repos/{repo}/issues?state=open&
+  labels={label}&since={cursor}`. New labelled issues become inbox
+  events. PRs returned by this endpoint are deliberately filtered
+  out; PR work belongs to the mention trigger because PRs almost
+  always have ongoing back-and-forth.
+- **`mention-in-comment`**: polls `GET /repos/{repo}/issues/comments?
+  since={cursor}` (returns both issue and PR comments). Comments
+  containing the configured mention string become events. The bot's
+  own login is filtered so a reply doesn't re-trigger itself.
+
+PR-comment events derive their `branch_target` by fetching
+`/repos/{repo}/pulls/{number}` once per unique PR per loop tick. This
+is the load-bearing seam to Phase 1: the daemon's
+`_branches_to_refresh` already understands `branch_target`, so
+"comment `@brr fix the failing test` on a PR" Just Works — the
+worktree starts on a freshly fast-forwarded copy of the PR head.
+
+`_POLL_INTERVAL = 60`. Authenticated REST quota is 5000/hr; this
+consumes ~120/hr at most. Each trigger keeps both a `since` cursor
+and a bounded set of seen IDs (`_SEEN_CAP = 500`) to dedupe across
+overlapping windows.
+
+### Auth
+
+`resolve_token(state)` order: stored > `gh auth token` > `GITHUB_TOKEN`
+or `GH_TOKEN` env > nothing. `auth(brr_dir)` runs the chain at setup,
+calls `GET /user` to validate, and records the bot login plus a
+`token_source` marker. gh CLI / env tokens are *not* persisted — the
+chain re-resolves them on every run, so `gh auth refresh` flows just
+work. An operator who pastes a token gets it stored under `.brr/`
+(already gitignored).
+
+`bind(brr_dir)` autodetects the repo from `git remote get-url origin`
+(both HTTPS and SSH forms recognised; non-github.com hosts return
+None) and prompts for label / mention configuration with sensible
+defaults (`brr` and `@brr-bot`).
+
+### Response delivery
+
+On the daemon's `done` packet, the gate posts a comment via
+`POST /repos/{repo}/issues/{issue_number}/comments` (PR-comment
+events use the PR number, which is the issue number in GitHub's
+API). Inbox event and response file are deleted on successful POST.
+
+### Error handling
+
+`_handle_api_error` interprets `Retry-After`,
+`X-RateLimit-Reset`/`X-RateLimit-Remaining: 0` and 4xx vs. 5xx
+distinctly:
+
+- `Retry-After` wins when present.
+- Else, exhausted rate limit sleeps until `X-RateLimit-Reset`.
+- Else, 4xx (non-transient: bad token, missing repo) backs off the
+  full `_BACKOFF_MAX = 120`s — surfaces the failure without spamming.
+- Else, 5xx / network errors back off the poll interval.
+
+### Tests
+
+[`tests/test_github_gate.py`](../tests/test_github_gate.py) covers
+the token resolution chain (stored / gh CLI / env / prompt), repo
+autodetect from both HTTPS and SSH origin URLs, the label trigger
+including the PR-skip rule, the mention trigger producing
+`branch_target` for PR comments and not for issue comments, the bot
+self-filter, comments without the mention being ignored, polling
+cursor advancement, response posting, the rate-limit /
+`Retry-After` / 4xx error matrix, and the no-op path when the gate
+is unconfigured. All API calls are mocked at the
+`_api_get` / `_api_post` boundary — the same pattern slack and
+telegram use.
 
 Other forges (`gitlab`, `gitea`, `bitbucket`) get their own modules
 when each is genuinely wanted; the github gate establishes the
-pattern (one module per provider, shared file-protocol contract, no
-abstract base class).
+pattern — one module per provider, shared file-protocol contract,
+no abstract base class.
 
 ## Phase 3 — Runner thoughtfulness
 
