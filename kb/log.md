@@ -1579,3 +1579,44 @@ Phase 2 (real GitHub gate) and Phase 3 (prompt-level mitigation for
 runner thoughtfulness on revisit-loaded tasks) are queued on the
 same plan and design page; the design page will amend in place as
 each lands.
+
+## [2026-05-15] implement | GitHub gate (Phase 2 of git-layer rework)
+
+Phase 2 of the git layer rework. New built-in gate
+[`gates/github.py`](../src/brr/gates/github.py) — stdlib `urllib`
+against `https://api.github.com`, mirroring the slack/telegram
+shape. Two configurable triggers, both opt-in:
+
+- `label-on-issue`: polls `/issues?labels={label}` and emits one
+  inbox event per newly-labelled issue. PRs returned by the same
+  endpoint are deliberately filtered out.
+- `mention-in-comment`: polls `/issues/comments` and emits one event
+  per comment containing the configured mention string. PR-comment
+  events fetch the PR head ref and pin it as `branch_target`, so
+  Phase 1's pre-task fetch+ff hook refreshes that branch before the
+  worker runs. The bot's own login is filtered to avoid
+  self-trigger loops.
+
+Auth: `resolve_token` chain is stored > `gh auth token` > env
+(`GITHUB_TOKEN` / `GH_TOKEN`). gh CLI / env tokens are never
+persisted; pasted tokens land under the gitignored `.brr/`. Repo
+autodetect parses both HTTPS and SSH origin URLs, ignores non-
+github.com remotes. Replies post as comments on the originating
+issue / PR via `POST /issues/{number}/comments`. Rate limits and
+4xx / 5xx errors handled distinctly: `Retry-After` wins, then
+`X-RateLimit-Reset`, then a long backoff for non-transient 4xx, a
+short one for 5xx.
+
+`is_configured` requires repo + at least one trigger + a resolvable
+token, so adding `github` to `_BUILTIN_GATES` does not surprise-
+enable anything for users who haven't run `brr setup github`.
+
+Tests: 403 passing (up from 370). New `tests/test_github_gate.py`
+(33 cases) covers the token chain, autodetect from HTTPS and SSH
+origins, both triggers, the PR-skip on label trigger, the
+self-comment filter, the no-mention skip, cursor advancement,
+response posting, and the error-handling matrix. All API calls
+mocked at the `_api_get` / `_api_post` boundary.
+
+Phase 3 (prompt-level mitigation for runner thoughtfulness) is the
+remaining piece on the same plan and design page.
