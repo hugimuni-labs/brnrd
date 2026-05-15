@@ -1,0 +1,622 @@
+"""GitHub gate — turns labelled issues and mentioned comments into events.
+
+The gate polls the GitHub REST API for two configurable triggers:
+
+- ``label-on-issue``: a new (or updated) open issue carrying the
+  configured label becomes one inbox event.
+- ``mention-in-comment``: a new comment containing the configured
+  mention string becomes one event. PR comments carry the PR head
+  branch as ``branch_target`` so the daemon's pre-task fetch+ff
+  refreshes that branch before the worker runs.
+
+Replies are posted as comments on the originating issue or PR.
+
+Stdlib ``urllib`` only, mirroring slack/telegram. State lives at
+``.brr/gates/github.json``. Auth resolution at setup time, in order:
+
+1. ``gh auth token`` shell-out when ``gh`` is on PATH.
+2. ``GITHUB_TOKEN`` environment variable.
+3. Interactive paste, stored in the state file.
+
+The gate is built-in but ``is_configured`` returns false until setup
+runs — there is no surprise auto-enable. Webhooks are deliberately
+out of scope for v1 (require a public URL and signature verification);
+polling matches the rest of brr's gate model.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from .. import gitops, protocol
+
+
+_API_ROOT = "https://api.github.com"
+_USER_AGENT = "brr-github-gate"
+_API_VERSION = "2022-11-28"
+_POLL_INTERVAL = 60
+_BACKOFF_MAX = 120
+_HTTP_TIMEOUT = 30
+# Cap how far back we look on first poll so a freshly-configured gate
+# doesn't re-process a year of historical comments.
+_INITIAL_LOOKBACK = timedelta(hours=1)
+# Cap how many seen IDs we keep per trigger to bound state file size.
+_SEEN_CAP = 500
+
+
+# ── HTTP helpers ─────────────────────────────────────────────────────
+
+
+class GitHubAPIError(RuntimeError):
+    """Raised on any non-2xx GitHub API response."""
+
+    def __init__(self, status: int, message: str, *, headers: dict | None = None):
+        super().__init__(f"github {status}: {message}")
+        self.status = status
+        self.message = message
+        self.headers = headers or {}
+
+
+def _request(
+    token: str,
+    method: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
+) -> tuple[Any, dict[str, str]]:
+    """Issue a GitHub API call. Returns ``(parsed_body, response_headers)``.
+
+    Raises ``GitHubAPIError`` on non-2xx responses; the ``Retry-After`` /
+    ``X-RateLimit-*`` headers are surfaced on the exception so the caller
+    can sleep until reset.
+    """
+    url = _API_ROOT + path
+    if params:
+        # Filter out None / empty values so callers can pass optional
+        # cursors without crafting URL strings by hand.
+        clean = {k: v for k, v in params.items() if v not in (None, "")}
+        if clean:
+            url = f"{url}?{urllib.parse.urlencode(clean)}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": _USER_AGENT,
+            "X-GitHub-Api-Version": _API_VERSION,
+            **({"Content-Type": "application/json"} if data else {}),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+            payload = resp.read()
+            headers = {k: v for k, v in resp.headers.items()}
+            parsed = json.loads(payload) if payload else None
+            return parsed, headers
+    except urllib.error.HTTPError as exc:
+        body_bytes = b""
+        try:
+            body_bytes = exc.read()
+        except Exception:  # pragma: no cover - defensive
+            pass
+        message = body_bytes.decode("utf-8", errors="replace") or exc.reason or ""
+        raise GitHubAPIError(
+            exc.code,
+            message[:500],
+            headers={k: v for k, v in (exc.headers or {}).items()},
+        ) from exc
+
+
+def _api_get(token: str, path: str, params: dict[str, Any] | None = None) -> Any:
+    payload, _ = _request(token, "GET", path, params=params)
+    return payload
+
+
+def _api_post(token: str, path: str, body: dict[str, Any]) -> Any:
+    payload, _ = _request(token, "POST", path, body=body)
+    return payload
+
+
+# ── State ────────────────────────────────────────────────────────────
+
+
+def _state_path(brr_dir: Path) -> Path:
+    return brr_dir / "gates" / "github.json"
+
+
+def _load_state(brr_dir: Path) -> dict:
+    path = _state_path(brr_dir)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return {}
+
+
+def _save_state(brr_dir: Path, state: dict) -> None:
+    path = _state_path(brr_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+# ── Token resolution ────────────────────────────────────────────────
+
+
+def _gh_cli_token() -> str | None:
+    """Read a token from ``gh auth token`` if the binary is available."""
+    if shutil.which("gh") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    token = result.stdout.strip()
+    return token or None
+
+
+def _env_token() -> str | None:
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        token = os.environ.get(name)
+        if token:
+            return token.strip()
+    return None
+
+
+def resolve_token(state: dict) -> str | None:
+    """Return the active token, preferring stored > gh CLI > env.
+
+    Stored tokens win because they are explicit operator intent — they
+    are only saved when the operator pasted one during ``setup``. The
+    gh CLI and env fallbacks are first-time setup conveniences.
+    """
+    stored = state.get("token")
+    if isinstance(stored, str) and stored.strip():
+        return stored.strip()
+    return _gh_cli_token() or _env_token()
+
+
+def _validate_token(token: str) -> str:
+    """Return the authenticated user's login. Raises on failure."""
+    payload = _api_get(token, "/user")
+    if not isinstance(payload, dict) or not payload.get("login"):
+        raise GitHubAPIError(0, "no login in /user response")
+    return str(payload["login"])
+
+
+# ── Repo autodetect ─────────────────────────────────────────────────
+
+
+_GITHUB_HOSTS = {"github.com", "www.github.com"}
+_HTTPS_RE = re.compile(r"^https?://([^/]+)/([^/]+)/([^/]+?)(?:\.git)?/?$")
+_SSH_RE = re.compile(r"^git@([^:]+):([^/]+)/([^/]+?)(?:\.git)?$")
+
+
+def parse_origin_url(url: str) -> str | None:
+    """Return ``owner/name`` for a github.com remote URL, or ``None``."""
+    if not url:
+        return None
+    url = url.strip()
+    m = _SSH_RE.match(url)
+    if m and m.group(1) in _GITHUB_HOSTS:
+        return f"{m.group(2)}/{m.group(3)}"
+    m = _HTTPS_RE.match(url)
+    if m and m.group(1) in _GITHUB_HOSTS:
+        return f"{m.group(2)}/{m.group(3)}"
+    return None
+
+
+def autodetect_repo(repo_root: Path) -> str | None:
+    remote = gitops.default_remote(repo_root)
+    if not remote:
+        return None
+    url = gitops.remote_url(repo_root, remote)
+    if not url:
+        return None
+    return parse_origin_url(url)
+
+
+# ── Setup ────────────────────────────────────────────────────────────
+
+
+def auth(brr_dir: Path) -> None:
+    state = _load_state(brr_dir)
+    token = resolve_token(state)
+    source = "stored" if state.get("token") else None
+    if token is None:
+        token = input("GitHub personal access token (repo scope): ").strip()
+        if not token:
+            print("[brr] No token provided.")
+            return
+        source = "stored"
+    elif not state.get("token"):
+        # We picked one up from gh CLI or env. Don't store it; just
+        # validate now so the operator knows it works.
+        source = "gh-cli" if _gh_cli_token() == token else "env"
+
+    try:
+        login = _validate_token(token)
+    except Exception as exc:
+        print(f"[brr] GitHub auth failed: {exc}")
+        return
+
+    state["bot_login"] = login
+    if source == "stored":
+        state["token"] = token
+    else:
+        # Make sure we don't keep a stale stored token if the operator
+        # is rotating to a gh CLI / env-based flow.
+        state.pop("token", None)
+    state["token_source"] = source
+    _save_state(brr_dir, state)
+    print(f"[brr] GitHub auth ok: @{login} (source={source})")
+
+
+def bind(brr_dir: Path) -> None:
+    state = _load_state(brr_dir)
+    if resolve_token(state) is None:
+        print("[brr] Run `brr auth github` first.")
+        return
+
+    repo_root = brr_dir.parent
+    detected = autodetect_repo(repo_root)
+    prompt = f"GitHub repo (owner/name) [{detected}]: " if detected else "GitHub repo (owner/name): "
+    repo = input(prompt).strip() or (detected or "")
+    if not repo or "/" not in repo:
+        print("[brr] Repo must look like 'owner/name'.")
+        return
+    state["repo"] = repo
+
+    triggers: dict[str, str] = state.get("triggers") or {}
+    label = input("Label to watch on issues (empty to disable) [brr]: ").strip()
+    if label.lower() == "off":
+        triggers.pop("label", None)
+    elif label or not triggers.get("label"):
+        triggers["label"] = label or "brr"
+
+    mention_default = triggers.get("mention") or "@brr-bot"
+    mention = input(
+        f"Mention string to watch in comments (empty to disable) [{mention_default}]: "
+    ).strip()
+    if mention.lower() == "off":
+        triggers.pop("mention", None)
+    elif mention or not triggers.get("mention"):
+        triggers["mention"] = mention or mention_default
+
+    if not triggers:
+        print("[brr] No triggers configured — at least one of label / mention required.")
+        return
+    state["triggers"] = triggers
+    _save_state(brr_dir, state)
+    print(f"[brr] GitHub gate bound: repo={repo} triggers={list(triggers)}")
+
+
+def setup(brr_dir: Path) -> None:
+    auth(brr_dir)
+    if "bot_login" in _load_state(brr_dir):
+        bind(brr_dir)
+
+
+def is_configured(brr_dir: Path) -> bool:
+    state = _load_state(brr_dir)
+    return (
+        bool(state.get("repo"))
+        and bool(state.get("triggers"))
+        and resolve_token(state) is not None
+    )
+
+
+# ── Gate loop ────────────────────────────────────────────────────────
+
+
+def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
+    """Daemon-thread entry point. Catches its own errors and backs off."""
+    backoff = 1
+    while True:
+        try:
+            sleep_seconds = _loop_once(brr_dir, inbox_dir, responses_dir)
+            backoff = 1
+        except GitHubAPIError as exc:
+            sleep_seconds = _handle_api_error(exc)
+            backoff = 1
+        except Exception as exc:
+            print(f"[brr:github] error: {exc}, retrying in {backoff}s")
+            sleep_seconds = backoff
+            backoff = min(backoff * 2, _BACKOFF_MAX)
+        time.sleep(max(1, int(sleep_seconds)))
+
+
+def _handle_api_error(exc: GitHubAPIError) -> int:
+    """Return how long to sleep after an API error.
+
+    Rate-limit responses include either ``Retry-After`` or a
+    ``X-RateLimit-Reset`` epoch; both let us sleep precisely.
+    """
+    headers = {k.lower(): v for k, v in (exc.headers or {}).items()}
+    if exc.status in (403, 429) and "retry-after" in headers:
+        try:
+            return max(1, int(headers["retry-after"]))
+        except ValueError:
+            pass
+    if exc.status in (403, 429) and headers.get("x-ratelimit-remaining") == "0":
+        try:
+            reset = int(headers.get("x-ratelimit-reset", "0"))
+            now = int(time.time())
+            return max(1, reset - now)
+        except ValueError:
+            pass
+    if 400 <= exc.status < 500:
+        # Unauthorised / forbidden / not-found is not transient. Surface
+        # the failure to the operator and back off gently so we don't
+        # spam logs.
+        print(f"[brr:github] {exc} — backing off {_BACKOFF_MAX}s")
+        return _BACKOFF_MAX
+    print(f"[brr:github] {exc} — backing off {_POLL_INTERVAL}s")
+    return _POLL_INTERVAL
+
+
+def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> int:
+    state = _load_state(brr_dir)
+    token = resolve_token(state)
+    repo = state.get("repo")
+    triggers = state.get("triggers") or {}
+    if not token or not repo or not triggers:
+        return _POLL_INTERVAL
+
+    cursor = state.setdefault("cursor", {})
+
+    if "label" in triggers:
+        _poll_label_trigger(token, repo, triggers["label"], cursor, inbox_dir)
+    if "mention" in triggers:
+        _poll_mention_trigger(
+            token, repo, triggers["mention"], state.get("bot_login", ""),
+            cursor, inbox_dir,
+        )
+
+    state["cursor"] = cursor
+    _save_state(brr_dir, state)
+
+    _deliver_responses(brr_dir, inbox_dir, responses_dir, token)
+    return _POLL_INTERVAL
+
+
+# ── Triggers ─────────────────────────────────────────────────────────
+
+
+def _initial_since() -> str:
+    return _format_iso(datetime.now(timezone.utc) - _INITIAL_LOOKBACK)
+
+
+def _poll_label_trigger(
+    token: str,
+    repo: str,
+    label: str,
+    cursor: dict,
+    inbox_dir: Path,
+) -> None:
+    since = cursor.get("issues_since") or _initial_since()
+    seen = set(cursor.get("seen_issue_numbers") or [])
+    issues = _api_get(
+        token, f"/repos/{repo}/issues",
+        params={
+            "state": "open",
+            "labels": label,
+            "since": since,
+            "per_page": 100,
+            "sort": "updated",
+            "direction": "asc",
+        },
+    ) or []
+
+    latest_seen = since
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        number = issue.get("number")
+        if not isinstance(number, int):
+            continue
+        if number in seen:
+            continue
+        # GitHub returns PRs from /issues too; skip them — PR work belongs
+        # to the mention trigger, not the label trigger, because PRs almost
+        # always have ongoing back-and-forth and a label trigger would
+        # only fire once per PR which is rarely what an operator wants.
+        if "pull_request" in issue:
+            continue
+
+        title = str(issue.get("title") or "").strip()
+        body = str(issue.get("body") or "").strip()
+        author = (issue.get("user") or {}).get("login") or ""
+        protocol.create_event(
+            inbox_dir,
+            source="github",
+            body=_format_event_body(title, body),
+            github_repo=repo,
+            github_kind="issue",
+            github_issue_number=number,
+            github_author=author,
+            github_html_url=issue.get("html_url") or "",
+            github_trigger="label",
+            github_label=label,
+            title=title,
+        )
+        seen.add(number)
+        ts = issue.get("updated_at") or issue.get("created_at")
+        if isinstance(ts, str) and ts > latest_seen:
+            latest_seen = ts
+
+    cursor["issues_since"] = latest_seen
+    cursor["seen_issue_numbers"] = sorted(seen)[-_SEEN_CAP:]
+
+
+def _poll_mention_trigger(
+    token: str,
+    repo: str,
+    mention: str,
+    bot_login: str,
+    cursor: dict,
+    inbox_dir: Path,
+) -> None:
+    since = cursor.get("comments_since") or _initial_since()
+    seen = set(cursor.get("seen_comment_ids") or [])
+    comments = _api_get(
+        token, f"/repos/{repo}/issues/comments",
+        params={
+            "since": since,
+            "per_page": 100,
+            "sort": "updated",
+            "direction": "asc",
+        },
+    ) or []
+
+    pr_branch_cache: dict[int, str] = {}
+    latest_seen = since
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        cid = comment.get("id")
+        if not isinstance(cid, int):
+            continue
+        if cid in seen:
+            continue
+        body = str(comment.get("body") or "")
+        if mention not in body:
+            continue
+        author = (comment.get("user") or {}).get("login") or ""
+        if author and bot_login and author == bot_login:
+            # Don't re-trigger on the bot's own replies.
+            continue
+
+        html_url = str(comment.get("html_url") or "")
+        is_pr = "/pull/" in html_url
+        issue_number = _extract_issue_number(comment.get("issue_url") or "")
+        if issue_number is None:
+            continue
+
+        meta: dict[str, Any] = {
+            "github_repo": repo,
+            "github_kind": "pr-comment" if is_pr else "issue-comment",
+            "github_issue_number": issue_number,
+            "github_comment_id": cid,
+            "github_author": author,
+            "github_html_url": html_url,
+            "github_trigger": "mention",
+            "github_mention": mention,
+        }
+        if is_pr:
+            meta["github_pr_number"] = issue_number
+            branch = pr_branch_cache.get(issue_number) or _fetch_pr_head_branch(
+                token, repo, issue_number,
+            )
+            if branch:
+                pr_branch_cache[issue_number] = branch
+                meta["branch_target"] = branch
+
+        protocol.create_event(
+            inbox_dir,
+            source="github",
+            body=_format_event_body("", body),
+            **meta,
+        )
+        seen.add(cid)
+        ts = comment.get("updated_at") or comment.get("created_at")
+        if isinstance(ts, str) and ts > latest_seen:
+            latest_seen = ts
+
+    cursor["comments_since"] = latest_seen
+    cursor["seen_comment_ids"] = sorted(seen)[-_SEEN_CAP:]
+
+
+_ISSUE_URL_RE = re.compile(r"/issues/(\d+)$")
+
+
+def _extract_issue_number(issue_url: str) -> int | None:
+    if not issue_url:
+        return None
+    m = _ISSUE_URL_RE.search(issue_url)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _fetch_pr_head_branch(token: str, repo: str, pr_number: int) -> str | None:
+    pr = _api_get(token, f"/repos/{repo}/pulls/{pr_number}")
+    if not isinstance(pr, dict):
+        return None
+    head = pr.get("head") or {}
+    ref = head.get("ref")
+    return str(ref) if isinstance(ref, str) and ref else None
+
+
+def _format_event_body(title: str, body: str) -> str:
+    if title and body:
+        return f"# {title}\n\n{body}".strip() + "\n"
+    if title:
+        return f"# {title}\n"
+    return body.strip() + "\n" if body else ""
+
+
+# ── Response delivery ──────────────────────────────────────────────
+
+
+def _deliver_responses(
+    brr_dir: Path,
+    inbox_dir: Path,
+    responses_dir: Path,
+    token: str,
+) -> None:
+    for event in protocol.list_done(inbox_dir, "github"):
+        eid = event["id"]
+        repo = event.get("github_repo")
+        number = _coerce_int(event.get("github_issue_number"))
+        body = protocol.read_response(responses_dir, eid)
+        if body is None:
+            continue
+        if not repo or number is None:
+            print(f"[brr:github] delivery error for {eid}: missing repo / issue_number")
+            continue
+        try:
+            _api_post(
+                token, f"/repos/{repo}/issues/{number}/comments",
+                body={"body": body},
+            )
+        except GitHubAPIError as exc:
+            print(f"[brr:github] delivery error for {eid}: {exc}")
+            continue
+        resp_path = protocol.response_path(responses_dir, eid)
+        protocol.cleanup(event["_path"], resp_path)
+
+
+def _coerce_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_iso(when: datetime) -> str:
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
