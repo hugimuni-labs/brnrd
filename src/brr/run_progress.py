@@ -118,6 +118,7 @@ class RunProgressView:
     maintenance_commits: int = 0
     maintenance_files: int = 0
     maintenance_ok: bool = True
+    sync_summary: str | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -241,6 +242,14 @@ def _project(
 
         ptype = record.get("type")
         if not ptype:
+            continue
+
+        if ptype == "synced":
+            summary = record.get("summary")
+            if isinstance(summary, str) and summary:
+                view.sync_summary = summary
+            elif record.get("error"):
+                view.sync_summary = f"sync error: {record['error']}"
             continue
 
         if ptype == "task_created":
@@ -478,6 +487,13 @@ def _render_compact(
     multi_attempt = sum(1 for e in history if e.name == "running") > 1
     task_started_at = history[0].started_at if history else view.started_at
 
+    if view.sync_summary:
+        # Surfaces the daemon's pre-task fetch+ff outcome on the card so
+        # operators see when the seed branch was actually advanced (or
+        # why we couldn't). Quiet when sync was a no-op — daemon only
+        # emits the packet on meaningful changes.
+        lines.append(f"synced: {view.sync_summary}")
+
     if not history:
         # No state to log yet — fall back to a single status line so
         # operators see something on a freshly-arrived event.
@@ -486,7 +502,7 @@ def _render_compact(
         lines.append(view.status_label())
         return "\n".join(lines).rstrip() + "\n"
 
-    if header:
+    if header or view.sync_summary:
         lines.append("")
 
     last_index = len(history) - 1

@@ -114,7 +114,7 @@ def cmd_down(args):
 
 
 def _load_gate(name: str):
-    gate_map = {"telegram": "telegram", "slack": "slack", "git": "git_gate"}
+    gate_map = {"telegram": "telegram", "slack": "slack"}
     mod_name = gate_map.get(name)
     if not mod_name:
         raise SystemExit(f"[brr] unknown gate: {name} (available: {', '.join(gate_map)})")
