@@ -1620,3 +1620,43 @@ mocked at the `_api_get` / `_api_post` boundary.
 
 Phase 3 (prompt-level mitigation for runner thoughtfulness) is the
 remaining piece on the same plan and design page.
+
+## [2026-05-15] implement | Runner thoughtfulness (Phase 3)
+
+Final phase of the git layer rework. Three small surface tweaks that
+attack the path-of-least-resistance failure mode the
+`brr/git-gate-defaults` runner exhibited, without adding a pre-task
+plan stage:
+
+- A new *"When the task asks you to reconsider"* section in
+  [`prompts/run.md`](../src/brr/prompts/run.md) names the trigger
+  phrases verbatim (`revisit`, `not great`, `wdyt`, `is this the
+  right shape`, etc.) and tells the runner what to do: re-read the
+  relevant code and design pages, surface contradictions per
+  Stewardship before resolving them, and prefer a chat-only reply
+  over a half-fitting commit when the right next step isn't clear
+  yet.
+- "Chat-only reply" is named explicitly as a complete and successful
+  task outcome for those signals, so the diff-as-receipt rule
+  doesn't override the right call on a revisit task.
+- A new self-review bullet in [`AGENTS.md`](../src/brr/AGENTS.md)
+  promotes the Stewardship principle from prose into a concrete
+  checklist item: *"If the task contained a contradiction with the
+  current code, design notes, or guardrails — did you surface it
+  before resolving it? (See Stewardship.)"*
+
+Why no plan stage: judgment failure, not a procedural one. A
+separate stage would split design from execution into different
+runs, hurt follow-through, and consume tokens on the 95% case
+(implement / fix / Q&A) where it adds no value. Post-task
+kb-maintenance is justified because it's mechanical; a pre-task
+plan stage would not be.
+
+Tests: 406 passing (up from 403). New `TestRevisitSignalGuardrails`
+in `tests/test_prompts.py` reads the bundled `run.md` and
+`AGENTS.md` directly to pin the trigger-phrase list, the
+chat-only-reply outcome, and the new self-review bullet. Silent
+prompt drift that drops them fails loudly.
+
+This closes the three-phase git layer rework
+(`kb/design-git-layer-rework.md` is now `Status: shipped`).
