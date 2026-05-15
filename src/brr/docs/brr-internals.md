@@ -226,10 +226,10 @@ progress to a human:
 - The Git gate is a no-op for live progress. Git is not a great surface
   for live status; commits and PRs remain its primary delivery path.
 
-Local commands (`status`, `inspect_task`) are now troubleshooting
-helpers. They render the same `RunProgressView` as gates so that if a
-remote run looks wrong, `brr status` shows the same view a Telegram
-card would.
+Live progress is remote-first. There is no public local status or
+inspect command; new lifecycle UX should flow through update packets,
+`RunProgressView`, and gate renderers instead of reintroducing a
+separate status module.
 
 ## Concurrency model
 
