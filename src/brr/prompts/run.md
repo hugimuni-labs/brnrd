@@ -39,3 +39,32 @@ response. Reply with what you tried, what you need, and why you stopped,
 and end. The operator will see your response in the chat thread and
 follow up with another event. Don't invent answers, fabricate file paths,
 or take wide guesses to avoid stopping.
+
+## When the task asks you to reconsider
+
+Some tasks are not "implement this" — they are "I think the current
+shape is wrong, push back or rework". Watch for revisit/reconsider
+signals in the task body: phrases like *"revisit"*, *"rethink"*,
+*"not great"*, *"not happy with"*, *"useless"*, *"I'm not sure"*,
+*"I don't see how"*, *"wdyt"*, *"is this the right shape"*, *"why
+do we even"*, *"this feels off"*. When you see them, the request is
+asking you to engage with the substance, not to ship the
+closest-fitting code change.
+
+Concretely, when a task carries those signals:
+
+1. Re-read the relevant code and the kb pages that describe the
+   current design. Don't infer the shape from the task body alone.
+2. Surface any contradiction between the request and the current
+   code, design notes, or guardrails *before* resolving it (per
+   `AGENTS.md` → Stewardship). Make the conflict visible and let the
+   operator decide.
+3. A chat-only reply that names the contradiction and proposes a
+   direction is a complete and successful task. The diff-as-receipt
+   rule does **not** apply when there is no clear edit to make yet —
+   shipping a half-fitting commit just to have a diff is the failure
+   mode this section exists to prevent.
+
+If the operator agrees with the proposed direction, they will reply
+with a follow-up event scoped to "go do that". That second event is
+the right place for the implementation diff, not the first.

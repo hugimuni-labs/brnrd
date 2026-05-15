@@ -276,3 +276,57 @@ class TestPromptBuilding:
         assert "brr inspect" not in prompt
         assert "brr stream" not in prompt
         assert "brr docs" not in prompt
+
+
+# ── Phase 3 guardrails: revisit-signal handling ──────────────────────
+
+
+def _read_bundled_run_prompt() -> str:
+    """Read the bundled prompt directly so we pin its shipped content."""
+    from pathlib import Path
+
+    import brr
+
+    return (Path(brr.__file__).parent / "prompts" / "run.md").read_text(
+        encoding="utf-8",
+    )
+
+
+def _read_bundled_agents_md() -> str:
+    from pathlib import Path
+
+    import brr
+
+    return (Path(brr.__file__).parent / "AGENTS.md").read_text(encoding="utf-8")
+
+
+class TestRevisitSignalGuardrails:
+    """Pin the prompt + AGENTS.md guidance that prevents path-of-least-
+    resistance shipping on design-loaded tasks. See
+    `kb/design-git-layer-rework.md` Phase 3 for the rationale."""
+
+    def test_run_prompt_mentions_revisit_signals(self):
+        prompt = _read_bundled_run_prompt()
+        # Section header that gates the new guidance.
+        assert "When the task asks you to reconsider" in prompt
+        # A representative subset of the trigger phrases. We don't pin
+        # every phrase verbatim so future copy edits stay cheap, but
+        # the load-bearing ones must be named.
+        for phrase in ("revisit", "not great", "wdyt", "is this the right shape"):
+            assert phrase in prompt, f"missing trigger phrase: {phrase!r}"
+
+    def test_run_prompt_authorizes_no_commit_for_revisit(self):
+        prompt = _read_bundled_run_prompt()
+        # The chat-only-reply outcome must be named explicitly so the
+        # diff-as-receipt rule doesn't override it on revisit tasks.
+        assert "chat-only reply" in prompt
+        assert "complete and successful task" in prompt
+        assert "Stewardship" in prompt
+
+    def test_agents_md_self_review_contains_contradiction_check(self):
+        agents = _read_bundled_agents_md()
+        # The new self-review bullet must reference the Stewardship
+        # section it maps onto so the link between checklist and
+        # principle stays explicit.
+        assert "did you surface it before resolving it" in agents
+        assert "Stewardship" in agents
