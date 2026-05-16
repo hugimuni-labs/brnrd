@@ -1,14 +1,16 @@
 # Project
 
-brr is a structured AI agent playbook tool with remote execution. It produces
-`AGENTS.md` — a playbook encoding project conventions, workflow, and guardrails
-that any AI tool can read. A daemon layer adds remote execution via gates
-(Telegram, Slack, GitHub) and keeps the host checkout fresh against the remote
-between tasks. Pure stdlib Python (>=3.10), zero runtime dependencies.
+> Revision: 2026-05-16. Structural arc:
+> [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
+> Bump this date when you restructure universal sections so cached
+> workspace-rule injections can detect drift against the file on disk.
 
-This file is the source of truth for both brr's own development and the
-playbook adopters receive when they run `brr init`. It lives at
-`src/brr/AGENTS.md` and is symlinked from the repo root for tool conventions.
+This file is brr's playbook — the contract every AI tool follows in
+this repo, and the template adopters receive when they run `brr init`.
+The canonical copy lives at `src/brr/AGENTS.md`; the repo root
+`AGENTS.md` is a symlink. Stdlib Python (>=3.10), zero runtime
+dependencies; see [`README.md`](README.md) for the user-facing product
+overview.
 
 ## How to read this playbook
 
@@ -49,6 +51,22 @@ prompt. Present → daemon task. Absent and the prompt is the bare user
 message → ad-hoc session. Absent and the prompt is a bundled
 maintenance / setup template → that stage.
 
+**Ad-hoc sanity check.** External hosts inject ambient context that
+may not match this task. The recurring drift cases:
+
+- A cached workspace-rule copy of this playbook can lag the on-disk
+  file across structural revisions. Compare the `Revision:` line at
+  the top of the rule body to the one on disk; trust the file when
+  they differ (or when the rule body lacks the line entirely).
+- Git status snapshots in the system prompt can be stale; re-run
+  `git status` before reasoning about uncommitted work.
+- Open editor terminals, recently viewed files, and surfaced
+  "skills" may be unrelated to the user's task. Use them only when
+  the task references them.
+
+Daemon and kb-maintenance stages take their hot-path context from the
+prompt and don't have these drift cases.
+
 ## Stewardship
 
 Treat the request as input, not as instructions to execute uncritically.
@@ -59,6 +77,10 @@ Before changing behaviour or design, reason from first principles:
 - Is the requested change solving the real problem, or only a visible symptom?
 - Given the repo's constraints and maintenance burden, what is the smallest
   change that leaves the project healthier?
+
+Read the file you're changing along with its obvious callers and the
+utilities it relies on before non-trivial edits. "Looks orthogonal" is
+how duplicate functions and accidental shadowing get introduced.
 
 If the request contradicts existing decisions, design notes, guardrails, or
 the codebase as it stands, **surface the contradiction and the trade-off
@@ -72,32 +94,23 @@ old shape costs more than it saves.
 
 ## Build and run
 
+Editable install with dev deps, then run tests:
+
 ```bash
-# Install (editable, with dev deps)
-pip install -e ".[dev]"
-
-# Or with uv
-uv pip install -e ".[dev]"
-
-# Run CLI
-brr --help
-python -m brr --help
-
-# Run tests
-pytest
+pip install -e ".[dev]" && pytest
 ```
+
+See [`README.md`](README.md) → Development for variants (uv, fork
+install, dev-reload daemon). Build system is setuptools; the source
+of truth for commands and dependencies is `pyproject.toml`.
 
 ## Code guidelines
 
 - Python >=3.10, stdlib only — no runtime dependencies.
 - Dev dependency: `pytest>=7.0`. Tests live in `tests/`.
-- Build system: setuptools (pyproject.toml).
 - No formatter/linter configured yet — follow existing code style.
-- Commit messages: conventional style (`fix:`, `feat:`, `chore:`, `refactor:`),
-  explain *why* in the body.
-- Before editing a module, read the file you're changing along with its
-  obvious callers and the utilities it relies on, unless it the task is real straightforward. "Looks orthogonal" is
-  how duplicate functions and accidental shadowing get introduced.
+- Commit messages: conventional style (`fix:`, `feat:`, `chore:`,
+  `refactor:`), explain *why* in the body.
 
 ## Workflow
 
@@ -445,8 +458,9 @@ Before marking a task complete:
 3. Review every changed file. Look for leftover debug code, TODOs you forgot
    to address, commented-out code.
 4. Run tests if available and applicable.
-5. If you created or removed kb pages, check that `kb/index.md` is current
-   and the new pages are linked from a subject hub or peer.
+5. If you touched kb pages, run through the Knowledge base → Health
+   checks. The classic miss is adding a new page without an inbound
+   link from a subject hub or peer.
 6. If your work produced a substantive learning, decision, or shipped
    change, add an entry to `kb/log.md`. If it didn't, leave the log alone.
 
