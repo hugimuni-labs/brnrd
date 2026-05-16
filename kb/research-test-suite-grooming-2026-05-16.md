@@ -1,14 +1,15 @@
 # Test suite grooming — 2026-05-16
 
-Status: active
+Status: shipped on 2026-05-16
 
 Investigation of the `tests/` suite to find bloat, duplication, and
 stale tests, and to weigh each against the *test-as-intent* discipline
 freshly added to AGENTS.md.
 
-Scope: review only. No deletions or restructuring committed in this
-pass — this page is a proposal. The follow-up plan is the prioritised
-list of moves at the bottom.
+The diagnostic was originally a review-only proposal. The
+high-leverage moves listed at the bottom were then executed across
+three commits; the page is preserved here for the *why*. See the
+2026-05-16 entry in [`kb/log.md`](log.md) for the executed shape.
 
 ## Current shape
 
@@ -226,8 +227,11 @@ tests do encode the *why* either in the docstring or the name.
 ## Recommended moves, by leverage
 
 Order is rough-priority — biggest payoff in clarity per LOC removed.
+All "high leverage" items below were shipped on 2026-05-16 (see
+`kb/log.md`). Medium / low items remain as future work if they
+become worth it.
 
-**High leverage (recommended)**
+**High leverage (shipped)**
 
 1. Delete `test_integration.py` (~110 LOC, 4 tests, three are direct
    dupes of `test_adopt.py`, one is trivial). Net: cleaner adopt
