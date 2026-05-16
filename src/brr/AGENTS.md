@@ -56,6 +56,9 @@ pytest
 - No formatter/linter configured yet — follow existing code style.
 - Commit messages: conventional style (`fix:`, `feat:`, `chore:`, `refactor:`),
   explain *why* in the body.
+- Before editing a module, read the file you're changing along with its
+  obvious callers and the utilities it relies on, unless it the task is real straightforward. "Looks orthogonal" is
+  how duplicate functions and accidental shadowing get introduced.
 
 ## Workflow
 
