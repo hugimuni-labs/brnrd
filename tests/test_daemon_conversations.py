@@ -2,64 +2,23 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from brr import conversations, daemon, envs
+from brr import conversations, daemon
 from brr.runner import RunnerResult
 
+from _helpers import (
+    StubWorktreeEnv,
+    make_event,
+    succeed_invoke,
+    write_repo_scaffold,
+)
 
-def _write_repo_scaffold(repo_root: Path) -> None:
-    (repo_root / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
-    (repo_root / ".brr" / "inbox").mkdir(parents=True)
-    (repo_root / ".brr" / "responses").mkdir(parents=True)
 
-
-def _make_event(repo_root: Path, *, eid: str, body: str, **extra) -> dict:
-    event = {
-        "id": eid,
-        "status": "pending",
-        "body": body,
-        "source": "telegram",
-        "_path": repo_root / ".brr" / "inbox" / f"{eid}.md",
-        **extra,
-    }
-    event["_path"].write_text(
-        f"---\nid: {eid}\nstatus: pending\nsource: telegram\n---\n{body}\n",
-        encoding="utf-8",
+def _stub_env(monkeypatch):
+    """Stub env backend that always writes ``result\\n`` and succeeds."""
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("result\n")),
     )
-    return event
-
-
-def _stub_env(monkeypatch, tmp_path):
-    """Stub env backend that just runs the runner and returns the task."""
-
-    class StubEnv:
-        name = "worktree"
-
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
-            return envs.RunContext(
-                name=self.name,
-                cwd=tmp_path,
-                repo_root=repo_root,
-                runtime_dir=tmp_path / ".brr",
-                response_path_host=response_path,
-                response_path_env=response_path,
-                branch_name=f"brr/{task.id}",
-                env_state={"worktree_path": str(tmp_path)},
-            )
-
-        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(invocation.response_path).write_text("result\n", encoding="utf-8")
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name, command=["mock"],
-                stdout="result\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-            )
-
-        def finalize(self, _ctx, task, _tasks_dir):
-            return task
-
-    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
 
 
 def _patch_runner_minimal(monkeypatch, captured_prompts=None):
@@ -85,13 +44,13 @@ def _patch_runner_minimal(monkeypatch, captured_prompts=None):
 
 
 def test_run_worker_routes_to_conversation_and_persists_records(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(
+    write_repo_scaffold(tmp_path)
+    event = make_event(
         tmp_path, eid="evt-conv-1", body="ship it",
         telegram_chat_id=42, telegram_topic_id=5,
     )
     _patch_runner_minimal(monkeypatch)
-    _stub_env(monkeypatch, tmp_path)
+    _stub_env(monkeypatch)
 
     task = daemon._run_worker(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
@@ -110,19 +69,19 @@ def test_run_worker_routes_to_conversation_and_persists_records(tmp_path, monkey
 
 
 def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    first = _make_event(
+    write_repo_scaffold(tmp_path)
+    first = make_event(
         tmp_path, eid="evt-thread-1", body="first",
         telegram_chat_id=77,
     )
-    second = _make_event(
+    second = make_event(
         tmp_path, eid="evt-thread-2", body="second",
         telegram_chat_id=77,
     )
 
     captured: list = []
     _patch_runner_minimal(monkeypatch, captured)
-    _stub_env(monkeypatch, tmp_path)
+    _stub_env(monkeypatch)
 
     daemon._run_worker(
         first, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
@@ -142,15 +101,15 @@ def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeyp
 
 
 def test_run_worker_followup_in_same_thread_reuses_conversation(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
+    write_repo_scaffold(tmp_path)
     _patch_runner_minimal(monkeypatch)
-    _stub_env(monkeypatch, tmp_path)
+    _stub_env(monkeypatch)
 
-    first = _make_event(
+    first = make_event(
         tmp_path, eid="evt-thread-A", body="initial",
         telegram_chat_id=88, telegram_topic_id=3,
     )
-    second = _make_event(
+    second = make_event(
         tmp_path, eid="evt-thread-B", body="follow-up",
         telegram_chat_id=88, telegram_topic_id=3,
     )

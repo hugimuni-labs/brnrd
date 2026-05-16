@@ -5,14 +5,12 @@ from pathlib import Path
 
 from brr import branching
 
+from _helpers import commit_files, init_git_repo
+
 
 def _init_repo(repo: Path) -> None:
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
-    (repo / "file.txt").write_text("base\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    init_git_repo(repo)
+    commit_files(repo, {"file.txt": "base\n"})
 
 
 def test_default_fallback_preserves_task_branch_from_default_seed(tmp_path):
