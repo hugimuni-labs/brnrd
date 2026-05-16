@@ -1753,3 +1753,47 @@ Slice 3 (snapshot regression test) and the canonical-home-per-fact
 cleanup remain open follow-ups on the plan; both reviews flagged
 them as in-passing chores. Full suite green at 404 tests (was 401
 before slice 1's three new cases).
+
+## [2026-05-16] research | Cursor orientation ergonomics — follow-up
+
+Second-pass external Cursor view taken after slices 1 and 2 of the
+agent-orientation layering plan landed earlier the same day. Filed
+[`kb/research-cursor-orientation-ergonomics-followup-2026-05-16.md`](research-cursor-orientation-ergonomics-followup-2026-05-16.md)
+and routed the recommendations onto
+[`kb/plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md).
+No code or AGENTS.md edits applied yet — operator selects which
+findings to act on.
+
+Headline findings:
+
+- **Workspace-rule cache delivers a stale `AGENTS.md`.** Cursor
+  injected the *pre-slice-2* playbook as the workspace rule (no
+  "How to read this playbook", `Session startup` + `Work re-review`
+  still split, log-tail recipe missing), while the on-disk file
+  carries the new shape. The slice that was meant to short-circuit
+  daemon-only filtering is silently invisible until the agent
+  notices the drift. Cheap brr-side mitigation: a top-of-file
+  `Revision:` marker plus a one-line "trust the on-disk file" rule
+  in the ad-hoc-agent stage block.
+- **README ↔ AGENTS.md elevator-pitch + Build-and-run duplication
+  is real and trimmable.** The user's prompt named this; confirmed.
+  `# Project` (11 lines) and `## Build and run` (16 lines) restate
+  material that lives canonically in `README.md` and
+  `pyproject.toml`. ~25 lines saved per session × every adopter if
+  trimmed to a one-liner pointer. First concrete target for the
+  plan's open canonical-home-cleanup follow-up.
+- **Slice 3 (snapshot regression test) is rejected** as low ROI:
+  `TestDaemonModeGuardrails` already pins the load-bearing anchors,
+  and a snapshot would tax every prompt copy-edit on the cheap
+  iteration loop. Plan updated.
+- **Dive-in-map two-halves declaration earns its keep.** The cheap
+  polish from slice 2 worked — this session stopped after the
+  orientation block. Deeper splits stay deferred.
+- **Cursor-side wishlist** gained one new entry: invalidate the
+  workspace-rule cache on file-content change. Not brr's to ship.
+
+Smaller findings recorded for batched cleanup: a Code-guidelines
+bullet that drifted in from Stewardship territory (with a typo);
+Self-review #5 overlapping Knowledge base → Health checks; an
+optional cold-start sanity-check block (workspace rule may be
+stale, git status may be stale, terminals/skills are ambient).

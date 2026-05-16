@@ -1,16 +1,22 @@
 # Agent orientation layering
 
-Status: active — slices 1 and 2 shipped on 2026-05-16; slice 3
-(snapshot regression test) and follow-up redundancy cleanups still
-open.
+Status: active — slices 1 and 2 shipped on 2026-05-16; slice 3 was
+**rejected on 2026-05-16** as low ROI (see
+[`research-cursor-orientation-ergonomics-followup-2026-05-16.md`](research-cursor-orientation-ergonomics-followup-2026-05-16.md)
+Finding 9); follow-up redundancy cleanups still open and now have a
+concrete first target.
 
 Synthesis of two same-day ergonomics reviews that converged
-independently on the same diagnosis and direction:
+independently on the same diagnosis and direction, plus a same-day
+follow-up review taken after slices 1+2 shipped:
 
 - [`research-runner-orientation-ergonomics-2026-05-16.md`](research-runner-orientation-ergonomics-2026-05-16.md) —
   daemon-launched runner view, Docker env, brr/<task-id> branch.
 - [`research-cursor-orientation-ergonomics-2026-05-16.md`](research-cursor-orientation-ergonomics-2026-05-16.md) —
   external Cursor session view, no daemon in the loop.
+- [`research-cursor-orientation-ergonomics-followup-2026-05-16.md`](research-cursor-orientation-ergonomics-followup-2026-05-16.md) —
+  second-pass Cursor view after slices 1+2 shipped: workspace-rule
+  cache staleness, README ↔ AGENTS.md duplication, slice-3 ROI.
 
 Plan supersedes the relevant parts of the older
 [`plan-branch-modes.md`](plan-branch-modes.md) note about "AGENTS.md
@@ -90,23 +96,23 @@ inside the playbook instead of relying on the reader to infer it.
   list of universal sections, pointing at this plan for the new
   shape.
 
-## Slice 3 — regression coverage, open
+## Slice 3 — regression coverage, rejected 2026-05-16
 
-Suggested by both reviews, not yet shipped.
+The pre-ship guess was that a snapshot test for a realistic full
+daemon prompt + run context would catch duplication / drift between
+the bundle and the run-context file. The follow-up review
+([`research-cursor-orientation-ergonomics-followup-2026-05-16.md`](research-cursor-orientation-ergonomics-followup-2026-05-16.md)
+Finding 9) re-examined the trade-off and recommends not shipping
+it: `tests/test_prompts.py::TestDaemonModeGuardrails` already pins
+the load-bearing anchors (Mode block, "injected-extract satisfies
+the step" claim, run-context-as-recovery framing), and a snapshot
+would freeze ergonomically-good prose into byte equality, taxing
+every prompt copy-edit on the cheap iteration loop. Cost outweighs
+the catch.
 
-A snapshot-style test for a realistic full daemon prompt plus run
-context, so future edits can see at a glance whether orientation
-data is duplicated, missing, or stale. The current
-`TestDaemonModeGuardrails` pins the right anchors but doesn't catch
-new duplication between the bundle and the context file. Owner
-flexibility: the test can live in `tests/test_prompts.py` or in a
-new `tests/test_daemon_orientation.py`; what matters is that it
-reads the bundle and the run-context file from a representative
-fixture and asserts that key facts are unique to one or the other.
-
-Skip the snapshot if it would freeze ergonomically-good prose into
-brittle byte-equality — the orientation guardrail tests in
-`TestDaemonModeGuardrails` already do the load-bearing work.
+If new duplication classes appear later that the guardrail tests
+miss, prefer extending those tests with targeted assertions over a
+broad snapshot.
 
 ## Open follow-ups (not yet sliced)
 
@@ -114,22 +120,41 @@ brittle byte-equality — the orientation guardrail tests in
   repeated fact (environment policy → `subject-envs.md`; "no
   triage" → `decision-remove-triage.md`; KB four-layer model →
   AGENTS.md) and shrink restatements elsewhere to pointers. Both
-  reviews flagged this; it's an in-passing chore as the kb is
-  touched, not a single dedicated slice.
-- **Dive-in-map orientation prominence.** The current
-  [`repo-dive-in-map.md`](repo-dive-in-map.md) buries the
-  "Current ownership snapshot" — the section most readers actually
-  need first — 60 lines into a 1357-line page that's already
-  flagged `oversized-page` by preflight. Either elevate that
-  block in the page (cheap), split orientation off into its own
-  page (medium), or split by ring (heavy). The cheap polish landed
-  alongside the kb work; medium / heavy splits remain open if
-  ad-hoc agents are still over-reading the map.
+  pre-ship reviews flagged this. The
+  [follow-up review](research-cursor-orientation-ergonomics-followup-2026-05-16.md)
+  surfaced the **first concrete target the user explicitly named**:
+  the `# Project` block and `## Build and run` section of
+  `AGENTS.md` restate material that lives canonically in `README.md`
+  and `pyproject.toml`. Trim those to a one-liner pointer; ~25
+  lines saved per session × every adopter.
+- **Workspace-rule staleness mitigation** (new). Cursor (and
+  potentially other hosts) inject `AGENTS.md` as a cached workspace
+  rule that lags the on-disk file across structural revisions. Cheap
+  brr-side mitigation: a top-of-file `Revision:` marker plus a
+  one-line "trust the on-disk file when in doubt" rule in the
+  ad-hoc-agent stage block. Detail in
+  [`research-cursor-orientation-ergonomics-followup-2026-05-16.md`](research-cursor-orientation-ergonomics-followup-2026-05-16.md)
+  Finding 1.
+- **Cold-start sanity-check block** (new). Three-bullet block in
+  AGENTS.md → "How to read this playbook" → ad-hoc-agent stage that
+  names the recurring host frictions (stale workspace rule, stale
+  git status, ambient terminals/skills) so an agent treats them as
+  expected rather than as silent context. Detail in the same
+  follow-up review, Finding 6.
+- **Dive-in-map orientation prominence.** The cheap two-halves
+  declaration shipped with slice 2 is paying for itself —
+  [Finding 8 of the follow-up review](research-cursor-orientation-ergonomics-followup-2026-05-16.md)
+  reports an external session stopping after the orientation block
+  rather than wading through the reference half. Medium / heavy
+  splits stay deferred indefinitely; revisit only if a future
+  review surfaces an agent over-reading the map.
 - **Cursor-side wishlist** (recorded so future agents don't
   re-discover): timestamp the git-status snapshot, tag
-  `terminals/*.txt` as ambient editor state, and declare the
-  runtime mode in the system prompt so the agent doesn't have to
-  infer it. Not brr's to ship; logged in the cursor research page.
+  `terminals/*.txt` as ambient editor state, declare the runtime
+  mode in the system prompt, **invalidate the workspace-rule cache
+  on file content change** (new from the follow-up review), and
+  filter surfaced skills by task domain. Not brr's to ship; logged
+  in the cursor research pages.
 
 ## What was rejected
 

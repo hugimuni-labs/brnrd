@@ -154,6 +154,12 @@ dive-in map) and are stable until something contradicts them.
   ~25-30%), specific redundancy across README / AGENTS.md / index /
   log / dive-in-map. Headline recommendations absorbed into
   [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md).
+- [Cursor orientation ergonomics — follow-up, 2026-05-16](research-cursor-orientation-ergonomics-followup-2026-05-16.md) —
+  *active*. Same-day second-pass review after slices 1+2 shipped.
+  Surfaces a Cursor workspace-rule cache that delivers a stale
+  `AGENTS.md` to the agent, confirms the user-flagged
+  README ↔ AGENTS.md elevator-pitch / Build-and-run duplication, and
+  recommends dropping the plan's slice 3 (snapshot test) as low ROI.
 - [Runner orientation ergonomics, 2026-05-16](research-runner-orientation-ergonomics-2026-05-16.md) —
   *shipped*. Same-day daemon-launched-runner view of the same
   problem from inside Docker: pinpoints the stage-vs-environment
