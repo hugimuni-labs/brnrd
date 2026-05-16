@@ -9,35 +9,18 @@ from brr import daemon, envs
 from brr.task import Task
 from brr.runner import RunnerResult
 
-
-def _write_repo_scaffold(repo_root: Path) -> None:
-    (repo_root / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
-    (repo_root / ".brr" / "inbox").mkdir(parents=True)
-    (repo_root / ".brr" / "responses").mkdir(parents=True)
+from _helpers import (
+    StubWorktreeEnv,
+    commit_files,
+    init_git_repo,
+    make_event,
+    succeed_invoke,
+    write_repo_scaffold,
+)
 
 
 def _stop_after_first_push(_repo_root: Path, **_kwargs) -> None:
     raise StopIteration
-
-
-def _make_event(
-    tmp_path: Path,
-    eid: str,
-    body: str = "raw event body",
-    source: str = "telegram",
-) -> dict:
-    path = tmp_path / ".brr" / "inbox" / f"{eid}.md"
-    path.write_text(
-        f"---\nid: {eid}\nstatus: pending\nsource: {source}\n---\n{body}\n",
-        encoding="utf-8",
-    )
-    return {
-        "id": eid,
-        "status": "pending",
-        "body": body,
-        "source": source,
-        "_path": path,
-    }
 
 
 def _stub_env_isolated(monkeypatch, tmp_path):
@@ -73,8 +56,8 @@ def _stub_env_isolated(monkeypatch, tmp_path):
 
 
 def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-1")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-1")
     worktree_path, _finalized = _stub_env_isolated(monkeypatch, tmp_path)
 
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
@@ -122,8 +105,8 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
 
 
 def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-2")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-2")
 
     class ExplodingEnv:
         name = "worktree"
@@ -150,8 +133,8 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
 
 
 def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-3")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-3")
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
@@ -206,8 +189,8 @@ def test_run_worker_calls_sync_before_resolving_branch_plan(
     tmp_path, monkeypatch,
 ):
     """Pre-task fetch+ff fires before the daemon picks a seed ref."""
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-sync-order")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-sync-order")
     _stub_env_isolated(monkeypatch, tmp_path)
 
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
@@ -265,8 +248,8 @@ def test_run_worker_calls_sync_before_resolving_branch_plan(
 
 def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
     """A sync error never blocks task execution."""
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-sync-fail")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-sync-fail")
     _stub_env_isolated(monkeypatch, tmp_path)
 
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
@@ -308,7 +291,7 @@ def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
 
 def test_branches_to_refresh_includes_default_and_structured(monkeypatch, tmp_path):
     """The helper merges the local default branch with structured event keys."""
-    _write_repo_scaffold(tmp_path)
+    write_repo_scaffold(tmp_path)
     monkeypatch.setattr(daemon.gitops, "default_branch", lambda _root: "main")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(daemon.gitops, "valid_branch_name", lambda _root, _b: True)
@@ -330,7 +313,7 @@ def test_branches_to_refresh_includes_default_and_structured(monkeypatch, tmp_pa
 
 
 def test_start_preserves_error_event_status(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
+    write_repo_scaffold(tmp_path)
     event = {"id": "evt-err", "status": "pending", "_path": tmp_path / ".brr" / "inbox" / "evt-err.md"}
     event["_path"].write_text(
         "---\nid: evt-err\nstatus: pending\n---\nhelp\n", encoding="utf-8",
@@ -408,7 +391,7 @@ def test_cleanup_traces_on_success_keeps_on_failure(tmp_path):
 
 
 def test_start_allows_same_pid_during_reexec(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
+    write_repo_scaffold(tmp_path)
     calls: list[str] = []
 
     monkeypatch.setenv("BRR_REEXEC", "1")
@@ -432,7 +415,7 @@ def test_start_allows_same_pid_during_reexec(tmp_path, monkeypatch):
 
 
 def test_start_rejects_existing_pid_without_reexec(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
+    write_repo_scaffold(tmp_path)
     monkeypatch.delenv("BRR_REEXEC", raising=False)
     monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: daemon.os.getpid())
 
@@ -443,7 +426,7 @@ def test_start_rejects_existing_pid_without_reexec(tmp_path, monkeypatch):
 
 
 def test_start_rejects_different_pid_during_reexec(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
+    write_repo_scaffold(tmp_path)
     monkeypatch.setenv("BRR_REEXEC", "1")
     monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: daemon.os.getpid() + 1)
 
@@ -454,7 +437,7 @@ def test_start_rejects_different_pid_during_reexec(tmp_path, monkeypatch):
 
 
 def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
+    write_repo_scaffold(tmp_path)
     order: list[str] = []
 
     class FakeWatcher:
@@ -491,7 +474,7 @@ def test_dev_reload_mode_from_config_reexecs_at_idle_boundary(tmp_path, monkeypa
 
 
 def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
+    write_repo_scaffold(tmp_path)
     event = {
         "id": "evt-reload",
         "status": "pending",
@@ -574,8 +557,8 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
 
 
 def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-kb", body="update docs")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-kb", body="update docs")
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
@@ -591,31 +574,10 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     )
     maintenance: list[str] = []
 
-    class StubEnv:
-        name = "worktree"
-
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
-            return envs.RunContext(
-                name=self.name, cwd=tmp_path, repo_root=repo_root,
-                runtime_dir=tmp_path / ".brr",
-                response_path_host=response_path,
-                response_path_env=response_path,
-                branch_name=f"brr/{task.id}",
-                env_state={"worktree_path": str(tmp_path)},
-            )
-
-        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name, command=["mock"],
-                stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-            )
-
-        def finalize(self, _ctx, task, _tasks_dir):
-            return task
-
-    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
+    )
 
     def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
         if invocation.kind == "kb-maintenance":
@@ -634,8 +596,8 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
 
 
 def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-skip", body="quick fix")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-skip", body="quick fix")
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
@@ -646,31 +608,10 @@ def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_kb_changed", lambda _root: False)
     maintenance: list[str] = []
 
-    class StubEnv:
-        name = "worktree"
-
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
-            return envs.RunContext(
-                name=self.name, cwd=tmp_path, repo_root=repo_root,
-                runtime_dir=tmp_path / ".brr",
-                response_path_host=response_path,
-                response_path_env=response_path,
-                branch_name=f"brr/{task.id}",
-                env_state={"worktree_path": str(tmp_path)},
-            )
-
-        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name, command=["mock"],
-                stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-            )
-
-        def finalize(self, _ctx, task, _tasks_dir):
-            return task
-
-    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
+    )
 
     def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
         if invocation.kind == "kb-maintenance":
@@ -695,8 +636,8 @@ def test_kb_maintenance_runs_on_preflight_findings_even_when_kb_unchanged(
     from an earlier task, the maintenance pass runs even when the
     current task didn't touch ``kb/``.
     """
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-preflight", body="no kb changes here")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-preflight", body="no kb changes here")
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
@@ -724,31 +665,10 @@ def test_kb_maintenance_runs_on_preflight_findings_even_when_kb_unchanged(
 
     captured: list[str] = []
 
-    class StubEnv:
-        name = "worktree"
-
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
-            return envs.RunContext(
-                name=self.name, cwd=tmp_path, repo_root=repo_root,
-                runtime_dir=tmp_path / ".brr",
-                response_path_host=response_path,
-                response_path_env=response_path,
-                branch_name=f"brr/{task.id}",
-                env_state={"worktree_path": str(tmp_path)},
-            )
-
-        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name, command=["mock"],
-                stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-            )
-
-        def finalize(self, _ctx, task, _tasks_dir):
-            return task
-
-    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
+    )
 
     def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
         if invocation.kind == "kb-maintenance":
@@ -773,8 +693,8 @@ def test_kb_maintenance_runs_on_preflight_findings_even_when_kb_unchanged(
 
 def test_kb_maintenance_skipped_when_clean_and_unchanged(tmp_path, monkeypatch):
     """Skip-fast: preflight clean + kb unchanged → no LLM pass at all."""
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-clean", body="non-kb work")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-clean", body="non-kb work")
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
@@ -787,31 +707,10 @@ def test_kb_maintenance_skipped_when_clean_and_unchanged(tmp_path, monkeypatch):
 
     captured: list[str] = []
 
-    class StubEnv:
-        name = "worktree"
-
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
-            return envs.RunContext(
-                name=self.name, cwd=tmp_path, repo_root=repo_root,
-                runtime_dir=tmp_path / ".brr",
-                response_path_host=response_path,
-                response_path_env=response_path,
-                branch_name=f"brr/{task.id}",
-                env_state={"worktree_path": str(tmp_path)},
-            )
-
-        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name, command=["mock"],
-                stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-            )
-
-        def finalize(self, _ctx, task, _tasks_dir):
-            return task
-
-    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
+    )
 
     def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
         if invocation.kind == "kb-maintenance":
@@ -830,8 +729,8 @@ def test_kb_maintenance_skipped_when_clean_and_unchanged(tmp_path, monkeypatch):
 
 def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monkeypatch):
     """When kb changed but preflight is clean, run with the bare prompt."""
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, "evt-touched", body="touched kb but cleanly")
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-touched", body="touched kb but cleanly")
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
@@ -849,31 +748,10 @@ def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monk
 
     captured: list[str] = []
 
-    class StubEnv:
-        name = "worktree"
-
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
-            return envs.RunContext(
-                name=self.name, cwd=tmp_path, repo_root=repo_root,
-                runtime_dir=tmp_path / ".brr",
-                response_path_host=response_path,
-                response_path_env=response_path,
-                branch_name=f"brr/{task.id}",
-                env_state={"worktree_path": str(tmp_path)},
-            )
-
-        def invoke(self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
-            Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
-            return RunnerResult(
-                invocation=invocation, runner_name=runner_name, command=["mock"],
-                stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-            )
-
-        def finalize(self, _ctx, task, _tasks_dir):
-            return task
-
-    monkeypatch.setattr(daemon.envs, "get_env", lambda _name: StubEnv())
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
+    )
 
     def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
         if invocation.kind == "kb-maintenance":
@@ -894,35 +772,17 @@ def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monk
 
 
 def _init_real_repo(repo: Path) -> str:
-    """Initialise a real git repo with one commit; return its HEAD oid.
+    """Real git repo with one commit seeding AGENTS.md + kb/subject-x.md.
 
     The maintenance commit step uses real git plumbing
-    (``git add``/``commit``/``rev-list``), so the unit tests need a
+    (``git add``/``commit``/``rev-list``), so these unit tests need a
     real repo rather than the stubs used elsewhere in this module.
     """
-    subprocess.run(
-        ["git", "init", "-b", "main"], cwd=repo, check=True,
-        capture_output=True,
-    )
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "t@t.local"], cwd=repo, check=True,
-    )
-    (repo / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
-    (repo / "kb").mkdir()
-    (repo / "kb" / "subject-x.md").write_text(
-        "# Subject x\n\nInitial body.\n", encoding="utf-8",
-    )
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "init"], cwd=repo, check=True,
-        capture_output=True,
-    )
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-        capture_output=True, text=True,
-    )
-    return head.stdout.strip()
+    init_git_repo(repo)
+    return commit_files(repo, {
+        "AGENTS.md": "# Agents\n",
+        "kb/subject-x.md": "# Subject x\n\nInitial body.\n",
+    })
 
 
 def test_commit_kb_maintenance_edits_rolls_up_leftover_kb_changes(tmp_path):

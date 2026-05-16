@@ -11,13 +11,11 @@ from brr.gitops import (
 )
 from brr.worktree import list_worktrees, create, remove
 
+from _helpers import init_git_repo
+
 
 def _init_repo(repo: Path) -> str:
-    subprocess.run(
-        ["git", "init", "-b", "main"], cwd=repo, check=True, stdout=subprocess.PIPE,
-    )
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    init_git_repo(repo)
     return "main"
 
 
