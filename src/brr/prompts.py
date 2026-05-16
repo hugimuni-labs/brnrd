@@ -164,6 +164,8 @@ def build_daemon_prompt(
     repo_root: Path,
     *,
     task_id: str | None = None,
+    source: str | None = None,
+    environment: str | None = None,
     branch_name: str | None = None,
     seed_ref: str | None = None,
     auto_land_branch: str | None = None,
@@ -186,6 +188,8 @@ def build_daemon_prompt(
         response_path=response_path,
         repo_root=repo_root,
         task_id=task_id,
+        source=source,
+        environment=environment,
         branch_name=branch_name,
         seed_ref=seed_ref,
         auto_land_branch=auto_land_branch,
@@ -218,6 +222,8 @@ def _build_task_context_bundle(
     response_path: str,
     repo_root: Path,
     task_id: str | None,
+    source: str | None,
+    environment: str | None,
     branch_name: str | None,
     seed_ref: str | None,
     auto_land_branch: str | None,
@@ -235,6 +241,20 @@ def _build_task_context_bundle(
     grepping the prompt keeps working.
     """
     sections: list[str] = ["---", "## Task Context Bundle"]
+
+    sections.append("")
+    sections.append("### Mode")
+    sections.append("- Stage: brr daemon task")
+    if source:
+        sections.append(f"- Source: {source}")
+    if environment:
+        sections.append(f"- Environment: {environment}")
+    sections.append("- Delivery: stdout captured by brr (see Delivery contract below)")
+    if context_path:
+        sections.append(
+            f"- Runtime recovery: {context_path} "
+            "(open only if a detail you need isn't in this bundle)"
+        )
 
     sections.append("")
     sections.append("### Task")

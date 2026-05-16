@@ -495,6 +495,8 @@ def _run_worker(
             prompt = prompts.build_daemon_prompt(
                 task.body, eid, str(env_ctx.response_path_env), run_root,
                 task_id=task.id,
+                source=task.source or event.get("source"),
+                environment=task.env,
                 branch_name=branch_name,
                 seed_ref=branch_plan.seed_ref,
                 auto_land_branch=branch_plan.auto_land_branch,
@@ -512,6 +514,8 @@ def _run_worker(
                 f"Original task: {task.body}",
                 eid, str(env_ctx.response_path_env), run_root,
                 task_id=task.id,
+                source=task.source or event.get("source"),
+                environment=task.env,
                 branch_name=branch_name,
                 seed_ref=branch_plan.seed_ref,
                 auto_land_branch=branch_plan.auto_land_branch,

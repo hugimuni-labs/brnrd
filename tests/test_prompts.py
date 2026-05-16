@@ -116,6 +116,8 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
             task_id="task-123",
+            source="telegram",
+            environment="docker",
             branch_name="brr/task-123",
             seed_ref="feat/task-abstraction",
             auto_land_branch="feat/task-abstraction",
@@ -136,6 +138,54 @@ class TestPromptBuilding:
         # When an auto-land target is set, the daemon will fast-forward
         # for us. No PR is needed, so the gh nudge stays out.
         assert "gh pr create" not in prompt
+
+    def test_daemon_prompt_includes_mode_block(self, tmp_path):
+        """The Mode block names the stage, source, environment, and
+        runtime-recovery surface so the runner can identify "where am
+        I?" from the bundle alone without opening the run context file
+        on every task."""
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        prompt = build_daemon_prompt(
+            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-123",
+            source="telegram",
+            environment="docker",
+            context_path="/repo/.brr/runs/task-123/context.md",
+        )
+        assert "### Mode" in prompt
+        assert "Stage: brr daemon task" in prompt
+        assert "Source: telegram" in prompt
+        assert "Environment: docker" in prompt
+        assert "Delivery: stdout captured by brr" in prompt
+        # Runtime-recovery line points at the context file and frames it
+        # as opt-in detail, not routine reading.
+        assert (
+            "Runtime recovery: /repo/.brr/runs/task-123/context.md"
+            in prompt
+        )
+        assert "open only if" in prompt
+
+    def test_daemon_prompt_mode_block_drops_missing_fields(self, tmp_path):
+        """Source, environment, and runtime-recovery lines disappear
+        when the daemon couldn't determine them. Stage and Delivery are
+        always present because they're invariant for this builder."""
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        prompt = build_daemon_prompt(
+            "do thing", "evt-9", "/tmp/r.md", tmp_path,
+            task_id="task-9",
+        )
+        assert "### Mode" in prompt
+        assert "Stage: brr daemon task" in prompt
+        assert "Delivery: stdout captured by brr" in prompt
+        assert "Source:" not in prompt
+        assert "Environment:" not in prompt
+        assert "Runtime recovery:" not in prompt
 
     def test_daemon_prompt_describes_preserved_task_branch(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -330,3 +380,26 @@ class TestRevisitSignalGuardrails:
         # principle stays explicit.
         assert "did you surface it before resolving it" in agents
         assert "Stewardship" in agents
+
+
+class TestDaemonModeGuardrails:
+    """Pin the run.md changes that route daemon runners through the
+    Task Context Bundle's Mode block and treat the run context file as
+    recovery detail rather than routine reading.  See
+    `kb/research-cursor-orientation-ergonomics-2026-05-16.md` and
+    `kb/plan-agent-orientation-layering.md`."""
+
+    def test_run_prompt_names_mode_block_and_recovery_role(self):
+        prompt = _read_bundled_run_prompt()
+        # The bundle's Mode section is the authoritative "where am I?".
+        assert "Mode" in prompt
+        # Injected Recent Activity counts toward the kb/log.md step so
+        # daemon runs don't re-read the log when the prompt already
+        # carries an extract. Checked as separate anchors so the
+        # paragraph can rewrap without breaking the guardrail.
+        assert "Recent Activity (from kb/log.md)" in prompt
+        assert "satisfies" in prompt
+        assert "kb/log.md startup step" in prompt
+        # The run context file is recovery detail, not routine reading.
+        assert "Runtime recovery" in prompt
+        assert "recovery detail" in prompt
