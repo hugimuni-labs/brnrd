@@ -1797,3 +1797,49 @@ bullet that drifted in from Stewardship territory (with a typo);
 Self-review #5 overlapping Knowledge base → Health checks; an
 optional cold-start sanity-check block (workspace rule may be
 stale, git status may be stale, terminals/skills are ambient).
+
+## [2026-05-16] implement | AGENTS.md trim + workspace-rule drift guard
+
+Acted on the follow-up review's recommended cuts in one commit on
+`main`:
+
+- **Workspace-rule drift guard.** Top-of-file `Revision: 2026-05-16`
+  marker, with a one-line maintenance rule asking future structural
+  edits to bump the date. Paired with a new "Ad-hoc sanity check"
+  block in Workflow → "How to read this playbook" naming the
+  recurring host frictions (workspace-rule cache lag, stale git
+  status, ambient terminals/skills) and how to reconcile them.
+  Daemon and kb-maintenance stages are scoped out of the block;
+  they take their hot-path context from the prompt.
+- **Project-block trim.** Cut the elevator-pitch duplication with
+  `README.md`. The Project block now leads with what the file *is*
+  (brr's playbook + adopter template), where the canonical copy
+  lives, and the stdlib-only constraint that affects code edits;
+  product overview points at `README.md`.
+- **Build-and-run trim.** Replaced the eight-stanza shell block
+  with `pip install -e ".[dev]" && pytest`, a pointer to
+  `README.md` → Development for variants, and the line that
+  `pyproject.toml` is the source of truth.
+- **Code-guidelines / Stewardship homing.** Moved the
+  "read-before-editing" rule from Code guidelines into Stewardship
+  (it's a discipline, not a code-style rule) and fixed the typo
+  (`unless it the task is real straightforward` →
+  `unless the task is straightforward` — actually trimmed the
+  caveat entirely; "non-trivial edits" carries the proportionality).
+- **Self-review #5 compression.** Pointed at Knowledge base →
+  Health checks rather than re-stating one entry from the list.
+
+Net AGENTS.md change: +43/-29 (net +14 lines), 476 → 490 lines. The
+sanity-check block more than offsets the trims, but the file is
+materially less duplicative with `README.md` and the new block is
+load-bearing. Full test suite green at 404 passing; `kb_preflight`
+clean apart from the known `oversized-page` advisory on
+`kb/repo-dive-in-map.md` that Finding 8 of the same review argues
+for keeping deferred. No bumps to test anchors — `Stewardship` and
+`did you surface it before resolving it` (Self-review #2 / the
+contradiction-surfacing checklist item) both still load as
+asserted.
+
+Plan housekeeping: `plan-agent-orientation-layering.md` was already
+updated by the research commit (slice 3 rejected, follow-ups
+re-routed).
