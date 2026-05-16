@@ -296,6 +296,19 @@ When resuming work or between tasks, scan `kb/` for:
 - Pages reading like running diffs of their own past wording ("originally
   X, then Y, now Z") instead of describing the current shape with a
   lineage breadcrumb. Compress.
+- **Aspirational drift.** Pages describing *what was designed* — "X is
+  pluggable", "supports A, B, C", "future Y includes…" — as if it were
+  shipped. Spot-check against the source the page links to (resolver, CLI
+  dispatch, the module that owns the surface). When the shape on disk and
+  the shape in prose disagree, trim the un-wired surface area or move it
+  to a `design-*` / `plan-*` page with a `Status: designed` / `Status: in
+  flight` marker — current-state pages should not advertise capability the
+  code does not provide.
+- **Sibling drift.** Subject hubs disagreeing with their sibling design or
+  research pages about labels (e.g. `local` vs `host`), field names, backend
+  lists, CLI surface, or packet types. Reconcile to one consistent
+  picture; the failure mode is each page reading fine in isolation while
+  the graph contradicts itself.
 
 Clean up as you go. If a page no longer adds value — operational scratch
 absorbed by a successor, a review whose findings are addressed and never
