@@ -12,27 +12,12 @@ from pathlib import Path
 from brr import conversations, daemon, envs
 from brr.runner import RunnerResult
 
-
-def _write_repo_scaffold(repo_root: Path) -> None:
-    (repo_root / "AGENTS.md").write_text("# Project\n", encoding="utf-8")
-    (repo_root / ".brr" / "inbox").mkdir(parents=True)
-    (repo_root / ".brr" / "responses").mkdir(parents=True)
-
-
-def _make_event(repo_root: Path, *, eid: str, body: str, **extra) -> dict:
-    event = {
-        "id": eid,
-        "status": "pending",
-        "body": body,
-        "source": "telegram",
-        "_path": repo_root / ".brr" / "inbox" / f"{eid}.md",
-        **extra,
-    }
-    event["_path"].write_text(
-        f"---\nid: {eid}\nstatus: pending\nsource: telegram\n---\n{body}\n",
-        encoding="utf-8",
-    )
-    return event
+from _helpers import (
+    StubWorktreeEnv,
+    make_event,
+    succeed_invoke,
+    write_repo_scaffold,
+)
 
 
 def _patch_runner(monkeypatch):
@@ -45,33 +30,6 @@ def _patch_runner(monkeypatch):
     monkeypatch.setattr(daemon, "_kb_changed", lambda _: False)
 
 
-class _StubWorktreeEnv:
-    """Minimal env backend that the daemon worker can drive end-to-end."""
-
-    name = "worktree"
-
-    def __init__(self, *, invoke_fn) -> None:
-        self._invoke = invoke_fn
-
-    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
-        return envs.RunContext(
-            name=self.name,
-            cwd=repo_root,
-            repo_root=repo_root,
-            runtime_dir=repo_root / ".brr",
-            response_path_host=response_path,
-            response_path_env=response_path,
-            branch_name=f"brr/{task.id}",
-            env_state={"worktree_path": str(repo_root)},
-        )
-
-    def invoke(self, ctx, runner_name, invocation, cfg, *, trace=False):
-        return self._invoke(ctx, runner_name, invocation, cfg, trace=trace)
-
-    def finalize(self, _ctx, task, _tasks_dir):
-        return task
-
-
 def _update_records(brr_dir: Path, conv_key: str) -> list[dict]:
     return [r for r in conversations.read_records(brr_dir, conv_key)
             if r.get("kind") == "update"]
@@ -81,25 +39,16 @@ def _packet_types(brr_dir: Path, conv_key: str) -> list[str]:
     return [r.get("type") for r in _update_records(brr_dir, conv_key)]
 
 
-def _success_invoke(_ctx, runner_name, invocation, _cfg, *, trace=False):
-    Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(invocation.response_path).write_text("all done\n", encoding="utf-8")
-    return RunnerResult(
-        invocation=invocation, runner_name=runner_name, command=["mock"],
-        stdout="all done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
-    )
-
-
 def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(
+    write_repo_scaffold(tmp_path)
+    event = make_event(
         tmp_path, eid="evt-success", body="ship it",
         telegram_chat_id=10, telegram_topic_id=1,
     )
     _patch_runner(monkeypatch)
     monkeypatch.setattr(
         daemon.envs, "get_env",
-        lambda _name: _StubWorktreeEnv(invoke_fn=_success_invoke),
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke()),
     )
 
     task = daemon._run_worker(
@@ -121,8 +70,8 @@ def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
 
 
 def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(
+    write_repo_scaffold(tmp_path)
+    event = make_event(
         tmp_path, eid="evt-retry", body="missing artifact",
         telegram_chat_id=20,
     )
@@ -143,7 +92,7 @@ def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         daemon.envs, "get_env",
-        lambda _name: _StubWorktreeEnv(invoke_fn=_retry_invoke),
+        lambda _name: StubWorktreeEnv(invoke_fn=_retry_invoke),
     )
 
     task = daemon._run_worker(
@@ -166,8 +115,8 @@ def test_hard_failure_does_not_retry_and_bubbles_error_to_failed_packet(
     """A timeout (or any non-zero exit) is unretryable: the daemon must
     surface the real error to the gate immediately rather than burn
     another expensive attempt on the same prompt."""
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, eid="evt-timeout", body="big task",
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-timeout", body="big task",
                         telegram_chat_id=40)
     _patch_runner(monkeypatch)
 
@@ -184,7 +133,7 @@ def test_hard_failure_does_not_retry_and_bubbles_error_to_failed_packet(
 
     monkeypatch.setattr(
         daemon.envs, "get_env",
-        lambda _name: _StubWorktreeEnv(invoke_fn=_timed_out),
+        lambda _name: StubWorktreeEnv(invoke_fn=_timed_out),
     )
 
     # max_retries=3 — even with retries allowed, hard failure must skip
@@ -219,8 +168,8 @@ def test_failure_after_retries_emits_finalizing_then_failed(tmp_path, monkeypatc
     ``finalizing(stage=failed)`` lands after ``failed``, its placeholder
     detail ("finalizing (failed)") clobbers the real failure reason.
     """
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, eid="evt-fail", body="never works",
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-fail", body="never works",
                         telegram_chat_id=30)
     _patch_runner(monkeypatch)
 
@@ -232,7 +181,7 @@ def test_failure_after_retries_emits_finalizing_then_failed(tmp_path, monkeypatc
 
     monkeypatch.setattr(
         daemon.envs, "get_env",
-        lambda _name: _StubWorktreeEnv(invoke_fn=_always_fail),
+        lambda _name: StubWorktreeEnv(invoke_fn=_always_fail),
     )
 
     task = daemon._run_worker(
@@ -297,8 +246,8 @@ class _FakeDockerEnv:
 
 
 def test_docker_env_emits_container_started(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, eid="evt-docker", body="run docker",
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-docker", body="run docker",
                         telegram_chat_id=40)
     _patch_runner(monkeypatch)
 
@@ -318,8 +267,8 @@ def test_docker_env_emits_container_started(tmp_path, monkeypatch):
 
 
 def test_docker_failed_emits_container_preserved(tmp_path, monkeypatch):
-    _write_repo_scaffold(tmp_path)
-    event = _make_event(tmp_path, eid="evt-docker-fail", body="never finishes",
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-docker-fail", body="never finishes",
                         telegram_chat_id=50)
     _patch_runner(monkeypatch)
 
