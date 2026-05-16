@@ -137,11 +137,29 @@ dive-in map) and are stable until something contradicts them.
   *active*. Refine the kb shape around current-state synthesis plus
   short breadcrumbs to git history, and replace hidden post-task LLM
   cleanup with explicit, first-class maintenance tasks.
+- [Agent orientation layering](plan-agent-orientation-layering.md) —
+  *active (slices 1+2 shipped 2026-05-16)*. Synthesis of the two
+  same-day ergonomics reviews into a four-layer model (repository
+  contract / stage overlay / runtime state packet / subject
+  knowledge), with shipped, in-flight, and open follow-up slices
+  marked.
 - [LLM Wiki framing](llm-wiki.md) — the source framing this project
   takes inspiration from for the wiki/synthesis layer.
 
 ## Research
 
+- [Cursor orientation ergonomics, 2026-05-16](research-cursor-orientation-ergonomics-2026-05-16.md) —
+  *shipped*. External Cursor session view: AGENTS.md mode-blindness,
+  the orientation read cost (~4,200 lines for a session that uses
+  ~25-30%), specific redundancy across README / AGENTS.md / index /
+  log / dive-in-map. Headline recommendations absorbed into
+  [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md).
+- [Runner orientation ergonomics, 2026-05-16](research-runner-orientation-ergonomics-2026-05-16.md) —
+  *shipped*. Same-day daemon-launched-runner view of the same
+  problem from inside Docker: pinpoints the stage-vs-environment
+  axis confusion, the missing Mode block on the Task Context
+  Bundle, and the run-context-file duplication. Converged
+  independently with the Cursor review.
 - [Test suite grooming, 2026-05-16](research-test-suite-grooming-2026-05-16.md) —
   *shipped*. Map of bloat, cross-file helper duplication, and
   intent-quality gaps in `tests/`; the high-leverage moves

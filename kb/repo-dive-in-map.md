@@ -1,26 +1,40 @@
 # Repo Dive-In Map
 
-This page is a bottom-up reading guide for the `brr` repository. It is meant
-for a human trying to understand the whole project file by file without losing
+Bottom-up reading guide for the `brr` repository. Aimed at someone
+trying to understand the whole project file by file without losing
 the cross-references between concepts.
 
-## Link policy
+## How to read this page
 
-Links are relative repository links, not absolute GitHub URLs. This is
-intentional: relative links work in GitHub, GitHub mobile, local editors, and
-non-main branches without pinning the reader to the wrong branch.
+The page has two halves with different jobs:
 
-When this guide says "source", read the linked file first, then read the linked
-tests immediately after. The tests are often the most compact description of
-the intended behavior.
+- **Orientation** (this section, plus *Current ownership snapshot*
+  and *One-sentence model* below) is what most readers need first.
+  If you only need to start acting in this repo, read these and
+  stop — the rest is reference you can dip into when a specific
+  area gets unfamiliar.
+- **Reference** (everything from *Start here* onward — spiral
+  reading route, entities, module cross-reference map, runtime
+  invariants, tests-as-second-path, design history, practical
+  navigator notes, maintenance rule) is the dive-in detail an
+  experienced reader uses to deep-read one area at a time.
 
-Reflects the current `main`. The major architectural arcs this guide
-assumes you'll meet in the codebase are linked under the relevant
-ring — this header just names the ones that change the *reading* most:
+This page is currently flagged `oversized-page` by `kb_preflight`
+on purpose: a full reading guide doesn't fit a small budget. The
+two-halves shape is the workaround until / unless the orientation
+slice graduates into its own page (tracked in
+[`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md)
+under open follow-ups).
+
+The major architectural arcs this guide assumes you'll meet in
+the codebase — links under the relevant ring — but the ones
+that change the *reading* most are:
 
 - `AGENTS.md` is the universal schema every tool reads; it lives in
   the package at [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) and is
-  symlinked from the repo root.
+  symlinked from the repo root. Its "How to read this playbook"
+  section names the three stages (ad-hoc agent / brr daemon task /
+  kb-maintenance or setup) and tells each one which sections apply.
 - Task construction is mechanical — no LLM triage step,
   see [`decision-remove-triage.md`](decision-remove-triage.md).
 - Branch intent is deterministic and structured —
@@ -47,14 +61,32 @@ ring — this header just names the ones that change the *reading* most:
   deterministic preflight ([`kb_preflight.py`](../src/brr/kb_preflight.py))
   plus graph stats ([`kb_health.py`](../src/brr/kb_health.py)), feeding
   an inline LLM cleanup pass after task delivery.
+- The daemon-task prompt opens with a Task Context Bundle whose
+  `### Mode` block names stage, source, environment, delivery, and
+  the optional run-context recovery file. Reading the bundle is the
+  hot path; the run context file is recovery detail. See
+  [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md)
+  for the layering model and [`prompts.py`](../src/brr/prompts.py)
+  for the builder.
 
 Past arcs (the kb-shape arc, the 2026-05-05 streams-to-conversations
 refactor, the 2026-05-06 triage removal, the 2026-05-12 branch-plan
 simplification, the Docker host-UID rework, the 2026-05-15 git-layer
 rework that introduced `sync.py` and the github gate, the 2026-05-16
-test-suite grooming) live in `git log` and in their decision/design
-pages. The current shape is what this guide describes; lineage
-breadcrumbs sit on the relevant kb pages.
+test-suite grooming, the 2026-05-16 agent-orientation layering arc)
+live in `git log` and in their decision/design pages. The current
+shape is what this guide describes; lineage breadcrumbs sit on the
+relevant kb pages.
+
+## Link policy
+
+Links are relative repository links, not absolute GitHub URLs. This is
+intentional: relative links work in GitHub, GitHub mobile, local editors, and
+non-main branches without pinning the reader to the wrong branch.
+
+When this guide says "source", read the linked file first, then read the linked
+tests immediately after. The tests are often the most compact description of
+the intended behavior.
 
 ## Current ownership snapshot
 
