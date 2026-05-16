@@ -23,12 +23,39 @@ and **AGENTS.md → "State first, history in git"**:
 **Review what the preceding task wrote.** If a `Task-touched kb pages`
 section appears below, start there: open each listed page, read the
 diff in the current commits on this branch, and check that the
-changes respect the rules above. The pattern to watch for is
-historical narrative — sentences that describe *what changed* or
-*what we used to think* — leaking into pages that should be reading
-as current-state synthesis. Rewrite those passages to the principle
-they're trying to convey, leave a one-line lineage breadcrumb if the
-fact-of-change still matters, and let git history hold the rest.
+changes respect the rules above. Three failure patterns share the
+"page doesn't describe what actually is" shape — name them
+separately, because the fix is different for each:
+
+- **Historical narrative.** Sentences that describe *what changed*
+  or *what we used to think* leaking into pages that should be
+  reading as current-state synthesis. Rewrite to the principle the
+  passage was trying to convey; leave a one-line lineage breadcrumb
+  only when the fact-of-change still load-bears for a reader today;
+  let git hold the rest.
+- **Aspirational drift.** Sentences describing *what was designed*
+  — "X is pluggable", "supports A, B, C", "future backends
+  include…" — reading as shipped fact when the code does less. Open
+  the source the page links to (resolver, CLI dispatch, the module
+  that owns the surface) and confirm the claim. When the shape on
+  disk and the shape in prose disagree, the prose loses: trim
+  un-wired surface area, or move it to a `design-*` / `plan-*` page
+  with a `Status: designed` / `Status: in flight` marker.
+- **Lifecycle drift.** Shipped research / plans / designs still
+  wearing proposal clothes ("we propose", "we should"); subject hubs
+  disagreeing with sibling design or research pages about labels
+  (e.g. `local` vs `host`), field names, backend lists, or CLI surface.
+  Promote (shipped material outgrown its artifact type → fold into a
+  subject hub), compress (research that landed → current-state
+  paragraph plus a lineage breadcrumb), or reconcile labels —
+  whichever leaves a cold reader with one consistent picture.
+
+For each touched page, do one cheap reality check: pick a concrete
+claim (a backend list, a CLI subcommand, a field name, a file path,
+a packet type) and confirm it against the source the page links to.
+This is what catches aspirational and lifecycle drift the diff alone
+won't surface, since the disagreement usually lives in a page the
+current task didn't touch.
 
 This always-on review is the primary job; the deterministic preflight
 below gives you additional concrete targets, not a replacement.
