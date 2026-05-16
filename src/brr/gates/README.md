@@ -1,8 +1,8 @@
 # Gates — file protocol spec
 
-A gate connects brr to an external channel (Telegram, Slack, Git, or
-anything else).  Gates communicate with the daemon exclusively through
-the filesystem — no shared memory, no function calls.
+A gate connects brr to an external channel (Telegram, Slack, GitHub,
+or anything else).  Gates communicate with the daemon exclusively
+through the filesystem — no shared memory, no function calls.
 
 ## File protocol
 
