@@ -172,6 +172,12 @@ dive-in map) and are stable until something contradicts them.
   axis confusion, the missing Mode block on the Task Context
   Bundle, and the run-context-file duplication. Converged
   independently with the Cursor review.
+- [Stdlib dependency policy, 2026-05-16](research-stdlib-dependency-policy-2026-05-16.md) —
+  architecture review of the zero-runtime-dependency rule: keep a
+  dependency-free core as the default, but treat dependencies as
+  acceptable at explicit gates/env/plugin edges when they delete real
+  complexity. Also records the current contradiction that env plugin
+  support is described in the kb but not implemented by `get_env`.
 - [Test suite grooming, 2026-05-16](research-test-suite-grooming-2026-05-16.md) —
   *shipped*. Map of bloat, cross-file helper duplication, and
   intent-quality gaps in `tests/`; the high-leverage moves

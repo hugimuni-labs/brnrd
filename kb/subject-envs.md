@@ -83,16 +83,21 @@ the env's job is to apply that decision inside its workspace.
 1. [`design-env-interface.md`](design-env-interface.md) for the full
    protocol, the per-env mechanics, the response-path split, the
    plugin / script-env model, and the configuration surface.
-2. [`subject-tasks-branching.md`](subject-tasks-branching.md) for how
+2. [`research-stdlib-dependency-policy-2026-05-16.md`](research-stdlib-dependency-policy-2026-05-16.md)
+   for the current dependency-policy review: keep core dependency-free
+   by default, allow explicit edge/plugin dependencies when they delete
+   real complexity, and reconcile the env plugin promise with the
+   shipped `get_env` implementation.
+3. [`subject-tasks-branching.md`](subject-tasks-branching.md) for how
    the daemon resolves seed refs and auto-land targets feeding into
    `Env.finalize`.
-3. [`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) for
+4. [`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) for
    the original "one task per worktree" reasoning that informed the
    current worktree env shape; the merge-coordinator path it sketched
    was abandoned in favour of the decentralised model above.
-4. [`src/brr/docs/envs.md`](../src/brr/docs/envs.md) for the
+5. [`src/brr/docs/envs.md`](../src/brr/docs/envs.md) for the
    user-facing reference: when to pick each env, configuration keys,
    troubleshooting.
-5. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §10 for the
+6. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §10 for the
    plugin candidates (Daytona, Firecracker, E2B) that would ride on
-   the entry-point mechanism once the registry surface is wired.
+   the registry surface once it is wired.
