@@ -9,6 +9,8 @@ import pytest
 
 from brr import sync
 
+from _helpers import init_git_repo
+
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 
@@ -18,13 +20,6 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         ["git", *args], cwd=repo, check=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
-
-
-def _init_repo(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init", "-b", "main")
-    _git(repo, "config", "user.name", "Test User")
-    _git(repo, "config", "user.email", "test@example.com")
 
 
 def _commit_file(repo: Path, name: str, body: str, *, message: str) -> None:
@@ -37,7 +32,7 @@ def _setup_remote_and_local(tmp_path: Path) -> tuple[Path, Path]:
     """Create a bare ``remote`` and a ``local`` clone with a tracking main."""
     remote = tmp_path / "remote.git"
     seed = tmp_path / "seed"
-    _init_repo(seed)
+    init_git_repo(seed)
     _commit_file(seed, "README.md", "seed\n", message="seed")
     subprocess.run(
         ["git", "clone", "--bare", str(seed), str(remote)],
@@ -94,7 +89,7 @@ def _push_new_commit(
 
 def test_refresh_no_remote_is_silent_noop(tmp_path):
     repo = tmp_path / "solo"
-    _init_repo(repo)
+    init_git_repo(repo)
     _commit_file(repo, "x", "x\n", message="solo")
 
     result = sync.refresh_before_task(repo, target_branches=["main"])
