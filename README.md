@@ -82,11 +82,11 @@ AGENTS.md + kb/         universal: works with any AI tool
   │
   └── brr adds remote execution:
 
-  ┌─────────┐    .brr/inbox/    ┌────────┐    runner     ┌──────────┐
-  │  Gates   │───────────────────│ Daemon │──────────────│  Runner   │
-  │ tg/slack │    .brr/responses │        │  subprocess  │ (AI CLI)  │
-  │ gh/any   │◄──────────────────│        │◄─────────────│           │
-  └─────────┘                    └────────┘   git push   └──────────┘
+  ┌─────────┐    .brr/inbox/    ┌────────┐    runner    ┌──────────┐
+  │  Gates  │───────────────────│ Daemon │──────────────│  Runner  │
+  │ tg/slack│    .brr/responses │        │  subprocess  │ (AI CLI) │
+  │ gh/any  │◄──────────────────│        │◄─────────────│          │
+  └─────────┘                   └────────┘   git push   └──────────┘
 ```
 
 Gates are transport adapters — they create event files and deliver responses.
