@@ -30,7 +30,8 @@ Carry these current-shape facts while reading:
   triage call and no frontmatter contract on response files.
 - `environment=auto` selects `docker` when `docker.image` is
   configured, otherwise `worktree`. `host` is explicit only. The
-  shipped backends are `host`, `worktree`, and `docker`.
+  shipped backends are `host`, `worktree`, and `docker`; `ssh`,
+  `devcontainer`, and env plugins are designed but still pending.
 - Before resolving the branch plan, the daemon runs a best-effort
   `sync.refresh_before_task`: one `git fetch` plus ff-only refreshes
   of the local default branch and any structured event branch.

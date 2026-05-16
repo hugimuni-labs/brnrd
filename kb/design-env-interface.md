@@ -35,34 +35,46 @@ live in their own designs / notes.
 ```python
 # src/brr/envs/__init__.py
 
-from typing import Protocol
+from typing import Any, Protocol
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class RunContext:
     """Per-task handle returned by EnvBackend.prepare()."""
-    name: str                   # backend name
+    name: str
     cwd: Path                  # where the runner should be invoked
     repo_root: Path            # the host repo (always)
     runtime_dir: Path          # host's shared .brr/
-    response_path_host: Path   # where finalize must land it; daemon checks this
+    response_path_host: Path   # where brr writes/verifies the response
     response_path_env: Path    # path rendered to the runner prompt
-    branch_name: str | None    # task branch, when env created one
-    branch_plan: BranchPlan    # seed / auto-land intent
-    env_state: dict            # opaque to brr; env may stash anything here
+    branch_name: str | None = None
+    branch_plan: BranchPlan | None = None
+    env_state: dict[str, Any] = field(default_factory=dict)
 
 class EnvBackend(Protocol):
-    name: str                  # "host" | "worktree" | "docker" | …
+    name: str                  # "host" | "worktree" | "docker" | ...
 
     def prepare(
-        self, task: Task, repo_root: Path, cfg: dict,
-        *, branch_plan: BranchPlan, response_path: Path,
+        self,
+        task: Task,
+        repo_root: Path,
+        cfg: dict[str, Any],
+        *,
+        branch_plan: BranchPlan,
+        response_path: Path,
     ) -> RunContext: ...
+
     def invoke(
-        self, ctx: RunContext, runner_name: str,
-        invocation: RunnerInvocation, cfg: dict, *, trace: bool = False,
+        self,
+        ctx: RunContext,
+        runner_name: str,
+        invocation: RunnerInvocation,
+        cfg: dict[str, Any],
+        *,
+        trace: bool = False,
     ) -> RunnerResult: ...
+
     def finalize(self, ctx: RunContext, task: Task, tasks_dir: Path) -> Task: ...
 ```
 
@@ -106,24 +118,17 @@ the built-in table; the accepted registry order is:
 
 ```python
 # src/brr/envs/__init__.py
-_BUILTIN: dict[str, type[Env]] = {
-    "host":         HostEnv,
-    "worktree":     WorktreeEnv,
-    "docker":       DockerEnv,
-    "ssh":          SshEnv,
-    "devcontainer": DevcontainerEnv,
+_BUILTINS: dict[str, type[EnvBackend]] = {
+    "docker": DockerEnv,
+    "host": HostEnv,
+    "worktree": WorktreeEnv,
 }
 
-def get_env(name: str, repo_root: Path) -> Env:
-    if name in _BUILTIN:
-        return _BUILTIN[name]()
-    for root in (repo_root / ".brr" / "envs", _USER_CFG / "envs"):
-        if (root / name).exists():
-            return ScriptEnvAdapter(name=name, root=root / name)
-    for ep in importlib.metadata.entry_points(group="brr.envs"):
-        if ep.name == name:
-            return ep.load()()
-    raise RuntimeError(f"unknown env: {name}")
+def get_env(name: str) -> EnvBackend:
+    backend = _BUILTINS.get((name or "worktree").strip())
+    if backend is None:
+        raise UnsupportedEnvironmentError(...)
+    return backend()
 ```
 
 #### Python plugins
@@ -247,16 +252,19 @@ This is the host-checkout path behind the protocol.
 - **prepare** → `git worktree add .brr/worktrees/<task-id> <branch>` (creating the branch if needed); cwd points at the worktree.
 - **invoke** → unchanged.
 - **finalize** →
-  - For `branch: auto | task`: attempt `git merge --ff-only <branch>` against the host's HEAD. On conflict → mark task `conflict` and *leave* the branch (decentralised merge — see below).
-  - For named `branch:` strategies: leave branch alone.
+  - Fast-forward the resolved auto-land target only when one exists
+    and the agent left commits on the task branch.
+  - Preserve the task branch when there is no auto-land target.
+  - Preserve any named branch the agent switched to.
+  - On fast-forward conflict, mark task `conflict` and keep the branch.
   - **Worktree teardown rule:** outcome-aware. Remove the worktree on
     clean `status=done` with nothing uncommitted. Preserve on
     `status ∈ {error, conflict}` or when the worktree has
     uncommitted/untracked files, so the user can inspect or salvage.
   - Response file is already on the host (worktree shares `.git` and `.brr/`).
 
-This is the current behaviour, just relocated and with the salvage rule
-above. Drop ~80 LOC from `daemon.py`.
+The current implementation lives in `WorktreeEnv` with the salvage rule
+above; `daemon.py` only orchestrates the protocol.
 
 #### Why worktree stays a flat env in v1
 
@@ -297,11 +305,11 @@ compose axis moves into a follow-up, not v1.
   - Bind-mount `repo_root` at the same absolute path inside the container
     (read-write), so the prompt's host paths remain valid in the env.
   - Network: configurable (`cfg["docker"]["network"]`, default `bridge`).
-  - **Branch handling:** current-branch Docker tasks mount the main checkout.
-    Non-current branch tasks first create the same `.brr/worktrees/<task-id>`
-    checkout that `worktree` uses and run Docker with that as the working
-    directory. This keeps branch work from switching or dirtying the host's
-    main checkout while keeping commits visible through the shared `.git`.
+  - **Branch handling:** Docker tasks create the same
+    `.brr/worktrees/<task-id>` checkout that `worktree` uses and run
+    Docker with that as the working directory. This keeps branch work
+    from switching or dirtying the host's main checkout while keeping
+    commits visible through the shared `.git`.
 - **invoke** → `docker run --name brr-<task-id>-<attempt> -v <repo>:<repo> -w <run-root> <image> <runner-cmd>`. The cmd line is built from the existing runner profile machinery. Note: **no `--rm`** — cleanup is `finalize`'s job so we can preserve the container for salvage and support retry diagnostics.
 - **finalize** → branch handling identical to worktree finalize. Container teardown matches the worktree salvage rule: `docker rm -f <container>` on clean `status=done`; preserve on `status ∈ {error, conflict}` or when the worktree has uncommitted/untracked files.
 
@@ -423,9 +431,8 @@ their workspace.
 There is no LLM triage step. The daemon picks the env mechanically
 from `.brr/config` and event metadata: `environment=auto` resolves to
 `docker` when a Docker image is configured, otherwise `worktree`;
-`host` is explicit only. `ssh` and `devcontainer` remain explicit in
-the accepted design, but current source rejects them until those
-backends are wired. See
+`host` is explicit only. `ssh`, `devcontainer`, and plugin env names
+are accepted design, not current resolver behavior. See
 [`decision-remove-triage.md`](decision-remove-triage.md) for why this
 shape replaced the earlier LLM triage idea.
 
@@ -473,11 +480,7 @@ from outside:
 
 The salvage rule has dedicated coverage on top of that: a task whose
 worker errors out leaves the worktree / container / remote scratch
-dir intact, and `task.meta` points at the preserved location. The
-script-env dispatch path is exercised with stub executables in
-`.brr/envs/<name>/` to verify the JSON-on-stdio protocol round-trips,
-and registry-precedence tests pin built-in > script > entry-point
-resolution.
+dir intact, and `task.meta` points at the preserved location.
 
 Docker integration tests gate on local Docker availability where needed;
 the ssh, devcontainer, and script-env test shapes remain design surface
@@ -499,9 +502,9 @@ point at the same protocol from above.
 
 ## Env scaffolding (future `brr env init`)
 
-**Not in v1.** Sketched here so the dual script/python plugin path has
-a forward and so the `--kind` flag doesn't get retrofitted awkwardly
-later.
+**Not implemented.** Sketched here so the dual script/python plugin path
+has a forward once the resolver supports it and so the `--kind` flag
+doesn't get retrofitted awkwardly later.
 
 Proposed shape:
 
@@ -522,14 +525,9 @@ brr env init <name> --kind=python --pkg=<package>
   → Leaves packaging/publishing to the user.
 ```
 
-Why not v1: the scaffolding is convenience, not capability. The same
-outcome is achievable today with `mkdir .brr/envs/myenv && cp …`.
-Shipping it now commits brr to a specific scaffold format before we
-know what real third-party envs want.
-
-Prior art to steal from when this lands: how `brr eject` copies
-bundled prompts (see `cli.cmd_eject`) — same pattern, different
-source directory.
+Why not v1: the resolver capability is still pending, and scaffolding
+would commit brr to a specific plugin layout before real third-party
+envs prove what they need.
 
 ---
 

@@ -55,11 +55,11 @@ dive-in map) and are stable until something contradicts them.
   contract enforced from the host, the outcome-aware salvage rule,
   decentralised fast-forward merging, and which envs ship today
   (`host` / `worktree` / `docker`) versus designed-but-pending
-  (`ssh` / `devcontainer`).
+  (`ssh` / `devcontainer` / env plugins).
 - [Env protocol design](design-env-interface.md) — *accepted on
   2026-05-06*. Full protocol, per-env mechanics, response-path split,
-  plugin / script-env model, and configuration surface. Tactical
-  companion to the env slice of the fleet deck.
+  accepted plugin / script-env model, and configuration surface.
+  Tactical companion to the env slice of the fleet deck.
 - [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) —
   *superseded on 2026-05-16 by*
   [`design-concurrent-execution.md`](design-concurrent-execution.md).

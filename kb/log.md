@@ -2022,6 +2022,40 @@ this change, so old `.brr/conversations/*.ndjson` and
 (no readers). They can be deleted by hand or left as historical
 artefacts.
 
+## [2026-05-16] research | Stdlib dependency policy
+
+Filed [`kb/research-stdlib-dependency-policy-2026-05-16.md`](research-stdlib-dependency-policy-2026-05-16.md)
+after a repo/code/kb deep dive on whether brr should preserve the
+stdlib-only rule. Conclusion: keep a dependency-free core as the
+default, but stop treating zero runtime dependencies as an absolute
+product law. brr's full daemon already depends operationally on Git,
+runner CLIs, remote gate APIs, and often Docker; the value to preserve
+is a small auditable core plus explicit dependency boundaries at gates,
+envs, and plugin packages.
+
+The clearest place a dependency might pay for itself is the HTTP gate
+layer (`urllib` helpers duplicated across Telegram, Slack, and GitHub).
+Frontmatter/config/git/CLI layers are still small enough that replacing
+them would likely add more abstraction than it removes. The research
+also surfaces a sharper contradiction with the "ad hoc modules" goal:
+the kb documents entry-point and script env plugins, but shipped
+`envs.get_env` only resolves the built-ins (`host`, `worktree`,
+`docker`). Recommended next step is to implement or explicitly
+downgrade that plugin promise before adding runtime dependencies. Also
+removed stale `repo-dive-in-map.md` links to the deleted
+`test_integration.py` after kb preflight surfaced them.
+
+## [2026-05-16] fix | KB consistency after stdlib dependency research
+
+Compressed the shipped test-suite grooming research page to current
+state and linked it from the repo dive test path so it is no longer a
+peer orphan. Reconciled env kb pages around the shipped resolver:
+`host` / `worktree` / `docker` are the only current built-ins, while
+`ssh`, `devcontainer`, and env plugins remain accepted-but-pending
+design. Updated the env design protocol references to match the
+current `EnvBackend` shape (`finalize` returns an updated `Task`, not
+a `FinalizeReport`).
+
 ## [2026-05-17] implement | GitHub gate: any-trigger + setup UX fix
 
 Fixed two issues in `src/brr/gates/github.py`:
@@ -2221,25 +2255,3 @@ fallback policy is only `preserve` or explicit `current`; conversation
 branch facts stay prompt context. The design's history was compressed
 to one lineage breadcrumb, and the index status now includes the
 2026-05-18 leased-publish amendment.
-## [2026-05-16] research | Stdlib dependency policy
-
-Filed [`kb/research-stdlib-dependency-policy-2026-05-16.md`](research-stdlib-dependency-policy-2026-05-16.md)
-after a repo/code/kb deep dive on whether brr should preserve the
-stdlib-only rule. Conclusion: keep a dependency-free core as the
-default, but stop treating zero runtime dependencies as an absolute
-product law. brr's full daemon already depends operationally on Git,
-runner CLIs, remote gate APIs, and often Docker; the value to preserve
-is a small auditable core plus explicit dependency boundaries at gates,
-envs, and plugin packages.
-
-The clearest place a dependency might pay for itself is the HTTP gate
-layer (`urllib` helpers duplicated across Telegram, Slack, and GitHub).
-Frontmatter/config/git/CLI layers are still small enough that replacing
-them would likely add more abstraction than it removes. The research
-also surfaces a sharper contradiction with the "ad hoc modules" goal:
-the kb documents entry-point and script env plugins, but shipped
-`envs.get_env` only resolves the built-ins (`host`, `worktree`,
-`docker`). Recommended next step is to implement or explicitly
-downgrade that plugin promise before adding runtime dependencies. Also
-removed stale `repo-dive-in-map.md` links to the deleted
-`test_integration.py` after kb preflight surfaced them.
