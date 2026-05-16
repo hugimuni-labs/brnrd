@@ -143,10 +143,11 @@ dive-in map) and are stable until something contradicts them.
 ## Research
 
 - [Test suite grooming, 2026-05-16](research-test-suite-grooming-2026-05-16.md) —
-  *active*. Map of bloat, cross-file helper duplication, and
-  intent-quality gaps in `tests/`; prioritised list of grooming moves
-  with scope guardrails. Companion to the AGENTS.md addition that says
-  tests must encode *why*, not only *what*.
+  *shipped*. Map of bloat, cross-file helper duplication, and
+  intent-quality gaps in `tests/`; the high-leverage moves
+  (`test_integration.py` removal, `tests/_helpers.py` extraction,
+  `_forge_view_url` stub-based rewrite, docker-mounts parametrize)
+  were executed in the same pass.
 - [Branch plan simplification, 2026-05-12](research-branch-plan-simplification-2026-05-12.md) —
   follow-up critique of the accepted branch-intent implementation:
   preserve the mechanical seed/auto-land/finalization contract, but

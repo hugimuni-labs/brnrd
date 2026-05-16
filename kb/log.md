@@ -1660,3 +1660,38 @@ prompt drift that drops them fails loudly.
 
 This closes the three-phase git layer rework
 (`kb/design-git-layer-rework.md` is now `Status: shipped`).
+
+## [2026-05-16] implement | Groom test suite around intent and shared scaffolding
+
+Filed [`kb/research-test-suite-grooming-2026-05-16.md`](research-test-suite-grooming-2026-05-16.md)
+mapping the bloat in `tests/` (mainly inline scaffolding duplicated
+across daemon-test files plus one file fully covered by another),
+then executed the high-leverage cuts in three commits:
+
+- Dropped `tests/test_integration.py` — three of its four tests were
+  weaker copies of `tests/test_adopt.py` and the fourth was a
+  tautology of its own mock.
+- Extracted `tests/_helpers.py` with `init_git_repo`, `commit_files`,
+  `write_repo_scaffold`, `make_event`, `StubWorktreeEnv`, and a
+  `succeed_invoke` factory. Migrated `test_daemon.py`,
+  `test_daemon_progress_packets.py`, `test_daemon_conversations.py`,
+  `test_branching.py`, `test_envs.py`, `test_gitops.py`, and
+  `test_sync.py` to import from it. `test_daemon.py` shrank from
+  1303 to 1172 LOC, mostly by collapsing five inline `StubEnv`
+  copies inside the kb-maintenance tests onto the shared
+  `StubWorktreeEnv(invoke_fn=succeed_invoke("ok\\n"))` factory.
+- Replaced four real-git `test_forge_view_url_*` tests in
+  `test_daemon.py` with three stub-based tests that cover only the
+  wrapper's actual responsibilities (read remote via gitops, read
+  forge overrides from config, swallow exceptions). URL templating
+  is already exhaustively parametrised in `test_forges.py`.
+- Parametrised the False/`"false"` twin in `test_envs.py`; tightened
+  the redundant "no triage" assertion in
+  `test_run_worker_constructs_task_without_triage` to a single
+  exact-equality check.
+
+Suite shape went 29 files / 7970 LOC / 406 tests → 28 + helpers /
+7786 LOC / 401 tests, still passing in ~3 s. Decision: keep the
+four-file daemon-test split (worker, progress packets,
+conversations, heartbeat) — combined they'd be ~1820 LOC and the
+concerns are genuinely distinct.
