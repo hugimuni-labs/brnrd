@@ -539,30 +539,20 @@ def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch
     assert mounts[-1] == f"{tmp_path}:{tmp_path}"
 
 
-def test_docker_invoke_skips_credential_mounts_when_disabled(tmp_path, monkeypatch):
+@pytest.mark.parametrize("disabled_value", [False, "false"])
+def test_docker_invoke_skips_credential_mounts_when_disabled(
+    tmp_path, monkeypatch, disabled_value,
+):
+    """``docker.mount_credentials`` accepts both the typed ``False`` and
+    the string ``"false"``; both must opt the credential bind-mounts
+    out so the container runs with a clean ``/brr-home``."""
     fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
     _stub_worktree(monkeypatch, tmp_path)
     (fake_home / ".claude").mkdir()
 
     command = _build_docker_invoke(
         tmp_path, monkeypatch,
-        cfg_extra={"docker.mount_credentials": False},
-    )
-
-    mounts = [
-        command[i + 1] for i, arg in enumerate(command) if arg == "-v"
-    ]
-    assert mounts == [f"{tmp_path}:{tmp_path}"]
-
-
-def test_docker_invoke_skips_credential_mounts_when_disabled_string(tmp_path, monkeypatch):
-    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
-    _stub_worktree(monkeypatch, tmp_path)
-    (fake_home / ".claude").mkdir()
-
-    command = _build_docker_invoke(
-        tmp_path, monkeypatch,
-        cfg_extra={"docker.mount_credentials": "false"},
+        cfg_extra={"docker.mount_credentials": disabled_value},
     )
 
     mounts = [
