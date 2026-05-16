@@ -5,7 +5,8 @@ Structured AI agent playbook with persistent knowledge base and remote execution
 brr produces `AGENTS.md` — a playbook that encodes your project's conventions,
 workflow, and guardrails.  Any AI tool that reads it (Claude Code, Cursor, Codex,
 Gemini) gets the same behavior.  brr adds a remote execution layer: a daemon that
-accepts tasks from Telegram, Slack, Git, or anything that writes a file.
+accepts tasks from Telegram, Slack, GitHub (issue labels and PR / issue
+mentions), or anything that writes a file.
 
 **Two layers of value:**
 
@@ -84,7 +85,7 @@ AGENTS.md + kb/         universal: works with any AI tool
   ┌─────────┐    .brr/inbox/    ┌────────┐    runner     ┌──────────┐
   │  Gates   │───────────────────│ Daemon │──────────────│  Runner   │
   │ tg/slack │    .brr/responses │        │  subprocess  │ (AI CLI)  │
-  │ git/any  │◄──────────────────│        │◄─────────────│           │
+  │ gh/any   │◄──────────────────│        │◄─────────────│           │
   └─────────┘                    └────────┘   git push   └──────────┘
 ```
 
@@ -107,7 +108,7 @@ bot a message; brr records the chat ID from each message and replies there.
 | `brr up`               | Start the daemon (foreground)         |
 | `brr down`             | Stop the daemon                       |
 
-Gates: `telegram`, `slack`, `git`.
+Gates: `telegram`, `slack`, `github`.
 
 ## Extending
 
