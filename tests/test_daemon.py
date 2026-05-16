@@ -94,8 +94,9 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert task.status == "done"
     assert task.body == "raw event body"
     assert task.env == "worktree"
-    # Triage no longer runs as a separate stage.
-    assert "triage" not in invocations
+    # Happy path: the daemon-run invocation is the only runner call —
+    # no separate triage stage, no retry. The labelled-kind check
+    # captures both halves of that intent in one assertion.
     assert invocations == ["daemon-run"]
     persisted = Task.from_file(tmp_path / ".brr" / "tasks" / f"{task.id}.md")
     assert persisted is not None
@@ -1020,73 +1021,81 @@ def test_maybe_kb_maintenance_skips_packet_when_no_routing_info(tmp_path, monkey
 
 
 # ── Forge URL inference ──────────────────────────────────────────────
+#
+# The URL-template logic itself is covered exhaustively in
+# tests/test_forges.py. ``daemon._forge_view_url`` is a thin wrapper
+# that reads the remote URL via ``gitops``, reads forge overrides from
+# ``.brr/config``, and swallows any failure into ``None``. The tests
+# below only cover those wrapper-specific responsibilities.
 
 
-def test_forge_view_url_returns_link_for_known_remote(tmp_path):
-    """When ``origin`` points at a recognised forge, ``_forge_view_url``
-    constructs the branch view URL from the live remote so gates can
-    show a clickable link in chat."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_real_repo(repo)
-    subprocess.run(
-        ["git", "remote", "add", "origin", "git@github.com:Gurio/brr.git"],
-        cwd=repo, check=True,
+def test_forge_view_url_feeds_remote_and_config_overrides_to_forges(monkeypatch, tmp_path):
+    """The wrapper reads the remote URL via gitops and the
+    ``forge.kind`` / ``forge.url_base`` overrides via the config
+    loader, then delegates to ``forges.view_branch_url``. This guards
+    the *plumbing* — that the wrapper still wires the right inputs
+    together — without re-testing URL templating."""
+    monkeypatch.setattr(
+        daemon.gitops, "remote_url",
+        lambda _repo, _remote: "git@git.internal.example.com:team/repo.git",
     )
-
-    url = daemon._forge_view_url(repo, "origin", "brr/task-xyz")
-
-    assert url == "https://github.com/Gurio/brr/tree/brr/task-xyz"
-
-
-def test_forge_view_url_returns_none_for_unknown_remote(tmp_path):
-    """A bare internal host without ``forge.kind`` configured stays
-    quiet — better silent than a guessed URL."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_real_repo(repo)
-    subprocess.run(
-        ["git", "remote", "add", "origin",
-         "git@git.example.com:team/repo.git"],
-        cwd=repo, check=True,
+    monkeypatch.setattr(
+        daemon.conf, "load_config",
+        lambda _repo: {
+            "forge.kind": "gitlab",
+            "forge.url_base": "https://gitlab.example.com",
+        },
     )
+    captured: dict = {}
 
-    assert daemon._forge_view_url(repo, "origin", "main") is None
+    def fake_view_branch_url(url, branch, **kwargs):
+        captured["args"] = (url, branch)
+        captured["kwargs"] = kwargs
+        return "https://gitlab.example.com/team/repo/-/tree/feature/foo"
 
+    monkeypatch.setattr(daemon.forges, "view_branch_url", fake_view_branch_url)
 
-def test_forge_view_url_honors_brr_config_forge_kind(tmp_path):
-    """``forge.kind = gitlab`` in ``.brr/config`` teaches brr which
-    template to apply to an internal host the default patterns
-    don't recognise."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_real_repo(repo)
-    subprocess.run(
-        ["git", "remote", "add", "origin",
-         "git@git.internal.example.com:team/repo.git"],
-        cwd=repo, check=True,
+    url = daemon._forge_view_url(tmp_path, "origin", "feature/foo")
+
+    assert url == "https://gitlab.example.com/team/repo/-/tree/feature/foo"
+    assert captured["args"] == (
+        "git@git.internal.example.com:team/repo.git", "feature/foo",
     )
-    (repo / ".brr").mkdir(exist_ok=True)
-    (repo / ".brr" / "config").write_text(
-        "forge.kind=gitlab\n", encoding="utf-8",
-    )
-
-    url = daemon._forge_view_url(repo, "origin", "feature/foo")
-
-    assert url == (
-        "https://git.internal.example.com/team/repo/-/tree/feature/foo"
-    )
+    assert captured["kwargs"] == {
+        "override_kind": "gitlab",
+        "override_url_base": "https://gitlab.example.com",
+    }
 
 
-def test_forge_view_url_returns_none_for_missing_remote(tmp_path):
-    """If the remote isn't configured at all, the helper returns
-    ``None`` rather than raising — the push has already happened and
-    the link is just polish."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_real_repo(repo)
+def test_forge_view_url_returns_none_when_remote_missing(monkeypatch, tmp_path):
+    """No remote URL means nothing to template against — the wrapper
+    short-circuits to ``None`` rather than calling ``forges`` with
+    ``None``."""
+    monkeypatch.setattr(daemon.gitops, "remote_url", lambda _repo, _remote: None)
+    called = False
 
-    assert daemon._forge_view_url(repo, "origin", "main") is None
+    def _should_not_call(*_a, **_kw):
+        nonlocal called
+        called = True
+        return "should not happen"
+
+    monkeypatch.setattr(daemon.forges, "view_branch_url", _should_not_call)
+
+    assert daemon._forge_view_url(tmp_path, "origin", "main") is None
+    assert called is False
+
+
+def test_forge_view_url_swallows_exceptions(monkeypatch, tmp_path):
+    """The push has already succeeded by the time we reach
+    ``_forge_view_url``; a missing link is never worth failing the
+    task over, so any exception in the resolve chain returns
+    ``None``."""
+    def _boom(*_a, **_kw):
+        raise RuntimeError("git binary exploded")
+
+    monkeypatch.setattr(daemon.gitops, "remote_url", _boom)
+
+    assert daemon._forge_view_url(tmp_path, "origin", "main") is None
 
 
 # ── Task-touched kb pages ────────────────────────────────────────────
