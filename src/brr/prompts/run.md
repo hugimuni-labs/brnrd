@@ -4,12 +4,23 @@ and guardrails for this repo. Read `kb/index.md` to understand what
 knowledge exists before making changes.
 
 If a `Task Context Bundle` follows below, you are running under the brr
-daemon. The bundle carries the task metadata, the delivery contract, the
-original event body, and recent activity in this conversation — read it
-once and orient from there. If it points to a generated run context file,
-use that file as the read-only recovery surface for runtime paths and
-environment details. Don't explore or modify `.brr/` beyond the run
-context file and any paths the task explicitly requires.
+daemon — the bundle's `Mode` section confirms the stage, source, and
+environment. The bundle is the hot path: it carries the task metadata,
+the delivery contract, the original event body, and the recent activity
+in this conversation. Read it once and orient from there.
+
+The prompt is preceded by a `Recent Activity (from kb/log.md)` extract
+that brr injects from the curated log. Together with the bundle's
+`Recent in this conversation` block, that injection satisfies the
+kb/log.md startup step in AGENTS.md. Only open `kb/log.md` directly
+when the task clearly needs older history than the extract carries.
+
+If the bundle's `Mode → Runtime recovery` line names a generated run
+context file, treat that file as recovery detail: open it only when you
+need something the bundle didn't include — exact host paths,
+container/image metadata, the full environment-state map, or runtime
+file locations. Don't explore or modify `.brr/` beyond that file and
+any paths the task explicitly requires.
 
 ## Delivery
 
