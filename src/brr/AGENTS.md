@@ -10,6 +10,45 @@ This file is the source of truth for both brr's own development and the
 playbook adopters receive when they run `brr init`. It lives at
 `src/brr/AGENTS.md` and is symlinked from the repo root for tool conventions.
 
+## How to read this playbook
+
+These rules are the repository contract for any AI tool reading the repo.
+They divide into **universal** sections that apply in every stage and
+**brr-stage** material that only applies when brr's daemon, runner, or
+setup orchestrator is hosting you. When an orchestrator prompt supplies
+a narrower stage contract — the daemon's Task Context Bundle, the
+kb-maintenance prompt, the setup prompt — follow that contract for the
+points it addresses and keep AGENTS.md as the base for everything else.
+
+Three stages, and how to read this file in each:
+
+- **Ad-hoc agent session** (Cursor, Codex CLI, Claude Code, plain
+  editor with no brr in the loop). No Task Context Bundle. No
+  `.brr/conversations/`. No preflight runs on this session. Read the
+  universal sections (Stewardship, Workflow → Orientation + Task types
+  + Commits, Knowledge base, Artifacts, Operating rules, Self-review,
+  Guardrails) plus Build and run and Code guidelines. Skip Workflow →
+  *When the brr daemon runs you* — that machinery isn't in play here.
+
+- **brr daemon task.** A Task Context Bundle opens with `### Mode`
+  (Stage, Source, Environment, Delivery, Runtime recovery). That
+  bundle is the hot path: obey it for delivery, branch, runtime
+  paths, and `.brr/` access — it overrides the generic workflow
+  wording for those points. Workflow → *When the brr daemon runs you*
+  backs it up; everything else (Stewardship, kb, artifacts, operating
+  rules, self-review, guardrails) applies uniformly.
+
+- **brr kb-maintenance / setup stage.** A specialised prompt
+  (`kb-maintenance.md`, `setup.md`) narrows the scope to kb cleanup
+  or initial adoption. Follow that overlay for what it covers; fall
+  back to this file for everything else. Do not continue the user
+  task during kb-maintenance.
+
+If you can't tell which stage you're in: look for `### Mode` in the
+prompt. Present → daemon task. Absent and the prompt is the bare user
+message → ad-hoc session. Absent and the prompt is a bundled
+maintenance / setup template → that stage.
+
 ## Stewardship
 
 Treat the request as input, not as instructions to execute uncritically.
@@ -62,55 +101,31 @@ pytest
 
 ## Workflow
 
-### Session startup
+### Orientation
 
-1. Read `kb/index.md` to understand what knowledge exists.
-2. Read `kb/log.md` for recent activity — the last 5-10 entries give you
-   context on what happened before this session.
-3. If a task is provided, proceed. If resuming, continue where the last
-   session left off based on the log.
+Run this at the start of every session, ad-hoc or daemon. It collapses
+what older versions of this file split between "Session startup" and
+"Work re-review" — they were the same job under different names.
 
-### Daemon freshness
-
-Before resolving the branch plan for a task, the daemon runs
-`sync.refresh_before_task`: a single `git fetch <default-remote>` plus
-a best-effort fast-forward of the local default branch (and any
-structured branch named in the event, e.g. a PR head branch carried by
-a forge gate). Fast-forward is `--ff-only`, so it never destroys local
-commits and quietly skips on a dirty working tree, diverged history,
-or any branch checked out in another worktree.
-
-The invariant this gives task code: the seed ref the worktree sprouts
-from reflects the remote at task start, not whatever the host last
-pulled. Sync outcomes ride on the progress card as a short
-`synced: ff main -> abc1234` line; no card noise on the no-op path.
-
-Two opt-out knobs in `.brr/config`, both default-on:
-
-- `sync.fetch_before_task=false` — never touch the network.
-- `sync.fast_forward_default=false` — fetch but leave local refs
-  alone (for users sharing the daemon's checkout with active dev
-  work).
-
-### Commits
-
-Commit directly on the current branch unless the task explicitly needs a
-feature branch. When brr's daemon runs the task, every worktree starts on a
-fresh `brr/<task-id>` branch from the seed ref named in the Task Context
-Bundle. If the bundle names an auto-land branch, staying on the task branch
-lets brr fast-forward that target after the run. If no auto-land branch is
-named, the default is to commit on `brr/<task-id>`; brr preserves and
-publishes that task branch for human routing when a remote is configured.
-Use `git switch -c <name>` first only when the work belongs on a different
-branch.
-
-One logical commit per task. The commit message should explain *why*, not
-*what* — the diff shows the what. Include the task summary in the first
-line.
-
-If you wrote files, commit them. The diff is the receipt that the work
-happened. Read-only tasks (Q&A, review, verify) are the only commit-free
-case, and only because nothing changed.
+1. Read `kb/index.md` first. It's organised by subject hub and the
+   links carry inline lifecycle markers, so a 30-second skim tells you
+   what current shape exists in `kb/`.
+2. Read recent activity from `kb/log.md`. The log appends **newest
+   entries to the bottom** and carries curated entries only (not every
+   task); headings are `## [YYYY-MM-DD] <type> | <title>`. Fetch the
+   tail, not the whole file:
+   - Tool-agnostic: `Read kb/log.md offset=-300` gives roughly the
+     last 10-15 entries.
+   - Shell: `grep '^## \[' kb/log.md | tail -10` to skim headings,
+     then targeted reads of any entry you want in full.
+   - When the brr daemon is hosting you, the prompt already embeds a
+     `Recent Activity (from kb/log.md)` extract plus the bundle's
+     `Recent in this conversation` block — those satisfy this step
+     unless you need older history than the extract carries.
+3. If continuing previous work, read the relevant subject hubs
+   (`kb/subject-*.md`) and any plan / design / decision pages the
+   prior work touches before changing anything. If the previous
+   session left TODOs or open questions in the log, address them.
 
 ### Task types
 
@@ -122,6 +137,65 @@ Adapt your approach:
   is the deliverable.
 - **Research / plan** — investigate, write findings to `kb/`. Commit.
 - **Release / deploy** — follow the project's release process exactly.
+
+### Commits
+
+Commit directly on the current branch unless the task explicitly needs
+a feature branch (`git switch -c <name>` first).
+
+One logical commit per task. The message should explain *why*, not
+*what* — the diff shows the what. Include the task summary in the
+first line.
+
+If you wrote files, commit them. The diff is the receipt that the work
+happened. Read-only tasks (Q&A, review, verify) are the only
+commit-free case, and only because nothing changed.
+
+### When the brr daemon runs you
+
+Everything in this subsection applies only when you're being launched
+by `brr up` / the daemon worker — the Task Context Bundle's `### Mode`
+section confirms the stage. In an ad-hoc session (Cursor, Codex CLI,
+Claude Code without brr orchestrating), skip the subsection — the
+machinery it describes isn't in play.
+
+**Daemon freshness.** Before resolving the branch plan for a task, the
+daemon runs `sync.refresh_before_task`: a single
+`git fetch <default-remote>` plus a best-effort fast-forward of the
+local default branch (and any structured branch named in the event,
+e.g. a PR head branch carried by a forge gate). Fast-forward is
+`--ff-only`, so it never destroys local commits and quietly skips on a
+dirty working tree, diverged history, or any branch checked out in
+another worktree.
+
+The invariant this gives task code: the seed ref the worktree sprouts
+from reflects the remote at task start, not whatever the host last
+pulled. Sync outcomes ride on the progress card as a short
+`synced: ff main -> abc1234` line; no card noise on the no-op path.
+
+Two opt-out knobs in `.brr/config`, both default-on:
+
+- `sync.fetch_before_task=false` — never touch the network.
+- `sync.fast_forward_default=false` — fetch but leave local refs alone
+  (for users sharing the daemon's checkout with active dev work).
+
+**Branch and commit nuance.** Every worktree starts on a fresh
+`brr/<task-id>` branch from the seed ref named in the bundle. If the
+bundle names an auto-land branch, staying on the task branch lets brr
+fast-forward that target after the run. If no auto-land branch is
+named, commit on `brr/<task-id>`; brr preserves and publishes that
+task branch for human routing when a remote is configured. Use
+`git switch -c <name>` first only when the work belongs on a different
+branch.
+
+**Delivery and runtime recovery.** The Task Context Bundle is the hot
+path — it carries the Mode block (stage / source / environment /
+delivery / runtime recovery), the branch plan, the recent conversation,
+and the original event body. The generated run context file (named in
+`Mode → Runtime recovery`) is recovery detail: open it only when the
+bundle didn't include something you need. Don't explore or modify
+`.brr/` beyond the run context file and any paths the task explicitly
+requires.
 
 ## Knowledge base
 
@@ -240,7 +314,8 @@ Each entry in `kb/log.md` uses this format for parseability:
 
 Types: `implement`, `review`, `research`, `plan`, `fix`, `decision`.
 
-`grep "^##" kb/log.md | tail -5` gives recent activity at a glance.
+`grep '^## \[' kb/log.md | tail -10` gives recent activity at a glance;
+see Workflow → Orientation for the orientation-time reading recipe.
 
 `kb/log.md` is a **curated** narrative. Add an entry when your task
 produced a meaningful learning, decision, or shipped change. If it
@@ -375,17 +450,6 @@ Before marking a task complete:
 6. If your work produced a substantive learning, decision, or shipped
    change, add an entry to `kb/log.md`. If it didn't, leave the log alone.
 
-## Work re-review
-
-When resuming a session (new conversation, fresh context):
-
-1. Read `kb/index.md` first — understand what knowledge exists.
-2. Read `kb/log.md` — understand what happened recently.
-3. If continuing previous work, read the relevant subject hubs and any
-   plan / design pages for context before making changes.
-4. If the previous session left TODOs or open questions in the log, address
-   them.
-
 ## Guardrails
 
 - Do not commit files containing secrets (`.env`, credentials, tokens).
@@ -398,11 +462,13 @@ When resuming a session (new conversation, fresh context):
 
 - `.brr/` is a runtime directory (gitignored) — do not commit its contents.
 - `src/brr/AGENTS.md` is brr's playbook *and* the template adopters receive
-  via `brr init`. Universal sections (Workflow, Knowledge base, Artifacts,
-  Operating rules, Self-review, Work re-review, Guardrails, Stewardship)
-  apply to every brr-managed project; project-specific sections (Project,
-  Build and run, Code guidelines, Constraints) are rewritten per repo by
-  the setup agent.
+  via `brr init`. Universal sections (How to read this playbook, Stewardship,
+  Workflow, Knowledge base, Artifacts, Operating rules, Self-review,
+  Guardrails) apply to every brr-managed project; project-specific sections
+  (Project, Build and run, Code guidelines, Constraints) are rewritten per
+  repo by the setup agent. The Workflow → *When the brr daemon runs you*
+  subsection is universal too — adopters keep it because their playbook may
+  be read by a brr daemon, even if they themselves run brr only by hand.
 - `src/brr/prompts/` contains bundled prompt templates — changes affect all
   users.
 - Gate implementations (`src/brr/gates/`) follow the file protocol spec in
