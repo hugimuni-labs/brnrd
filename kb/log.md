@@ -1695,3 +1695,61 @@ Suite shape went 29 files / 7970 LOC / 406 tests → 28 + helpers /
 four-file daemon-test split (worker, progress packets,
 conversations, heartbeat) — combined they'd be ~1820 LOC and the
 concerns are genuinely distinct.
+
+## [2026-05-16] implement | Agent orientation layering — slices 1 and 2
+
+Two same-day ergonomics reviews converged on the same diagnosis: the
+playbook + prompts treat *stage* (ad-hoc / daemon task /
+kb-maintenance / setup) implicitly, so external Cursor sessions
+filter daemon-only material on every read and daemon-launched
+runners open the run context file even when the bundle already
+covered them. Filed both reviews and acted on the high-leverage
+slices in one arc:
+
+- [`kb/research-cursor-orientation-ergonomics-2026-05-16.md`](research-cursor-orientation-ergonomics-2026-05-16.md) —
+  external Cursor view, ~4,200 lines of orientation context for a
+  session that used ~25-30%.
+- [`kb/research-runner-orientation-ergonomics-2026-05-16.md`](research-runner-orientation-ergonomics-2026-05-16.md) —
+  daemon-launched-runner view from inside Docker, naming the
+  stage-vs-environment axis as the missing layering and the Task
+  Context Bundle as the right place to hang stage/source/env.
+- [`kb/plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md) —
+  synthesis page locking in the four-layer model (repository
+  contract / stage overlay / runtime state packet / subject
+  knowledge) and tracking slice status.
+
+Slice 1 (`feat(prompts):`) — opens the Task Context Bundle with a
+`### Mode` block (Stage / Source / Environment / Delivery / Runtime
+recovery). `daemon.py` threads `task.source` and `task.env` into
+both the first-attempt and retry-attempt prompts. `prompts/run.md`
+is rewritten to point at the Mode block as the authoritative "where
+am I?" surface, declare that the injected
+`Recent Activity (from kb/log.md)` extract satisfies AGENTS.md's
+kb/log.md startup step, and treat the generated run context file
+as recovery detail. `run_context.py` header matches that framing.
+Tests: a `TestDaemonModeGuardrails` class pins the new run.md
+anchors, plus three cases over the Mode block.
+
+Slice 2 (`refactor(AGENTS.md):`) — stage-aware restructure. New
+"How to read this playbook" section after Project names the three
+stages and tells each one which sections apply, with `### Mode`
+as the detection hint. Workflow rebuilt as Orientation
+(universal) + Task types + Commits (universal) + "When the brr
+daemon runs you" (daemon-only subsection absorbing Daemon
+freshness, the `brr/<task-id>` commit nuance, and the
+delivery/recovery rules). "Work re-review" deleted — it duplicated
+Session startup. Orientation carries a concrete tail-fetch recipe
+for `kb/log.md`. Constraints updated for the new universal section
+list. `decision-kb-shape.md` gets a lineage breadcrumb pointing at
+the plan page for the section rename.
+
+Cheap dive-in-map polish folded into the same kb commit: opens
+with a "How to read this page" two-halves declaration
+(orientation vs reference) so cold readers can stop after the
+snapshot block if they only need to act. Full orientation-vs-
+reference split deferred to a future slice; tracked on the plan.
+
+Slice 3 (snapshot regression test) and the canonical-home-per-fact
+cleanup remain open follow-ups on the plan; both reviews flagged
+them as in-passing chores. Full suite green at 404 tests (was 401
+before slice 1's three new cases).
