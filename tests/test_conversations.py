@@ -42,9 +42,32 @@ def test_conversation_key_slack_falls_back_to_ts():
     assert conversations.conversation_key_for_event(event) == "slack:C123:9.0"
 
 
-def test_conversation_key_git():
-    event = {"source": "git", "git_file": "events/foo.md"}
-    assert conversations.conversation_key_for_event(event) == "git:events/foo.md"
+def test_conversation_key_github_issue():
+    event = {
+        "source": "github",
+        "github_repo": "acme/widget",
+        "github_issue_number": 42,
+    }
+    assert conversations.conversation_key_for_event(event) == "github:acme/widget:42"
+
+
+def test_conversation_key_github_issue_number_as_string():
+    event = {
+        "source": "github",
+        "github_repo": "acme/widget",
+        "github_issue_number": "7",
+    }
+    assert conversations.conversation_key_for_event(event) == "github:acme/widget:7"
+
+
+def test_conversation_key_github_missing_anchor_returns_none():
+    assert conversations.conversation_key_for_event({"source": "github"}) is None
+    assert conversations.conversation_key_for_event(
+        {"source": "github", "github_repo": "acme/r"},
+    ) is None
+    assert conversations.conversation_key_for_event(
+        {"source": "github", "github_issue_number": 1},
+    ) is None
 
 
 def test_conversation_key_explicit_wins():
@@ -73,7 +96,9 @@ def test_safe_dir_name_encodes_colons():
 
 
 def test_safe_dir_name_strips_unsafe_chars():
-    assert conversations.safe_dir_name("git:path with space") == "git__path_with_space"
+    assert conversations.safe_dir_name("github:o/r:1 with space") == (
+        "github__o_r__1_with_space"
+    )
 
 
 def test_key_from_dir_name_inverts_safe_dir_name():
