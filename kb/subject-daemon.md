@@ -155,7 +155,7 @@ contract can be designed honestly rather than wedged into the
 default prompt.
 
 GitHub final-response delivery also decorates the runner's stdout with
-a branch footer. That footer now includes direct links to changed
+a branch footer. That footer includes direct links to changed
 `kb/*.md` result pages on the finalized branch, excluding `kb/index.md`
 and `kb/log.md` so research / design / subject articles are surfaced
 without forcing the operator to browse the branch tree by hand. The

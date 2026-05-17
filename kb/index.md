@@ -37,7 +37,7 @@ dive-in map) and are stable until something contradicts them.
   on 2026-05-15*. Reframes the deleted tasks-folder gate around what
   it was conflating: daemon-side freshness (pre-task fetch+ff with
   the seed-ref invariant), a real GitHub gate (built-in, stdlib,
-  polling, label + mention triggers, PR-comment events carrying
+  polling, label / mention / any triggers, PR events carrying
   `branch_target`), and a prompt-level mitigation for runner
   thoughtfulness on design-loaded tasks (revisit-signal section in
   the run prompt + a self-review bullet).
