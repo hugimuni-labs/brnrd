@@ -213,7 +213,11 @@ def build_kb_maintenance_prompt(repo_root: Path) -> str:
 
 # ── Task Context Bundle internals ────────────────────────────────────
 
-_RECENT_CONVERSATION_MAX = 8
+# How many prior conversation records the prompt renders. The daemon reads
+# a slightly larger window from the log so that records belonging to the
+# in-flight event/task (filtered out before formatting) don't starve the
+# tail. Keep the daemon's read cap = RECENT_CONVERSATION_MAX + headroom.
+RECENT_CONVERSATION_MAX = 8
 
 
 def _build_task_context_bundle(
@@ -375,7 +379,7 @@ def _format_recent_conversation(
     if not records:
         return ""
     bullets: list[str] = []
-    for record in records[-_RECENT_CONVERSATION_MAX:]:
+    for record in records[-RECENT_CONVERSATION_MAX:]:
         kind = record.get("kind")
         ts = record.get("ts", "")
         line: str | None = None

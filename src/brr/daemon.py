@@ -66,6 +66,12 @@ _DEFAULT_MAX_WORKERS = 2
 # worker is done. A long-running task killed mid-flight by an external
 # signal still leaves trace dirs and the response file for forensics.
 _SHUTDOWN_DRAIN_TIMEOUT: float | None = None
+# Extra rows pulled from the conversation log on top of what the prompt
+# actually renders. Absorbs the in-flight event + task records (and any
+# pre-runner update packets for the same event) that
+# ``_recent_conversation_for_prompt`` strips before formatting, so the
+# rendered tail stays at ``prompts.RECENT_CONVERSATION_MAX``.
+_RECENT_READ_HEADROOM = 12
 
 
 # ── Per-branch locks ────────────────────────────────────────────────
@@ -513,9 +519,13 @@ def _run_worker(
             host_context_branch=branch_plan.host_context_branch,
         )
 
+    # Read a window larger than the prompt renders so the in-flight
+    # event/task records (stripped by _recent_conversation_for_prompt)
+    # don't shrink the tail below RECENT_CONVERSATION_MAX.
+    recent_read_limit = prompts.RECENT_CONVERSATION_MAX + _RECENT_READ_HEADROOM
     recent_conversation = (
         _recent_conversation_for_prompt(
-            conversations.read_recent(brr_dir, conv_key, limit=20),
+            conversations.read_recent(brr_dir, conv_key, limit=recent_read_limit),
             event_id=eid,
             task_id=task.id,
         )
