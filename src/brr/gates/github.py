@@ -595,16 +595,45 @@ def _deliver_responses(
         if not repo or number is None:
             print(f"[brr:github] delivery error for {eid}: missing repo / issue_number")
             continue
+        threaded_body = _thread_reply_body(event, body)
         try:
             _api_post(
                 token, f"/repos/{repo}/issues/{number}/comments",
-                body={"body": body},
+                body={"body": threaded_body},
             )
         except GitHubAPIError as exc:
             print(f"[brr:github] delivery error for {eid}: {exc}")
             continue
         resp_path = protocol.response_path(responses_dir, eid)
         protocol.cleanup(event["_path"], resp_path)
+
+
+_COMMENT_KINDS = frozenset({"issue-comment", "pr-comment"})
+
+
+def _thread_reply_body(event: dict, body: str) -> str:
+    """Prepend a quote-style pointer back at the triggering comment.
+
+    GitHub's issue/PR comment endpoint has no first-class "reply to a
+    specific comment" primitive (review-comment replies are a separate
+    API and a separate trigger we don't expose). The closest thing to a
+    visible thread anchor is a blockquote linking to the source comment,
+    which is what the GitHub web UI itself generates when a user clicks
+    "Quote reply". Skipped for label-triggered events because the issue
+    itself *is* the source — the comment doesn't need to point at it.
+    """
+    kind = str(event.get("github_kind") or "")
+    if kind not in _COMMENT_KINDS:
+        return body
+    url = str(event.get("github_html_url") or "").strip()
+    if not url:
+        return body
+    author = str(event.get("github_author") or "").strip()
+    if author:
+        preface = f"> Replying to [@{author}'s comment]({url})\n\n"
+    else:
+        preface = f"> Replying to [the source comment]({url})\n\n"
+    return preface + body
 
 
 def _coerce_int(value: object) -> int | None:

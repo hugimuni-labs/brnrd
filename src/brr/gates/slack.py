@@ -12,6 +12,7 @@ Required setup:
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.request
 import urllib.error
@@ -65,28 +66,45 @@ def _save_state(brr_dir: Path, state: dict) -> None:
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
 
-def _progress_state_path(brr_dir: Path) -> Path:
-    return brr_dir / "gates" / "slack_progress.json"
+_PROGRESS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def _load_progress_state(brr_dir: Path) -> dict:
-    path = _progress_state_path(brr_dir)
+def _progress_state_path(brr_dir: Path, task_id: str) -> Path:
+    """Per-task progress card state file.
+
+    Each task owns its own state file under
+    ``.brr/gates/slack/progress/<task-id>.json``. The render path for
+    task A only reads / writes A's file, so concurrent workers handling
+    different tasks never share a state surface. See
+    ``kb/design-concurrent-execution.md``.
+    """
+    safe = _PROGRESS_SAFE_RE.sub("_", task_id) if task_id else "_unknown"
+    return brr_dir / "gates" / "slack" / "progress" / f"{safe}.json"
+
+
+def _load_progress_for_task(brr_dir: Path, task_id: str) -> dict | None:
+    """Return this task's previously-rendered card state, or None."""
+    path = _progress_state_path(brr_dir, task_id)
     if not path.exists():
-        return {}
+        return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}
+        return None
 
 
-def _save_progress_state(brr_dir: Path, state: dict) -> None:
-    path = _progress_state_path(brr_dir)
+def _save_progress_for_task(
+    brr_dir: Path, task_id: str, entry: dict,
+) -> None:
+    """Write this task's card state file (atomic via rename)."""
+    path = _progress_state_path(brr_dir, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def _progress_key(task_id: str) -> str:
-    return task_id
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(entry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -180,6 +198,13 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             continue
         ts = msg.get("ts", "")
         user = msg.get("user", "?")
+        # ``thread_ts`` is the parent message's ts when this message is
+        # itself a reply inside an existing thread. Capturing it lets
+        # both the progress card and the final response thread under the
+        # original thread root rather than spawning a new one. When the
+        # message is itself the start of a conversation, ``thread_ts``
+        # is absent and ``slack_ts`` serves the same role downstream.
+        thread_ts = msg.get("thread_ts") or ""
         protocol.create_event(
             inbox_dir,
             source="slack",
@@ -187,6 +212,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             slack_channel=channel,
             slack_user=user,
             slack_ts=ts,
+            slack_thread_ts=thread_ts,
         )
         if ts > oldest_ts:
             oldest_ts = ts
@@ -210,10 +236,20 @@ def _deliver_responses(
         body = protocol.read_response(responses_dir, eid)
         if body is None:
             continue
+        event_channel = str(event.get("slack_channel") or channel)
+        # Match the progress card: prefer the parent thread when the
+        # source message was itself a reply, otherwise treat the source
+        # message as the thread root. Without this the final response
+        # ends up posted at channel level while the card lives in the
+        # thread, splitting the conversation in half.
+        thread_ts = str(
+            event.get("slack_thread_ts") or event.get("slack_ts") or ""
+        )
+        params: dict = {"channel": event_channel, "text": body}
+        if thread_ts:
+            params["thread_ts"] = thread_ts
         try:
-            _slack_api(token, "chat.postMessage", {
-                "channel": channel, "text": body,
-            })
+            _slack_api(token, "chat.postMessage", params)
         except Exception as e:
             print(f"[brr:slack] delivery error for {eid}: {e}")
             continue
@@ -281,15 +317,12 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         view, compact=True, style=run_progress.SLACK_MRKDWN_STYLE,
     )
 
-    progress_state = _load_progress_state(brr_dir)
-    key = _progress_key(task_id)
-    entry = progress_state.get(key)
+    entry = _load_progress_for_task(brr_dir, task_id)
 
     if entry and entry.get("last_text") == text:
         # Identical to the last rendered message — skip the round-trip.
         entry["last_render"] = ptype
-        progress_state[key] = entry
-        _save_progress_state(brr_dir, progress_state)
+        _save_progress_for_task(brr_dir, task_id, entry)
         return
 
     try:
@@ -302,8 +335,7 @@ def render_update(brr_dir: Path, packet: Any) -> None:
                 })
                 entry["last_render"] = ptype
                 entry["last_text"] = text
-                progress_state[key] = entry
-                _save_progress_state(brr_dir, progress_state)
+                _save_progress_for_task(brr_dir, task_id, entry)
                 return
             except Exception:
                 # The message is genuinely gone (deleted, expired, etc.).
@@ -316,13 +348,12 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         ts = resp.get("ts")
         if not ts:
             return
-        progress_state[key] = {
+        _save_progress_for_task(brr_dir, task_id, {
             "channel": channel,
             "thread_ts": thread_ts,
             "ts": ts,
             "last_render": ptype,
             "last_text": text,
-        }
-        _save_progress_state(brr_dir, progress_state)
+        })
     except Exception:
         return

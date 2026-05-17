@@ -218,11 +218,13 @@ progress to a human:
 
 - The Telegram gate sends one progress message per task in the
   originating chat or topic on `task_created`, then edits the same
-  message via `editMessageText` for later packets. State lives at
-  `.brr/gates/telegram_progress.json`.
+  message via `editMessageText` for later packets. Per-task state lives
+  under `.brr/gates/telegram/progress/<task-id>.json` so concurrent
+  workers never share a file.
 - The Slack gate posts one threaded reply per task on `task_created`,
-  then updates it with `chat.update`. State lives at
-  `.brr/gates/slack_progress.json`.
+  then updates it with `chat.update`. Per-task state lives under
+  `.brr/gates/slack/progress/<task-id>.json` on the same one-writer
+  guarantee.
 - Non-chat gates (script gates, future forge gates posting on issues
   or PRs) typically skip live progress and let the durable artifact —
   a commit, a comment, a delivered file — speak for the run.

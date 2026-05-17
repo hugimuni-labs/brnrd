@@ -16,12 +16,15 @@ def _seed_task(
     chat_id: int = 555,
     topic_id: int | None = None,
     source: str = "telegram",
+    message_id: int | None = None,
 ) -> Task:
     tasks_dir = brr_dir / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
     meta = {"telegram_chat_id": chat_id}
     if topic_id is not None:
         meta["telegram_topic_id"] = topic_id
+    if message_id is not None:
+        meta["telegram_message_id"] = message_id
     conv_key = f"telegram:{chat_id}:" + (str(topic_id) if topic_id is not None else "")
     task = Task(
         id=task_id, event_id="evt-" + task_id, body="x",
@@ -77,8 +80,76 @@ def test_render_update_sends_message_on_task_created(tmp_path, monkeypatch):
     # Telegram-flavoured rendering: HTML parse_mode so the strike-
     # through markup later in the lifecycle renders as the user expects.
     assert params.get("parse_mode") == "HTML"
-    state = telegram._load_progress_state(brr_dir)
-    assert state[task.id]["message_id"] == 42
+    entry = telegram._load_progress_for_task(brr_dir, task.id)
+    assert entry["message_id"] == 42
+
+
+def test_render_update_threads_first_send_under_source_message(
+    tmp_path, monkeypatch,
+):
+    """The initial progress card must reply to the user's message.
+
+    Edits don't carry a reply target (Telegram has no way to change
+    a message's reply pointer after the fact), so only the very first
+    ``sendMessage`` should set ``reply_to_message_id``.
+    """
+    brr_dir = tmp_path / ".brr"
+    _save_token(brr_dir)
+    task = _seed_task(brr_dir, "task-tg-thread", chat_id=555, message_id=4242)
+
+    api_calls: list[tuple] = []
+
+    def fake_api_call(token, method, params=None):
+        api_calls.append((token, method, params))
+        if method == "sendMessage":
+            return {"result": {"message_id": 90}}
+        if method == "editMessageText":
+            return {"result": {"message_id": 90}}
+        return {}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+
+    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+          event_id=task.event_id, branch="auto", env="host")
+    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+          attempt=1)
+
+    sends = [c for c in api_calls if c[1] == "sendMessage"]
+    edits = [c for c in api_calls if c[1] == "editMessageText"]
+    assert len(sends) == 1
+    assert sends[0][2]["reply_to_message_id"] == 4242
+    assert sends[0][2]["allow_sending_without_reply"] is True
+    # Edits never carry the reply pointer — Telegram rejects it on edit
+    # endpoints and we'd lose the visible thread anchor either way.
+    assert all("reply_to_message_id" not in c[2] for c in edits)
+
+
+def test_render_update_first_send_omits_reply_to_when_unknown(
+    tmp_path, monkeypatch,
+):
+    # Legacy tasks (created before the message-id capture landed) carry
+    # no ``telegram_message_id``; the gate must still post the card,
+    # just without the reply pointer.
+    brr_dir = tmp_path / ".brr"
+    _save_token(brr_dir)
+    task = _seed_task(brr_dir, "task-tg-legacy", chat_id=555)
+
+    api_calls: list[tuple] = []
+
+    def fake_api_call(token, method, params=None):
+        api_calls.append((token, method, params))
+        if method == "sendMessage":
+            return {"result": {"message_id": 91}}
+        return {}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+
+    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+          event_id=task.event_id, branch="auto", env="host")
+
+    sends = [c for c in api_calls if c[1] == "sendMessage"]
+    assert len(sends) == 1
+    assert "reply_to_message_id" not in sends[0][2]
 
 
 def test_render_update_edits_existing_message(tmp_path, monkeypatch):
@@ -149,8 +220,8 @@ def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch)
 
     methods = [m for _, m, _ in api_calls]
     assert methods.count("sendMessage") == 2
-    state = telegram._load_progress_state(brr_dir)
-    assert state[task.id]["message_id"] != 201
+    entry = telegram._load_progress_for_task(brr_dir, task.id)
+    assert entry["message_id"] != 201
 
 
 def test_render_update_ignores_non_telegram_tasks(tmp_path, monkeypatch):
@@ -289,9 +360,9 @@ def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):
     # Pre-seed progress state: a prior message exists, but with no
     # cached last_text — so render_update will try to edit, hit
     # "not modified", and must NOT fall through to sendMessage.
-    telegram._save_progress_state(brr_dir, {
-        task.id: {"chat_id": 222, "topic_id": None, "message_id": 900,
-                  "last_render": "task_created"},
+    telegram._save_progress_for_task(brr_dir, task.id, {
+        "chat_id": 222, "topic_id": None, "message_id": 900,
+        "last_render": "task_created",
     })
 
     api_calls: list[tuple] = []
@@ -322,5 +393,5 @@ def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):
     methods = [m for _, m, _ in api_calls]
     assert methods.count("editMessageText") == 1
     assert methods.count("sendMessage") == 0
-    state = telegram._load_progress_state(brr_dir)
-    assert state[task.id]["message_id"] == 900
+    entry = telegram._load_progress_for_task(brr_dir, task.id)
+    assert entry["message_id"] == 900

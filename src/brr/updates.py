@@ -48,13 +48,22 @@ class UpdatePacket:
     """A single lifecycle update.
 
     *conversation_key* is the gate-thread key (e.g. ``telegram:123:``)
-    used to route the packet to the right conversation log. May be
-    empty for orphan events; in that case the packet is rendered to
+    used to route the packet to the right conversation directory. May
+    be empty for orphan events; in that case the packet is rendered to
     console but not persisted.
+
+    *event_id* selects the per-event-pipeline jsonl file under that
+    directory. The contention-free conversation layer (see
+    ``kb/design-concurrent-execution.md``) routes every record one
+    worker emits into the same ``<event-id>.jsonl`` so concurrent
+    workers never share a file. Packets without ``event_id`` fall
+    through to the orphan log so a buggy emitter is observable rather
+    than silently dropped.
     """
 
     type: str
     conversation_key: str = ""
+    event_id: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, Any]:
@@ -92,11 +101,16 @@ def emit(brr_dir: Path, packet: UpdatePacket) -> None:
     if packet.type not in PACKET_TYPES:
         return
     if packet.conversation_key:
+        # Prefer the explicit field, but fall back to a payload-provided
+        # event_id so callers migrating to the field-based shape don't
+        # silently drop into the orphan log during transition.
+        event_id = packet.event_id or str(packet.payload.get("event_id") or "")
         conversations.append_update(
             brr_dir,
             packet.conversation_key,
             type=packet.type,
             payload=packet.payload or {},
+            event_id=event_id,
         )
     _render_console(packet)
     _dispatch_to_gates(brr_dir, packet)
