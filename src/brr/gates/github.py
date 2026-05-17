@@ -7,7 +7,10 @@ The gate polls the GitHub REST API for three configurable triggers:
 - ``mention-in-comment``: a new comment containing the configured
   mention string becomes one event. PR comments carry the PR head
   branch as ``branch_target`` so the daemon's pre-task fetch+ff
-  refreshes that branch before the worker runs.
+  refreshes that branch before the worker runs. For ``@handle``-style
+  triggers, comments authored by ``handle`` are filtered so the named
+  account cannot self-loop; the PAT holder can still @-mention that
+  account from their own comments.
 - ``any``: every new issue, PR, and comment fires an event. Overrides
   label and mention when set. Token-expensive on busy repos; off by
   default. PR events include ``branch_target``; bot's own comments are
@@ -511,7 +514,7 @@ def _poll_mention_trigger(
     token: str,
     repo: str,
     mention: str,
-    bot_login: str,
+    token_login: str,
     cursor: dict,
     inbox_dir: Path,
 ) -> None:
@@ -541,8 +544,9 @@ def _poll_mention_trigger(
         if mention not in body:
             continue
         author = (comment.get("user") or {}).get("login") or ""
-        if author and bot_login and author == bot_login:
-            # Don't re-trigger on the bot's own replies.
+        if _skip_mention_comment_author(author, mention, token_login):
+            # Don't re-trigger when the named @-account echoes the trigger
+            # (or, for non-@ triggers, the token holder's own comments).
             continue
 
         html_url = str(comment.get("html_url") or "")
@@ -722,6 +726,40 @@ def _poll_any_activity(
 
 
 _ISSUE_URL_RE = re.compile(r"/issues/(\d+)$")
+
+
+def _login_to_skip_for_mention_trigger(mention: str, token_login: str) -> str | None:
+    """GitHub login whose issue/PR comments never emit *mention* events.
+
+    ``bot_login`` in state is the authenticated token owner (often a human
+    PAT). Skipping ``author == token_login`` would drop every @-mention the
+    operator writes. When the trigger is ``@handle``-shaped, only ``handle``
+    is skipped (the automation account named in the mention). For custom
+    substring triggers without a leading ``@…`` handle, fall back to the
+    token login so legacy ``HELPME``-style triggers still avoid self-loops.
+    """
+    raw = (mention or "").strip()
+    if raw.startswith("@"):
+        acc: list[str] = []
+        for ch in raw[1:]:
+            if ch in " \t\n\r":
+                break
+            if ch.isalnum() or ch == "-":
+                acc.append(ch)
+            else:
+                break
+        login = "".join(acc).strip("-")
+        if login:
+            return login
+    tl = (token_login or "").strip()
+    return tl or None
+
+
+def _skip_mention_comment_author(author: str, mention: str, token_login: str) -> bool:
+    skip = _login_to_skip_for_mention_trigger(mention, token_login)
+    if not skip or not author:
+        return False
+    return author.casefold() == skip.casefold()
 
 
 def _extract_issue_number(issue_url: str) -> int | None:

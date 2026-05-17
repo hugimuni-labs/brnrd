@@ -338,6 +338,46 @@ def test_mention_trigger_ignores_bot_own_comments(tmp_path, monkeypatch):
     assert protocol.list_pending(inbox) == []
 
 
+def test_mention_trigger_pat_holder_can_mention_automation_account(
+    tmp_path, monkeypatch,
+):
+    """``bot_login`` is the token owner; @-triggers name the account to ignore."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "Gurio",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    def fake_api_get(token, path, params=None):
+        if path == "/repos/owner/name/issues/comments":
+            return [
+                {
+                    "id": 14,
+                    "body": "@brr-bot could you follow up on this PR",
+                    "user": {"login": "Gurio"},
+                    "issue_url": "https://api.github.com/repos/owner/name/issues/14",
+                    "html_url": "https://github.com/owner/name/pull/14#issuecomment-14",
+                    "updated_at": "2026-05-17T12:00:00Z",
+                },
+            ]
+        if path == "/repos/owner/name/pulls/14":
+            return {"head": {"ref": "brr/runner-ergonomics-review"}}
+        return []
+
+    monkeypatch.setattr(github, "_api_get", fake_api_get)
+
+    github._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    assert events[0]["github_trigger"] == "mention"
+    assert events[0]["branch_target"] == "brr/runner-ergonomics-review"
+
+
 def test_mention_trigger_skips_comments_without_mention(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
