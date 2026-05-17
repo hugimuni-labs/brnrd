@@ -13,12 +13,18 @@ the mechanical safety contract around that runtime choice.
 Resolution order:
 
 1. Structured event branch field (``branch_target``, ``target_branch``,
-   ``base_branch``, or the legacy ``branch``).
+   ``base_branch``, or the legacy ``branch``). When the event names a
+   target, the plan seeds from the **remote** tracking ref
+   (``<remote>/<target>``) if present, so the worker sprouts from the
+   forge-visible state even when the daemon's local copy of that branch
+   diverged and the pre-task ff was refused.
 2. Fallback policy from config (``branch.fallback``):
    * ``preserve`` (default) — no auto-land target; agent commits live on
      ``brr/<task-id>`` until a human routes them.
    * ``current`` — seed from and auto-land to the host current branch;
-     opt-in self-development behaviour.
+     opt-in self-development behaviour. The remote preference is **not**
+     applied here: ``current`` is the self-development knob and the host
+     is the source of truth.
 """
 
 from __future__ import annotations
@@ -93,6 +99,7 @@ def resolve_branch_plan(
                 source=f"event:{key}",
                 host_context_branch=host_context,
                 default_seed=default_seed,
+                prefer_remote=True,
             )
 
     mode = _fallback_mode(cfg)
@@ -120,9 +127,36 @@ def _plan_for_target(
     source: str,
     host_context_branch: str | None,
     default_seed: str,
+    prefer_remote: bool = False,
 ) -> BranchPlan:
-    old_oid = gitops.branch_head(repo_root, target)
-    seed_ref = target if old_oid else default_seed
+    """Resolve seed + ff anchor for *target*.
+
+    With ``prefer_remote=True`` (set on the event-branch path), the seed
+    ref becomes ``<remote>/<target>`` when that tracking ref exists. This
+    matters when the host's local copy of *target* has diverged from the
+    remote: the daemon's pre-task sync ff is refused on diverged history,
+    and without this preference the worker would seed from a stale local
+    branch and produce a divergent, unpushable history. Anchoring to the
+    remote ref guarantees the worker sprouts from the GitHub-visible
+    state regardless of how stale the host's local branch is.
+
+    The ff anchor (``expected_old_oid``) follows the seed: when we seed
+    from the remote, finalize's auto-land ff is checked against the
+    remote oid we actually built on, not the diverged local one.
+    """
+    local_oid = gitops.branch_head(repo_root, target)
+    seed_ref = target if local_oid else default_seed
+    old_oid = local_oid
+
+    if prefer_remote:
+        remote = gitops.default_remote(repo_root)
+        if remote:
+            remote_ref = f"{remote}/{target}"
+            remote_oid = gitops.rev_parse(repo_root, remote_ref)
+            if remote_oid:
+                seed_ref = remote_ref
+                old_oid = remote_oid
+
     return BranchPlan(
         seed_ref=seed_ref,
         auto_land_branch=target,
