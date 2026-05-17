@@ -1,9 +1,9 @@
 """Lifecycle update packets — gate-agnostic task progress events.
 
 The daemon emits typed packets for task lifecycle moments. They are
-persisted to the conversation log
-(``.brr/conversations/<key>.ndjson``) and optionally rendered by gates
-(Telegram, Slack, Git, CLI). The core stays gate-agnostic; gates may
+persisted to the conversation log (``.brr/conversations/<safe-key>/
+<event-id>.jsonl``) and optionally rendered by gates (Telegram, Slack,
+GitHub, CLI). The core stays gate-agnostic; gates may
 opt in to a ``render_update(brr_dir, packet)`` hook.
 
 Packet types are stable identifiers — gates branch on them to decide
