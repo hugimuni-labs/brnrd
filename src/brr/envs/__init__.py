@@ -14,6 +14,7 @@ that branch as-is.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -328,6 +329,11 @@ _DOCKER_DEFAULT_PASSTHROUGH_ENV: tuple[str, ...] = (
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    # Forward the GitHub token when the operator sets it in the environment
+    # directly; tasks triggered by the GitHub gate additionally receive it
+    # injected from the gate's stored state (see _resolve_github_gate_token).
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
 )
 
 
@@ -344,6 +350,7 @@ _DOCKER_DEFAULT_CRED_PATHS: tuple[str, ...] = (
     ".gemini",
     ".gitconfig",
     ".config/gh",
+    ".ssh",
 )
 
 # HOME directory baked into the runner image, owned mode 1777 so any UID
@@ -357,6 +364,30 @@ def _docker_extra_env_keys(cfg: dict[str, Any]) -> list[str]:
     if not raw:
         return []
     return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _resolve_github_gate_token(brr_dir: Path) -> str | None:
+    """Return the token stored in the GitHub gate's state file, or from env.
+
+    Used to inject ``GITHUB_TOKEN`` into Docker containers when a task was
+    triggered by the GitHub gate, so the runner's ``gh`` CLI and HTTPS git
+    operations are authenticated without relying on the system keyring (which
+    is unavailable inside a container).
+    """
+    state_path = brr_dir / "gates" / "github.json"
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            stored = state.get("token")
+            if isinstance(stored, str) and stored.strip():
+                return stored.strip()
+        except Exception:
+            pass
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        val = os.environ.get(name)
+        if val:
+            return val.strip()
+    return None
 
 
 def _docker_passthrough_env_args(cfg: dict[str, Any]) -> list[str]:
@@ -380,6 +411,9 @@ def _docker_credential_mount_args(cfg: dict[str, Any]) -> list[str]:
     tokens and updated session state on the host stay current. Targets
     land under the container's HOME, which the daemon also sets via
     ``-e HOME=...`` so the CLIs find them at ``$HOME/.codex`` etc.
+
+    Includes ``~/.ssh`` so the runner can push via SSH remotes without
+    needing a separate credential setup.
     """
     if not _docker_bool(cfg, "mount_credentials", True):
         return []
@@ -492,6 +526,12 @@ class DockerEnv(WorktreeEnv):
             "docker_containers": [],
         })
         task.meta["docker_image"] = image
+
+        if task.source == "github":
+            token = _resolve_github_gate_token(repo_root / ".brr")
+            if token:
+                ctx.env_state["github_token"] = token
+
         return ctx
 
     def invoke(
@@ -538,6 +578,16 @@ class DockerEnv(WorktreeEnv):
             *_docker_git_safe_directory_args(),
             *_docker_passthrough_env_args(cfg),
             *_docker_credential_mount_args(cfg),
+            # Inject the GitHub gate token when available so ``gh`` CLI
+            # and HTTPS git operations are authenticated inside the
+            # container regardless of whether the system keyring is
+            # reachable (it isn't inside Docker).
+            *(
+                ["-e", f"GITHUB_TOKEN={ctx.env_state['github_token']}"]
+                if ctx.env_state.get("github_token")
+                and not os.environ.get("GITHUB_TOKEN")
+                else []
+            ),
             "-v", f"{ctx.repo_root}:{ctx.repo_root}",
             "-w", str(invocation.cwd or ctx.cwd),
             image,

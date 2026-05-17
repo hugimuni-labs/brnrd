@@ -539,6 +539,20 @@ def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch
     assert mounts[-1] == f"{tmp_path}:{tmp_path}"
 
 
+def test_docker_invoke_mounts_ssh_when_present(tmp_path, monkeypatch):
+    """.ssh is in the default credential paths so the runner can push via
+    SSH remotes (e.g. git@github.com:) without a separate setup step."""
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    (fake_home / ".ssh").mkdir()
+    (fake_home / ".ssh" / "id_ed25519").write_text("FAKE_KEY", encoding="utf-8")
+
+    command = _build_docker_invoke(tmp_path, monkeypatch)
+
+    mounts = [command[i + 1] for i, arg in enumerate(command) if arg == "-v"]
+    assert f"{fake_home}/.ssh:/brr-home/.ssh" in mounts
+
+
 @pytest.mark.parametrize("disabled_value", [False, "false"])
 def test_docker_invoke_skips_credential_mounts_when_disabled(
     tmp_path, monkeypatch, disabled_value,
@@ -623,3 +637,127 @@ def test_docker_finalize_preserves_containers_on_error(tmp_path, monkeypatch):
     persisted = Task.from_file(tmp_path / ".brr" / "tasks" / "task-5.md")
     assert persisted is not None
     assert persisted.meta["docker_containers"] == "brr-task-5-evt-5-attempt-1"
+
+
+def _build_docker_invoke_with_task(
+    tmp_path,
+    monkeypatch,
+    *,
+    task: "Task",
+    cfg_extra=None,
+    label="evt-gh-1",
+):
+    """Like ``_build_docker_invoke`` but accepts a caller-supplied task."""
+    monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
+    response_path = tmp_path / ".brr" / "responses" / f"{task.event_id}.md"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict = {"docker.image": "brr/test-runner:latest"}
+    if cfg_extra:
+        cfg.update(cfg_extra)
+    ctx = envs.get_env("docker").prepare(
+        task, tmp_path, cfg,
+        branch_plan=_plan(), response_path=response_path,
+    )
+    commands: list = []
+    monkeypatch.setattr(
+        envs.subprocess,
+        "run",
+        lambda command, **_kwargs: commands.append(command)
+        or envs.subprocess.CompletedProcess(command, 0, "ok\n", ""),
+    )
+    invocation = RunnerInvocation(
+        kind="daemon-run",
+        label=label,
+        prompt="hello",
+        cwd=ctx.cwd,
+        repo_root=tmp_path,
+        response_path=str(response_path),
+    )
+    envs.get_env("docker").invoke(
+        ctx, "mock-runner", invocation, {**cfg, "runner_cmd": ["mock", "{prompt}"]},
+    )
+    return commands[0]
+
+
+def test_docker_inject_github_token_from_gate_state(tmp_path, monkeypatch):
+    """When a task originated from the GitHub gate and the gate has a stored
+    token, GITHUB_TOKEN is injected into the container environment so ``gh``
+    CLI and HTTPS git operations authenticate without needing the system
+    keyring (which is unavailable inside Docker)."""
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)  # noqa: F841
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    gate_dir = tmp_path / ".brr" / "gates"
+    gate_dir.mkdir(parents=True)
+    (gate_dir / "github.json").write_text(
+        '{"token": "ghs_stored_token", "repo": "owner/repo", "bot_login": "bot"}',
+        encoding="utf-8",
+    )
+
+    task = Task(id="task-gh", event_id="evt-gh", body="review PR", source="github")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    kv_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" in command[i + 1]
+    ]
+    assert "GITHUB_TOKEN=ghs_stored_token" in kv_env
+
+
+def test_docker_no_github_token_for_non_github_task(tmp_path, monkeypatch):
+    """Tasks from other sources must not receive a GITHUB_TOKEN even when
+    the gate state file exists on disk."""
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)  # noqa: F841
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    gate_dir = tmp_path / ".brr" / "gates"
+    gate_dir.mkdir(parents=True)
+    (gate_dir / "github.json").write_text(
+        '{"token": "ghs_stored_token"}', encoding="utf-8",
+    )
+
+    task = Task(id="task-tg", event_id="evt-tg", body="telegram task", source="telegram")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    kv_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" in command[i + 1]
+    ]
+    assert not any(v.startswith("GITHUB_TOKEN=") for v in kv_env)
+
+
+def test_docker_github_token_not_duplicated_when_in_daemon_env(tmp_path, monkeypatch):
+    """When GITHUB_TOKEN is already in the daemon's environment it is passed
+    via ``-e GITHUB_TOKEN`` (no value, docker inherits from env) and we
+    must not emit a second ``-e GITHUB_TOKEN=...`` from the gate state."""
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)  # noqa: F841
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.setenv("GITHUB_TOKEN", "from_daemon_env")
+
+    gate_dir = tmp_path / ".brr" / "gates"
+    gate_dir.mkdir(parents=True)
+    (gate_dir / "github.json").write_text(
+        '{"token": "ghs_stored_different"}', encoding="utf-8",
+    )
+
+    task = Task(id="task-gh2", event_id="evt-gh2", body="from env", source="github")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    kv_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and command[i + 1].startswith("GITHUB_TOKEN=")
+    ]
+    assert kv_env == [], "injected key=value form must be absent when env already has GITHUB_TOKEN"
+    bare_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and command[i + 1] == "GITHUB_TOKEN"
+    ]
+    assert bare_env == ["GITHUB_TOKEN"]
