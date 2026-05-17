@@ -2044,3 +2044,28 @@ any skips subsequent prompts), 5 for `_poll_any_activity` (issue event,
 PR event with `branch_target`, comment events with bot-self-filter, any
 overrides label/mention routing).
 
+## [2026-05-17] fix | Docker env: SSH mount + GitHub token injection
+
+Addressed two failures observed in an e2e GitHub gate run (PR #14) where the
+agent inside Docker could not use `gh` CLI (unauthenticated) and could not
+push via SSH (no key).
+
+**Root cause 1 — `gh` unauthenticated**: On Linux, `gh auth login` stores
+tokens in the system keyring (libsecret), not in `~/.config/gh/hosts.yml`.
+The existing `.config/gh` directory mount therefore carried the config but
+not the secret. Fix: add `GITHUB_TOKEN`/`GH_TOKEN` to
+`_DOCKER_DEFAULT_PASSTHROUGH_ENV` (forwarded from daemon env when set), and
+for tasks with `source == "github"` inject the gate's stored token directly
+as `GITHUB_TOKEN=...` in the container args by reading
+`.brr/gates/github.json`. A new `_resolve_github_gate_token` helper in
+`envs/__init__.py` handles the state file read with a silent fallback.
+
+**Root cause 2 — SSH push failure**: `.ssh` was missing from
+`_DOCKER_DEFAULT_CRED_PATHS`. Added it; the mount is skipped when the
+directory doesn't exist on the host (matching the behaviour of all other
+credential paths) and is omitted entirely when `docker.mount_credentials=false`.
+
+Tests: 451 passing (was 449). +4 new in `test_envs.py`: SSH mount present
+when directory exists; GitHub token injected as key=value when task source is
+`github`; no injection for non-github tasks; key=value form absent (bare
+passthrough used instead) when `GITHUB_TOKEN` is already in daemon env.
