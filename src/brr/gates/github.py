@@ -43,7 +43,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .. import gitops, protocol
+from .. import gitops, protocol, run_progress
+from ..task import Task
 
 
 _API_ROOT = "https://api.github.com"
@@ -825,3 +826,142 @@ def _format_iso(when: datetime) -> str:
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ── Live progress card ────────────────────────────────────────────────
+
+
+_RENDERABLE_PACKETS = {
+    "task_created",
+    "env_prepared",
+    "container_started",
+    "container_preserved",
+    "run_started",
+    "attempt_started",
+    "attempt_failed",
+    "retrying",
+    "artifact_created",
+    "heartbeat",
+    "finalizing",
+    "push_started",
+    "push_done",
+    "done",
+    "failed",
+    "conflict",
+}
+
+
+def _progress_state_path(brr_dir: Path, task_id: str) -> Path:
+    safe = task_id.replace("/", "_").replace("..", "_")
+    return brr_dir / "gates" / "github" / "progress" / f"{safe}.json"
+
+
+def _load_progress_for_task(brr_dir: Path, task_id: str) -> dict | None:
+    path = _progress_state_path(brr_dir, task_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _save_progress_for_task(brr_dir: Path, task_id: str, data: dict) -> None:
+    path = _progress_state_path(brr_dir, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _build_card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
+    view = run_progress.project_task(brr_dir, conv_key, task_id)
+    if view is None:
+        return None
+    return run_progress.render_text(
+        view,
+        compact=True,
+        style=run_progress.GITHUB_MARKDOWN_STYLE,
+    )
+
+
+def _api_patch(token: str, path: str, body: dict[str, Any]) -> Any:
+    payload, _ = _request(token, "PATCH", path, body=body)
+    return payload
+
+
+def render_update(brr_dir: Path, packet: Any) -> None:
+    """Create/edit a GitHub progress comment for *packet*.
+
+    On ``task_created`` a fresh comment is posted on the originating issue
+    or PR and the resulting comment ID is stored so later packets can edit
+    the same comment via PATCH. Failures are swallowed — the daemon must
+    keep running even if the GitHub API is unreachable.
+    """
+    ptype = getattr(packet, "type", None)
+    if ptype not in _RENDERABLE_PACKETS:
+        return
+
+    state = _load_state(brr_dir)
+    token = resolve_token(state)
+    if not token:
+        return
+
+    conv_key = getattr(packet, "conversation_key", "") or ""
+    task_id = run_progress.task_id_from_packet(packet)
+    if not conv_key or not task_id:
+        return
+
+    task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
+    if task is None or task.source != "github":
+        return
+    repo = task.meta.get("github_repo") or state.get("repo")
+    number = _coerce_int(task.meta.get("github_issue_number"))
+    if not repo or number is None:
+        return
+
+    text = _build_card_text(brr_dir, conv_key, task_id)
+    if text is None:
+        return
+
+    entry = _load_progress_for_task(brr_dir, task_id)
+
+    if entry and entry.get("last_text") == text:
+        entry["last_render"] = ptype
+        _save_progress_for_task(brr_dir, task_id, entry)
+        return
+
+    try:
+        if entry and entry.get("comment_id"):
+            try:
+                _api_patch(
+                    token,
+                    f"/repos/{repo}/issues/comments/{entry['comment_id']}",
+                    body={"body": text},
+                )
+            except Exception:
+                # Comment deleted; fall through to post a fresh one.
+                new = _api_post(
+                    token,
+                    f"/repos/{repo}/issues/{number}/comments",
+                    body={"body": text},
+                )
+                cid = (new or {}).get("id") if isinstance(new, dict) else None
+                if cid is None:
+                    return
+                entry = {"comment_id": cid}
+        else:
+            new = _api_post(
+                token,
+                f"/repos/{repo}/issues/{number}/comments",
+                body={"body": text},
+            )
+            cid = (new or {}).get("id") if isinstance(new, dict) else None
+            if cid is None:
+                return
+            entry = {"comment_id": cid}
+
+        entry["last_text"] = text
+        entry["last_render"] = ptype
+        _save_progress_for_task(brr_dir, task_id, entry)
+
+    except Exception as exc:
+        print(f"[brr:github] render_update error for {task_id}: {exc}")

@@ -9,6 +9,8 @@ import pytest
 
 from brr import protocol
 from brr.gates import github
+from brr import run_progress
+from brr.task import Task
 
 
 # ── parse_origin_url ─────────────────────────────────────────────────
@@ -844,3 +846,126 @@ def test_any_trigger_overrides_label_and_mention_in_loop(tmp_path, monkeypatch):
     assert poll_any_calls == ["any"]
     assert poll_label_calls == []
     assert poll_mention_calls == []
+
+
+# ── render_update (progress cards) ───────────────────────────────────
+
+
+def _make_packet(ptype: str, conv_key: str, task_id: str):
+    """Minimal UpdatePacket-compatible object for render_update tests."""
+    from types import SimpleNamespace
+    return SimpleNamespace(type=ptype, conversation_key=conv_key, payload={"task_id": task_id})
+
+
+def _write_task(brr_dir: Path, task_id: str, *, repo: str, issue_number: int) -> None:
+    task = Task(
+        id=task_id,
+        event_id="evt-001",
+        body="do the thing",
+        source="github",
+        conversation_key="github:default",
+        meta={"github_repo": repo, "github_issue_number": issue_number},
+    )
+    tasks_dir = brr_dir / "tasks"
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    (tasks_dir / f"{task_id}.md").write_text(task.to_frontmatter(), encoding="utf-8")
+
+
+def test_render_update_creates_comment_on_task_created(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    github._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
+    _write_task(brr_dir, "task-001", repo="o/r", issue_number=42)
+    monkeypatch.setattr(github, "_build_card_text", lambda *a: "**task received**")
+
+    posts: list[tuple[str, dict]] = []
+    monkeypatch.setattr(github, "_api_post", lambda token, path, body: posts.append((path, body)) or {"id": 999})
+    monkeypatch.setattr(github, "_api_patch", lambda token, path, body: None)
+
+    pkt = _make_packet("task_created", "github:default", "task-001")
+    github.render_update(brr_dir, pkt)
+
+    assert len(posts) == 1
+    assert posts[0][0] == "/repos/o/r/issues/42/comments"
+    assert posts[0][1]["body"] == "**task received**"
+
+    entry = github._load_progress_for_task(brr_dir, "task-001")
+    assert entry["comment_id"] == 999
+
+
+def test_render_update_patches_existing_comment(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    github._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
+    _write_task(brr_dir, "task-002", repo="o/r", issue_number=7)
+    github._save_progress_for_task(brr_dir, "task-002", {"comment_id": 555, "last_text": "old"})
+    monkeypatch.setattr(github, "_build_card_text", lambda *a: "**running...**")
+
+    patches: list[tuple[str, dict]] = []
+    monkeypatch.setattr(github, "_api_patch", lambda token, path, body: patches.append((path, body)))
+    posts: list = []
+    monkeypatch.setattr(github, "_api_post", lambda *a, **kw: posts.append(a))
+
+    pkt = _make_packet("heartbeat", "github:default", "task-002")
+    github.render_update(brr_dir, pkt)
+
+    assert patches == [("/repos/o/r/issues/comments/555", {"body": "**running...**"})]
+    assert posts == []
+
+
+def test_render_update_skips_duplicate_text(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    github._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
+    _write_task(brr_dir, "task-003", repo="o/r", issue_number=1)
+    github._save_progress_for_task(
+        brr_dir, "task-003", {"comment_id": 11, "last_text": "same text"},
+    )
+    monkeypatch.setattr(github, "_build_card_text", lambda *a: "same text")
+
+    patches: list = []
+    monkeypatch.setattr(github, "_api_patch", lambda *a, **kw: patches.append(a))
+    posts: list = []
+    monkeypatch.setattr(github, "_api_post", lambda *a, **kw: posts.append(a))
+
+    pkt = _make_packet("heartbeat", "github:default", "task-003")
+    github.render_update(brr_dir, pkt)
+
+    assert patches == []
+    assert posts == []
+
+
+def test_render_update_noop_for_non_github_source(tmp_path, monkeypatch):
+    """render_update must ignore tasks not sourced from GitHub."""
+    brr_dir = tmp_path / ".brr"
+    github._save_state(brr_dir, {"token": "tok"})
+    # Write a task with source="telegram"
+    task = Task(
+        id="task-tg",
+        event_id="evt-x",
+        body="ping",
+        source="telegram",
+        meta={"telegram_chat_id": 123},
+    )
+    (brr_dir / "tasks").mkdir(parents=True, exist_ok=True)
+    (brr_dir / "tasks" / "task-tg.md").write_text(task.to_frontmatter(), encoding="utf-8")
+
+    posts: list = []
+    monkeypatch.setattr(github, "_api_post", lambda *a, **kw: posts.append(a))
+
+    pkt = _make_packet("task_created", "telegram:123:", "task-tg")
+    github.render_update(brr_dir, pkt)
+
+    assert posts == []
+
+
+def test_render_update_noop_when_no_token(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    monkeypatch.setattr(github, "_gh_cli_token", lambda: None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    # No state file at all — no token.
+    posts: list = []
+    monkeypatch.setattr(github, "_api_post", lambda *a, **kw: posts.append(a))
+
+    pkt = _make_packet("task_created", "github:default", "task-x")
+    github.render_update(brr_dir, pkt)
+
+    assert posts == []
