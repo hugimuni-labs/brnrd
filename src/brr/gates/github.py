@@ -1,6 +1,6 @@
-"""GitHub gate — turns labelled issues and mentioned comments into events.
+"""GitHub gate — turns GitHub activity into events.
 
-The gate polls the GitHub REST API for two configurable triggers:
+The gate polls the GitHub REST API for three configurable triggers:
 
 - ``label-on-issue``: a new (or updated) open issue carrying the
   configured label becomes one inbox event.
@@ -8,6 +8,10 @@ The gate polls the GitHub REST API for two configurable triggers:
   mention string becomes one event. PR comments carry the PR head
   branch as ``branch_target`` so the daemon's pre-task fetch+ff
   refreshes that branch before the worker runs.
+- ``any``: every new issue, PR, and comment fires an event. Overrides
+  label and mention when set. Token-expensive on busy repos; off by
+  default. PR events include ``branch_target``; bot's own comments are
+  still filtered.
 
 Replies are posted as comments on the originating issue or PR.
 
@@ -269,6 +273,21 @@ def auth(brr_dir: Path) -> None:
     print(f"[brr] GitHub auth ok: @{login} (source={source})")
 
 
+def _prompt_trigger(label: str, default: str) -> str | None:
+    """Prompt for a trigger string.
+
+    - Enter → accepts the bracketed default as-is.
+    - ``off`` / ``none`` / ``disable`` → remove the trigger (returns ``None``).
+    - Anything else → use that literal value.
+    """
+    raw = input(f"{label} (off to disable) [{default}]: ").strip()
+    if not raw:
+        return default
+    if raw.lower() in ("off", "none", "disable"):
+        return None
+    return raw
+
+
 def bind(brr_dir: Path) -> None:
     state = _load_state(brr_dir)
     if resolve_token(state) is None:
@@ -284,21 +303,37 @@ def bind(brr_dir: Path) -> None:
         return
     state["repo"] = repo
 
-    triggers: dict[str, str] = state.get("triggers") or {}
-    label = input("Label to watch on issues (empty to disable) [brr]: ").strip()
-    if label.lower() == "off":
-        triggers.pop("label", None)
-    elif label or not triggers.get("label"):
-        triggers["label"] = label or "brr"
+    triggers: dict[str, Any] = state.get("triggers") or {}
 
-    mention_default = triggers.get("mention") or "@brr-bot"
-    mention = input(
-        f"Mention string to watch in comments (empty to disable) [{mention_default}]: "
-    ).strip()
-    if mention.lower() == "off":
+    # 'any' fires on every issue, PR, and comment — overrides label/mention.
+    print("Watch all activity fires on every new issue, PR, and comment without")
+    print("filtering. Token-expensive on busy repos. Off by default.")
+    any_raw = input("Enable? (on to enable, Enter to skip) [off]: ").strip().lower()
+    if any_raw in ("on", "yes", "true"):
+        triggers = {"any": True}
+        state["triggers"] = triggers
+        _save_state(brr_dir, state)
+        print(f"[brr] GitHub gate bound: repo={repo} triggers=['any']")
+        return
+    triggers.pop("any", None)
+
+    label = _prompt_trigger(
+        "Label to watch on issues",
+        str(triggers.get("label") or "brr"),
+    )
+    if label is None:
+        triggers.pop("label", None)
+    else:
+        triggers["label"] = label
+
+    mention = _prompt_trigger(
+        "Mention string to watch in comments",
+        str(triggers.get("mention") or "@brr-bot"),
+    )
+    if mention is None:
         triggers.pop("mention", None)
-    elif mention or not triggers.get("mention"):
-        triggers["mention"] = mention or mention_default
+    else:
+        triggers["mention"] = mention
 
     if not triggers:
         print("[brr] No triggers configured — at least one of label / mention required.")
@@ -382,13 +417,18 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> int:
 
     cursor = state.setdefault("cursor", {})
 
-    if "label" in triggers:
-        _poll_label_trigger(token, repo, triggers["label"], cursor, inbox_dir)
-    if "mention" in triggers:
-        _poll_mention_trigger(
-            token, repo, triggers["mention"], state.get("bot_login", ""),
-            cursor, inbox_dir,
+    if triggers.get("any"):
+        _poll_any_activity(
+            token, repo, state.get("bot_login", ""), cursor, inbox_dir,
         )
+    else:
+        if "label" in triggers:
+            _poll_label_trigger(token, repo, triggers["label"], cursor, inbox_dir)
+        if "mention" in triggers:
+            _poll_mention_trigger(
+                token, repo, triggers["mention"], state.get("bot_login", ""),
+                cursor, inbox_dir,
+            )
 
     state["cursor"] = cursor
     _save_state(brr_dir, state)
@@ -542,6 +582,142 @@ def _poll_mention_trigger(
 
     cursor["comments_since"] = latest_seen
     cursor["seen_comment_ids"] = sorted(seen)[-_SEEN_CAP:]
+
+
+def _poll_any_activity(
+    token: str,
+    repo: str,
+    bot_login: str,
+    cursor: dict,
+    inbox_dir: Path,
+) -> None:
+    """Poll all issues, PRs, and comments without filtering.
+
+    Used when ``triggers["any"]`` is set. Emits one event per new issue,
+    PR, and comment. PR events carry ``branch_target`` so the daemon's
+    pre-task fetch+ff refreshes the PR head branch. Bot's own comments
+    are filtered to prevent self-triggering loops.
+    """
+    # --- Issues and PRs -----------------------------------------------
+    since = cursor.get("any_issues_since") or _initial_since()
+    seen = set(cursor.get("any_seen_issue_numbers") or [])
+    items = _api_get(
+        token, f"/repos/{repo}/issues",
+        params={
+            "state": "all",
+            "since": since,
+            "per_page": 100,
+            "sort": "updated",
+            "direction": "asc",
+        },
+    ) or []
+
+    latest_seen = since
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        number = item.get("number")
+        if not isinstance(number, int):
+            continue
+        if number in seen:
+            continue
+
+        is_pr = "pull_request" in item
+        title = str(item.get("title") or "").strip()
+        body_text = str(item.get("body") or "").strip()
+        author = (item.get("user") or {}).get("login") or ""
+        meta: dict[str, Any] = {
+            "github_repo": repo,
+            "github_issue_number": number,
+            "github_author": author,
+            "github_html_url": item.get("html_url") or "",
+            "github_trigger": "any",
+        }
+        if is_pr:
+            meta["github_kind"] = "pr"
+            meta["github_pr_number"] = number
+            branch = _fetch_pr_head_branch(token, repo, number)
+            if branch:
+                meta["branch_target"] = branch
+        else:
+            meta["github_kind"] = "issue"
+        protocol.create_event(
+            inbox_dir,
+            source="github",
+            body=_format_event_body(title, body_text),
+            title=title,
+            **meta,
+        )
+        seen.add(number)
+        ts = item.get("updated_at") or item.get("created_at")
+        if isinstance(ts, str) and ts > latest_seen:
+            latest_seen = ts
+
+    cursor["any_issues_since"] = latest_seen
+    cursor["any_seen_issue_numbers"] = sorted(seen)[-_SEEN_CAP:]
+
+    # --- Comments -----------------------------------------------------
+    since_c = cursor.get("any_comments_since") or _initial_since()
+    seen_c = set(cursor.get("any_seen_comment_ids") or [])
+    comments = _api_get(
+        token, f"/repos/{repo}/issues/comments",
+        params={
+            "since": since_c,
+            "per_page": 100,
+            "sort": "updated",
+            "direction": "asc",
+        },
+    ) or []
+
+    pr_branch_cache: dict[int, str] = {}
+    latest_seen_c = since_c
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        cid = comment.get("id")
+        if not isinstance(cid, int):
+            continue
+        if cid in seen_c:
+            continue
+        author = (comment.get("user") or {}).get("login") or ""
+        if author and bot_login and author == bot_login:
+            continue
+        html_url = str(comment.get("html_url") or "")
+        is_pr_comment = "/pull/" in html_url
+        issue_number = _extract_issue_number(comment.get("issue_url") or "")
+        if issue_number is None:
+            continue
+        body_text = str(comment.get("body") or "")
+        meta_c: dict[str, Any] = {
+            "github_repo": repo,
+            "github_kind": "pr-comment" if is_pr_comment else "issue-comment",
+            "github_issue_number": issue_number,
+            "github_comment_id": cid,
+            "github_author": author,
+            "github_html_url": html_url,
+            "github_trigger": "any",
+        }
+        if is_pr_comment:
+            meta_c["github_pr_number"] = issue_number
+            branch = pr_branch_cache.get(issue_number) or _fetch_pr_head_branch(
+                token, repo, issue_number,
+            )
+            if branch:
+                pr_branch_cache[issue_number] = branch
+                meta_c["branch_target"] = branch
+        protocol.create_event(
+            inbox_dir,
+            source="github",
+            body=_format_event_body("", body_text),
+            **meta_c,
+        )
+        seen_c.add(cid)
+        ts = comment.get("updated_at") or comment.get("created_at")
+        if isinstance(ts, str) and ts > latest_seen_c:
+            latest_seen_c = ts
+
+    cursor["any_comments_since"] = latest_seen_c
+    cursor["any_seen_comment_ids"] = sorted(seen_c)[-_SEEN_CAP:]
 
 
 _ISSUE_URL_RE = re.compile(r"/issues/(\d+)$")
