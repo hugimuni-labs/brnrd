@@ -199,7 +199,10 @@ fast-forward that target after the run. If no auto-land branch is
 named, commit on `brr/<task-id>`; brr preserves and publishes that
 task branch for human routing when a remote is configured. Use
 `git switch -c <name>` first only when the work belongs on a different
-branch.
+branch. If a checkout on your chosen name collides with a concurrent
+task that picked the same name, fall back to a unique variant — the
+default `brr/<task-id>` namespace is collision-free, so this only
+matters if you opted out of it.
 
 **Delivery and runtime recovery.** The Task Context Bundle is the hot
 path — it carries the Mode block (stage / source / environment /

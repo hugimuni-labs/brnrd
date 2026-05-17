@@ -1843,3 +1843,179 @@ asserted.
 Plan housekeeping: `plan-agent-orientation-layering.md` was already
 updated by the research commit (slice 3 rejected, follow-ups
 re-routed).
+
+## [2026-05-16] implement | Gate responses thread under their source event
+
+First slice of the concurrent-execution roll-up: make every gate's
+response visibly reply to the message that triggered it, so concurrent
+tasks in the same channel/chat can be told apart at the source. The
+work stays gate-local — no daemon-loop changes, no shared-state
+locking — and lands value today regardless of whether the threading
+work follows.
+
+- **Telegram** ([`gates/telegram.py`](../src/brr/gates/telegram.py)):
+  capture `telegram_message_id` at event creation; thread both the
+  status card's *initial* `sendMessage` and the final response's
+  `_send_with_overflow` via `reply_to_message_id` plus
+  `allow_sending_without_reply: true` (resilient when the source is
+  deleted mid-run). `editMessageText` deliberately doesn't carry the
+  reply pointer — Telegram has no way to change a message's reply
+  target after the fact, so only the first send matters.
+- **Slack** ([`gates/slack.py`](../src/brr/gates/slack.py)): capture
+  `thread_ts` (the parent ts when the source message is itself an
+  in-thread reply) at event creation; thread the final
+  `chat.postMessage` on `slack_thread_ts or slack_ts`. The status card
+  was already threaded — this fixes the existing inconsistency where
+  the card lived in-thread while the response posted at channel
+  level, splitting the conversation in half.
+- **GitHub** ([`gates/github.py`](../src/brr/gates/github.py)):
+  mention-trigger replies now prepend `> Replying to [@author's
+  comment](url)` (or a no-handle variant for deleted users). Issue and
+  PR comment endpoints have no first-class reply primitive, so a
+  blockquote pointer is the closest visible anchor (matches what the
+  GitHub UI's "Quote reply" button generates). Label-trigger replies
+  are unchanged — the issue itself is the source.
+
+Out of scope, surfaced in the same conversation but deliberately not
+done here: (1) the daemon's worker loop is still single-threaded, and
+[`subject-daemon.md`](subject-daemon.md) + the abandoned
+merge-coordinator path on
+[`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) record
+that as a deliberate decision; reversing it should land as its own
+PR with the kb decision rewrite up front rather than slip in as a
+side-effect; (2) the proposed "tell the runner to pick a new branch
+name if checkout fails" prompt nudge was dropped — the default
+worktree flow (`brr/<task-id>` is unique per task id) is immune to
+that collision, so it would have been guidance for an imagined
+problem.
+
+Tests: 414 passing (was 404). +10 new: 4 telegram (event capture
+records `message_id`; delivery threads; legacy no-message-id events
+still deliver; `_send_message` API params), 3 telegram render-update
+(first send threads, edits don't carry the pointer, legacy tasks
+still post), 3 slack (parent `thread_ts` capture from
+`conversations.history`, delivery threads, legacy events still
+post), 2 github (mention-trigger response quotes the source comment;
+falls back without `@handle` when author missing). The existing
+`test_replies_are_sent_to_originating_chat` stub for telegram was
+widened to accept the new keyword.
+
+## [2026-05-16] implement | Concurrent task execution via contention-free state
+
+Second slice of the concurrent-execution roll-up: the daemon worker
+loop is now a bounded `ThreadPoolExecutor` (default `max_workers=2`,
+config-overridable). Reaching that needed a redesign of every shared
+mutable surface the old serial loop was hiding, not just an
+"add-locking" pass — the CRDT-vibes steer the operator put on the
+direction earlier in the conversation. Partitioning by task / event
+removed every cross-worker file write the daemon used to make,
+leaving only two genuinely-shared resources (the auto-land target ref
+and the push branch ref), each guarded by its own per-branch lock.
+
+KB first: [`subject-daemon.md`](subject-daemon.md) gained a
+**Concurrency model** section laying out the partitioning rule and the
+two per-resource locks; the old "Concurrent worker pool. Still
+deferred." bullet was rewritten as a 2026-05-16 lineage breadcrumb
+pointing at the new design.
+[`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) was
+marked **superseded** with a breadcrumb noting the
+merge-coordinator path it described was abandoned and *never came
+back* — the partitioned model replaces the coordinator entirely. New
+canonical design page: [`design-concurrent-execution.md`](design-concurrent-execution.md)
+spells out the contract, the resource→writer table, the
+conversation-layer change, the gate-progress change, the packet flow,
+the threaded loop, the per-branch locks, and the dev_reload
+quiescence semantics under concurrency. `kb/index.md` linked.
+
+Implementation, in shipping order:
+
+- **Conversation layer** ([`conversations.py`](../src/brr/conversations.py)):
+  `.brr/conversations/<key>.ndjson` → `.brr/conversations/<key>/<event-id>.jsonl`.
+  Every record one worker emits lands in that one event's file; the
+  file has exactly one writer for its lifetime. `read_records` globs
+  the directory and merges by `ts`; new `read_event_records` opens
+  just the one file when a caller already knows the event id.
+  Timestamps bumped to microsecond precision so multi-file merge
+  ordering survives sub-second concurrent appends. Single-line
+  `O_APPEND` writes in binary mode are defence in depth — the
+  per-event-file partitioning already guarantees one writer per file,
+  but the kernel atomicity guarantee makes the orphan-fallback path
+  safe too. `safe_filename`/`key_from_filename` renamed to the
+  directory-name variants `safe_dir_name`/`key_from_dir_name`.
+- **Packet flow** ([`updates.py`](../src/brr/updates.py),
+  [`daemon.py`](../src/brr/daemon.py)): `UpdatePacket` gained an
+  explicit `event_id` field so `conversations.append_update` knows
+  which per-event jsonl to write. `daemon._run_worker` now builds a
+  `_WorkerEmit(brr_dir, conv_key, event_id)` closure-like dataclass
+  and calls `emit("packet_type", **payload)` everywhere — the helpers
+  `_emit_new_containers`, `_emit_preserved_containers`,
+  `_record_response_artifact`, `_maybe_kb_maintenance`, and
+  `_push_if_needed` all take an `emit` (or carry `event_id`)
+  argument. The repetition of `updates.emit(brr_dir,
+  updates.UpdatePacket(type=..., conversation_key=conv_key,
+  payload={...}))` is gone, ~120 lines of churn removed.
+- **Gate progress state** ([`gates/telegram.py`](../src/brr/gates/telegram.py),
+  [`gates/slack.py`](../src/brr/gates/slack.py)):
+  `.brr/gates/telegram_progress.json` (single shared dict) →
+  `.brr/gates/telegram/progress/<task-id>.json` (one file per task);
+  same for slack. New helpers `_load_progress_for_task` /
+  `_save_progress_for_task` collapse the old load → mutate → save
+  triplet into a per-task load/save pair. Two concurrent renders
+  for two tasks touch two distinct files; no locks.
+- **Threaded loop** ([`daemon.start`](../src/brr/daemon.py)):
+  the serial body became a dispatch loop on a `ThreadPoolExecutor`
+  capped at `max_workers`. New `_run_worker_and_finalize` wraps the
+  existing `_run_worker` plus the post-task `set_status`, push,
+  and dev_reload-flag bookkeeping that used to live in the main
+  loop body, so each worker thread owns its full pipeline. The
+  main loop reaps completed futures, throttles dispatch to
+  capacity, polls the dev_reload watcher (main thread only — the
+  watcher's snapshot state isn't thread-safe), and waits for
+  `reload_requested and not in_flight` before re-execing. Per-branch
+  locks via a tiny `_branch_lock(name)` helper backed by a
+  `defaultdict(Lock)` guard the `WorktreeEnv` finalize's
+  fast-forward and `_push_if_needed`'s git push.
+- **Config knob**: `max_workers` reads from `.brr/config`
+  (`_DEFAULT_MAX_WORKERS = 2`). Setting `max_workers=1` reproduces
+  the previous serial-v1 behaviour exactly for adopters that don't
+  want concurrency.
+- **AGENTS.md** worktree note: added one sentence under the
+  branch-and-commit nuance paragraph saying that if a runner that
+  opts out of `brr/<task-id>` collides with another concurrent task
+  on the same chosen name, fall back to a unique variant. Kept
+  minimal per the operator's "fine to skip, very minor" steer.
+- **Bundled docs**: `src/brr/docs/conversations.md` updated to
+  describe the directory-of-jsonls layout and the one-writer-per-
+  event invariant; `src/brr/docs/brr-internals.md` updated for the
+  per-task gate progress file paths.
+
+Out-of-scope rejections recorded on `design-concurrent-execution.md`
+so future revisits don't re-litigate them: a merge coordinator, a
+lock on the old aggregated ndjson, an asyncio rewrite, per-task
+subprocess workers.
+
+Tests: 424 passing (was 414). Conversation layout migrated; the
+`safe_filename`/`key_from_filename` tests became
+`safe_dir_name`/`key_from_dir_name`/`conversation_path`/
+`event_log_path` tests. Existing daemon tests updated where they
+depended on `_push_if_needed` running on the main thread (it now
+runs in the worker, so termination via `StopIteration` moved to
+`protocol.list_pending`); the `_maybe_kb_maintenance` signature
+change rippled into two tests. +5 new: 4 in
+`test_daemon_concurrency.py` (two events dispatch in parallel with
+`max_workers=2`; `max_workers=1` enforces serial dispatch; a worker
+crash doesn't kill the daemon; default `max_workers` lands on
+`_DEFAULT_MAX_WORKERS` when config omits it), 1 in
+`test_conversations.py` (two concurrent writers for different event
+ids in the same conversation don't lose records and merge cleanly
+on read). Run-progress had a sub-second rounding bug surfaced by
+microsecond timestamps — `_to_iso` was throwing away microseconds
+when round-tripping `now` through string format, so the live
+elapsed counter was off by up to 1s; fixed by preserving
+microseconds in `_to_iso`.
+
+No migration code. The operator confirmed no users persist across
+this change, so old `.brr/conversations/*.ndjson` and
+`.brr/gates/{telegram,slack}_progress.json` files become inert
+(no readers). They can be deleted by hand or left as historical
+artefacts.

@@ -61,10 +61,15 @@ dive-in map) and are stable until something contradicts them.
   plugin / script-env model, and configuration surface. Tactical
   companion to the env slice of the fleet deck.
 - [Concurrent Worktrees Plan](plan-concurrent-worktrees.md) —
-  *shipped (one-task-per-worktree slice; merge-coordinator path
-  abandoned)*. Original architecture for parallel task execution;
-  read for the reasoning that informed the current `worktree.py` +
-  env protocol shape.
+  *superseded on 2026-05-16 by*
+  [`design-concurrent-execution.md`](design-concurrent-execution.md).
+  Preserved for the reasoning that informed the current `worktree.py`
+  + env protocol shape; the merge-coordinator design described there
+  was abandoned and never came back.
+- [Concurrent execution design](design-concurrent-execution.md) —
+  *accepted on 2026-05-16*. Partitioned per-event/per-task state
+  removes the shared-mutable surfaces a serial daemon was hiding;
+  threaded loop on top synchronises only on per-branch ff and push.
 
 ## Tasks & branching
 

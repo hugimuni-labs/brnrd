@@ -1,6 +1,7 @@
 """Tests for the daemon worker after the triage stage was removed."""
 
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -17,10 +18,6 @@ from _helpers import (
     succeed_invoke,
     write_repo_scaffold,
 )
-
-
-def _stop_after_first_push(_repo_root: Path, **_kwargs) -> None:
-    raise StopIteration
 
 
 def _stub_env_isolated(monkeypatch, tmp_path):
@@ -320,24 +317,36 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
         "---\nid: evt-err\nstatus: pending\n---\nhelp\n", encoding="utf-8",
     )
     statuses: list[str] = []
+    pending_calls: list[int] = []
 
     monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
     monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
     monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
-    monkeypatch.setattr(
-        daemon.protocol,
-        "list_pending",
-        lambda _inbox: [event] if not statuses else [],
-    )
+    # Compress the polling sleep so the loop reaches its second
+    # iteration (where StopIteration is raised) without the test
+    # waiting on the production interval.
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.01)
+
+    def fake_list_pending(_inbox):
+        pending_calls.append(1)
+        if len(pending_calls) == 1:
+            return [event]
+        # Second call breaks the loop in the main thread. The finally
+        # block waits for the in-flight worker to finish before
+        # tearing the pool down, so statuses observed by the worker
+        # thread are present when pytest.raises captures the exit.
+        raise StopIteration
+
+    monkeypatch.setattr(daemon.protocol, "list_pending", fake_list_pending)
     monkeypatch.setattr(daemon.protocol, "set_status", lambda _ev, status: statuses.append(status))
     monkeypatch.setattr(
         daemon,
         "_run_worker",
         lambda *_a, **_k: Task(id="task-err", event_id="evt-err", body="help", status="error"),
     )
-    monkeypatch.setattr(daemon, "_push_if_needed", _stop_after_first_push)
+    monkeypatch.setattr(daemon, "_push_if_needed", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
 
     with pytest.raises(StopIteration):
@@ -486,6 +495,13 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     order: list[str] = []
+    order_lock = threading.Lock()
+
+    def record(label: str) -> None:
+        # Worker thread and main thread both append; the lock keeps
+        # the timeline observable without rare interleaving artefacts.
+        with order_lock:
+            order.append(label)
 
     class FakeWatcher:
         def __init__(self):
@@ -493,7 +509,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
 
         def changed(self):
             self.calls += 1
-            order.append(f"watch:{self.calls}")
+            record(f"watch:{self.calls}")
             return self.calls == 2
 
     watcher = FakeWatcher()
@@ -508,10 +524,14 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(daemon.reload_mod, "reexec", _stop_after_reexec)
     monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
-    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: order.append("write-pid"))
-    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: order.append("clear-pid"))
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: record("write-pid"))
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: record("clear-pid"))
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    # Short scan interval so the loop's second iteration (where the
+    # watcher reports a change and the now-empty pool triggers
+    # reexec) lands quickly after the worker thread finishes.
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.05)
     monkeypatch.setattr(
         daemon.protocol,
         "list_pending",
@@ -520,31 +540,35 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.protocol,
         "set_status",
-        lambda _event, status: order.append(f"status:{status}"),
+        lambda _event, status: record(f"status:{status}"),
     )
-    monkeypatch.setattr(
-        daemon,
-        "_run_worker",
-        lambda *_args, **_kwargs: (
-            order.append("worker")
-            or Task(
-                id="task-reload",
-                event_id="evt-reload",
-                body="help",
-                status="done",
-            )
-        ),
-    )
+
+    def fake_run_worker(*_args, **_kwargs):
+        record("worker")
+        return Task(
+            id="task-reload",
+            event_id="evt-reload",
+            body="help",
+            status="done",
+        )
+
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
     monkeypatch.setattr(
         daemon,
         "_push_if_needed",
-        lambda *_args, **_kwargs: order.append("push"),
+        lambda *_args, **_kwargs: record("push"),
     )
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
 
     with pytest.raises(StopIteration):
         daemon.start(tmp_path, dev_reload=True)
 
+    # The dispatch order is deterministic: the main thread records
+    # write-pid → watch:1 → status:processing → submits the worker;
+    # the worker thread records worker → status:done → push during
+    # the scan-interval sleep; the next iteration records watch:2 →
+    # observes the empty pool → reexecs; the finally block records
+    # clear-pid.
     assert order == [
         "write-pid",
         "watch:1",
@@ -923,24 +947,23 @@ def test_maybe_kb_maintenance_emits_done_packet(tmp_path, monkeypatch):
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
 
+    emit = daemon._WorkerEmit(brr_dir, "telegram:1:", "evt-x")
     daemon._maybe_kb_maintenance(
         repo, repo, {}, "codex",
-        brr_dir=brr_dir, conv_key="telegram:1:", task_id="task-x",
+        emit=emit, task_id="task-x",
     )
 
     from brr import conversations
-    log_path = conversations.conversation_path(brr_dir, "telegram:1:")
-    assert log_path.exists()
     records = [
-        line for line in log_path.read_text(encoding="utf-8").splitlines()
-        if '"kb_maintenance_done"' in line
+        r for r in conversations.read_records(brr_dir, "telegram:1:")
+        if r.get("type") == "kb_maintenance_done"
     ]
     assert len(records) == 1
     record = records[0]
-    assert '"commits": 1' in record
-    assert '"files": 1' in record
-    assert '"ok": true' in record
-    assert '"task_id": "task-x"' in record
+    assert record["commits"] == 1
+    assert record["files"] == 1
+    assert record["ok"] is True
+    assert record["task_id"] == "task-x"
 
 
 def test_maybe_kb_maintenance_emits_clean_packet_when_no_edits(tmp_path, monkeypatch):
@@ -971,20 +994,20 @@ def test_maybe_kb_maintenance_emits_clean_packet_when_no_edits(tmp_path, monkeyp
 
     monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
 
+    emit = daemon._WorkerEmit(brr_dir, "telegram:1:", "evt-y")
     daemon._maybe_kb_maintenance(
         repo, repo, {}, "codex",
-        brr_dir=brr_dir, conv_key="telegram:1:", task_id="task-y",
+        emit=emit, task_id="task-y",
     )
 
     from brr import conversations
-    log_path = conversations.conversation_path(brr_dir, "telegram:1:")
     records = [
-        line for line in log_path.read_text(encoding="utf-8").splitlines()
-        if '"kb_maintenance_done"' in line
+        r for r in conversations.read_records(brr_dir, "telegram:1:")
+        if r.get("type") == "kb_maintenance_done"
     ]
     assert len(records) == 1
-    assert '"commits": 0' in records[0]
-    assert '"files": 0' in records[0]
+    assert records[0]["commits"] == 0
+    assert records[0]["files"] == 0
 
 
 def test_maybe_kb_maintenance_skips_packet_when_no_routing_info(tmp_path, monkeypatch):
