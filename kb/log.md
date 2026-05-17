@@ -2264,3 +2264,17 @@ page, and `pip install brr` signals dated Python next to `uvx`. Ranked
 adoption moves put a 60-90s demo video first and the deps change at #6.
 No code or README touched in this pass; natural follow-ups are a
 `decision-runtime-dependencies.md` and a `plan-readme-rework.md`.
+## [2026-05-17] implement | GitHub response footer links kb result files
+
+GitHub delivery now appends direct blob links for committed `kb/*.md`
+result pages in the final response footer, next to the existing branch /
+compare links. The footer computes changed kb pages by diffing the
+task's pinned pre-run base (`seed_oid`, with fallbacks for older task
+files) against the finalized branch, filters out `kb/index.md` and
+`kb/log.md`, and stays quiet on git errors or tasks without committed kb
+articles. The runtime `.brr/responses/<event-id>.md` file remains delivery
+plumbing and is not linked.
+
+Docs updated in `subject-daemon.md` and `execution-map.md`. Tests: 453
+passing. +2 in `test_github_gate.py` cover preserved task branches and
+auto-landed branches.

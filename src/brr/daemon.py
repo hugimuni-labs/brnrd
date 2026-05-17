@@ -572,6 +572,8 @@ def _run_worker(
         if branch_plan.seed_ref
         else None
     )
+    if task_pre_head:
+        task.meta["seed_oid"] = task_pre_head
 
     emit(
         "env_prepared",

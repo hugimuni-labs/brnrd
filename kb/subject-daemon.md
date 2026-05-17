@@ -154,6 +154,15 @@ like opening a PR / MR belongs to a post-task hook, deferred so its
 contract can be designed honestly rather than wedged into the
 default prompt.
 
+GitHub final-response delivery also decorates the runner's stdout with
+a branch footer. That footer now includes direct links to changed
+`kb/*.md` result pages on the finalized branch, excluding `kb/index.md`
+and `kb/log.md` so research / design / subject articles are surfaced
+without forcing the operator to browse the branch tree by hand. The
+runtime response file under `.brr/responses/` remains delivery plumbing
+and is deleted after the gate posts the comment; it is not a durable
+artifact to link.
+
 ## Process control
 
 Process control is deliberately local:

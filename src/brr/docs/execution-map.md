@@ -73,6 +73,13 @@ branch push. Gates deliver `done` events and clean up the inbox and
 response files after a successful send, while the progress card can
 continue to show post-response housekeeping.
 
+Gates may decorate delivery after the branch is finalized. The GitHub
+gate appends a branch / compare footer to pushed tasks, and when the
+task changed durable `kb/*.md` result pages it adds direct blob links
+for those pages (excluding `kb/index.md` and `kb/log.md`). The
+`.brr/responses/<event-id>.md` file itself is runtime plumbing, not a
+committed result artifact.
+
 If the runner exits cleanly but stdout is empty, the daemon retries up
 to `response_retries` times before failing the task. Hard failures
 (non-zero exit, timeout — controlled by `runner.timeout_seconds`,
@@ -132,7 +139,9 @@ Its frontmatter contains:
 
 - `event_id` → links to `.brr/inbox/` and `.brr/responses/`
 - `branch_name` → the git branch used
-- `seed_ref` / `expected_publish_branch` → the resolved publish plan
+- `seed_ref` / `seed_oid` / `expected_publish_branch` /
+  `expected_remote_oid` → the resolved publish plan, pinned pre-run
+  base commit, and optional remote lease anchor
 - `publish_branch` / `publish_status` → recorded by finalize for the
   publish step (status is `ready` | `nothing` | `detached` |
   `conflict`)

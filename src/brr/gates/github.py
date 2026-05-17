@@ -806,18 +806,34 @@ def _find_task_for_event(brr_dir: Path, event_id: str) -> Task | None:
     return None
 
 
-def _branch_footer(repo: str, task: Task) -> str:
+_RESULT_FILE_LIMIT = 6
+_RESULT_FILE_EXCLUDES = frozenset({"kb/index.md", "kb/log.md"})
+
+
+def _branch_footer(repo: str, task: Task, repo_root: Path | None = None) -> str:
     """Return a Markdown footer with branch / PR links, or empty string.
 
     Only appended after finalization has identified the branch that
     should be published. The ``?expand=1`` on the compare URL pre-fills
     GitHub's PR-creation form so clicking it is one step from merging.
+    When the task committed durable kb pages, include direct blob links
+    so a reader can open the long-form result without hunting through
+    the branch tree.
     """
     branch = task.meta.get("publish_branch")
     if not branch:
         return ""
     base_url = f"https://github.com/{repo}"
     tree_url = f"{base_url}/tree/{urllib.parse.quote(branch, safe='/')}"
+    result_files = _result_file_links(repo, task, repo_root, str(branch))
+    result_line = _format_result_files_line(result_files)
+    landed = task.meta.get("landed_branch")
+    if landed:
+        return (
+            f"\n\n---\n"
+            f"Branch [`{branch}`]({tree_url}) landed on `{landed}`."
+            f"{result_line}"
+        )
     compare_url = (
         f"{base_url}/compare/{urllib.parse.quote(branch, safe='/')}?expand=1"
     )
@@ -825,7 +841,95 @@ def _branch_footer(repo: str, task: Task) -> str:
         f"\n\n---\n"
         f"Branch: [`{branch}`]({tree_url}) · "
         f"[Compare & open PR ↗]({compare_url})"
+        f"{result_line}"
     )
+
+
+def _result_file_links(
+    repo: str,
+    task: Task,
+    repo_root: Path | None,
+    branch: str,
+) -> list[str]:
+    """Return Markdown links for committed kb result pages on *branch*.
+
+    The runtime response file is deleted after delivery; durable
+    long-form results are the committed kb pages. Index and log edits are
+    deliberately filtered out because they are navigation/changelog noise,
+    not the article the operator wants to open.
+    """
+    if repo_root is None:
+        return []
+    paths = _result_files_for_task(repo_root, task, branch)
+    if not paths:
+        return []
+    base_url = f"https://github.com/{repo}"
+    quoted_branch = urllib.parse.quote(branch, safe="/")
+    links: list[str] = []
+    for path in paths[:_RESULT_FILE_LIMIT]:
+        quoted_path = urllib.parse.quote(path, safe="/")
+        label = Path(path).name
+        url = f"{base_url}/blob/{quoted_branch}/{quoted_path}"
+        links.append(f"[`{label}`]({url})")
+    remaining = len(paths) - _RESULT_FILE_LIMIT
+    if remaining > 0:
+        links.append(f"{remaining} more in the branch")
+    return links
+
+
+def _format_result_files_line(links: list[str]) -> str:
+    if not links:
+        return ""
+    label = "Result file" if len(links) == 1 else "Result files"
+    return f"\n{label}: " + " · ".join(links)
+
+
+def _result_files_for_task(repo_root: Path, task: Task, branch: str) -> list[str]:
+    base_ref = _result_files_base_ref(task)
+    if not base_ref:
+        return []
+    try:
+        result = subprocess.run(
+            [
+                "git", "diff", "--name-only", "-z",
+                "--diff-filter=ACMR",
+                f"{base_ref}..{branch}",
+                "--", "kb/",
+            ],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0 or not result.stdout:
+        return []
+    return _filter_result_file_paths(result.stdout.split("\0"))
+
+
+def _result_files_base_ref(task: Task) -> str | None:
+    """Return the pre-task ref to diff against for result-file links."""
+    for key in ("seed_oid", "auto_land_old_oid", "seed_ref"):
+        raw = task.meta.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
+def _filter_result_file_paths(paths: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        clean = path.strip()
+        if (
+            not clean
+            or clean in seen
+            or clean in _RESULT_FILE_EXCLUDES
+            or not clean.startswith("kb/")
+            or not clean.endswith(".md")
+        ):
+            continue
+        seen.add(clean)
+        out.append(clean)
+    return sorted(out)
 
 
 def _deliver_responses(
@@ -846,7 +950,7 @@ def _deliver_responses(
             continue
         task = _find_task_for_event(brr_dir, eid)
         if task is not None:
-            footer = _branch_footer(repo, task)
+            footer = _branch_footer(repo, task, brr_dir.parent)
             if footer:
                 body = body.rstrip() + footer + "\n"
         threaded_body = _thread_reply_body(event, body)
