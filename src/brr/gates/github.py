@@ -756,6 +756,46 @@ def _format_event_body(title: str, body: str) -> str:
 # ── Response delivery ──────────────────────────────────────────────
 
 
+def _find_task_for_event(brr_dir: Path, event_id: str) -> Task | None:
+    """Scan .brr/tasks/ for the task whose event_id matches *event_id*."""
+    tasks_dir = brr_dir / "tasks"
+    if not tasks_dir.exists():
+        return None
+    for path in tasks_dir.glob("*.md"):
+        task = Task.from_file(path)
+        if task and task.event_id == event_id:
+            return task
+    return None
+
+
+def _branch_footer(repo: str, task: Task) -> str:
+    """Return a Markdown footer with branch / PR links, or empty string.
+
+    Only appended when the runner actually pushed a branch. The
+    ``?expand=1`` on the compare URL pre-fills GitHub's PR-creation form
+    so clicking it is one step from merging.
+    """
+    branch = task.meta.get("changed_branch") or task.meta.get("branch_name")
+    if not branch:
+        return ""
+    base_url = f"https://github.com/{repo}"
+    tree_url = f"{base_url}/tree/{urllib.parse.quote(branch, safe='/')}"
+    landed = task.meta.get("landed_branch")
+    if landed:
+        return (
+            f"\n\n---\n"
+            f"Branch [`{branch}`]({tree_url}) landed on `{landed}`."
+        )
+    compare_url = (
+        f"{base_url}/compare/{urllib.parse.quote(branch, safe='/')}?expand=1"
+    )
+    return (
+        f"\n\n---\n"
+        f"Branch: [`{branch}`]({tree_url}) · "
+        f"[Compare & open PR ↗]({compare_url})"
+    )
+
+
 def _deliver_responses(
     brr_dir: Path,
     inbox_dir: Path,
@@ -772,6 +812,11 @@ def _deliver_responses(
         if not repo or number is None:
             print(f"[brr:github] delivery error for {eid}: missing repo / issue_number")
             continue
+        task = _find_task_for_event(brr_dir, eid)
+        if task is not None:
+            footer = _branch_footer(repo, task)
+            if footer:
+                body = body.rstrip() + footer + "\n"
         threaded_body = _thread_reply_body(event, body)
         try:
             _api_post(
