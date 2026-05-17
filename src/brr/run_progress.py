@@ -1,8 +1,9 @@
 """Run progress — gate-agnostic projection over conversation log records.
 
-Conversation logs (``.brr/conversations/<key>.ndjson``) capture every
-fact the daemon emits about an event/task: the event arrival, the
-task row, lifecycle update packets, and artifact records. This module
+Conversation logs (under ``.brr/conversations/<safe-key>/``, one
+``<event-id>.jsonl`` per pipeline) capture every fact the daemon emits
+about an event/task: the event arrival, the task row, lifecycle update
+packets, and artifact records. This module
 folds those records into a compact ``RunProgressView`` that gates and
 local diagnostics can render the same way.
 

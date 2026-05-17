@@ -23,7 +23,9 @@ Each record carries ``ts`` (microsecond-precision UTC ISO 8601) plus a
 ``kind`` discriminator (``event``, ``task``, ``artifact``, ``update``)
 plus type-specific fields. Reading projects one task's lifecycle by
 opening just its ``<event-id>.jsonl``; reading the full conversation
-context glob+merges every file in the directory, sorted by ``ts``.
+context merges every file in the directory by ``ts``. Tailing only the
+latest rows uses ``read_recent``, which avoids loading whole files
+when *limit* is small (see that function's docstring).
 
 Single-line ``O_APPEND`` writes in binary mode rely on the kernel's
 guarantee that the offset advance and the write happen atomically
@@ -37,12 +39,14 @@ kb page rather than asking brr for a typed identity field.
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 # ── Time helpers ─────────────────────────────────────────────────────
@@ -241,6 +245,70 @@ def _records_from_file(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _iter_lines_reversed(path: Path) -> Iterator[str]:
+    """Yield non-empty stripped lines from *path*, last line first.
+
+    Reads the file in binary chunks from EOF so callers do not load
+    whole multi-megabyte jsonl files just to tail a few records.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size == 0:
+        return
+    block = 8192
+    try:
+        fh = path.open("rb")
+    except OSError:
+        return
+    try:
+        incomplete = b""
+        pos = size
+        while pos > 0:
+            take = min(block, pos)
+            pos -= take
+            fh.seek(pos)
+            buf = fh.read(take) + incomplete
+            parts = buf.split(b"\n")
+            incomplete = parts[0]
+            for raw in reversed(parts[1:]):
+                raw = raw.strip()
+                if raw:
+                    yield raw.decode("utf-8", errors="replace")
+        tail = incomplete.strip()
+        if tail:
+            yield tail.decode("utf-8", errors="replace")
+    finally:
+        fh.close()
+
+
+def _iter_records_reversed(path: Path) -> Iterator[dict[str, Any]]:
+    """Parse jsonl from *path* last record first (reverse physical order)."""
+    for line in _iter_lines_reversed(path):
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+
+def _ts_epoch(record: dict[str, Any]) -> float:
+    """UTC epoch seconds for sorting; missing or bad ``ts`` → -inf (oldest)."""
+    ts = record.get("ts")
+    if not isinstance(ts, str) or not ts:
+        return float("-inf")
+    try:
+        if ts.endswith("Z"):
+            dt = datetime.fromisoformat(ts[:-1]).replace(tzinfo=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return float("-inf")
+
+
 def _ts_key(record: dict[str, Any]) -> str:
     ts = record.get("ts")
     return ts if isinstance(ts, str) else ""
@@ -267,11 +335,41 @@ def read_records(brr_dir: Path, key: str) -> list[dict[str, Any]]:
 def read_recent(
     brr_dir: Path, key: str, limit: int = 10,
 ) -> list[dict[str, Any]]:
-    """Return the last *limit* records from the conversation log."""
-    records = read_records(brr_dir, key)
-    if limit <= 0 or len(records) <= limit:
-        return records
-    return records[-limit:]
+    """Return the last *limit* records from the conversation log, oldest first.
+
+    Merges globally by ``ts`` without building the full sorted history when
+    *limit* > 0: each ``<event-id>.jsonl`` is scanned from the end in
+    fixed-size chunks, and a small heap selects the newest *limit* rows.
+    This matches :func:`read_records` as long as ``ts`` is non-decreasing
+    within each file (single writer, monotonic clock — see
+    ``kb/design-concurrent-execution.md``).
+
+    *limit* <= 0 means no cap — same as :func:`read_records` (full merge
+    and sort).
+    """
+    if limit <= 0:
+        return read_records(brr_dir, key)
+    files = _iter_log_files(brr_dir, key)
+    if not files:
+        return []
+    rev_iters = [_iter_records_reversed(p) for p in files]
+    heap: list[tuple[float, int, int, dict[str, Any]]] = []
+    seq = 0
+    for i, it in enumerate(rev_iters):
+        rec = next(it, None)
+        if rec is not None:
+            heapq.heappush(heap, (-_ts_epoch(rec), seq, i, rec))
+            seq += 1
+    picked: list[dict[str, Any]] = []
+    while heap and len(picked) < limit:
+        _, _, fi, rec = heapq.heappop(heap)
+        picked.append(rec)
+        nxt = next(rev_iters[fi], None)
+        if nxt is not None:
+            heapq.heappush(heap, (-_ts_epoch(nxt), seq, fi, nxt))
+            seq += 1
+    picked.reverse()
+    return picked
 
 
 def read_event_records(
