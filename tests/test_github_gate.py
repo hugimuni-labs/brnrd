@@ -969,3 +969,95 @@ def test_render_update_noop_when_no_token(tmp_path, monkeypatch):
     github.render_update(brr_dir, pkt)
 
     assert posts == []
+
+
+# ── branch footer + delivery ─────────────────────────────────────────
+
+
+def test_branch_footer_returns_empty_when_no_branch():
+    task = Task(id="t", event_id="e", body="b", source="github", meta={})
+    assert github._branch_footer("o/r", task) == ""
+
+
+def test_branch_footer_includes_tree_and_compare_links():
+    task = Task(
+        id="t", event_id="e", body="b", source="github",
+        meta={"changed_branch": "brr/task-abc"},
+    )
+    footer = github._branch_footer("owner/repo", task)
+    assert "brr/task-abc" in footer
+    assert "https://github.com/owner/repo/tree/brr/task-abc" in footer
+    assert "compare/brr/task-abc?expand=1" in footer
+    assert "Compare & open PR" in footer
+
+
+def test_branch_footer_shows_landed_when_auto_merged():
+    task = Task(
+        id="t", event_id="e", body="b", source="github",
+        meta={"changed_branch": "brr/task-abc", "landed_branch": "main"},
+    )
+    footer = github._branch_footer("owner/repo", task)
+    assert "landed on `main`" in footer
+    assert "expand=1" not in footer
+
+
+def test_find_task_for_event(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    _write_task(brr_dir, "task-find-me", repo="o/r", issue_number=1)
+    # Give it a known event_id by rewriting the frontmatter:
+    task_path = brr_dir / "tasks" / "task-find-me.md"
+    text = task_path.read_text()
+    text = text.replace("event_id: evt-001", "event_id: evt-target")
+    task_path.write_text(text)
+
+    found = github._find_task_for_event(brr_dir, "evt-target")
+    assert found is not None
+    assert found.id == "task-find-me"
+
+    assert github._find_task_for_event(brr_dir, "evt-unknown") is None
+
+
+def test_deliver_responses_appends_branch_footer(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {"token": "tok", "repo": "owner/repo"})
+
+    # Create a task file with a pushed branch.
+    task = Task(
+        id="task-deliver",
+        event_id="evt-deliver",
+        body="do something",
+        source="github",
+        meta={"github_repo": "owner/repo", "github_issue_number": 5,
+              "changed_branch": "brr/task-deliver"},
+    )
+    (brr_dir / "tasks").mkdir(parents=True, exist_ok=True)
+    (brr_dir / "tasks" / "task-deliver.md").write_text(task.to_frontmatter())
+
+    # Create a done event and a response file.
+    protocol.create_event(
+        inbox, source="github", body="do something",
+        github_repo="owner/repo",
+        github_kind="issue",
+        github_issue_number=5,
+    )
+    event = protocol.list_pending(inbox)[0]
+    # Patch the event's event_id field to match the task.
+    text = event["_path"].read_text()
+    text = text.replace(f"id: {event['id']}", f"id: evt-deliver")
+    event["_path"].write_text(text)
+
+    protocol.set_status(event, "done")
+    protocol.write_response(responses, "evt-deliver", "The work is done.")
+
+    posts: list[tuple[str, dict]] = []
+    monkeypatch.setattr(github, "_api_post", lambda token, path, body: posts.append((path, body)))
+
+    github._deliver_responses(brr_dir, inbox, responses, "tok")
+
+    assert len(posts) == 1
+    body_text = posts[0][1]["body"]
+    assert "The work is done." in body_text
+    assert "brr/task-deliver" in body_text
+    assert "compare/brr/task-deliver?expand=1" in body_text
