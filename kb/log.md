@@ -2019,3 +2019,28 @@ this change, so old `.brr/conversations/*.ndjson` and
 `.brr/gates/{telegram,slack}_progress.json` files become inert
 (no readers). They can be deleted by hand or left as historical
 artefacts.
+
+## [2026-05-17] implement | GitHub gate: any-trigger + setup UX fix
+
+Fixed two issues in `src/brr/gates/github.py`:
+
+**Setup UX**: The `bind()` prompts said "empty to disable" but pressing
+Enter actually accepted the default. Added `_prompt_trigger()` helper;
+prompts now say "off to disable", Enter accepts the bracketed value, and
+`off`/`none`/`disable` removes the trigger. No behaviour change — just
+accurate copy and a cleaner abstraction.
+
+**Any trigger**: Added a third trigger `any` (boolean). When enabled,
+`_poll_any_activity()` polls all issues, PRs (`github_kind=pr`,
+`branch_target` from PR head), and comments (`github_kind=issue-comment`
+or `pr-comment`) without label/mention filtering. Bot's own comments are
+still filtered. Overrides label and mention in `_loop_once`. Setup adds an
+"any" prompt first with a token-cost warning; answering `on` skips the
+label/mention prompts. Off by default.
+
+Tests: 432 passing (was 424). +10 new in `test_github_gate.py`: 4 for
+`bind()` UX (Enter accepts default, off disables, typed value overrides,
+any skips subsequent prompts), 5 for `_poll_any_activity` (issue event,
+PR event with `branch_target`, comment events with bot-self-filter, any
+overrides label/mention routing).
+

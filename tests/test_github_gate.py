@@ -611,3 +611,236 @@ def test_format_event_body_combines_title_and_body():
     assert out.startswith("# Fix bug\n\nSteps to reproduce")
     assert github._format_event_body("title only", "") == "# title only\n"
     assert github._format_event_body("", "body only") == "body only\n"
+
+
+# ── bind() UX: _prompt_trigger and default handling ────────────────
+
+
+def _make_inputs(*values):
+    """Return an ``input`` replacement that yields ``values`` in order."""
+    it = iter(values)
+    return lambda _prompt: next(it)
+
+
+def test_bind_enter_accepts_label_and_mention_defaults(tmp_path, monkeypatch):
+    """Pressing Enter at each trigger prompt accepts the bracketed default."""
+    brr_dir = tmp_path / ".brr"
+    github._save_state(brr_dir, {"token": "t", "bot_login": "brr-bot"})
+    monkeypatch.setattr(github, "autodetect_repo", lambda _: None)
+    # Inputs: repo, any-prompt (Enter=skip), label (Enter=brr), mention (Enter=@brr-bot)
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", ""))
+
+    github.bind(brr_dir)
+
+    state = github._load_state(brr_dir)
+    assert state["triggers"] == {"label": "brr", "mention": "@brr-bot"}
+
+
+def test_bind_off_disables_label(tmp_path, monkeypatch):
+    """Typing 'off' at the label prompt removes the label trigger."""
+    brr_dir = tmp_path / ".brr"
+    github._save_state(brr_dir, {"token": "t", "bot_login": "b", "triggers": {"label": "brr"}})
+    monkeypatch.setattr(github, "autodetect_repo", lambda _: None)
+    # repo, any-skip, label=off, mention=Enter
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "off", ""))
+
+    github.bind(brr_dir)
+
+    state = github._load_state(brr_dir)
+    assert "label" not in state["triggers"]
+    assert state["triggers"]["mention"] == "@brr-bot"
+
+
+def test_bind_typed_value_overrides_default(tmp_path, monkeypatch):
+    """Typing a custom label string uses that string, not the default."""
+    brr_dir = tmp_path / ".brr"
+    github._save_state(brr_dir, {"token": "t", "bot_login": "b"})
+    monkeypatch.setattr(github, "autodetect_repo", lambda _: None)
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "my-label", "off"))
+
+    github.bind(brr_dir)
+
+    state = github._load_state(brr_dir)
+    assert state["triggers"] == {"label": "my-label"}
+
+
+def test_bind_any_trigger_saves_and_skips_label_mention_prompts(tmp_path, monkeypatch, capsys):
+    """Enabling 'any' saves triggers={'any': True} and skips subsequent prompts."""
+    brr_dir = tmp_path / ".brr"
+    github._save_state(brr_dir, {"token": "t", "bot_login": "b"})
+    monkeypatch.setattr(github, "autodetect_repo", lambda _: None)
+    # repo, any=on — no further prompts expected
+    inputs = _make_inputs("owner/repo", "on")
+    monkeypatch.setattr("builtins.input", inputs)
+
+    github.bind(brr_dir)
+
+    state = github._load_state(brr_dir)
+    assert state["triggers"] == {"any": True}
+    assert "['any']" in capsys.readouterr().out
+
+
+# ── any trigger pollers ───────────────────────────────────────────
+
+
+def test_any_trigger_emits_issue_event(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"any": True},
+        "cursor": {"any_issues_since": "2026-01-01T00:00:00Z"},
+    })
+
+    def fake_api_get(token, path, params=None):
+        if path == "/repos/owner/name/issues":
+            return [
+                {
+                    "number": 5,
+                    "title": "A plain issue",
+                    "body": "details here",
+                    "user": {"login": "alice"},
+                    "html_url": "https://github.com/owner/name/issues/5",
+                    "updated_at": "2026-05-15T10:00:00Z",
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(github, "_api_get", fake_api_get)
+
+    github._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["github_kind"] == "issue"
+    assert ev["github_issue_number"] == 5
+    assert ev["github_trigger"] == "any"
+    assert "branch_target" not in ev
+
+
+def test_any_trigger_emits_pr_event_with_branch_target(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"any": True},
+        "cursor": {"any_issues_since": "2026-01-01T00:00:00Z"},
+    })
+
+    def fake_api_get(token, path, params=None):
+        if path == "/repos/owner/name/issues":
+            return [
+                {
+                    "number": 10,
+                    "title": "My PR",
+                    "body": "a change",
+                    "user": {"login": "bob"},
+                    "html_url": "https://github.com/owner/name/pull/10",
+                    "pull_request": {"url": "https://api.github.com/repos/owner/name/pulls/10"},
+                    "updated_at": "2026-05-15T11:00:00Z",
+                },
+            ]
+        if path == "/repos/owner/name/pulls/10":
+            return {"head": {"ref": "feature-y"}}
+        return []
+
+    monkeypatch.setattr(github, "_api_get", fake_api_get)
+
+    github._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["github_kind"] == "pr"
+    assert ev["github_pr_number"] == 10
+    assert ev["branch_target"] == "feature-y"
+    assert ev["github_trigger"] == "any"
+
+
+def test_any_trigger_emits_comment_events_skipping_bot(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "o/r",
+        "triggers": {"any": True},
+        "cursor": {"any_comments_since": "2026-01-01T00:00:00Z"},
+    })
+
+    def fake_api_get(token, path, params=None):
+        if path == "/repos/o/r/issues/comments":
+            return [
+                {
+                    "id": 100,
+                    "body": "human comment",
+                    "user": {"login": "alice"},
+                    "issue_url": "https://api.github.com/repos/o/r/issues/3",
+                    "html_url": "https://github.com/o/r/issues/3#issuecomment-100",
+                    "updated_at": "2026-05-15T12:00:00Z",
+                },
+                {
+                    "id": 101,
+                    "body": "bot's own reply — must be filtered",
+                    "user": {"login": "brr-bot"},
+                    "issue_url": "https://api.github.com/repos/o/r/issues/3",
+                    "html_url": "https://github.com/o/r/issues/3#issuecomment-101",
+                    "updated_at": "2026-05-15T12:01:00Z",
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(github, "_api_get", fake_api_get)
+
+    github._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    assert events[0]["github_comment_id"] == 100
+    assert events[0]["github_kind"] == "issue-comment"
+    assert events[0]["github_trigger"] == "any"
+
+
+def test_any_trigger_overrides_label_and_mention_in_loop(tmp_path, monkeypatch):
+    """When 'any' is set, label/mention pollers must not run."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "o/r",
+        "triggers": {"any": True, "label": "brr", "mention": "@brr-bot"},
+    })
+
+    poll_any_calls: list[str] = []
+    poll_label_calls: list[str] = []
+    poll_mention_calls: list[str] = []
+
+    monkeypatch.setattr(
+        github, "_poll_any_activity",
+        lambda *a, **kw: poll_any_calls.append("any"),
+    )
+    monkeypatch.setattr(
+        github, "_poll_label_trigger",
+        lambda *a, **kw: poll_label_calls.append("label"),
+    )
+    monkeypatch.setattr(
+        github, "_poll_mention_trigger",
+        lambda *a, **kw: poll_mention_calls.append("mention"),
+    )
+    monkeypatch.setattr(github, "_deliver_responses", lambda *a, **kw: None)
+
+    github._loop_once(brr_dir, inbox, responses)
+
+    assert poll_any_calls == ["any"]
+    assert poll_label_calls == []
+    assert poll_mention_calls == []
