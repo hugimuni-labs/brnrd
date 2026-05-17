@@ -2069,3 +2069,44 @@ Tests: 451 passing (was 449). +4 new in `test_envs.py`: SSH mount present
 when directory exists; GitHub token injected as key=value when task source is
 `github`; no injection for non-github tasks; key=value form absent (bare
 passthrough used instead) when `GITHUB_TOKEN` is already in daemon env.
+
+## [2026-05-18] fix | Branch plan: event branches seed from remote ref
+
+PR #14's second run produced a tangled branch — the daemon's pre-task ff
+was refused on a non-fast-forward (`origin/brr/runner-ergonomics-review`
+diverged from the local branch), then the worker seeded from the **local**
+branch and rebased onto the local `origin/...` tracking ref instead of
+`origin/main`. The result was three commits that re-implemented main
+commits under different SHAs, plus the three genuine new ones.
+
+Root cause in `branching._plan_for_target`: when an event names a target
+branch, the seed was `target` (the local branch), with the local oid as
+the ff anchor. If the local branch had diverged from the remote, the
+worker started from a stale point — and the daemon's sync hook is
+ff-only, so it does nothing about divergence; it just records it.
+
+Fix: `_plan_for_target` gained a `prefer_remote` parameter (default
+False). `resolve_branch_plan` passes `prefer_remote=True` for the
+event-branch path only. When set, the plan looks up
+`<remote>/<target>` via `gitops.rev_parse`; if present, that becomes
+the `seed_ref` and `expected_old_oid`. The `fallback:current` path
+keeps the host-branch behaviour — that mode is the self-development
+knob where the host is the source of truth.
+
+Salvage: rebuilt `brr/runner-ergonomics-review` by cherry-picking the
+5 genuine commits onto `origin/main` and force-pushing with
+`--force-with-lease`. The three duplicate-of-main commits were dropped.
+
+Known gap recorded here so the next run doesn't re-derive it: an agent
+that rebases or otherwise rewrites a published task branch produces a
+non-fast-forward push, and brr's auto-push uses plain `git push` (no
+force). Today's mitigation is the new remote-seed: agents won't *need*
+to rebase a PR branch to catch up, because the worker already starts
+from the forge-visible state. If a future task type genuinely needs to
+rewrite published history (squash, fixup), it will require an explicit
+force-with-lease publishing story; not in scope for this fix.
+
+Tests: 454 passing (was 451). +3 in `test_branching.py`: event branch
+seeds from `origin/<branch>` when the local copy has diverged from the
+remote ref; falls back to the local branch when no remote ref exists;
+`fallback:current` ignores the remote (self-development mode).
