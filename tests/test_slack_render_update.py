@@ -72,8 +72,8 @@ def test_render_update_posts_message_on_task_created(tmp_path, monkeypatch):
     assert "docker" in params["text"]
     assert "preparing" in params["text"]
     assert task.id not in params["text"]
-    state = slack._load_progress_state(brr_dir)
-    assert state[task.id]["ts"] == "1700000.0500"
+    entry = slack._load_progress_for_task(brr_dir, task.id)
+    assert entry["ts"] == "1700000.0500"
 
 
 def test_render_update_updates_existing_message(tmp_path, monkeypatch):
@@ -175,3 +175,137 @@ def test_render_update_skips_when_token_missing(tmp_path, monkeypatch):
     _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
           branch="auto", env="host")
     assert api_calls == []
+
+
+# ── Event capture and final response delivery ──────────────────────
+
+
+def test_loop_captures_parent_thread_ts(tmp_path, monkeypatch):
+    """A message posted inside an existing thread surfaces ``thread_ts``.
+
+    Slack's ``conversations.history`` returns the parent message's ts
+    via the ``thread_ts`` field on replies. The gate captures it so both
+    the progress card and the final response anchor under the same
+    thread root instead of starting a new sibling thread.
+    """
+    from brr import protocol
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    slack._save_state(brr_dir, {"token": "secret", "channel": "C123"})
+
+    def fake_slack_api(token, method, params=None):
+        if method == "conversations.history":
+            return {
+                "ok": True,
+                "messages": [
+                    # Top-level message (no thread_ts) — captured plain.
+                    {"ts": "1700.0001", "user": "U1", "text": "first"},
+                    # Reply inside an existing thread — parent ts must
+                    # ride through as slack_thread_ts.
+                    {
+                        "ts": "1700.0050",
+                        "thread_ts": "1700.0001",
+                        "user": "U2",
+                        "text": "second, in-thread",
+                    },
+                ],
+            }
+        return {"ok": True}
+
+    monkeypatch.setattr(slack, "_slack_api", fake_slack_api)
+    slack._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    events = sorted(
+        protocol.list_pending(inbox_dir), key=lambda ev: ev["slack_ts"],
+    )
+    assert [ev["body"] for ev in events] == ["first", "second, in-thread"]
+    # Plain top-level post has no parent thread.
+    assert events[0]["slack_thread_ts"] == ""
+    # In-thread reply carries the parent ts.
+    assert events[1]["slack_thread_ts"] == "1700.0001"
+
+
+def test_response_delivery_threads_under_source_message(tmp_path, monkeypatch):
+    """Final responses post with ``thread_ts`` matching the source.
+
+    Previously the progress card threaded but the final response did
+    not, splitting the conversation in half. Both now thread under the
+    same parent so the user sees the bot's reply nested under their
+    request.
+    """
+    from brr import protocol
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    slack._save_state(brr_dir, {"token": "secret", "channel": "C999"})
+
+    # Two events: a top-level message (slack_ts becomes thread root)
+    # and an in-thread reply (slack_thread_ts is the parent).
+    protocol.create_event(
+        inbox_dir, source="slack", body="first",
+        slack_channel="C999", slack_user="U1",
+        slack_ts="1700.1000", slack_thread_ts="",
+    )
+    protocol.create_event(
+        inbox_dir, source="slack", body="second",
+        slack_channel="C999", slack_user="U2",
+        slack_ts="1700.2000", slack_thread_ts="1700.1500",
+    )
+    first, second = sorted(
+        protocol.list_pending(inbox_dir), key=lambda ev: ev["body"],
+    )
+    protocol.set_status(first, "done")
+    protocol.set_status(second, "done")
+    protocol.write_response(responses_dir, first["id"], "answer one")
+    protocol.write_response(responses_dir, second["id"], "answer two")
+
+    posts: list[dict] = []
+
+    def fake_slack_api(token, method, params=None):
+        if method == "chat.postMessage":
+            posts.append(dict(params or {}))
+        return {"ok": True, "ts": "1700.9999"}
+
+    monkeypatch.setattr(slack, "_slack_api", fake_slack_api)
+    slack._deliver_responses(brr_dir, inbox_dir, responses_dir, "secret", "C999")
+
+    assert posts == [
+        # Top-level source → final response threads on its own ts.
+        {"channel": "C999", "text": "answer one", "thread_ts": "1700.1000"},
+        # In-thread source → final response threads on the parent ts.
+        {"channel": "C999", "text": "answer two", "thread_ts": "1700.1500"},
+    ]
+
+
+def test_response_delivery_omits_thread_ts_when_unknown(tmp_path, monkeypatch):
+    # Legacy events created before slack_ts capture landed have neither
+    # field. Delivery must still post the response (just unthreaded).
+    from brr import protocol
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    slack._save_state(brr_dir, {"token": "secret", "channel": "C000"})
+
+    protocol.create_event(
+        inbox_dir, source="slack", body="legacy",
+        slack_channel="C000", slack_user="U?",
+    )
+    event = protocol.list_pending(inbox_dir)[0]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses_dir, event["id"], "ok")
+
+    posts: list[dict] = []
+    monkeypatch.setattr(
+        slack, "_slack_api",
+        lambda t, m, p=None: (
+            posts.append(dict(p or {})) if m == "chat.postMessage" else None,
+            {"ok": True, "ts": "x"},
+        )[1],
+    )
+    slack._deliver_responses(brr_dir, inbox_dir, responses_dir, "secret", "C000")
+
+    assert posts == [{"channel": "C000", "text": "ok"}]

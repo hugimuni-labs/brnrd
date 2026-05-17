@@ -68,15 +68,26 @@ that change the *reading* most are:
   [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md)
   for the layering model and [`prompts.py`](../src/brr/prompts.py)
   for the builder.
+- The daemon runs tasks concurrently in a bounded worker pool
+  (`max_workers=2` default). Concurrency works because every shared
+  mutable surface was partitioned per event / per task — conversation
+  records are one jsonl per event pipeline, gate progress cards are
+  one json per task, branches are per-task by id. The only genuinely
+  shared resources are git refs at auto-land ff and push, and each
+  is guarded by a per-branch lock. See
+  [`design-concurrent-execution.md`](design-concurrent-execution.md)
+  for the partitioning contract and
+  [`subject-daemon.md`](subject-daemon.md) for the synthesis.
 
 Past arcs (the kb-shape arc, the 2026-05-05 streams-to-conversations
 refactor, the 2026-05-06 triage removal, the 2026-05-12 branch-plan
 simplification, the Docker host-UID rework, the 2026-05-15 git-layer
 rework that introduced `sync.py` and the github gate, the 2026-05-16
-test-suite grooming, the 2026-05-16 agent-orientation layering arc)
-live in `git log` and in their decision/design pages. The current
-shape is what this guide describes; lineage breadcrumbs sit on the
-relevant kb pages.
+test-suite grooming, the 2026-05-16 agent-orientation layering arc,
+the 2026-05-16 concurrent-execution arc that swapped the serial v1
+loop for a thread pool over partitioned state) live in `git log` and
+in their decision/design pages. The current shape is what this guide
+describes; lineage breadcrumbs sit on the relevant kb pages.
 
 ## Link policy
 
@@ -110,6 +121,13 @@ These are the most important current-shape details to carry while reading:
   runtime choice.
 - Responses are plain text — no frontmatter contract on `.brr/responses/`. If the agent can't complete the task, it explains why and the operator follows up in-thread.
 - Live run UX is remote-first: gates render a per-task progress card from `UpdatePacket`s via the `run_progress` projection. Long-running attempts emit periodic `heartbeat` packets (every 30s) so the card visibly bumps elapsed time. There is no separate local status module; troubleshooting follows run context, task, conversation, trace, and response artifacts.
+- The daemon worker loop is a bounded `ThreadPoolExecutor`
+  (`max_workers=2` default, `max_workers=1` reproduces the previous
+  serial behaviour). Workers don't share mutable state — conversation
+  jsonls and gate progress cards are partitioned per event / per task;
+  per-branch locks guard auto-land fast-forward and push so two tasks
+  landing on the same target serialise without affecting unrelated
+  pushes.
 - After a successful push, the daemon derives a clickable "view branch" URL via [`forges.py`](../src/brr/forges.py) (GitHub / GitLab / Bitbucket / Gitea host patterns, plus `[forge]` override) and attaches it to the `push_done` packet so the gate can put a real link in front of the user.
 - The [stewardship section in `src/brr/AGENTS.md`](../src/brr/AGENTS.md) is part of the architecture: treat the request as input, not as instructions; reason from first principles before changing behaviour; and **surface contradictions** between the request and the codebase rather than silently following either side. Functional, not aspirational — failing to bubble up a contradiction is a real bug in the workflow, not a stylistic miss.
 
@@ -217,8 +235,8 @@ Keep in mind:
 
 - `Task` is the central work unit constructed mechanically from an event. It carries the originating event, concrete environment backend, status, source, conversation key, and freeform metadata (worktree path, branch name, response path, etc.). There is no longer a `branch` field — branching is decided by the agent inside the worktree at runtime.
 - `BranchPlan` (in `branching.py`) is a frozen dataclass the daemon resolves once per task: `seed_ref`, optional `auto_land_branch`, `source` (e.g. `event:branch_target`, `fallback:current`, `fallback:preserve`), `host_context_branch`, optional `expected_old_oid`. Resolution looks at the structured event field (`branch_target` / `target_branch` / `base_branch` / legacy `branch`) and falls back to the `branch.fallback` config knob. No conversation history, no LLM. Plan facts ride the task file via `BranchPlan.meta_items()`.
-- A conversation is just a per-gate-thread append-only ndjson log of events, tasks, artifacts, and lifecycle update packets. There is no manifest, no title, no intent — those leaky stream-identity fields were removed in the 2026-05-05 refactor (see [decision-drop-streams.md](decision-drop-streams.md)).
-- `UpdatePacket` is lifecycle telemetry routed to a conversation log and, optionally, gate `render_update` hooks. The packet vocabulary covers sync, env prep, attempts, heartbeats, retries, finalize, push, kb maintenance, and Docker container births/preservations.
+- A conversation is a per-gate-thread directory of append-only jsonl files — one file per event pipeline (`.brr/conversations/<key>/<event-id>.jsonl`), so a worker only ever writes to its own pipeline's file and the concurrent loop never shares a file across workers. There is no manifest, no title, no intent — those leaky stream-identity fields were removed in the 2026-05-05 refactor (see [decision-drop-streams.md](decision-drop-streams.md)); the per-event-pipeline layout was the 2026-05-16 contention-free rework (see [design-concurrent-execution.md](design-concurrent-execution.md)).
+- `UpdatePacket` is lifecycle telemetry routed to a conversation log and, optionally, gate `render_update` hooks. The packet vocabulary covers sync, env prep, attempts, heartbeats, retries, finalize, push, kb maintenance, and Docker container births/preservations. Packets carry `event_id` explicitly so `conversations.append_update` writes into the right per-event jsonl; the daemon's `_WorkerEmit` closure fills it in automatically inside `_run_worker`.
 - `RunProgressView` (in `run_progress.py`) folds conversation records into a compact per-task projection that gates render; its expanded renderer remains useful for diagnostics. Adding new lifecycle UX should extend this projection, not reinvent rendering per gate.
 - `run_context.py` writes a per-task context file under `.brr/runs/<task-id>/context.md` so an agent can recover orientation without poking around runtime state.
 
@@ -286,9 +304,18 @@ Read:
 - [developer reload tests](../tests/test_dev_reload.py)
 - [daemon-conversation tests](../tests/test_daemon_conversations.py)
 
+`daemon.start()` is a dispatch loop on a bounded
+`ThreadPoolExecutor`: each iteration polls the dev-reload watcher
+(main thread only), reaps completed futures, re-execs only when
+`reload_requested and not in_flight`, then dispatches new events
+from the inbox up to `max_workers` capacity. Each worker thread runs
+`_run_worker_and_finalize`, which wraps `_run_worker` plus the
+post-task `set_status` and `_push_if_needed` housekeeping so a
+single thread owns the full pipeline for one event end to end.
+
 Read `_run_worker()` in passes rather than all at once:
 
-1. Derive the conversation key from the event (gate-thread fingerprint).
+1. Derive the conversation key from the event (gate-thread fingerprint); build the local `_WorkerEmit(brr_dir, conv_key, event_id)` closure so every packet from this worker routes to the right per-event jsonl without per-call repetition.
 2. Refresh local refs via [`sync.refresh_before_task`](../src/brr/sync.py): one `git fetch <default-remote>` plus ff-only of the local default branch and any structured target branch named in the event. Best-effort; never raises.
 3. Resolve the [`BranchPlan`](../src/brr/branching.py): structured event field first (`branch_target` / `target_branch` / `base_branch` / legacy `branch`), then the `branch.fallback` policy (`preserve` default; `current` for self-development).
 4. Append the event arrival and emit `event_received`; emit a `synced` packet when sync moved a ref, skipped one, or errored.
@@ -300,13 +327,16 @@ Read `_run_worker()` in passes rather than all at once:
 10. Invoke the runner with periodic `heartbeat` packets (every 30s) and retries when the runner prints no final reply on stdout.
 11. Capture the plain-text response file (written from stdout).
 12. Run [`kb_preflight.scan`](../src/brr/kb_preflight.py) plus [`kb_health.compute_graph_stats`](../src/brr/kb_health.py); if either has findings or `kb/` was touched, run the kb-maintenance LLM pass with findings + stats + the list of task-touched pages injected, then roll up any leftover kb edits as a `brr maintenance` commit and emit `kb_maintenance_done`. Otherwise skip — the pass is now a true safety net.
-13. Finalize the environment — `WorktreeEnv.finalize` reads the worktree's git state to decide between fast-forward landing and branch preservation.
-14. Update task status, push the branch when there's something to publish (attaching a [`forges.view_branch_url`](../src/brr/forges.py) link to `push_done`), and append matching update packets to the conversation log.
+13. Finalize the environment — `WorktreeEnv.finalize` reads the worktree's git state to decide between fast-forward landing and branch preservation. The fast-forward into an auto-land target runs inside `_branch_lock(target)` so two concurrent tasks landing on the same branch serialise correctly.
+
+Then `_run_worker_and_finalize` (the worker-tail wrapper) updates task status, pushes the branch when there's something to publish (push runs inside `_branch_lock(branch_name)` and attaches a [`forges.view_branch_url`](../src/brr/forges.py) link to `push_done`), and lets the main loop reap the future.
 
 Keep in mind:
 
-- The daemon is serial in v1: it processes one pending event at a time.
-- Gate threads run beside it, but task execution itself is not a worker pool yet.
+- The daemon runs tasks concurrently in a bounded thread pool (`max_workers=2` default; `max_workers=1` reproduces the previous serial-v1 behaviour exactly). Workers don't share mutable state — partitioning by event / task / branch removes every shared-file write the old loop used to perform; see [design-concurrent-execution.md](design-concurrent-execution.md).
+- Per-branch locks via `_branch_lock(name)` guard only the two genuinely-shared resources (auto-land target ref, push branch ref). Tasks targeting different branches never contend.
+- The dev-reload watcher runs on the main thread only — re-exec waits until the pool drains (`reload_requested and not in_flight`) so no in-flight worker has its process replaced underneath it.
+- Gate threads run beside the worker pool; gate-side `render_update` for two distinct tasks writes to two distinct per-task json files, no shared state.
 - There is exactly one runner invocation per attempt — no separate triage call.
 - The agent owns branching: brr only decides whether to fast-forward back or preserve the branch as-is.
 - Worktree/Docker tasks isolate the working directory while sharing the runtime `.brr/`.
@@ -337,7 +367,7 @@ Keep in mind:
 - Gates create event files and deliver response files.
 - `_BUILTIN_GATES = ["telegram", "slack", "github"]` in `daemon.py`; each one only starts when its `is_configured(brr_dir)` returns true. Adding a built-in means registering it here and shipping a module under `gates/`.
 - `updates.emit()` can call optional gate `render_update()` hooks, but gate-side failures are swallowed. `_dispatch_to_gates` only walks `("telegram", "slack")` today; chat surfaces render a live card, the GitHub gate does not.
-- Telegram and Slack gates render a live per-task progress card via `render_update`: send-on-`task_created`, edit-on-progress through `editMessageText`/`chat.update`, fallback to a fresh send when the original message is gone. State lives at `.brr/gates/telegram_progress.json` and `.brr/gates/slack_progress.json`.
+- Telegram and Slack gates render a live per-task progress card via `render_update`: send-on-`task_created`, edit-on-progress through `editMessageText`/`chat.update`, fallback to a fresh send when the original message is gone. Per-task card state lives at `.brr/gates/telegram/progress/<task-id>.json` and `.brr/gates/slack/progress/<task-id>.json` — one file per task so concurrent renders for different tasks never share a state surface.
 - The GitHub gate polls the REST API (stdlib `urllib` only) for two triggers — `label-on-issue` and `mention-in-comment` — and posts replies as comments on the originating issue or PR. PR-comment events carry the PR head branch as `branch_target` so the daemon's pre-task fetch+ff refreshes that branch before the worker runs. Auth resolution at setup time: `gh auth token`, then `GITHUB_TOKEN`, then interactive paste. State lives at `.brr/gates/github.json`. No webhooks in v1.
 - There is no local status module. Keep live progress in `updates.py`, `run_progress.py`, and gate renderers instead of adding transport-specific lifecycle views.
 - Bundled docs live in `src/brr/docs/`; per-repo overrides live in `.brr/docs/`.
@@ -444,13 +474,14 @@ Referenced by:
 
 Persistence:
 
-- `.brr/conversations/<safe-key>.ndjson` — one append-only ndjson per gate thread; `:` is encoded as `__` in filenames.
+- `.brr/conversations/<safe-key>/<event-id>.jsonl` — one append-only jsonl per event pipeline, sitting in a directory named after the gate-thread key; `:` is encoded as `__` in directory names. Each file has exactly one writer (the worker handling that one event). `read_records` globs the directory and merges by `ts`; `read_event_records` opens a single file when the caller already knows the event id.
 
 Important concepts:
 
 - Conversations have no manifest, no title, no intent. Identity is the bug we removed; see [decision-drop-streams.md](decision-drop-streams.md).
 - The conversation key is `telegram:<chat>:<topic>`, `slack:<channel>:<thread_ts>`, or `git:<file>` — a gate-thread fingerprint.
-- Each record carries `ts` and a `kind` discriminator (`event`, `task`, `artifact`, `update`).
+- Each record carries a microsecond-precision `ts` and a `kind` discriminator (`event`, `task`, `artifact`, `update`).
+- Per-event-pipeline file layout is the contention-free guarantee that lets the concurrent worker pool run without per-shared-file locks; see [design-concurrent-execution.md](design-concurrent-execution.md).
 - Lines of work that span runs belong in `kb/`, not in a runtime field.
 
 Read with:
@@ -476,7 +507,7 @@ Referenced by:
 
 Persistence:
 
-- `.brr/conversations/<safe-key>.ndjson` (records with `kind=update`)
+- `.brr/conversations/<safe-key>/<event-id>.jsonl` (records with `kind=update`); `UpdatePacket.event_id` selects the per-event-pipeline file.
 
 Stable packet types, in roughly chronological order (see `PACKET_TYPES` in `updates.py` for the canonical list):
 
@@ -522,7 +553,7 @@ Referenced by:
 
 Persistence:
 
-- Derived on demand from `.brr/conversations/<safe-key>.ndjson` filtered by `task_id`. The view itself is not persisted.
+- Derived on demand by globbing `.brr/conversations/<safe-key>/*.jsonl`, merging records by `ts`, and filtering by `task_id`. The view itself is not persisted.
 
 Important fields:
 
@@ -755,9 +786,9 @@ Optional update hook:
 - `render_update(brr_dir, packet)` — gates that opt in render a per-task
   progress card from the `RunProgressView` projection. Telegram does this
   via `sendMessage` + `editMessageText`; Slack via `chat.postMessage` +
-  `chat.update`. Per-gate progress state lives at
-  `.brr/gates/<gate>_progress.json`. Gates that aren't a chat surface
-  (script gates, the GitHub gate posting issue/PR comments, etc.)
+  `chat.update`. Per-task progress state lives at
+  `.brr/gates/<gate>/progress/<task-id>.json`. Gates that aren't a chat
+  surface (script gates, the GitHub gate posting issue/PR comments, etc.)
   typically skip the hook — the durable artifact (a comment, a commit,
   a file) is the delivery.
 
@@ -969,18 +1000,22 @@ Environment resolution:
 [`daemon.py`](../src/brr/daemon.py) is the main integration point. It imports
 nearly every core module because it owns the lifecycle:
 
-- config loading
+- config loading (including `max_workers`, default 2)
 - PID file management
 - gate startup (`_BUILTIN_GATES = ["telegram", "slack", "github"]`)
-- optional developer reload watcher (`dev_reload.py`)
+- optional developer reload watcher (`dev_reload.py`), polled from
+  the main thread and acted on only when the pool drains
+- bounded `ThreadPoolExecutor` dispatch loop with future reaping,
+  in-flight throttling, and quiescent reload semantics
 - inbox scan
-- conversation key derivation
+- conversation key derivation (per worker)
 - pre-task freshness via `sync.refresh_before_task` (one fetch +
   ff-only the targets surfaced by `_branches_to_refresh`)
 - branch intent resolution (`branching.resolve_branch_plan`)
 - mechanical task construction (`Task.from_event`)
 - task persistence
-- env prepare/invoke/finalize
+- env prepare/invoke/finalize, with `WorktreeEnv.finalize`'s
+  fast-forward held under `_branch_lock(auto_land_branch)`
 - attempt loop with retries, `heartbeat` packets every 30s, and
   lifecycle packets
 - response validation
@@ -989,17 +1024,22 @@ nearly every core module because it owns the lifecycle:
   a `brr maintenance` commit and announced via
   `kb_maintenance_done` (see the kb-consistency invariant below)
 - branch-aware git push attempt with `push_started` / `push_done`
-  packets; `_forge_view_url` attaches a `forges.view_branch_url`
+  packets (push itself held under `_branch_lock(branch_name)`);
+  `_forge_view_url` attaches a `forges.view_branch_url`
   link to the `push_done` payload when derivable
-- quiescent re-exec after package-file changes when `--dev-reload` or
-  `dev_reload=true` is active
 
 The worker emits the full run-progress packet stream (`synced`,
 `env_prepared`, `attempt_started`, `attempt_failed`, `retrying`,
 `heartbeat`, `finalizing`, plus `container_started` /
-`container_preserved` for the Docker env). Read these helpers in
+`container_preserved` for the Docker env). Every emit rides on the
+`_WorkerEmit(brr_dir, conv_key, event_id)` closure built at the top
+of `_run_worker`, so packets land in the right per-event jsonl
+without each call repeating the routing tuple. Read these helpers in
 `daemon.py` next to the worker loop:
 
+- `_WorkerEmit` — closure-like dataclass that captures `(brr_dir, conversation_key, event_id)` and exposes `emit("packet_type", **payload)`.
+- `_run_worker_and_finalize` — worker-tail wrapper that runs `_run_worker`, sets the event status, and calls `_push_if_needed`; each worker thread runs the full pipeline through this function.
+- `_branch_lock(name)` — per-branch lock backed by a guarded `defaultdict(threading.Lock)`; guards auto-land ff and push, the only two cross-worker shared resources left.
 - `_branches_to_refresh` — pre-task target list for `sync.refresh_before_task`.
 - `_emit_new_containers` — diffs `env_ctx.env_state["docker_containers"]` between attempts.
 - `_emit_preserved_containers` — fires `container_preserved` when finalize left containers behind.
@@ -1009,6 +1049,7 @@ When debugging behavior, read daemon tests before modifying daemon source:
 
 - [daemon tests](../tests/test_daemon.py)
 - [daemon-heartbeat tests](../tests/test_daemon_heartbeat.py)
+- [daemon-concurrency tests](../tests/test_daemon_concurrency.py)
 - [developer reload tests](../tests/test_dev_reload.py)
 - [daemon-conversation tests](../tests/test_daemon_conversations.py)
 - [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
@@ -1110,12 +1151,61 @@ update packets, but durable project knowledge still belongs in `kb/`. The
 runtime — see [decision-drop-streams.md](decision-drop-streams.md). If a
 line of work matters enough to name, it belongs as a `kb/` page.
 
+### Conversation log is partitioned per event pipeline
+
+The on-disk layout is `.brr/conversations/<safe-key>/<event-id>.jsonl`
+— one append-only jsonl per event pipeline, sitting in a directory
+named after the gate-thread key. Every file has exactly one writer
+for its lifetime: the worker thread handling that one event. That's
+the contention-free guarantee the concurrent worker pool relies on —
+no shared mutable file across workers means no need for a lock on
+the conversation layer. Reads glob the directory and merge by `ts`
+(microsecond precision so concurrent appends from sibling pipelines
+keep a stable order on merge). See
+[design-concurrent-execution.md](design-concurrent-execution.md) for
+the partitioning contract, and
+[`src/brr/docs/conversations.md`](../src/brr/docs/conversations.md)
+for the user-visible side.
+
 ### Run progress is a projection, not state
 
 `RunProgressView` is derived on demand from conversation records, filtered
-by `task_id`. The source of truth is the per-conversation ndjson. Rendering
-UX (gates, local status) should always go through `run_progress`; introducing
-parallel ad-hoc derivations across modules is the path to drift.
+by `task_id`. The source of truth is the directory of per-event jsonl files
+under `.brr/conversations/<safe-key>/`. Rendering UX (gates, local status)
+should always go through `run_progress`; introducing parallel ad-hoc
+derivations across modules is the path to drift.
+
+### Daemon worker loop is concurrent and contention-free
+
+`daemon.start()` dispatches tasks into a bounded
+`ThreadPoolExecutor` (default `max_workers=2`, config-overridable;
+set `max_workers=1` to reproduce the previous serial-v1 behaviour
+exactly). Concurrency works because every shared mutable surface
+was partitioned per event / per task:
+
+- **Conversation records** — per-event jsonl (see invariant above).
+- **Gate progress card state** — `.brr/gates/<gate>/progress/<task-id>.json`,
+  one file per task, single-writer.
+- **Worktree + branch** — `brr/<task-id>` is unique per task id,
+  worktree dir is `.brr/worktrees/<task-id>`.
+- **Trace dirs** — `.brr/traces/<task-id>-<label>/`, per task.
+
+The only genuinely-shared resources are git refs at auto-land
+fast-forward (the resolved target branch) and push (the branch being
+pushed). Both are guarded by `daemon._branch_lock(name)`, keyed on
+the branch name, so two concurrent tasks landing on the same target
+or pushing the same branch serialise while unrelated tasks proceed
+in parallel.
+
+The dev-reload watcher is polled on the main thread only and only
+acts when `reload_requested and not in_flight`, so an in-progress
+worker can never have its process replaced underneath it. New code
+that introduces shared mutable runtime state must either partition
+the surface per event/task/branch or take a per-resource lock
+explicitly; module-wide locks are a regression and should be
+justified on
+[design-concurrent-execution.md](design-concurrent-execution.md)
+if they really are necessary.
 
 ### Daemon freshness is best-effort, never blocking
 
@@ -1204,16 +1294,17 @@ If source-first reading feels too abstract, run the test path instead:
 14. [kb-health tests](../tests/test_kb_health.py)
 15. [daemon tests](../tests/test_daemon.py)
 16. [daemon-heartbeat tests](../tests/test_daemon_heartbeat.py)
-17. [daemon-conversation tests](../tests/test_daemon_conversations.py)
-18. [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
-19. [Telegram gate tests](../tests/test_telegram_gate.py)
-20. [GitHub gate tests](../tests/test_github_gate.py)
-21. [gate setup tests](../tests/test_gate_setup.py)
-22. [Telegram render-update tests](../tests/test_telegram_render_update.py)
-23. [Slack render-update tests](../tests/test_slack_render_update.py)
-24. [adopt tests](../tests/test_adopt.py)
-25. [CLI tests](../tests/test_cli.py)
-26. [docs tests](../tests/test_docs.py)
+17. [daemon-concurrency tests](../tests/test_daemon_concurrency.py)
+18. [daemon-conversation tests](../tests/test_daemon_conversations.py)
+19. [daemon-progress-packet tests](../tests/test_daemon_progress_packets.py)
+20. [Telegram gate tests](../tests/test_telegram_gate.py)
+21. [GitHub gate tests](../tests/test_github_gate.py)
+22. [gate setup tests](../tests/test_gate_setup.py)
+23. [Telegram render-update tests](../tests/test_telegram_render_update.py)
+24. [Slack render-update tests](../tests/test_slack_render_update.py)
+25. [adopt tests](../tests/test_adopt.py)
+26. [CLI tests](../tests/test_cli.py)
+27. [docs tests](../tests/test_docs.py)
 
 Cross-cutting test scaffolding lives in
 [`tests/_helpers.py`](../tests/_helpers.py): `init_git_repo`,
@@ -1241,8 +1332,10 @@ Subject hubs (start here when a whole area is unfamiliar):
   pattern (four memory layers, graph topology, subject genesis,
   cross-tool maintenance, what was rejected).
 - [Subject: daemon and process lifecycle](subject-daemon.md) —
-  foreground `brr up`, gate/file-protocol boundary, serial worker
-  lifecycle, local process control, the development reload direction.
+  foreground `brr up`, gate/file-protocol boundary, bounded
+  thread-pool worker lifecycle, partitioning-by-task contract,
+  per-branch locks, local process control, the development reload
+  direction.
 - [Subject: tasks and branching](subject-tasks-branching.md) —
   mechanical task construction, environment resolution, agent-owned
   runtime branching, worktree finalization, and the structured
@@ -1288,12 +1381,22 @@ Designs (current contracts that the code points back to):
 - [Developer daemon reload design](design-daemon-dev-reload.md) —
   *shipped*. Editable install plus opt-in quiescent re-exec on
   package-file changes, kept behind `--dev-reload` / `dev_reload=true`.
+- [Concurrent execution design](design-concurrent-execution.md) —
+  *accepted on 2026-05-16*. The accepted shape behind the threaded
+  worker pool: per-event jsonl conversation layer, per-task gate
+  progress files, per-branch locks for auto-land ff and push, the
+  packet-flow + emit-closure refactor, and an explicit list of
+  rejected alternatives (merge coordinator, async rewrite,
+  per-task subprocess workers, locking the old aggregated ndjson).
 
 Plans:
 
 - [Concurrent worktrees plan](plan-concurrent-worktrees.md) —
-  *shipped* (one-task-per-worktree slice; merge-coordinator path
-  abandoned).
+  *superseded on 2026-05-16 by*
+  [`design-concurrent-execution.md`](design-concurrent-execution.md).
+  Preserved for the reasoning that informed the current
+  `worktree.py` + env protocol shape; the merge-coordinator path it
+  described was abandoned and never came back.
 - [Branch modes plan](plan-branch-modes.md) — *shipped, with
   revisions* (triage reversed, `needs_context` gone).
 - [State-first kb maintenance plan](plan-kb-state-first-maintenance.md) —
@@ -1362,6 +1465,16 @@ Use these heuristics while reading:
   [subject-daemon.md](subject-daemon.md) and then jump to
   [daemon.py](../src/brr/daemon.py) and
   [dev_reload.py](../src/brr/dev_reload.py).
+- If a file talks about concurrent task execution, the worker pool,
+  per-event/per-task partitioning, per-branch locks, or `max_workers`,
+  start with [design-concurrent-execution.md](design-concurrent-execution.md)
+  for the contract and then jump to `daemon.start()`,
+  `_run_worker_and_finalize`, and `_branch_lock` in
+  [daemon.py](../src/brr/daemon.py); the conversation layer change
+  lives in [conversations.py](../src/brr/conversations.py) and the
+  per-task gate progress files in
+  [gates/telegram.py](../src/brr/gates/telegram.py) /
+  [gates/slack.py](../src/brr/gates/slack.py).
 - If a file talks about kb consistency, orphan pages, broken cross-links, or "should this kb-maintenance pass run?", jump to [kb_preflight.py](../src/brr/kb_preflight.py) and `_maybe_kb_maintenance` in [daemon.py](../src/brr/daemon.py). For pages-by-kind / in-degree / peer-orphans / log size, jump to [kb_health.py](../src/brr/kb_health.py). The maintenance contract itself lives in [AGENTS.md → "Knowledge base shape"](../src/brr/AGENTS.md), not in the brr daemon.
 - If a file talks about cwd, worktrees, Docker, response path translation, or runner credential wiring (env passthrough, login-dir mounts, git safe.directory), jump to [envs/__init__.py](../src/brr/envs/__init__.py).
 - If a file talks about clickable "view branch" URLs, remote-URL parsing, or `forge.kind` / `forge.url_base` overrides, jump to [forges.py](../src/brr/forges.py) and `_forge_view_url` in [daemon.py](../src/brr/daemon.py).
@@ -1375,7 +1488,7 @@ Update this page when any of these change:
 - public CLI commands
 - event/task/conversation file formats
 - environment backends
-- daemon lifecycle (including the worker step list and the lifecycle packet vocabulary in `updates.PACKET_TYPES`)
+- daemon lifecycle (including the worker step list, the lifecycle packet vocabulary in `updates.PACKET_TYPES`, the worker-pool dispatch shape, and the partitioning / per-branch-lock contract)
 - runner artifact contract
 - gate hook surface, including the built-in gate set (`_BUILTIN_GATES`)
 - daemon freshness contract (`sync.refresh_before_task`, the opt-out config knobs, the `synced` packet)
@@ -1384,6 +1497,7 @@ Update this page when any of these change:
 - bundled docs vs KB ownership
 - kb consistency contract (preflight findings, graph stats, kb-maintenance trigger, AGENTS.md kb schema, `kb_maintenance_done` packet)
 - module boundaries that affect "where do I jump?" routing (e.g. the runner / prompts split, kb_preflight + kb_health, sync, forges, branching)
+- conversation / gate-progress on-disk layout (per-event jsonl directory, per-task gate progress file paths) — these double as the contention-free contract under the concurrent worker pool
 - subject hubs added or retired
 - shared test scaffolding in [`tests/_helpers.py`](../tests/_helpers.py)
 - test files that become the best behavioral reference for a module

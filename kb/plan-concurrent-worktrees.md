@@ -1,18 +1,24 @@
 # Plan: Multi-Topic Concurrent Task Execution via Git Worktrees
 
-**Status: shipped (one-task-per-worktree slice; merge-coordinator path
-abandoned).** What landed: [`worktree.py`](../src/brr/worktree.py) for
-git-worktree lifecycle, the `Env` protocol with `host` / `worktree` /
-`docker` backends in [`envs/__init__.py`](../src/brr/envs/__init__.py),
+**Status: superseded by
+[`design-concurrent-execution.md`](design-concurrent-execution.md) on
+2026-05-16.** Preserved for the architectural reasoning that
+informed the current shape. The merge-coordinator design described
+below was abandoned and *never came back* — the shipped
+concurrent-execution design ditches the coordinator entirely and
+relies on per-event / per-task file partitioning so workers don't
+share mutable state. Branch-level synchronisation only kicks in at
+auto-land fast-forward and at push, both keyed per branch.
+
+What landed before supersession: [`worktree.py`](../src/brr/worktree.py)
+for git-worktree lifecycle, the `Env` protocol with `host` / `worktree`
+/ `docker` backends in [`envs/__init__.py`](../src/brr/envs/__init__.py),
 `Task` carrying `branch` and `env`, daemon execution inside a per-task
-worktree on a `brr/<task-id>` branch. What was abandoned: the explicit
-worker pool and merge coordinator. Decentralised merging via
-`git merge --ff-only` from the agent's branch back into the base
-replaces the coordinator (see
-[`design-env-interface.md`](design-env-interface.md) for the rationale
-and [`decision-remove-triage.md`](decision-remove-triage.md) for how
-the task pipeline simplified). The daemon remains serial in the v1
-shape.
+worktree on a `brr/<task-id>` branch. The serial-v1 worker loop the
+original plan kept was replaced by a bounded `ThreadPoolExecutor` on
+2026-05-16; see [`subject-daemon.md`](subject-daemon.md) for the
+synthesis and `design-concurrent-execution.md` for the partitioning
+contract.
 
 Per-task log files (`kb/log-<task-id>.md`) referenced below are gone —
 see [`decision-kb-shape.md`](decision-kb-shape.md). Stdout is the

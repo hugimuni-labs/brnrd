@@ -4,22 +4,32 @@ The daemon is a single foreground process (``brr up``).  It:
 
 1. Starts configured gate threads (each gate polls its own channel).
 2. Scans ``.brr/inbox/`` for pending events on a timer.
-3. Spawns workers (runner subprocesses) one at a time (serial v1).
-4. Checks for response files after each worker finishes.
-5. Retries the runner if no response file was created.
-6. Pushes git commits after a worker makes changes.
+3. Dispatches pending events into a bounded worker pool.
+4. Each worker owns the full pipeline for its event: runner invocation,
+   retries, response capture, kb maintenance, env finalize, branch push,
+   and event status update.
+5. Workers don't share mutable state — conversation logs and gate
+   progress cards are partitioned per event / per task. The only
+   resources that need synchronisation are git refs at fast-forward and
+   push, which take per-branch locks. See
+   ``kb/design-concurrent-execution.md`` for the full contract.
 
-No cancellation in v1 — the runner runs to completion.
+No cancellation in v1 — runners run to completion. ``brr down`` /
+SIGTERM flip the loop flag; the dispatch loop stops accepting new
+events and the pool drains before the process exits.
 """
 
 from __future__ import annotations
 
+import collections
+import concurrent.futures
 import os
 import shutil
 import signal
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import branching
@@ -45,6 +55,67 @@ _BUILTIN_GATES = ["telegram", "slack", "github"]
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
 _HEARTBEAT_INTERVAL = 30.0
+# Default worker pool size. 2 is mild concurrency that handles the
+# typical "long task in flight + quick question arrives" scenario
+# without inviting forge API quota or runner subscription contention.
+# Adopters can set ``max_workers=1`` to reproduce the previous serial
+# behaviour exactly, or raise it as needed.
+_DEFAULT_MAX_WORKERS = 2
+# How long to wait for in-flight workers to drain on shutdown. None
+# means "wait forever"; the loop only exits the pool join when every
+# worker is done. A long-running task killed mid-flight by an external
+# signal still leaves trace dirs and the response file for forensics.
+_SHUTDOWN_DRAIN_TIMEOUT: float | None = None
+
+
+# ── Per-branch locks ────────────────────────────────────────────────
+
+
+# A keyed lock for git operations that genuinely share a resource:
+# fast-forwarding into an auto-land target, and pushing a branch. Two
+# workers acting on the same branch serialise on the same lock; two
+# workers acting on different branches never contend. The map itself
+# is guarded by a tiny lock so two concurrent first-uses of the same
+# branch see the same Lock instance.
+_BRANCH_LOCKS: dict[str, threading.Lock] = collections.defaultdict(threading.Lock)
+_BRANCH_LOCKS_GUARD = threading.Lock()
+
+
+def _branch_lock(name: str | None) -> threading.Lock:
+    """Return the per-branch lock for *name*, creating it on first use."""
+    if not name:
+        # Unknown branch — return a fresh anonymous lock so the caller
+        # still gets a context manager but doesn't serialise anything.
+        return threading.Lock()
+    with _BRANCH_LOCKS_GUARD:
+        return _BRANCH_LOCKS[name]
+
+
+# ── Packet emitter for one worker ───────────────────────────────────
+
+
+@dataclass
+class _WorkerEmit:
+    """Closure-like emitter that carries (brr_dir, conv_key, event_id).
+
+    Every packet from one worker shares these three values, so threading
+    them through every emit call individually is just noise. Callers
+    use ``emit("packet_type", **payload)`` — the conversation_key and
+    event_id rides on the packet automatically so it lands in the
+    right per-event jsonl file.
+    """
+
+    brr_dir: Path
+    conversation_key: str
+    event_id: str
+
+    def __call__(self, packet_type: str, **payload: object) -> None:
+        updates.emit(self.brr_dir, updates.UpdatePacket(
+            type=packet_type,
+            conversation_key=self.conversation_key,
+            event_id=self.event_id,
+            payload=payload,
+        ))
 
 
 # ── PID file ─────────────────────────────────────────────────────────
@@ -122,16 +193,23 @@ def _push_if_needed(
     *,
     branch: str | None = None,
     conversation_key: str | None = None,
+    event_id: str | None = None,
     task_id: str | None = None,
 ) -> None:
     """Push the changed branch when there are commits to publish.
 
     When *conversation_key* is provided, emit ``push_started``/
     ``push_done`` update packets so gates can render delivery progress.
+    The actual ``git push`` runs inside a per-branch lock so two
+    concurrent workers that happen to target the same branch can't
+    interleave their pushes.
     """
     branch_name = branch or gitops.current_branch(repo_root)
     if not branch_name or branch_name == "HEAD":
         return
+
+    brr_dir = gitops.shared_brr_dir(repo_root)
+    emit = _WorkerEmit(brr_dir, conversation_key or "", event_id or "")
 
     try:
         upstream = gitops.branch_upstream(repo_root, branch_name)
@@ -167,7 +245,6 @@ def _push_if_needed(
         if not remote:
             return
         commit_count = len(commits)
-        brr_dir = gitops.shared_brr_dir(repo_root)
         push_payload: dict = {
             "commits": commit_count,
             "branch": branch_name,
@@ -176,16 +253,13 @@ def _push_if_needed(
         if task_id:
             push_payload["task_id"] = task_id
         if conversation_key:
-            updates.emit(brr_dir, updates.UpdatePacket(
-                type="push_started",
-                conversation_key=conversation_key,
-                payload=push_payload,
-            ))
+            emit("push_started", **push_payload)
         print(f"[brr] pushing {branch_name}...")
-        push = subprocess.run(
-            push_cmd, cwd=repo_root,
-            capture_output=True, text=True, timeout=60,
-        )
+        with _branch_lock(branch_name):
+            push = subprocess.run(
+                push_cmd, cwd=repo_root,
+                capture_output=True, text=True, timeout=60,
+            )
         if conversation_key:
             done_payload = dict(push_payload)
             done_payload["ok"] = push.returncode == 0
@@ -202,11 +276,7 @@ def _push_if_needed(
                 view = _forge_view_url(repo_root, remote, branch_name)
                 if view:
                     done_payload["view_url"] = view
-            updates.emit(brr_dir, updates.UpdatePacket(
-                type="push_done",
-                conversation_key=conversation_key,
-                payload=done_payload,
-            ))
+            emit("push_done", **done_payload)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
@@ -332,6 +402,11 @@ def _run_worker(
     Creates a Task from the event, persists it to .brr/tasks/,
     derives the conversation key, and tracks status throughout
     execution. Returns the Task.
+
+    Every update packet rides through the local ``emit`` closure so
+    ``conversation_key`` and ``event_id`` are populated automatically.
+    Per-event-pipeline conversation routing relies on that — see
+    ``kb/design-concurrent-execution.md``.
     """
     eid = event["id"]
     brr_dir = gitops.shared_brr_dir(repo_root)
@@ -339,6 +414,7 @@ def _run_worker(
     runner_name = runner.resolve_runner(repo_root)
 
     conv_key = conversations.conversation_key_for_event(event) or ""
+    emit = _WorkerEmit(brr_dir, conv_key, eid)
 
     # Refresh local refs before resolving the branch plan so the task
     # seeds from a current view of the world. Computing target_branches
@@ -354,34 +430,23 @@ def _run_worker(
 
     if conv_key:
         conversations.append_event(brr_dir, conv_key, event)
-        updates.emit(brr_dir, updates.UpdatePacket(
-            type="event_received",
-            conversation_key=conv_key,
-            payload={"event_id": eid, "source": event.get("source", "")},
-        ))
+        emit("event_received", event_id=eid, source=event.get("source", ""))
         sync_summary = sync.render_summary(sync_result)
         if sync_summary or sync_result.error:
-            updates.emit(brr_dir, updates.UpdatePacket(
-                type="synced",
-                conversation_key=conv_key,
-                payload={
-                    "event_id": eid,
-                    "summary": sync_summary,
-                    "ff_branches": dict(sync_result.ff_branches),
-                    "skipped": dict(sync_result.skipped),
-                    "error": sync_result.error,
-                },
-            ))
+            emit(
+                "synced",
+                event_id=eid,
+                summary=sync_summary,
+                ff_branches=dict(sync_result.ff_branches),
+                skipped=dict(sync_result.skipped),
+                error=sync_result.error,
+            )
 
     task = Task.from_event(event, cfg)
     task.conversation_key = conv_key
     task.save(tasks_dir)
 
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="task_created",
-        conversation_key=conv_key,
-        payload={"task_id": task.id, "event_id": eid, "env": task.env},
-    ))
+    emit("task_created", task_id=task.id, event_id=eid, env=task.env)
 
     task.update_status("running", tasks_dir)
     resp_path = protocol.response_path(responses_dir, eid)
@@ -405,11 +470,7 @@ def _run_worker(
     except RuntimeError as e:
         print(f"[brr] task {task.id}: env setup failed: {e}")
         task.update_status("error", tasks_dir)
-        updates.emit(brr_dir, updates.UpdatePacket(
-            type="failed",
-            conversation_key=conv_key,
-            payload={"task_id": task.id, "stage": "env", "error": str(e)},
-        ))
+        emit("failed", task_id=task.id, stage="env", error=str(e))
         return task
 
     run_root = env_ctx.cwd
@@ -430,18 +491,15 @@ def _run_worker(
         else None
     )
 
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="env_prepared",
-        conversation_key=conv_key,
-        payload={
-            "task_id": task.id,
-            "env": task.env,
-            "branch_name": branch_name,
-            "seed_ref": branch_plan.seed_ref,
-            "auto_land_branch": branch_plan.auto_land_branch,
-            "branch_source": branch_plan.source,
-        },
-    ))
+    emit(
+        "env_prepared",
+        task_id=task.id,
+        env=task.env,
+        branch_name=branch_name,
+        seed_ref=branch_plan.seed_ref,
+        auto_land_branch=branch_plan.auto_land_branch,
+        branch_source=branch_plan.source,
+    )
 
     if conv_key:
         conversations.append_task(
@@ -476,18 +534,15 @@ def _run_worker(
     task.save(tasks_dir)
 
     trace_dirs: list[str] = []
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="run_started",
-        conversation_key=conv_key,
-        payload={
-            "task_id": task.id,
-            "branch": branch_name,
-            "seed_ref": branch_plan.seed_ref,
-            "auto_land_branch": branch_plan.auto_land_branch,
-            "env": task.env,
-            "runner": runner_name,
-        },
-    ))
+    emit(
+        "run_started",
+        task_id=task.id,
+        branch=branch_name,
+        seed_ref=branch_plan.seed_ref,
+        auto_land_branch=branch_plan.auto_land_branch,
+        env=task.env,
+        runner=runner_name,
+    )
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
     for attempt in range(1, max_retries + 2):
@@ -528,32 +583,19 @@ def _run_worker(
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
-        updates.emit(brr_dir, updates.UpdatePacket(
-            type="attempt_started",
-            conversation_key=conv_key,
-            payload={
-                "task_id": task.id,
-                "event_id": eid,
-                "attempt": attempt,
-            },
-        ))
+        emit("attempt_started", task_id=task.id, event_id=eid, attempt=attempt)
 
         attempt_started_monotonic = time.monotonic()
 
         def _emit_heartbeat() -> None:
             elapsed = int(time.monotonic() - attempt_started_monotonic)
-            updates.emit(brr_dir, updates.UpdatePacket(
-                type="heartbeat",
-                conversation_key=conv_key,
-                payload={
-                    "task_id": task.id,
-                    "attempt": attempt,
-                    "elapsed_seconds": elapsed,
-                },
-            ))
-            _emit_new_containers(
-                brr_dir, conv_key, task.id, env_ctx, seen_containers,
+            emit(
+                "heartbeat",
+                task_id=task.id,
+                attempt=attempt,
+                elapsed_seconds=elapsed,
             )
+            _emit_new_containers(emit, task.id, env_ctx, seen_containers)
 
         result = _invoke_with_heartbeat(
             env_backend,
@@ -571,9 +613,7 @@ def _run_worker(
             trace=True,
             on_heartbeat=_emit_heartbeat,
         )
-        _emit_new_containers(
-            brr_dir, conv_key, task.id, env_ctx, seen_containers,
-        )
+        _emit_new_containers(emit, task.id, env_ctx, seen_containers)
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
         try:
@@ -599,11 +639,12 @@ def _run_worker(
             print(f"[brr] worker {eid}: response ready")
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
-            _record_response_artifact(brr_dir, conv_key, task, resp_path)
+            _record_response_artifact(emit, task, resp_path)
             task.update_status("done", tasks_dir)
             maintenance_trace = _maybe_kb_maintenance(
                 run_root, repo_root, cfg, runner_name,
-                brr_dir=brr_dir, conv_key=conv_key, task_id=task.id,
+                emit=emit,
+                task_id=task.id,
                 task_pre_head=task_pre_head,
                 trace=True,
             )
@@ -611,39 +652,34 @@ def _run_worker(
                 trace_dirs.append(maintenance_trace)
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
                 task.save(tasks_dir)
-            updates.emit(brr_dir, updates.UpdatePacket(
-                type="finalizing",
-                conversation_key=conv_key,
-                payload={"task_id": task.id, "stage": "done"},
-            ))
-            task = env_backend.finalize(env_ctx, task, tasks_dir)
+            emit("finalizing", task_id=task.id, stage="done")
+            # Per-branch lock around finalize: if this task's auto-land
+            # target overlaps another concurrent worker's, the
+            # fast-forward inside finalize must serialise on that name.
+            # Tasks targeting different branches don't contend.
+            with _branch_lock(branch_plan.auto_land_branch):
+                task = env_backend.finalize(env_ctx, task, tasks_dir)
             _cleanup_traces_on_success(brr_dir, tasks_dir, task)
-            _emit_preserved_containers(brr_dir, conv_key, task)
+            _emit_preserved_containers(emit, task)
             preserved_branch = task.meta.get("preserved_branch")
             landed_branch = task.meta.get("landed_branch")
             changed_branch = task.meta.get("changed_branch")
             if task.status == "conflict":
-                updates.emit(brr_dir, updates.UpdatePacket(
-                    type="conflict",
-                    conversation_key=conv_key,
-                    payload={
-                        "task_id": task.id,
-                        "branch": preserved_branch or branch_name,
-                        "preserved_branch": preserved_branch,
-                    },
-                ))
+                emit(
+                    "conflict",
+                    task_id=task.id,
+                    branch=preserved_branch or branch_name,
+                    preserved_branch=preserved_branch,
+                )
             else:
-                updates.emit(brr_dir, updates.UpdatePacket(
-                    type="done",
-                    conversation_key=conv_key,
-                    payload={
-                        "task_id": task.id,
-                        "event_id": eid,
-                        "preserved_branch": preserved_branch,
-                        "landed_branch": landed_branch,
-                        "changed_branch": changed_branch,
-                    },
-                ))
+                emit(
+                    "done",
+                    task_id=task.id,
+                    event_id=eid,
+                    preserved_branch=preserved_branch,
+                    landed_branch=landed_branch,
+                    changed_branch=changed_branch,
+                )
             return task
 
         retry_reason = result.retry_reason()
@@ -661,23 +697,16 @@ def _run_worker(
             attempt_payload["exit_code"] = last_failure["exit_code"]
             if last_failure.get("timed_out"):
                 attempt_payload["timed_out"] = True
-        updates.emit(brr_dir, updates.UpdatePacket(
-            type="attempt_failed",
-            conversation_key=conv_key,
-            payload=attempt_payload,
-        ))
+        emit("attempt_failed", **attempt_payload)
         if will_retry:
             print(f"[brr] worker {eid}: {retry_reason}, retrying...")
-            updates.emit(brr_dir, updates.UpdatePacket(
-                type="retrying",
-                conversation_key=conv_key,
-                payload={
-                    "task_id": task.id,
-                    "event_id": eid,
-                    "attempt": attempt + 1,
-                    "reason": retry_reason,
-                },
-            ))
+            emit(
+                "retrying",
+                task_id=task.id,
+                event_id=eid,
+                attempt=attempt + 1,
+                reason=retry_reason,
+            )
             continue
         # Hard failure (timeout / non-zero exit) — no retry, give up now
         # rather than burning another expensive attempt. The give-up
@@ -695,13 +724,10 @@ def _run_worker(
     # on the task before the failure packet renders — the failure packet
     # is what gates see last, so its payload must be the canonical
     # explanation.
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="finalizing",
-        conversation_key=conv_key,
-        payload={"task_id": task.id, "stage": "failed"},
-    ))
-    task = env_backend.finalize(env_ctx, task, tasks_dir)
-    _emit_preserved_containers(brr_dir, conv_key, task)
+    emit("finalizing", task_id=task.id, stage="failed")
+    with _branch_lock(branch_plan.auto_land_branch):
+        task = env_backend.finalize(env_ctx, task, tasks_dir)
+    _emit_preserved_containers(emit, task)
     failed_payload: dict[str, object] = {
         "task_id": task.id,
         "event_id": eid,
@@ -714,11 +740,7 @@ def _run_worker(
             failed_payload["error"] = last_failure["error"]
         if last_failure.get("timed_out"):
             failed_payload["timed_out"] = True
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="failed",
-        conversation_key=conv_key,
-        payload=failed_payload,
-    ))
+    emit("failed", **failed_payload)
     return task
 
 
@@ -778,8 +800,7 @@ def _invoke_with_heartbeat(
 
 
 def _emit_new_containers(
-    brr_dir: Path,
-    conversation_key: str,
+    emit: _WorkerEmit,
     task_id: str,
     env_ctx: "envs.RunContext",
     seen: set[str],
@@ -798,15 +819,12 @@ def _emit_new_containers(
         if cid in seen:
             continue
         seen.add(cid)
-        updates.emit(brr_dir, updates.UpdatePacket(
-            type="container_started",
-            conversation_key=conversation_key,
-            payload={
-                "task_id": task_id,
-                "env": env_ctx.name,
-                "container": cid,
-            },
-        ))
+        emit(
+            "container_started",
+            task_id=task_id,
+            env=env_ctx.name,
+            container=cid,
+        )
 
 
 def _recent_conversation_for_prompt(
@@ -827,8 +845,7 @@ def _recent_conversation_for_prompt(
 
 
 def _emit_preserved_containers(
-    brr_dir: Path,
-    conversation_key: str,
+    emit: _WorkerEmit,
     task: Task,
 ) -> None:
     """Emit container_preserved when finalize left containers behind."""
@@ -843,41 +860,31 @@ def _emit_preserved_containers(
         containers = [str(raw)]
     if not containers:
         return
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="container_preserved",
-        conversation_key=conversation_key,
-        payload={
-            "task_id": task.id,
-            "containers": containers,
-        },
-    ))
+    emit("container_preserved", task_id=task.id, containers=containers)
 
 
 def _record_response_artifact(
-    brr_dir: Path,
-    conversation_key: str,
+    emit: _WorkerEmit,
     task: Task,
     response_path: Path,
 ) -> None:
     """Index the response artifact on the conversation log."""
     label = f"response:{task.event_id}" if task.event_id else f"response:{task.id}"
-    if conversation_key:
+    if emit.conversation_key:
         conversations.append_artifact(
-            brr_dir, conversation_key,
+            emit.brr_dir, emit.conversation_key,
             kind="response",
             path=str(response_path),
             task_id=task.id,
+            event_id=emit.event_id,
             label=label,
         )
-    updates.emit(brr_dir, updates.UpdatePacket(
-        type="artifact_created",
-        conversation_key=conversation_key,
-        payload={
-            "task_id": task.id,
-            "kind": "response",
-            "path": str(response_path),
-        },
-    ))
+    emit(
+        "artifact_created",
+        task_id=task.id,
+        kind="response",
+        path=str(response_path),
+    )
 
 
 def _kb_changed(run_root: Path) -> bool:
@@ -965,8 +972,7 @@ def _maybe_kb_maintenance(
     cfg: dict,
     runner_name: str,
     *,
-    brr_dir: Path | None = None,
-    conv_key: str | None = None,
+    emit: _WorkerEmit | None = None,
     task_id: str | None = None,
     task_pre_head: str | None = None,
     trace: bool = False,
@@ -1049,17 +1055,14 @@ def _maybe_kb_maintenance(
         print(f"[brr] kb maintenance failed (non-fatal): exit {result.returncode}")
 
     commits, files = _commit_kb_maintenance_edits(run_root, pre_head)
-    if brr_dir is not None and conv_key:
-        updates.emit(brr_dir, updates.UpdatePacket(
-            type="kb_maintenance_done",
-            conversation_key=conv_key,
-            payload={
-                "task_id": task_id,
-                "commits": commits,
-                "files": files,
-                "ok": bool(result.ok),
-            },
-        ))
+    if emit is not None and emit.conversation_key:
+        emit(
+            "kb_maintenance_done",
+            task_id=task_id,
+            commits=commits,
+            files=files,
+            ok=bool(result.ok),
+        )
 
     if result.trace_dir:
         return str(result.trace_dir.relative_to(gitops.shared_brr_dir(repo_root)))
@@ -1151,6 +1154,50 @@ def _commit_kb_maintenance_edits(
         return (0, 0)
 
 
+# ── Worker-tail housekeeping ────────────────────────────────────────
+
+
+def _run_worker_and_finalize(
+    event: dict,
+    repo_root: Path,
+    responses_dir: Path,
+    cfg: dict,
+    max_retries: int,
+) -> Task:
+    """Run one event end-to-end and return the resulting Task.
+
+    Owns the full pipeline for one event: run the runner, capture
+    response, set event status, push to remote. Lives as a separate
+    function so each worker thread owns the whole pipeline (and so
+    tests can drive it without spinning up the threaded loop).
+
+    The dev-reload watcher is polled in the main loop only — calling
+    it from worker threads would race on the watcher's internal
+    snapshot.
+    """
+    task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
+    protocol.set_status(event, task.status)
+    if task.status == "error":
+        print(f"[brr] task {task.id}: failed")
+    elif task.status == "conflict":
+        print(
+            f"[brr] task {task.id}: branch preserved (cannot fast-forward)"
+        )
+
+    _push_if_needed(
+        repo_root,
+        branch=(
+            task.meta.get("changed_branch")
+            or task.meta.get("landed_branch")
+            or task.meta.get("preserved_branch")
+        ),
+        conversation_key=task.conversation_key,
+        event_id=task.event_id,
+        task_id=task.id,
+    )
+    return task
+
+
 # ── Main loop ────────────────────────────────────────────────────────
 
 
@@ -1161,12 +1208,21 @@ def start(
 ) -> None:
     """Run the daemon main loop (blocking, foreground).
 
+    Tasks dispatch into a bounded ``ThreadPoolExecutor`` so unrelated
+    events run in parallel. ``max_workers`` reads from ``.brr/config``
+    (default ``2``); set ``max_workers=1`` to reproduce the previous
+    serial behaviour exactly. Workers don't share mutable state — see
+    ``kb/design-concurrent-execution.md`` and ``kb/subject-daemon.md``
+    for the partitioning contract.
+
     Traces are always written and worktrees/containers are kept on
     failure (or when uncommitted files are left behind) but discarded
     on clean success — there is no operator-facing debug switch.
 
     *dev_reload* enables the brr-development re-exec watcher.  When
     ``None``, falls back to the ``dev_reload`` key in ``.brr/config``.
+    Reload waits until the worker pool drains so no in-flight task
+    has its process replaced underneath it.
     """
     brr_dir = gitops.shared_brr_dir(repo_root)
     inbox_dir = brr_dir / "inbox"
@@ -1191,6 +1247,7 @@ def start(
 
     cfg = conf.load_config(repo_root)
     max_retries = int(cfg.get("response_retries", 1))
+    max_workers = max(1, int(cfg.get("max_workers", _DEFAULT_MAX_WORKERS)))
     dev_reload_mode = (
         dev_reload if dev_reload is not None
         else bool(cfg.get("dev_reload", False))
@@ -1206,51 +1263,86 @@ def start(
 
     if reload_watcher is not None:
         print("[brr] developer reload enabled")
-    print(f"[brr] daemon started (pid {os.getpid()})")
+    print(
+        f"[brr] daemon started (pid {os.getpid()}, "
+        f"max_workers={max_workers})"
+    )
+
+    pool = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="brr-worker",
+    )
+    # Maps event path → in-flight future, so we don't double-dispatch
+    # an event the gate hasn't observed as "done" yet on its next
+    # scan. The path is a stable identity for the inbox file.
+    in_flight: dict[Path, concurrent.futures.Future] = {}
+    reload_requested = False
 
     try:
         while running:
+            # Top of loop: poll the dev-reload watcher exactly once.
+            # The watcher mutates its own snapshot; the main thread is
+            # its only caller so the changed() bookkeeping stays
+            # consistent. Workers don't poll the watcher themselves.
             if reload_watcher is not None and reload_watcher.changed():
+                reload_requested = True
+
+            # Reap completed futures so capacity reflects reality on
+            # this iteration's dispatch decisions.
+            completed = [
+                path for path, fut in in_flight.items() if fut.done()
+            ]
+            for path in completed:
+                fut = in_flight.pop(path)
+                try:
+                    fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    # Worker crashed before returning a Task. The task
+                    # file may or may not exist; the operator sees the
+                    # traceback in the daemon console.
+                    print(f"[brr] worker crashed: {exc}")
+
+            # Quiescent reload: only re-exec when no worker is in
+            # flight, so an in-progress task can't have its process
+            # replaced underneath it. The dev_reload design's
+            # "between tasks" guarantee generalises to "between
+            # batches" under the concurrent pool.
+            if reload_requested and not in_flight:
                 print("[brr] package files changed; re-execing daemon")
-                reload_mod.reexec()
+                pool.shutdown(wait=True)
+                reload_mod.reexec()  # noreturn on success
 
-            events = protocol.list_pending(inbox_dir)
-            if events:
-                event = events[0]
-                eid = event["id"]
-                print(f"[brr] processing: {eid}")
-                protocol.set_status(event, "processing")
+            # Dispatch new events as capacity allows. Stop accepting
+            # new events once reload is requested so the pool can
+            # drain — bounds reload latency to "longest in-flight
+            # task at flag time".
+            if not reload_requested:
+                events = protocol.list_pending(inbox_dir)
+                for event in events:
+                    if event["_path"] in in_flight:
+                        continue
+                    if len(in_flight) >= max_workers:
+                        break
+                    eid = event["id"]
+                    print(f"[brr] processing: {eid}")
+                    protocol.set_status(event, "processing")
+                    fut = pool.submit(
+                        _run_worker_and_finalize,
+                        event, repo_root, responses_dir, cfg, max_retries,
+                    )
+                    in_flight[event["_path"]] = fut
 
-                task = _run_worker(
-                    event, repo_root, responses_dir, cfg, max_retries,
-                )
-                protocol.set_status(event, task.status)
-
-                if task.status == "error":
-                    print(f"[brr] task {task.id}: failed")
-                elif task.status == "conflict":
-                    print(f"[brr] task {task.id}: branch preserved (cannot fast-forward)")
-
-                _push_if_needed(
-                    repo_root,
-                    branch=(
-                        task.meta.get("changed_branch")
-                        or task.meta.get("landed_branch")
-                        or task.meta.get("preserved_branch")
-                    ),
-                    conversation_key=task.conversation_key,
-                    task_id=task.id,
-                )
-                if reload_watcher is not None and reload_watcher.changed():
-                    print("[brr] package files changed during task; re-execing daemon")
-                    reload_mod.reexec()
-            else:
-                time.sleep(_SCAN_INTERVAL)
+            time.sleep(_SCAN_INTERVAL)
 
             for t in gate_threads:
                 if not t.is_alive():
                     print(f"[brr] warning: gate thread {t.name} died")
 
     finally:
+        # Drain in-flight workers before exiting. cancel_futures=False
+        # because every submitted future has already started (we
+        # throttle dispatch ourselves to max_workers); cancellation
+        # would only cancel a queued task we don't have.
+        pool.shutdown(wait=True, cancel_futures=False)
         _clear_pid(brr_dir)
         print("[brr] daemon stopped")

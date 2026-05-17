@@ -442,8 +442,106 @@ def test_response_posts_comment_to_originating_thread(tmp_path, monkeypatch):
 
     github._deliver_responses(brr_dir, inbox, responses, "secret")
 
+    # Label-trigger events: the issue itself is the source, so the
+    # response body lands verbatim — no quote preface needed (and one
+    # would just point the comment back at its own issue).
     assert posts == [("/repos/owner/name/issues/42/comments", {"body": "the answer"})]
     assert not event_path.exists()
+
+
+def test_response_to_mention_quotes_source_comment(tmp_path, monkeypatch):
+    """Mention-triggered replies prepend a quote pointer at the source.
+
+    GitHub's issue/PR comments API has no first-class reply primitive,
+    so the closest visible thread anchor is a blockquote linking to the
+    triggering comment. Matches what the GitHub UI's "Quote reply"
+    button generates.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    protocol.create_event(
+        inbox,
+        source="github",
+        body="@brr-bot please fix",
+        github_repo="owner/name",
+        github_kind="pr-comment",
+        github_issue_number=7,
+        github_pr_number=7,
+        github_comment_id=12345,
+        github_author="alice",
+        github_html_url="https://github.com/owner/name/pull/7#issuecomment-12345",
+        github_trigger="mention",
+    )
+    event = protocol.list_pending(inbox)[0]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses, event["id"], "Done — pushed to feature-x.")
+
+    posts: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        github, "_api_post",
+        lambda token, path, body: posts.append((path, body)),
+    )
+
+    github._deliver_responses(brr_dir, inbox, responses, "secret")
+
+    assert len(posts) == 1
+    path, body = posts[0]
+    assert path == "/repos/owner/name/issues/7/comments"
+    text = body["body"]
+    assert text.startswith(
+        "> Replying to [@alice's comment]"
+        "(https://github.com/owner/name/pull/7#issuecomment-12345)"
+    )
+    assert text.endswith("Done — pushed to feature-x.")
+
+
+def test_response_to_mention_falls_back_when_author_missing(tmp_path, monkeypatch):
+    # Comments without a resolved author still get the quote pointer,
+    # just without the @-handle (rare but possible for deleted users).
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "o/r",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    protocol.create_event(
+        inbox, source="github", body="@brr-bot",
+        github_repo="o/r",
+        github_kind="issue-comment",
+        github_issue_number=3,
+        github_comment_id=77,
+        github_html_url="https://github.com/o/r/issues/3#issuecomment-77",
+        github_trigger="mention",
+    )
+    event = protocol.list_pending(inbox)[0]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses, event["id"], "ack")
+
+    posts: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        github, "_api_post",
+        lambda token, path, body: posts.append((path, body)),
+    )
+
+    github._deliver_responses(brr_dir, inbox, responses, "secret")
+
+    text = posts[0][1]["body"]
+    assert text.startswith(
+        "> Replying to [the source comment]"
+        "(https://github.com/o/r/issues/3#issuecomment-77)"
+    )
 
 
 # ── error handling ────────────────────────────────────────────────

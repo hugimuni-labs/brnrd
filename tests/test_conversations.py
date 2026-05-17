@@ -65,39 +65,89 @@ def test_conversation_key_no_source_returns_none():
     assert conversations.conversation_key_for_event({}) is None
 
 
-# ── filename encoding ───────────────────────────────────────────────
+# ── directory name encoding ─────────────────────────────────────────
 
 
-def test_safe_filename_encodes_colons():
-    assert conversations.safe_filename("telegram:42:7") == "telegram__42__7.ndjson"
+def test_safe_dir_name_encodes_colons():
+    assert conversations.safe_dir_name("telegram:42:7") == "telegram__42__7"
 
 
-def test_safe_filename_strips_unsafe_chars():
-    assert conversations.safe_filename("git:path with space") == "git__path_with_space.ndjson"
+def test_safe_dir_name_strips_unsafe_chars():
+    assert conversations.safe_dir_name("git:path with space") == "git__path_with_space"
 
 
-def test_key_from_filename_inverts_safe_filename():
-    encoded = conversations.safe_filename("telegram:42:")
-    assert conversations.key_from_filename(encoded) == "telegram:42:"
+def test_key_from_dir_name_inverts_safe_dir_name():
+    encoded = conversations.safe_dir_name("telegram:42:")
+    assert conversations.key_from_dir_name(encoded) == "telegram:42:"
+
+
+def test_conversation_path_is_directory(tmp_path):
+    path = conversations.conversation_path(tmp_path, "telegram:42:7")
+    assert path == tmp_path / "conversations" / "telegram__42__7"
+
+
+def test_event_log_path_routes_per_event(tmp_path):
+    path = conversations.event_log_path(tmp_path, "telegram:42:7", "evt-1")
+    assert path == (
+        tmp_path / "conversations" / "telegram__42__7" / "evt-1.jsonl"
+    )
 
 
 # ── append/read ──────────────────────────────────────────────────────
 
 
-def test_append_record_creates_path_and_stamps_ts(tmp_path):
-    conversations.append_record(tmp_path, "k:1", {"kind": "test"})
-    path = conversations.conversation_path(tmp_path, "k:1")
-    assert path.exists()
-    record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+def test_append_record_creates_event_file_and_stamps_ts(tmp_path):
+    conversations.append_record(
+        tmp_path, "k:1", {"kind": "test"}, event_id="evt-a",
+    )
+    file_path = conversations.event_log_path(tmp_path, "k:1", "evt-a")
+    assert file_path.exists()
+    record = json.loads(file_path.read_text(encoding="utf-8").splitlines()[0])
     assert record["kind"] == "test"
     assert "ts" in record
 
 
-def test_append_record_appends_in_order(tmp_path):
+def test_append_record_appends_in_order_within_event(tmp_path):
     for i in range(3):
-        conversations.append_record(tmp_path, "k", {"kind": "n", "i": i})
+        conversations.append_record(
+            tmp_path, "k", {"kind": "n", "i": i}, event_id="evt-a",
+        )
     records = conversations.read_records(tmp_path, "k")
     assert [r["i"] for r in records] == [0, 1, 2]
+
+
+def test_append_record_merges_across_event_files_by_ts(tmp_path):
+    # Two pipelines (event A and event B) write into the same
+    # conversation; read_records merges them sorted by ts.
+    conversations.append_record(
+        tmp_path, "k", {"kind": "n", "i": 0}, event_id="evt-a",
+    )
+    conversations.append_record(
+        tmp_path, "k", {"kind": "n", "i": 1}, event_id="evt-b",
+    )
+    conversations.append_record(
+        tmp_path, "k", {"kind": "n", "i": 2}, event_id="evt-a",
+    )
+    records = conversations.read_records(tmp_path, "k")
+    assert [r["i"] for r in records] == [0, 1, 2]
+
+
+def test_read_event_records_returns_only_one_file(tmp_path):
+    conversations.append_record(
+        tmp_path, "k", {"kind": "n", "i": 0}, event_id="evt-a",
+    )
+    conversations.append_record(
+        tmp_path, "k", {"kind": "n", "i": 1}, event_id="evt-b",
+    )
+    a_only = conversations.read_event_records(tmp_path, "k", "evt-a")
+    assert [r["i"] for r in a_only] == [0]
+
+
+def test_append_record_without_event_id_falls_back_to_orphan(tmp_path):
+    conversations.append_record(tmp_path, "k", {"kind": "stray", "i": 0})
+    orphan_path = conversations.event_log_path(tmp_path, "k", "")
+    assert orphan_path.exists()
+    assert orphan_path.name == "_orphan.jsonl"
 
 
 def test_read_records_missing_returns_empty(tmp_path):
@@ -106,14 +156,18 @@ def test_read_records_missing_returns_empty(tmp_path):
 
 def test_read_recent_tail(tmp_path):
     for i in range(15):
-        conversations.append_record(tmp_path, "k", {"kind": "n", "i": i})
+        conversations.append_record(
+            tmp_path, "k", {"kind": "n", "i": i}, event_id="evt-a",
+        )
     recent = conversations.read_recent(tmp_path, "k", limit=5)
     assert [r["i"] for r in recent] == [10, 11, 12, 13, 14]
 
 
 def test_read_recent_limit_zero_returns_all(tmp_path):
     for i in range(3):
-        conversations.append_record(tmp_path, "k", {"kind": "n", "i": i})
+        conversations.append_record(
+            tmp_path, "k", {"kind": "n", "i": i}, event_id="evt-a",
+        )
     assert len(conversations.read_recent(tmp_path, "k", limit=0)) == 3
 
 
@@ -161,12 +215,14 @@ def test_append_artifact_records_kind_and_path(tmp_path):
     conversations.append_artifact(
         tmp_path, "k",
         kind="response", path="/abs/x.md",
-        task_id="t-1", label="response:evt-1",
+        task_id="t-1", event_id="evt-1",
+        label="response:evt-1",
     )
     record = conversations.read_records(tmp_path, "k")[-1]
     assert record["kind"] == "artifact"
     assert record["artifact_kind"] == "response"
     assert record["task_id"] == "t-1"
+    assert record["event_id"] == "evt-1"
     assert record["label"] == "response:evt-1"
 
 
@@ -175,12 +231,14 @@ def test_append_update_records_type_and_payload(tmp_path):
         tmp_path, "k",
         type="task_created",
         payload={"task_id": "t-1", "branch": "auto"},
+        event_id="evt-1",
     )
     record = conversations.read_records(tmp_path, "k")[-1]
     assert record["kind"] == "update"
     assert record["type"] == "task_created"
     assert record["task_id"] == "t-1"
     assert record["branch"] == "auto"
+    assert record["event_id"] == "evt-1"
 
 
 # ── listing ──────────────────────────────────────────────────────────
@@ -191,8 +249,12 @@ def test_list_conversations_empty(tmp_path):
 
 
 def test_list_conversations_returns_decoded_keys(tmp_path):
-    conversations.append_record(tmp_path, "telegram:1:", {"kind": "n"})
-    conversations.append_record(tmp_path, "slack:C:1.0", {"kind": "n"})
+    conversations.append_record(
+        tmp_path, "telegram:1:", {"kind": "n"}, event_id="evt-a",
+    )
+    conversations.append_record(
+        tmp_path, "slack:C:1.0", {"kind": "n"}, event_id="evt-b",
+    )
     keys = conversations.list_conversations(tmp_path)
     assert "telegram:1:" in keys
     assert "slack:C:1.0" in keys
@@ -202,9 +264,53 @@ def test_list_conversations_returns_decoded_keys(tmp_path):
 
 
 def test_records_for_task_filters_by_task_id(tmp_path):
-    conversations.append_record(tmp_path, "k", {"kind": "task", "task_id": "t-1"})
-    conversations.append_record(tmp_path, "k", {"kind": "update", "task_id": "t-2"})
-    conversations.append_record(tmp_path, "k", {"kind": "update", "task_id": "t-1", "type": "done"})
+    conversations.append_record(
+        tmp_path, "k", {"kind": "task", "task_id": "t-1"}, event_id="evt-a",
+    )
+    conversations.append_record(
+        tmp_path, "k", {"kind": "update", "task_id": "t-2"}, event_id="evt-b",
+    )
+    conversations.append_record(
+        tmp_path, "k", {"kind": "update", "task_id": "t-1", "type": "done"},
+        event_id="evt-a",
+    )
     matches = conversations.records_for_task(tmp_path, "k", "t-1")
     assert len(matches) == 2
     assert all(r["task_id"] == "t-1" for r in matches)
+
+
+# ── Concurrency: per-event-pipeline writes don't share a file ────────
+
+
+def test_concurrent_appends_for_different_events_dont_lose_records(tmp_path):
+    """Two pipelines writing into the same conversation must each see
+    every record they emitted — the per-event-pipeline file layout
+    means concurrent writers never share a file.
+    """
+    import threading
+
+    barrier = threading.Barrier(2)
+
+    def writer(event_id: str, count: int) -> None:
+        barrier.wait()
+        for i in range(count):
+            conversations.append_record(
+                tmp_path, "k", {"kind": "n", "i": i, "src": event_id},
+                event_id=event_id,
+            )
+
+    t1 = threading.Thread(target=writer, args=("evt-a", 50))
+    t2 = threading.Thread(target=writer, args=("evt-b", 50))
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    a_records = conversations.read_event_records(tmp_path, "k", "evt-a")
+    b_records = conversations.read_event_records(tmp_path, "k", "evt-b")
+    assert len(a_records) == 50
+    assert len(b_records) == 50
+    # Each pipeline's file is single-writer, so iteration order is the
+    # append order.
+    assert [r["i"] for r in a_records] == list(range(50))
+    assert [r["i"] for r in b_records] == list(range(50))
+    # Merged read across both files returns every record exactly once.
+    all_records = conversations.read_records(tmp_path, "k")
+    assert len(all_records) == 100

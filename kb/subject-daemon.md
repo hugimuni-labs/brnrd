@@ -17,11 +17,13 @@ The bottom-up source route is still
 
 The daemon is intentionally small and foreground-owned. `brr up` runs
 one Python process in the repo, writes `.brr/daemon.pid`, starts any
-configured gate threads, and loops over `.brr/inbox/` looking for
-pending events. `brr down` sends `SIGTERM` to the recorded PID. The
-signal handlers for `SIGTERM` and `SIGINT` only flip the loop flag,
-so a signal received during `_run_worker` asks the daemon to drain the
-current task before exiting rather than trying to cancel the runner.
+configured gate threads, and dispatches pending events from
+`.brr/inbox/` into a bounded worker pool. `brr down` sends `SIGTERM`
+to the recorded PID. The signal handlers for `SIGTERM` and `SIGINT`
+only flip the loop flag, so a signal received while workers are
+running asks the daemon to stop accepting new events and drain the
+pool before exiting rather than trying to cancel the in-flight
+runners.
 
 The daemon owns orchestration, not meaning:
 
@@ -41,11 +43,54 @@ The daemon owns orchestration, not meaning:
   env synthesis hub is [`subject-envs.md`](subject-envs.md); the protocol
   spec lives in [`design-env-interface.md`](design-env-interface.md).
 
-The serial-v1 guarantee still matters. The old concurrent-worktree plan
-imagined a pool and merge coordinator, but the shipped system keeps one
-daemon worker active at a time and uses per-task branches/worktrees for
-isolation. That preserves simple recovery semantics: one active event,
-one active task, one response, one push path.
+## Concurrency model
+
+The daemon runs tasks concurrently in a bounded worker pool (default
+`max_workers=2`, configurable via `.brr/config`). Each worker thread
+takes one pending event from the inbox, runs the full `_run_worker`
+pipeline end-to-end (including push and post-task housekeeping), and
+returns. Workers don't share mutable state with each other — the
+shipped design is contention-free by partitioning, not by locking.
+
+The partitioning rules that make concurrency safe without per-shared-
+file locks:
+
+- **Worktree / branch identity is per task.** Each task gets a fresh
+  `brr/<task-id>` branch sprouted from the resolved seed ref into
+  `.brr/worktrees/<task-id>/`. Task ids are globally unique
+  (`evt-<nanotime>-<random>`), so two concurrent task starts never
+  collide on branch name or worktree directory.
+- **Conversation log is one file per event pipeline.**
+  `.brr/conversations/<key>/<event-id>.jsonl` holds every record one
+  worker invocation emits (event arrival, task lifecycle, update
+  packets, artifact records). The file has exactly one writer for its
+  lifetime. Readers glob the directory and merge by `ts` for
+  projection. The conversations bundled doc
+  ([`src/brr/docs/conversations.md`](../src/brr/docs/conversations.md))
+  describes the user-visible side; the design page named below
+  carries the per-event-file partitioning rationale.
+- **Gate progress card state is one file per task.**
+  `.brr/gates/<gate>/progress/<task-id>.json` carries the rendered
+  card state for one task; the render path reads and writes only its
+  own file.
+- **Per-task artefacts** (`.brr/tasks/<task-id>.md`, response file
+  at `.brr/responses/<event-id>.md`, trace dirs) are already keyed by
+  id and don't overlap.
+
+What still needs explicit synchronisation, because it touches a
+genuinely shared git ref:
+
+- **Auto-land fast-forward** (`gitops.fast_forward_branch` in the
+  worktree finalize path) takes a per-branch lock keyed on the
+  resolved target name, so two tasks landing on the same auto-land
+  target serialise correctly. Tasks targeting different branches
+  proceed in parallel.
+- **Branch push** (`_push_if_needed`) takes the same kind of
+  per-branch lock keyed on the branch being pushed, for the same
+  reason.
+
+Cancellation is still not in v1: signals request drain-and-exit, they
+don't interrupt a running AI CLI.
 
 ## Worker lifecycle
 
@@ -120,10 +165,12 @@ For brr self-development, the restart pain is real but narrower than a
 product restart feature. The shipped path is captured in
 [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md): use an
 editable install, then run `brr up --dev-reload` (or set
-`dev_reload=true`) so the foreground daemon re-execs between tasks when
-brr's own package files change. The reload path remains terminal-owned
-and quiescent-only, not a remote command, and it stays explicit rather
-than becoming unconditional `brr up` behaviour.
+`dev_reload=true`) so the foreground daemon re-execs when brr's own
+package files change. Under the concurrent worker pool the reload
+remains quiescent-only — when a worker notices changed package files
+on task completion, the daemon stops accepting new events and re-execs
+once the pool drains to zero in-flight tasks. The reload path stays
+terminal-owned and explicit, not a remote command.
 
 ## Status and troubleshooting
 
@@ -145,9 +192,16 @@ removed on 2026-05-14 once the only importers were tests and stale docs.
   it is not needed for the local brr self-development reload loop.
 - **True cancellation.** The daemon has no cancellation in v1. Signals
   request drain-and-exit; they do not interrupt a running AI CLI.
-- **Concurrent worker pool.** Still deferred. The current code and tests
-  assume serial task execution, and the restart/reload design relies on
-  that simplicity by only re-execing between tasks.
+
+(Earlier versions of this page recorded a concurrent worker pool as
+deferred and the original merge-coordinator design as abandoned;
+both were reversed on 2026-05-16 when concurrency shipped on top of
+the contention-free per-event/per-task partitioning above, so the
+coordinator never came back. See
+[`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) for
+the lineage of the partial pre-2026-05-16 shape and
+[`design-concurrent-execution.md`](design-concurrent-execution.md)
+for the accepted design.)
 
 ## Read next
 
