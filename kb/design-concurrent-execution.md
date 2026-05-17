@@ -84,8 +84,11 @@ Read paths:
   records carry strictly increasing timestamps within a file (single
   writer) and the projection cares about chronological order across
   files for context.
-- `read_recent(brr_dir, key, limit)` is the same path with a tail
-  slice.
+- `read_recent(brr_dir, key, limit)` returns the last *limit* records
+  by ``ts`` using a heap merge over per-file reverse line iteration, so
+  prompt tails do not read every line of every jsonl when only a short
+  window is needed. ``limit <= 0`` falls back to a full ``read_records``
+  merge (same as "give me everything").
 - `records_for_task(brr_dir, key, task_id)` benefits from the per-
   event layout: we read just `<event-id>.jsonl` (when we can map
   task id → event id) instead of filtering across all conversation

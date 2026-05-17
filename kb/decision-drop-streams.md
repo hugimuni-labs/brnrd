@@ -84,13 +84,19 @@ Conversations as a thin per-thread log:
 
 ```
 .brr/conversations/
-    <gate-thread-key>.ndjson    — append-only event/task/artifact/update records
+    <safe-key>/
+        <event-id>.jsonl    — append-only records for one pipeline run
 ```
 
 A conversation has no manifest, no title, no intent, no status. It is
 a routing anchor (`gate_thread_key`) plus an ordered history. Daemon
 appends event arrivals, task lifecycle records, artifact creations,
-and lifecycle update packets to a single ndjson per gate thread.
+and lifecycle update packets under that directory — one jsonl per
+event pipeline so concurrent workers never share a writer
+([`design-concurrent-execution.md`](design-concurrent-execution.md)).
+The earliest post-streams shape used a single ndjson per key; that
+layout was superseded on 2026-05-16 by the per-event partitioning
+above.
 
 For agent context, prompts now carry a `## Recent in this conversation`
 block fed by tailing the conversation log. No frozen identity, just

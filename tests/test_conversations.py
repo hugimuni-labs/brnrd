@@ -188,6 +188,39 @@ def test_read_recent_tail(tmp_path):
     assert [r["i"] for r in recent] == [10, 11, 12, 13, 14]
 
 
+def test_read_recent_matches_read_records_tail_multi_event(tmp_path):
+    key = "telegram:1:"
+    for i in range(5):
+        conversations.append_record(
+            tmp_path, key, {"kind": "n", "i": i}, event_id="evt-a",
+        )
+    for i in range(5, 12):
+        conversations.append_record(
+            tmp_path, key, {"kind": "n", "i": i}, event_id="evt-b",
+        )
+    full = conversations.read_records(tmp_path, key)
+    for lim in (1, 3, 7, 12, 20):
+        want = full[-lim:] if lim <= len(full) else full
+        got = conversations.read_recent(tmp_path, key, limit=lim)
+        assert got == want
+
+
+def test_read_recent_large_file_scans_from_tail(tmp_path):
+    """Many lines in one jsonl: read_recent must match full merge tail."""
+    key = "slack:C1:"
+    path = conversations.event_log_path(tmp_path, key, "evt-big")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for i in range(400):
+        ts = f"2026-01-01T00:00:00.{i:06d}Z"
+        rows.append(json.dumps({"ts": ts, "i": i}, sort_keys=True))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    full = conversations.read_records(tmp_path, key)
+    assert len(full) == 400
+    got = conversations.read_recent(tmp_path, key, limit=15)
+    assert got == full[-15:]
+
+
 def test_read_recent_limit_zero_returns_all(tmp_path):
     for i in range(3):
         conversations.append_record(

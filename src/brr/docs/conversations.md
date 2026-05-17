@@ -1,7 +1,8 @@
 # Conversations
 
 A conversation is the running history of one gate thread — Telegram
-chat+topic, Slack channel+thread, or git source file. brr appends
+chat+topic, Slack channel+thread, or GitHub repo+issue/PR (other forges
+mirror the same idea). brr appends
 events, task lifecycle rows, artifact records, and lifecycle update
 packets under a per-thread directory. That history is the recent-
 activity context the next agent in the same thread sees.
@@ -23,7 +24,7 @@ A conversation key is the gate-thread fingerprint:
 
 - `telegram:<chat_id>:<topic_id>`
 - `slack:<channel>:<thread_ts>`
-- `git:<file>`
+- `github:<owner/repo>:<issue_or_pr_number>`
 
 For directory names, `:` is encoded as `__`. Each `<event-id>.jsonl`
 file is owned by the one worker that handles that event — the
@@ -40,8 +41,12 @@ mutable state across pipelines. Every record carries a `ts` (UTC ISO
 
 Tail any one event's jsonl to see that pipeline's lifecycle. Reading
 the whole directory and sorting by `ts` reconstructs the full
-conversation history, which is what `brr.conversations.read_records`
-and the run-progress projection do under the hood.
+conversation history (`brr.conversations.read_records`). For prompt
+tails and other “last *N* rows” use cases, `read_recent` merges the
+newest *N* records by `ts` without loading every line of every file
+(assumes `ts` is non-decreasing within each jsonl — the normal
+single-writer append contract). The run-progress projection reads the
+full merged timeline for a task via `read_records`.
 
 ## Lifecycle
 
@@ -50,7 +55,7 @@ worker runs:
 
 1. Explicit `conversation_key` carried on the event (rare).
 2. Gate-thread fingerprint based on the event's source (Telegram chat,
-   Slack thread, git source file).
+   Slack thread, GitHub issue/PR).
 
 If neither resolves, the event still gets a task and a response, but
 no conversation log is written. This is by design — orphan or local
@@ -116,4 +121,4 @@ they were leaky by design when derived from raw chat text.
 - A workflow engine. Conversations are coordination state, not
   orchestration rules. Agents stay in charge of the work itself.
 - A dashboard. Richer renderings can be built on top of the same
-  ndjson log when needed.
+  per-thread jsonl files when needed.
