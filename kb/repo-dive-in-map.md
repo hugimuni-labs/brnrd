@@ -261,7 +261,7 @@ Read:
 - [`src/brr/envs/__init__.py`](../src/brr/envs/__init__.py)
 - [`src/brr/prompts/runners.md`](../src/brr/prompts/runners.md)
 - [`src/brr/prompts/run.md`](../src/brr/prompts/run.md)
-- [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md) — thin redundancy pass; pointer at AGENTS.md → "Knowledge base shape"
+- [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md) — thin redundancy pass; pointer at AGENTS.md for the kb rules
 - [`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py) — deterministic kb consistency scanner that feeds the maintenance prompt
 - [`src/brr/kb_health.py`](../src/brr/kb_health.py) — graph stats (pages by kind, in-degree, peer orphans, log size) injected next to preflight findings
 
@@ -941,8 +941,7 @@ Prompt files to read alongside the modules:
 - [`runners.md`](../src/brr/prompts/runners.md) — runner profile
   registry.
 - [`kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md) —
-  thin redundancy pass; points at AGENTS.md → "Knowledge base shape"
-  for the rules.
+  thin redundancy pass; points at AGENTS.md for the kb rules.
 
 ### Daemon freshness and forge inference
 
@@ -1247,9 +1246,9 @@ injected, alongside a graph-shape block from
 peer orphans, `log.md` size, "task touched N pages this run") and
 the list of kb / AGENTS.md files the preceding task changed.
 
-The LLM pass is deliberately thin — it points at AGENTS.md →
-"Knowledge base shape" for the rules and either addresses the
-findings or does a brief redundancy check. The primary maintenance
+The LLM pass is deliberately thin — it points at AGENTS.md for the
+kb rules and either addresses the findings or does a brief redundancy
+check. The primary maintenance
 contract lives in AGENTS.md so external tools (Cursor, Codex CLI,
 Claude Code) follow the same rules without needing brr's preflight.
 
@@ -1478,7 +1477,7 @@ Use these heuristics while reading:
   per-task gate progress files in
   [gates/telegram.py](../src/brr/gates/telegram.py) /
   [gates/slack.py](../src/brr/gates/slack.py).
-- If a file talks about kb consistency, orphan pages, broken cross-links, or "should this kb-maintenance pass run?", jump to [kb_preflight.py](../src/brr/kb_preflight.py) and `_maybe_kb_maintenance` in [daemon.py](../src/brr/daemon.py). For pages-by-kind / in-degree / peer-orphans / log size, jump to [kb_health.py](../src/brr/kb_health.py). The maintenance contract itself lives in [AGENTS.md → "Knowledge base shape"](../src/brr/AGENTS.md), not in the brr daemon.
+- If a file talks about kb consistency, orphan pages, broken cross-links, or "should this kb-maintenance pass run?", jump to [kb_preflight.py](../src/brr/kb_preflight.py) and `_maybe_kb_maintenance` in [daemon.py](../src/brr/daemon.py). For pages-by-kind / in-degree / peer-orphans / log size, jump to [kb_health.py](../src/brr/kb_health.py). The maintenance contract itself lives in [AGENTS.md](../src/brr/AGENTS.md), not in the brr daemon.
 - If a file talks about cwd, worktrees, Docker, response path translation, or runner credential wiring (env passthrough, login-dir mounts, git safe.directory), jump to [envs/__init__.py](../src/brr/envs/__init__.py).
 - If a file talks about clickable "view branch" URLs, remote-URL parsing, or `forge.kind` / `forge.url_base` overrides, jump to [forges.py](../src/brr/forges.py) and `_forge_view_url` in [daemon.py](../src/brr/daemon.py).
 - If a file talks about transport, auth, polling, or delivery, jump to [gates](../src/brr/gates/). For label-on-issue, mention-in-comment, or PR-comment events carrying `branch_target`, [gates/github.py](../src/brr/gates/github.py) specifically.

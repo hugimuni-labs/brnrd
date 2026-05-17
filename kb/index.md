@@ -3,8 +3,8 @@
 Pages are grouped by **subject area** — Environments, Tasks &
 branching, Conversations & responses, Documentation strategy, Fleet &
 overlays, KB itself, Research. The grouping is editorial: the kb is
-ultimately a graph (see [`AGENTS.md`](../AGENTS.md) → "Knowledge base
-shape" and [`decision-kb-shape.md`](decision-kb-shape.md)). The index
+ultimately a graph (see the kb rules in [`AGENTS.md`](../AGENTS.md)
+and [`decision-kb-shape.md`](decision-kb-shape.md)). The index
 is the canonical entry point; once a subject accretes a real hub
 page, link it at the top of its section.
 

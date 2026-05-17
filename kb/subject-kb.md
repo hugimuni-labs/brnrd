@@ -5,7 +5,7 @@ lives, what it's for, how it stays coherent, and what each surrounding
 artifact contributes.
 
 This is a *subject hub* in the sense
-[AGENTS.md → "Knowledge base shape"](../AGENTS.md) describes —
+[AGENTS.md's kb rules](../AGENTS.md) describe —
 synthesis you can read in one sitting to understand the kb without
 reconstructing it from a dozen scattered pages. Schema lives in
 AGENTS.md; the *why* of any given choice lives in
@@ -122,8 +122,8 @@ The brr daemon's role is the **safety net**:
   invoked from
   [`daemon._maybe_kb_maintenance`](../src/brr/daemon.py)) only runs
   when the preflight has findings *or* the task touched `kb/`. The
-  prompt points back at AGENTS.md → "Knowledge base shape" for the
-  rules and addresses the injected findings.
+  prompt points back at AGENTS.md for the kb rules and addresses the
+  injected findings.
 
 External tools (Cursor / Codex / Claude Code) don't have brr's
 preflight, so they fall back to the AGENTS.md schema alone.
@@ -167,11 +167,14 @@ The execution plan is in
 The inline maintenance pass
 ([`daemon._maybe_kb_maintenance`](../src/brr/daemon.py) plus
 [`prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md))
-runs on the task's own branch after delivery so cleanup rides on the
-same branch as the work that triggered it. The plan also makes the
-pass commit its edits and surface a status packet so the operator
-sees that grooming happened, rather than the pass silently dropping
-edits (the current bug).
+runs on the task's own branch after delivery so cleanup rides with the
+work that triggered it. The prompt asks the maintenance runner to
+commit its own logical edits; as a fallback, the daemon rolls any
+leftover allowed `kb/` / `AGENTS.md` edits into one `brr maintenance`
+commit and emits `kb_maintenance_done` with commit/file counts so the
+operator sees whether grooming landed. Earlier versions could drop
+maintenance edits silently; the current daemon path stamps or exposes
+them.
 
 ## What was deliberately rejected
 
@@ -205,8 +208,8 @@ A few attractive ideas that have been considered and not pursued:
 
 In priority order:
 
-1. [`AGENTS.md`](../AGENTS.md) → "Knowledge base shape" — the
-   universal rules every agent follows.
+1. [`AGENTS.md`](../AGENTS.md) — the universal kb rules every agent
+   follows.
 2. [`decision-kb-shape.md`](decision-kb-shape.md) — why those rules,
    what triggered the rethink, what was deferred.
 3. [`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md)
