@@ -1,7 +1,9 @@
 """Conversation log — per-event-pipeline append-only history.
 
 A conversation is the history of one gate thread (Telegram chat, Slack
-thread, git source file). It has no manifest, no title, no intent —
+thread, GitHub issue or pull request). Other forge gates are expected
+to follow the same pattern: a stable ``source``-specific key derived
+from their thread anchor fields. It has no manifest, no title, no intent —
 those were the leaky stream identity fields removed in the 2026-05-05
 streams-to-conversations refactor (see ``kb/decision-drop-streams.md``).
 
@@ -68,9 +70,9 @@ def gate_thread_key(meta: dict[str, Any]) -> str | None:
     """Return a stable conversation key for the gate thread, or None.
 
     The key threads repeat events from the same conversational source
-    (Telegram chat+topic, Slack channel+thread, git source file) onto
-    the same conversation directory. Returns None when an event carries
-    no gate context that can serve as a stable thread anchor.
+    (Telegram chat+topic, Slack channel+thread, GitHub repo+issue/PR)
+    onto the same conversation directory. Returns None when an event
+    carries no gate context that can serve as a stable thread anchor.
     """
     source = (meta.get("source") or "").strip()
     if source == "telegram":
@@ -85,10 +87,17 @@ def gate_thread_key(meta: dict[str, Any]) -> str | None:
         if channel:
             return f"slack:{channel}:{thread}"
         return None
-    if source == "git":
-        f = meta.get("git_file") or ""
-        if f:
-            return f"git:{f}"
+    if source == "github":
+        repo = (meta.get("github_repo") or "").strip()
+        raw_n = meta.get("github_issue_number")
+        if isinstance(raw_n, int):
+            num = raw_n
+        elif isinstance(raw_n, str) and raw_n.strip().isdigit():
+            num = int(raw_n.strip())
+        else:
+            num = None
+        if repo and num is not None:
+            return f"github:{repo}:{num}"
         return None
     if source:
         return f"{source}:default"
@@ -101,7 +110,7 @@ def conversation_key_for_event(event: dict[str, Any]) -> str | None:
     Order:
 
     1. Explicit ``conversation_key`` carried on the event.
-    2. Gate-thread fingerprint (Telegram chat, Slack thread, git file).
+    2. Gate-thread fingerprint (Telegram chat, Slack thread, GitHub issue/PR).
     """
     explicit = event.get("conversation_key")
     if isinstance(explicit, str) and explicit.strip():
