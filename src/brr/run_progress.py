@@ -440,6 +440,7 @@ class RenderStyle:
 PLAIN_STYLE = RenderStyle()
 TELEGRAM_HTML_STYLE = RenderStyle(done_open="<s>", done_close="</s>")
 SLACK_MRKDWN_STYLE = RenderStyle(done_open="~", done_close="~")
+GITHUB_MARKDOWN_STYLE = RenderStyle(done_open="~~", done_close="~~")
 
 
 def render_text(
