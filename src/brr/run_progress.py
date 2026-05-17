@@ -687,9 +687,18 @@ def _parse_iso(value: str | None) -> datetime | None:
 
 
 def _to_iso(when: datetime) -> str:
+    """Format a datetime as microsecond-precision UTC ISO 8601.
+
+    Microsecond precision matches the resolution emitted by
+    ``conversations._now_iso`` so callers that round-trip the value
+    through :func:`_elapsed_seconds` get sub-second accuracy back.
+    Second-precision rounding here historically lost up to ~1s on the
+    chat-card running counter.
+    """
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    utc = when.astimezone(timezone.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond:06d}Z"
 
 
 def _elapsed_seconds(start: str | None, end: str | None) -> float | None:

@@ -14,6 +14,7 @@ incoming messages and stored on each event.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 import urllib.request
@@ -78,12 +79,20 @@ def _send_message(
     topic_id: int | None = None,
     *,
     parse_mode: str | None = None,
+    reply_to_message_id: int | None = None,
 ) -> dict:
     params: dict = {"chat_id": chat_id, "text": text}
     if topic_id:
         params["message_thread_id"] = topic_id
     if parse_mode:
         params["parse_mode"] = parse_mode
+    if reply_to_message_id:
+        # ``allow_sending_without_reply`` keeps delivery resilient when
+        # the originating message has been deleted by the user before
+        # the runner finished — Telegram would otherwise return a 400
+        # and the response would be dropped.
+        params["reply_to_message_id"] = reply_to_message_id
+        params["allow_sending_without_reply"] = True
     return _api_call(token, "sendMessage", params)
 
 
@@ -118,15 +127,31 @@ def _post_gist(content: str, filename: str = "result.md") -> str | None:
     return None
 
 
-def _send_with_overflow(token: str, chat_id: int, topic_id: int | None, text: str) -> None:
+def _send_with_overflow(
+    token: str,
+    chat_id: int,
+    topic_id: int | None,
+    text: str,
+    *,
+    reply_to_message_id: int | None = None,
+) -> None:
     if len(text) <= _MAX_TG_LEN:
-        _send_message(token, chat_id, text, topic_id)
+        _send_message(
+            token, chat_id, text, topic_id,
+            reply_to_message_id=reply_to_message_id,
+        )
         return
     url = _post_gist(text)
     if url:
-        _send_message(token, chat_id, f"Result: {url}", topic_id)
+        _send_message(
+            token, chat_id, f"Result: {url}", topic_id,
+            reply_to_message_id=reply_to_message_id,
+        )
     else:
-        _send_message(token, chat_id, text[:_MAX_TG_LEN] + "\n\n[truncated]", topic_id)
+        _send_message(
+            token, chat_id, text[:_MAX_TG_LEN] + "\n\n[truncated]", topic_id,
+            reply_to_message_id=reply_to_message_id,
+        )
 
 
 # ── State ────────────────────────────────────────────────────────────
@@ -149,28 +174,45 @@ def _save_state(brr_dir: Path, state: dict) -> None:
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
 
-def _progress_state_path(brr_dir: Path) -> Path:
-    return brr_dir / "gates" / "telegram_progress.json"
+_PROGRESS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def _load_progress_state(brr_dir: Path) -> dict:
-    path = _progress_state_path(brr_dir)
+def _progress_state_path(brr_dir: Path, task_id: str) -> Path:
+    """Per-task progress card state file.
+
+    Each task owns its own state file under
+    ``.brr/gates/telegram/progress/<task-id>.json``. The render path for
+    task A only reads / writes A's file, so concurrent workers handling
+    different tasks never share a state surface. See
+    ``kb/design-concurrent-execution.md``.
+    """
+    safe = _PROGRESS_SAFE_RE.sub("_", task_id) if task_id else "_unknown"
+    return brr_dir / "gates" / "telegram" / "progress" / f"{safe}.json"
+
+
+def _load_progress_for_task(brr_dir: Path, task_id: str) -> dict | None:
+    """Return this task's previously-rendered card state, or None."""
+    path = _progress_state_path(brr_dir, task_id)
     if not path.exists():
-        return {}
+        return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}
+        return None
 
 
-def _save_progress_state(brr_dir: Path, state: dict) -> None:
-    path = _progress_state_path(brr_dir)
+def _save_progress_for_task(
+    brr_dir: Path, task_id: str, entry: dict,
+) -> None:
+    """Write this task's card state file (atomic via rename)."""
+    path = _progress_state_path(brr_dir, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def _progress_key(task_id: str) -> str:
-    return task_id
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(entry, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -296,6 +338,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             continue
 
         user = msg.get("from", {}).get("first_name", "?")
+        message_id = msg.get("message_id")
         protocol.create_event(
             inbox_dir,
             source="telegram",
@@ -303,6 +346,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             telegram_chat_id=chat_id,
             telegram_topic_id=topic_id or "",
             telegram_user=user,
+            telegram_message_id=message_id if message_id is not None else "",
         )
 
     state["offset"] = offset
@@ -332,8 +376,12 @@ def _deliver_responses(
             print(f"[brr:telegram] delivery error for {eid}: missing chat id")
             continue
         topic_id = _event_int(event, "telegram_topic_id", default_topic_id)
+        reply_to = _event_int(event, "telegram_message_id")
         try:
-            _send_with_overflow(token, chat_id, topic_id, body)
+            _send_with_overflow(
+                token, chat_id, topic_id, body,
+                reply_to_message_id=reply_to,
+            )
         except Exception as e:
             print(f"[brr:telegram] delivery error for {eid}: {e}")
             continue
@@ -473,22 +521,23 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     if chat_id is None:
         return
     topic_id = _coerce_optional_int(task.meta.get("telegram_topic_id"))
+    # Thread the initial card under the user's message. Subsequent edits
+    # ride on the stored ``message_id`` (Telegram has no way to change a
+    # message's reply target after the fact, so this only matters once).
+    reply_to = _coerce_optional_int(task.meta.get("telegram_message_id"))
 
     text = _build_card_text(brr_dir, conv_key, task_id)
     if text is None:
         return
 
-    progress_state = _load_progress_state(brr_dir)
-    key = _progress_key(task_id)
-    entry = progress_state.get(key)
+    entry = _load_progress_for_task(brr_dir, task_id)
 
     if entry and entry.get("last_text") == text:
         # Identical to the last rendered message — nothing to do. Avoids
         # the Telegram round-trip and the "message is not modified" 400
         # that would come back if we sent it.
         entry["last_render"] = ptype
-        progress_state[key] = entry
-        _save_progress_state(brr_dir, progress_state)
+        _save_progress_for_task(brr_dir, task_id, entry)
         return
 
     try:
@@ -508,38 +557,37 @@ def render_update(brr_dir: Path, packet: Any) -> None:
                 # Fall through to send a replacement.
                 resp = _send_message(
                     token, chat_id, text, topic_id, parse_mode="HTML",
+                    reply_to_message_id=reply_to,
                 )
                 message_id = (resp.get("result") or {}).get("message_id")
                 if message_id is None:
                     return
-                progress_state[key] = {
+                _save_progress_for_task(brr_dir, task_id, {
                     "chat_id": chat_id,
                     "topic_id": topic_id,
                     "message_id": message_id,
                     "last_render": ptype,
                     "last_text": text,
-                }
-                _save_progress_state(brr_dir, progress_state)
+                })
                 return
             entry["last_render"] = ptype
             entry["last_text"] = text
-            progress_state[key] = entry
-            _save_progress_state(brr_dir, progress_state)
+            _save_progress_for_task(brr_dir, task_id, entry)
             return
 
         resp = _send_message(
             token, chat_id, text, topic_id, parse_mode="HTML",
+            reply_to_message_id=reply_to,
         )
         message_id = (resp.get("result") or {}).get("message_id")
         if message_id is None:
             return
-        progress_state[key] = {
+        _save_progress_for_task(brr_dir, task_id, {
             "chat_id": chat_id,
             "topic_id": topic_id,
             "message_id": message_id,
             "last_render": ptype,
             "last_text": text,
-        }
-        _save_progress_state(brr_dir, progress_state)
+        })
     except Exception:
         return

@@ -3,8 +3,8 @@
 A conversation is the running history of one gate thread — Telegram
 chat+topic, Slack channel+thread, or git source file. brr appends
 events, task lifecycle rows, artifact records, and lifecycle update
-packets to one ndjson per thread. That log is the recent-activity
-context the next agent in the same thread sees.
+packets under a per-thread directory. That history is the recent-
+activity context the next agent in the same thread sees.
 
 The model is intentionally small. Conversations have **no manifest,
 no title, no intent, no status**. They exist only to thread events
@@ -15,7 +15,8 @@ project knowledge still belongs in `kb/`.
 
 ```
 .brr/conversations/
-    <safe-key>.ndjson    — append-only records for one gate thread
+    <safe-key>/
+        <event-id>.jsonl    — one pipeline run's append-only records
 ```
 
 A conversation key is the gate-thread fingerprint:
@@ -24,8 +25,11 @@ A conversation key is the gate-thread fingerprint:
 - `slack:<channel>:<thread_ts>`
 - `git:<file>`
 
-For filenames, `:` is encoded as `__`. Each file is an append-only
-ndjson; every record carries a `ts` (UTC ISO 8601) and a `kind`:
+For directory names, `:` is encoded as `__`. Each `<event-id>.jsonl`
+file is owned by the one worker that handles that event — the
+contention-free layout keeps the concurrent worker pool from sharing
+mutable state across pipelines. Every record carries a `ts` (UTC ISO
+8601, microsecond precision) and a `kind`:
 
 | `kind`   | What it captures                                          |
 |----------|-----------------------------------------------------------|
@@ -34,8 +38,10 @@ ndjson; every record carries a `ts` (UTC ISO 8601) and a `kind`:
 | `update` | A lifecycle update packet for a task (typed via `type:`)  |
 | `artifact` | A produced artifact (response file, durable kb page, etc.) |
 
-Tail the log to see the conversation history. Filter by `task_id` to
-project a single task's lifecycle.
+Tail any one event's jsonl to see that pipeline's lifecycle. Reading
+the whole directory and sorting by `ts` reconstructs the full
+conversation history, which is what `brr.conversations.read_records`
+and the run-progress projection do under the hood.
 
 ## Lifecycle
 
