@@ -218,6 +218,12 @@ def build_kb_maintenance_prompt(repo_root: Path) -> str:
 # in-flight event/task (filtered out before formatting) don't starve the
 # tail. Keep the daemon's read cap = RECENT_CONVERSATION_MAX + headroom.
 RECENT_CONVERSATION_MAX = 8
+_RECENT_CONTEXT_UPDATE_TYPES = {
+    "conflict",
+    "done",
+    "failed",
+    "push_done",
+}
 
 
 def _build_task_context_bundle(
@@ -348,7 +354,7 @@ def _build_task_context_bundle(
                 "placeholder name."
             )
 
-    recent_block = _format_recent_conversation(recent_conversation)
+    recent_block = format_recent_conversation(recent_conversation)
     if recent_block:
         sections.append("")
         sections.append("### Recent in this conversation")
@@ -367,7 +373,7 @@ def _build_task_context_bundle(
     return "\n".join(sections) + "\n"
 
 
-def _format_recent_conversation(
+def format_recent_conversation(
     records: list[dict[str, Any]] | None,
 ) -> str:
     """Render the last few conversation records as human-readable bullets.
@@ -379,41 +385,72 @@ def _format_recent_conversation(
     if not records:
         return ""
     bullets: list[str] = []
-    for record in records[-RECENT_CONVERSATION_MAX:]:
-        kind = record.get("kind")
-        ts = record.get("ts", "")
-        line: str | None = None
-        if kind == "event":
-            summary = (record.get("summary") or "").strip()
-            source = record.get("source") or ""
-            line = f"- {ts} event ({source}): {summary}".rstrip()
-        elif kind == "task":
-            tid = record.get("task_id", "")
-            status = record.get("status") or "pending"
-            branch = (
-                record.get("changed_branch")
-                or record.get("auto_land_branch")
-                or record.get("branch_name")
-                or ""
-            )
-            line = f"- {ts} task {tid} status={status} branch={branch}"
-        elif kind == "update":
-            ptype = record.get("type") or ""
-            tid = record.get("task_id") or ""
-            stage = record.get("stage") or ""
-            err = record.get("error") or ""
-            bits = [f"- {ts} update {ptype}"]
-            if tid:
-                bits.append(f"task={tid}")
-            if stage:
-                bits.append(f"stage={stage}")
-            if err:
-                bits.append(f"error={err}")
-            line = " ".join(bits)
-        elif kind == "artifact":
-            label = record.get("label") or record.get("artifact_kind") or ""
-            path = record.get("path") or ""
-            line = f"- {ts} artifact {label} {path}".rstrip()
+    for record in reversed(records):
+        line = _recent_conversation_line(record)
         if line:
             bullets.append(line)
+        if len(bullets) >= RECENT_CONVERSATION_MAX:
+            break
+    bullets.reverse()
     return "\n".join(bullets)
+
+
+def _format_recent_conversation(
+    records: list[dict[str, Any]] | None,
+) -> str:
+    """Backward-compatible private alias for older prompt tests/helpers."""
+    return format_recent_conversation(records)
+
+
+def recent_conversation_record_is_useful(record: dict[str, Any]) -> bool:
+    """Return whether *record* belongs in ordinary daemon prompt context."""
+    return _recent_conversation_line(record) is not None
+
+
+def _recent_conversation_line(record: dict[str, Any]) -> str | None:
+    kind = record.get("kind")
+    ts = record.get("ts", "")
+    if kind == "event":
+        summary = (record.get("summary") or "").strip()
+        if not summary:
+            return None
+        source = record.get("source") or ""
+        return f"- {ts} event ({source}): {summary}".rstrip()
+    if kind == "task":
+        tid = record.get("task_id", "")
+        status = record.get("status") or ""
+        branch = (
+            record.get("changed_branch")
+            or record.get("auto_land_branch")
+            or record.get("branch_name")
+            or ""
+        )
+        if not branch and status in ("", "pending"):
+            return None
+        bits = [f"- {ts} task {tid}".rstrip()]
+        if status and status != "pending":
+            bits.append(f"status={status}")
+        if branch:
+            bits.append(f"branch={branch}")
+        return " ".join(bits)
+    if kind == "update":
+        ptype = record.get("type") or ""
+        if ptype not in _RECENT_CONTEXT_UPDATE_TYPES:
+            return None
+        bits = [f"- {ts} update {ptype}"]
+        for key, label in (
+            ("task_id", "task"),
+            ("stage", "stage"),
+            ("branch", "branch"),
+            ("changed_branch", "changed_branch"),
+            ("landed_branch", "landed_branch"),
+            ("preserved_branch", "preserved_branch"),
+            ("commits", "commits"),
+            ("ok", "ok"),
+            ("error", "error"),
+        ):
+            value = record.get(key)
+            if value not in (None, ""):
+                bits.append(f"{label}={value}")
+        return " ".join(bits)
+    return None

@@ -143,7 +143,8 @@ dive-in map) and are stable until something contradicts them.
   short breadcrumbs to git history, and replace hidden post-task LLM
   cleanup with explicit, first-class maintenance tasks.
 - [Agent orientation layering](plan-agent-orientation-layering.md) —
-  *active (slices 1+2 and first AGENTS.md cleanup shipped)*.
+  *active (slices 1+2, AGENTS.md cleanup, and recent-conversation
+  filtering shipped)*.
   Synthesis of the ergonomics reviews into a four-layer model
   (repository contract / stage overlay / runtime state packet /
   subject knowledge), with shipped, rejected, and open prompt-noise
@@ -166,11 +167,12 @@ dive-in map) and are stable until something contradicts them.
   records the rejected slice-3 snapshot test and remaining
   Cursor-side wishlist.
 - [Runner orientation ergonomics, 2026-05-17](research-runner-orientation-ergonomics-2026-05-17.md) —
-  *active*. Daemon-launched runner follow-up after the AGENTS.md
+  *shipped*. Daemon-launched runner follow-up after the AGENTS.md
   trim / drift guard: confirms the Mode block, injected
   recent-activity block, and cold run-context contract are working;
   identifies mechanical `Recent in this conversation` records as
-  the next high-leverage prompt-noise target.
+  the next high-leverage prompt-noise target and records the
+  same-day filtering implementation.
 - [Runner orientation ergonomics, 2026-05-16](research-runner-orientation-ergonomics-2026-05-16.md) —
   *shipped*. Same-day daemon-launched-runner view of the same
   problem from inside Docker: pinpoints the stage-vs-environment

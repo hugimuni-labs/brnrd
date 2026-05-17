@@ -67,11 +67,10 @@ _DEFAULT_MAX_WORKERS = 2
 # signal still leaves trace dirs and the response file for forensics.
 _SHUTDOWN_DRAIN_TIMEOUT: float | None = None
 # Extra rows pulled from the conversation log on top of what the prompt
-# actually renders. Absorbs the in-flight event + task records (and any
-# pre-runner update packets for the same event) that
-# ``_recent_conversation_for_prompt`` strips before formatting, so the
-# rendered tail stays at ``prompts.RECENT_CONVERSATION_MAX``.
-_RECENT_READ_HEADROOM = 12
+# actually renders. Absorbs the in-flight event/task records and the
+# mechanical lifecycle packets that ``_recent_conversation_for_prompt``
+# strips before formatting, so useful context survives a noisy tail.
+_RECENT_READ_HEADROOM = 48
 
 
 # ── Per-branch locks ────────────────────────────────────────────────
@@ -843,15 +842,17 @@ def _recent_conversation_for_prompt(
     event_id: str,
     task_id: str,
 ) -> list[dict]:
-    """Return prior conversation records, excluding the in-flight task."""
+    """Return useful prior conversation records for prompt/context surfaces."""
     out: list[dict] = []
     for record in records:
         if record.get("event_id") == event_id:
             continue
         if record.get("task_id") == task_id:
             continue
+        if not prompts.recent_conversation_record_is_useful(record):
+            continue
         out.append(record)
-    return out
+    return out[-prompts.RECENT_CONVERSATION_MAX:]
 
 
 def _emit_preserved_containers(

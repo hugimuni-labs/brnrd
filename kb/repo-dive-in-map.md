@@ -468,7 +468,10 @@ Source:
 Referenced by:
 
 - Daemon routes every event to a conversation key and appends lifecycle records.
-- Runner prompt builders receive recent records and render them under a `Recent in this conversation` block.
+- Runner prompt builders receive a semantic tail of recent records
+  (events, task branch rows, final outcomes, push summaries) and render
+  them under a `Recent in this conversation` block; raw lifecycle
+  records stay in the conversation log for diagnostics.
 - `run_progress.py` projects conversation records into `RunProgressView`.
 - Updates append lifecycle update packets to the same per-conversation log.
 

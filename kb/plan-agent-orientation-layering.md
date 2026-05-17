@@ -4,8 +4,9 @@ Status: active — slices 1 and 2 shipped on 2026-05-16; the first
 AGENTS.md follow-up cleanup shipped on 2026-05-16 in `ddee9bd`; slice 3 was
 **rejected on 2026-05-16** as low ROI (see
 [`research-cursor-orientation-ergonomics-followup-2026-05-16.md`](research-cursor-orientation-ergonomics-followup-2026-05-16.md)
-Finding 9). The current open runner-side follow-up is filtering
-mechanical conversation records out of ordinary daemon prompts.
+Finding 9). The runner-side recent-conversation filtering follow-up shipped
+on 2026-05-17; remaining open follow-ups are lower-priority prompt
+deduplication and external-host wishlist items.
 
 Synthesis of two same-day ergonomics reviews that converged
 independently on the same diagnosis and direction, plus a same-day
@@ -22,8 +23,9 @@ daemon-runner review after the first AGENTS.md cleanup landed:
 - [`research-runner-orientation-ergonomics-2026-05-17.md`](research-runner-orientation-ergonomics-2026-05-17.md) —
   daemon-runner follow-up after AGENTS.md trim / drift guard:
   confirms the Mode block and cold run-context contract are working,
-  and identifies mechanical `Recent in this conversation` records as
-  the next prompt-noise target.
+  identifies mechanical `Recent in this conversation` records as
+  the next prompt-noise target, and records the 2026-05-17 filtering
+  implementation.
 
 Plan supersedes the relevant parts of the older
 [`plan-branch-modes.md`](plan-branch-modes.md) note about "AGENTS.md
@@ -134,17 +136,18 @@ broad snapshot.
   Commit `ddee9bd` (2026-05-16) added the top-of-file `Revision:`
   marker plus the ad-hoc sanity-check block for stale workspace rules,
   stale git status snapshots, and ambient terminals / surfaced skills.
+- **Recent-conversation filtering.** The 2026-05-17 follow-up keeps
+  ordinary daemon prompts focused on semantic conversation memory:
+  user events, task branch rows, final done / failed / conflict
+  outcomes, and successful or failed push summaries. Heartbeats,
+  in-flight progress packets, response artifact paths, and other
+  lifecycle plumbing stay in the raw conversation log and the live
+  progress projection; daemon-debugging tasks can still inspect the
+  raw `.brr/conversations/` files through the run-context recovery
+  path when the task explicitly requires it.
 
 ## Open follow-ups (not yet sliced)
 
-- **Recent-conversation filtering.** The 2026-05-17 daemon-runner
-  review found the bundle's `Recent in this conversation` block
-  mostly carried mechanical lifecycle records: heartbeat, response
-  artifact path, kb-maintenance, finalizing, done, push-started, and
-  push-done. Ordinary daemon prompts should preserve semantic user
-  events, prior final summaries / branch / commit facts, and omit the
-  section entirely when only lifecycle chatter remains. Keep a
-  diagnostic path for daemon-debugging tasks.
 - **Daemon delivery de-duplication.** Lower priority. Delivery and
   remote path hygiene are load-bearing, so some repetition is useful;
   the next possible trim is making the Task Context Bundle the single

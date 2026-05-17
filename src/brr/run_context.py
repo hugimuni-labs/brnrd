@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from . import prompts
 from .envs import RunContext
 from .task import Task
 
@@ -120,38 +121,4 @@ def render_context(
 
 def _render_recent_conversation(records: list[dict[str, Any]]) -> str:
     """Format conversation records as a bullet list for the context file."""
-    bullets: list[str] = []
-    for record in records:
-        kind = record.get("kind")
-        ts = record.get("ts", "")
-        if kind == "event":
-            summary = (record.get("summary") or "").strip()
-            source = record.get("source") or ""
-            bullets.append(f"- {ts} event ({source}): {summary}".rstrip())
-        elif kind == "task":
-            tid = record.get("task_id", "")
-            status = record.get("status") or "pending"
-            branch = (
-                record.get("changed_branch")
-                or record.get("auto_land_branch")
-                or record.get("branch_name")
-                or ""
-            )
-            bullets.append(
-                f"- {ts} task {tid} status={status} branch={branch}".rstrip()
-            )
-        elif kind == "update":
-            ptype = record.get("type") or ""
-            tid = record.get("task_id") or ""
-            stage = record.get("stage") or ""
-            bits = [f"- {ts} update {ptype}"]
-            if tid:
-                bits.append(f"task={tid}")
-            if stage:
-                bits.append(f"stage={stage}")
-            bullets.append(" ".join(bits))
-        elif kind == "artifact":
-            label = record.get("label") or record.get("artifact_kind") or ""
-            path = record.get("path") or ""
-            bullets.append(f"- {ts} artifact {label} {path}".rstrip())
-    return "\n".join(bullets)
+    return prompts.format_recent_conversation(records)

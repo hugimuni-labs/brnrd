@@ -1,7 +1,7 @@
 # Runner orientation ergonomics, 2026-05-17
 
-Status: active - review filed on 2026-05-17; implementation follow-ups
-are not yet sliced.
+Status: shipped on 2026-05-17 - review filed and the recommended
+recent-conversation filtering slice implemented the same day.
 
 Daemon-launched runner review after the orientation layering work and
 the AGENTS.md trim / workspace-rule drift guard landed. This is a
@@ -72,9 +72,9 @@ The bundle carried enough runtime state for this task. I never opened
 the generated run context file. The "open only if a detail you need
 isn't in this bundle" wording is doing real work.
 
-## Remaining friction
+## Friction found before the follow-up
 
-### 1. Recent in this conversation is mostly operational noise
+### 1. Recent in this conversation was mostly operational noise
 
 This bundle's `Recent in this conversation` section listed heartbeat,
 artifact path, kb-maintenance, finalizing, done, push-started, and
@@ -89,10 +89,13 @@ tasks, the useful records are:
 - previous agent final replies or a compact summary of them;
 - branch / commit facts when they affect follow-up routing.
 
-Progress updates, heartbeat records, response artifact paths, and push
-started / done events should be suppressed by default. If the filtered
-set is empty, omit the section. If a task is explicitly debugging daemon
-operation, a diagnostic mode can expose the mechanical records.
+The shipped follow-up filters that prompt surface to useful records:
+events, task branch rows, final done / failed / conflict outcomes, and
+push summaries. Progress updates, heartbeat records, response artifact
+paths, and push-started rows are suppressed by default; if the filtered
+set is empty, the whole section is omitted. Raw lifecycle records remain
+available through the conversation log when a daemon-debugging task
+explicitly needs them.
 
 ### 2. The AGENTS.md read is sometimes redundant, but safely so
 
@@ -146,17 +149,37 @@ tool; it is better curation of what brr already injects:
 - keep raw lifecycle records available only for daemon-debugging tasks;
 - keep the run context file cold unless the bundle lacks a needed fact.
 
-## Recommended next slice
+## Shipped next slice
 
-Slice the next ergonomics change around conversation filtering:
+The follow-up implementation sliced conversation filtering around the
+review's recommendation:
 
-1. Teach `_format_recent_conversation()` to omit purely mechanical
-   lifecycle updates by default.
-2. Preserve user events, prior task summaries / final replies, and
-   branch / commit facts.
-3. Add tests proving that heartbeat / push / artifact-path-only records
-   disappear from ordinary daemon prompts, while a useful semantic event
-   still renders.
+1. `prompts.format_recent_conversation()` omits purely mechanical
+   lifecycle updates by default and renders the same semantic summary
+   for the daemon bundle and generated run context.
+2. `daemon._recent_conversation_for_prompt()` filters before passing
+   recent records downstream, reads extra headroom so semantic records
+   survive noisy concurrent tails, and still strips the in-flight task.
+3. Prompt and daemon-conversation tests prove heartbeat / finalizing /
+   push-started / response-artifact records disappear from ordinary
+   daemon prompts while useful event, task, done, and push facts still
+   render.
 
-That should remove the most visible remaining prompt noise without
-weakening the runtime recovery story.
+This removes the most visible remaining prompt noise without weakening
+the runtime recovery story.
+
+## Implementation-run notes
+
+This follow-up run's bundle omitted `Recent in this conversation`
+entirely, which is the desired shape when the filtered set has no
+semantic records. Code inspection after rebasing onto current `main`
+still found the formatter would render heartbeat / finalizing /
+artifact-path records whenever they were present, so the filtering
+slice was still needed.
+
+Rebasing a PR branch under an auto-land task remains a separate branch
+workflow wrinkle: brr's normal branch finalization and push path is
+fast-forward-only, while a true PR-branch rebase requires a deliberate
+force-with-lease publish story. This task keeps that as an operational
+finding, not an implementation change; hiding force-push semantics
+inside ordinary auto-land would be the wrong default.

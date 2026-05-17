@@ -99,9 +99,10 @@ layout was superseded on 2026-05-16 by the per-event partitioning
 above.
 
 For agent context, prompts now carry a `## Recent in this conversation`
-block fed by tailing the conversation log. No frozen identity, just
-recent facts. Existing `kb/log.md` continues to provide cross-session
-context.
+block fed by tailing the conversation log and filtering it to semantic
+records: user events, task branch rows, final outcomes, and push
+summaries. No frozen identity, just recent facts. Existing `kb/log.md`
+continues to provide cross-session context.
 
 For deliberate tracking of an ongoing line of work, write a `kb/`
 page. The agent already reads and writes `kb/` on every run; lines of

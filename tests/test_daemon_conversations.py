@@ -100,6 +100,93 @@ def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeyp
     assert not any(r.get("event_id") == "evt-thread-2" for r in daemon_records)
 
 
+def test_run_worker_filters_mechanical_recent_conversation_records(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:55:"
+    conversations.append_event(
+        brr_dir,
+        key,
+        {
+            "id": "evt-old",
+            "source": "telegram",
+            "body": "prior useful request",
+        },
+    )
+    conversations.append_task(
+        brr_dir, key,
+        task_id="task-old",
+        event_id="evt-old",
+        env="docker",
+        status="done",
+        branch_name="brr/old",
+    )
+    for i in range(24):
+        conversations.append_update(
+            brr_dir,
+            key,
+            type="heartbeat",
+            payload={"task_id": "task-old", "elapsed_seconds": i},
+            event_id="evt-old",
+        )
+    conversations.append_update(
+        brr_dir,
+        key,
+        type="finalizing",
+        payload={"task_id": "task-old", "stage": "done"},
+        event_id="evt-old",
+    )
+    conversations.append_update(
+        brr_dir,
+        key,
+        type="push_started",
+        payload={"task_id": "task-old", "branch": "brr/old"},
+        event_id="evt-old",
+    )
+    conversations.append_artifact(
+        brr_dir,
+        key,
+        kind="response",
+        path="/repo/.brr/responses/evt-old.md",
+        task_id="task-old",
+        event_id="evt-old",
+    )
+    conversations.append_update(
+        brr_dir,
+        key,
+        type="done",
+        payload={"task_id": "task-old", "changed_branch": "brr/old"},
+        event_id="evt-old",
+    )
+
+    event = make_event(
+        tmp_path, eid="evt-current", body="follow-up",
+        telegram_chat_id=55,
+    )
+    captured: list = []
+    _patch_runner_minimal(monkeypatch, captured)
+    _stub_env(monkeypatch)
+
+    daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    daemon_records = [
+        c[2] for c in captured if c[0] == "daemon" and c[1] == "evt-current"
+    ][0]
+    assert [r.get("kind") for r in daemon_records] == [
+        "event",
+        "task",
+        "update",
+    ]
+    assert daemon_records[0]["summary"] == "prior useful request"
+    assert daemon_records[1]["branch_name"] == "brr/old"
+    assert daemon_records[2]["type"] == "done"
+    assert daemon_records[2]["changed_branch"] == "brr/old"
+
+
 def test_run_worker_followup_in_same_thread_reuses_conversation(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     _patch_runner_minimal(monkeypatch)

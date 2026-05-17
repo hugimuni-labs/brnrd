@@ -2101,3 +2101,23 @@ Findings:
   `kb/index.md` now reflect that the first AGENTS.md cleanup and
   workspace-rule drift guard shipped in `ddee9bd`; the old Cursor
   follow-up page is marked partly shipped with a current-state note.
+
+## [2026-05-17] implement | Filter daemon recent-conversation prompt context
+
+Implemented the runner-orientation follow-up on top of current `main`'s
+conversation-log tailing change. Ordinary daemon prompts now filter
+`Recent in this conversation` to semantic records: user events, task
+branch rows, final done / failed / conflict outcomes, and push summaries.
+Heartbeats, in-flight progress packets, response artifact paths, and
+other lifecycle plumbing stay in the raw conversation log and live
+progress projection; if filtering leaves no useful records, the bundle
+omits the section.
+
+`daemon._recent_conversation_for_prompt()` now strips in-flight records
+and prompt-noise before writing both the generated run context and the
+Task Context Bundle, with extra tail headroom so useful records survive
+noisy concurrent runs. `run_context.py` reuses the prompt formatter so
+the two recovery surfaces do not drift.
+
+Tests: focused prompt + daemon conversation tests passed; full suite
+passed after installing the repo dev extras in the task container.

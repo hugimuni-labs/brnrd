@@ -5,7 +5,10 @@ chat+topic, Slack channel+thread, or GitHub repo+issue/PR (other forges
 mirror the same idea). brr appends
 events, task lifecycle rows, artifact records, and lifecycle update
 packets under a per-thread directory. That history is the recent-
-activity context the next agent in the same thread sees.
+activity source for the next agent in the same thread; daemon prompts
+filter it down to semantic context so ordinary runs see user events,
+branch rows, final outcomes, and push summaries rather than raw
+lifecycle plumbing.
 
 The model is intentionally small. Conversations have **no manifest,
 no title, no intent, no status**. They exist only to thread events
@@ -68,10 +71,10 @@ on the conversation log. Packet types are stable identifiers gates can
 branch on:
 
 ```
-event_received task_created env_prepared container_started
+event_received synced task_created env_prepared container_started
 attempt_started attempt_failed retrying run_started artifact_created
 heartbeat finalizing container_preserved push_started push_done
-done failed conflict
+kb_maintenance_done done failed conflict
 ```
 
 `heartbeat` is a no-op for the projection — the daemon emits one every

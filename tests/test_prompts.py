@@ -258,6 +258,29 @@ class TestPromptBuilding:
                 "kind": "update",
                 "type": "done",
                 "task_id": "task-prev",
+                "changed_branch": "brr/task-prev",
+            },
+            {
+                "ts": "2026-05-05T20:00:06Z",
+                "kind": "update",
+                "type": "heartbeat",
+                "task_id": "task-prev",
+                "elapsed_seconds": 30,
+            },
+            {
+                "ts": "2026-05-05T20:00:07Z",
+                "kind": "artifact",
+                "artifact_kind": "response",
+                "path": "/repo/.brr/responses/evt-prev.md",
+            },
+            {
+                "ts": "2026-05-05T20:00:08Z",
+                "kind": "update",
+                "type": "push_done",
+                "task_id": "task-prev",
+                "branch": "brr/task-prev",
+                "commits": 1,
+                "ok": True,
             },
         ]
 
@@ -276,6 +299,12 @@ class TestPromptBuilding:
         assert "earlier ping" in prompt
         assert "task-prev" in prompt
         assert "update done" in prompt
+        assert "changed_branch=brr/task-prev" in prompt
+        assert "update push_done" in prompt
+        assert "commits=1" in prompt
+        assert "heartbeat" not in prompt
+        assert "artifact response" not in prompt
+        assert ".brr/responses/evt-prev.md" not in prompt
         assert "Original event body" in prompt
         assert "please fix the login flow" in prompt
         assert "Task ID: task-123" in prompt
@@ -283,6 +312,46 @@ class TestPromptBuilding:
         assert "Auto-land branch: feat/task" in prompt
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
+
+    def test_daemon_prompt_omits_mechanical_recent_conversation(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        recent = [
+            {
+                "ts": "2026-05-05T20:00:00Z",
+                "kind": "update",
+                "type": "heartbeat",
+                "task_id": "task-prev",
+            },
+            {
+                "ts": "2026-05-05T20:00:01Z",
+                "kind": "update",
+                "type": "finalizing",
+                "task_id": "task-prev",
+                "stage": "done",
+            },
+            {
+                "ts": "2026-05-05T20:00:02Z",
+                "kind": "artifact",
+                "artifact_kind": "response",
+                "path": "/tmp/artifact-only.md",
+            },
+        ]
+
+        prompt = build_daemon_prompt(
+            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-123",
+            recent_conversation=recent,
+            event_body="please fix the login flow",
+        )
+
+        assert "Recent in this conversation" not in prompt
+        assert "heartbeat" not in prompt
+        assert "finalizing" not in prompt
+        assert "/tmp/artifact-only.md" not in prompt
+        assert "Original event body" in prompt
 
     def test_daemon_prompt_does_not_repeat_identical_event_body(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
