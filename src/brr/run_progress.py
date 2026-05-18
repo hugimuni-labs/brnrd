@@ -114,6 +114,7 @@ class RunProgressView:
     phase_history: list[PhaseEntry] = field(default_factory=list)
     push_commits: int | None = None
     push_ok: bool = True
+    push_error: str | None = None
     view_url: str | None = None
     maintenance_ran: bool = False
     maintenance_commits: int = 0
@@ -323,12 +324,18 @@ def _project(
             commits = record.get("commits")
             view.push_commits = int(commits) if isinstance(commits, int) else view.push_commits
             view.push_ok = bool(record.get("ok", True))
+            error = record.get("error")
+            if isinstance(error, str) and error:
+                view.push_error = error
             view_url = record.get("view_url")
             if isinstance(view_url, str) and view_url:
                 view.view_url = view_url
-            view.detail = (
-                f"pushed {commits} commit(s)" if commits else "pushed"
-            )
+            if view.push_ok:
+                view.detail = (
+                    f"pushed {commits} commit(s)" if commits else "pushed"
+                )
+            else:
+                view.detail = "push failed"
         elif ptype == "kb_maintenance_done":
             view.maintenance_ran = True
             commits = record.get("commits")
@@ -619,9 +626,11 @@ def _phase_label(entry: PhaseEntry, multi_attempt: bool) -> str:
 def _terminal_extra(view: RunProgressView, entry: PhaseEntry) -> str:
     """Extra suffix for the terminal entry (delivered/failed/conflict)."""
     parts: list[str] = []
-    if entry.name == "delivered" and view.push_commits:
+    if entry.name == "delivered" and view.push_commits and view.push_ok:
         plural = "" if view.push_commits == 1 else "s"
         parts.append(f"pushed {view.push_commits} commit{plural}")
+    elif entry.name == "delivered" and not view.push_ok:
+        parts.append("push failed")
     if entry.name == "delivered" and view.maintenance_ran:
         # When the maintenance pass ran, surface it in the card so
         # the operator sees that kb cleanup happened on the same

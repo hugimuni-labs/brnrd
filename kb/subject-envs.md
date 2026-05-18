@@ -25,6 +25,14 @@ ride on either Python entry points (`brr.envs`) or drop-in script
 envs in `.brr/envs/<name>/` and `~/.config/brr/envs/<name>/`; both
 dispatch paths share the protocol so neither kind is privileged.
 
+Docker wires runner credentials from the host at invocation time. For
+GitHub-originated tasks, brr can inject the GitHub gate token (stored,
+environment-provided, or resolved through `gh auth token`) and configures
+in-container git to rewrite common GitHub SSH remote forms to HTTPS with
+a token-backed credential helper. That gives runner agents a working
+`git push` path for PR/rebase work even when no SSH agent is available
+inside the container.
+
 ## Durability contract
 
 Tasks running in a non-`local` env run in an **ephemeral** location.

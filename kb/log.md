@@ -2150,3 +2150,25 @@ Tests: 458 passing (was 454). +4 in `test_sync.py`: sweep advances
 non-target tracking branches; sweep failures stay silent; explicit-
 target failures still recorded; `sync.fast_forward_all=false` reverts
 to the pre-sweep contract.
+
+## [2026-05-18] fix | Runner and daemon can publish rebased GitHub branches
+
+Closed the gap left by the PR #17 rebase attempt: the runner could
+produce the rebased branch locally, but `git push` inside Docker still
+used the repo's SSH remote and failed with `Permission denied
+(publickey)`. Docker GitHub tasks now resolve a gate token from stored
+state, env, or `gh auth token`, pass it as `GITHUB_TOKEN`, and configure
+git to rewrite GitHub SSH remotes to HTTPS with a token-backed
+credential helper. Runner-initiated pushes now have a credentialed path
+without requiring an SSH agent in the container.
+
+The host-side daemon publish path also learned the explicit PR-rebase
+case. When the changed branch is the resolved auto-land target and the
+branch is not a fast-forward of its remote-tracking ref, `_push_if_needed`
+uses `--force-with-lease` anchored to the remote OID captured before the
+run. This is deliberately narrower than a general force-push: other
+branches keep ordinary push semantics.
+
+Progress rendering now treats failed `push_done` packets as `push
+failed` instead of saying `pushed N commits`, so a delivered response
+card no longer hides the publish failure.
