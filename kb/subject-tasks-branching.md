@@ -65,7 +65,11 @@ If the agent stays on the task branch and an explicit auto-land
 target was set, brr fast-forwards it. If no target exists, brr
 preserves the task branch. If the agent switched branches or detached
 HEAD, finalization records whatever git state was left and pushes the
-agent-chosen branch.
+agent-chosen branch. When that branch is the explicit auto-land target
+and the agent rewrote it locally (for example a PR rebase), the daemon
+publishes with `--force-with-lease` anchored to the remote OID captured
+before the run. Other branch pushes remain ordinary pushes, so brr does
+not grow a general "force whatever changed" path.
 
 The full design and the design's lineage live in
 [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md);
