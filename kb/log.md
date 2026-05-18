@@ -1,6 +1,8 @@
 # Activity Log
 
-Newest entries at the bottom. Format:
+Newest entries at the bottom. Keep repo-root `.gitattributes` with
+`kb/log.md merge=union` so parallel merges usually combine appended entries;
+append new sections only, not concurrent rewrites of the same lines. Format:
 
 ## [YYYY-MM-DD] <type> | <title>
 

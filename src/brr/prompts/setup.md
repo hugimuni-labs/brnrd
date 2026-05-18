@@ -26,7 +26,13 @@ as follows:
 
 5. Create `kb/log.md` if it does not exist (use the seed below).
 
-6. Commit the created/modified files with message: "chore: set up
+6. If this repo uses Git, add or update **`.gitattributes`** at the repo root
+   so it contains `kb/log.md merge=union` (one line; merge with any existing
+   rules). That nudges Git to union-merge the episodic log when parallel
+   branches each append entries — still best practice to **append** new log
+   sections only, not rewrite the same lines on concurrent branches.
+
+7. Commit the created/modified files with message: "chore: set up
    AGENTS.md and knowledge base".
 
 Treat sections in the model that aren't on either list as universal —
@@ -63,7 +69,9 @@ four-layer model and link-discipline rules.
 
 Curated chronological narrative. Newest entries at the bottom. Add an
 entry when a task produced a meaningful learning, decision, or shipped
-change. Format:
+change. Keep `.gitattributes` line `kb/log.md merge=union` so parallel Git
+merges usually combine appended entries cleanly (append-only; avoid
+concurrent edits to the same lines). Format:
 
 ## [YYYY-MM-DD] <type> | <title>
 
