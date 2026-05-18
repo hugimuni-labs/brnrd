@@ -1,6 +1,6 @@
 # Design: daemon branch intent resolution
 
-Status: accepted on 2026-05-12
+Status: accepted on 2026-05-12; amended on 2026-05-18
 
 This hangs off the tasks/branching hub,
 [`subject-tasks-branching.md`](subject-tasks-branching.md), and refines
@@ -70,15 +70,16 @@ valid state where brr preserves `brr/<task-id>` for human routing.
 Deterministic, no LLM call, runs before env prep:
 
 1. **Explicit structured instruction wins.** Event metadata fields
-   (`branch=`, `target_branch=`, `branch_target=`) are authoritative
-   because they're already structured. Prose instructions inside the
-   event body ("do this on feature/payment-refactor") are the worker
-   agent's responsibility to act on through normal git operations
-   inside the worktree.
-2. **Issue/PR/task source metadata wins.** PR head branch, issue-linked
-   branch, git-gate source ref, task-file frontmatter branch, etc.,
-   map directly into the plan. This is the expansion point: new gate
-   integrations should plug in here rather than into prose parsing.
+   (`branch_target=`, `target_branch=`, `base_branch=`, then the
+   legacy `branch=`) are authoritative because they're already
+   structured. Prose instructions inside the event body ("do this on
+   feature/payment-refactor") are the worker agent's responsibility to
+   act on through normal git operations inside the worktree.
+2. **Source integrations materialize branch facts as event metadata.**
+   A gate that knows a PR head branch, task-file branch, or other
+   structured source ref should put it in one of the resolver fields
+   above. GitHub PR events and PR comments do this with
+   `branch_target`; the resolver itself still only reads event fields.
 3. **Current branch is context only.** `gitops.current_branch(repo_root)`
    is recorded as `host_context_branch`, shown in the run context, and
    handed to the agent. It is never an automatic landing target. The
@@ -99,7 +100,8 @@ mode, *not* the branch target for every task.
 
 The resolver is deterministic. It does not classify the task, parse
 free-text intent, or ask a model where to land work. It only gathers
-branch authority that already exists in structured state.
+branch authority that already exists in structured event fields and
+fallback policy.
 
 The worker prompt then includes the branch plan:
 
@@ -165,20 +167,16 @@ The push helper accepts the changed branch/ref explicitly:
 Delivery follows the branch that actually changed, not the daemon
 process's `HEAD`.
 
-(Earlier wording treated all daemon publishing as ordinary push after
-fast-forward local landing. Amended 2026-05-18 after a PR-rebase run
-showed that explicit target branches also need a leased publish path
-when the runner intentionally rewrites history.)
-
 ## Operator modes
 
 This design supports several honest workflows:
 
 - **Remote-safe default.** `branch_fallback=preserve`. Unattributed
   remote work cannot mutate a random feature branch.
-- **Threaded work.** A PR, issue, git task file, or any structured
-  source carries branch continuity in its metadata. Follow-ups land on
-  or continue the same branch without re-asking.
+- **Threaded work.** A PR event/comment, git task file, or any other
+  source that emits structured branch metadata carries branch
+  continuity. Follow-ups land on or continue the same branch without
+  re-asking.
 - **Explicit branch work.** The user or source metadata names the
   branch in structured metadata; prose instructions are honoured by
   the worker agent at runtime.
@@ -205,7 +203,8 @@ This design supports several honest workflows:
 - `RunContext` carries `BranchPlan`.
 - Conversation records and progress packets carry branch facts
   (`landed_branch`, `preserved_branch`, `changed_branch`) so later
-  thread tasks can resolve branch continuity from structured state.
+  thread agents can see branch continuity in prompt context; the daemon
+  resolver does not mine conversation history.
 - `gitops.fast_forward_branch` advances a named local branch by merge
   when it is the daemon checkout, or by `update-ref` when it is not
   checked out anywhere.
@@ -220,14 +219,11 @@ expansion point, not a different design.
 
 ## Lineage
 
-- **2026-05-10**: first draft proposed a `landing_branch=` config key
-  as the universal target. Rejected during review for creating hidden
-  branch authority.
-- **2026-05-11**: shipped resolver + daemon gitops path with
-  conversation-derived branch facts as one of the resolution steps.
-- **2026-05-12**: removed conversation-derived branch facts from the
-  resolver after a worktree collision exposed sparse-window false
-  positives. Trimmed fallback modes to `preserve` (default) and
-  `current` (explicit). See
-  [`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
-  for the full critique. This is the current shape.
+Amended 2026-05-12 to remove conversation-derived branch authority
+from the resolver and keep only `preserve` / `current` fallback modes
+after a sparse-window false positive; amended 2026-05-18 to add leased
+publishing for explicit target branches after PR-rebase pushes exposed
+the ordinary-push gap. See
+[`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
+for the resolver critique; the 2026-05-18 change is in commit
+`4c6959f`.

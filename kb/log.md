@@ -2172,3 +2172,15 @@ branches keep ordinary push semantics.
 Progress rendering now treats failed `push_done` packets as `push
 failed` instead of saying `pushed N commits`, so a delivered response
 card no longer hides the publish failure.
+
+## [2026-05-19] fix | KB branch resolver prose matches shipped resolver
+
+Post-task kb maintenance checked the rebased-branch publish notes
+against `branching.py`, `daemon.py`, and `envs/__init__.py`. The branch
+hub and daemon branch design now describe the shipped resolver order:
+structured event branch fields (`branch_target`, `target_branch`,
+`base_branch`, legacy `branch`) are the only daemon auto-land authority;
+fallback policy is only `preserve` or explicit `current`; conversation
+branch facts stay prompt context. The design's history was compressed
+to one lineage breadcrumb, and the index status now includes the
+2026-05-18 leased-publish amendment.
