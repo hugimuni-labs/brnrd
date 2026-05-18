@@ -310,8 +310,8 @@ Read:
 `reload_requested and not in_flight`, then dispatches new events
 from the inbox up to `max_workers` capacity. Each worker thread runs
 `_run_worker_and_finalize`, which wraps `_run_worker` plus the
-post-task `set_status` and `_push_if_needed` housekeeping so a
-single thread owns the full pipeline for one event end to end.
+post-response `_push_if_needed` housekeeping so a single thread owns
+the full pipeline for one event end to end.
 
 Read `_run_worker()` in passes rather than all at once:
 
@@ -326,10 +326,11 @@ Read `_run_worker()` in passes rather than all at once:
 9. Build the daemon prompt via [`prompts.build_daemon_prompt`](../src/brr/prompts.py) — preamble, recent conversation block, Task Context Bundle, delivery contract.
 10. Invoke the runner with periodic `heartbeat` packets (every 30s) and retries when the runner prints no final reply on stdout.
 11. Capture the plain-text response file (written from stdout).
-12. Run [`kb_preflight.scan`](../src/brr/kb_preflight.py) plus [`kb_health.compute_graph_stats`](../src/brr/kb_health.py); if either has findings or `kb/` was touched, run the kb-maintenance LLM pass with findings + stats + the list of task-touched pages injected, then roll up any leftover kb edits as a `brr maintenance` commit and emit `kb_maintenance_done`. Otherwise skip — the pass is now a true safety net.
-13. Finalize the environment — `WorktreeEnv.finalize` reads the worktree's git state to decide between fast-forward landing and branch preservation. The fast-forward into an auto-land target runs inside `_branch_lock(target)` so two concurrent tasks landing on the same branch serialise correctly.
+12. Set the inbox event to `done`, making the response file deliverable by the gate before post-response housekeeping starts.
+13. Run [`kb_preflight.scan`](../src/brr/kb_preflight.py) plus [`kb_health.compute_graph_stats`](../src/brr/kb_health.py); if either has findings or `kb/` was touched, run the kb-maintenance LLM pass with findings + stats + the list of task-touched pages injected, then roll up any leftover kb edits as a `brr maintenance` commit and emit `kb_maintenance_done`. Otherwise skip — the pass is now a true safety net.
+14. Finalize the environment — `WorktreeEnv.finalize` reads the worktree's git state to decide between fast-forward landing and branch preservation. The fast-forward into an auto-land target runs inside `_branch_lock(target)` so two concurrent tasks landing on the same branch serialise correctly.
 
-Then `_run_worker_and_finalize` (the worker-tail wrapper) updates task status, pushes the branch when there's something to publish (push runs inside `_branch_lock(branch_name)` and attaches a [`forges.view_branch_url`](../src/brr/forges.py) link to `push_done`), and lets the main loop reap the future.
+Then `_run_worker_and_finalize` (the worker-tail wrapper) pushes the branch when there's something to publish (push runs inside `_branch_lock(branch_name)` and attaches a [`forges.view_branch_url`](../src/brr/forges.py) link to `push_done`), and lets the main loop reap the future.
 
 Keep in mind:
 
@@ -1018,7 +1019,8 @@ nearly every core module because it owns the lifecycle:
   fast-forward held under `_branch_lock(auto_land_branch)`
 - attempt loop with retries, `heartbeat` packets every 30s, and
   lifecycle packets
-- response validation
+- response validation and response release to the gate before
+  maintenance/finalize/push housekeeping
 - `kb_preflight.scan` + `kb_health.compute_graph_stats` plus a
   conditional kb-maintenance LLM pass; leftover kb edits rolled up as
   a `brr maintenance` commit and announced via
@@ -1038,7 +1040,7 @@ without each call repeating the routing tuple. Read these helpers in
 `daemon.py` next to the worker loop:
 
 - `_WorkerEmit` — closure-like dataclass that captures `(brr_dir, conversation_key, event_id)` and exposes `emit("packet_type", **payload)`.
-- `_run_worker_and_finalize` — worker-tail wrapper that runs `_run_worker`, sets the event status, and calls `_push_if_needed`; each worker thread runs the full pipeline through this function.
+- `_run_worker_and_finalize` — worker-tail wrapper that runs `_run_worker` and calls `_push_if_needed`; each worker thread runs the full pipeline through this function.
 - `_branch_lock(name)` — per-branch lock backed by a guarded `defaultdict(threading.Lock)`; guards auto-land ff and push, the only two cross-worker shared resources left.
 - `_branches_to_refresh` — pre-task target list for `sync.refresh_before_task`.
 - `_emit_new_containers` — diffs `env_ctx.env_state["docker_containers"]` between attempts.

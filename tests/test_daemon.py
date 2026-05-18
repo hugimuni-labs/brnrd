@@ -620,6 +620,73 @@ def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     assert maintenance == ["KB MAINTENANCE"]
 
 
+def test_response_is_released_before_kb_maintenance(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-release", body="answer first")
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: f"P {eid}",
+    )
+    monkeypatch.setattr(
+        daemon.envs,
+        "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
+    )
+
+    order: list[str] = []
+    real_set_status = daemon.protocol.set_status
+
+    def recording_set_status(ev, status):
+        order.append(f"status:{status}")
+        real_set_status(ev, status)
+
+    def fake_maintenance(*_args, **_kwargs):
+        order.append("maintenance")
+        assert event.get("status") == "done"
+        assert "status: done" in event["_path"].read_text(encoding="utf-8")
+        return None
+
+    monkeypatch.setattr(daemon.protocol, "set_status", recording_set_status)
+    monkeypatch.setattr(daemon, "_maybe_kb_maintenance", fake_maintenance)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    assert order == ["status:done", "maintenance"]
+
+
+def test_worker_finalize_tolerates_gate_cleanup_after_response(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-cleaned", body="answer first")
+
+    def fake_run_worker(ev, *_args, **_kwargs):
+        daemon._set_event_status_if_present(ev, "done")
+        ev["_path"].unlink()
+        return Task(
+            id="task-cleaned",
+            event_id=ev["id"],
+            body=ev["body"],
+            source=ev["source"],
+            status="done",
+        )
+
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "_push_if_needed", lambda *_args, **_kwargs: None)
+
+    task = daemon._run_worker_and_finalize(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+
+
 def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-skip", body="quick fix")
