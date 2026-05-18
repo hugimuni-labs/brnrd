@@ -126,7 +126,10 @@ second LLM call.
 5. If `final_branch != brr/<task-id>`: the agent made a runtime branch
    choice. Don't merge it elsewhere. Record `preserved_branch`, update
    conversation branch context, push it if a publish remote is
-   configured.
+   configured. If the branch is the explicit auto-land target and its
+   history was rewritten relative to the remote-tracking ref, the push
+   uses `--force-with-lease` with the recorded old remote OID; this is
+   the PR-rebase path, not a broad force-push permission.
 6. If `final_branch == brr/<task-id>` and `auto_land_branch` exists:
    fast-forward `auto_land_branch` to task HEAD only when the recorded
    old OID still matches and the update is a fast-forward.
@@ -152,11 +155,20 @@ The push helper accepts the changed branch/ref explicitly:
   renamed branch) with `git push -u` when it has no upstream and a
   default remote exists — matching how a user would publish a new
   branch;
+- when the chosen branch is the explicit auto-land target and a rebase
+  or other deliberate rewrite made it non-fast-forward relative to the
+  remote-tracking ref, use `--force-with-lease` against the captured
+  pre-run remote OID;
 - otherwise skip push and surface the local branch name in progress
   and the final response.
 
 Delivery follows the branch that actually changed, not the daemon
 process's `HEAD`.
+
+(Earlier wording treated all daemon publishing as ordinary push after
+fast-forward local landing. Amended 2026-05-18 after a PR-rebase run
+showed that explicit target branches also need a leased publish path
+when the runner intentionally rewrites history.)
 
 ## Operator modes
 

@@ -110,6 +110,14 @@ Two paths cover both API-key and subscription-only auth:
    what gives `git commit` your real author identity, and what lets
    `gh pr create` open PRs as your GitHub user from inside a task.
 
+For tasks that came from the GitHub gate, brr also injects the gate's
+token when it can resolve one from stored state, the daemon environment,
+or `gh auth token`. The Docker command configures git to rewrite common
+GitHub SSH remote forms (`git@github.com:...`, `ssh://git@github.com/...`)
+to HTTPS and supplies the token through an in-container credential
+helper, so `git push` works for PR branches even when no SSH agent is
+mounted.
+
 You can opt out of the credential-dir mounts with
 `docker.mount_credentials=false`. The mounts are read-write so refresh
 tokens written inside the container land back on the host — your host
