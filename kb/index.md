@@ -54,7 +54,7 @@ dive-in map) and are stable until something contradicts them.
   Protocol (three-phase `prepare → invoke → finalize`), the durability
   contract enforced from the host, the outcome-aware salvage rule,
   decentralised fast-forward merging, and which envs ship today
-  (`local` / `worktree` / `docker`) versus designed-but-pending
+  (`host` / `worktree` / `docker`) versus designed-but-pending
   (`ssh` / `devcontainer`).
 - [Env protocol design](design-env-interface.md) — *accepted on
   2026-05-06*. Full protocol, per-env mechanics, response-path split,

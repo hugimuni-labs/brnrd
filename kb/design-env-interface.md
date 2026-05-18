@@ -16,19 +16,21 @@ third-party plugin candidates) live in
 ## Scope
 
 The design covers a single three-phase abstraction (`prepare → invoke
-→ finalize`) used by five built-in envs (`local`, `worktree`,
+→ finalize`) for shipped and planned envs (`host`, `worktree`,
 `docker`, `ssh`, `devcontainer`), an explicit durability contract the
 daemon enforces from the host, the decentralised branch-and-PR merge
 model that replaced an earlier merge-coordinator sketch, and a dual
 plugin point — Python entry points under `brr.envs` and drop-in
-script envs in `~/.config/brr/envs/` or `.brr/envs/`. Concurrent
-execution, overlays, `brnrd`, and env-specific secret handling beyond
-what gates already do are explicitly out of scope and live in their
-own designs / notes.
+script envs in `~/.config/brr/envs/` or `.brr/envs/`. Current source
+wires only `host`, `worktree`, and `docker`; `ssh`, `devcontainer`,
+and the plugin/script registry remain accepted design surface.
+Concurrent execution, overlays, `brnrd`, and env-specific secret
+handling beyond what gates already do are explicitly out of scope and
+live in their own designs / notes.
 
 ---
 
-## The Env Protocol
+## The EnvBackend Protocol
 
 ```python
 # src/brr/envs/__init__.py
@@ -39,30 +41,29 @@ from dataclasses import dataclass
 
 @dataclass
 class RunContext:
-    """Per-task handle returned by Env.prepare()."""
+    """Per-task handle returned by EnvBackend.prepare()."""
+    name: str                   # backend name
     cwd: Path                  # where the runner should be invoked
     repo_root: Path            # the host repo (always)
-    branch: str | None         # the branch the agent will commit on
-    response_path_env: Path    # where the runner is told to write (agent-visible)
+    runtime_dir: Path          # host's shared .brr/
     response_path_host: Path   # where finalize must land it; daemon checks this
-    runtime_dir: Path          # host's .brr/ (read-only mount in remote envs)
+    response_path_env: Path    # path rendered to the runner prompt
+    branch_name: str | None    # task branch, when env created one
+    branch_plan: BranchPlan    # seed / auto-land intent
     env_state: dict            # opaque to brr; env may stash anything here
 
-@dataclass
-class FinalizeReport:
-    """What the env actually produced. Daemon checks this against the contract."""
-    branch_pushed: bool        # branch ref reachable from host's git
-    commits: int               # commit count on the branch (0 = no work)
-    response_written: bool     # response_path exists on host
-    notes: str = ""            # free-form, persisted for diagnostics
+class EnvBackend(Protocol):
+    name: str                  # "host" | "worktree" | "docker" | …
 
-class Env(Protocol):
-    name: str                  # "local" | "worktree" | "docker" | …
-
-    def validate(self, cfg: dict) -> None: ...
-    def prepare(self, task: Task, repo_root: Path, cfg: dict) -> RunContext: ...
-    def invoke(self, ctx: RunContext, prompt: str, cfg: dict) -> RunnerResult: ...
-    def finalize(self, ctx: RunContext, task: Task) -> FinalizeReport: ...
+    def prepare(
+        self, task: Task, repo_root: Path, cfg: dict,
+        *, branch_plan: BranchPlan, response_path: Path,
+    ) -> RunContext: ...
+    def invoke(
+        self, ctx: RunContext, runner_name: str,
+        invocation: RunnerInvocation, cfg: dict, *, trace: bool = False,
+    ) -> RunnerResult: ...
+    def finalize(self, ctx: RunContext, task: Task, tasks_dir: Path) -> Task: ...
 ```
 
 `invoke` keeps returning `RunnerResult` so the existing trace / retry
@@ -72,15 +73,16 @@ prepare/finalize logic.
 
 ### Response path split
 
-`response_path_env` is what the runner sees in its prompt ("write your
-response to …"). `response_path_host` is where the daemon later verifies
-the response landed. For envs that share a filesystem with the host,
-they're the same path; for remote envs, `finalize` is responsible for
-the transfer.
+`response_path_env` is the env-visible location associated with the
+captured response file; `response_path_host` is where the daemon later
+verifies that captured stdout landed. Runners still print the final
+reply on stdout; brr writes the response file. For envs that share a
+filesystem with the host, the two paths are the same; for remote envs,
+`finalize` is responsible for the transfer.
 
 | Env            | `response_path_env`                            | `response_path_host`                           | Equal? |
 |----------------|------------------------------------------------|------------------------------------------------|--------|
-| `local`        | `repo_root/.brr/responses/<id>.md`             | same                                           | yes    |
+| `host`         | `repo_root/.brr/responses/<id>.md`             | same                                           | yes    |
 | `worktree`     | `repo_root/.brr/responses/<id>.md`             | same (worktree shares `.brr/`)                 | yes    |
 | `docker`       | `/work/.brr/responses/<id>.md` (bind-mount)    | `repo_root/.brr/responses/<id>.md`             | yes (same inode via mount) |
 | `ssh`          | `<scratch>/<task-id>/.brr/responses/<id>.md`   | `repo_root/.brr/responses/<id>.md`             | **no** — `finalize` scp's it back |
@@ -93,7 +95,8 @@ runner's prompt is each env's concern.
 
 ### Registry & plugin point
 
-Two dispatch modes, one protocol. Resolution order in `get_env(name)`:
+Designed dispatch modes, one protocol. The current source only checks
+the built-in table; the accepted registry order is:
 
 1. Built-in Python class in `src/brr/envs/`.
 2. Script env in `.brr/envs/<name>/` (per-repo override).
@@ -104,7 +107,7 @@ Two dispatch modes, one protocol. Resolution order in `get_env(name)`:
 ```python
 # src/brr/envs/__init__.py
 _BUILTIN: dict[str, type[Env]] = {
-    "local":        LocalEnv,
+    "host":         HostEnv,
     "worktree":     WorktreeEnv,
     "docker":       DockerEnv,
     "ssh":          SshEnv,
@@ -125,7 +128,8 @@ def get_env(name: str, repo_root: Path) -> Env:
 
 #### Python plugins
 
-For typed, reusable, shareable envs. Ship as a separate pip package:
+For typed, reusable, shareable envs. The accepted registry design has
+them ship as separate pip packages:
 
 ```toml
 # someone-else/pyproject.toml
@@ -133,15 +137,16 @@ For typed, reusable, shareable envs. Ship as a separate pip package:
 firecracker = "myorg_brr_envs.firecracker:FirecrackerEnv"
 ```
 
-`brr` keeps zero runtime deps; plugins bring their own. This is how
-a **dogfood Daytona plugin** ships after this PR merges — outside of
-`brr` core, in its own repo, as proof of the mechanism. See
-`notes-pondering-fleet.md` §10 for the list of plugin candidates.
+`brr` keeps zero runtime deps; plugins bring their own. A future
+Daytona plugin would live outside `brr` core, in its own repo, as
+proof of the mechanism. See `notes-pondering-fleet.md` §10 for the
+list of plugin candidates.
 
 #### Script envs (drop-in, zero install)
 
-For "bash script on my machine, point brr at it" ergonomics. A script
-env is a directory whose name *is* the env name. Two supported layouts:
+For "bash script on my machine, point brr at it" ergonomics. The
+accepted design treats a script env as a directory whose name *is* the
+env name. Two designed layouts:
 
 ```
 .brr/envs/myenv/
@@ -158,9 +163,8 @@ or a single executable dispatching by first argv:
 ```
 
 Protocol is **JSON-in on stdin, JSON-out on stdout**, with fields
-matching the Python dataclasses verbatim (`RunContext`,
-`FinalizeReport`, `RunnerResult`). `stderr` is propagated unchanged to
-the trace.
+matching the Python dataclasses verbatim (`RunContext`, `Task`,
+`RunnerResult`). `stderr` is propagated unchanged to the trace.
 
 Minimal bash stub for the `invoke` step of a script env:
 
@@ -179,9 +183,9 @@ jq -nc --arg out "$out" --argjson rc "$rc" \
   '{stdout: $out, stderr: "", returncode: $rc, validation_ok: ($rc == 0)}'
 ```
 
-The Python `ScriptEnvAdapter` shells out to these four executables and
-marshals JSON. It's the bridge that keeps protocol parity between
-Python and script envs; neither kind is privileged.
+The planned Python `ScriptEnvAdapter` shells out to these four
+executables and marshals JSON. It's the bridge that keeps protocol
+parity between Python and script envs; neither kind is privileged.
 
 For the future `brr env init` scaffolding helper, see the "Env
 scaffolding" section further down.
@@ -190,19 +194,18 @@ scaffolding" section further down.
 
 ## The durability contract
 
-> Every task that runs in a non-`local` env runs in an **ephemeral**
+> Every task that runs in an isolated env runs in an **ephemeral**
 > location. Containers exit. Worktrees are removed. ssh scratch dirs are
 > rsync'd over. **The only outputs that survive are git refs and the
 > response file.** Everything else is lost on `finalize()`.
 
-Concrete rules every `Env.finalize()` must satisfy:
+Concrete rules every `EnvBackend.finalize()` must satisfy:
 
 | Output                                      | Where it ends up on the host          | Required when                            |
 |---------------------------------------------|----------------------------------------|------------------------------------------|
-| Git commits on `ctx.branch`                 | reachable in host's `.git`             | `ctx.branch is not None`                 |
+| Git commits on `ctx.branch_name`            | reachable in host's `.git`             | `ctx.branch_name is not None`            |
 | Response file `<event-id>.md`               | `repo_root/.brr/responses/<id>.md`     | always (existing daemon contract)        |
 | Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | always written; removed on clean `status=done`, kept on `error`/`conflict` |
-| Per-task log                                | committed in branch as `kb/log-<id>.md`| worktree-style branches                  |
 | Env-private scratch teardown                | n/a — removed from env's territory     | clean `status=done` with no uncommitted files |
 
 Anything an agent writes outside of a commit, the response file, or a
@@ -218,38 +221,26 @@ Persisted task metadata surfaces the preserved location via `task.meta`.
 
 ### Enforcement
 
-The daemon doesn't guess. After `finalize` returns its `FinalizeReport`,
-`daemon._run_worker()` does:
-
-```python
-report = env.finalize(ctx, task)
-if not report.response_written:
-    # existing retry path; nothing new
-    return retry_or_error()
-if ctx.branch and not gitops.branch_exists(repo_root, ctx.branch):
-    task.update_status("error", tasks_dir)        # branch was promised, never landed
-    return task
-if ctx.branch and report.commits == 0:
-    # branch exists but no work; informational only
-    task.meta["empty_branch"] = "true"
-```
-
-That's the entire enforcement: file checks + git ref checks. No
-filesystem inspection inside the env's territory. The contract is
+The daemon doesn't guess. Current source enforces the response side
+before finalization through `RunnerResult.validation_ok` and the host
+response path. Env finalization then records host-observable branch
+facts (`changed_branch`, `landed_branch`, `preserved_branch`) on
+`task.meta`; worktree and Docker finalization decide whether the branch
+can fast-forward the resolved auto-land target or must be preserved.
+No daemon code inspects private env internals. The contract is
 *observable from the host*.
 
 ---
 
-## The five built-ins
+## Designed envs
 
-### `local`
+### `host`
 
-- **prepare** → `RunContext(cwd=repo_root, branch=None or current, …)`
+- **prepare** → `RunContext(cwd=repo_root, branch_name=None, …)`
 - **invoke** → `runner.invoke_runner(...)` directly.
-- **finalize** → no-op besides building the report (`branch_pushed=True`
-  trivially because the agent ran in the host repo).
+- **finalize** → no-op that returns the task unchanged.
 
-This is the current `branch: current` path, refactored into the protocol.
+This is the host-checkout path behind the protocol.
 
 ### `worktree`
 
@@ -314,11 +305,11 @@ compose axis moves into a follow-up, not v1.
 - **invoke** → `docker run --name brr-<task-id>-<attempt> -v <repo>:<repo> -w <run-root> <image> <runner-cmd>`. The cmd line is built from the existing runner profile machinery. Note: **no `--rm`** — cleanup is `finalize`'s job so we can preserve the container for salvage and support retry diagnostics.
 - **finalize** → branch handling identical to worktree finalize. Container teardown matches the worktree salvage rule: `docker rm -f <container>` on clean `status=done`; preserve on `status ∈ {error, conflict}` or when the worktree has uncommitted/untracked files.
 
-For users who want **stronger isolation** (no shared `.git`), a
-sub-mode `docker.isolation=clone`: `prepare` clones the repo into a
-container-private volume, `finalize` does a `git fetch` from that volume
-back to the host. Default is the bind-mount path because it's simpler
-and faster.
+For users who want **stronger isolation** (no shared `.git`), the
+design leaves room for a future `docker.isolation=clone` sub-mode:
+`prepare` would clone the repo into a container-private volume and
+`finalize` would fetch it back to the host. Current source uses the
+bind-mount path because it is simpler and faster.
 
 ### `ssh`
 
@@ -349,31 +340,31 @@ maintain a parallel `docker.image` for brr.
   - `devcontainer up --workspace-folder <repo_root>` — starts the container (no-op if already up).
   - Record the container id / workspace folder in `ctx.env_state`.
   - `ctx.cwd = repo_root` on the host side; the devcontainer CLI handles the in-container path.
-  - Same bind-mount story as `docker`: the repo is mounted in the container, so commits on `ctx.branch` are visible to the host immediately. `response_path_env` resolves to the in-container path; `response_path_host` stays the host's `.brr/responses/<id>.md`.
+  - Same bind-mount story as `docker`: the repo is mounted in the container, so commits on `ctx.branch_name` are visible to the host immediately. `response_path_env` resolves to the in-container path; `response_path_host` stays the host's `.brr/responses/<id>.md`.
 - **invoke** → `devcontainer exec --workspace-folder <repo_root> -- <runner-cmd>`. Runner profile machinery unchanged.
 - **finalize** → branch handling identical to worktree/docker finalize. Container teardown: `devcontainer down` on clean `status=done`; preserve on `status ∈ {error, conflict}`. Mirrors the worktree salvage rule.
 
-Gated at `validate()` time so triage can pick `devcontainer` only when
-the repo actually supports it. The triage prompt explicitly mentions
-this (see below).
+`devcontainer` is designed-but-unwired. Current source rejects it via
+`get_env()` until a backend is implemented.
 
 ---
 
-## Decentralised "coordinator"
-
-Replacing the central merge coordinator we kept deferring.
+## Decentralised branch landing
 
 ### The model
 
-> Every task **always produces a branch**. Merging is opt-in per branch
-> strategy. Conflicts are not a coordinator's problem — they are a
-> human's problem (or the next agent run's problem).
+Worktree and Docker tasks start on a task branch from the resolved
+`BranchPlan.seed_ref`. Finalization fast-forwards the explicit
+`BranchPlan.auto_land_branch` when possible; otherwise it preserves
+the branch the agent actually changed. Conflicts are not a central
+coordinator's problem — they are a human's problem or the next agent
+run's problem.
 
-| `branch:` strategy   | What `finalize` does for the branch                                        |
-|----------------------|----------------------------------------------------------------------------|
-| `current`            | nothing (no branch)                                                        |
-| `auto` / `task`      | best-effort `git merge --ff-only`; on conflict → status=`conflict`, branch kept |
-| `<name>` / `new:<x>` | nothing (human or PR tooling owns the merge)                               |
+| Runtime shape | What `finalize` does |
+| --- | --- |
+| Host env | no branch finalization |
+| Task branch plus auto-land target | best-effort fast-forward of the target |
+| Named branch, detached HEAD, missing auto-land target, or ff conflict | preserve the branch / mark conflict for human routing |
 
 That's the whole "coordinator". The original 2026-05 env slice assumed
 the helper would be `gitops.merge_branch` plus `_finalize_worktree_task`.
@@ -385,18 +376,19 @@ no safe target exists.
 
 ### Concurrency note
 
-When v2 wants parallel workers, the only new thing is a **mutex on
-the host's HEAD ref** — only one finalize can touch the host's working
-branch at a time. That's a `threading.Lock()` in the daemon, not a
-coordinator. Branches commute well in git; conflicts that can't ff-merge
-get parked as `conflict` status and don't block other tasks.
+The shipped worker pool uses per-branch locks for the two shared git ref
+operations: auto-land fast-forward and push. Branches commute well in
+git; conflicts that can't ff-merge get parked as `conflict` status and
+don't block unrelated tasks.
 
 ### Why this is enough
 
-- **Q&A tasks** → `branch: current`, no commits, no merge. Nothing to coordinate.
-- **Research tasks** → `branch: auto`, single new file in `kb/`. ff-merge succeeds 99% of the time.
-- **Refactor tasks** → `branch: auto` or named; if auto fails, `conflict` status surfaces it; if named, it's a PR.
-- **Long-lived feature work** → named branch; brr never tries to merge.
+- Q&A tasks normally produce no branch changes.
+- Small implementation or research tasks can stay on the task branch
+  and fast-forward an explicit auto-land target.
+- Named or switched branches are preserved for human review or PR
+  tooling.
+- If an auto-land fast-forward fails, `conflict` status surfaces it.
 
 CRDT-flavoured framing is real here: branches in git already have a
 well-defined merge operation; brr just orchestrates `git merge` calls
@@ -405,34 +397,24 @@ trivially defined. No bespoke conflict resolution.
 
 ---
 
-## Daemon changes (small)
+## Daemon integration
 
-```python
-# daemon._run_worker — pseudo-diff
-- if uses_worktree: worktree.create(...)
-- ... inline invoke ...
-- if uses_worktree: _finalize_worktree_task(...)
-+ env = envs.get_env(task.env, repo_root)
-+ env.validate(cfg)
-+ ctx = env.prepare(task, repo_root, cfg)
-+ try:
-+     for attempt in range(...):
-+         result = env.invoke(ctx, prompt, cfg)
-+         if result.validation_ok: break
-+ finally:
-+     # finalize reads task.status and honours the outcome-aware
-+     # salvage rule: tear down on clean done, preserve on
-+     # error/conflict or when work is left uncommitted.
-+     report = env.finalize(ctx, task)
-+ # contract checks (response_written, branch_pushed)
-```
+Current source keeps env mechanics behind `EnvBackend`:
 
-Net: `_run_worker` shrinks; the env-specific branches disappear.
-`worktree.py` becomes the implementation of `WorktreeEnv` and stops
-being daemon's helper. Scratch preservation on `error` / `conflict`
-is a behaviour change from current `_finalize_worktree_task` (which
-force-removes the worktree on `error`); worth calling out in the PR
-description.
+1. `task.resolve_env()` resolves user/event policy to a concrete backend.
+2. `daemon._run_worker()` calls `envs.get_env(task.env)`.
+3. `prepare()` returns a `RunContext` with cwd, runtime directory,
+   response paths, branch plan, branch name, and env-private state.
+4. `invoke()` runs the normal runner command, possibly wrapped by the
+   backend (`DockerEnv` wraps it in `docker run`).
+5. `finalize()` reads task status and git state, applies the
+   outcome-aware salvage rule, records branch facts on `task.meta`, and
+   returns the updated `Task`.
+
+The daemon owns retries, response validation, kb maintenance, progress
+packets, and push. Env backends own workspace setup, runner transport,
+scratch cleanup/preservation, and branch landing/preservation inside
+their workspace.
 
 ---
 
@@ -441,7 +423,9 @@ description.
 There is no LLM triage step. The daemon picks the env mechanically
 from `.brr/config` and event metadata: `environment=auto` resolves to
 `docker` when a Docker image is configured, otherwise `worktree`;
-`host` is explicit only; `ssh` and `devcontainer` are explicit. See
+`host` is explicit only. `ssh` and `devcontainer` remain explicit in
+the accepted design, but current source rejects them until those
+backends are wired. See
 [`decision-remove-triage.md`](decision-remove-triage.md) for why this
 shape replaced the earlier LLM triage idea.
 
@@ -449,22 +433,23 @@ shape replaced the earlier LLM triage idea.
 
 ## Configuration surface
 
-`.brr/config` keys added in this PR:
+Configuration keys in this design:
 
 ```ini
-default_env=worktree           # currently local; change with the env work
-docker.image=brr/runner:py311  # default if env=docker is picked
+environment=worktree           # auto | host | worktree | docker
+docker.image=brr/runner:py311  # required when docker is selected
 docker.network=bridge
 ssh.host=                      # required if env=ssh is ever picked
 ssh.scratch=~/.brr/scratch
 devcontainer.workspace=        # optional override of --workspace-folder
 ```
 
-All optional. Absent values fall back to documented defaults. `validate()`
-raises before `prepare()` runs when required config is missing:
-`env=ssh` without `ssh.host`; `env=devcontainer` without the
-`devcontainer` CLI or a `.devcontainer/devcontainer.json` in the
-repo.
+Absent values fall back to documented defaults where the shipped backend
+supports a default. Current `DockerEnv.prepare()` raises before invoke
+when Docker is unavailable or `docker.image` is missing. Future
+`ssh`/`devcontainer` backends should reject missing `ssh.host`,
+missing `devcontainer` CLI, or a missing `.devcontainer/devcontainer.json`
+before invoking a runner.
 
 ---
 
@@ -478,10 +463,10 @@ from outside:
    with the table above).
 2. `invoke` is called with a stub runner (existing
    `runner.invoke_runner` mocking pattern); stdout/stderr propagate.
-3. `finalize` produces a `FinalizeReport` with the right fields:
-   response file present → `response_written=True`; branch with N
-   commits → `commits=N`, `branch_pushed=True`; empty branch →
-   `commits=0`.
+3. `finalize` returns an updated `Task` with the right metadata:
+   response file present on the host; changed branch recorded when
+   commits exist; preserved branch/container state recorded when
+   cleanup is not safe.
 4. Daemon-level integration: a fake event end-to-end through the env,
    asserting durability artefacts on the host and cleanup of the
    env-private state.
@@ -494,10 +479,9 @@ script-env dispatch path is exercised with stub executables in
 and registry-precedence tests pin built-in > script > entry-point
 resolution.
 
-Docker, ssh, and devcontainer integration tests gate on
-`DOCKER_AVAILABLE` / `SSH_TEST_HOST` / `DEVCONTAINER_AVAILABLE` so CI
-doesn't need a docker daemon, a remote box, or a devcontainer host;
-unit tests stub subprocess calls everywhere else.
+Docker integration tests gate on local Docker availability where needed;
+the ssh, devcontainer, and script-env test shapes remain design surface
+until those backends are wired.
 
 ---
 
@@ -554,8 +538,10 @@ source directory.
 These adjacent concerns sit outside the design on purpose and have
 their own homes:
 
-- Concurrent execution (deferred; the daemon stays serial and the v2
-  unlock is a host-HEAD mutex, not a coordinator).
+- Concurrent execution — shipped in
+  [`design-concurrent-execution.md`](design-concurrent-execution.md);
+  env finalization participates through per-branch locks around shared
+  git refs.
 - Overlays — see [`plan-overlays.md`](plan-overlays.md).
 - `brnrd` — separate project, see
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md).

@@ -2138,3 +2138,13 @@ finished."
 Tests: 457 passing (was 454). +3 tests: response release happens before
 kb maintenance; worker finalization tolerates gate cleanup after early
 delivery; GitHub branch footers ignore `branch_name` before finalization.
+
+## [2026-05-18] fix | KB consistency: compress dive-in map and reconcile env labels
+
+Compressed `repo-dive-in-map.md` from an oversized module-by-module
+reference into a compact current-state reading guide, keeping source
+and tests as the authoritative detail. The pass also removed a stale
+status-module reference and reconciled the env kb wording with source:
+`host`, `worktree`, and `docker` are the shipped backends; `ssh`,
+`devcontainer`, and plugin/script env registries remain accepted design
+surface, not wired runtime behavior.
