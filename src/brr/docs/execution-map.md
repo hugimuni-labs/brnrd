@@ -8,7 +8,7 @@ per-repo by dropping a file at `.brr/docs/execution-map.md`.
 ## Pipeline
 
 ```
-event (inbox) → task (persisted) → context file → run env → response → kb preflight → finalize
+event (inbox) → task (persisted) → context file → run env → response → response release → kb preflight → finalize
 ```
 
 ### 1. Event arrives
@@ -67,6 +67,12 @@ unreachable service), it should say so plainly in the response and
 stop. The operator sees the reply in the gate thread and follows up
 with another event.
 
+Once the response file is validated, the daemon marks the inbox event
+`done` before running kb maintenance, environment finalization, or
+branch push. Gates deliver `done` events and clean up the inbox and
+response files after a successful send, while the progress card can
+continue to show post-response housekeeping.
+
 If the runner exits cleanly but stdout is empty, the daemon retries up
 to `response_retries` times before failing the task. Hard failures
 (non-zero exit, timeout — controlled by `runner.timeout_seconds`,
@@ -75,10 +81,10 @@ error rather than burning another expensive attempt.
 
 ### 5. KB maintenance (preflight + optional LLM pass)
 
-After a successful task, `brr.kb_preflight.scan` runs over `kb/` and
-returns structured findings (orphan pages, broken links, index
-drift). When findings exist or the task modified `kb/`, a short LLM
-redundancy pass runs with the findings injected into the prompt;
+After the response is released, `brr.kb_preflight.scan` runs over
+`kb/` and returns structured findings (orphan pages, broken links,
+index drift). When findings exist or the task modified `kb/`, a short
+LLM redundancy pass runs with the findings injected into the prompt;
 otherwise the LLM pass is skipped. The primary maintenance contract
 lives in AGENTS.md (the universal kb shape rules every tool follows);
 this hook is the brr-side safety net. See `brr-internals.md` for the
