@@ -13,14 +13,24 @@ The contract is deliberately small:
   ``<remote>/<branch>``. ff-only is safe (refuses non-fast-forward and
   dirty-checkout cases), so failures are recorded and the daemon
   proceeds against current local refs.
+- After the targeted ff's, sweep every other local branch that has a
+  matching ``<remote>/<branch>`` tracking ref and try the same ff
+  best-effort. This keeps branches the agent learns about from free
+  text (Telegram, Slack) safe to ``git switch`` into without the agent
+  having to remember to use ``origin/<branch>`` explicitly. Failures on
+  sweep-discovered branches are **silent** (not recorded in
+  ``SyncResult.skipped``) — abandoned branches that diverged ages ago
+  should not fill the progress card.
 - Never raises. Any unexpected exception is captured in
   ``SyncResult.error`` so a fetch failure cannot block task execution.
 
-Two opt-out config knobs in ``.brr/config``:
+Three opt-out config knobs in ``.brr/config``:
 
 - ``sync.fetch_before_task=false`` — skip the network entirely.
 - ``sync.fast_forward_default=false`` — fetch but do not advance local
   refs (for users sharing the daemon's checkout with active dev work).
+- ``sync.fast_forward_all=false`` — fetch and ff the explicit targets,
+  but skip the sweep over other local branches.
 """
 
 from __future__ import annotations
@@ -87,6 +97,17 @@ def fast_forward_enabled(cfg: dict[str, Any]) -> bool:
     return _bool(cfg, "sync.fast_forward_default", True)
 
 
+def fast_forward_all_enabled(cfg: dict[str, Any]) -> bool:
+    """Whether the sweep over non-target local branches is allowed.
+
+    When False, only the explicit ``target_branches`` are considered for
+    fast-forward; behaviour matches pre-sweep brr. Gated separately from
+    ``fast_forward_default`` so an operator can keep targeted ff's on
+    while opting out of the broader sweep (and vice versa).
+    """
+    return _bool(cfg, "sync.fast_forward_all", True)
+
+
 # ── Public entry point ───────────────────────────────────────────────
 
 
@@ -129,8 +150,15 @@ def refresh_before_task(
                 result.skipped[branch] = "ff disabled (sync.fast_forward_default=false)"
             return result
 
+        explicit = set(branches)
         for branch in branches:
             _try_fast_forward(repo_root, remote, branch, result)
+
+        if fast_forward_all_enabled(cfg):
+            for branch in _sweep_candidates(repo_root, remote, explicit):
+                _try_fast_forward(
+                    repo_root, remote, branch, result, silent_on_skip=True,
+                )
     except Exception as exc:  # pragma: no cover - defensive
         result.error = f"{type(exc).__name__}: {exc}"
 
@@ -184,21 +212,33 @@ def _try_fast_forward(
     remote: str,
     branch: str,
     result: SyncResult,
+    *,
+    silent_on_skip: bool = False,
 ) -> None:
-    """Best-effort ff of *branch* to ``<remote>/<branch>``. Records outcome."""
+    """Best-effort ff of *branch* to ``<remote>/<branch>``. Records outcome.
+
+    With ``silent_on_skip=True``, failures (missing local, missing remote
+    ref, refused ff) don't populate ``result.skipped``. Used by the sweep
+    over non-target branches: abandoned branches that have diverged
+    forever should not pollute the progress card. Successful ff's are
+    still recorded regardless — advancing a branch is the useful signal.
+    """
     if not gitops.branch_exists(repo_root, branch):
-        result.skipped[branch] = "branch does not exist locally"
+        if not silent_on_skip:
+            result.skipped[branch] = "branch does not exist locally"
         return
 
     remote_ref = f"{remote}/{branch}"
     if gitops.rev_parse(repo_root, remote_ref) is None:
-        result.skipped[branch] = f"no remote ref {remote_ref}"
+        if not silent_on_skip:
+            result.skipped[branch] = f"no remote ref {remote_ref}"
         return
 
     old_oid = gitops.branch_head(repo_root, branch)
     update = gitops.fast_forward_branch(repo_root, branch, remote_ref)
     if not update.success:
-        result.skipped[branch] = update.detail or "fast-forward refused"
+        if not silent_on_skip:
+            result.skipped[branch] = update.detail or "fast-forward refused"
         return
 
     new_oid = update.commit or gitops.branch_head(repo_root, branch) or ""
@@ -206,6 +246,30 @@ def _try_fast_forward(
         # Already up to date — not worth surfacing.
         return
     result.ff_branches[branch] = new_oid
+
+
+def _sweep_candidates(
+    repo_root: Path,
+    remote: str,
+    explicit: set[str],
+) -> list[str]:
+    """Local branches eligible for the sweep ff pass.
+
+    Eligible = exists locally, has a matching ``<remote>/<branch>``
+    tracking ref, and wasn't already covered as an explicit target.
+    Filtering by tracking-ref existence here cheaply prunes the noise
+    cases (purely local branches, fork branches against a different
+    remote name) so ``_try_fast_forward`` doesn't have to deal with
+    them.
+    """
+    out: list[str] = []
+    for branch in gitops.list_local_branches(repo_root):
+        if branch in explicit:
+            continue
+        if gitops.rev_parse(repo_root, f"{remote}/{branch}") is None:
+            continue
+        out.append(branch)
+    return out
 
 
 # ── Rendering ────────────────────────────────────────────────────────

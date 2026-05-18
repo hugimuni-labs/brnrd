@@ -2110,3 +2110,41 @@ Tests: 454 passing (was 451). +3 in `test_branching.py`: event branch
 seeds from `origin/<branch>` when the local copy has diverged from the
 remote ref; falls back to the local branch when no remote ref exists;
 `fallback:current` ignores the remote (self-development mode).
+
+## [2026-05-18] fix | Sync: ff every tracking branch, agent prompt nudge
+
+Closes the freshness gap that `prefer_remote` didn't cover. The earlier
+fix only kicks in when the event itself names a branch (GitHub gate with
+`branch_target`). For free-text gates like Telegram — "rebase
+brr/feature-b onto main" — the daemon couldn't know which branch the
+agent was about to consume, so the local copy of `feature-b` could be
+stale relative to the remote when the agent did `git switch feature-b`
+inside the worktree.
+
+Two parts:
+
+**Daemon: broaden the pre-task ff to every tracking branch.**
+`sync.refresh_before_task` now sweeps every local branch with a matching
+`<remote>/<branch>` after the explicit-target ff pass. Targets keep
+their failure-recording behaviour (the caller asked, the caller gets
+told); sweep-discovered branches that can't ff are **silent no-ops**
+(not in `result.skipped`) so abandoned branches don't pollute the
+progress card. Gated by `sync.fast_forward_all` (default True). New
+`gitops.list_local_branches` lists local heads via
+`git for-each-ref refs/heads/`. `_try_fast_forward` gained a
+`silent_on_skip` parameter; a new `_sweep_candidates` builds the
+discovery list.
+
+**Agent prompt nudge in `src/brr/prompts/run.md`.** A new section
+"Working on a branch the task names" tells the agent to seed work from
+`origin/<branch>` rather than the local branch when the task asks them
+to operate on something other than their task branch. The daemon's
+sweep makes this almost always equivalent to using the local name, but
+the nudge keeps agents robust against the cases the sweep can't fix
+(force-push divergence, network-disabled daemon, branch the daemon
+hasn't seen yet).
+
+Tests: 458 passing (was 454). +4 in `test_sync.py`: sweep advances
+non-target tracking branches; sweep failures stay silent; explicit-
+target failures still recorded; `sync.fast_forward_all=false` reverts
+to the pre-sweep contract.
