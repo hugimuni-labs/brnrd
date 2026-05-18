@@ -581,6 +581,30 @@ def test_render_text_compact_terminal_reports_total_elapsed(tmp_path):
     assert "pushed 2 commits" in last_line
 
 
+def test_render_text_compact_reports_push_failure(tmp_path):
+    """A failed push is post-response housekeeping: the response can be
+    delivered, but the progress card must not claim the commits were
+    pushed."""
+    brr_dir = tmp_path / ".brr"
+    key = "github:17:"
+    _emit(brr_dir, key, "task_created", task_id="task-pf", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-pf", attempt=1)
+    _emit(brr_dir, key, "finalizing", task_id="task-pf", stage="done")
+    _emit(
+        brr_dir, key, "push_done",
+        task_id="task-pf", commits=5, ok=False,
+        error="Permission denied (publickey)",
+    )
+    _emit(brr_dir, key, "done", task_id="task-pf", event_id="evt-pf")
+
+    view = run_progress.project_task(brr_dir, key, "task-pf")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    last_line = text.rstrip().splitlines()[-1]
+    assert "push failed" in last_line
+    assert "pushed 5 commits" not in last_line
+
+
 def test_render_text_compact_failed_keeps_error_below_struck_log(tmp_path):
     """On hard failure the strike-through log ends with ``failed`` and
     the actual error sits on the next line so the chat reader sees the
