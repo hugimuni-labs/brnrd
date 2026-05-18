@@ -314,3 +314,93 @@ def test_render_summary_includes_error():
 ])
 def test_bool_helper(raw, expected):
     assert sync._bool({"k": raw}, "k", default=not expected) is expected
+
+
+# ── fast_forward_all (sweep over non-target branches) ───────────────
+
+
+def _local_with_tracked_feature(tmp_path: Path) -> tuple[Path, Path]:
+    """Set up local + remote with both ``main`` and ``feature`` tracking.
+
+    Returns ``(remote_bare, local)``. The local clone has ``feature``
+    checked out and pushed once so ``origin/feature`` exists; the
+    working tree is left on ``main`` so callers can advance ``feature``
+    on the remote from a sibling and check the sweep.
+    """
+    remote, local = _setup_remote_and_local(tmp_path)
+    _git(local, "checkout", "-b", "feature")
+    _commit_file(local, "feature.txt", "feature\n", message="feature seed")
+    _git(local, "push", "-u", "origin", "feature")
+    _git(local, "checkout", "main")
+    return remote, local
+
+
+def test_refresh_fast_forward_all_advances_untargeted_branch(tmp_path):
+    """The sweep pass advances any local branch tracking the remote,
+    not only the explicit targets — so when an agent later does
+    ``git switch feature`` the local copy already matches the remote."""
+    remote, local = _local_with_tracked_feature(tmp_path)
+    feature_oid = _push_new_commit(tmp_path, remote, branch="feature")
+
+    result = sync.refresh_before_task(local, target_branches=["main"])
+
+    assert result.ff_branches.get("feature") == feature_oid
+    assert "feature" not in result.skipped
+
+
+def test_refresh_fast_forward_all_silent_on_diverged_untargeted(tmp_path):
+    """Sweep-discovered branches that can't ff (diverged, dirty, etc.)
+    are silent no-ops: not recorded in either ``ff_branches`` or
+    ``skipped``. Abandoned branches shouldn't fill the progress card."""
+    remote, local = _local_with_tracked_feature(tmp_path)
+    _push_new_commit(tmp_path, remote, branch="feature")
+    # Diverge local feature with its own commit.
+    _git(local, "checkout", "feature")
+    _commit_file(local, "local-only.txt", "x\n", message="local divergence")
+    _git(local, "checkout", "main")
+
+    result = sync.refresh_before_task(local, target_branches=["main"])
+
+    assert "feature" not in result.ff_branches
+    assert "feature" not in result.skipped
+
+
+def test_refresh_fast_forward_all_records_skip_for_explicit_target(tmp_path):
+    """When the caller explicitly names a branch in ``target_branches``,
+    its ff failures *are* recorded — the silent-on-skip rule only
+    applies to sweep-discovered branches. The caller asked, so the
+    caller gets told."""
+    remote, local = _local_with_tracked_feature(tmp_path)
+    _push_new_commit(tmp_path, remote, branch="feature")
+    _git(local, "checkout", "feature")
+    _commit_file(local, "local-only.txt", "x\n", message="local divergence")
+    _git(local, "checkout", "main")
+
+    result = sync.refresh_before_task(
+        local, target_branches=["main", "feature"],
+    )
+
+    assert "feature" in result.skipped
+    assert "fast-forward" in result.skipped["feature"].lower()
+
+
+def test_refresh_fast_forward_all_disabled_via_config(tmp_path):
+    """``sync.fast_forward_all=false`` reverts to pre-sweep behaviour:
+    only explicit targets are considered. Branches with a remote
+    counterpart no longer get auto-advanced."""
+    remote, local = _local_with_tracked_feature(tmp_path)
+    feature_oid = _push_new_commit(tmp_path, remote, branch="feature")
+
+    pre_oid = _git(local, "rev-parse", "feature").stdout.strip()
+    result = sync.refresh_before_task(
+        local,
+        target_branches=["main"],
+        cfg={"sync.fast_forward_all": False},
+    )
+
+    assert "feature" not in result.ff_branches
+    assert "feature" not in result.skipped
+    # Local feature untouched.
+    post_oid = _git(local, "rev-parse", "feature").stdout.strip()
+    assert post_oid == pre_oid
+    assert feature_oid != pre_oid  # sanity: remote really did advance
