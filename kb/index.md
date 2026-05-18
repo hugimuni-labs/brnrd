@@ -79,10 +79,11 @@ dive-in map) and are stable until something contradicts them.
   branch-intent design that removes both ambient host checkout state and
   hidden universal landing-branch config from daemon-produced commits.
 - [Daemon branch intent design](design-daemon-landing-branch.md) —
-  *accepted, amended*. Resolve seed refs and optional auto-land targets
-  from explicit structured event data; conversation branch facts are
-  prompt context only after the 2026-05-12 amendment, not daemon-side
-  auto-land authority.
+  *accepted on 2026-05-12; amended on 2026-05-18*. Resolve seed refs
+  and optional auto-land targets from explicit structured event data;
+  conversation branch facts are prompt context only after the
+  2026-05-12 amendment, and explicit target rewrites publish through a
+  leased PR-rebase path after the 2026-05-18 amendment.
 - [Branch Modes Plan](plan-branch-modes.md) — *shipped, with
   revisions*. Branch and env are task properties, the agent owns
   branching at runtime. Triage and `needs_context` were reversed —
