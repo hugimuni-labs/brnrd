@@ -90,6 +90,23 @@ def branch_exists(repo_root: Path, branch: str) -> bool:
     return result.returncode == 0
 
 
+def list_local_branches(repo_root: Path) -> list[str]:
+    """Return local branch names sorted by ref name.
+
+    Used by the daemon's pre-task sync to enumerate every branch with a
+    potential remote counterpart for the best-effort ff sweep. Returns an
+    empty list on detached HEAD or when ``git for-each-ref`` fails — the
+    sync layer treats missing branches as a no-op.
+    """
+    result = _git(
+        repo_root, "for-each-ref",
+        "--format=%(refname:short)", "refs/heads/", check=False,
+    )
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def branch_head(repo_root: Path, branch: str) -> str | None:
     """Return the OID for local *branch*, or None when it is missing."""
     return rev_parse(repo_root, f"refs/heads/{branch}")
