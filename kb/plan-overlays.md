@@ -2,7 +2,7 @@
 
 **Status: blocked.** Overlays are paused until the research gate below
 chooses a shape. The broad env blocker has narrowed now that the core
-`local` / `worktree` / `docker` `Env` protocol ships; check
+`host` / `worktree` / `docker` `Env` protocol ships; check
 [`subject-envs.md`](subject-envs.md) before reviving any env-dependent
 overlay requirement.
 
