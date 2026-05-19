@@ -387,6 +387,16 @@ def _resolve_github_gate_token(brr_dir: Path) -> str | None:
         val = os.environ.get(name)
         if val:
             return val.strip()
+    if shutil.which("gh") is not None:
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
     return None
 
 
@@ -442,8 +452,8 @@ def _docker_user_args() -> list[str]:
     return ["-u", f"{getuid()}:{getgid()}"]
 
 
-def _docker_git_safe_directory_args() -> list[str]:
-    """Inject ``safe.directory='*'`` git config inside the container.
+def _docker_git_config_env_args(github_token_available: bool = False) -> list[str]:
+    """Inject git config inside the container via ``GIT_CONFIG_*`` env vars.
 
     The repo is bind-mounted at the same absolute path it has on the
     host. The host directory is owned by the user running the daemon,
@@ -455,12 +465,51 @@ def _docker_git_safe_directory_args() -> list[str]:
     Using git's env-var config (``GIT_CONFIG_COUNT/KEY/VALUE``, supported
     since git 2.31) avoids requiring every image to bake the same line
     into ``/etc/gitconfig`` and works for user-built images too.
+
+    When a GitHub token is available, also rewrite common GitHub SSH
+    remote forms to HTTPS and provide a token-backed credential helper.
+    ``GITHUB_TOKEN`` alone does not help ``git push git@github.com:...``;
+    the rewrite lets PR/rebase tasks push from Docker even when no SSH
+    agent is mounted.
     """
-    return [
-        "-e", "GIT_CONFIG_COUNT=1",
-        "-e", "GIT_CONFIG_KEY_0=safe.directory",
-        "-e", "GIT_CONFIG_VALUE_0=*",
+    pairs: list[tuple[str, str]] = [
+        ("safe.directory", "*"),
     ]
+    if github_token_available:
+        pairs.extend([
+            ("url.https://github.com/.insteadOf", "git@github.com:"),
+            ("url.https://github.com/.insteadOf", "ssh://git@github.com/"),
+            (
+                "credential.helper",
+                "!f() { test \"$1\" = get || exit 0; "
+                "echo username=x-access-token; "
+                "echo \"password=${GITHUB_TOKEN:-$GH_TOKEN}\"; }; f",
+            ),
+        ])
+
+    args = ["-e", f"GIT_CONFIG_COUNT={len(pairs)}"]
+    for idx, (key, value) in enumerate(pairs):
+        args.extend([
+            "-e", f"GIT_CONFIG_KEY_{idx}={key}",
+            "-e", f"GIT_CONFIG_VALUE_{idx}={value}",
+        ])
+    return args
+
+
+def _docker_git_safe_directory_args() -> list[str]:
+    """Backward-compatible wrapper for tests/importers of the old helper."""
+    return _docker_git_config_env_args()
+
+
+def _docker_github_token_for_git(ctx: RunContext) -> str | None:
+    token = ctx.env_state.get("github_token")
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        val = os.environ.get(name)
+        if val and val.strip():
+            return val.strip()
+    return None
 
 
 def _docker_container_name(task_id: str, label: str) -> str:
@@ -575,7 +624,7 @@ class DockerEnv(WorktreeEnv):
             # so the CLIs and git pick them up via ``$HOME``.
             *_docker_user_args(),
             "-e", f"HOME={_DOCKER_CONTAINER_HOME}",
-            *_docker_git_safe_directory_args(),
+            *_docker_git_config_env_args(bool(_docker_github_token_for_git(ctx))),
             *_docker_passthrough_env_args(cfg),
             *_docker_credential_mount_args(cfg),
             # Inject the GitHub gate token when available so ``gh`` CLI

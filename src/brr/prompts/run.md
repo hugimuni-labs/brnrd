@@ -40,6 +40,21 @@ end your response with the branch name and commit SHA (e.g.
 compare URL automatically, but naming them in the body helps readers who
 see only the text.
 
+## Working on a branch the task names
+
+When the task asks you to operate on an existing branch other than your
+task branch (e.g. "rebase brr/feature-x onto main"), seed your work from
+the remote tracking ref, not the local branch:
+
+    git switch -c work origin/<branch>
+
+brr's daemon pre-fetches the remote and best-effort fast-forwards every
+local tracking branch before this task started, so `origin/<branch>` is
+already current. The local branch may still be stale — for example, when
+the remote was force-pushed and the local copy can no longer
+fast-forward. Starting from `origin/<branch>` is the safe default;
+rebase, rename, or push from there as the task requires.
+
 ## Knowledge base writes
 
 Optional, not mandatory. Write to `kb/` only when your work produced
