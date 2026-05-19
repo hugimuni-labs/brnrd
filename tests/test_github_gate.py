@@ -1041,6 +1041,21 @@ def test_branch_footer_includes_tree_and_compare_links():
     assert "Compare & open PR" in footer
 
 
+def test_branch_footer_uses_expected_publish_branch_for_refspec():
+    task = Task(
+        id="t", event_id="e", body="b", source="github",
+        meta={
+            "publish_branch": "brr/task-abc",
+            "expected_publish_branch": "feature/results",
+        },
+    )
+    footer = github._branch_footer("owner/repo", task)
+
+    assert "https://github.com/owner/repo/tree/feature/results" in footer
+    assert "compare/feature/results?expand=1" in footer
+    assert "tree/brr/task-abc" not in footer
+
+
 def test_branch_footer_links_changed_kb_result_pages(tmp_path):
     init_git_repo(tmp_path)
     seed_oid = commit_files(
@@ -1096,41 +1111,86 @@ def test_branch_footer_links_changed_kb_result_pages(tmp_path):
     assert "noise.py" not in footer
 
 
-def test_branch_footer_shows_landed_when_auto_merged():
-    task = Task(
-        id="t", event_id="e", body="b", source="github",
-        meta={"publish_branch": "brr/task-abc", "landed_branch": "main"},
-    )
-    footer = github._branch_footer("owner/repo", task)
-    assert "landed on `main`" in footer
-    assert "expand=1" not in footer
-
-
-def test_branch_footer_uses_pre_land_oid_for_landed_result_pages(tmp_path):
+def test_branch_footer_uses_expected_branch_for_result_file_urls(tmp_path):
     init_git_repo(tmp_path)
-    before = commit_files(
+    seed_oid = commit_files(
         tmp_path,
         {"kb/index.md": "# Index\n", "kb/log.md": "# Log\n"},
     )
+    subprocess.run(
+        ["git", "switch", "-c", "brr/task-result"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
     commit_files(
         tmp_path,
-        {"kb/design-landed-result.md": "# Landed result\n"},
-        message="land result",
+        {"kb/research-result-links.md": "# Result links\n"},
+        message="research",
     )
     task = Task(
         id="t", event_id="e", body="b", source="github",
         meta={
-            "publish_branch": "main",
-            "landed_branch": "main",
-            "seed_ref": "main",
-            "auto_land_old_oid": before,
+            "publish_branch": "brr/task-result",
+            "expected_publish_branch": "feature/results",
+            "seed_oid": seed_oid,
         },
     )
 
     footer = github._branch_footer("owner/repo", task, tmp_path)
 
-    assert "landed on `main`" in footer
-    assert "blob/main/kb/design-landed-result.md" in footer
+    assert "blob/feature/results/kb/research-result-links.md" in footer
+    assert "blob/brr/task-result/kb/research-result-links.md" not in footer
+
+
+def test_branch_footer_uses_host_context_for_rebased_result_pages(tmp_path):
+    init_git_repo(tmp_path)
+    commit_files(
+        tmp_path,
+        {
+            "kb/index.md": "# Index\n",
+            "kb/log.md": "# Log\n",
+            "README.md": "# Repo\n",
+        },
+    )
+    subprocess.run(
+        ["git", "switch", "-c", "feature/results"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    old_feature_head = commit_files(
+        tmp_path,
+        {"kb/research-result-links.md": "# Result links\n"},
+        message="add result",
+    )
+    subprocess.run(
+        ["git", "switch", "main"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    commit_files(
+        tmp_path,
+        {"kb/upstream-main.md": "# Upstream\n"},
+        message="advance main",
+    )
+    subprocess.run(
+        ["git", "switch", "-c", "feature/rebased"],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    commit_files(
+        tmp_path,
+        {"kb/research-result-links.md": "# Result links\n"},
+        message="replay result",
+    )
+    task = Task(
+        id="t", event_id="e", body="b", source="github",
+        meta={
+            "publish_branch": "feature/rebased",
+            "seed_oid": old_feature_head,
+            "host_context_branch": "main",
+        },
+    )
+
+    footer = github._branch_footer("owner/repo", task, tmp_path)
+
+    assert "research-result-links.md" in footer
+    assert "upstream-main.md" not in footer
 
 
 def test_find_task_for_event(tmp_path):

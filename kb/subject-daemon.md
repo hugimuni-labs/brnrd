@@ -156,12 +156,16 @@ default prompt.
 
 GitHub final-response delivery also decorates the runner's stdout with
 a branch footer. That footer includes direct links to changed
-`kb/*.md` result pages on the finalized branch, excluding `kb/index.md`
-and `kb/log.md` so research / design / subject articles are surfaced
-without forcing the operator to browse the branch tree by hand. The
-runtime response file under `.brr/responses/` remains delivery plumbing
-and is deleted after the gate posts the comment; it is not a durable
-artifact to link.
+`kb/*.md` result pages on the branch brr publishes on the forge,
+excluding `kb/index.md` and `kb/log.md` so research / design / subject
+articles are surfaced without forcing the operator to browse the branch
+tree by hand. For refspec publishes, the footer still diffs the local
+`publish_branch` but points URLs at `expected_publish_branch`. When a
+task rebases a branch and the old seed is no longer an ancestor, the
+footer compares against the host-context branch instead of treating
+upstream kb changes as task results. The runtime response file under
+`.brr/responses/` remains delivery plumbing and is deleted after the
+gate posts the comment; it is not a durable artifact to link.
 
 ## Process control
 

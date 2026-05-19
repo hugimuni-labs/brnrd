@@ -820,20 +820,17 @@ def _branch_footer(repo: str, task: Task, repo_root: Path | None = None) -> str:
     so a reader can open the long-form result without hunting through
     the branch tree.
     """
-    branch = task.meta.get("publish_branch")
-    if not branch:
+    source_branch = task.meta.get("publish_branch")
+    if not source_branch:
         return ""
+    source_branch = str(source_branch)
+    branch = _footer_branch(task, source_branch)
     base_url = f"https://github.com/{repo}"
     tree_url = f"{base_url}/tree/{urllib.parse.quote(branch, safe='/')}"
-    result_files = _result_file_links(repo, task, repo_root, str(branch))
+    result_files = _result_file_links(
+        repo, task, repo_root, source_branch, branch,
+    )
     result_line = _format_result_files_line(result_files)
-    landed = task.meta.get("landed_branch")
-    if landed:
-        return (
-            f"\n\n---\n"
-            f"Branch [`{branch}`]({tree_url}) landed on `{landed}`."
-            f"{result_line}"
-        )
     compare_url = (
         f"{base_url}/compare/{urllib.parse.quote(branch, safe='/')}?expand=1"
     )
@@ -845,13 +842,21 @@ def _branch_footer(repo: str, task: Task, repo_root: Path | None = None) -> str:
     )
 
 
+def _footer_branch(task: Task, source_branch: str) -> str:
+    raw = task.meta.get("expected_publish_branch")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return source_branch
+
+
 def _result_file_links(
     repo: str,
     task: Task,
     repo_root: Path | None,
-    branch: str,
+    source_branch: str,
+    link_branch: str,
 ) -> list[str]:
-    """Return Markdown links for committed kb result pages on *branch*.
+    """Return Markdown links for committed kb result pages.
 
     The runtime response file is deleted after delivery; durable
     long-form results are the committed kb pages. Index and log edits are
@@ -860,11 +865,11 @@ def _result_file_links(
     """
     if repo_root is None:
         return []
-    paths = _result_files_for_task(repo_root, task, branch)
+    paths = _result_files_for_task(repo_root, task, source_branch)
     if not paths:
         return []
     base_url = f"https://github.com/{repo}"
-    quoted_branch = urllib.parse.quote(branch, safe="/")
+    quoted_branch = urllib.parse.quote(link_branch, safe="/")
     links: list[str] = []
     for path in paths[:_RESULT_FILE_LIMIT]:
         quoted_path = urllib.parse.quote(path, safe="/")
@@ -885,15 +890,15 @@ def _format_result_files_line(links: list[str]) -> str:
 
 
 def _result_files_for_task(repo_root: Path, task: Task, branch: str) -> list[str]:
-    base_ref = _result_files_base_ref(task)
-    if not base_ref:
+    diff_spec = _result_files_diff_spec(repo_root, task, branch)
+    if not diff_spec:
         return []
     try:
         result = subprocess.run(
             [
                 "git", "diff", "--name-only", "-z",
                 "--diff-filter=ACMR",
-                f"{base_ref}..{branch}",
+                diff_spec,
                 "--", "kb/",
             ],
             cwd=repo_root, capture_output=True, text=True, timeout=10,
@@ -905,6 +910,20 @@ def _result_files_for_task(repo_root: Path, task: Task, branch: str) -> list[str
     return _filter_result_file_paths(result.stdout.split("\0"))
 
 
+def _result_files_diff_spec(repo_root: Path, task: Task, branch: str) -> str | None:
+    base_ref = _result_files_base_ref(task)
+    if base_ref and _is_ancestor(repo_root, base_ref, branch):
+        return f"{base_ref}..{branch}"
+
+    # Rebase tasks rewrite the branch so the old seed is no longer an
+    # ancestor. In that shape, diffing seed..branch includes upstream
+    # base-branch changes; compare against the host context instead.
+    context_ref = _result_files_host_context_ref(repo_root, task, branch)
+    if context_ref:
+        return f"{context_ref}..{branch}"
+    return None
+
+
 def _result_files_base_ref(task: Task) -> str | None:
     """Return the pre-task ref to diff against for result-file links."""
     for key in ("seed_oid", "auto_land_old_oid", "seed_ref"):
@@ -912,6 +931,37 @@ def _result_files_base_ref(task: Task) -> str | None:
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
     return None
+
+
+def _result_files_host_context_ref(
+    repo_root: Path,
+    task: Task,
+    branch: str,
+) -> str | None:
+    raw = task.meta.get("host_context_branch")
+    if not isinstance(raw, str):
+        return None
+    host_branch = raw.strip()
+    if not host_branch or host_branch == "HEAD" or host_branch == branch:
+        return None
+    remote = gitops.default_remote(repo_root)
+    candidates = [f"{remote}/{host_branch}"] if remote else []
+    candidates.append(host_branch)
+    for ref in candidates:
+        if gitops.rev_parse(repo_root, ref) and _is_ancestor(repo_root, ref, branch):
+            return ref
+    return None
+
+
+def _is_ancestor(repo_root: Path, maybe_ancestor: str, ref: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", maybe_ancestor, ref],
+            cwd=repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def _filter_result_file_paths(paths: list[str]) -> list[str]:
