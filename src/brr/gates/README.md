@@ -25,17 +25,17 @@ The daemon picks up `pending` events and hands them to the runner.
 
 ### Output: `.brr/responses/`
 
-The runner writes a response file:
+The daemon captures the runner's final stdout and writes a response file:
 
 ```
----
-event_id: evt-<timestamp>-<rand>
----
 <response body>
 ```
 
-The daemon sets the event status to `done`.  The gate reads the
-response and delivers it through its channel, then cleans up both files.
+The daemon sets the event status to `done` as soon as the response is
+validated.  The gate reads the response and delivers it through its
+channel, then cleans up both files.  Daemon housekeeping such as kb
+maintenance, environment finalization, and branch push can continue
+after the response is already deliverable.
 
 ## Writing a gate
 

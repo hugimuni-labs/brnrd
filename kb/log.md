@@ -2113,6 +2113,43 @@ seeds from `origin/<branch>` when the local copy has diverged from the
 remote ref; falls back to the local branch when no remote ref exists;
 `fallback:current` ignores the remote (self-development mode).
 
+## [2026-05-18] fix | Release responses before kb maintenance
+
+Recent daemon logs showed the runner response artifact was written, but
+the originating gate could not deliver it until after kb maintenance,
+environment finalization, and branch push. Root cause: gates only deliver
+events with `status: done`, while `_run_worker_and_finalize` set that
+status after `_run_worker` returned, and `_run_worker` included the
+post-response housekeeping path.
+
+Fix: successful `_run_worker` now marks the inbox event `done`
+immediately after the response file is validated and the task status is
+persisted, before `_maybe_kb_maintenance`. The worker tail no longer
+rewrites an already-deliverable event and tolerates the gate having
+cleaned up the inbox file while maintenance/finalize/push continue.
+GitHub's branch footer now waits for `changed_branch` rather than using
+the prepared `branch_name`, avoiding a race where early delivery could
+link a branch before finalization had identified what should be
+published.
+
+Docs updated: `subject-daemon.md`, `repo-dive-in-map.md`,
+`execution-map.md`, and `gates/README.md` now describe `done` as
+"response is deliverable" rather than "all daemon housekeeping is
+finished."
+
+Tests: 457 passing (was 454). +3 tests: response release happens before
+kb maintenance; worker finalization tolerates gate cleanup after early
+delivery; GitHub branch footers ignore `branch_name` before finalization.
+
+## [2026-05-18] fix | KB consistency: compress dive-in map and reconcile env labels
+
+Compressed `repo-dive-in-map.md` from an oversized module-by-module
+reference into a compact current-state reading guide, keeping source
+and tests as the authoritative detail. The pass also removed a stale
+status-module reference and reconciled the env kb wording with source:
+`host`, `worktree`, and `docker` are the shipped backends; `ssh`,
+`devcontainer`, and plugin/script env registries remain accepted design
+surface, not wired runtime behavior.
 ## [2026-05-18] fix | Sync: ff every tracking branch, agent prompt nudge
 
 Closes the freshness gap that `prefer_remote` didn't cover. The earlier

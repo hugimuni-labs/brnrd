@@ -1,29 +1,30 @@
 # Subject: environments
 
 Hub page for how brr runs tasks in different execution contexts — the
-host checkout, a git worktree, a Docker container, an ssh-reachable
-machine, a devcontainer, or a user-supplied plugin. The implementation
-lives in [`envs/__init__.py`](../src/brr/envs/__init__.py); this page
-is the current synthesis of the protocol, the durability contract,
-and the salvage rule that hangs off it.
+host checkout, a git worktree, or a Docker container. The accepted env
+design also sketches ssh, devcontainer, and plugin/script backends, but
+the implementation currently wired in
+[`envs/__init__.py`](../src/brr/envs/__init__.py) ships only the three
+built-ins named below. This page is the current synthesis of the
+protocol, the durability contract, and the salvage rule that hangs off
+it.
 
 ## Current shape
 
 Every environment implements the same three-phase `Env` Protocol:
 `prepare → invoke → finalize`. The daemon picks the env mechanically
 from `.brr/config` and event metadata (`environment=auto` resolves to
-`docker` when an image is configured, otherwise `worktree`; `host`,
-`ssh`, and `devcontainer` are explicit), then asks the env to set up
-a workspace, run the runner, and return a `FinalizeReport`. Branch
-resolution and trace handling are env-agnostic and happen above the
-protocol; everything filesystem- or transport-specific lives behind
-it.
+`docker` when an image is configured, otherwise `worktree`; `host` is
+explicit), then asks the env to set up a workspace, run the runner, and
+finalize. Branch resolution and trace handling are env-agnostic and
+happen above the protocol; everything filesystem- or transport-specific
+lives behind it.
 
-Three envs ship today — `local`, `worktree`, and `docker`. Two are
-designed but not yet implemented — `ssh` and `devcontainer`. Plugins
-ride on either Python entry points (`brr.envs`) or drop-in script
-envs in `.brr/envs/<name>/` and `~/.config/brr/envs/<name>/`; both
-dispatch paths share the protocol so neither kind is privileged.
+Three envs ship today: `host`, `worktree`, and `docker`. `ssh`,
+`devcontainer`, Python entry points (`brr.envs`), and drop-in script
+envs in `.brr/envs/<name>/` / `~/.config/brr/envs/<name>/` are accepted
+design surface, not wired runtime backends; `get_env()` rejects them
+until that registry work lands.
 
 Docker wires runner credentials from the host at invocation time. For
 GitHub-originated tasks, brr can inject the GitHub gate token (stored,
@@ -35,7 +36,7 @@ inside the container.
 
 ## Durability contract
 
-Tasks running in a non-`local` env run in an **ephemeral** location.
+Tasks running in an isolated env run in an **ephemeral** location.
 The only outputs that survive are git refs and the response file on
 the host. Trace artefacts and per-task scratch (worktree directory,
 container, remote scratch dir) are env territory and get torn down on
@@ -93,5 +94,5 @@ the env's job is to apply that decision inside its workspace.
    user-facing reference: when to pick each env, configuration keys,
    troubleshooting.
 5. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §10 for the
-   plugin candidates (Daytona, Firecracker, E2B) that ride on the
-   entry-point mechanism but ship outside brr core.
+   plugin candidates (Daytona, Firecracker, E2B) that would ride on
+   the entry-point mechanism once the registry surface is wired.

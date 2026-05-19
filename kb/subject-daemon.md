@@ -108,16 +108,23 @@ For each pending event, the daemon:
 6. invokes the configured runner headlessly;
 7. captures the runner's final stdout as the response file;
 8. retries if no response was produced;
-9. runs kb preflight plus the optional redundancy pass after successful
+9. marks the inbox event `done`, making the response file deliverable
+   by the originating gate;
+10. runs kb preflight plus the optional redundancy pass after successful
    work;
-10. finalizes the environment, fast-forwarding or preserving branches;
-11. marks the event terminal and pushes the branch that actually changed.
+11. finalizes the environment, fast-forwarding or preserving branches;
+12. pushes the branch that actually changed.
 
 The durable user response is plain stdout captured by
 [`runner.invoke_runner`](../src/brr/runner.py), not a file the agent
 writes manually. This contract is documented in
 [`execution-map.md`](../src/brr/docs/execution-map.md) and enforced by
 the daemon prompt assembled in [`prompts.py`](../src/brr/prompts.py).
+Response delivery is intentionally released before kb maintenance,
+environment finalization, and push: those stages are post-response
+housekeeping and should not delay the operator seeing the result. The
+progress card can continue to show maintenance, finalization, and push
+after the final reply is already in the originating chat thread.
 
 ## Forge-aware response card
 

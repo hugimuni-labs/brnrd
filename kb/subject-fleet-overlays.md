@@ -11,7 +11,7 @@ fleet strands coherent while they are paused.
 
 The fleet agenda is deliberately not one feature.
 
-- **Environments** answer where one task executes. `local`, `worktree`,
+- **Environments** answer where one task executes. `host`, `worktree`,
   and `docker` ship today; `ssh` and `devcontainer` remain designed but
   unimplemented. Read [`subject-envs.md`](subject-envs.md) and
   [`design-env-interface.md`](design-env-interface.md) for the current
