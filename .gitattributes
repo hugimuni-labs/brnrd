@@ -1,0 +1,4 @@
+# Episodic log is append-mostly: union merge keeps parallel branch additions
+# without conflict markers. Caveat: concurrent edits to the same line (e.g.
+# header tweaks) can interleave oddly — prefer appending new entries only.
+kb/log.md merge=union

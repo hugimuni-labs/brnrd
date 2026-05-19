@@ -707,6 +707,89 @@ def test_docker_inject_github_token_from_gate_state(tmp_path, monkeypatch):
     assert "GITHUB_TOKEN=ghs_stored_token" in kv_env
 
 
+def test_docker_github_token_rewrites_ssh_remotes(tmp_path, monkeypatch):
+    """A GitHub token must also help plain ``git push`` when origin is SSH.
+
+    The runner sees the repo's real remote URL. If that URL is
+    ``git@github.com:...``, exporting ``GITHUB_TOKEN`` is not enough:
+    git still tries SSH and fails without an agent/key. The Docker env
+    injects git config that rewrites GitHub SSH remotes to HTTPS with
+    the token for the duration of the container.
+    """
+    _isolate_docker_creds(monkeypatch, tmp_path)  # noqa: F841
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    gate_dir = tmp_path / ".brr" / "gates"
+    gate_dir.mkdir(parents=True)
+    (gate_dir / "github.json").write_text(
+        '{"token": "ghs_stored_token"}', encoding="utf-8",
+    )
+
+    task = Task(
+        id="task-gh-rewrite", event_id="evt-gh-r",
+        body="rebase", source="github",
+    )
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    env_values = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" in command[i + 1]
+    ]
+    assert "GIT_CONFIG_COUNT=4" in env_values
+    assert "GIT_CONFIG_KEY_1=url.https://github.com/.insteadOf" in env_values
+    assert "GIT_CONFIG_VALUE_1=git@github.com:" in env_values
+    assert "GIT_CONFIG_KEY_2=url.https://github.com/.insteadOf" in env_values
+    assert "GIT_CONFIG_VALUE_2=ssh://git@github.com/" in env_values
+    assert "GIT_CONFIG_KEY_3=credential.helper" in env_values
+    assert any(
+        v.startswith("GIT_CONFIG_VALUE_3=!f()")
+        and "password=${GITHUB_TOKEN:-$GH_TOKEN}" in v
+        for v in env_values
+    )
+
+
+def test_docker_github_token_can_come_from_gh_cli(tmp_path, monkeypatch):
+    """GitHub gate setup may use ``gh auth token`` without storing a token.
+
+    The gate can poll with that token in-process, but a Docker runner
+    still needs the token injected explicitly for push/rebase work.
+    """
+    _isolate_docker_creds(monkeypatch, tmp_path)  # noqa: F841
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    gate_dir = tmp_path / ".brr" / "gates"
+    gate_dir.mkdir(parents=True)
+    (gate_dir / "github.json").write_text(
+        '{"repo": "owner/repo", "token_source": "gh-cli"}',
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **_kwargs):
+        if command == ["gh", "auth", "token"]:
+            return envs.subprocess.CompletedProcess(command, 0, "ghs_cli_token\n", "")
+        return envs.subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(envs.subprocess, "run", fake_run)
+
+    task = Task(
+        id="task-gh-cli", event_id="evt-gh-cli",
+        body="push", source="github",
+    )
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    kv_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" in command[i + 1]
+    ]
+    assert "GITHUB_TOKEN=ghs_cli_token" in kv_env
+
+
 def test_docker_no_github_token_for_non_github_task(tmp_path, monkeypatch):
     """Tasks from other sources must not receive a GITHUB_TOKEN even when
     the gate state file exists on disk."""
