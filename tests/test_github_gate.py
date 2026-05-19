@@ -1019,6 +1019,14 @@ def test_branch_footer_returns_empty_when_no_branch():
     assert github._branch_footer("o/r", task) == ""
 
 
+def test_branch_footer_ignores_branch_name_before_finalize():
+    task = Task(
+        id="t", event_id="e", body="b", source="github",
+        meta={"branch_name": "brr/task-abc"},
+    )
+    assert github._branch_footer("o/r", task) == ""
+
+
 def test_branch_footer_includes_tree_and_compare_links():
     task = Task(
         id="t", event_id="e", body="b", source="github",

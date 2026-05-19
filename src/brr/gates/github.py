@@ -809,11 +809,11 @@ def _find_task_for_event(brr_dir: Path, event_id: str) -> Task | None:
 def _branch_footer(repo: str, task: Task) -> str:
     """Return a Markdown footer with branch / PR links, or empty string.
 
-    Only appended when the runner actually pushed a branch. The
-    ``?expand=1`` on the compare URL pre-fills GitHub's PR-creation form
-    so clicking it is one step from merging.
+    Only appended after finalization has identified the branch that
+    should be published. The ``?expand=1`` on the compare URL pre-fills
+    GitHub's PR-creation form so clicking it is one step from merging.
     """
-    branch = task.meta.get("changed_branch") or task.meta.get("branch_name")
+    branch = task.meta.get("changed_branch")
     if not branch:
         return ""
     base_url = f"https://github.com/{repo}"

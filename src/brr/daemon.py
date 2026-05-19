@@ -6,8 +6,8 @@ The daemon is a single foreground process (``brr up``).  It:
 2. Scans ``.brr/inbox/`` for pending events on a timer.
 3. Dispatches pending events into a bounded worker pool.
 4. Each worker owns the full pipeline for its event: runner invocation,
-   retries, response capture, kb maintenance, env finalize, branch push,
-   and event status update.
+   retries, response capture, response release to gates, kb maintenance,
+   env finalize, and branch push.
 5. Workers don't share mutable state — conversation logs and gate
    progress cards are partitioned per event / per task. The only
    resources that need synchronisation are git refs at fast-forward and
@@ -705,6 +705,7 @@ def _run_worker(
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             _record_response_artifact(emit, task, resp_path)
             task.update_status("done", tasks_dir)
+            _set_event_status_if_present(event, "done")
             maintenance_trace = _maybe_kb_maintenance(
                 run_root, repo_root, cfg, runner_name,
                 emit=emit,
@@ -949,6 +950,16 @@ def _record_response_artifact(
         kind="response",
         path=str(response_path),
     )
+
+
+def _set_event_status_if_present(event: dict, status: str) -> bool:
+    """Set an inbox event status, tolerating gate cleanup after delivery."""
+    try:
+        protocol.set_status(event, status)
+    except FileNotFoundError:
+        return False
+    event["status"] = status
+    return True
 
 
 def _kb_changed(run_root: Path) -> bool:
@@ -1231,16 +1242,18 @@ def _run_worker_and_finalize(
     """Run one event end-to-end and return the resulting Task.
 
     Owns the full pipeline for one event: run the runner, capture
-    response, set event status, push to remote. Lives as a separate
-    function so each worker thread owns the whole pipeline (and so
-    tests can drive it without spinning up the threaded loop).
+    response, perform post-response housekeeping, and push to remote.
+    Lives as a separate function so each worker thread owns the whole
+    pipeline (and so tests can drive it without spinning up the
+    threaded loop).
 
     The dev-reload watcher is polled in the main loop only — calling
     it from worker threads would race on the watcher's internal
     snapshot.
     """
     task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
-    protocol.set_status(event, task.status)
+    if event.get("status") != "done":
+        _set_event_status_if_present(event, task.status)
     if task.status == "error":
         print(f"[brr] task {task.id}: failed")
     elif task.status == "conflict":
