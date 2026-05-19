@@ -581,6 +581,40 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     ]
 
 
+def test_worker_push_passes_lease_for_changed_auto_land_branch(tmp_path, monkeypatch):
+    event = {"id": "evt-lease", "source": "github", "body": "rebase"}
+    task = Task(
+        id="task-lease",
+        event_id="evt-lease",
+        body="rebase",
+        status="done",
+        source="github",
+        conversation_key="github:owner/repo#17",
+        meta={
+            "changed_branch": "brr/deliver-before-kb-maintenance",
+            "auto_land_branch": "brr/deliver-before-kb-maintenance",
+            "auto_land_old_oid": "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
+        },
+    )
+    captured = {}
+
+    monkeypatch.setattr(daemon, "_run_worker", lambda *_a, **_k: task)
+    monkeypatch.setattr(daemon.protocol, "set_status", lambda *_a, **_k: None)
+
+    def fake_push(*_args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(daemon, "_push_if_needed", fake_push)
+
+    daemon._run_worker_and_finalize(event, tmp_path, tmp_path / ".brr", {}, 0)
+
+    assert captured["branch"] == "brr/deliver-before-kb-maintenance"
+    assert (
+        captured["expected_remote_oid"]
+        == "6c1ca158d19c6ba40c06e8a46f7c338ada056246"
+    )
+
+
 def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-kb", body="update docs")

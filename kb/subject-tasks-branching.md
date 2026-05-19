@@ -50,11 +50,15 @@ in a container.
 
 ## Branch intent and landing
 
-The seed ref comes from the configured `auto_land_branch`, then the
-event's `target_branch` metadata, then a fixed config seed, then the
-host checkout's current branch as last resort. Auto-land target comes
-only from structured event metadata; when absent, brr preserves the
-task branch without trying to infer a target.
+Structured event branch fields (`branch_target`, `target_branch`,
+`base_branch`, then legacy `branch`) become the auto-land target and
+the seed. When a matching remote-tracking ref exists, brr seeds from
+that remote ref so a runner starts from the forge-visible branch even
+if the daemon's local branch diverged. Without structured branch
+authority, `branch.fallback=preserve` seeds from the repo default
+branch (falling back to host `HEAD`) and preserves the task branch;
+`branch.fallback=current` is the explicit self-development mode that
+seeds from and auto-lands to the host checkout branch.
 
 The host's current branch travels into the prompt as context but is
 never treated as an auto-land target — agents need to know what
@@ -65,7 +69,11 @@ If the agent stays on the task branch and an explicit auto-land
 target was set, brr fast-forwards it. If no target exists, brr
 preserves the task branch. If the agent switched branches or detached
 HEAD, finalization records whatever git state was left and pushes the
-agent-chosen branch.
+agent-chosen branch. When that branch is the explicit auto-land target
+and the agent rewrote it locally (for example a PR rebase), the daemon
+publishes with `--force-with-lease` anchored to the remote OID captured
+before the run. Other branch pushes remain ordinary pushes, so brr does
+not grow a general "force whatever changed" path.
 
 The full design and the design's lineage live in
 [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md);

@@ -201,6 +201,7 @@ def _push_if_needed(
     conversation_key: str | None = None,
     event_id: str | None = None,
     task_id: str | None = None,
+    expected_remote_oid: str | None = None,
 ) -> None:
     """Push the changed branch when there are commits to publish.
 
@@ -208,7 +209,9 @@ def _push_if_needed(
     ``push_done`` update packets so gates can render delivery progress.
     The actual ``git push`` runs inside a per-branch lock so two
     concurrent workers that happen to target the same branch can't
-    interleave their pushes.
+    interleave their pushes. When *expected_remote_oid* is provided and
+    the local branch has been rewritten relative to its remote-tracking
+    ref, publish with ``--force-with-lease`` anchored to that OID.
     """
     branch_name = branch or gitops.current_branch(repo_root)
     if not branch_name or branch_name == "HEAD":
@@ -221,6 +224,7 @@ def _push_if_needed(
         upstream = gitops.branch_upstream(repo_root, branch_name)
         remote = gitops.branch_remote(repo_root, branch_name)
         set_upstream = False
+        force_with_lease = False
 
         if upstream:
             commits = _commits_between(repo_root, upstream, branch_name)
@@ -229,15 +233,22 @@ def _push_if_needed(
             if not remote:
                 remote = upstream.split("/", 1)[0] if "/" in upstream else None
             remote_branch = upstream.split("/", 1)[1] if "/" in upstream else branch_name
-            push_cmd = [
-                "git", "push", remote or "origin",
-                f"{branch_name}:{remote_branch}",
-            ]
+            force_with_lease = _needs_force_with_lease(
+                repo_root, upstream, branch_name, expected_remote_oid,
+            )
         else:
             remote = gitops.default_remote(repo_root)
             if not remote:
                 return
-            commits = _commits_since_seed(repo_root, branch_name)
+            remote_branch = branch_name
+            remote_ref = f"{remote}/{branch_name}"
+            if gitops.rev_parse(repo_root, remote_ref):
+                commits = _commits_between(repo_root, remote_ref, branch_name)
+                force_with_lease = _needs_force_with_lease(
+                    repo_root, remote_ref, branch_name, expected_remote_oid,
+                )
+            else:
+                commits = _commits_since_seed(repo_root, branch_name)
             if not commits:
                 return
             # A new branch with no upstream: publish it the way a user
@@ -246,15 +257,24 @@ def _push_if_needed(
             # the branch is in the brr namespace or one the agent
             # named at runtime.
             set_upstream = True
-            push_cmd = ["git", "push", "-u", remote, branch_name]
 
         if not remote:
             return
+        push_cmd = _push_command(
+            remote,
+            branch_name,
+            remote_branch,
+            set_upstream=set_upstream,
+            expected_remote_oid=(
+                expected_remote_oid if force_with_lease else None
+            ),
+        )
         commit_count = len(commits)
         push_payload: dict = {
             "commits": commit_count,
             "branch": branch_name,
             "set_upstream": set_upstream,
+            "force_with_lease": force_with_lease,
         }
         if task_id:
             push_payload["task_id"] = task_id
@@ -285,6 +305,40 @@ def _push_if_needed(
             emit("push_done", **done_payload)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+
+
+def _needs_force_with_lease(
+    repo_root: Path,
+    remote_ref: str,
+    branch: str,
+    expected_remote_oid: str | None,
+) -> bool:
+    """True when *branch* rewrote *remote_ref* and has a lease anchor."""
+    if not expected_remote_oid:
+        return False
+    return not gitops.is_ancestor(repo_root, remote_ref, branch)
+
+
+def _push_command(
+    remote: str,
+    branch: str,
+    remote_branch: str,
+    *,
+    set_upstream: bool,
+    expected_remote_oid: str | None,
+) -> list[str]:
+    cmd = ["git", "push"]
+    if set_upstream:
+        cmd.append("-u")
+    if expected_remote_oid:
+        remote_ref = f"refs/heads/{remote_branch}"
+        cmd.append(f"--force-with-lease={remote_ref}:{expected_remote_oid}")
+        cmd.extend([remote, f"{branch}:{remote_ref}"])
+    elif set_upstream and remote_branch == branch:
+        cmd.extend([remote, branch])
+    else:
+        cmd.extend([remote, f"{branch}:{remote_branch}"])
+    return cmd
 
 
 def _forge_view_url(
@@ -1207,16 +1261,22 @@ def _run_worker_and_finalize(
             f"[brr] task {task.id}: branch preserved (cannot fast-forward)"
         )
 
+    branch_to_push = (
+        task.meta.get("changed_branch")
+        or task.meta.get("landed_branch")
+        or task.meta.get("preserved_branch")
+    )
+    expected_remote_oid = None
+    if branch_to_push and branch_to_push == task.meta.get("auto_land_branch"):
+        expected_remote_oid = task.meta.get("auto_land_old_oid")
+
     _push_if_needed(
         repo_root,
-        branch=(
-            task.meta.get("changed_branch")
-            or task.meta.get("landed_branch")
-            or task.meta.get("preserved_branch")
-        ),
+        branch=branch_to_push,
         conversation_key=task.conversation_key,
         event_id=task.event_id,
         task_id=task.id,
+        expected_remote_oid=expected_remote_oid,
     )
     return task
 

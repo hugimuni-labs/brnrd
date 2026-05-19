@@ -1,6 +1,8 @@
 # Activity Log
 
-Newest entries at the bottom. Format:
+Newest entries at the bottom. Keep repo-root `.gitattributes` with
+`kb/log.md merge=union` so parallel merges usually combine appended entries;
+append new sections only, not concurrent rewrites of the same lines. Format:
 
 ## [YYYY-MM-DD] <type> | <title>
 
@@ -2148,3 +2150,74 @@ status-module reference and reconciled the env kb wording with source:
 `host`, `worktree`, and `docker` are the shipped backends; `ssh`,
 `devcontainer`, and plugin/script env registries remain accepted design
 surface, not wired runtime behavior.
+## [2026-05-18] fix | Sync: ff every tracking branch, agent prompt nudge
+
+Closes the freshness gap that `prefer_remote` didn't cover. The earlier
+fix only kicks in when the event itself names a branch (GitHub gate with
+`branch_target`). For free-text gates like Telegram — "rebase
+brr/feature-b onto main" — the daemon couldn't know which branch the
+agent was about to consume, so the local copy of `feature-b` could be
+stale relative to the remote when the agent did `git switch feature-b`
+inside the worktree.
+
+Two parts:
+
+**Daemon: broaden the pre-task ff to every tracking branch.**
+`sync.refresh_before_task` now sweeps every local branch with a matching
+`<remote>/<branch>` after the explicit-target ff pass. Targets keep
+their failure-recording behaviour (the caller asked, the caller gets
+told); sweep-discovered branches that can't ff are **silent no-ops**
+(not in `result.skipped`) so abandoned branches don't pollute the
+progress card. Gated by `sync.fast_forward_all` (default True). New
+`gitops.list_local_branches` lists local heads via
+`git for-each-ref refs/heads/`. `_try_fast_forward` gained a
+`silent_on_skip` parameter; a new `_sweep_candidates` builds the
+discovery list.
+
+**Agent prompt nudge in `src/brr/prompts/run.md`.** A new section
+"Working on a branch the task names" tells the agent to seed work from
+`origin/<branch>` rather than the local branch when the task asks them
+to operate on something other than their task branch. The daemon's
+sweep makes this almost always equivalent to using the local name, but
+the nudge keeps agents robust against the cases the sweep can't fix
+(force-push divergence, network-disabled daemon, branch the daemon
+hasn't seen yet).
+
+Tests: 458 passing (was 454). +4 in `test_sync.py`: sweep advances
+non-target tracking branches; sweep failures stay silent; explicit-
+target failures still recorded; `sync.fast_forward_all=false` reverts
+to the pre-sweep contract.
+
+## [2026-05-18] fix | Runner and daemon can publish rebased GitHub branches
+
+Closed the gap left by the PR #17 rebase attempt: the runner could
+produce the rebased branch locally, but `git push` inside Docker still
+used the repo's SSH remote and failed with `Permission denied
+(publickey)`. Docker GitHub tasks now resolve a gate token from stored
+state, env, or `gh auth token`, pass it as `GITHUB_TOKEN`, and configure
+git to rewrite GitHub SSH remotes to HTTPS with a token-backed
+credential helper. Runner-initiated pushes now have a credentialed path
+without requiring an SSH agent in the container.
+
+The host-side daemon publish path also learned the explicit PR-rebase
+case. When the changed branch is the resolved auto-land target and the
+branch is not a fast-forward of its remote-tracking ref, `_push_if_needed`
+uses `--force-with-lease` anchored to the remote OID captured before the
+run. This is deliberately narrower than a general force-push: other
+branches keep ordinary push semantics.
+
+Progress rendering now treats failed `push_done` packets as `push
+failed` instead of saying `pushed N commits`, so a delivered response
+card no longer hides the publish failure.
+
+## [2026-05-19] fix | KB branch resolver prose matches shipped resolver
+
+Post-task kb maintenance checked the rebased-branch publish notes
+against `branching.py`, `daemon.py`, and `envs/__init__.py`. The branch
+hub and daemon branch design now describe the shipped resolver order:
+structured event branch fields (`branch_target`, `target_branch`,
+`base_branch`, legacy `branch`) are the only daemon auto-land authority;
+fallback policy is only `preserve` or explicit `current`; conversation
+branch facts stay prompt context. The design's history was compressed
+to one lineage breadcrumb, and the index status now includes the
+2026-05-18 leased-publish amendment.

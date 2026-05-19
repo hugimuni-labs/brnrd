@@ -26,6 +26,14 @@ envs in `.brr/envs/<name>/` / `~/.config/brr/envs/<name>/` are accepted
 design surface, not wired runtime backends; `get_env()` rejects them
 until that registry work lands.
 
+Docker wires runner credentials from the host at invocation time. For
+GitHub-originated tasks, brr can inject the GitHub gate token (stored,
+environment-provided, or resolved through `gh auth token`) and configures
+in-container git to rewrite common GitHub SSH remote forms to HTTPS with
+a token-backed credential helper. That gives runner agents a working
+`git push` path for PR/rebase work even when no SSH agent is available
+inside the container.
+
 ## Durability contract
 
 Tasks running in an isolated env run in an **ephemeral** location.
