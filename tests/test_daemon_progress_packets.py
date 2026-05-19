@@ -371,3 +371,58 @@ def test_push_sets_upstream_for_new_brr_branch(tmp_path, monkeypatch):
     started = next(r for r in records if r.get("type") == "push_started")
     assert started.get("branch") == "brr/task-1"
     assert started.get("set_upstream") is True
+
+
+def test_push_uses_force_with_lease_for_rewritten_target(tmp_path, monkeypatch):
+    """A PR branch rebase is not a fast-forward, but it is publishable
+    when brr captured the remote OID before the run. The host-side push
+    should use that OID as a lease instead of doing a blind force push or
+    a normal push that will be rejected."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    conv_key = "github:owner/repo#17"
+
+    monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+    monkeypatch.setattr(daemon.gitops, "branch_upstream", lambda _r, b: f"origin/{b}")
+    monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: "origin")
+
+    calls = []
+
+    class _Result:
+        def __init__(self, returncode=0, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(args, **_kwargs):
+        calls.append(args)
+        if args[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return _Result(returncode=1)
+        if "log" in args:
+            return _Result(returncode=0, stdout="abc rebased\n")
+        if "push" in args:
+            return _Result(returncode=0)
+        return _Result(returncode=0)
+
+    monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
+
+    daemon._push_if_needed(
+        tmp_path,
+        branch="brr/deliver-before-kb-maintenance",
+        conversation_key=conv_key,
+        task_id="task-push",
+        expected_remote_oid="6c1ca158d19c6ba40c06e8a46f7c338ada056246",
+    )
+
+    assert [
+        "git", "push",
+        "--force-with-lease="
+        "refs/heads/brr/deliver-before-kb-maintenance:"
+        "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
+        "origin",
+        "brr/deliver-before-kb-maintenance:"
+        "refs/heads/brr/deliver-before-kb-maintenance",
+    ] in calls
+    records = _update_records(brr_dir, conv_key)
+    started = next(r for r in records if r.get("type") == "push_started")
+    assert started.get("force_with_lease") is True
