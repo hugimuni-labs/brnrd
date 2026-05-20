@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 
 from brr.gitops import (
+    advance_branch_with_anchor,
+    branch_head,
     current_branch,
     fast_forward_branch,
     is_tracked,
@@ -113,6 +115,44 @@ def test_fast_forward_branch_updates_unchecked_out_branch(tmp_path):
         text=True,
     ).stdout.strip()
     assert target_head == source_head
+
+
+def test_advance_branch_with_anchor_relocates_rebased_head(tmp_path):
+    """After a rebase onto main, the task branch is not a ff of the PR tip."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    main_branch = _init_repo(repo)
+    (repo / "file.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    subprocess.run(["git", "checkout", "-b", "feature/pr"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    (repo / "pr.txt").write_text("pr\n", encoding="utf-8")
+    subprocess.run(["git", "add", "pr.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "pr"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    pr_tip = branch_head(repo, "feature/pr")
+
+    subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
+    (repo / "main.txt").write_text("main\n", encoding="utf-8")
+    subprocess.run(["git", "add", "main.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    subprocess.run(["git", "checkout", "-b", "brr/task-rebase"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    (repo / "rebased.txt").write_text("rebased\n", encoding="utf-8")
+    subprocess.run(["git", "add", "rebased.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "rebased"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
+
+    ff = fast_forward_branch(repo, "feature/pr", "brr/task-rebase", expected_old_oid=pr_tip)
+    assert ff.success is False
+
+    anchored = advance_branch_with_anchor(
+        repo, "feature/pr", "brr/task-rebase", expected_old_oid=pr_tip,
+    )
+    assert anchored.success is True
+    subprocess.run(["git", "checkout", "feature/pr"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    assert (repo / "rebased.txt").exists()
+    assert (repo / "main.txt").exists()
 
 
 def test_list_worktrees_empty(tmp_path):

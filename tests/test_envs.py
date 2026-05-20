@@ -142,6 +142,42 @@ def test_worktree_finalize_preserves_task_branch_without_auto_land(tmp_path):
     assert not (repo / "change.txt").exists()
 
 
+def test_worktree_finalize_relocates_rebased_auto_land_target(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    response_path = repo / ".brr" / "responses" / "evt-rebase.md"
+    subprocess.run(["git", "checkout", "-b", "feature/pr"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    _commit_in(repo, "pr.txt", "pr\n", "pr")
+    pr_tip = envs.gitops.branch_head(repo, "feature/pr")
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    _commit_in(repo, "main.txt", "main\n", "main")
+
+    task = Task(id="task-rebase", event_id="evt-rebase", body="rebase", status="done")
+    plan = branching.BranchPlan(
+        seed_ref=f"feature/pr",
+        auto_land_branch="feature/pr",
+        source="event:branch_target",
+        host_context_branch="main",
+        expected_old_oid=pr_tip,
+    )
+    backend = envs.get_env("worktree")
+    ctx = backend.prepare(
+        task, repo, {},
+        branch_plan=plan, response_path=response_path,
+    )
+    _commit_in(ctx.cwd, "rebased.txt", "rebased\n", "rebased")
+
+    backend.finalize(ctx, task, repo / ".brr" / "tasks")
+
+    assert task.status == "done"
+    assert task.meta["landed_branch"] == "feature/pr"
+    assert task.meta["changed_branch"] == "feature/pr"
+    subprocess.run(["git", "checkout", "feature/pr"], cwd=repo, check=True, stdout=subprocess.PIPE)
+    assert (repo / "rebased.txt").exists()
+    assert not envs.gitops.branch_exists(repo, "brr/task-rebase")
+
+
 def test_worktree_finalize_fast_forwards_auto_land_target(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
