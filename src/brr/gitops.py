@@ -248,6 +248,79 @@ def fast_forward_branch(
     )
 
 
+def advance_branch_with_anchor(
+    repo_root: Path,
+    branch: str,
+    source_ref: str,
+    *,
+    expected_old_oid: str,
+) -> BranchUpdateResult:
+    """Relocate *branch* to *source_ref* when its tip still matches *expected_old_oid*.
+
+    Used after a deliberate history rewrite (rebase onto main, squash) where
+    the task branch is not a fast-forward of the auto-land target but brr
+    captured the pre-run oid. Refuses when the anchor moved (another writer
+    or concurrent task).
+    """
+    if not valid_branch_name(repo_root, branch):
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"invalid branch name: {branch}",
+        )
+
+    source_oid = rev_parse(repo_root, source_ref)
+    if source_oid is None:
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"cannot resolve source ref: {source_ref}",
+        )
+
+    old_oid = branch_head(repo_root, branch)
+    if old_oid != expected_old_oid:
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=(
+                f"{branch} changed while task was running"
+                if old_oid is not None
+                else f"{branch} has no anchor to relocate"
+            ),
+        )
+
+    if current_branch(repo_root) == branch:
+        result = _git(repo_root, "reset", "--hard", source_ref, check=False)
+        if result.returncode == 0:
+            commit = rev_parse(repo_root, "HEAD") or source_oid
+            return BranchUpdateResult(success=True, branch=branch, commit=commit)
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=result.stderr.strip() or result.stdout.strip(),
+        )
+
+    checkout_path = branch_checkout_path(repo_root, branch)
+    if checkout_path is not None and checkout_path.resolve() != repo_root.resolve():
+        return BranchUpdateResult(
+            success=False,
+            branch=branch,
+            detail=f"{branch} is checked out at {checkout_path}",
+        )
+
+    ref = f"refs/heads/{branch}"
+    result = _git(
+        repo_root, "update-ref", ref, source_oid, expected_old_oid, check=False,
+    )
+    if result.returncode == 0:
+        return BranchUpdateResult(success=True, branch=branch, commit=source_oid)
+    return BranchUpdateResult(
+        success=False,
+        branch=branch,
+        detail=result.stderr.strip() or result.stdout.strip(),
+    )
+
+
 def branch_upstream(repo_root: Path, branch: str) -> str | None:
     """Return the upstream ref for *branch*, e.g. ``origin/main``."""
     result = _git(

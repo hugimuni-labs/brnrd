@@ -581,6 +581,56 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     ]
 
 
+def test_push_lease_anchor_for_task_branch_tracking_auto_land(tmp_path, monkeypatch):
+    task = Task(
+        id="task-up",
+        event_id="evt-up",
+        body="rebase",
+        meta={
+            "changed_branch": "brr/task-1",
+            "auto_land_branch": "brr/result-file-links",
+            "auto_land_old_oid": "abc123",
+        },
+    )
+    monkeypatch.setattr(
+        daemon.gitops,
+        "branch_upstream",
+        lambda _root, branch: (
+            "origin/brr/result-file-links" if branch == "brr/task-1" else None
+        ),
+    )
+    assert daemon._push_lease_anchor(tmp_path, task, "brr/task-1") == "abc123"
+    assert daemon._push_lease_anchor(tmp_path, task, "brr/other") is None
+
+
+def test_worker_finalize_keeps_event_deliverable_on_branch_conflict(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-conflict", body="rebase")
+    responses = tmp_path / ".brr" / "responses"
+    daemon.protocol.write_response(responses, "evt-conflict", "rebased ok\n")
+
+    conflict_task = Task(
+        id="task-conflict",
+        event_id="evt-conflict",
+        body="rebase",
+        status="conflict",
+        source=event["source"],
+    )
+
+    monkeypatch.setattr(daemon, "_run_worker", lambda *_a, **_k: conflict_task)
+    monkeypatch.setattr(daemon, "_push_if_needed", lambda *_a, **_k: None)
+
+    daemon._run_worker_and_finalize(
+        event, tmp_path, responses, {}, 0,
+    )
+
+    assert event.get("status") == "done"
+    assert "status: done" in event["_path"].read_text(encoding="utf-8")
+    assert daemon.protocol.response_exists(responses, "evt-conflict")
+
+
 def test_worker_push_passes_lease_for_changed_auto_land_branch(tmp_path, monkeypatch):
     event = {"id": "evt-lease", "source": "github", "body": "rebase"}
     task = Task(
