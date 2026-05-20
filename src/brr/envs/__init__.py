@@ -241,6 +241,24 @@ class WorktreeEnv(HostEnv):
                 initial_branch,
                 expected_old_oid=plan.expected_old_oid,
             )
+            if (
+                not result.success
+                and plan.expected_old_oid
+                and result.detail
+                and "not a fast-forward" in result.detail
+            ):
+                anchored = gitops.advance_branch_with_anchor(
+                    ctx.repo_root,
+                    plan.auto_land_branch,
+                    initial_branch,
+                    expected_old_oid=plan.expected_old_oid,
+                )
+                if anchored.success:
+                    result = anchored
+                    print(
+                        f"[brr] task {task.id}: relocated "
+                        f"{plan.auto_land_branch} to rebased task head"
+                    )
             if result.success:
                 task.meta["landed_branch"] = plan.auto_land_branch
                 task.meta["changed_branch"] = plan.auto_land_branch

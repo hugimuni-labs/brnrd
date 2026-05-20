@@ -307,6 +307,24 @@ def _push_if_needed(
         pass
 
 
+def _push_lease_anchor(
+    repo_root: Path,
+    task: Task,
+    branch_to_push: str | None,
+) -> str | None:
+    """Return the pre-run remote oid to anchor a leased push, if any."""
+    auto_land = task.meta.get("auto_land_branch")
+    old_oid = task.meta.get("auto_land_old_oid")
+    if not branch_to_push or not auto_land or not old_oid:
+        return None
+    if branch_to_push == auto_land:
+        return str(old_oid)
+    upstream = gitops.branch_upstream(repo_root, branch_to_push)
+    if upstream and upstream.endswith(f"/{auto_land}"):
+        return str(old_oid)
+    return None
+
+
 def _needs_force_with_lease(
     repo_root: Path,
     remote_ref: str,
@@ -1253,7 +1271,16 @@ def _run_worker_and_finalize(
     """
     task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
     if event.get("status") != "done":
-        _set_event_status_if_present(event, task.status)
+        # A response-ready task can still end in branch ``conflict`` when
+        # landing fails; keep the inbox event deliverable so gates post the
+        # agent reply instead of only updating the progress card.
+        if (
+            task.status == "conflict"
+            and protocol.response_exists(responses_dir, event["id"])
+        ):
+            _set_event_status_if_present(event, "done")
+        else:
+            _set_event_status_if_present(event, task.status)
     if task.status == "error":
         print(f"[brr] task {task.id}: failed")
     elif task.status == "conflict":
@@ -1266,9 +1293,9 @@ def _run_worker_and_finalize(
         or task.meta.get("landed_branch")
         or task.meta.get("preserved_branch")
     )
-    expected_remote_oid = None
-    if branch_to_push and branch_to_push == task.meta.get("auto_land_branch"):
-        expected_remote_oid = task.meta.get("auto_land_old_oid")
+    expected_remote_oid = _push_lease_anchor(
+        repo_root, task, branch_to_push,
+    )
 
     _push_if_needed(
         repo_root,
