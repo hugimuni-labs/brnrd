@@ -100,16 +100,21 @@ The legacy `env` and `default_env` config keys are still accepted, but
 new config should use `environment`.
 
 Branching is no longer carried on the task file. Before env prep the
-daemon resolves a branch plan: seed ref, optional auto-land branch,
-authority, and host checkout branch as context. Worktree and Docker
-runs always start on a fresh `brr/<task-id>` branch sprouted from the
-seed ref. If the plan has an auto-land target, committing on the task
-branch lets brr fast-forward that target. If no target exists, brr
-preserves the task branch and publishes it when a remote is configured.
+daemon resolves a publish plan: seed ref, optional
+`expected_publish_branch` (when the event named one), source string,
+host checkout branch as context, and an optional `expected_remote_oid`
+captured from the remote-tracking ref at task start for force-with-
+lease pushes. Worktree and Docker runs always start on a fresh
+`brr/<task-id>` branch sprouted from the seed ref. After the run,
+finalize records `publish_branch` + `publish_status` on the task and
+`daemon.publish` ships that branch — via a refspec push when the
+agent kept the task branch but the event named a different expected
+publish target, a leased force-push when the agent rewrote the
+expected branch, or an ordinary push otherwise.
 `branch.fallback` (or the legacy spelling `branch_fallback`) controls
-the no-authority fallback:
-`preserve` by default, or `inbox`, `default`, or `current` when chosen
-explicitly.
+the no-authority fallback. The only supported mode is `preserve`
+(the default). Legacy values (`inbox`, `default`, `current`) warn once
+on daemon start and downgrade to `preserve`.
 
 Legacy per-repo override folders may still be read by the library, but
 there is no public command to seed them:

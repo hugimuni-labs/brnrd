@@ -13,7 +13,7 @@ event (inbox) → task (persisted) → context file → run env → response →
 
 ### 1. Event arrives
 
-A gate (Telegram, Slack, future forge gates) or a script writes a
+A gate (Telegram, Slack, GitHub, future forge gates) or a script writes a
 markdown file to `.brr/inbox/`. The file has frontmatter (`id`,
 `source`, `status`) and a body with the user's message.
 
@@ -132,7 +132,10 @@ Its frontmatter contains:
 
 - `event_id` → links to `.brr/inbox/` and `.brr/responses/`
 - `branch_name` → the git branch used
-- `seed_ref` / `auto_land_branch` → the resolved branch plan
+- `seed_ref` / `expected_publish_branch` → the resolved publish plan
+- `publish_branch` / `publish_status` → recorded by finalize for the
+  publish step (status is `ready` | `nothing` | `detached` |
+  `conflict`)
 - `worktree_path` → the worktree directory (if applicable)
 - `context_path` → generated run context file
 - `response_path` → the response file

@@ -207,14 +207,14 @@ def test_run_worker_calls_sync_before_resolving_branch_plan(
         captured_targets.append(list(target_branches))
         return daemon.sync.SyncResult(fetched=True)
 
-    real_resolve = daemon.branching.resolve_branch_plan
+    real_resolve = daemon.branching.resolve_publish_plan
 
     def wrapped_resolve(repo_root, ev, cfg):
         call_order.append("resolve")
         return real_resolve(repo_root, ev, cfg)
 
     monkeypatch.setattr(daemon.sync, "refresh_before_task", fake_refresh)
-    monkeypatch.setattr(daemon.branching, "resolve_branch_plan", wrapped_resolve)
+    monkeypatch.setattr(daemon.branching, "resolve_publish_plan", wrapped_resolve)
 
     base_env = envs.get_env("worktree")
 
@@ -346,7 +346,7 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
         "_run_worker",
         lambda *_a, **_k: Task(id="task-err", event_id="evt-err", body="help", status="error"),
     )
-    monkeypatch.setattr(daemon, "_push_if_needed", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
 
     with pytest.raises(StopIteration):
@@ -555,7 +555,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
     monkeypatch.setattr(
         daemon,
-        "_push_if_needed",
+        "publish",
         lambda *_args, **_kwargs: record("push"),
     )
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
@@ -581,58 +581,9 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     ]
 
 
-def test_push_lease_anchor_for_task_branch_tracking_auto_land(tmp_path, monkeypatch):
-    task = Task(
-        id="task-up",
-        event_id="evt-up",
-        body="rebase",
-        meta={
-            "changed_branch": "brr/task-1",
-            "auto_land_branch": "brr/result-file-links",
-            "auto_land_old_oid": "abc123",
-        },
-    )
-    monkeypatch.setattr(
-        daemon.gitops,
-        "branch_upstream",
-        lambda _root, branch: (
-            "origin/brr/result-file-links" if branch == "brr/task-1" else None
-        ),
-    )
-    assert daemon._push_lease_anchor(tmp_path, task, "brr/task-1") == "abc123"
-    assert daemon._push_lease_anchor(tmp_path, task, "brr/other") is None
-
-
-def test_worker_finalize_keeps_event_deliverable_on_branch_conflict(
-    tmp_path, monkeypatch,
-):
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-conflict", body="rebase")
-    responses = tmp_path / ".brr" / "responses"
-    daemon.protocol.write_response(responses, "evt-conflict", "rebased ok\n")
-
-    conflict_task = Task(
-        id="task-conflict",
-        event_id="evt-conflict",
-        body="rebase",
-        status="conflict",
-        source=event["source"],
-    )
-
-    monkeypatch.setattr(daemon, "_run_worker", lambda *_a, **_k: conflict_task)
-    monkeypatch.setattr(daemon, "_push_if_needed", lambda *_a, **_k: None)
-
-    daemon._run_worker_and_finalize(
-        event, tmp_path, responses, {}, 0,
-    )
-
-    assert event.get("status") == "done"
-    assert "status: done" in event["_path"].read_text(encoding="utf-8")
-    assert daemon.protocol.response_exists(responses, "evt-conflict")
-
-
-def test_worker_push_passes_lease_for_changed_auto_land_branch(tmp_path, monkeypatch):
-    event = {"id": "evt-lease", "source": "github", "body": "rebase"}
+def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
+    """The publish kernel reads ``publish_branch`` + ``expected_remote_oid``
+    directly from ``task.meta`` (no extra threading from the worker)."""
     task = Task(
         id="task-lease",
         event_id="evt-lease",
@@ -641,24 +592,26 @@ def test_worker_push_passes_lease_for_changed_auto_land_branch(tmp_path, monkeyp
         source="github",
         conversation_key="github:owner/repo#17",
         meta={
-            "changed_branch": "brr/deliver-before-kb-maintenance",
-            "auto_land_branch": "brr/deliver-before-kb-maintenance",
-            "auto_land_old_oid": "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
+            "publish_branch": "brr/deliver-before-kb-maintenance",
+            "expected_publish_branch": "brr/deliver-before-kb-maintenance",
+            "expected_remote_oid": "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
         },
     )
-    captured = {}
-
     monkeypatch.setattr(daemon, "_run_worker", lambda *_a, **_k: task)
     monkeypatch.setattr(daemon.protocol, "set_status", lambda *_a, **_k: None)
+    captured: dict = {}
 
-    def fake_push(*_args, **kwargs):
-        captured.update(kwargs)
+    def fake_publish(repo, t):
+        captured["repo"] = repo
+        captured["publish_branch"] = t.meta.get("publish_branch")
+        captured["expected_remote_oid"] = t.meta.get("expected_remote_oid")
 
-    monkeypatch.setattr(daemon, "_push_if_needed", fake_push)
+    monkeypatch.setattr(daemon, "publish", fake_publish)
 
+    event = {"id": "evt-lease", "source": "github", "body": "rebase"}
     daemon._run_worker_and_finalize(event, tmp_path, tmp_path / ".brr", {}, 0)
 
-    assert captured["branch"] == "brr/deliver-before-kb-maintenance"
+    assert captured["publish_branch"] == "brr/deliver-before-kb-maintenance"
     assert (
         captured["expected_remote_oid"]
         == "6c1ca158d19c6ba40c06e8a46f7c338ada056246"
@@ -762,7 +715,7 @@ def test_worker_finalize_tolerates_gate_cleanup_after_response(
         )
 
     monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
-    monkeypatch.setattr(daemon, "_push_if_needed", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(daemon, "publish", lambda *_args, **_kwargs: None)
 
     task = daemon._run_worker_and_finalize(
         event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,

@@ -64,10 +64,14 @@ def render_context(
     ]
     if ctx.branch_plan:
         lines.append(f"- Seed ref: {ctx.branch_plan.seed_ref}")
-        if ctx.branch_plan.auto_land_branch:
-            lines.append(f"- Auto-land branch: {ctx.branch_plan.auto_land_branch}")
+        if ctx.branch_plan.expected_publish_branch:
+            lines.append(
+                f"- Expected publish branch: {ctx.branch_plan.expected_publish_branch}"
+            )
         else:
-            lines.append("- Auto-land branch: none (task branch will be preserved)")
+            lines.append(
+                "- Expected publish branch: none (task branch will be published as-is)"
+            )
         lines.append(f"- Branch source: {ctx.branch_plan.source}")
         if ctx.branch_plan.host_context_branch:
             lines.append(f"- Host context branch: {ctx.branch_plan.host_context_branch}")
@@ -132,8 +136,8 @@ def _render_recent_conversation(records: list[dict[str, Any]]) -> str:
             tid = record.get("task_id", "")
             status = record.get("status") or "pending"
             branch = (
-                record.get("changed_branch")
-                or record.get("auto_land_branch")
+                record.get("publish_branch")
+                or record.get("expected_publish_branch")
                 or record.get("branch_name")
                 or ""
             )

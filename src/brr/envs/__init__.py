@@ -5,11 +5,13 @@ backend owns the task scratch location (host checkout, git worktree,
 docker container) and the cleanup rules around one runner invocation.
 
 Branching is the agent's call now: every worktree starts on a fresh
-``brr/<task-id>`` branch from the daemon's resolved seed ref. If the
-branch plan has an auto-land target, leaving commits on the task branch
-lets brr fast-forward that target. Without a target, brr preserves the
-task branch for human routing. Switching to another branch also preserves
-that branch as-is.
+``brr/<task-id>`` branch from the daemon's resolved seed ref. The
+agent commits there or switches to another branch; the daemon's
+publish step (in ``daemon.publish``) reads whatever branch the
+worktree ends up on and publishes it. The env layer does no
+landing — it only classifies the worktree's final state into a
+``publish_status`` (``ready`` | ``nothing`` | ``detached``) and records
+which branch to publish.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ class RunContext:
     response_path_host: Path
     response_path_env: Path
     branch_name: str | None = None
-    branch_plan: branching.BranchPlan | None = None
+    branch_plan: branching.PublishPlan | None = None
     env_state: dict[str, Any] = field(default_factory=dict)
 
 
@@ -53,7 +55,7 @@ class EnvBackend(Protocol):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        branch_plan: branching.BranchPlan,
+        branch_plan: branching.PublishPlan,
         response_path: Path,
     ) -> RunContext:
         ...
@@ -87,7 +89,7 @@ class HostEnv:
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        branch_plan: branching.BranchPlan,
+        branch_plan: branching.PublishPlan,
         response_path: Path,
     ) -> RunContext:
         return RunContext(
@@ -130,7 +132,7 @@ class WorktreeEnv(HostEnv):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        branch_plan: branching.BranchPlan,
+        branch_plan: branching.PublishPlan,
         response_path: Path,
     ) -> RunContext:
         run_root, branch_name = worktree.create(
@@ -157,6 +159,22 @@ class WorktreeEnv(HostEnv):
         task: Task,
         tasks_dir: Path,
     ) -> Task:
+        """Classify the worktree's final state into a publish outcome.
+
+        The agent's branch is whatever ``git`` says is checked out in the
+        worktree after the run. The daemon's publish step (in
+        ``daemon.publish``) reads ``task.meta["publish_branch"]`` and
+        ``task.meta["publish_status"]`` and decides whether to push,
+        with what lease, and to which remote ref. Finalize itself never
+        updates a non-task branch ref and never calls
+        ``gitops.fast_forward_branch``.
+
+        Worktree teardown is outcome-aware: a clean success with no
+        uncommitted files tears the worktree down (the branch ref +
+        traces are the durable artefact). A ``detached`` outcome or any
+        untracked/unstaged files in the worktree keep it alive so the
+        operator can inspect what the agent left behind.
+        """
         worktree_path = Path(ctx.env_state.get("worktree_path") or ctx.cwd)
         initial_branch = ctx.branch_name or worktree.task_branch_name(task.id)
 
@@ -164,141 +182,104 @@ class WorktreeEnv(HostEnv):
             task.save(tasks_dir)
             return task
 
-        final_branch = worktree.current_branch(worktree_path)
-        changed = self._land_or_preserve(
-            ctx, task, tasks_dir,
+        outcome = self._resolve_outcome(
+            ctx,
             worktree_path=worktree_path,
             initial_branch=initial_branch,
-            final_branch=final_branch,
         )
-        if final_branch:
-            task.meta["branch_name"] = final_branch
-        if changed or final_branch:
-            task.save(tasks_dir)
-        return task
 
-    def _land_or_preserve(
-        self,
-        ctx: RunContext,
-        task: Task,
-        tasks_dir: Path,
-        *,
-        worktree_path: Path,
-        initial_branch: str,
-        final_branch: str | None,
-    ) -> bool:
-        """Decide what to do with the agent's branch on cleanup.
+        task.meta["publish_status"] = outcome.status
+        if outcome.publish_branch:
+            task.meta["publish_branch"] = outcome.publish_branch
+            task.meta["branch_name"] = outcome.publish_branch
+        elif "publish_branch" in task.meta:
+            del task.meta["publish_branch"]
+        task.save(tasks_dir)
 
-        Cleanup is outcome-aware: a clean success with no uncommitted
-        files tears the worktree down (the branch ref + traces are the
-        durable artefact). A conflict, a detached HEAD, or any
-        untracked/unstaged files in the worktree keeps it alive so the
-        operator can inspect what the agent left behind.
-
-        Returns True when task metadata changed after the earlier status
-        save, so callers know to persist it.
-        """
-        plan = ctx.branch_plan
-        if plan is None:
-            raise RuntimeError(
-                f"task {task.id}: worktree finalize has no branch plan"
-            )
-
-        # ── Classify the run and record final branch metadata ──────
-        delete_branch = False
-        delete_unused_initial = False
-        keep_worktree = False
-        changed_metadata = True
-
-        if final_branch is None:
-            print(f"[brr] task {task.id}: detached HEAD inside worktree, preserving")
-            task.meta["preserved_branch"] = initial_branch
-            task.meta["changed_branch"] = initial_branch
-            keep_worktree = True
-        elif final_branch != initial_branch:
-            print(
-                f"[brr] task {task.id}: agent landed on {final_branch}, "
-                "preserving (runtime branch choice)"
-            )
-            task.meta["preserved_branch"] = final_branch
-            task.meta["changed_branch"] = final_branch
-            delete_unused_initial = True
-        elif not worktree.has_commits_beyond(worktree_path, plan.seed_ref):
-            # Throwaway task branch with no commits — drop both.
-            delete_branch = True
-            changed_metadata = False
-        elif not plan.auto_land_branch:
-            print(
-                f"[brr] task {task.id}: preserving {initial_branch} "
-                "(no auto-land target)"
-            )
-            task.meta["preserved_branch"] = initial_branch
-            task.meta["changed_branch"] = initial_branch
-        else:
-            result = gitops.fast_forward_branch(
-                ctx.repo_root,
-                plan.auto_land_branch,
-                initial_branch,
-                expected_old_oid=plan.expected_old_oid,
-            )
-            if (
-                not result.success
-                and plan.expected_old_oid
-                and result.detail
-                and "not a fast-forward" in result.detail
-            ):
-                anchored = gitops.advance_branch_with_anchor(
-                    ctx.repo_root,
-                    plan.auto_land_branch,
-                    initial_branch,
-                    expected_old_oid=plan.expected_old_oid,
-                )
-                if anchored.success:
-                    result = anchored
-                    print(
-                        f"[brr] task {task.id}: relocated "
-                        f"{plan.auto_land_branch} to rebased task head"
-                    )
-            if result.success:
-                task.meta["landed_branch"] = plan.auto_land_branch
-                task.meta["changed_branch"] = plan.auto_land_branch
-                task.meta["landed_commit"] = result.commit
-                delete_branch = True
-            else:
-                print(
-                    f"[brr] task {task.id}: cannot fast-forward "
-                    f"{plan.auto_land_branch}, preserving {initial_branch}"
-                )
-                task.update_status("conflict", tasks_dir)
-                task.meta["preserved_branch"] = initial_branch
-                task.meta["changed_branch"] = initial_branch
-                if result.detail:
-                    task.meta["branch_error"] = result.detail
-                keep_worktree = True
-
-        # ── Decide whether to tear down the worktree directory ─────
-        if keep_worktree:
+        if outcome.keep_worktree:
             print(
                 f"[brr] task {task.id}: keeping worktree at {worktree_path} "
-                "for inspection"
+                f"({outcome.keep_reason})"
             )
-            return changed_metadata
+            return task
+
         if worktree.has_uncommitted_changes(worktree_path):
             print(
                 f"[brr] task {task.id}: keeping worktree at {worktree_path} "
                 "(uncommitted changes left behind)"
             )
-            return changed_metadata
+            return task
 
         worktree.remove(
             ctx.repo_root, task.id,
             branch=initial_branch,
-            delete_branch=delete_branch,
+            delete_branch=outcome.delete_task_branch,
             force=True,
         )
-        if delete_unused_initial and initial_branch != final_branch:
+        if outcome.delete_unused_initial:
             self._delete_unused_initial_branch(ctx.repo_root, initial_branch)
-        return changed_metadata
+        return task
+
+    def _resolve_outcome(
+        self,
+        ctx: RunContext,
+        *,
+        worktree_path: Path,
+        initial_branch: str,
+    ) -> "_FinalizeOutcome":
+        """Map the worktree's final git state to a publish outcome.
+
+        Four cases:
+
+        - detached HEAD: ``status=detached``, no publish branch,
+          keep the worktree for inspection.
+        - final branch has no commits beyond the seed ref:
+          ``status=nothing``, no publish branch, delete the task branch
+          along with the worktree.
+        - final branch has commits, agent stayed on the task branch:
+          ``status=ready``, publish the task branch. Worktree is torn
+          down unless it has uncommitted leftovers.
+        - final branch has commits, agent switched branches:
+          ``status=ready``, publish the new branch. Worktree is torn
+          down unless it has uncommitted leftovers; the unused
+          ``brr/<task-id>`` placeholder is best-effort deleted.
+        """
+        plan = ctx.branch_plan
+        if plan is None:
+            raise RuntimeError(
+                "worktree finalize has no publish plan"
+            )
+
+        final_branch = worktree.current_branch(worktree_path)
+
+        if final_branch is None:
+            return _FinalizeOutcome(
+                status="detached",
+                publish_branch=None,
+                keep_worktree=True,
+                keep_reason="detached HEAD",
+            )
+
+        if final_branch == initial_branch and not worktree.has_commits_beyond(
+            worktree_path, plan.seed_ref,
+        ):
+            return _FinalizeOutcome(
+                status="nothing",
+                publish_branch=None,
+                delete_task_branch=True,
+            )
+
+        if final_branch != initial_branch:
+            return _FinalizeOutcome(
+                status="ready",
+                publish_branch=final_branch,
+                delete_unused_initial=True,
+            )
+
+        return _FinalizeOutcome(
+            status="ready",
+            publish_branch=final_branch,
+        )
 
     def _delete_unused_initial_branch(self, repo_root: Path, branch: str) -> None:
         """Best-effort delete of the throwaway ``brr/<task-id>`` branch.
@@ -315,6 +296,24 @@ class WorktreeEnv(HostEnv):
             detail = (result.stderr or result.stdout or "").strip()
             if detail:
                 print(f"[brr] warning: could not delete {branch}: {detail}")
+
+
+@dataclass
+class _FinalizeOutcome:
+    """Classification produced by ``WorktreeEnv._resolve_outcome``.
+
+    ``status`` mirrors ``task.meta["publish_status"]``: one of
+    ``ready``, ``nothing``, or ``detached``. ``conflict`` is owned by
+    the daemon's publish step — finalize never produces it because the
+    env layer no longer touches non-task refs.
+    """
+
+    status: str
+    publish_branch: str | None
+    keep_worktree: bool = False
+    keep_reason: str = ""
+    delete_task_branch: bool = False
+    delete_unused_initial: bool = False
 
 
 def _docker_cfg(cfg: dict[str, Any], key: str, default: str = "") -> str:
@@ -567,7 +566,7 @@ class DockerEnv(WorktreeEnv):
         repo_root: Path,
         cfg: dict[str, Any],
         *,
-        branch_plan: branching.BranchPlan,
+        branch_plan: branching.PublishPlan,
         response_path: Path,
     ) -> RunContext:
         if shutil.which("docker") is None:

@@ -1,8 +1,10 @@
-"""Branch plan resolution for daemon tasks.
+"""Publish plan resolution for daemon tasks.
 
-The plan is a thin pre-run record: which ref to seed the
-``brr/<task-id>`` worktree branch from, and which branch (if any)
-finalization may fast-forward when the agent stays on the task branch.
+The plan is a thin pre-run record naming the ref the
+``brr/<task-id>`` worktree branch sprouts from, the branch (if any)
+the event expects work to land under on the remote, and the
+remote-tracking oid captured at task start so a leased rebase push can
+refuse to clobber a concurrent writer.
 
 Branch *intent* — "should this work continue a prior thread branch?",
 "does the task body name a branch?" — belongs to the worker agent. The
@@ -18,13 +20,13 @@ Resolution order:
    (``<remote>/<target>``) if present, so the worker sprouts from the
    forge-visible state even when the daemon's local copy of that branch
    diverged and the pre-task ff was refused.
-2. Fallback policy from config (``branch.fallback``):
-   * ``preserve`` (default) — no auto-land target; agent commits live on
-     ``brr/<task-id>`` until a human routes them.
-   * ``current`` — seed from and auto-land to the host current branch;
-     opt-in self-development behaviour. The remote preference is **not**
-     applied here: ``current`` is the self-development knob and the host
-     is the source of truth.
+2. Fallback policy: seed from the repo default branch (falling back to
+   host ``HEAD``) and set no expected publish target — committed task
+   branches are preserved for human routing and published under their
+   own name. ``branch.fallback=current`` (the old self-development knob
+   that also fast-forwarded the host checkout) was removed when the
+   publish kernel collapsed; legacy config values warn and downgrade to
+   the preserve default.
 """
 
 from __future__ import annotations
@@ -49,14 +51,14 @@ _STRUCTURED_BRANCH_KEYS = STRUCTURED_BRANCH_KEYS
 
 
 @dataclass(frozen=True)
-class BranchPlan:
-    """Pre-run branch plan resolved without asking the worker model."""
+class PublishPlan:
+    """Pre-run publish plan resolved without asking the worker model."""
 
     seed_ref: str
-    auto_land_branch: str | None
+    expected_publish_branch: str | None
     source: str
     host_context_branch: str | None
-    expected_old_oid: str | None = None
+    expected_remote_oid: str | None = None
 
     def meta_items(self) -> dict[str, str]:
         """Return non-empty task metadata fields for this plan."""
@@ -64,21 +66,21 @@ class BranchPlan:
             "seed_ref": self.seed_ref,
             "branch_source": self.source,
         }
-        if self.auto_land_branch:
-            out["auto_land_branch"] = self.auto_land_branch
+        if self.expected_publish_branch:
+            out["expected_publish_branch"] = self.expected_publish_branch
         if self.host_context_branch:
             out["host_context_branch"] = self.host_context_branch
-        if self.expected_old_oid:
-            out["auto_land_old_oid"] = self.expected_old_oid
+        if self.expected_remote_oid:
+            out["expected_remote_oid"] = self.expected_remote_oid
         return out
 
 
-def resolve_branch_plan(
+def resolve_publish_plan(
     repo_root: Path,
     event: dict[str, Any],
     cfg: dict[str, Any],
-) -> BranchPlan:
-    """Resolve a branch plan from structured state and explicit policy.
+) -> PublishPlan:
+    """Resolve a publish plan from structured event state and policy.
 
     Deliberately does not look at conversation history, parse free-text
     instructions, or run an LLM. Anything beyond a structured event
@@ -90,79 +92,66 @@ def resolve_branch_plan(
 
     for key in _STRUCTURED_BRANCH_KEYS:
         candidate = _event_branch_candidate(
-            repo_root, key, event.get(key), host_context,
+            repo_root, key, event.get(key),
         )
         if candidate:
-            return _plan_for_target(
+            return _plan_for_event_target(
                 repo_root,
                 candidate,
                 source=f"event:{key}",
                 host_context_branch=host_context,
                 default_seed=default_seed,
-                prefer_remote=True,
             )
 
-    mode = _fallback_mode(cfg)
-    if mode == "current" and host_context:
-        return _plan_for_target(
-            repo_root,
-            host_context,
-            source="fallback:current",
-            host_context_branch=host_context,
-            default_seed=default_seed,
-        )
-
-    return BranchPlan(
+    _warn_on_legacy_fallback(cfg)
+    return PublishPlan(
         seed_ref=default_seed,
-        auto_land_branch=None,
+        expected_publish_branch=None,
         source="fallback:preserve",
         host_context_branch=host_context,
     )
 
 
-def _plan_for_target(
+def _plan_for_event_target(
     repo_root: Path,
     target: str,
     *,
     source: str,
     host_context_branch: str | None,
     default_seed: str,
-    prefer_remote: bool = False,
-) -> BranchPlan:
-    """Resolve seed + ff anchor for *target*.
+) -> PublishPlan:
+    """Resolve seed + remote lease anchor for an event-named *target*.
 
-    With ``prefer_remote=True`` (set on the event-branch path), the seed
-    ref becomes ``<remote>/<target>`` when that tracking ref exists. This
-    matters when the host's local copy of *target* has diverged from the
-    remote: the daemon's pre-task sync ff is refused on diverged history,
-    and without this preference the worker would seed from a stale local
-    branch and produce a divergent, unpushable history. Anchoring to the
-    remote ref guarantees the worker sprouts from the GitHub-visible
-    state regardless of how stale the host's local branch is.
+    The seed prefers ``<remote>/<target>`` when that tracking ref
+    exists: the daemon's pre-task sync is ff-only and refuses on
+    diverged history, so without this preference the worker would seed
+    from a stale local branch and produce a divergent, unpushable
+    history. Anchoring to the remote ref guarantees the worker sprouts
+    from the forge-visible state regardless of how stale the host's
+    local branch is.
 
-    The ff anchor (``expected_old_oid``) follows the seed: when we seed
-    from the remote, finalize's auto-land ff is checked against the
-    remote oid we actually built on, not the diverged local one.
+    The expected remote oid is captured from the remote-tracking ref at
+    task start. It only ever feeds a force-with-lease push when the
+    agent rewrote that branch locally (the PR-rebase case); plain
+    pushes never use it.
     """
-    local_oid = gitops.branch_head(repo_root, target)
-    seed_ref = target if local_oid else default_seed
-    old_oid = local_oid
+    seed_ref = target if gitops.branch_head(repo_root, target) else default_seed
+    expected_remote_oid: str | None = None
 
-    if prefer_remote:
-        remote = gitops.default_remote(repo_root)
-        if remote:
-            remote_ref = f"{remote}/{target}"
-            remote_oid = gitops.rev_parse(repo_root, remote_ref)
-            if remote_oid:
-                seed_ref = remote_ref
-                old_oid = remote_oid
+    remote = gitops.default_remote(repo_root)
+    if remote:
+        remote_ref = f"{remote}/{target}"
+        remote_oid = gitops.rev_parse(repo_root, remote_ref)
+        if remote_oid:
+            seed_ref = remote_ref
+            expected_remote_oid = remote_oid
 
-    return BranchPlan(
+    return PublishPlan(
         seed_ref=seed_ref,
-        auto_land_branch=target,
+        expected_publish_branch=target,
         source=source,
         host_context_branch=host_context_branch,
-        expected_old_oid=old_oid,
+        expected_remote_oid=expected_remote_oid,
     )
 
 
@@ -175,26 +164,42 @@ def _default_seed(repo_root: Path, host_branch: str) -> str:
     return "HEAD"
 
 
-def _fallback_mode(cfg: dict[str, Any]) -> str:
+_LEGACY_FALLBACK_WARNED = False
+
+
+def _warn_on_legacy_fallback(cfg: dict[str, Any]) -> None:
+    """One-shot warning when ``branch.fallback`` carries a non-preserve value.
+
+    The publish kernel only supports ``preserve``; older configs may
+    still set ``current`` / ``inbox`` / ``default``. Silently
+    downgrading would hide the change from operators inheriting an old
+    file, so we surface it once per process. The warning is a print to
+    stderr-equivalent (the daemon prints to stdout for operator-visible
+    notices); promoting to ``logging`` would require a logger setup
+    this module deliberately avoids.
+    """
+    global _LEGACY_FALLBACK_WARNED
+    if _LEGACY_FALLBACK_WARNED:
+        return
     raw = cfg.get("branch.fallback", cfg.get("branch_fallback", "preserve"))
     mode = str(raw).strip().lower()
-    if mode in {"preserve", "current"}:
-        return mode
-    return "preserve"
+    if mode and mode != "preserve":
+        print(
+            f"[brr] warning: branch.fallback={raw!r} is no longer "
+            "supported (only 'preserve' remains); ignoring."
+        )
+        _LEGACY_FALLBACK_WARNED = True
 
 
 def _event_branch_candidate(
     repo_root: Path,
     key: str,
     value: Any,
-    host_context_branch: str | None,
 ) -> str | None:
     if key == "branch" and isinstance(value, str):
         legacy = value.strip().lower()
-        if legacy in {"", "auto", "task", "none"}:
+        if legacy in {"", "auto", "task", "none", "current"}:
             return None
-        if legacy == "current":
-            return host_context_branch
     if not isinstance(value, str):
         return None
     branch = value.strip()

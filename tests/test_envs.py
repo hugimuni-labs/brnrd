@@ -9,11 +9,11 @@ from brr.task import Task
 from _helpers import commit_files, init_git_repo
 
 
-def _plan(seed: str = "main", target: str | None = "main") -> branching.BranchPlan:
+def _plan(seed: str = "main", target: str | None = "main") -> branching.PublishPlan:
     """Convenience: build a plan for tests that don't care about resolver state."""
-    return branching.BranchPlan(
+    return branching.PublishPlan(
         seed_ref=seed,
-        auto_land_branch=target,
+        expected_publish_branch=target,
         source="test",
         host_context_branch=seed,
     )
@@ -114,98 +114,163 @@ def _commit_in(path, filename, text, message):
     subprocess.run(["git", "commit", "-m", message], cwd=path, check=True, stdout=subprocess.PIPE)
 
 
-def test_worktree_finalize_preserves_task_branch_without_auto_land(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-    response_path = repo / ".brr" / "responses" / "evt-preserve.md"
-    task = Task(id="task-preserve", event_id="evt-preserve", body="change", status="done")
-    plan = branching.BranchPlan(
-        seed_ref="main",
-        auto_land_branch=None,
-        source="fallback:preserve",
-        host_context_branch="main",
-    )
+def _make_finalize_task(
+    repo, tid, *, plan, status="done",
+):
+    """Common setup for ``WorktreeEnv.finalize`` outcome-table tests.
+
+    Returns ``(backend, ctx, task, tasks_dir)``. Each test is responsible
+    for whatever git activity inside ``ctx.cwd`` produces the worktree
+    state it wants to classify.
+    """
+    response_path = repo / ".brr" / "responses" / f"{tid}.md"
+    task = Task(id=tid, event_id=tid, body="change", status=status)
     backend = envs.get_env("worktree")
     ctx = backend.prepare(
         task, repo, {},
         branch_plan=plan, response_path=response_path,
+    )
+    return backend, ctx, task, repo / ".brr" / "tasks"
+
+
+def test_worktree_finalize_ready_when_task_branch_has_commits(tmp_path):
+    """status=ready, publish_branch=brr/<task-id>; clean worktree torn down."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    backend, ctx, task, tasks_dir = _make_finalize_task(
+        repo, "task-preserve", plan=plan,
     )
     _commit_in(ctx.cwd, "change.txt", "change\n", "change")
 
-    backend.finalize(ctx, task, repo / ".brr" / "tasks")
+    backend.finalize(ctx, task, tasks_dir)
 
-    assert task.meta["preserved_branch"] == "brr/task-preserve"
-    assert task.meta["changed_branch"] == "brr/task-preserve"
+    assert task.meta["publish_status"] == "ready"
+    assert task.meta["publish_branch"] == "brr/task-preserve"
+    assert task.meta["branch_name"] == "brr/task-preserve"
     assert not ctx.cwd.exists()
+    # Task branch stays alive: the daemon's publish step will read it.
     assert envs.gitops.branch_exists(repo, "brr/task-preserve")
+    # Worktree changes never leak into the host checkout.
     assert not (repo / "change.txt").exists()
 
 
-def test_worktree_finalize_relocates_rebased_auto_land_target(tmp_path):
+def test_worktree_finalize_ready_when_agent_switched_branches(tmp_path):
+    """status=ready, publish_branch=<switched-to>; unused brr/<task-id>
+    placeholder is best-effort deleted."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    response_path = repo / ".brr" / "responses" / "evt-rebase.md"
-    subprocess.run(["git", "checkout", "-b", "feature/pr"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    _commit_in(repo, "pr.txt", "pr\n", "pr")
-    pr_tip = envs.gitops.branch_head(repo, "feature/pr")
-    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    _commit_in(repo, "main.txt", "main\n", "main")
-
-    task = Task(id="task-rebase", event_id="evt-rebase", body="rebase", status="done")
-    plan = branching.BranchPlan(
-        seed_ref=f"feature/pr",
-        auto_land_branch="feature/pr",
-        source="event:branch_target",
-        host_context_branch="main",
-        expected_old_oid=pr_tip,
+    subprocess.run(
+        ["git", "branch", "feature/pr", "main"],
+        cwd=repo, check=True, stdout=subprocess.PIPE,
     )
-    backend = envs.get_env("worktree")
-    ctx = backend.prepare(
-        task, repo, {},
-        branch_plan=plan, response_path=response_path,
+    plan = _plan(seed="main", target="feature/pr")
+    backend, ctx, task, tasks_dir = _make_finalize_task(
+        repo, "task-switch", plan=plan,
     )
-    _commit_in(ctx.cwd, "rebased.txt", "rebased\n", "rebased")
-
-    backend.finalize(ctx, task, repo / ".brr" / "tasks")
-
-    assert task.status == "done"
-    assert task.meta["landed_branch"] == "feature/pr"
-    assert task.meta["changed_branch"] == "feature/pr"
-    subprocess.run(["git", "checkout", "feature/pr"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    assert (repo / "rebased.txt").exists()
-    assert not envs.gitops.branch_exists(repo, "brr/task-rebase")
-
-
-def test_worktree_finalize_fast_forwards_auto_land_target(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_repo(repo)
-    old_main = envs.gitops.branch_head(repo, "main")
-    response_path = repo / ".brr" / "responses" / "evt-land.md"
-    task = Task(id="task-land", event_id="evt-land", body="change", status="done")
-    plan = branching.BranchPlan(
-        seed_ref="main",
-        auto_land_branch="main",
-        source="fallback:current",
-        host_context_branch="main",
-        expected_old_oid=old_main,
+    # Agent moves to feature/pr inside the worktree and commits there.
+    subprocess.run(
+        ["git", "checkout", "feature/pr"],
+        cwd=ctx.cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    backend = envs.get_env("worktree")
-    ctx = backend.prepare(
-        task, repo, {},
-        branch_plan=plan, response_path=response_path,
-    )
-    _commit_in(ctx.cwd, "landed.txt", "landed\n", "landed")
+    _commit_in(ctx.cwd, "pr.txt", "pr\n", "pr")
 
-    backend.finalize(ctx, task, repo / ".brr" / "tasks")
+    backend.finalize(ctx, task, tasks_dir)
 
-    assert task.meta["landed_branch"] == "main"
-    assert task.meta["changed_branch"] == "main"
-    assert (repo / "landed.txt").exists()
+    assert task.meta["publish_status"] == "ready"
+    assert task.meta["publish_branch"] == "feature/pr"
+    assert task.meta["branch_name"] == "feature/pr"
     assert not ctx.cwd.exists()
-    assert not envs.gitops.branch_exists(repo, "brr/task-land")
+    assert envs.gitops.branch_exists(repo, "feature/pr")
+    # The empty brr/<task-id> placeholder is cleaned up best-effort.
+    assert not envs.gitops.branch_exists(repo, "brr/task-switch")
+
+
+def test_worktree_finalize_nothing_when_no_commits_on_task_branch(tmp_path):
+    """status=nothing, no publish_branch, task branch torn down."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    backend, ctx, task, tasks_dir = _make_finalize_task(
+        repo, "task-noop", plan=plan,
+    )
+    # No commits inside the worktree.
+
+    backend.finalize(ctx, task, tasks_dir)
+
+    assert task.meta["publish_status"] == "nothing"
+    assert "publish_branch" not in task.meta
+    assert not ctx.cwd.exists()
+    assert not envs.gitops.branch_exists(repo, "brr/task-noop")
+
+
+def test_worktree_finalize_detached_keeps_worktree(tmp_path):
+    """status=detached, no publish_branch, worktree kept for inspection."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    backend, ctx, task, tasks_dir = _make_finalize_task(
+        repo, "task-detach", plan=plan,
+    )
+    # Agent detaches HEAD in the worktree.
+    subprocess.run(
+        ["git", "checkout", "--detach", "HEAD"],
+        cwd=ctx.cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+    backend.finalize(ctx, task, tasks_dir)
+
+    assert task.meta["publish_status"] == "detached"
+    assert "publish_branch" not in task.meta
+    # Detached worktree is preserved so the operator can recover commits.
+    assert ctx.cwd.exists()
+
+
+def test_worktree_finalize_keeps_worktree_with_uncommitted_changes(tmp_path):
+    """Even on a ``ready`` outcome, uncommitted files keep the worktree
+    alive so the operator can inspect what the agent left behind."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    backend, ctx, task, tasks_dir = _make_finalize_task(
+        repo, "task-dirty", plan=plan,
+    )
+    _commit_in(ctx.cwd, "committed.txt", "ok\n", "committed")
+    # Leave an unstaged file behind.
+    (ctx.cwd / "dirty.txt").write_text("scratch\n", encoding="utf-8")
+
+    backend.finalize(ctx, task, tasks_dir)
+
+    assert task.meta["publish_status"] == "ready"
+    assert task.meta["publish_branch"] == "brr/task-dirty"
+    # Worktree (and uncommitted file) are preserved.
+    assert ctx.cwd.exists()
+    assert (ctx.cwd / "dirty.txt").exists()
+
+
+def test_worktree_finalize_skips_classification_when_task_not_done(tmp_path):
+    """A non-``done`` task (error / conflict / timeout) bypasses outcome
+    classification: the env layer just persists the task and leaves the
+    worktree alone for the operator."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    plan = _plan(seed="main", target=None)
+    backend, ctx, task, tasks_dir = _make_finalize_task(
+        repo, "task-error", plan=plan, status="error",
+    )
+    _commit_in(ctx.cwd, "partial.txt", "partial\n", "partial")
+
+    backend.finalize(ctx, task, tasks_dir)
+
+    assert "publish_status" not in task.meta
+    assert "publish_branch" not in task.meta
+    assert ctx.cwd.exists()
 
 
 def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):

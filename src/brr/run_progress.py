@@ -227,7 +227,7 @@ def _project(
         if kind == "task":
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
-                record.get("auto_land_branch") or view.display_base
+                record.get("expected_publish_branch") or view.display_base
             )
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
@@ -262,7 +262,7 @@ def _project(
             view.env = record.get("env") or view.env
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
-                record.get("auto_land_branch") or view.display_base
+                record.get("expected_publish_branch") or view.display_base
             )
         elif ptype == "container_started":
             cid = record.get("container")
@@ -288,7 +288,7 @@ def _project(
             view.runner_name = record.get("runner") or view.runner_name
             view.branch_name = record.get("branch") or view.branch_name
             view.display_base = (
-                record.get("auto_land_branch") or view.display_base
+                record.get("expected_publish_branch") or view.display_base
             )
         elif ptype == "attempt_failed":
             reason = record.get("reason")
@@ -380,14 +380,14 @@ def _project(
             ))
         elif ptype == "conflict":
             view.branch_name = (
-                record.get("preserved_branch")
+                record.get("publish_branch")
                 or record.get("branch")
                 or view.branch_name
             )
             view.state = "failed"
             view.detail = (
-                f"merge conflict on {record.get('branch')}"
-                if record.get("branch") else "merge conflict"
+                f"publish conflict on {record.get('branch')}"
+                if record.get("branch") else "publish conflict"
             )
             _close_open_phase(view, ts)
             view.phase_history.append(PhaseEntry(
@@ -395,9 +395,7 @@ def _project(
             ))
         elif ptype == "done":
             view.branch_name = (
-                record.get("changed_branch")
-                or record.get("landed_branch")
-                or record.get("preserved_branch")
+                record.get("publish_branch")
                 or view.branch_name
             )
             view.state = "succeeded"
