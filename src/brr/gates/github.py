@@ -813,17 +813,11 @@ def _branch_footer(repo: str, task: Task) -> str:
     should be published. The ``?expand=1`` on the compare URL pre-fills
     GitHub's PR-creation form so clicking it is one step from merging.
     """
-    branch = task.meta.get("changed_branch")
+    branch = task.meta.get("publish_branch")
     if not branch:
         return ""
     base_url = f"https://github.com/{repo}"
     tree_url = f"{base_url}/tree/{urllib.parse.quote(branch, safe='/')}"
-    landed = task.meta.get("landed_branch")
-    if landed:
-        return (
-            f"\n\n---\n"
-            f"Branch [`{branch}`]({tree_url}) landed on `{landed}`."
-        )
     compare_url = (
         f"{base_url}/compare/{urllib.parse.quote(branch, safe='/')}?expand=1"
     )

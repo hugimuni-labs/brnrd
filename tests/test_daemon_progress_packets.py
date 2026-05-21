@@ -288,141 +288,227 @@ def test_docker_failed_emits_container_preserved(tmp_path, monkeypatch):
     assert preserved.get("containers"), preserved
 
 
-def test_push_emits_started_and_done_packets(tmp_path, monkeypatch):
-    """_push_if_needed should emit push packets when commits are unpushed."""
+# ── publish() arms ──────────────────────────────────────────────────
+#
+# ``daemon.publish`` is the single post-finalize publish step. It has
+# five mutually exclusive arms; one test per arm so the decision table
+# stays readable.
+
+
+class _Result:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _publish_task(*, meta: dict, conv_key: str = "telegram:99:") -> "daemon.Task":
+    from brr.task import Task
+
+    return Task(
+        id="task-publish",
+        event_id="evt-publish",
+        body="publish me",
+        status="done",
+        source="github",
+        conversation_key=conv_key,
+        meta=meta,
+    )
+
+
+def test_publish_noop_when_no_publish_branch(tmp_path, monkeypatch):
+    """``publish_branch`` empty → publish returns without touching git."""
     brr_dir = tmp_path / ".brr"
     brr_dir.mkdir()
-    conv_key = "telegram:99:"
+    monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+    calls: list = []
+    monkeypatch.setattr(
+        daemon.subprocess, "run",
+        lambda args, **_kw: calls.append(args) or _Result(returncode=0),
+    )
 
+    task = _publish_task(meta={})
+    daemon.publish(tmp_path, task)
+
+    assert calls == []
+    assert _packet_types(brr_dir, "telegram:99:") == []
+
+
+def test_publish_plain_push_to_existing_upstream(tmp_path, monkeypatch):
+    """Branch with upstream + new commits → plain ``git push``,
+    push_started/push_done packets land on the conversation log."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
     monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
     monkeypatch.setattr(daemon.gitops, "branch_upstream", lambda _r, b: f"origin/{b}")
     monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: "origin")
 
-    calls = []
+    calls: list = []
 
-    class _Result:
-        def __init__(self, returncode=0, stdout="", stderr=""):
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def _fake_run(args, **kwargs):
+    def _fake_run(args, **_kw):
         calls.append(args)
         if "log" in args:
             return _Result(returncode=0, stdout="abc Fix bug\n")
-        if "push" in args:
-            return _Result(returncode=0)
         return _Result(returncode=0)
 
     monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
 
-    daemon._push_if_needed(
-        tmp_path,
-        branch="main",
-        conversation_key=conv_key,
-        task_id="task-push",
-    )
+    task = _publish_task(meta={"publish_branch": "main"})
+    daemon.publish(tmp_path, task)
 
-    types = _packet_types(brr_dir, conv_key)
+    assert ["git", "push", "origin", "main"] in calls
+    types = _packet_types(brr_dir, "telegram:99:")
     assert "push_started" in types
     assert "push_done" in types
 
 
-def test_push_sets_upstream_for_new_brr_branch(tmp_path, monkeypatch):
+def test_publish_new_branch_pushes_with_upstream_flag(tmp_path, monkeypatch):
+    """New ``brr/<task-id>`` with no upstream + new commits → push
+    with ``-u`` so the local branch tracks origin afterwards."""
     brr_dir = tmp_path / ".brr"
     brr_dir.mkdir()
-    conv_key = "telegram:100:"
-
     monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
     monkeypatch.setattr(daemon.gitops, "branch_upstream", lambda _r, _b: None)
     monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: None)
     monkeypatch.setattr(daemon.gitops, "default_remote", lambda _r: "origin")
     monkeypatch.setattr(daemon.gitops, "default_branch", lambda _r: "main")
+    monkeypatch.setattr(daemon.gitops, "rev_parse", lambda _r, _ref: None)
 
-    calls = []
+    calls: list = []
 
-    class _Result:
-        def __init__(self, returncode=0, stdout="", stderr=""):
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def _fake_run(args, **kwargs):
+    def _fake_run(args, **_kw):
         calls.append(args)
         if "merge-base" in args:
             return _Result(returncode=0, stdout="baseoid\n")
         if "log" in args:
             return _Result(returncode=0, stdout="abc Fix bug\n")
-        if "push" in args:
-            return _Result(returncode=0)
         return _Result(returncode=0)
 
     monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
 
-    daemon._push_if_needed(
-        tmp_path,
-        branch="brr/task-1",
-        conversation_key=conv_key,
-        task_id="task-push",
-    )
+    task = _publish_task(meta={"publish_branch": "brr/task-1"})
+    daemon.publish(tmp_path, task)
 
     assert ["git", "push", "-u", "origin", "brr/task-1"] in calls
-    records = _update_records(brr_dir, conv_key)
-    started = next(r for r in records if r.get("type") == "push_started")
-    assert started.get("branch") == "brr/task-1"
+    started = next(
+        r for r in _update_records(brr_dir, "telegram:99:")
+        if r.get("type") == "push_started"
+    )
     assert started.get("set_upstream") is True
 
 
-def test_push_uses_force_with_lease_for_rewritten_target(tmp_path, monkeypatch):
-    """A PR branch rebase is not a fast-forward, but it is publishable
-    when brr captured the remote OID before the run. The host-side push
-    should use that OID as a lease instead of doing a blind force push or
-    a normal push that will be rejected."""
+def test_publish_refspec_when_agent_kept_task_branch(tmp_path, monkeypatch):
+    """Agent stayed on ``brr/<task-id>`` but event named a different
+    expected publish branch → push via refspec to the expected name
+    without touching any local ref."""
     brr_dir = tmp_path / ".brr"
     brr_dir.mkdir()
-    conv_key = "github:owner/repo#17"
+    monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+    monkeypatch.setattr(daemon.gitops, "branch_upstream", lambda _r, _b: None)
+    monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: None)
+    monkeypatch.setattr(daemon.gitops, "default_remote", lambda _r: "origin")
+    monkeypatch.setattr(
+        daemon.gitops, "rev_parse",
+        lambda _r, ref: "remoteoid" if ref == "origin/feature/x" else None,
+    )
+    monkeypatch.setattr(daemon.gitops, "is_ancestor", lambda *_a, **_k: True)
 
+    calls: list = []
+
+    def _fake_run(args, **_kw):
+        calls.append(args)
+        if "log" in args:
+            return _Result(returncode=0, stdout="abc rebased\n")
+        return _Result(returncode=0)
+
+    monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
+
+    task = _publish_task(meta={
+        "publish_branch": "brr/task-1",
+        "expected_publish_branch": "feature/x",
+    })
+    daemon.publish(tmp_path, task)
+
+    assert ["git", "push", "origin", "brr/task-1:feature/x"] in calls
+    # Refspec push must not carry ``-u`` (the local name doesn't match
+    # the remote target, so an upstream would be meaningless).
+    assert not any(
+        arg == "-u" for cmd in calls for arg in cmd if "push" in cmd
+    )
+
+
+def test_publish_force_with_lease_for_rewritten_target(tmp_path, monkeypatch):
+    """Agent rewrote ``feature/x`` locally (rebase) and brr captured the
+    remote OID at task start → push with ``--force-with-lease`` anchored
+    to that OID. This is the PR-rebase arm."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
+    monkeypatch.setattr(daemon.gitops, "branch_upstream", lambda _r, b: f"origin/{b}")
+    monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: "origin")
+    # ``is_ancestor`` False → local rewrote history relative to the
+    # remote, so the lease arm fires.
+    monkeypatch.setattr(daemon.gitops, "is_ancestor", lambda *_a, **_k: False)
+
+    calls: list = []
+
+    def _fake_run(args, **_kw):
+        calls.append(args)
+        if "log" in args:
+            return _Result(returncode=0, stdout="abc rebased\n")
+        return _Result(returncode=0)
+
+    monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
+
+    expected_oid = "6c1ca158d19c6ba40c06e8a46f7c338ada056246"
+    task = _publish_task(
+        meta={
+            "publish_branch": "feature/x",
+            "expected_publish_branch": "feature/x",
+            "expected_remote_oid": expected_oid,
+        },
+        conv_key="github:owner/repo#17",
+    )
+    daemon.publish(tmp_path, task)
+
+    assert [
+        "git", "push",
+        f"--force-with-lease=refs/heads/feature/x:{expected_oid}",
+        "origin", "feature/x:refs/heads/feature/x",
+    ] in calls
+    started = next(
+        r for r in _update_records(brr_dir, "github:owner/repo#17")
+        if r.get("type") == "push_started"
+    )
+    assert started.get("force_with_lease") is True
+
+
+def test_publish_flips_publish_status_to_conflict_on_push_failure(
+    tmp_path, monkeypatch,
+):
+    """A failed push must mark the task's publish status as ``conflict``
+    and emit the conflict packet so gates show the delivery failure
+    instead of (falsely) celebrating success."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
     monkeypatch.setattr(daemon.gitops, "shared_brr_dir", lambda _r: brr_dir)
     monkeypatch.setattr(daemon.gitops, "branch_upstream", lambda _r, b: f"origin/{b}")
     monkeypatch.setattr(daemon.gitops, "branch_remote", lambda _r, _b: "origin")
 
-    calls = []
-
-    class _Result:
-        def __init__(self, returncode=0, stdout="", stderr=""):
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def _fake_run(args, **_kwargs):
-        calls.append(args)
-        if args[:3] == ["git", "merge-base", "--is-ancestor"]:
-            return _Result(returncode=1)
+    def _fake_run(args, **_kw):
         if "log" in args:
-            return _Result(returncode=0, stdout="abc rebased\n")
+            return _Result(returncode=0, stdout="abc Fix bug\n")
         if "push" in args:
-            return _Result(returncode=0)
+            return _Result(
+                returncode=1, stderr="error: failed to push",
+            )
         return _Result(returncode=0)
 
     monkeypatch.setattr(daemon.subprocess, "run", _fake_run)
 
-    daemon._push_if_needed(
-        tmp_path,
-        branch="brr/deliver-before-kb-maintenance",
-        conversation_key=conv_key,
-        task_id="task-push",
-        expected_remote_oid="6c1ca158d19c6ba40c06e8a46f7c338ada056246",
-    )
+    task = _publish_task(meta={"publish_branch": "main"})
+    daemon.publish(tmp_path, task)
 
-    assert [
-        "git", "push",
-        "--force-with-lease="
-        "refs/heads/brr/deliver-before-kb-maintenance:"
-        "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
-        "origin",
-        "brr/deliver-before-kb-maintenance:"
-        "refs/heads/brr/deliver-before-kb-maintenance",
-    ] in calls
-    records = _update_records(brr_dir, conv_key)
-    started = next(r for r in records if r.get("type") == "push_started")
-    assert started.get("force_with_lease") is True
+    assert task.meta.get("publish_status") == "conflict"
+    types = _packet_types(brr_dir, "telegram:99:")
+    assert "conflict" in types

@@ -1030,23 +1030,13 @@ def test_branch_footer_ignores_branch_name_before_finalize():
 def test_branch_footer_includes_tree_and_compare_links():
     task = Task(
         id="t", event_id="e", body="b", source="github",
-        meta={"changed_branch": "brr/task-abc"},
+        meta={"publish_branch": "brr/task-abc"},
     )
     footer = github._branch_footer("owner/repo", task)
     assert "brr/task-abc" in footer
     assert "https://github.com/owner/repo/tree/brr/task-abc" in footer
     assert "compare/brr/task-abc?expand=1" in footer
     assert "Compare & open PR" in footer
-
-
-def test_branch_footer_shows_landed_when_auto_merged():
-    task = Task(
-        id="t", event_id="e", body="b", source="github",
-        meta={"changed_branch": "brr/task-abc", "landed_branch": "main"},
-    )
-    footer = github._branch_footer("owner/repo", task)
-    assert "landed on `main`" in footer
-    assert "expand=1" not in footer
 
 
 def test_find_task_for_event(tmp_path):
@@ -1078,7 +1068,7 @@ def test_deliver_responses_appends_branch_footer(tmp_path, monkeypatch):
         body="do something",
         source="github",
         meta={"github_repo": "owner/repo", "github_issue_number": 5,
-              "changed_branch": "brr/task-deliver"},
+              "publish_branch": "brr/task-deliver"},
     )
     (brr_dir / "tasks").mkdir(parents=True, exist_ok=True)
     (brr_dir / "tasks" / "task-deliver.md").write_text(task.to_frontmatter())

@@ -168,7 +168,7 @@ def build_daemon_prompt(
     environment: str | None = None,
     branch_name: str | None = None,
     seed_ref: str | None = None,
-    auto_land_branch: str | None = None,
+    expected_publish_branch: str | None = None,
     branch_source: str | None = None,
     host_context_branch: str | None = None,
     runtime_dir: str | None = None,
@@ -192,7 +192,7 @@ def build_daemon_prompt(
         environment=environment,
         branch_name=branch_name,
         seed_ref=seed_ref,
-        auto_land_branch=auto_land_branch,
+        expected_publish_branch=expected_publish_branch,
         branch_source=branch_source,
         host_context_branch=host_context_branch,
         runtime_dir=runtime_dir,
@@ -230,7 +230,7 @@ def _build_task_context_bundle(
     environment: str | None,
     branch_name: str | None,
     seed_ref: str | None,
-    auto_land_branch: str | None,
+    expected_publish_branch: str | None,
     branch_source: str | None,
     host_context_branch: str | None,
     runtime_dir: str | None,
@@ -268,10 +268,12 @@ def _build_task_context_bundle(
     sections.append(f"- Execution root: {repo_root}")
     if seed_ref:
         sections.append(f"- Seed ref: {seed_ref}")
-    if auto_land_branch:
-        sections.append(f"- Auto-land branch: {auto_land_branch}")
+    if expected_publish_branch:
+        sections.append(f"- Expected publish branch: {expected_publish_branch}")
     elif seed_ref:
-        sections.append("- Auto-land branch: none (preserve task branch)")
+        sections.append(
+            "- Expected publish branch: none (task branch will be published as-is)"
+        )
     if branch_source:
         sections.append(f"- Branch source: {branch_source}")
     if host_context_branch:
@@ -317,24 +319,24 @@ def _build_task_context_bundle(
         "this task explicitly asks for."
     )
     if branch_name and seed_ref:
-        if auto_land_branch:
+        if expected_publish_branch:
             sections.append(
                 f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
-                f"Because `{auto_land_branch}` is the resolved auto-land "
-                "target, committing on the current branch lets brr "
-                "fast-forward that target after the run. If the task body or "
-                "recent conversation clearly point somewhere else, switch to "
-                "that branch before editing; brr will preserve the branch you "
-                "end up on."
+                f"Because `{expected_publish_branch}` is the expected publish "
+                "branch (the event named it), brr will publish your commits "
+                "under that name after the run — stay on this branch and "
+                "commit normally, or switch to another branch if the task "
+                "clearly belongs somewhere else; brr will publish whichever "
+                "branch you end up on."
             )
         else:
             sections.append(
                 f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
-                "No auto-land target was resolved, so commit on the current "
-                "task branch by default; brr will preserve that branch for "
-                "human routing and publish it when a remote is configured. If "
-                "the task body or recent conversation point to a specific "
-                "branch, switch to it before editing."
+                "No expected publish branch was resolved, so commit on the "
+                "current task branch by default; brr will publish that branch "
+                "for human routing when a remote is configured. If the task "
+                "body or recent conversation point to a specific branch, "
+                "switch to it before editing."
             )
             sections.append(
                 f"- The placeholder branch name `{branch_name}` is opaque on "
@@ -391,8 +393,8 @@ def _format_recent_conversation(
             tid = record.get("task_id", "")
             status = record.get("status") or "pending"
             branch = (
-                record.get("changed_branch")
-                or record.get("auto_land_branch")
+                record.get("publish_branch")
+                or record.get("expected_publish_branch")
                 or record.get("branch_name")
                 or ""
             )

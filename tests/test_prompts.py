@@ -120,7 +120,7 @@ class TestPromptBuilding:
             environment="docker",
             branch_name="brr/task-123",
             seed_ref="feat/task-abstraction",
-            auto_land_branch="feat/task-abstraction",
+            expected_publish_branch="feat/task-abstraction",
             branch_source="event:target_branch",
             runtime_dir="/repo/.brr",
             context_path="/repo/.brr/runs/task-123/context.md",
@@ -128,15 +128,15 @@ class TestPromptBuilding:
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
         assert "Seed ref: feat/task-abstraction" in prompt
-        assert "Auto-land branch: feat/task-abstraction" in prompt
+        assert "Expected publish branch: feat/task-abstraction" in prompt
         assert "Current branch: brr/task-123" in prompt
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "Run context file: /repo/.brr/runs/task-123/context.md" in prompt
         assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
         assert "fix it" in prompt
         assert "kb/log-" not in prompt
-        # When an auto-land target is set, the daemon will fast-forward
-        # for us. No PR is needed, so the gh nudge stays out.
+        # When the event named the publish branch, brr publishes there
+        # automatically. No PR is needed, so the gh nudge stays out.
         assert "gh pr create" not in prompt
 
     def test_daemon_prompt_includes_mode_block(self, tmp_path):
@@ -197,19 +197,19 @@ class TestPromptBuilding:
             task_id="task-123",
             branch_name="brr/task-123",
             seed_ref="main",
-            auto_land_branch=None,
+            expected_publish_branch=None,
             branch_source="fallback:preserve",
             host_context_branch="feature/host",
         )
 
         assert "Seed ref: main" in prompt
-        assert "Auto-land branch: none" in prompt
+        assert "Expected publish branch: none" in prompt
         assert "Branch source: fallback:preserve" in prompt
         assert "Host context branch: feature/host" in prompt
-        assert "preserve that branch" in prompt
-        # No auto-land target → nudge the agent to rename the branch to
-        # something descriptive so the forge URL brr will publish reads
-        # well on the forge's branch list.
+        assert "publish that branch" in prompt
+        # No expected publish target → nudge the agent to rename the
+        # branch to something descriptive so the forge URL brr will
+        # publish reads well on the forge's branch list.
         assert "rename the branch" in prompt
         assert "brr/<short-slug>" in prompt
         # The forge-locked `gh pr create` nudge is gone — brr now emits
@@ -232,7 +232,7 @@ class TestPromptBuilding:
             task_id="task-123",
             branch_name="brr/task-123",
             seed_ref="main",
-            auto_land_branch=None,
+            expected_publish_branch=None,
         )
 
         assert "remotely" in prompt
@@ -266,7 +266,7 @@ class TestPromptBuilding:
             task_id="task-123",
             branch_name="brr/task-123",
             seed_ref="feat/task",
-            auto_land_branch="feat/task",
+            expected_publish_branch="feat/task",
             runtime_dir="/repo/.brr",
             recent_conversation=recent,
             event_body="please fix the login flow",
@@ -280,7 +280,7 @@ class TestPromptBuilding:
         assert "please fix the login flow" in prompt
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
-        assert "Auto-land branch: feat/task" in prompt
+        assert "Expected publish branch: feat/task" in prompt
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
 
