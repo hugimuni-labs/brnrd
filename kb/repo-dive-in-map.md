@@ -46,7 +46,7 @@ Carry these current-shape facts while reading:
 - After response validation, `_run_worker()` marks the inbox event
   `done` before kb maintenance, env finalization, and push, so gates
   can deliver the response while post-response housekeeping continues.
-- The daemon uses a bounded worker pool (`max_workers=2` default).
+- The daemon uses a bounded worker pool (`max_workers=4` default).
   Concurrency is safe because mutable runtime files are partitioned
   per event, per task, or per branch; git ref updates use per-branch
   locks.
@@ -219,13 +219,17 @@ Read `_run_worker()` in lifecycle passes:
 10. Record the response artifact.
 11. Mark the inbox event `done` so the gate may deliver the response.
 12. Run kb preflight, graph stats, and optional kb maintenance.
-13. Finalize the environment under the publish-branch lock (classify
-    the worktree's final state into a `publish_status`).
+13. Finalize the environment — classify the worktree's final state
+    into a `publish_status` and record the branch to publish on
+    `task.meta`.
 14. Emit terminal task packets and hand off to the worker-tail
     wrapper, which calls `daemon.publish`.
 
-Then `_run_worker_and_finalize()` pushes the changed branch, also under
-a per-branch lock, and attaches a `forges.view_branch_url` link to
+Then `_run_worker_and_finalize()` publishes the recorded branch under
+a per-branch lock — refspec push when the agent kept the task branch
+but the event named a different `expected_publish_branch`, leased
+force-push when the agent rewrote that branch (PR-rebase), plain
+push otherwise — and attaches a `forges.view_branch_url` link to
 `push_done` when derivable.
 
 Tests: [daemon](../tests/test_daemon.py),
