@@ -417,7 +417,7 @@ def append_task(
     status: str,
     branch_name: str | None = None,
     seed_ref: str | None = None,
-    auto_land_branch: str | None = None,
+    expected_publish_branch: str | None = None,
     branch_source: str | None = None,
     host_context_branch: str | None = None,
 ) -> None:
@@ -432,8 +432,8 @@ def append_task(
     }
     if seed_ref:
         record["seed_ref"] = seed_ref
-    if auto_land_branch:
-        record["auto_land_branch"] = auto_land_branch
+    if expected_publish_branch:
+        record["expected_publish_branch"] = expected_publish_branch
     if branch_source:
         record["branch_source"] = branch_source
     if host_context_branch:

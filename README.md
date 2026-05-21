@@ -127,11 +127,13 @@ to worktree behavior.  The concrete built-ins today are `host`,
 `worktree`, and `docker`; future backends such as `devcontainer`, `ssh`,
 or service-specific plugins fit behind the same internal protocol.
 
-Daemon git operations are branch-plan driven. With no structured branch
-target, `branch.fallback=preserve` is the default: work starts on
-`brr/<task-id>` from the repo default branch, and committed task branches
-are preserved for human routing and pushed when a remote is configured.
-Other fallback modes are `inbox`, `default`, and `current`.
+Daemon git operations are publish-plan driven. Each task starts on a
+fresh `brr/<task-id>` branch from a resolved seed ref. When the event
+names a target branch (`branch_target`, `target_branch`, `base_branch`,
+or legacy `branch`), brr seeds from `<remote>/<target>` and publishes
+under that name after the run. Without a structured target the task
+branch is preserved as-is and published for human routing when a remote
+is configured.
 
 Docker mode wires credentials automatically: brr forwards
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /

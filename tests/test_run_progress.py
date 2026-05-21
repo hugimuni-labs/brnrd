@@ -27,7 +27,7 @@ def test_project_task_succeeds_through_full_lifecycle(tmp_path):
         brr_dir, key,
         task_id="task-1", event_id="evt-1",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch="main",
+        seed_ref="main", expected_publish_branch="main",
         branch_name="brr/task-1",
     )
     _emit(brr_dir, key, "task_created", task_id="task-1", event_id="evt-1",
@@ -258,7 +258,7 @@ def test_render_text_compact_has_runner_env_branch_header(tmp_path):
         brr_dir, key,
         task_id="task-r", event_id="evt-r",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch="main",
+        seed_ref="main", expected_publish_branch="main",
         branch_name="brr/task-r",
     )
 
@@ -286,7 +286,7 @@ def test_render_text_compact_surfaces_kb_maintenance_done(tmp_path):
         brr_dir, key,
         task_id="task-m", event_id="evt-m",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch=None,
+        seed_ref="main", expected_publish_branch=None,
         branch_name="brr/task-m",
     )
     _emit(brr_dir, key, "task_created", task_id="task-m", env="docker")
@@ -322,7 +322,7 @@ def test_render_text_compact_shows_maintenance_clean_when_no_commits(tmp_path):
         brr_dir, key,
         task_id="task-mc", event_id="evt-mc",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch=None,
+        seed_ref="main", expected_publish_branch=None,
         branch_name="brr/task-mc",
     )
     _emit(brr_dir, key, "task_created", task_id="task-mc", env="docker")
@@ -351,7 +351,7 @@ def test_push_done_carries_forge_view_url_into_view(tmp_path):
         brr_dir, key,
         task_id="task-fv", event_id="evt-fv",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch=None,
+        seed_ref="main", expected_publish_branch=None,
         branch_name="brr/task-fv",
     )
     _emit(brr_dir, key, "task_created", task_id="task-fv", env="docker")
@@ -380,7 +380,7 @@ def test_render_text_compact_emits_view_url_under_delivered(tmp_path):
         brr_dir, key,
         task_id="task-fl", event_id="evt-fl",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch=None,
+        seed_ref="main", expected_publish_branch=None,
         branch_name="brr/task-fl",
     )
     _emit(brr_dir, key, "task_created", task_id="task-fl", env="docker")
@@ -414,7 +414,7 @@ def test_render_text_compact_omits_view_line_without_url(tmp_path):
         brr_dir, key,
         task_id="task-fn", event_id="evt-fn",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch=None,
+        seed_ref="main", expected_publish_branch=None,
         branch_name="brr/task-fn",
     )
     _emit(brr_dir, key, "task_created", task_id="task-fn", env="docker")
@@ -441,7 +441,7 @@ def test_render_text_compact_skips_maintenance_when_not_run(tmp_path):
         brr_dir, key,
         task_id="task-mn", event_id="evt-mn",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch=None,
+        seed_ref="main", expected_publish_branch=None,
         branch_name="brr/task-mn",
     )
     _emit(brr_dir, key, "task_created", task_id="task-mn", env="docker")
@@ -456,15 +456,15 @@ def test_render_text_compact_skips_maintenance_when_not_run(tmp_path):
     assert "maintenance" not in text
 
 
-def test_render_text_compact_omits_arrow_without_auto_land_branch(tmp_path):
-    """When there is no explicit auto-land target, the header shows just the
-    branch name. The seed_ref (where the branch was cut from) is a setup
-    detail and should NOT be rendered as a landing target.
+def test_render_text_compact_omits_arrow_without_expected_publish_branch(tmp_path):
+    """When there is no explicit expected publish target, the header shows
+    just the branch name. The seed_ref (where the branch was cut from) is a
+    setup detail and should NOT be rendered as a landing target.
 
     Previously ``display_base`` fell back to ``seed_ref``, which made every
     task card claim it was landing on `main` even when the agent picked its
-    own branch with no auto-merge intent. That was misleading enough to
-    surface a real merge surprise in chat.
+    own branch with no expected publish intent. That was misleading enough
+    to surface a real merge surprise in chat.
     """
     brr_dir = tmp_path / ".brr"
     key = "telegram:8b:"
@@ -472,7 +472,7 @@ def test_render_text_compact_omits_arrow_without_auto_land_branch(tmp_path):
         brr_dir, key,
         task_id="task-na", event_id="evt-na",
         env="docker", status="running",
-        seed_ref="main", auto_land_branch=None,
+        seed_ref="main", expected_publish_branch=None,
         branch_name="brr/task-na",
     )
     _emit(brr_dir, key, "task_created", task_id="task-na", env="docker")
