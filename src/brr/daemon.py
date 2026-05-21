@@ -55,12 +55,12 @@ _BUILTIN_GATES = ["telegram", "slack", "github"]
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
 _HEARTBEAT_INTERVAL = 30.0
-# Default worker pool size. 2 is mild concurrency that handles the
-# typical "long task in flight + quick question arrives" scenario
-# without inviting forge API quota or runner subscription contention.
-# Adopters can set ``max_workers=1`` to reproduce the previous serial
-# behaviour exactly, or raise it as needed.
-_DEFAULT_MAX_WORKERS = 2
+# Default worker pool size. Four parallel tasks cover the usual burst
+# (several channels or follow-ups while longer work is in flight) without
+# most adopters needing to tune config. Forge API quota and runner
+# subscription limits still apply — set ``max_workers=1`` for strictly
+# serial behaviour, or lower/raise via ``.brr/config`` as needed.
+_DEFAULT_MAX_WORKERS = 4
 # How long to wait for in-flight workers to drain on shutdown. None
 # means "wait forever"; the loop only exits the pool join when every
 # worker is done. A long-running task killed mid-flight by an external
@@ -1320,7 +1320,7 @@ def start(
 
     Tasks dispatch into a bounded ``ThreadPoolExecutor`` so unrelated
     events run in parallel. ``max_workers`` reads from ``.brr/config``
-    (default ``2``); set ``max_workers=1`` to reproduce the previous
+    (default ``4``); set ``max_workers=1`` to reproduce the previous
     serial behaviour exactly. Workers don't share mutable state — see
     ``kb/design-concurrent-execution.md`` and ``kb/subject-daemon.md``
     for the partitioning contract.
