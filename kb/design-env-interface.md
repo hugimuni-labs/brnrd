@@ -223,12 +223,14 @@ Persisted task metadata surfaces the preserved location via `task.meta`.
 
 The daemon doesn't guess. Current source enforces the response side
 before finalization through `RunnerResult.validation_ok` and the host
-response path. Env finalization then records host-observable branch
-facts (`changed_branch`, `landed_branch`, `preserved_branch`) on
-`task.meta`; worktree and Docker finalization decide whether the branch
-can fast-forward the resolved auto-land target or must be preserved.
-No daemon code inspects private env internals. The contract is
-*observable from the host*.
+response path. Env finalization then records host-observable publish
+facts (`publish_branch`, `publish_status`) on `task.meta`; worktree
+and Docker finalization classify the worktree's final git state into
+a publish outcome (the env layer never updates a non-task ref since
+the 2026-05-21 publish-kernel collapse — see
+[`design-publish-kernel.md`](design-publish-kernel.md)). No daemon
+code inspects private env internals. The contract is *observable from
+the host*.
 
 ---
 
@@ -349,46 +351,54 @@ maintain a parallel `docker.image` for brr.
 
 ---
 
-## Decentralised branch landing
+## Decentralised branch publishing
 
 ### The model
 
 Worktree and Docker tasks start on a task branch from the resolved
-`BranchPlan.seed_ref`. Finalization fast-forwards the explicit
-`BranchPlan.auto_land_branch` when possible; otherwise it preserves
-the branch the agent actually changed. Conflicts are not a central
-coordinator's problem — they are a human's problem or the next agent
-run's problem.
+`PublishPlan.seed_ref`. Finalize classifies the worktree's final git
+state into a `publish_status` and records the branch to publish;
+`daemon.publish` then ships that branch. The env layer never updates
+a non-task ref. Conflicts are not a central coordinator's problem —
+they are a human's problem or the next agent run's problem.
 
-| Runtime shape | What `finalize` does |
+| Runtime shape | What `finalize` records |
 | --- | --- |
 | Host env | no branch finalization |
-| Task branch plus auto-land target | best-effort fast-forward of the target |
-| Named branch, detached HEAD, missing auto-land target, or ff conflict | preserve the branch / mark conflict for human routing |
+| Task branch with commits | `publish_status=ready`, `publish_branch=brr/<task-id>` |
+| Agent switched branches with commits | `publish_status=ready`, `publish_branch=<switched-to>` |
+| No commits beyond seed | `publish_status=nothing`, no publish branch (task branch deleted) |
+| Detached HEAD | `publish_status=detached`, no publish branch (worktree kept) |
 
 That's the whole "coordinator". The original 2026-05 env slice assumed
 the helper would be `gitops.merge_branch` plus `_finalize_worktree_task`.
-As of 2026-05-11 the branch-intent implementation replaced that with
+The 2026-05-11 branch-intent implementation replaced that with
 `branching.BranchPlan`, `gitops.fast_forward_branch`, and
-`WorktreeEnv._land_or_preserve()` / `DockerEnv.finalize()`: finalization
-fast-forwards a resolved auto-land target or preserves the branch when
-no safe target exists.
+`WorktreeEnv._land_or_preserve()` / `DockerEnv.finalize()`. The
+2026-05-21 publish-kernel collapse (see
+[`design-publish-kernel.md`](design-publish-kernel.md)) folded that
+further: `WorktreeEnv.finalize` now only classifies the worktree's
+final state into a `publish_status`, and `daemon.publish` ships the
+recorded branch in one step.
 
 ### Concurrency note
 
-The shipped worker pool uses per-branch locks for the two shared git ref
-operations: auto-land fast-forward and push. Branches commute well in
-git; conflicts that can't ff-merge get parked as `conflict` status and
-don't block unrelated tasks.
+The shipped worker pool uses a single per-branch lock for the publish
+step (`daemon.publish`). Branches commute well in git; pushes that
+get rejected surface as `publish_status=conflict` and don't block
+unrelated tasks. Finalize no longer participates in the lock — the
+env layer doesn't touch shared refs.
 
 ### Why this is enough
 
 - Q&A tasks normally produce no branch changes.
 - Small implementation or research tasks can stay on the task branch
-  and fast-forward an explicit auto-land target.
-- Named or switched branches are preserved for human review or PR
-  tooling.
-- If an auto-land fast-forward fails, `conflict` status surfaces it.
+  and let the daemon publish it via refspec to an
+  `expected_publish_branch` named by the event.
+- Named or switched branches are still preserved for human review or
+  PR tooling.
+- If a push fails (lease lost, remote rewritten under us, permissions),
+  `publish_status=conflict` surfaces it.
 
 CRDT-flavoured framing is real here: branches in git already have a
 well-defined merge operation; brr just orchestrates `git merge` calls

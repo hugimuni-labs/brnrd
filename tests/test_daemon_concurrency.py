@@ -40,7 +40,7 @@ def _baseline_patches(monkeypatch):
     monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
     monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
-    monkeypatch.setattr(daemon, "_push_if_needed", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
 
 

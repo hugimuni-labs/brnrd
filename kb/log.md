@@ -2221,3 +2221,28 @@ fallback policy is only `preserve` or explicit `current`; conversation
 branch facts stay prompt context. The design's history was compressed
 to one lineage breadcrumb, and the index status now includes the
 2026-05-18 leased-publish amendment.
+
+## [2026-05-21] refactor | Collapse the publish pipeline around one kernel
+
+Collapsed the daemon's land+push pipeline into one publish step. The
+agent leaves work on a branch; the daemon publishes that branch.
+`branching.BranchPlan` became `PublishPlan` (`auto_land_branch` →
+`expected_publish_branch`, `expected_old_oid` → `expected_remote_oid`).
+`WorktreeEnv._land_or_preserve` was replaced with a 4-state outcome
+classifier (`ready` | `nothing` | `detached`); finalize no longer
+touches non-task refs. `daemon._push_if_needed` +
+`_push_lease_anchor` + `_needs_force_with_lease` + `_push_command`
+collapsed into `daemon.publish()` plus a small `_push_command` builder
+with a 5-arm decision table (noop / plain / upstream / refspec /
+lease). The metadata triple `preserved_branch` / `landed_branch` /
+`changed_branch` collapsed to `publish_branch` +
+`publish_status`; six readers (`run_progress.py`, `run_context.py`,
+`prompts.py`, `conversations.py`, `gates/github.py`, `daemon.py`) now
+consume only those keys. `gitops.advance_branch_with_anchor` deleted
+(only caller was the old land path). `branch.fallback=current` removed
+with a one-shot warning for legacy configs. New
+[`design-publish-kernel.md`](design-publish-kernel.md) supersedes
+[`design-daemon-landing-branch.md`](design-daemon-landing-branch.md).
+Cross-task freshness is unchanged — `sync.refresh_before_task` plus
+the resolver's `prefer_remote` seeding from `<remote>/<target>` cover
+the case the predecessor design used local-land for.

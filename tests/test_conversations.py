@@ -254,7 +254,7 @@ def test_append_task_includes_env_and_branch_name(tmp_path):
         tmp_path, "k",
         task_id="t-1", event_id="evt-1",
         env="worktree", status="pending",
-        seed_ref="main", auto_land_branch="main",
+        seed_ref="main", expected_publish_branch="main",
         branch_source="event:target_branch",
         branch_name="brr/t-1",
     )
@@ -262,7 +262,7 @@ def test_append_task_includes_env_and_branch_name(tmp_path):
     assert record["task_id"] == "t-1"
     assert record["env"] == "worktree"
     assert record["seed_ref"] == "main"
-    assert record["auto_land_branch"] == "main"
+    assert record["expected_publish_branch"] == "main"
     assert record["branch_source"] == "event:target_branch"
     assert record["branch_name"] == "brr/t-1"
     assert "branch" not in record

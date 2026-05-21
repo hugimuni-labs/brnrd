@@ -191,171 +191,177 @@ def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[th
     return threads
 
 
-# ── Git push ─────────────────────────────────────────────────────────
+# ── Git publish ──────────────────────────────────────────────────────
 
 
-def _push_if_needed(
+def publish(
     repo_root: Path,
-    *,
-    branch: str | None = None,
-    conversation_key: str | None = None,
-    event_id: str | None = None,
-    task_id: str | None = None,
-    expected_remote_oid: str | None = None,
+    task: Task,
 ) -> None:
-    """Push the changed branch when there are commits to publish.
+    """Publish the task's branch to its remote, if there are commits.
 
-    When *conversation_key* is provided, emit ``push_started``/
-    ``push_done`` update packets so gates can render delivery progress.
-    The actual ``git push`` runs inside a per-branch lock so two
-    concurrent workers that happen to target the same branch can't
-    interleave their pushes. When *expected_remote_oid* is provided and
-    the local branch has been rewritten relative to its remote-tracking
-    ref, publish with ``--force-with-lease`` anchored to that OID.
+    The publish kernel:
+
+    - The agent leaves work on a branch. ``task.meta["publish_branch"]``
+      names it (set by ``WorktreeEnv.finalize``).
+    - When the event named an ``expected_publish_branch`` and the
+      agent stayed on the task branch ``brr/<task-id>``, publish to
+      the expected branch via a refspec
+      (``git push origin brr/<task-id>:refs/heads/<expected>``) so
+      the daemon never has to update the local target ref.
+    - When the resulting source ref equals the expected publish
+      branch AND ``task.meta["expected_remote_oid"]`` is set AND the
+      local source is not an ancestor of the remote target, push with
+      ``--force-with-lease`` anchored to ``expected_remote_oid``. This
+      is the PR-rebase case.
+    - Otherwise plain push, with ``-u`` when the local branch has no
+      upstream.
+
+    A failed push flips ``publish_status`` to ``conflict`` and emits
+    the ``conflict`` packet so gates render the delivery failure
+    rather than reporting success.
     """
-    branch_name = branch or gitops.current_branch(repo_root)
-    if not branch_name or branch_name == "HEAD":
+    push_branch = task.meta.get("publish_branch")
+    if not push_branch:
         return
 
     brr_dir = gitops.shared_brr_dir(repo_root)
-    emit = _WorkerEmit(brr_dir, conversation_key or "", event_id or "")
+    emit = _WorkerEmit(
+        brr_dir, task.conversation_key or "", task.event_id or "",
+    )
+
+    expected = task.meta.get("expected_publish_branch") or None
+    expected_remote_oid = task.meta.get("expected_remote_oid") or None
+    # Refspec push: agent kept the task branch (``brr/<task-id>``)
+    # but the event named a different ``expected`` to publish under.
+    # Push the local source to the named remote ref without touching
+    # the local target ref first.
+    remote_branch = expected if expected and expected != push_branch else push_branch
 
     try:
-        upstream = gitops.branch_upstream(repo_root, branch_name)
-        remote = gitops.branch_remote(repo_root, branch_name)
+        upstream = gitops.branch_upstream(repo_root, push_branch)
+        remote = gitops.branch_remote(repo_root, push_branch)
         set_upstream = False
         force_with_lease = False
 
-        if upstream:
-            commits = _commits_between(repo_root, upstream, branch_name)
+        if upstream and remote_branch == push_branch:
+            commits = _commits_between(repo_root, upstream, push_branch)
             if not commits:
                 return
             if not remote:
                 remote = upstream.split("/", 1)[0] if "/" in upstream else None
-            remote_branch = upstream.split("/", 1)[1] if "/" in upstream else branch_name
-            force_with_lease = _needs_force_with_lease(
-                repo_root, upstream, branch_name, expected_remote_oid,
-            )
         else:
-            remote = gitops.default_remote(repo_root)
+            remote = remote or gitops.default_remote(repo_root)
             if not remote:
                 return
-            remote_branch = branch_name
-            remote_ref = f"{remote}/{branch_name}"
+            remote_ref = f"{remote}/{remote_branch}"
             if gitops.rev_parse(repo_root, remote_ref):
-                commits = _commits_between(repo_root, remote_ref, branch_name)
-                force_with_lease = _needs_force_with_lease(
-                    repo_root, remote_ref, branch_name, expected_remote_oid,
-                )
+                commits = _commits_between(repo_root, remote_ref, push_branch)
             else:
-                commits = _commits_since_seed(repo_root, branch_name)
+                commits = _commits_since_seed(repo_root, push_branch)
             if not commits:
                 return
-            # A new branch with no upstream: publish it the way a user
-            # would, with ``git push -u``. brr push behaviour stays
-            # parallel to manual push behaviour, regardless of whether
-            # the branch is in the brr namespace or one the agent
-            # named at runtime.
-            set_upstream = True
+            # Set upstream only when pushing to a matching-named branch
+            # for the first time; refspec pushes don't carry an
+            # upstream because the local source name doesn't match the
+            # remote target. Mirrors how a user would publish a new
+            # branch with ``git push -u``.
+            if remote_branch == push_branch:
+                set_upstream = True
 
         if not remote:
             return
+
+        # Lease decision: force-with-lease only when the local source
+        # ref has rewritten history relative to the remote target and
+        # the daemon captured the remote oid at task start.
+        if (
+            expected_remote_oid
+            and remote_branch == expected
+            and not gitops.is_ancestor(
+                repo_root, f"{remote}/{remote_branch}", push_branch,
+            )
+        ):
+            force_with_lease = True
+
         push_cmd = _push_command(
             remote,
-            branch_name,
+            push_branch,
             remote_branch,
             set_upstream=set_upstream,
-            expected_remote_oid=(
-                expected_remote_oid if force_with_lease else None
-            ),
+            lease_oid=(expected_remote_oid if force_with_lease else None),
         )
-        commit_count = len(commits)
         push_payload: dict = {
-            "commits": commit_count,
-            "branch": branch_name,
+            "commits": len(commits),
+            "branch": push_branch,
             "set_upstream": set_upstream,
             "force_with_lease": force_with_lease,
+            "task_id": task.id,
         }
-        if task_id:
-            push_payload["task_id"] = task_id
-        if conversation_key:
+        if task.conversation_key:
             emit("push_started", **push_payload)
-        print(f"[brr] pushing {branch_name}...")
-        with _branch_lock(branch_name):
+        print(f"[brr] pushing {push_branch}...")
+        with _branch_lock(remote_branch):
             push = subprocess.run(
                 push_cmd, cwd=repo_root,
                 capture_output=True, text=True, timeout=60,
             )
-        if conversation_key:
+        if task.conversation_key:
             done_payload = dict(push_payload)
             done_payload["ok"] = push.returncode == 0
-            if push.returncode != 0:
+            if push.returncode == 0:
+                view = _forge_view_url(repo_root, remote, remote_branch)
+                if view:
+                    done_payload["view_url"] = view
+            else:
                 detail = (push.stderr or push.stdout or "").strip()
                 if detail:
                     done_payload["error"] = detail[:500]
-            elif remote:
-                # On a successful push, try to derive a clickable view
-                # URL so the gate can put a real link in front of the
-                # operator. Failures stay quiet — the push already
-                # happened, the branch is reachable, the link is just
-                # a nice-to-have.
-                view = _forge_view_url(repo_root, remote, branch_name)
-                if view:
-                    done_payload["view_url"] = view
             emit("push_done", **done_payload)
+        if push.returncode != 0:
+            task.meta["publish_status"] = "conflict"
+            if task.conversation_key:
+                emit(
+                    "conflict",
+                    task_id=task.id,
+                    branch=push_branch,
+                    publish_branch=push_branch,
+                )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
 
-def _push_lease_anchor(
-    repo_root: Path,
-    task: Task,
-    branch_to_push: str | None,
-) -> str | None:
-    """Return the pre-run remote oid to anchor a leased push, if any."""
-    auto_land = task.meta.get("auto_land_branch")
-    old_oid = task.meta.get("auto_land_old_oid")
-    if not branch_to_push or not auto_land or not old_oid:
-        return None
-    if branch_to_push == auto_land:
-        return str(old_oid)
-    upstream = gitops.branch_upstream(repo_root, branch_to_push)
-    if upstream and upstream.endswith(f"/{auto_land}"):
-        return str(old_oid)
-    return None
-
-
-def _needs_force_with_lease(
-    repo_root: Path,
-    remote_ref: str,
-    branch: str,
-    expected_remote_oid: str | None,
-) -> bool:
-    """True when *branch* rewrote *remote_ref* and has a lease anchor."""
-    if not expected_remote_oid:
-        return False
-    return not gitops.is_ancestor(repo_root, remote_ref, branch)
-
-
 def _push_command(
     remote: str,
-    branch: str,
+    source: str,
     remote_branch: str,
     *,
     set_upstream: bool,
-    expected_remote_oid: str | None,
+    lease_oid: str | None,
 ) -> list[str]:
+    """Build ``git push`` argv for the publish step.
+
+    Three mutually exclusive arms:
+
+    - ``lease_oid`` set → ``--force-with-lease`` push with explicit
+      refspec ``<source>:refs/heads/<remote_branch>``.
+    - ``set_upstream`` set → ``git push -u <remote> <source>``; only
+      reachable when ``source == remote_branch``.
+    - otherwise → ``git push <remote> <source>:<remote_branch>`` (or
+      plain ``<source>`` when names match).
+    """
     cmd = ["git", "push"]
+    if lease_oid:
+        remote_ref = f"refs/heads/{remote_branch}"
+        cmd.append(f"--force-with-lease={remote_ref}:{lease_oid}")
+        cmd.extend([remote, f"{source}:{remote_ref}"])
+        return cmd
     if set_upstream:
         cmd.append("-u")
-    if expected_remote_oid:
-        remote_ref = f"refs/heads/{remote_branch}"
-        cmd.append(f"--force-with-lease={remote_ref}:{expected_remote_oid}")
-        cmd.extend([remote, f"{branch}:{remote_ref}"])
-    elif set_upstream and remote_branch == branch:
-        cmd.extend([remote, branch])
+    if source == remote_branch:
+        cmd.extend([remote, source])
     else:
-        cmd.extend([remote, f"{branch}:{remote_branch}"])
+        cmd.extend([remote, f"{source}:{remote_branch}"])
     return cmd
 
 
@@ -446,7 +452,7 @@ def _branches_to_refresh(repo_root: Path, event: dict) -> list[str]:
     work). Adds any structured event branch fields the daemon already
     knows about (``branch_target``, ``target_branch``, ``base_branch``,
     ``branch``), filtered through the same validation
-    ``branching.resolve_branch_plan`` uses so we don't hand the sync
+    ``branching.resolve_publish_plan`` uses so we don't hand the sync
     layer "auto" / "current" sentinels.
     """
     out: list[str] = []
@@ -454,11 +460,9 @@ def _branches_to_refresh(repo_root: Path, event: dict) -> list[str]:
     if default and default != "HEAD":
         out.append(default)
 
-    host_branch = gitops.current_branch(repo_root)
-    host_context = host_branch if host_branch != "HEAD" else None
     for key in branching.STRUCTURED_BRANCH_KEYS:
         candidate = branching._event_branch_candidate(
-            repo_root, key, event.get(key), host_context,
+            repo_root, key, event.get(key),
         )
         if candidate and candidate not in out:
             out.append(candidate)
@@ -504,7 +508,7 @@ def _run_worker(
         repo_root, target_branches=sync_targets, cfg=cfg,
     )
 
-    branch_plan = branching.resolve_branch_plan(repo_root, event, cfg)
+    branch_plan = branching.resolve_publish_plan(repo_root, event, cfg)
 
     if conv_key:
         conversations.append_event(brr_dir, conv_key, event)
@@ -575,7 +579,7 @@ def _run_worker(
         env=task.env,
         branch_name=branch_name,
         seed_ref=branch_plan.seed_ref,
-        auto_land_branch=branch_plan.auto_land_branch,
+        expected_publish_branch=branch_plan.expected_publish_branch,
         branch_source=branch_plan.source,
     )
 
@@ -586,7 +590,7 @@ def _run_worker(
             env=task.env, status=task.status,
             branch_name=branch_name,
             seed_ref=branch_plan.seed_ref,
-            auto_land_branch=branch_plan.auto_land_branch,
+            expected_publish_branch=branch_plan.expected_publish_branch,
             branch_source=branch_plan.source,
             host_context_branch=branch_plan.host_context_branch,
         )
@@ -621,7 +625,7 @@ def _run_worker(
         task_id=task.id,
         branch=branch_name,
         seed_ref=branch_plan.seed_ref,
-        auto_land_branch=branch_plan.auto_land_branch,
+        expected_publish_branch=branch_plan.expected_publish_branch,
         env=task.env,
         runner=runner_name,
     )
@@ -636,7 +640,7 @@ def _run_worker(
                 environment=task.env,
                 branch_name=branch_name,
                 seed_ref=branch_plan.seed_ref,
-                auto_land_branch=branch_plan.auto_land_branch,
+                expected_publish_branch=branch_plan.expected_publish_branch,
                 branch_source=branch_plan.source,
                 host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
@@ -655,7 +659,7 @@ def _run_worker(
                 environment=task.env,
                 branch_name=branch_name,
                 seed_ref=branch_plan.seed_ref,
-                auto_land_branch=branch_plan.auto_land_branch,
+                expected_publish_branch=branch_plan.expected_publish_branch,
                 branch_source=branch_plan.source,
                 host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
@@ -736,33 +740,21 @@ def _run_worker(
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
                 task.save(tasks_dir)
             emit("finalizing", task_id=task.id, stage="done")
-            # Per-branch lock around finalize: if this task's auto-land
-            # target overlaps another concurrent worker's, the
-            # fast-forward inside finalize must serialise on that name.
-            # Tasks targeting different branches don't contend.
-            with _branch_lock(branch_plan.auto_land_branch):
+            # Per-branch lock around finalize: if this task's expected
+            # publish branch overlaps another concurrent worker's, the
+            # publish step must serialise on that name. Tasks
+            # targeting different branches don't contend.
+            with _branch_lock(branch_plan.expected_publish_branch):
                 task = env_backend.finalize(env_ctx, task, tasks_dir)
             _cleanup_traces_on_success(brr_dir, tasks_dir, task)
             _emit_preserved_containers(emit, task)
-            preserved_branch = task.meta.get("preserved_branch")
-            landed_branch = task.meta.get("landed_branch")
-            changed_branch = task.meta.get("changed_branch")
-            if task.status == "conflict":
-                emit(
-                    "conflict",
-                    task_id=task.id,
-                    branch=preserved_branch or branch_name,
-                    preserved_branch=preserved_branch,
-                )
-            else:
-                emit(
-                    "done",
-                    task_id=task.id,
-                    event_id=eid,
-                    preserved_branch=preserved_branch,
-                    landed_branch=landed_branch,
-                    changed_branch=changed_branch,
-                )
+            emit(
+                "done",
+                task_id=task.id,
+                event_id=eid,
+                publish_branch=task.meta.get("publish_branch"),
+                publish_status=task.meta.get("publish_status"),
+            )
             return task
 
         retry_reason = result.retry_reason()
@@ -808,7 +800,7 @@ def _run_worker(
     # is what gates see last, so its payload must be the canonical
     # explanation.
     emit("finalizing", task_id=task.id, stage="failed")
-    with _branch_lock(branch_plan.auto_land_branch):
+    with _branch_lock(branch_plan.expected_publish_branch):
         task = env_backend.finalize(env_ctx, task, tasks_dir)
     _emit_preserved_containers(emit, task)
     failed_payload: dict[str, object] = {
@@ -1271,40 +1263,11 @@ def _run_worker_and_finalize(
     """
     task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
     if event.get("status") != "done":
-        # A response-ready task can still end in branch ``conflict`` when
-        # landing fails; keep the inbox event deliverable so gates post the
-        # agent reply instead of only updating the progress card.
-        if (
-            task.status == "conflict"
-            and protocol.response_exists(responses_dir, event["id"])
-        ):
-            _set_event_status_if_present(event, "done")
-        else:
-            _set_event_status_if_present(event, task.status)
+        _set_event_status_if_present(event, task.status)
     if task.status == "error":
         print(f"[brr] task {task.id}: failed")
-    elif task.status == "conflict":
-        print(
-            f"[brr] task {task.id}: branch preserved (cannot fast-forward)"
-        )
 
-    branch_to_push = (
-        task.meta.get("changed_branch")
-        or task.meta.get("landed_branch")
-        or task.meta.get("preserved_branch")
-    )
-    expected_remote_oid = _push_lease_anchor(
-        repo_root, task, branch_to_push,
-    )
-
-    _push_if_needed(
-        repo_root,
-        branch=branch_to_push,
-        conversation_key=task.conversation_key,
-        event_id=task.event_id,
-        task_id=task.id,
-        expected_remote_oid=expected_remote_oid,
-    )
+    publish(repo_root, task)
     return task
 
 

@@ -80,14 +80,14 @@ file locks:
 What still needs explicit synchronisation, because it touches a
 genuinely shared git ref:
 
-- **Auto-land fast-forward** (`gitops.fast_forward_branch` in the
-  worktree finalize path) takes a per-branch lock keyed on the
-  resolved target name, so two tasks landing on the same auto-land
-  target serialise correctly. Tasks targeting different branches
-  proceed in parallel.
-- **Branch push** (`_push_if_needed`) takes the same kind of
-  per-branch lock keyed on the branch being pushed, for the same
-  reason.
+- **Publish** (`daemon.publish`) takes a per-branch lock keyed on the
+  branch being pushed, so two tasks publishing under the same name
+  (or under the same `expected_publish_branch` via a refspec push)
+  serialise on the push. Tasks publishing different branches don't
+  contend. Finalize no longer participates in this lock — the env
+  layer never updates a non-task ref since the 2026-05-21 publish-
+  kernel collapse (see
+  [`design-publish-kernel.md`](design-publish-kernel.md)).
 
 Cancellation is still not in v1: signals request drain-and-exit, they
 don't interrupt a running AI CLI.
@@ -112,8 +112,9 @@ For each pending event, the daemon:
    by the originating gate;
 10. runs kb preflight plus the optional redundancy pass after successful
    work;
-11. finalizes the environment, fast-forwarding or preserving branches;
-12. pushes the branch that actually changed.
+11. finalizes the environment, classifying the worktree's final state
+    into a `publish_status` and recording the branch to publish;
+12. publishes that branch via `daemon.publish` under a per-branch lock.
 
 The durable user response is plain stdout captured by
 [`runner.invoke_runner`](../src/brr/runner.py), not a file the agent
@@ -223,9 +224,9 @@ Read these in order when changing daemon behavior:
    responsibilities; [`design-env-interface.md`](design-env-interface.md)
    for the underlying protocol spec.
 5. [`subject-tasks-branching.md`](subject-tasks-branching.md) and
-   [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-   for task construction, branch intent resolution, and the accepted fix
-   for ambient host-checkout and hidden landing-config coupling.
+   [`design-publish-kernel.md`](design-publish-kernel.md) for task
+   construction, branch intent resolution, and the accepted publish
+   kernel that replaced the predecessor land-then-push pipeline.
 6. [`design-git-layer-rework.md`](design-git-layer-rework.md) for the
    pre-task fetch+ff invariant, the boundary between pure git refs
    (daemon) and forge concepts (per-provider gates), and the staged

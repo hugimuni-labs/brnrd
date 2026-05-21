@@ -1,11 +1,13 @@
 # Subject: tasks and branching
 
 Hub page for how brr turns incoming events into tasks, isolates the
-work, and decides where committed work lands. This area is spread
-across [`task.py`](../src/brr/task.py),
+work, and decides which branch to publish. This area is spread across
+[`task.py`](../src/brr/task.py),
 [`worktree.py`](../src/brr/worktree.py),
-[`envs/__init__.py`](../src/brr/envs/__init__.py), old branch plans,
-and the triage-removal decision; this page is the current synthesis.
+[`envs/__init__.py`](../src/brr/envs/__init__.py),
+[`branching.py`](../src/brr/branching.py), and
+[`daemon.py`](../src/brr/daemon.py); this page is the current
+synthesis.
 
 ## Current shape
 
@@ -23,79 +25,117 @@ is configured, otherwise a git worktree. `host` is explicit only. That
 choice keeps remote runs isolated by default without asking an LLM to
 classify "small" versus "large" tasks ahead of time.
 
-For worktree-backed tasks, brr first resolves a deterministic branch
-plan: seed ref, optional auto-land branch, resolver source string,
-host checkout branch as context, and expected old OID for safe
-fast-forwards. It then creates `.brr/worktrees/<task-id>/` on a fresh
-`brr/<task-id>` branch from the seed ref. The agent owns the runtime
-branching choice:
+For worktree-backed tasks, brr resolves a deterministic
+`PublishPlan`: seed ref, optional `expected_publish_branch` (when the
+event named a target), resolver source string, host checkout branch as
+context, and an optional `expected_remote_oid` captured from the
+remote-tracking ref at task start for force-with-lease pushes. It then
+creates `.brr/worktrees/<task-id>/` on a fresh `brr/<task-id>` branch
+from the seed ref. The agent owns the runtime branching choice:
 
-- commit on the original `brr/<task-id>` branch when the branch plan is
+- commit on the original `brr/<task-id>` branch when the plan is
   right;
-- switch to a new or existing named branch when the task body — or the
-  recent conversation context the prompt includes — overrides the plan;
+- switch to a new or existing named branch when the task body — or
+  the recent conversation context the prompt includes — overrides the
+  plan;
 - make no commits for read-only work.
 
-On success, `WorktreeEnv.finalize` reads the final branch state and
-always tears down the worktree directory; persistent inspection rides
-on the branch ref and trace dirs, not on a live worktree pinning the
-branch. If the agent stayed on the original task branch and an
-auto-land target exists, brr fast-forwards that target and deletes the
-throwaway branch. If no target exists, brr preserves the task branch
-for human routing and publishes it when a remote is configured. If the
-agent switched branches, detached HEAD, or cannot fast-forward the
-target, brr preserves the branch for human follow-up. Docker uses the
-same worktree-backed branch contract, with the runner command executed
-in a container.
+On success, `WorktreeEnv.finalize` reads the worktree's final git
+state, classifies it into a `publish_status`, and records the branch
+to publish. Finalize never touches a non-task ref. Worktree teardown
+is outcome-aware: clean `ready` with no uncommitted files tears the
+worktree down (the branch ref plus traces are the durable artefact);
+detached HEAD or uncommitted leftovers keep the worktree alive so the
+operator can inspect what the agent left behind. Docker uses the
+same worktree-backed branch contract, with the runner command
+executed in a container.
 
-## Branch intent and landing
+## Publishing and the publish kernel
 
-Structured event branch fields (`branch_target`, `target_branch`,
-`base_branch`, then legacy `branch`) become the auto-land target and
-the seed. When a matching remote-tracking ref exists, brr seeds from
-that remote ref so a runner starts from the forge-visible branch even
-if the daemon's local branch diverged. Without structured branch
-authority, `branch.fallback=preserve` seeds from the repo default
-branch (falling back to host `HEAD`) and preserves the task branch;
-`branch.fallback=current` is the explicit self-development mode that
-seeds from and auto-lands to the host checkout branch.
+The agent leaves work on a branch. The daemon publishes that branch.
+That's the kernel — finalize classifies, `daemon.publish` ships.
+Pull-side freshness (so a follow-up task seeds from the previous
+task's publish) lives in [`sync.py`](../src/brr/sync.py); publishing
+is one step.
+
+The resolver's order of operations is unchanged from the predecessor
+design: structured event branch fields (`branch_target`,
+`target_branch`, `base_branch`, then legacy `branch`) name the
+`expected_publish_branch` and the seed. When a remote-tracking ref
+exists for that target, brr seeds from `<remote>/<target>` so a runner
+starts from the forge-visible branch even if the daemon's local copy
+diverged. Without a structured target, `branch.fallback=preserve`
+seeds from the repo default branch (falling back to host `HEAD`) and
+records no expected publish target; the committed task branch is
+preserved and pushed under its own name. The previous `current`
+fallback (and the long-defunct `inbox` / `default`) was removed when
+the publish kernel collapsed the local-land path; legacy config values
+warn once and downgrade to `preserve`.
 
 The host's current branch travels into the prompt as context but is
-never treated as an auto-land target — agents need to know what
-branch the user was looking at, but the resolver doesn't infer
-landing intent from it.
+never treated as a publish target — agents need to know which branch
+the user was looking at, but the resolver doesn't infer publishing
+intent from it.
 
-If the agent stays on the task branch and an explicit auto-land
-target was set, brr fast-forwards it. If no target exists, brr
-preserves the task branch. If the agent switched branches or detached
-HEAD, finalization records whatever git state was left and pushes the
-agent-chosen branch. When that branch is the explicit auto-land target
-and the agent rewrote it locally (for example a PR rebase), the daemon
-publishes with `--force-with-lease` anchored to the remote OID captured
-before the run. Other branch pushes remain ordinary pushes, so brr does
-not grow a general "force whatever changed" path.
+Finalize produces one of four `publish_status` values:
 
-The full design and the design's lineage live in
-[`design-daemon-landing-branch.md`](design-daemon-landing-branch.md);
-the most recent rewrite (2026-05-12) trimmed the resolver to
-event-metadata-only branch authority — see
-[`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
-for the rationale.
+- `ready` — the task branch has commits; `publish_branch` names what
+  to ship (the original `brr/<task-id>` if the agent stayed put, or
+  the agent's chosen branch otherwise).
+- `nothing` — agent stayed on the task branch and made no commits;
+  task branch is deleted along with the worktree.
+- `detached` — agent left HEAD detached; worktree is kept for the
+  operator to recover the commits.
+- `conflict` — emitted by `daemon.publish` when the push itself
+  failed, so gates render the delivery failure instead of celebrating
+  a successful run.
+
+`daemon.publish` chooses one of five mutually exclusive arms by
+reading `task.meta["publish_branch"]`,
+`task.meta["expected_publish_branch"]`, and
+`task.meta["expected_remote_oid"]`:
+
+| Arm | When | Behaviour |
+| --- | ---- | --------- |
+| noop | no publish branch, no new commits, or no remote | skip |
+| plain | publish branch has upstream, name matches | `git push origin <branch>` |
+| upstream | new local branch, name matches | `git push -u origin <branch>` |
+| refspec | agent kept `brr/<task-id>` but event named a different `expected_publish_branch` | `git push origin brr/<task-id>:<expected>` |
+| lease | publish branch equals expected publish branch *and* `expected_remote_oid` is set *and* local is not an ancestor of `origin/<branch>` (i.e. agent rewrote history — the PR-rebase case) | `git push --force-with-lease=<ref>:<oid> origin <branch>:<ref>` |
+
+Other branches stay ordinary pushes; brr does not grow a general
+"force whatever changed" path.
+
+## Cross-task freshness
+
+The local-land path that earlier shapes ran before pushing only ever
+advanced the *host* checkout's local ref. Removing it doesn't lose
+freshness because the remote was authoritative anyway: every gate
+routes through it. `sync.refresh_before_task` already fetches origin
+and best-effort fast-forwards before the resolver runs, and the
+resolver prefers `<remote>/<target>` when present, so a follow-up task
+seeds from the previous task's published state even when the
+operator's local copy never moved.
 
 ## Read next
 
-1. [`decision-remove-triage.md`](decision-remove-triage.md) for why
+1. [`design-publish-kernel.md`](design-publish-kernel.md) for the
+   accepted publish kernel design, decision tables, and the lineage
+   from the predecessor landing-branch design.
+2. [`decision-remove-triage.md`](decision-remove-triage.md) for why
    task construction is mechanical and branching moved to runtime.
-2. [`plan-branch-modes.md`](plan-branch-modes.md) for the older design
-   history and discarded per-task branch fields.
 3. [`subject-envs.md`](subject-envs.md) for the env protocol,
    durability contract, and salvage rule the worktree/docker
    finalizers implement; [`design-env-interface.md`](design-env-interface.md)
    for the underlying design.
-4. [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
-   for the accepted branch-intent resolver design and remaining future
-   source-metadata expansion points.
-5. [`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
-   for a follow-up critique of the current resolver surface, especially
-   the recommendation to keep mechanical landing defaults while demoting
-   inferred conversation branch history to runner context.
+4. [`subject-daemon.md`](subject-daemon.md) for the daemon's
+   concurrency model and per-branch publish lock.
+5. [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
+   (superseded 2026-05-21) for the predecessor landing-branch design
+   notes; read only for the rationale of the constraints the kernel
+   inherits.
+6. [`plan-branch-modes.md`](plan-branch-modes.md) for the older design
+   history and discarded per-task branch fields.
+7. [`research-branch-plan-simplification-2026-05-12.md`](research-branch-plan-simplification-2026-05-12.md)
+   for the resolver critique whose follow-through landed in the
+   2026-05-21 publish-kernel collapse.
