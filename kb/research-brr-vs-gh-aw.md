@@ -483,4 +483,9 @@ than you'd gain by collapsing them.
 - GitHub Changelog, *"GitHub Agentic Workflows are now in technical preview"*, 2026-02-13
 - `github/gh-aw` discussions #20558, #23173, #27292, #27432 (internal audits, 2026-03 → 2026-04)
 - `kb/deck-brr-fleet-steering.md`, `kb/design-env-interface.md`, `kb/notes-pondering-fleet.md`
+- [`kb/research-positioning-and-runtime-deps-2026-05-21.md`](research-positioning-and-runtime-deps-2026-05-21.md)
+  — peer research extending §3.8 and §4.2: reframes brr's zero-dep
+  constraint and "differentiators in that niche" list (zero-deps,
+  gate-as-filesystem, playbook-first) into a positioning critique aimed
+  at the AI-tool creator crowd, with ranked moves for adoption.
 - `awesome-ai-agents-2026` for adjacent-project framing (Trigger.dev, OpenClaw, n8n)
