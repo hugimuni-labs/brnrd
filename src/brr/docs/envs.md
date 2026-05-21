@@ -33,14 +33,11 @@ is no LLM in the loop. If a request needs different isolation, change
 
 Branch fallback is separate from environment selection. When no
 structured event/thread metadata names a branch target, `branch.fallback`
-or `branch_fallback` controls the daemon's branch plan:
-
-- `preserve` (default) — seed from the repo default branch and preserve
-  the `brr/<task-id>` branch for human routing.
-- `inbox` — seed from the default branch and auto-land to `brr/inbox`.
-- `default` — seed from and auto-land to the repo default branch.
-- `current` — compatibility/development mode: seed from and auto-land
-  to the daemon host checkout's current branch.
+or `branch_fallback` controls the daemon's publish plan. The only
+supported mode is `preserve` (the default): seed from the repo default
+branch and publish the `brr/<task-id>` branch under its own name for
+human routing. Legacy values (`inbox`, `default`, `current`) warn once
+on daemon start and downgrade to `preserve`.
 
 ## `host`
 
@@ -55,19 +52,28 @@ The daemon creates a git worktree under `.brr/worktrees/<task-id>/`
 on a fresh `brr/<task-id>` branch sprouted from the resolved seed ref.
 The runner cwd points at the worktree; your main checkout is
 untouched. After a successful run, the daemon inspects the worktree's
-git state:
+git state and records one of four `publish_status` outcomes:
 
-- Agent committed on the original `brr/<task-id>` branch and the branch
-  plan has an auto-land target → fast-forward that target, remove the
-  worktree.
-- Agent committed on the original `brr/<task-id>` branch and the branch
-  plan has no auto-land target → preserve the task branch, publish it
-  when a remote is configured, and remove the worktree.
-- Agent switched to or created another branch (`git switch -c …`),
-  or commits cannot fast-forward the target → leave the branch alone,
-  remove the worktree.
-- No commits beyond the seed ref → drop the empty branch with the
-  worktree.
+- `ready` — the agent committed on a branch. `publish_branch` records
+  what to ship (the original `brr/<task-id>` if the agent stayed put,
+  or whichever branch the agent switched to). The worktree is torn
+  down unless it carries uncommitted leftovers.
+- `nothing` — no commits beyond the seed ref. The empty task branch
+  and worktree are deleted; nothing is published.
+- `detached` — the agent left HEAD detached. The worktree is kept so
+  you can recover the commits.
+- `conflict` — emitted by the publish step if the push itself failed,
+  so the gate renders the delivery failure instead of celebrating a
+  successful run.
+
+`daemon.publish` then ships the recorded `publish_branch` in one
+step. When the event named an `expected_publish_branch` but the agent
+kept the task branch, the push uses a refspec
+(`git push origin brr/<task-id>:<expected>`) so the daemon never
+touches the local target ref. When the agent rewrote the expected
+branch locally (the PR-rebase case) and brr captured the remote OID
+at task start, the push uses `--force-with-lease` against that OID.
+Other branches stay ordinary pushes.
 
 This is the right default for code-modifying work. Worktrees that
 end up in a non-clean state (failures, conflicts, or untracked

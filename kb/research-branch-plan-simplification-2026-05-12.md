@@ -9,6 +9,12 @@ complicated than the job requires, with the goal of simplifying code
 while preserving runner-agent economics and the user-facing remote-run
 feel.
 
+> Follow-up: the 2026-05-21 publish-kernel collapse
+> ([`design-publish-kernel.md`](design-publish-kernel.md)) implemented
+> the further simplification this page recommended — `BranchPlan`
+> became `PublishPlan`, the local-land step and the metadata triple
+> went away, and the `current` fallback was removed alongside.
+
 ## Current mechanics
 
 The daemon resolves a `branching.BranchPlan` before environment prep.

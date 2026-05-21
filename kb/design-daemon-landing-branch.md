@@ -1,6 +1,20 @@
 # Design: daemon branch intent resolution
 
-Status: accepted on 2026-05-12; amended on 2026-05-18
+Status: superseded by [`design-publish-kernel.md`](design-publish-kernel.md) on 2026-05-21
+
+This page is preserved for historical context — the resolver design it
+records was the immediate predecessor of today's publish kernel and
+its two amendments (2026-05-12 conversation-authority removal,
+2026-05-18 leased PR rebase) carry into the kernel unchanged. The live
+current-state synthesis lives in
+[`subject-tasks-branching.md`](subject-tasks-branching.md) →
+"Publishing and the publish kernel" and
+[`design-publish-kernel.md`](design-publish-kernel.md). Everything
+below describes the shape *before* the 2026-05-21 collapse: a
+separate landing step, a `BranchPlan` with an `auto_land_branch`, the
+metadata triple `preserved_branch` / `landed_branch` /
+`changed_branch`, and a `current` fallback mode. Read the design notes
+for context only — the names and step boundaries have all moved.
 
 This hangs off the tasks/branching hub,
 [`subject-tasks-branching.md`](subject-tasks-branching.md), and refines

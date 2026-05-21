@@ -35,9 +35,12 @@ Carry these current-shape facts while reading:
   `sync.refresh_before_task`: one `git fetch` plus ff-only refreshes
   of the local default branch and any structured event branch.
 - Worktree and Docker tasks start from the resolved seed ref on a
-  fresh `brr/<task-id>` branch. Finalization fast-forwards an
-  explicit auto-land target when possible; otherwise it preserves the
-  changed branch for human routing.
+  fresh `brr/<task-id>` branch. Finalization classifies the worktree's
+  final state into a `publish_status` (`ready` | `nothing` |
+  `detached`); `daemon.publish` then publishes the recorded branch,
+  using a refspec push when the agent kept the task branch but the
+  event named a different `expected_publish_branch`, and a leased
+  force-push when the agent rewrote that branch (the PR-rebase case).
 - Runner stdout is the response. `runner.invoke_runner()` captures the
   final stdout and writes `.brr/responses/<event-id>.md`.
 - After response validation, `_run_worker()` marks the inbox event
@@ -135,11 +138,12 @@ Keep in mind:
 - `Task` is the work unit derived from an event. It carries the
   concrete env backend, status, source, conversation key, and runtime
   metadata.
-- `BranchPlan` is resolved once per task from structured event fields
-  (`branch_target`, `target_branch`, `base_branch`, legacy `branch`)
-  and `branch.fallback`. It records `seed_ref`, optional
-  `auto_land_branch`, source, host-context branch, and optional old
-  OID for fast-forward validation.
+- `PublishPlan` is resolved once per task from structured event
+  fields (`branch_target`, `target_branch`, `base_branch`, legacy
+  `branch`) and `branch.fallback`. It records `seed_ref`, optional
+  `expected_publish_branch`, source, host-context branch, and an
+  optional `expected_remote_oid` captured from the remote-tracking
+  ref at task start for force-with-lease pushes (the PR-rebase case).
 - Conversations are directories of per-event jsonl files:
   `.brr/conversations/<key>/<event-id>.jsonl`. Each worker writes one
   file; readers merge by timestamp.
@@ -205,7 +209,7 @@ Read `_run_worker()` in lifecycle passes:
 
 1. Derive the conversation key and local `_WorkerEmit` closure.
 2. Refresh local refs with `sync.refresh_before_task`.
-3. Resolve `BranchPlan`.
+3. Resolve `PublishPlan`.
 4. Append event arrival and sync packets.
 5. Build and persist the `Task`.
 6. Resolve and prepare the env backend.
@@ -215,8 +219,10 @@ Read `_run_worker()` in lifecycle passes:
 10. Record the response artifact.
 11. Mark the inbox event `done` so the gate may deliver the response.
 12. Run kb preflight, graph stats, and optional kb maintenance.
-13. Finalize the environment under the auto-land branch lock.
-14. Emit terminal task packets and return to the worker-tail wrapper.
+13. Finalize the environment under the publish-branch lock (classify
+    the worktree's final state into a `publish_status`).
+14. Emit terminal task packets and hand off to the worker-tail
+    wrapper, which calls `daemon.publish`.
 
 Then `_run_worker_and_finalize()` pushes the changed branch, also under
 a per-branch lock, and attaches a `forges.view_branch_url` link to
@@ -271,7 +277,7 @@ Tests: [Telegram gate](../tests/test_telegram_gate.py),
 | RunProgressView | [`run_progress.py`](../src/brr/run_progress.py) | Derived on demand | Projection gates render; not persisted. |
 | RunnerInvocation / RunnerResult | [`runner.py`](../src/brr/runner.py) | Optional traces | One external AI CLI call and its validation result. |
 | RunContext | [`run_context.py`](../src/brr/run_context.py) | `.brr/runs/<task-id>/context.md` | Recovery detail plus host/env path mapping. |
-| BranchPlan | [`branching.py`](../src/brr/branching.py) | Task metadata | Deterministic seed and auto-land intent. |
+| PublishPlan | [`branching.py`](../src/brr/branching.py) | Task metadata | Deterministic seed, expected publish target, and remote lease anchor. |
 | SyncResult | [`sync.py`](../src/brr/sync.py) | `synced` packet payload | Best-effort freshness; never blocks task execution. |
 | ForgeMatch | [`forges.py`](../src/brr/forges.py) | `push_done.view_url` when available | Pure remote-URL parsing; no network or auth. |
 | EnvBackend | [`envs/__init__.py`](../src/brr/envs/__init__.py) | Task metadata plus env scratch | `prepare -> invoke -> finalize`. |
@@ -326,10 +332,13 @@ requested.
 
 ### Branching Is Runtime-Owned By The Agent
 
-The daemon resolves seed and optional auto-land intent before the run.
-Inside the worktree, the agent may stay on the task branch or switch to
-a named branch. Finalization reads git state after the fact and either
-fast-forwards the auto-land target or preserves the changed branch.
+The daemon resolves seed and optional expected publish target before
+the run. Inside the worktree, the agent may stay on the task branch or
+switch to a named branch. Finalization reads git state after the fact
+and records the branch to publish; `daemon.publish` then ships it
+(via refspec push when the agent kept the task branch but the event
+named a different publish target, leased force-push for PR rebases,
+or a plain push otherwise).
 
 ### Progress Is A Projection
 
@@ -370,7 +379,7 @@ Key decisions:
 Current designs:
 
 - [Env protocol design](design-env-interface.md)
-- [Daemon branch intent design](design-daemon-landing-branch.md)
+- [Publish kernel design](design-publish-kernel.md)
 - [Git layer rework design](design-git-layer-rework.md)
 - [Developer daemon reload design](design-daemon-dev-reload.md)
 - [Concurrent execution design](design-concurrent-execution.md)
@@ -390,8 +399,8 @@ Plans and research worth knowing:
 
 - Event files, response files, or frontmatter: read
   [protocol.py](../src/brr/protocol.py).
-- Seed refs, auto-land targets, or structured branch fields: read
-  [branching.py](../src/brr/branching.py) and
+- Seed refs, expected publish targets, or structured branch fields:
+  read [branching.py](../src/brr/branching.py) and
   [subject-tasks-branching.md](subject-tasks-branching.md).
 - Thread continuity or recent conversation injection: read
   [conversations.py](../src/brr/conversations.py) and
@@ -404,7 +413,7 @@ Plans and research worth knowing:
 - Worktrees, Docker, response path translation, or credential wiring:
   read [envs/__init__.py](../src/brr/envs/__init__.py).
 - Daemon process lifecycle, worker pool, response release, kb
-  maintenance, finalization, or push: read
+  maintenance, finalization, or publish: read
   [daemon.py](../src/brr/daemon.py) beside
   [subject-daemon.md](subject-daemon.md).
 - GitHub/Telegram/Slack transport behavior: read

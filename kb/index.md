@@ -75,15 +75,18 @@ dive-in map) and are stable until something contradicts them.
 
 - **Hub: [tasks and branching](subject-tasks-branching.md)** —
   synthesis of mechanical task construction, environment resolution,
-  agent-owned runtime branching, worktree finalization, and the active
-  branch-intent design that removes both ambient host checkout state and
-  hidden universal landing-branch config from daemon-produced commits.
+  agent-owned runtime branching, the 4-state finalize outcome table,
+  and the publish kernel that ships the agent's branch in one step.
+- [Publish kernel design](design-publish-kernel.md) —
+  *accepted on 2026-05-21*. Agent leaves work on a branch; daemon
+  publishes that branch. Collapses the predecessor land+push pipeline
+  into one publish step (5-arm decision table), unifies metadata around
+  `publish_branch` + `publish_status`, drops the `current` fallback.
 - [Daemon branch intent design](design-daemon-landing-branch.md) —
-  *accepted on 2026-05-12; amended on 2026-05-18*. Resolve seed refs
-  and optional auto-land targets from explicit structured event data;
-  conversation branch facts are prompt context only after the
-  2026-05-12 amendment, and explicit target rewrites publish through a
-  leased PR-rebase path after the 2026-05-18 amendment.
+  *superseded by [`design-publish-kernel.md`](design-publish-kernel.md) on 2026-05-21*.
+  Predecessor landing-branch design (separate land + push, `BranchPlan`
+  with `auto_land_branch`, metadata triple); preserved for context on
+  the constraints the kernel inherits.
 - [Branch Modes Plan](plan-branch-modes.md) — *shipped, with
   revisions*. Branch and env are task properties, the agent owns
   branching at runtime. Triage and `needs_context` were reversed —
