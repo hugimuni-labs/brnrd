@@ -2246,3 +2246,21 @@ with a one-shot warning for legacy configs. New
 Cross-task freshness is unchanged — `sync.refresh_before_task` plus
 the resolver's `prefer_remote` seeding from `<remote>/<target>` cover
 the case the predecessor design used local-land for.
+## [2026-05-21] research | Positioning and runtime dependencies re-evaluation
+
+Reframed the zero-dependency constraint as one symptom of a broader
+positioning question. New page at
+`kb/research-positioning-and-runtime-deps-2026-05-21.md`, cross-linked
+from `kb/index.md` (Research section) and as a peer of
+`kb/research-brr-vs-gh-aw.md`. Per-candidate analysis: `dulwich` is a
+net negative (no `git worktree` support, would split brr's git code
+path); `requests` is a clean modest win across the three gates
+(~80-100 LOC); per-forge SDKs (PyGithub / python-telegram-bot /
+slack_sdk) are a bigger lever (300-500 LOC saved) but defer to a
+separate decision. Part 2 of the page reads brr's positioning against
+the AI-tool creator crowd: the README tagline buries the hook, the
+killer Telegram-as-remote-control demo is invisible from the landing
+page, and `pip install brr` signals dated Python next to `uvx`. Ranked
+adoption moves put a 60-90s demo video first and the deps change at #6.
+No code or README touched in this pass; natural follow-ups are a
+`decision-runtime-dependencies.md` and a `plan-readme-rework.md`.

@@ -196,3 +196,12 @@ dive-in map) and are stable until something contradicts them.
   security / fleet axes, market fit for the remote-controlled
   repo-first CLI runner use case, which gh-aw ideas brr could
   credibly adopt vs. not.
+- [Positioning and runtime dependencies, 2026-05-21](research-positioning-and-runtime-deps-2026-05-21.md) —
+  reframes the zero-dependency constraint as one symptom of a broader
+  positioning question. Per-candidate cost-benefit (`dulwich`: pass;
+  `requests`: take; per-forge SDKs: defer), then a Part 2 on what
+  brr has to do to "pop" with the AI-tool creator crowd — tagline,
+  README compression, `uvx`-first install, demo video shot-list, and
+  ranked moves. Headline recommendations: stop leading the README
+  with "zero runtime dependencies"; the highest-leverage adoption
+  move is a 60-90s Telegram demo video, not code.
