@@ -165,7 +165,7 @@ the post-task `protocol.set_status`, `_push_if_needed`, and
 dev-reload-flag check that previously lived in the main loop. The
 worker thread owns the full pipeline for its event.
 
-`max_workers` reads from `.brr/config` (`max_workers=2` default).
+`max_workers` reads from `.brr/config` (`max_workers=4` default).
 Setting `max_workers=1` exactly reproduces serial-v1 behaviour for
 adopters who don't want concurrency; setting it higher trades RAM
 and forge API quota for parallelism.

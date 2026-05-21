@@ -46,7 +46,7 @@ The daemon owns orchestration, not meaning:
 ## Concurrency model
 
 The daemon runs tasks concurrently in a bounded worker pool (default
-`max_workers=2`, configurable via `.brr/config`). Each worker thread
+`max_workers=4`, configurable via `.brr/config`). Each worker thread
 takes one pending event from the inbox, runs the full `_run_worker`
 pipeline end-to-end (including push and post-task housekeeping), and
 returns. Workers don't share mutable state with each other — the
