@@ -8,9 +8,8 @@
 This file is brr's playbook — the contract every AI tool follows in
 this repo, and the template adopters receive when they run `brr init`.
 The canonical copy lives at `src/brr/AGENTS.md`; the repo root
-`AGENTS.md` is a symlink. Stdlib Python (>=3.10), zero runtime
-dependencies; see [`README.md`](README.md) for the user-facing product
-overview.
+`AGENTS.md` is a symlink. Python >=3.10; see [`README.md`](README.md)
+for the user-facing product overview.
 
 ## How to read this playbook
 
@@ -106,7 +105,10 @@ of truth for commands and dependencies is `pyproject.toml`.
 
 ## Code guidelines
 
-- Python >=3.10, stdlib only — no runtime dependencies.
+- Python >=3.10. Prefer stdlib, but small runtime dependencies that do
+  not require native compilation are acceptable when they pay for
+  themselves; avoid native-extension-heavy packages unless a task
+  explicitly settles that trade-off.
 - Dev dependency: `pytest>=7.0`. Tests live in `tests/`.
 - No formatter/linter configured yet — follow existing code style.
 - Commit messages: conventional style (`fix:`, `feat:`, `chore:`,
@@ -490,4 +492,3 @@ Before marking a task complete:
   users.
 - Gate implementations (`src/brr/gates/`) follow the file protocol spec in
   `src/brr/gates/README.md` — maintain protocol compatibility.
-- Zero runtime dependencies is a hard constraint — stdlib Python only.
