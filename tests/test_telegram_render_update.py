@@ -351,8 +351,6 @@ def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):
     daemon process with no cached state), render_update should treat it
     as a successful no-op.
     """
-    import urllib.error
-
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
     task = _seed_task(brr_dir, "task-tg-nm", chat_id=222)
@@ -370,17 +368,6 @@ def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):
     def fake_api_call(token, method, params=None):
         api_calls.append((token, method, params))
         if method == "editMessageText":
-            err = urllib.error.HTTPError(
-                "https://api.telegram.org/...",
-                400,
-                "Bad Request",
-                {},
-                None,
-            )
-            err.read = lambda: (
-                b'{"ok":false,"error_code":400,'
-                b'"description":"Bad Request: message is not modified"}'
-            )
             raise telegram._TelegramNotModified("message is not modified")
         if method == "sendMessage":
             return {"result": {"message_id": 901}}
