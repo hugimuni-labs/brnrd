@@ -5,7 +5,7 @@ description = "Structured guardrails for AI agent work, managed from a chat"
 authors = [ { name = "brr Contributors" } ]
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["requests>=2.31,<3"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

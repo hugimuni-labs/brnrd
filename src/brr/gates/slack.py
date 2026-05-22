@@ -1,7 +1,6 @@
 """Slack gate — polls channel history, delivers responses.
 
-Uses stdlib urllib only (zero deps).  Credentials and runtime state
-live in ``.brr/gates/slack.json``.
+Credentials and runtime state live in ``.brr/gates/slack.json``.
 
 Required setup:
 - Create a Slack app with ``channels:history``, ``channels:read``,
@@ -14,10 +13,10 @@ from __future__ import annotations
 import json
 import re
 import time
-import urllib.request
-import urllib.error
 from pathlib import Path
 from typing import Any
+
+import requests
 
 from .. import protocol, run_progress
 from ..task import Task
@@ -31,16 +30,19 @@ _POLL_INTERVAL = 5
 
 def _slack_api(token: str, method: str, params: dict | None = None) -> dict:
     url = f"https://slack.com/api/{method}"
-    body = json.dumps(params or {}).encode()
-    req = urllib.request.Request(
-        url, data=body,
+    response = requests.post(
+        url,
+        json=params or {},
         headers={
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {token}",
         },
+        timeout=30,
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise RuntimeError("Slack API error: non-object response")
     if not data.get("ok"):
         raise RuntimeError(f"Slack API error: {data.get('error', 'unknown')}")
     return data

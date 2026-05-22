@@ -17,10 +17,10 @@ import json
 import re
 import subprocess
 import time
-import urllib.request
-import urllib.error
 from pathlib import Path
 from typing import Any
+
+import requests
 
 from .. import protocol, run_progress
 from ..task import Task
@@ -44,32 +44,41 @@ class _TelegramNotModified(Exception):
 
 def _api_call(token: str, method: str, params: dict | None = None) -> dict:
     url = _API.format(token=token, method=method)
-    body = json.dumps(params or {}).encode()
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        if exc.code == 400 and method == "editMessageText":
-            payload = _read_error_payload(exc)
-            description = str(payload.get("description", ""))
-            if "message is not modified" in description.lower():
-                raise _TelegramNotModified(description) from None
-        raise
+        response = requests.post(url, json=params or {}, timeout=90)
+    except requests.RequestException as exc:
+        message = str(exc).replace(token, "<token>")
+        raise RuntimeError(f"Telegram API request failed: {message}") from exc
+    payload = _response_json(response)
+    if response.status_code == 400 and method == "editMessageText":
+        description = str(payload.get("description", ""))
+        if "message is not modified" in description.lower():
+            raise _TelegramNotModified(description) from None
+    if not 200 <= response.status_code < 300:
+        message = _telegram_error_message(response, payload)
+        raise RuntimeError(f"Telegram API error {response.status_code}: {message}")
+    if payload.get("ok") is False:
+        description = str(payload.get("description") or "unknown")
+        raise RuntimeError(f"Telegram API error: {description}")
+    return payload
 
 
-def _read_error_payload(exc: urllib.error.HTTPError) -> dict:
-    """Decode an HTTPError body into Telegram's JSON envelope, best-effort."""
+def _response_json(response: requests.Response) -> dict:
+    """Decode a Telegram JSON envelope, best-effort."""
     try:
-        raw = exc.read()
-    except Exception:
+        payload = response.json()
+    except ValueError:
         return {}
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _telegram_error_message(response: requests.Response, payload: dict) -> str:
+    description = payload.get("description")
+    if description:
+        return str(description)
+    if response.text:
+        return response.text[:500]
+    return response.reason or "unknown"
 
 
 def _send_message(
