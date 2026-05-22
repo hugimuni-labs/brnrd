@@ -455,7 +455,7 @@ def run_executor(
 # ── Task execution ───────────────────────────────────────────────────
 
 
-def run_task(instruction: str) -> str:
+def run_task(instruction: str, *, self_review: bool = False) -> str:
     """Run a user instruction via the configured runner (for ``brr run``)."""
     from . import gitops
     repo_root = gitops.ensure_git_repo()
@@ -464,8 +464,12 @@ def run_task(instruction: str) -> str:
 
     cfg = conf.load_config(repo_root)
     runner_name = resolve_runner(repo_root)
+    if not self_review:
+        self_review = _prompts.self_review_enabled(cfg)
 
-    prompt = _prompts.build_run_prompt(instruction, repo_root)
+    prompt = _prompts.build_run_prompt(
+        instruction, repo_root, self_review=self_review,
+    )
 
     print(f"[brr] running: {instruction}")
     print(f"[brr] runner: {runner_name}")

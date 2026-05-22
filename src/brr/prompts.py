@@ -125,14 +125,27 @@ def _join_prompt_parts(
     preamble: str,
     repo_root: Path,
     trailer: str,
+    *,
+    self_review: bool = False,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
     parts = [preamble]
     context = _build_context_block(repo_root)
     if context:
         parts.append(context)
+    if self_review:
+        nudge = read_prompt("self-review.md", repo_root)
+        if nudge:
+            parts.append(nudge)
     parts.append(trailer)
     return "\n\n".join(parts)
+
+
+def self_review_enabled(cfg: dict[str, Any] | None) -> bool:
+    """Return whether runner prompts should include the ergonomics footer nudge."""
+    if not cfg:
+        return False
+    return bool(cfg.get("runner.self_review", cfg.get("runner_self_review")))
 
 
 # ── Top-level builders ───────────────────────────────────────────────
@@ -151,10 +164,20 @@ def build_init_prompt(repo_root: Path) -> str:
     return f"{setup}\n\n{template}"
 
 
-def build_run_prompt(task: str, repo_root: Path) -> str:
+def build_run_prompt(
+    task: str,
+    repo_root: Path,
+    *,
+    self_review: bool = False,
+) -> str:
     """Build the prompt for ``brr run`` — run.md + recent context + task."""
     preamble = read_prompt("run.md", repo_root)
-    return _join_prompt_parts(preamble, repo_root, f"---\nTask: {task}")
+    return _join_prompt_parts(
+        preamble,
+        repo_root,
+        f"---\nTask: {task}",
+        self_review=self_review,
+    )
 
 
 def build_daemon_prompt(
@@ -175,6 +198,7 @@ def build_daemon_prompt(
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
+    self_review: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
@@ -203,7 +227,9 @@ def build_daemon_prompt(
     trailer = bundle.rstrip()
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nTask: {task}"
-    return _join_prompt_parts(preamble, repo_root, trailer)
+    return _join_prompt_parts(
+        preamble, repo_root, trailer, self_review=self_review,
+    )
 
 
 def build_kb_maintenance_prompt(repo_root: Path) -> str:
@@ -237,6 +263,7 @@ def _build_task_context_bundle(
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
     event_body: str | None,
+    self_review: bool = False,
 ) -> str:
     """Assemble the human-readable Task Context Bundle for the daemon prompt.
 

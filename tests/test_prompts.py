@@ -5,6 +5,7 @@ from brr.prompts import (
     _read_recent_log,
     build_daemon_prompt,
     build_run_prompt,
+    self_review_enabled,
 )
 
 
@@ -107,6 +108,27 @@ class TestPromptBuilding:
         prompt = build_run_prompt("do something", tmp_path)
         assert "Bug fix" in prompt
         assert "do something" in prompt
+
+    def test_run_prompt_self_review_nudge_when_requested(self, tmp_path):
+        prompt = build_run_prompt("review env", tmp_path, self_review=True)
+        assert "Ergonomics review:" in prompt
+        assert "Environment ergonomics" in prompt
+
+    def test_run_prompt_omits_self_review_by_default(self, tmp_path):
+        prompt = build_run_prompt("plain task", tmp_path)
+        assert "Environment ergonomics" not in prompt
+
+    def test_self_review_enabled_from_config(self):
+        assert self_review_enabled({"runner.self_review": True})
+        assert not self_review_enabled({"runner.self_review": False})
+        assert self_review_enabled({"runner_self_review": True})
+
+    def test_daemon_prompt_self_review_nudge_when_requested(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
+            self_review=True,
+        )
+        assert "Ergonomics review:" in prompt
 
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

@@ -24,6 +24,11 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("run", help="run a task through the runner")
     p.add_argument("instruction", help="what to do")
+    p.add_argument(
+        "--self-review",
+        action="store_true",
+        help="ask the runner to end with a short environment ergonomics review",
+    )
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("auth", help="authenticate a gate")
@@ -74,7 +79,7 @@ def cmd_run(args):
         print(f"[brr] warning: daemon running (pid {pid}) — concurrent writes possible")
 
     from . import runner
-    runner.run_task(args.instruction)
+    runner.run_task(args.instruction, self_review=args.self_review)
 
 
 def cmd_auth(args):

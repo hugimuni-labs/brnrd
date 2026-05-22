@@ -24,6 +24,24 @@ def test_run_requires_instruction():
         main(["run"])
 
 
+def test_run_self_review_flag_passes_to_runner(monkeypatch, tmp_path):
+    calls = []
+
+    monkeypatch.setattr("brr.cli._repo_root", lambda: tmp_path)
+    monkeypatch.setattr("brr.daemon.read_pid", lambda _brr: None)
+    monkeypatch.setattr(
+        "brr.runner.run_task",
+        lambda instruction, *, self_review=False: calls.append(
+            (instruction, self_review),
+        )
+        or "ok",
+    )
+
+    main(["run", "--self-review", "review the env"])
+
+    assert calls == [("review the env", True)]
+
+
 def test_up_dev_reload_flag_passes_to_daemon(monkeypatch, tmp_path):
     calls = []
 

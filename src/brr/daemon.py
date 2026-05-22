@@ -631,6 +631,7 @@ def _run_worker(
     )
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
+    prompt_self_review = prompts.self_review_enabled(cfg)
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = prompts.build_daemon_prompt(
@@ -647,6 +648,7 @@ def _run_worker(
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
+                self_review=prompt_self_review,
             )
         else:
             prompt = prompts.build_daemon_prompt(
@@ -666,6 +668,7 @@ def _run_worker(
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
+                self_review=prompt_self_review,
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
