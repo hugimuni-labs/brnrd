@@ -24,22 +24,20 @@ def test_run_requires_instruction():
         main(["run"])
 
 
-def test_run_self_review_flag_passes_to_runner(monkeypatch, tmp_path):
+def test_up_self_review_flag_passes_to_daemon(monkeypatch, tmp_path):
     calls = []
 
     monkeypatch.setattr("brr.cli._repo_root", lambda: tmp_path)
-    monkeypatch.setattr("brr.daemon.read_pid", lambda _brr: None)
     monkeypatch.setattr(
-        "brr.runner.run_task",
-        lambda instruction, *, self_review=False: calls.append(
-            (instruction, self_review),
-        )
-        or "ok",
+        "brr.daemon.start",
+        lambda repo_root, *, dev_reload=None, self_review=None: calls.append(
+            (repo_root, dev_reload, self_review),
+        ),
     )
 
-    main(["run", "--self-review", "review the env"])
+    main(["up", "--self-review"])
 
-    assert calls == [("review the env", True)]
+    assert calls == [(tmp_path, None, True)]
 
 
 def test_up_dev_reload_flag_passes_to_daemon(monkeypatch, tmp_path):
@@ -48,7 +46,7 @@ def test_up_dev_reload_flag_passes_to_daemon(monkeypatch, tmp_path):
     monkeypatch.setattr("brr.cli._repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         "brr.daemon.start",
-        lambda repo_root, *, dev_reload=None: calls.append(
+        lambda repo_root, *, dev_reload=None, self_review=None: calls.append(
             (repo_root, dev_reload),
         ),
     )
