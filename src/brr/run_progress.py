@@ -227,7 +227,9 @@ def _project(
         if kind == "task":
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
-                record.get("expected_publish_branch") or view.display_base
+                record.get("target_branch")
+                or record.get("expected_publish_branch")  # compat: old records
+                or view.display_base
             )
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
@@ -262,7 +264,9 @@ def _project(
             view.env = record.get("env") or view.env
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
-                record.get("expected_publish_branch") or view.display_base
+                record.get("target_branch")
+                or record.get("expected_publish_branch")  # compat: old records
+                or view.display_base
             )
         elif ptype == "container_started":
             cid = record.get("container")
@@ -288,7 +292,9 @@ def _project(
             view.runner_name = record.get("runner") or view.runner_name
             view.branch_name = record.get("branch") or view.branch_name
             view.display_base = (
-                record.get("expected_publish_branch") or view.display_base
+                record.get("target_branch")
+                or record.get("expected_publish_branch")  # compat: old records
+                or view.display_base
             )
         elif ptype == "attempt_failed":
             reason = record.get("reason")

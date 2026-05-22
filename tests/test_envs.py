@@ -13,7 +13,7 @@ def _plan(seed: str = "main", target: str | None = "main") -> branching.PublishP
     """Convenience: build a plan for tests that don't care about resolver state."""
     return branching.PublishPlan(
         seed_ref=seed,
-        expected_publish_branch=target,
+        target_branch=target,
         source="test",
         host_context_branch=seed,
     )
@@ -62,6 +62,7 @@ def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
         lambda repo_root, task_id, base_ref="HEAD": created.append((repo_root, task_id, base_ref))
         or (worktree_path, f"brr/{task_id}"),
     )
+    monkeypatch.setattr(envs.worktree, "switch_to", lambda _path, _branch: None)
     task = Task(id="task-2", event_id="evt-2", body="change code")
     response_path = tmp_path / ".brr" / "responses" / "evt-2.md"
 
@@ -72,9 +73,11 @@ def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
 
     assert ctx.name == "docker"
     assert ctx.cwd == worktree_path
-    assert ctx.branch_name == "brr/task-2"
+    # _plan() has target="main", so the auto-switch fires: agent starts on main.
+    assert ctx.branch_name == "main"
+    assert ctx.task_branch == "brr/task-2"
     assert task.meta["worktree_path"] == str(worktree_path)
-    assert task.meta["branch_name"] == "brr/task-2"
+    assert task.meta["branch_name"] == "main"
     assert created == [(tmp_path, "task-2", "main")]
 
 
@@ -94,13 +97,14 @@ def _isolate_docker_creds(monkeypatch, tmp_path):
 
 
 def _stub_worktree(monkeypatch, tmp_path):
-    """Replace worktree.create with a stub that just makes the dir."""
+    """Replace worktree.create and switch_to with stubs that just make the dir."""
     def _create(_repo_root, task_id, base_ref="HEAD"):
         path = tmp_path / ".brr" / "worktrees" / task_id
         path.mkdir(parents=True, exist_ok=True)
         return path, f"brr/{task_id}"
 
     monkeypatch.setattr(envs.worktree, "create", _create)
+    monkeypatch.setattr(envs.worktree, "switch_to", lambda _path, _branch: None)
 
 
 def _init_repo(repo):
@@ -156,9 +160,54 @@ def test_worktree_finalize_ready_when_task_branch_has_commits(tmp_path):
     assert not (repo / "change.txt").exists()
 
 
-def test_worktree_finalize_ready_when_agent_switched_branches(tmp_path):
-    """status=ready, publish_branch=<switched-to>; unused brr/<task-id>
-    placeholder is best-effort deleted."""
+def test_worktree_prepare_auto_switches_to_target_branch(tmp_path):
+    """prepare() switches the worktree HEAD to target_branch; agent starts there."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    subprocess.run(
+        ["git", "branch", "feature/auto", "main"],
+        cwd=repo, check=True, stdout=subprocess.PIPE,
+    )
+    plan = _plan(seed="main", target="feature/auto")
+    task = Task(id="task-auto", event_id="evt-auto", body="do work")
+    response_path = repo / ".brr" / "responses" / "evt-auto.md"
+    backend = envs.get_env("worktree")
+
+    ctx = backend.prepare(task, repo, {}, branch_plan=plan, response_path=response_path)
+
+    assert ctx.branch_name == "feature/auto"
+    assert ctx.task_branch == "brr/task-auto"
+    assert task.meta["branch_name"] == "feature/auto"
+    # Worktree HEAD is on feature/auto, not on the task placeholder.
+    assert envs.worktree.current_branch(ctx.cwd) == "feature/auto"
+
+
+def test_worktree_finalize_nothing_preserves_target_branch(tmp_path):
+    """status=nothing deletes only the task placeholder, not target_branch."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    subprocess.run(
+        ["git", "branch", "feature/keep", "main"],
+        cwd=repo, check=True, stdout=subprocess.PIPE,
+    )
+    plan = _plan(seed="main", target="feature/keep")
+    backend, ctx, task, tasks_dir = _make_finalize_task(repo, "task-keep", plan=plan)
+    # No commits inside the worktree.
+
+    backend.finalize(ctx, task, tasks_dir)
+
+    assert task.meta["publish_status"] == "nothing"
+    assert not ctx.cwd.exists()
+    # task placeholder is gone; target_branch is untouched.
+    assert not envs.gitops.branch_exists(repo, "brr/task-keep")
+    assert envs.gitops.branch_exists(repo, "feature/keep")
+
+
+def test_worktree_finalize_ready_when_agent_on_target_branch(tmp_path):
+    """status=ready, publish_branch=target_branch; brr/<task-id>
+    placeholder is cleaned up."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
@@ -170,11 +219,9 @@ def test_worktree_finalize_ready_when_agent_switched_branches(tmp_path):
     backend, ctx, task, tasks_dir = _make_finalize_task(
         repo, "task-switch", plan=plan,
     )
-    # Agent moves to feature/pr inside the worktree and commits there.
-    subprocess.run(
-        ["git", "checkout", "feature/pr"],
-        cwd=ctx.cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
+    # After auto-switch in prepare, ctx.cwd is already on feature/pr.
+    assert ctx.branch_name == "feature/pr"
+    assert ctx.task_branch == "brr/task-switch"
     _commit_in(ctx.cwd, "pr.txt", "pr\n", "pr")
 
     backend.finalize(ctx, task, tasks_dir)

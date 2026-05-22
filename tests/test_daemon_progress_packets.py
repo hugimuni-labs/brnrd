@@ -425,7 +425,7 @@ def test_publish_refspec_when_agent_kept_task_branch(tmp_path, monkeypatch):
 
     task = _publish_task(meta={
         "publish_branch": "brr/task-1",
-        "expected_publish_branch": "feature/x",
+        "target_branch": "feature/x",
     })
     daemon.publish(tmp_path, task)
 
@@ -464,7 +464,7 @@ def test_publish_force_with_lease_for_rewritten_target(tmp_path, monkeypatch):
     task = _publish_task(
         meta={
             "publish_branch": "feature/x",
-            "expected_publish_branch": "feature/x",
+            "target_branch": "feature/x",
             "expected_remote_oid": expected_oid,
         },
         conv_key="github:owner/repo#17",
