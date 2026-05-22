@@ -2277,3 +2277,15 @@ they pay for themselves and do not require native compilation. Added
 [`decision-runtime-dependencies.md`](decision-runtime-dependencies.md)
 and updated current-state kb pages that still described the gates as
 stdlib/urllib-only.
+
+## [2026-05-22] fix | KB consistency: env and dependency prose
+
+Reviewed the requests-gates kb updates against the shipped source.
+Confirmed `requests` in `pyproject.toml` and the built-in gates, then
+trimmed sibling drift in env/fleet pages: brr ships `host`, `worktree`,
+and `docker`; `ssh`, `devcontainer`, plugin entry points, and script envs
+remain design surface; `WorktreeEnv.finalize` records
+`publish_status`/`publish_branch` and `daemon.publish` ships the branch.
+The remaining deterministic preflight item is the Research-section
+hub-coverage info nudge; no hub was added because the section is a mixed
+artifact bucket rather than one coherent subject area.

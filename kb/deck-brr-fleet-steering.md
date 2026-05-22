@@ -3,7 +3,7 @@ marp: true
 paginate: true
 theme: default
 title: brr — fleet & steering
-status: roadmap (env axis active, overlays/brnrd paused)
+status: roadmap (env axis partly shipped, overlays/brnrd paused)
 style: |
   section { font-size: 22px; line-height: 1.35; }
   h1 { color: #d14; margin-bottom: 0.2em; }
@@ -20,7 +20,9 @@ style: |
 <!--
 Status: roadmap — read for the three-axis frame, not as a current spec.
 Current synthesis: [subject-fleet-overlays.md](subject-fleet-overlays.md).
-Axis 3 (Environment) is in flight via design-env-interface.md;
+Axis 3 (Environment) ships host/worktree/docker via subject-envs.md;
+plugin/script envs plus ssh/devcontainer remain design surface in
+design-env-interface.md;
 Axis 1 (Overlay) is paused behind the env work, see plan-overlays.md;
 Axis 2 (Fleet / brnrd) is future work.
 
@@ -30,6 +32,10 @@ Some specifics in this deck have been overtaken by later decisions:
     conversation log (decision-drop-streams.md);
   - the per-task `kb/log-<task-id>.md` mechanism is gone
     (decision-kb-shape.md).
+  - env labels settled on `host` rather than `local`; docker ships,
+    while ssh/devcontainer/plugin envs are not wired backends yet.
+  - the merge-coordinator path was abandoned in favour of the
+    publish-kernel/decentralised branch model.
 Read those decisions alongside this deck if you need the current shape.
 -->
 
@@ -349,17 +355,20 @@ Environments are a **commercial lever**, not a niche feature. Worth doing once, 
 
 # the Env interface
 
-The `Task` already carries `env: local | worktree | docker`. Only `local` and `worktree` are implemented, and they're hardcoded inside `daemon._run_worker()`.
+Current source routes task execution through `EnvBackend`
+implementations. Shipped backends are `host`, `worktree`, and `docker`;
+`ssh`, `devcontainer`, and third-party env registration remain design
+surface in `design-env-interface.md`.
 
-Abstract it:
+Conceptually:
 
 ```python
-class Env(Protocol):
+class EnvBackend(Protocol):
     name: str
 
-    def prepare(self, task: Task, repo_root: Path) -> RunContext: ...
-    def invoke(self, ctx: RunContext, prompt: str) -> RunnerResult: ...
-    def finalize(self, ctx: RunContext, task: Task, *, debug: bool) -> None: ...
+    def prepare(...) -> RunContext: ...
+    def invoke(...) -> RunnerResult: ...
+    def finalize(...) -> Task: ...
 ```
 
 Each environment owns: where the code lives during the run, how the runner is launched, how results come back, how cleanup happens.
@@ -372,19 +381,21 @@ Daemon code collapses to: `env = envs[task.env]; env.prepare → env.invoke → 
 
 | env           | prepare                  | invoke                    | finalize          |
 |---------------|--------------------------|---------------------------|-------------------|
-| `local`       | cwd = repo_root          | subprocess                | nothing           |
-| `worktree`    | `git worktree add …`     | subprocess in worktree    | merge + remove    |
-| `docker`      | bind-mount + image       | `docker run`              | container rm      |
-| `ssh`         | rsync to remote          | `ssh … runner "$prompt"`  | rsync back        |
-| `kube`        | `kubectl create job`     | stream logs               | `kubectl delete`  |
+| `host`        | cwd = repo_root          | subprocess                | nothing           |
+| `worktree`    | `git worktree add ...`   | subprocess in worktree    | classify + cleanup |
+| `docker`      | worktree + bind mount    | `docker run`              | classify + cleanup |
+| `ssh` / `devcontainer` | accepted design surface | not wired yet | not wired yet |
+| third-party   | plugin/script registry design | package-owned transport | package-owned cleanup |
 
-Built-ins ship with brr. Third-party envs register via `entry_points = {"brr.envs": [...]}`. Core dependencies stay small and avoid native compilation requirements; third-party envs bring their own dependencies.
+Core dependencies stay small and avoid native compilation requirements;
+third-party envs bring their own dependencies once the registry surface
+is wired.
 
 ---
 
 # the durability contract
 
-Every non-`local` env is **ephemeral by construction**. A container exits. A
+Every scratch env is **ephemeral by construction**. A container exits. A
 worktree is removed. An ssh scratch dir gets rsync'd over. A kube Job is
 garbage-collected. None of those survive the run.
 
@@ -399,7 +410,7 @@ invoke    →  run the agent
 finalize  →  harvest durable output (commit · push · response), then tear down
 ```
 
-All envs — including `worktree` and even `local` at crash-time — share this
+All envs — including `worktree` and even `host` at crash-time — share this
 contract. "Durable output" is git refs + `.brr/responses/<event>.md`. Nothing else is real.
 
 ---

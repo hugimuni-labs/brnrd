@@ -123,7 +123,7 @@ dive-in map) and are stable until something contradicts them.
   `brnrd` as a future fleet operator outside repo-local brr, and
   environments as the active axis now handled by the env hub.
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
-  *roadmap (env axis active, overlays/brnrd paused)*. Three-axis
+  *roadmap (env axis partly shipped, overlays/brnrd paused)*. Three-axis
   framing (overlays · brnrd · environments); read for the strategic
   shape, not as a current spec — see decision pages and the env
   design for the live state.
@@ -188,9 +188,10 @@ dive-in map) and are stable until something contradicts them.
   were executed in the same pass.
 - [Branch plan simplification, 2026-05-12](research-branch-plan-simplification-2026-05-12.md) —
   follow-up critique of the accepted branch-intent implementation:
-  preserve the mechanical seed/auto-land/finalization contract, but
-  shrink branch planning back to landing defaults and stop treating
-  inferred conversation branch history as hidden auto-land authority.
+  preserve the mechanical seed/finalization contract that later fed
+  the publish kernel, but shrink branch planning back to explicit
+  event targets and stop treating inferred conversation branch history
+  as hidden publish authority.
 - [Daemon runner context ergonomics, 2026-05-09](research-runner-context-ergonomics-2026-05-09.md) —
   point-in-time review of a live brr daemon run: how much context the
   agent had to read, which prompt/runtime surfaces helped, where the

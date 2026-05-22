@@ -16,8 +16,8 @@ against that target.
 
 | | brr | gh-aw |
 |---|---|---|
-| What it is | A Python-stdlib playbook generator plus an on-box daemon that converts file-protocol events into local AI-CLI invocations against your repo | A `gh` CLI extension that compiles markdown+frontmatter workflow files into GitHub Actions `.lock.yml` files, running ephemeral coding agents inside GHA runners |
-| Where the agent runs | **on your machine** (local / worktree / future docker / ssh / kube) | **inside a GitHub Actions runner** (GitHub-hosted or customer self-hosted GHA runner) |
+| What it is | A small-dependency Python playbook generator plus an on-box daemon that converts file-protocol events into local AI-CLI invocations against your repo | A `gh` CLI extension that compiles markdown+frontmatter workflow files into GitHub Actions `.lock.yml` files, running ephemeral coding agents inside GHA runners |
+| Where the agent runs | **on your machine** (`host`, `worktree`, or `docker` today; `ssh`, `devcontainer`, and plugin envs are design surface) | **inside a GitHub Actions runner** (GitHub-hosted or customer self-hosted GHA runner) |
 | Who triggers it | **anything that writes a file** — Telegram, Slack, `git push`, a bash script, a webhook transformed to a file event | **GitHub events only** — `issues`, `pull_request`, `issue_comment`, `slash_command`, `label_command`, `schedule`, `workflow_dispatch`, `push`, … |
 | Ownership | self-hosted by design; user owns `~/.config/brr/` (optionally a git clone of a user-owned repo); zero cloud | GitHub-native by design; you do **not** opt out of GitHub as the scheduler, storage layer, identity boundary, or billing unit |
 | State of the art | private project, pre-1.0, no release cadence; shaping up around the "fleet & steering" design | GitHub Next technical preview since 2026-02-13, CLI `v0.68.x` as of mid-April, measurable internal success-rate audits, GPL removal, SBOM, rate-limiting in flight |
@@ -65,10 +65,11 @@ substrate** and on the **transport for human intent**.
 
 ### 3.1 · execution substrate
 
-- **brr:** on the machine that holds the working copy. Minimal isolation
-  today (local or `git worktree`), actively moving to an `Env` plugin
-  interface (`prepare / invoke / finalize`) with built-ins for `docker`,
-  `ssh`, and an entry-point group (`brr.envs`) for `kube` and friends.
+- **brr:** on the machine that holds the working copy. Execution runs
+  through the `EnvBackend` interface (`prepare / invoke / finalize`);
+  shipped backends are `host`, `worktree`, and `docker`. `ssh`,
+  `devcontainer`, Python entry points (`brr.envs`), and script envs
+  remain accepted design surface, not wired runtime backends.
 - **gh-aw:** inside a GHA runner. Ephemeral by definition. No story for
   running the *same workflow* on a box you own outside of configuring a GHA
   self-hosted runner — and even then the control plane is still GHA.
@@ -101,7 +102,7 @@ They agree on the shape, they differ on the plumbing.
 
 - **brr:** the durability contract is *commit + push + `.brr/responses/<event>.md`*.
   Env layer makes this explicit (see `kb/deck-brr-fleet-steering.md` §
-  "durability contract"): every non-`local` env is ephemeral, so only git
+  "durability contract"): every scratch env is ephemeral, so only git
   refs + the response file survive.
 - **gh-aw:** the durability contract is *git refs via `safe-outputs`*.
   `safe-outputs.create-issue`, `add-comment`, `create-pull-request`,
