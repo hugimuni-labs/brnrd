@@ -18,8 +18,8 @@ The gate polls the GitHub REST API for three configurable triggers:
 
 Replies are posted as comments on the originating issue or PR.
 
-Stdlib ``urllib`` only, mirroring slack/telegram. State lives at
-``.brr/gates/github.json``. Auth resolution at setup time, in order:
+State lives at ``.brr/gates/github.json``. Auth resolution at setup
+time, in order:
 
 1. ``gh auth token`` shell-out when ``gh`` is on PATH.
 2. ``GITHUB_TOKEN`` environment variable.
@@ -39,12 +39,12 @@ import re
 import shutil
 import subprocess
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import requests
+from requests.utils import quote
 
 from .. import gitops, protocol, run_progress
 from ..task import Task
@@ -91,43 +91,51 @@ def _request(
     can sleep until reset.
     """
     url = _API_ROOT + path
+    clean_params = None
     if params:
         # Filter out None / empty values so callers can pass optional
         # cursors without crafting URL strings by hand.
         clean = {k: v for k, v in params.items() if v not in (None, "")}
         if clean:
-            url = f"{url}?{urllib.parse.urlencode(clean)}"
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
+            clean_params = clean
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "User-Agent": _USER_AGENT,
+        "X-GitHub-Api-Version": _API_VERSION,
+    }
+    response = requests.request(
+        method,
         url,
-        data=data,
-        method=method,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "User-Agent": _USER_AGENT,
-            "X-GitHub-Api-Version": _API_VERSION,
-            **({"Content-Type": "application/json"} if data else {}),
-        },
+        params=clean_params,
+        json=body if body is not None else None,
+        headers=headers,
+        timeout=_HTTP_TIMEOUT,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
-            payload = resp.read()
-            headers = {k: v for k, v in resp.headers.items()}
-            parsed = json.loads(payload) if payload else None
-            return parsed, headers
-    except urllib.error.HTTPError as exc:
-        body_bytes = b""
-        try:
-            body_bytes = exc.read()
-        except Exception:  # pragma: no cover - defensive
-            pass
-        message = body_bytes.decode("utf-8", errors="replace") or exc.reason or ""
+    response_headers = {k: v for k, v in response.headers.items()}
+    if not 200 <= response.status_code < 300:
         raise GitHubAPIError(
-            exc.code,
-            message[:500],
-            headers={k: v for k, v in (exc.headers or {}).items()},
-        ) from exc
+            response.status_code,
+            _github_error_message(response),
+            headers=response_headers,
+        )
+    if not response.content:
+        return None, response_headers
+    return response.json(), response_headers
+
+
+def _github_error_message(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        message = payload.get("message")
+        if message:
+            return str(message)[:500]
+    if response.text:
+        return response.text[:500]
+    return response.reason or ""
 
 
 def _api_get(token: str, path: str, params: dict[str, Any] | None = None) -> Any:
@@ -817,9 +825,9 @@ def _branch_footer(repo: str, task: Task) -> str:
     if not branch:
         return ""
     base_url = f"https://github.com/{repo}"
-    tree_url = f"{base_url}/tree/{urllib.parse.quote(branch, safe='/')}"
+    tree_url = f"{base_url}/tree/{quote(branch, safe='/')}"
     compare_url = (
-        f"{base_url}/compare/{urllib.parse.quote(branch, safe='/')}?expand=1"
+        f"{base_url}/compare/{quote(branch, safe='/')}?expand=1"
     )
     return (
         f"\n\n---\n"
