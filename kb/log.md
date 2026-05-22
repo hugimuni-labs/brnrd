@@ -2421,3 +2421,83 @@ No code changes; all designs are status:proposed (gates) or pending
 acceptance (plans). The brr.run backend prototype is the blocker
 for the gates launch plan, sized at ~3 days for the
 end-to-end inbox-as-service smoke test.
+
+## [2026-05-22] plan | Managed-mode reshape — work continuity via brr.run
+
+Reframed managed mode around **work continuity, not laptop
+continuity** after spotting that the previously-preferred
+"always-on host" answer to laptop-down dispatch was a shape
+mismatch with the pitch: the pitch sells "your laptop, accessible
+from anywhere" — i.e. the user is buying *work continuity*, with
+their laptop as default home. The always-on host forces a third
+operational surface for a 30%-utilisation case at 100% cost, and
+nudges brr toward an infra-deployment story when its wedge is
+"my laptop has superpowers."
+
+The replacement answer uses what's already always-on: **brr.run
+itself**. The dispatcher gains a failover path — when a user's
+daemon is offline AND failover is enabled, brr.run spawns a
+per-task ephemeral sandbox (in the user's cloud via BYO token,
+or in brr.run's account via paid managed compute), runs the
+task, pushes the branch home, posts the response via the gate,
+tears down. Three paid surfaces emerge cleanly: managed gates
+(free); BYO failover compute (free; user pays own cloud bill);
+managed compute (paid usage-based; brr.run's cloud account). All
+three ride the same dispatcher and the same cloud-runner
+adapters — same code, different callers.
+
+Pricing settled on a three-tier shape mapped to marginal cost:
+
+- **Free dispatcher** — gates + BYO failover. brr.run is a
+  public-good for the OSS user; rate caps bound the loss-leader
+  exposure. Honest because per-user dispatch cost is
+  approximately zero.
+- **Usage-based managed compute** — pure pass-through with
+  margin (30-50%). Unit economics forced-positive by
+  construction; never under water.
+- **Team / SLA tier later** — sticky revenue with org-level
+  features. Lands once individual usage proves out.
+
+The shape resolves the tension between non-VC-backed + OSS-self-
+hostable: pricing aligned with marginal cost means the hosted-vs-
+self-host pitch reads as "we run the ops so you don't" rather
+than "we charge for the privilege."
+
+KB changes from the reshape:
+
+- `kb/subject-managed-mode.md` — rewritten around work-continuity
+  and the three-surface frame. Daemon hosting demoted to a niche
+  path for cloud-first users.
+- `kb/design-managed-gates.md` → renamed to
+  `kb/design-brr-run-protocol.md` and grown with the
+  spawn-compute / failover-dispatch endpoint family, cloud-
+  credential storage endpoints, and the cloud-token security
+  model.
+- New: `kb/decision-pricing-shape.md` (status: proposed) —
+  three-tier pricing decision with alternatives considered.
+- New: `kb/plan-failover-compute.md` — Surfaces B + C
+  implementation, four slices (credential storage; dispatcher +
+  first server-side caller; managed-compute pool; docs).
+- `kb/plan-daemon-deployment-templates.md` — demoted to
+  launch-nice-to-have; recontextualised for cloud-first audience.
+- `kb/plan-managed-gates-launch.md` — repointed at the renamed
+  design page; cross-linked to `plan-failover-compute.md` as
+  sister plan sharing the backend skeleton.
+- `kb/research-cloud-runner-patterns.md` — added "Caller axis"
+  section formalising that each adapter is consumed by laptop
+  daemon AND brr.run server-side, with same code and small
+  per-caller deltas (token source, repo delivery, response
+  delivery, failure salvage, cost ceiling).
+- `kb/notes-pondering-fleet.md` — added reframe breadcrumbs to
+  §1 and §4 noting the demotion of the always-on-host answer;
+  retained body as provenance; updated §7 re-promotion guide to
+  reference the renamed design page.
+- `kb/index.md` and `kb/subject-fleet-overlays.md` — Fleet &
+  overlays section reflects the new page family and the rename.
+
+No code changes; designs are status:proposed pending acceptance
+before backend implementation can start. The brr.run backend
+prototype remains the immediate blocker. brnrd unaffected — the
+work-continuity frame makes the boundary even clearer: managed
+mode keeps individual task work flowing; brnrd thinks at the
+fleet / planning level.

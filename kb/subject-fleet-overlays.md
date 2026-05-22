@@ -81,14 +81,19 @@ module by default.
    implementation plan and its blocking research gate.
 3. [`subject-managed-mode.md`](subject-managed-mode.md) for the
    managed-mode page family promoted out of the pondering on
-   2026-05-22: hosted gates (Dimension A), BYO cloud execution
-   (Dimension B), daemon hosting, and the OSS / paid split that
-   ships at launch. The hub fans out to a design
-   ([`design-managed-gates.md`](design-managed-gates.md)), a
-   research page
+   2026-05-22: three paid surfaces (managed gates, BYO failover
+   compute, managed compute) all riding a brr.run-as-failover-
+   dispatcher model, plus the demoted daemon-hosting deployment
+   templates and the OSS / paid split that ships at launch. The
+   hub fans out to a design
+   ([`design-brr-run-protocol.md`](design-brr-run-protocol.md)),
+   a research page
    ([`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)),
-   and three plan pages
+   a decision page
+   ([`decision-pricing-shape.md`](decision-pricing-shape.md)),
+   and four plan pages
    ([`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
+   [`plan-failover-compute.md`](plan-failover-compute.md),
    [`plan-env-fly-machines.md`](plan-env-fly-machines.md),
    [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)).
 4. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) for the

@@ -123,33 +123,49 @@ dive-in map) and are stable until something contradicts them.
   `brnrd` as a future fleet operator outside repo-local brr, and
   environments as the active axis now handled by the env hub.
 - **Hub: [managed mode](subject-managed-mode.md)** — *active*. The
-  hosted-gates and BYO-cloud-execution tier promoted on 2026-05-22
-  out of pondering. Covers the two-dimension split (Dimension A —
-  managed gates / IO; Dimension B — BYO cloud execution) plus the
-  orthogonal daemon-hosting concern, with deployment-target ranking
-  and the OSS / paid split that ships at launch.
-- [Managed gates protocol design](design-managed-gates.md) —
-  *proposed*. Locks the cloud-gate adapter shape on the daemon
-  side and the brr.run inbox-as-service REST API on the server
-  side; both consumers build against this once accepted.
+  three-paid-surface story: managed gates (Surface A), BYO failover
+  compute (Surface B), managed compute (Surface C), all riding the
+  same brr.run-as-failover-dispatcher model. Promoted on 2026-05-22
+  out of pondering; reshaped same day around the work-continuity
+  frame after recognising the always-on-host model was a shape
+  mismatch with the pitch.
+- [brr.run protocol design](design-brr-run-protocol.md) —
+  *proposed*. The wire format between brr daemons and brr.run.
+  Covers gates (managed-gates path), failover dispatch (decision
+  tree), cloud-credential storage and security model, and the
+  per-task accounting hooks. Renamed from `design-managed-gates.md`
+  on 2026-05-22 when spawn-compute joined the protocol.
+- [Pricing shape decision](decision-pricing-shape.md) —
+  *proposed*. Three-tier shape mapped to marginal cost: free
+  dispatcher (gates + BYO failover); usage-based managed compute
+  (pass-through with margin); optional team / SLA tier later.
 - [Cloud-runner patterns research](research-cloud-runner-patterns.md) —
   cross-adapter patterns (credential / repo / result delivery,
-  cold-start budgets, network policy) and per-platform briefs (Fly
-  Machines, Modal, Daytona, E2B, Codespaces, vanilla VMs) for
-  Dimension B. Promoted from `notes-pondering-fleet.md` §2.
+  cold-start budgets, network policy), the caller axis (same
+  adapter code called from laptop daemon AND from brr.run
+  server-side for failover), and per-platform briefs (Fly Machines,
+  Modal, Daytona, E2B, Codespaces, vanilla VMs). Promoted from
+  `notes-pondering-fleet.md` §2.
 - [Managed gates launch plan](plan-managed-gates-launch.md) —
-  *not started*. Two slices: GH App adapter first (largest BYO
-  pain relief), TG bot adapter as fast-follow on the same backend.
-  Backend skeleton is a FastAPI app + postgres in a separate
-  `brr-run` repo.
+  *not started*. Surface A. Two slices: GH App adapter first
+  (largest BYO pain relief), TG bot adapter as fast-follow on the
+  same backend. Backend skeleton is a FastAPI app + postgres in a
+  separate `brr-run` repo, shared with the failover-compute plan.
+- [Failover compute plan](plan-failover-compute.md) — *not
+  started*. Surfaces B + C on top of the same backend skeleton:
+  cloud-credential storage, dispatcher decision tree, the first
+  server-side cloud-runner adapter caller (Fly Machines), the
+  brr-managed pseudo-platform for paid managed compute, and the
+  CLI surface for the `brr accounts` verbs.
 - [Fly Machines env plan](plan-env-fly-machines.md) — *not
   started*. First BYO cloud-runner adapter; ships as the
-  `brr-env-fly-machines` plugin package, not a built-in.
+  `brr-env-fly-machines` plugin package. Used by the laptop
+  daemon (active BYO) and by brr.run server-side (failover) both.
 - [Daemon deployment templates plan](plan-daemon-deployment-templates.md) —
-  *not started*. Dockerfile split (`brr/daemon` vs `brr/runner`)
-  plus a `deploy/{fly,render,heroku,upsun,railway,vps,docker-compose}/`
-  folder of one-click / one-CLI-command templates and a "deploying
-  brr" docs page.
+  *demoted to launch-nice-to-have on 2026-05-22*. Earlier framing
+  positioned the always-on-host as the preferred laptop-down
+  answer; the failover-compute path replaced it. These templates
+  remain useful for the niche cloud-first audience.
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
   *roadmap (env axis partly shipped, overlays/brnrd paused)*. Three-axis
   framing (overlays · brnrd · environments); read for the strategic

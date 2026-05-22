@@ -30,13 +30,35 @@ the current state. §6 is the re-promotion guide.
 
 > **PROMOTED on 2026-05-22 — see
 > [`subject-managed-mode.md`](subject-managed-mode.md) (hub),
-> [`design-managed-gates.md`](design-managed-gates.md) (locked
-> protocol), and the three plan pages
+> [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+> (locked protocol; renamed from `design-managed-gates.md` when
+> spawn-compute joined its scope), and the plan and decision
+> pages
 > ([`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
+> [`plan-failover-compute.md`](plan-failover-compute.md),
 > [`plan-env-fly-machines.md`](plan-env-fly-machines.md),
-> [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)).
+> [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md),
+> [`decision-pricing-shape.md`](decision-pricing-shape.md)).
 > Body below retained as provenance — the agreed shape lives in the
 > promoted pages.**
+>
+> **2026-05-22 reframe.** The original two-dimension synthesis
+> below treated "where does the daemon live" as an orthogonal
+> concern and positioned an always-on-host as the *preferred BYO
+> answer to laptop-down dispatch* (see also §4 + §1.3 below). On
+> reflection that strayed from the work-continuity pitch — making
+> the user operate a third thing for what is mostly a paper
+> benefit (30% utilisation at 100% cost). The current shape
+> instead frames brr.run itself as the always-on dispatcher:
+> laptop online → forward to laptop; laptop offline AND failover
+> enabled → brr.run spawns a per-task ephemeral sandbox in the
+> user's cloud (BYO) or its own (managed compute), execute the
+> task, push the branch home, tear the sandbox down. The
+> always-on-host model survives as a niche path for cloud-first
+> users only. Surfaces A / B / C (managed gates, BYO failover
+> compute, managed compute) all ride the same dispatcher; see
+> [`subject-managed-mode.md`](subject-managed-mode.md) for the
+> current synthesis.
 
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.
@@ -623,13 +645,20 @@ still stands as the survey. Updates since:
   brr` survives restarts, works on every platform that runs Docker,
   and uses the runner image brr already ships. Pair it with
   per-platform native paths, not as a replacement.
-- **Two-layer daemon hosting (the managed-mode angle).** In
-  Dimension B the daemon's restart-survival problem partially
+- **Two-layer daemon hosting (the managed-mode angle).** *2026-05-22
+  reframe: the "always-on host as the preferred BYO answer to
+  laptop-down" claim below was demoted. The current preferred
+  answer is brr.run-as-failover-dispatcher (Surface B in
+  [`subject-managed-mode.md`](subject-managed-mode.md)) — the
+  always-on host survives as a niche path for cloud-first users
+  only. Body below retained as provenance.* In Dimension B the
+  daemon's restart-survival problem partially
   disappears: if the daemon itself runs on a small always-on host
   the user controls, the laptop-down case is solved by the box-up
-  case. This is the **preferred answer for BYO compute dispatch**
-  (§1.3) — much simpler than brr.run spawning sandboxes on the
-  user's account, and OSS-pure end-to-end. The model is two-layer:
+  case. This was originally framed as the preferred answer for
+  BYO compute dispatch (§1.3) — simpler than brr.run spawning
+  sandboxes on the user's account, and OSS-pure end-to-end. The
+  model is two-layer:
   - *Always-on daemon host* = where the brr process lives.
     Long-polls brr.run for gates events; dispatches tasks via
     whatever env is configured.
@@ -710,14 +739,16 @@ Priorities have shifted since the older guide. The current order,
 highest priority first:
 
 - **Managed mode (Dimension A — managed gates).** Promote into a
-  small page family: `subject-managed-mode.md` (hub covering both
-  dimensions + daemon hosting), `design-managed-gates.md` (the
-  cloud-gate adapter protocol on the daemon side + the brr.run
-  inbox-as-service API), and `plan-managed-gates-launch.md` with
-  two slices — GH App adapter first (largest BYO-setup pain
-  relief), TG bot adapter as fast-follow (same backend, additional
-  webhook endpoint + event parser). Backend skeleton is a FastAPI
-  app + postgres; sized in the chat thread that produced this guide.
+  small page family: `subject-managed-mode.md` (hub covering
+  Surfaces A / B / C + daemon hosting), `design-brr-run-protocol.md`
+  (the wire format spanning gates + failover dispatch + cloud-
+  token security; renamed from `design-managed-gates.md` once
+  spawn-compute joined its scope), and
+  `plan-managed-gates-launch.md` with two slices — GH App adapter
+  first (largest BYO-setup pain relief), TG bot adapter as
+  fast-follow (same backend, additional webhook endpoint + event
+  parser). Backend skeleton is a FastAPI app + postgres; sized in
+  the chat thread that produced this guide.
 - **Managed mode (Dimension B — BYO cloud execution).** Promote
   `research-cloud-runner-patterns.md` (lifting §2 of this page into
   a durable reference: credential / repo / result-delivery patterns

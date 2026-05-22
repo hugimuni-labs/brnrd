@@ -1,7 +1,11 @@
 # Research: cloud-runner patterns and per-platform deltas
 
-Cross-adapter analysis for the Dimension B (BYO cloud execution)
-work in [managed mode](subject-managed-mode.md). Promoted from
+Cross-adapter analysis for the cloud-execution work in
+[managed mode](subject-managed-mode.md). The same adapter code is
+called from two callers (see "Caller axis" below): the laptop
+daemon (Surface B / BYO compute, *active* mode) and brr.run
+server-side (Surface B / *failover* mode and Surface C / *managed
+compute*). Promoted from
 [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §2 to be a
 durable reference that per-platform adapter plans cite.
 
@@ -12,23 +16,66 @@ durable reference that per-platform adapter plans cite.
    (`prepare → invoke → finalize`). No new protocol needed; cloud
    runners are variations of the designed `ssh` env with the
    transport swapped for a per-platform SDK or REST API.
-2. The cross-adapter complexity lives in three patterns:
+2. Each adapter has **two callers** — the laptop daemon and
+   brr.run server-side — same code, two callers (see "Caller
+   axis" below for the shared-surface guarantees and the small
+   deltas each caller imposes).
+3. The cross-adapter complexity lives in three patterns:
    credential delivery, repo delivery, and result delivery. Each
    has 2-3 ranked options; each platform picks per its constraints.
-3. Per-platform cold start ranges from ~90ms (Daytona from
+4. Per-platform cold start ranges from ~90ms (Daytona from
    snapshot) to ~minutes (cold Codespaces). Per-task cost floor
    for a 5-minute small task ranges from a fraction of a cent
    (Fly Machines per-second) to free-tier (Codespaces personal
    account).
-4. First adapter to ship is **Fly Machines** (fastest cold start,
+5. First adapter to ship is **Fly Machines** (fastest cold start,
    REST API, cheapest per-task). **Codespaces** is the cheap
    fast-follow (`gh` CLI, devcontainer-native, huge audience
    overlap).
-5. Read-only PaaS platforms (Heroku, Upsun, Render, Railway, App
+6. Read-only PaaS platforms (Heroku, Upsun, Render, Railway, App
    Platform) are NOT cloud-runner candidates — wrong runtime
    shape. They are *daemon-hosting* candidates; see
    [`subject-managed-mode.md`](subject-managed-mode.md) → Daemon
    hosting.
+
+## Caller axis — same adapter, two callers
+
+Each cloud-runner adapter is consumed by both:
+
+- **Laptop daemon caller.** The user runs the daemon; the daemon
+  picks the adapter from `.brr/config`; the adapter reads the
+  platform token from the user's env. This is the existing
+  designed shape from
+  [`design-env-interface.md`](design-env-interface.md).
+- **brr.run server-side caller.** brr.run runs the dispatcher;
+  when a user's daemon is offline and failover is enabled, the
+  dispatcher decrypts the user's stored token (or uses brr.run's
+  own token for Surface C / managed compute), instantiates the
+  adapter, and runs the same `prepare → invoke → finalize`
+  sequence. Specified in
+  [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+  "Failover dispatch".
+
+The adapter code is identical between callers. What differs:
+
+| Concern | Laptop daemon caller | brr.run server-side caller |
+|---------|---------------------|----------------------------|
+| **Token source** | `os.environ[adapter.api_token_env]` | Decrypted in-memory from credential store at spawn time, cleared after |
+| **Repo delivery** | Per Pattern B below — usually `git clone` with a token from the user's env | Per Pattern B below — but the git token comes from the GH App install (for GitHub remotes) OR a per-account deploy key (for other remotes) |
+| **Response delivery** | Writes to `.brr/responses/` on the daemon host | Sandbox carries a one-shot `task-key` (Bearer token scoped to one `event_id`, 1h TTL) and POSTs to `/v1/daemons/responses` directly |
+| **Failure salvage** | Daemon's `salvage` rule from [`subject-envs.md`](subject-envs.md): preserve on `error` / `conflict`, destroy on `done` | Server-side default destroy-on-anything; salvage requires explicit `--debug-failover` opt-in to avoid stranded paid resources |
+| **Cost ceiling** | Not the adapter's concern (user pays their own bill in real time) | Enforced before spawn by the dispatcher per `failover-policy.monthly_cost_cap_usd` |
+
+Implementation guarantee: any adapter written for the laptop
+caller can be invoked from the server caller by wrapping it in a
+small caller-context object that injects the token source and the
+response sink. Adapters do not need two implementations.
+
+This is the load-bearing reason all the per-platform briefs below
+ship as plugins, not built-ins: the same plugin package is
+imported by the laptop daemon's gate-resolution path AND by the
+brr.run backend's failover-spawn path. One implementation, two
+deployment targets.
 
 ## Part 1 · The minimum protocol delta
 

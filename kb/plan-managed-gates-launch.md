@@ -1,10 +1,16 @@
 # Plan: managed gates — launch sequencing
 
-Implementation plan for the Dimension A (managed gates) work
-specified in [`design-managed-gates.md`](design-managed-gates.md).
-Two slices ship at launch, in this order: **GitHub App adapter
-first** (largest BYO-setup pain relief), **Telegram bot adapter as
+Implementation plan for **Surface A** (managed gates / IO) of
+[managed mode](subject-managed-mode.md), specified in
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md). Two
+slices ship at launch, in this order: **GitHub App adapter first**
+(largest BYO-setup pain relief), **Telegram bot adapter as
 fast-follow** on the same backend.
+
+Sister plan
+[`plan-failover-compute.md`](plan-failover-compute.md) covers
+Surfaces B (BYO failover compute) and C (managed compute) on top
+of the same backend skeleton this plan stands up.
 
 ## Status
 
@@ -15,9 +21,12 @@ fast-follow** on the same backend.
   inbox → daemon poll → response → Telegram message). Most likely
   a FastAPI app + postgres on whichever PaaS is cheapest. Lives in
   a separate `brr-run` repo.
-- [`design-managed-gates.md`](design-managed-gates.md) acceptance —
-  the wire format needs to be locked before both sides start
-  building in parallel.
+- [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+  acceptance — the wire format needs to be locked before both
+  sides start building in parallel.
+- [`decision-pricing-shape.md`](decision-pricing-shape.md)
+  acceptance — the launch needs a free-tier rate-cap floor
+  decided before the gate adapters wire up rate limiting.
 
 ## Goals
 
@@ -114,8 +123,8 @@ brr.run-side ~200-300 LOC.
 ## Risks
 
 - **Wire-format churn.** If
-  [`design-managed-gates.md`](design-managed-gates.md) changes
-  during the build, both sides need coordinated releases.
+  [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+  changes during the build, both sides need coordinated releases.
   Mitigation: lock the design with a `Status: accepted` banner
   before starting slice 1.
 - **GitHub App approval delays.** Public GitHub Apps need a manual
@@ -128,13 +137,22 @@ brr.run-side ~200-300 LOC.
 
 ## Read next
 
-1. [`design-managed-gates.md`](design-managed-gates.md) — the
-   contract this plan implements.
-2. [`subject-managed-mode.md`](subject-managed-mode.md) — the
-   strategic context (two-dimension split,
-   monetisation-at-launch).
+1. [`design-brr-run-protocol.md`](design-brr-run-protocol.md) —
+   the contract this plan implements.
+2. [`plan-failover-compute.md`](plan-failover-compute.md) — the
+   sister plan covering Surfaces B + C on top of the same
+   backend skeleton this plan stands up.
+3. [`subject-managed-mode.md`](subject-managed-mode.md) — the
+   strategic context (three paid surfaces, work-continuity
+   frame).
+4. [`decision-pricing-shape.md`](decision-pricing-shape.md) — the
+   pricing model that drives the free-tier rate caps.
 
 ## Lineage
 
 - 2026-05-22 — drafted as part of the managed-mode KB shape
   rollout.
+- 2026-05-22 — repointed at `design-brr-run-protocol.md` (renamed
+  from `design-managed-gates.md`) and cross-linked to the new
+  `plan-failover-compute.md` sister plan after the work-
+  continuity reframe expanded the design's scope.
