@@ -641,6 +641,9 @@ class DockerEnv(WorktreeEnv):
             # so the CLIs and git pick them up via ``$HOME``.
             *_docker_user_args(),
             "-e", f"HOME={_DOCKER_CONTAINER_HOME}",
+            # Non-interactive git (rebase --continue, commit, etc.) must not
+            # try to launch an editor that isn't in the slim runner image.
+            "-e", "GIT_EDITOR=true",
             *_docker_git_config_env_args(bool(_docker_github_token_for_git(ctx))),
             *_docker_passthrough_env_args(cfg),
             *_docker_credential_mount_args(cfg),

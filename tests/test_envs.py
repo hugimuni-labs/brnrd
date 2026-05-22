@@ -325,6 +325,7 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     # set on the daemon (none here).
     assert forwarded == [
         "HOME=/brr-home",
+        "GIT_EDITOR=true",
         "GIT_CONFIG_COUNT=1",
         "GIT_CONFIG_KEY_0=safe.directory",
         "GIT_CONFIG_VALUE_0=*",
