@@ -1,8 +1,9 @@
 # Positioning and runtime dependencies — 2026-05-21
 
-Status: research only. No code, no decision, no README rework yet. The
-natural follow-ups are a `decision-runtime-dependencies.md` for the deps
-stance and a `plan-readme-rework.md` (or similar) if the positioning
+Status: runtime-dependency slice accepted on 2026-05-22 via
+[`decision-runtime-dependencies.md`](decision-runtime-dependencies.md);
+broader positioning remains research. A `plan-readme-rework.md` (or
+similar) is still the natural follow-up if the README positioning
 recommendations land.
 
 Peer of [`research-brr-vs-gh-aw.md`](research-brr-vs-gh-aw.md): both
@@ -35,9 +36,10 @@ at the end.
    second demo video at the top of the README, a benefit-led tagline,
    and `uvx brr` instead of `pip install brr` as the lead install
    command. Code-side, dropping the "zero runtime dependencies" line
-   from [`README.md`](../README.md) and the Constraints bullet in
-   [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) is the only change this
-   research recommends doing soon.
+   from [`README.md`](../README.md), softening
+   [`src/brr/AGENTS.md`](../src/brr/AGENTS.md), and adopting
+   `requests` was accepted on 2026-05-22; the rest of the positioning
+   recommendations remain research.
 
 ---
 
@@ -45,26 +47,25 @@ at the end.
 
 ### What zero-deps was actually protecting
 
-The constraint shows up in three places: [`README.md`](../README.md)
-("Zero runtime dependencies. Stdlib Python only."),
-[`src/brr/AGENTS.md`](../src/brr/AGENTS.md) Constraints ("Zero runtime
-dependencies is a hard constraint — stdlib Python only."), and
+The now-retired constraint showed up in three places:
+[`README.md`](../README.md) ("Zero runtime dependencies. Stdlib Python
+only."), [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) Constraints ("Zero
+runtime dependencies is a hard constraint — stdlib Python only."), and
 [`pyproject.toml`](../pyproject.toml) (`dependencies = []`). It was
 implicitly protecting four things:
 
 | Goal | Reality check | Verdict |
 |------|---------------|---------|
 | Install friction | `pip install brr` is fast because there's nothing to download. `uv tool install brr-with-deps` is *also* fast (uv resolves and downloads in <1s). | Mostly resolved by `uv`. |
-| No native compile | Avoids the "pip wants a C compiler" failure mode common with cryptography/pydantic-v1/numpy. | Still real, but solved by *pure-Python deps only*, not zero-deps. |
+| No native compile | Avoids the "pip wants a C compiler" failure mode common with cryptography/pydantic-v1/numpy. | Still real, but solved by avoiding deps that require native compilation, not by zero-deps. |
 | No venv pollution | "Drop it into system Python and it works." | False today — every Python adopter has venvs anyway; `pipx`/`uvx` ship the venv as part of the install. |
 | Cross-platform / Windows | If there are no deps, there's no platform-specific binary to fail. | Orthogonal — brr's Windows blockers are signal handling, daemon model, and bash gate examples (see below). |
 | Dev simplicity (`pip install -e .`) | True. Slightly less true with deps, but `uv pip install -e ".[dev]"` is still one line. | Marginal. |
 | Fork-and-customise simplicity | Same as above. | Marginal. |
 
 The strongest surviving rationale is *no native compile* — and that's a
-"pure-Python deps only" rule, not a "stdlib only" rule. `requests` is
-pure Python. `dulwich` is pure Python. `python-telegram-bot` is pure
-Python. The constraint as written is overshooting its real target.
+"avoid native compilation requirements" rule, not a "stdlib only" rule.
+The constraint as written is overshooting its real target.
 
 ### What zero-deps was not buying
 
@@ -227,16 +228,16 @@ first-order for adoption.
   3.10 so this is a real wart for one feature. Drop if/when brr ever
   reads TOML config (it doesn't today; `.brr/config` is INI-ish).
 
-### Stance recommendation (for the eventual decision page)
+### Stance recommendation (accepted for the runtime-deps slice)
 
 - **Drop the "Zero runtime dependencies. Stdlib Python only." line from
   [`README.md`](../README.md)** — it's signalling a value the audience
   doesn't share.
 - **Soften the Constraints bullet in
   [`src/brr/AGENTS.md`](../src/brr/AGENTS.md)** from a hard
-  constraint to a soft preference: "Prefer stdlib; pure-Python deps
-  acceptable when they pay for themselves; avoid native extensions for
-  install ergonomics."
+  constraint to a soft preference: "Prefer stdlib; small deps that do
+  not require native compilation are acceptable when they pay for
+  themselves."
 - **Allow `requests`** as the first adoption, on the cost-benefit
   above.
 - **Hold per-forge SDKs** until the README / tagline / install
@@ -556,12 +557,13 @@ half a day.
 
 ## Lineage and read next
 
-Natural follow-ups, in order of decreasing certainty:
+Read next, in order of decreasing certainty:
 
-- **`kb/decision-runtime-dependencies.md`** — bakes Part 1 into a
-  binding stance: stdlib-preferred soft default, pure-Python deps
-  allowed when they pay for themselves, `requests` greenlit, SDK
-  migrations as a separate later decision.
+- **[`kb/decision-runtime-dependencies.md`](decision-runtime-dependencies.md)** —
+  accepted on 2026-05-22. Bakes Part 1 into a binding stance:
+  stdlib-preferred soft default, small deps that avoid native
+  compilation requirements allowed when they pay for themselves,
+  `requests` greenlit, SDK migrations as a separate later decision.
 - **`kb/plan-readme-rework.md`** — operationalises moves 1-4 from
   Part 2 above: tagline, demo video shot-list, README skeleton,
   install-command reordering, deep-link targets.

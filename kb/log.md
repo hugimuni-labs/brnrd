@@ -2264,3 +2264,16 @@ page, and `pip install brr` signals dated Python next to `uvx`. Ranked
 adoption moves put a 60-90s demo video first and the deps change at #6.
 No code or README touched in this pass; natural follow-ups are a
 `decision-runtime-dependencies.md` and a `plan-readme-rework.md`.
+
+## [2026-05-22] implement | Adopt requests for built-in gates
+
+Accepted the runtime-dependency slice of the positioning research.
+`pyproject.toml` now declares `requests>=2.31,<3`; Telegram, Slack, and
+GitHub gates use `requests` instead of hand-written `urllib` glue for
+JSON HTTP calls and error bodies. README and `src/brr/AGENTS.md` no
+longer present zero runtime dependencies as a value or hard constraint;
+the new rule is stdlib-preferred with small runtime deps allowed when
+they pay for themselves and do not require native compilation. Added
+[`decision-runtime-dependencies.md`](decision-runtime-dependencies.md)
+and updated current-state kb pages that still described the gates as
+stdlib/urllib-only.
