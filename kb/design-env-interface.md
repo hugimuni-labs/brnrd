@@ -49,7 +49,7 @@ class RunContext:
     response_path_host: Path   # where finalize must land it; daemon checks this
     response_path_env: Path    # path rendered to the runner prompt
     branch_name: str | None    # task branch, when env created one
-    branch_plan: BranchPlan    # seed / auto-land intent
+    branch_plan: PublishPlan   # seed / expected publish target
     env_state: dict            # opaque to brr; env may stash anything here
 
 class EnvBackend(Protocol):
@@ -57,7 +57,7 @@ class EnvBackend(Protocol):
 
     def prepare(
         self, task: Task, repo_root: Path, cfg: dict,
-        *, branch_plan: BranchPlan, response_path: Path,
+        *, branch_plan: PublishPlan, response_path: Path,
     ) -> RunContext: ...
     def invoke(
         self, ctx: RunContext, runner_name: str,
@@ -250,16 +250,19 @@ This is the host-checkout path behind the protocol.
 - **prepare** → `git worktree add .brr/worktrees/<task-id> <branch>` (creating the branch if needed); cwd points at the worktree.
 - **invoke** → unchanged.
 - **finalize** →
-  - For `branch: auto | task`: attempt `git merge --ff-only <branch>` against the host's HEAD. On conflict → mark task `conflict` and *leave* the branch (decentralised merge — see below).
-  - For named `branch:` strategies: leave branch alone.
+  - Read the final HEAD in the worktree and record `publish_status`
+    plus `publish_branch` for `daemon.publish`.
+  - Never update a non-task ref and never call
+    `gitops.fast_forward_branch`; publish conflicts are handled by the
+    daemon publish step.
   - **Worktree teardown rule:** outcome-aware. Remove the worktree on
     clean `status=done` with nothing uncommitted. Preserve on
     `status ∈ {error, conflict}` or when the worktree has
     uncommitted/untracked files, so the user can inspect or salvage.
   - Response file is already on the host (worktree shares `.git` and `.brr/`).
 
-This is the current behaviour, just relocated and with the salvage rule
-above. Drop ~80 LOC from `daemon.py`.
+This is the current worktree behaviour behind the env protocol, with
+branch publication collapsed into the publish kernel.
 
 #### Why worktree stays a flat env in v1
 
@@ -371,24 +374,18 @@ they are a human's problem or the next agent run's problem.
 | No commits beyond seed | `publish_status=nothing`, no publish branch (task branch deleted) |
 | Detached HEAD | `publish_status=detached`, no publish branch (worktree kept) |
 
-That's the whole "coordinator". The original 2026-05 env slice assumed
-the helper would be `gitops.merge_branch` plus `_finalize_worktree_task`.
-The 2026-05-11 branch-intent implementation replaced that with
-`branching.BranchPlan`, `gitops.fast_forward_branch`, and
-`WorktreeEnv._land_or_preserve()` / `DockerEnv.finalize()`. The
-2026-05-21 publish-kernel collapse (see
-[`design-publish-kernel.md`](design-publish-kernel.md)) folded that
-further: `WorktreeEnv.finalize` now only classifies the worktree's
-final state into a `publish_status`, and `daemon.publish` ships the
-recorded branch in one step.
+That's the whole "coordinator". Earlier env and branch-intent designs
+landed or fast-forwarded local refs during finalization; the
+2026-05-21 publish kernel superseded that path, so
+`WorktreeEnv.finalize` now only classifies and `daemon.publish` ships
+the recorded branch in one step.
 
 ### Concurrency note
 
-The shipped worker pool uses a single per-branch lock for the publish
-step (`daemon.publish`). Branches commute well in git; pushes that
-get rejected surface as `publish_status=conflict` and don't block
-unrelated tasks. Finalize no longer participates in the lock — the
-env layer doesn't touch shared refs.
+The shipped worker pool still serializes env finalization for tasks
+that name the same expected publish branch; unrelated branches do not
+contend. The actual publish operation runs through `daemon.publish`,
+and rejected pushes surface as `publish_status=conflict`.
 
 ### Why this is enough
 
@@ -402,9 +399,9 @@ env layer doesn't touch shared refs.
   `publish_status=conflict` surfaces it.
 
 CRDT-flavoured framing is real here: branches in git already have a
-well-defined merge operation; brr just orchestrates `git merge` calls
-and falls back to "leave it for a human" when the operation isn't
-trivially defined. No bespoke conflict resolution.
+well-defined merge operation. Brr publishes the agent's branch and
+falls back to "leave it for a human" when the remote rejects the push
+or the merge is not trivially defined. No bespoke conflict resolution.
 
 ---
 
@@ -424,8 +421,8 @@ Current source keeps env mechanics behind `EnvBackend`:
 
 The daemon owns retries, response validation, kb maintenance, progress
 packets, and push. Env backends own workspace setup, runner transport,
-scratch cleanup/preservation, and branch landing/preservation inside
-their workspace.
+scratch cleanup/preservation, and branch classification inside their
+workspace.
 
 ---
 
@@ -567,18 +564,9 @@ their own homes:
 
 ## Lineage
 
-- **2026-05-13** — split current-state synthesis out into
-  [`subject-envs.md`](subject-envs.md); compressed the proposal
-  scaffolding (Goals, Done definition, Docs/Tests to add) into a
-  short scope paragraph and a test-shape section. The design itself
-  is unchanged; this is a state-first cleanup so the page reads as a
-  reference rather than a PR plan.
-- **2026-05-11** — branch-intent rewrite (see
-  [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md))
-  replaced the original `gitops.merge_branch` /
-  `_finalize_worktree_task` mechanics with `branching.BranchPlan`,
-  `gitops.fast_forward_branch`, and
-  `WorktreeEnv._land_or_preserve` / `DockerEnv.finalize`.
+- **2026-05-21** — branch publication moved out of env finalization
+  into [`design-publish-kernel.md`](design-publish-kernel.md), replacing
+  the earlier local-land branch-intent mechanics.
 - **2026-05-06** — accepted; `prepare`/`invoke`/`finalize` and the
   `host`/`worktree`/`docker` built-ins shipped; outcome-aware salvage
   rule added on top of the original spec so failures stay

@@ -63,20 +63,18 @@ error/conflict so the failure is debuggable.
 
 ## Decentralised merging
 
-There is no central merge coordinator. Each `finalize` attempts a
-fast-forward of the resolved auto-land branch when one is set and the
-agent stayed on the task branch; everything else (named branches,
-detached HEAD, missing auto-land target) preserves the agent's branch
-choice for human routing. Conflicts park the task at
-`status=conflict` with the branch preserved; the next human or agent
-run owns the resolution. Branches commute well in git, so brr just
-orchestrates `git merge --ff-only` calls and falls back to "leave it
-for a human" when an ff merge isn't trivial.
+There is no central merge coordinator. `WorktreeEnv.finalize`
+classifies the final worktree state into `publish_status` and
+`publish_branch`; `daemon.publish` then publishes that branch in one
+step. The env layer never fast-forwards a non-task ref. Push conflicts
+flip the task to `publish_status=conflict` with the branch preserved;
+the next human or agent run owns the resolution.
 
 The full branch-resolution logic lives one subject over in
 [`subject-tasks-branching.md`](subject-tasks-branching.md) and
-[`design-daemon-landing-branch.md`](design-daemon-landing-branch.md);
-the env's job is to apply that decision inside its workspace.
+[`design-publish-kernel.md`](design-publish-kernel.md); the env's job
+is to classify the workspace state and preserve scratch when the
+salvage rule says to.
 
 ## Read next
 
@@ -84,8 +82,8 @@ the env's job is to apply that decision inside its workspace.
    protocol, the per-env mechanics, the response-path split, the
    plugin / script-env model, and the configuration surface.
 2. [`subject-tasks-branching.md`](subject-tasks-branching.md) for how
-   the daemon resolves seed refs and auto-land targets feeding into
-   `Env.finalize`.
+   the daemon resolves publish plans feeding into `Env.finalize` and
+   `daemon.publish`.
 3. [`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) for
    the original "one task per worktree" reasoning that informed the
    current worktree env shape; the merge-coordinator path it sketched
