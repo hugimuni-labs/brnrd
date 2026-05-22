@@ -24,29 +24,13 @@ def test_run_requires_instruction():
         main(["run"])
 
 
-def test_up_self_review_flag_passes_to_daemon(monkeypatch, tmp_path):
-    calls = []
-
-    monkeypatch.setattr("brr.cli._repo_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        "brr.daemon.start",
-        lambda repo_root, *, dev_reload=None, self_review=None: calls.append(
-            (repo_root, dev_reload, self_review),
-        ),
-    )
-
-    main(["up", "--self-review"])
-
-    assert calls == [(tmp_path, None, True)]
-
-
 def test_up_dev_reload_flag_passes_to_daemon(monkeypatch, tmp_path):
     calls = []
 
     monkeypatch.setattr("brr.cli._repo_root", lambda: tmp_path)
     monkeypatch.setattr(
         "brr.daemon.start",
-        lambda repo_root, *, dev_reload=None, self_review=None: calls.append(
+        lambda repo_root, *, dev_reload=None: calls.append(
             (repo_root, dev_reload),
         ),
     )
