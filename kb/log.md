@@ -2289,3 +2289,135 @@ remain design surface; `WorktreeEnv.finalize` records
 The remaining deterministic preflight item is the Research-section
 hub-coverage info nudge; no hub was added because the section is a mixed
 artifact bucket rather than one coherent subject area.
+## [2026-05-22] research | Managed mode reshape of pondering-fleet
+
+Reshaped `kb/notes-pondering-fleet.md` around managed mode as the
+new dominant pondering strand. Split managed-brr into two
+independent dimensions: managed gates / IO (hosted bots, removes
+per-user token setup) and cloud execution (BYO cloud key + later
+fully-managed compute, removes the laptop-down blocker). Both
+preserve a 1:1 OSS self-hosted path through the existing env
+protocol — every cloud-runner candidate is the same `ssh`-shaped
+adapter with a different transport. Added a per-platform "what brr
+has to add" audit grounded in 2026 platform docs: Fly Machines
+(~300ms cold start, REST API, `auto_destroy`), Modal Sandboxes (SDK
++ image build, per-second), Daytona (~90ms from snapshot, SaaS or
+self-hosted, AGPL-3.0 as API client is fine), E2B (Debian-only
+templates, code-interpreter shape), Codespaces (`gh codespace`
+CLI, devcontainer-native), vanilla VMs (SSH bootstrap). Surfaced
+the credential-delivery gap explicitly: local docker bind-mounts
+`_DOCKER_DEFAULT_CRED_PATHS` (~/.claude / ~/.codex / ~/.gemini /
+~/.config/gh / ~/.ssh), which remote sandboxes cannot — three
+ranked vehicles (env vars only, platform secret store, one-shot
+upload). Recontextualised `brnrd` as a separate further-postponed
+operator-agent product distinct from managed-brr (managed-brr ships
+first; brnrd consumes brr and brr.run later). Argued for shipping
+the first paid tier at launch as adopter-goodwill cover and
+solo-OSS maintenance funding. Dropped the stale "promoted" pointer
+subsections (older §1, §2) and collapsed the shipped decentralised-
+merge §8 to a one-line breadcrumb. Updated re-promotion guide
+puts managed gates and the first two cloud-runner adapters (Fly
+Machines, Codespaces) at the top, `brr install-service` for
+mac+linux as part of the launch shape, brnrd much later. Index
+section header and `notes-pondering-fleet.md` description updated
+in `kb/index.md` and `kb/subject-fleet-overlays.md`; no code,
+README, or design-page changes in this pass.
+
+## [2026-05-22] research | Pondering-fleet follow-up — BYO dispatch, daemon hosting, read-only PaaS
+
+Three small follow-up edits to `kb/notes-pondering-fleet.md`
+clarifying the BYO compute dispatch question and the daemon-hosting
+story that resolves it:
+
+1. §1.3 (Dimension B) gained a "Who dispatches when the laptop is
+   down?" paragraph: the answer is "daemon-on-an-always-on-host",
+   not brr.run-spawns-sandboxes. The OSS / BYO / fully-managed
+   distinction is sharpened — BYO has brr.run out of the per-task
+   path; only fully-managed adds a brr.run-side scheduler.
+2. §2.8 (what we're not building) gained the read-only PaaS bullet
+   (Heroku / Upsun / Render / Railway / App Platform): wrong shape
+   for per-task sandboxes (no per-task API, no BYO OCI image,
+   read-only `/app` blocks `git worktree`) but valid as
+   daemon-hosting targets — cross-references §4.
+3. §4 (cross-platform daemon supervision) expanded around the
+   two-layer daemon hosting model (always-on daemon host +
+   optional per-task sandbox fan-out) with a four-row deployment
+   targets table (free-tier always-on cloud apps, read-only PaaS
+   templates, cheap always-on VPS, laptop / home server) ranked by
+   setup ease, plus the `deploy/{fly,render,heroku,upsun,vps,
+   docker-compose}/` templates folder pointing at a `brr/daemon`
+   image variant that drops the runner CLIs to stay small.
+4. §7 re-promotion guide updated to the agreed KB shape:
+   `subject-managed-mode.md` + `design-managed-gates.md` +
+   `plan-managed-gates-launch.md` (GH adapter first, TG fast-follow)
+   for Dimension A; `research-cloud-runner-patterns.md` +
+   `plan-env-fly-machines.md` for Dimension B; new
+   `plan-daemon-deployment-templates.md` for the deployment story;
+   explicitly no `design-cloud-runner-protocol.md` since
+   `design-env-interface.md` already covers it.
+
+Still capture-only — no design / plan pages drafted yet. The agreed
+KB shape is the next promotion target.
+
+## [2026-05-22] plan | Managed-mode KB shape promoted out of pondering
+
+Promoted the managed-mode strand from
+`kb/notes-pondering-fleet.md` §1 / §2 into a six-page family that
+fresh-context pickup can navigate without rereading the pondering
+doc. Optimised for least implementation / maintenance effort,
+adoption-index leverage, and ease of BYO setup. New pages:
+
+- `kb/subject-managed-mode.md` — hub. Covers the two-dimension
+  split (Dimension A managed gates, Dimension B BYO cloud
+  execution) plus the orthogonal daemon-hosting concern.
+  References down to design, research, and three plan pages.
+- `kb/design-managed-gates.md` — *proposed*. Locks the cloud-gate
+  adapter shape on the daemon side and the brr.run inbox-as-service
+  REST API on the server side. Specifies the normalised event
+  shape (uniform across TG and GH), the long-poll + response loop,
+  the pairing flows for both platforms, multi-daemon routing
+  policies, failure modes, and operational concerns. Wire format
+  is the boundary that lets daemon-side and brr.run-side ship in
+  parallel once accepted.
+- `kb/research-cloud-runner-patterns.md` — durable reference
+  lifted from pondering §2. Cross-adapter patterns (credential
+  delivery, repo delivery, result delivery, cold-start budgets,
+  network policy) and per-platform briefs for Fly Machines, Modal,
+  Daytona, E2B, Codespaces, vanilla VMs, plus the explicit
+  not-building list including the read-only PaaS category.
+- `kb/plan-managed-gates-launch.md` — two slices: GH App adapter
+  first (largest BYO-setup pain relief), TG bot adapter
+  fast-follow on the same backend. Backend skeleton in a separate
+  `brr-run` repo, OSS reference implementation.
+- `kb/plan-env-fly-machines.md` — first BYO cloud-runner adapter,
+  shipping as `brr-env-fly-machines` plugin package (not a
+  built-in). ~300-400 LOC plugin + image-publish work shared with
+  the deployment-templates plan.
+- `kb/plan-daemon-deployment-templates.md` — Dockerfile split
+  (`brr/daemon` vs `brr/runner`) + the
+  `deploy/{fly,render,heroku,upsun,railway,vps,docker-compose}/`
+  template folder + a "deploying brr" docs page. Cashes out the
+  daemon-hosting story without brr.run holding cloud credentials.
+
+No new design page for cloud-runner protocol —
+`design-env-interface.md` already covers it; cloud adapters are
+variations of the designed `ssh` env. No `plan-env-codespaces.md`
+yet — defer until Fly adapter is shipping or shipped, to de-risk
+the second adapter from real first-adapter experience.
+
+KB wiring updates:
+
+- `kb/index.md` Fleet & overlays section header changed to
+  "managed mode active; overlays / brnrd paused"; six new entries
+  added.
+- `kb/subject-fleet-overlays.md` Current State and Reading Map
+  expanded to include `subject-managed-mode.md` as a peer hub and
+  acknowledge managed mode as the active cross-cutting strand.
+- `kb/notes-pondering-fleet.md` §1 and §2 marked PROMOTED with
+  breadcrumbs pointing at the new pages; bodies retained as
+  provenance.
+
+No code changes; all designs are status:proposed (gates) or pending
+acceptance (plans). The brr.run backend prototype is the blocker
+for the gates launch plan, sized at ~3 days for the
+end-to-end inbox-as-service smoke test.

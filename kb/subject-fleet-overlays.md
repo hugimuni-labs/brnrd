@@ -20,9 +20,17 @@ The fleet agenda is deliberately not one feature.
   copying prompt edits into each repo. They are blocked on
   [`plan-overlays.md`](plan-overlays.md)'s research gate, which must pick
   the overlay shape before implementation starts.
+- **Managed mode** answers what ships as a paid tier at launch — hosted
+  gates (Telegram + GitHub App) and BYO cloud execution adapters — and
+  where the daemon lives when the laptop is down. Active design strand;
+  see [`subject-managed-mode.md`](subject-managed-mode.md). Cross-cuts
+  the env axis (cloud-runner adapters extend the env protocol) and
+  intentionally distinct from `brnrd`.
 - **Fleet / brnrd** answers how a user sees and commands many brr-managed
   repos as a set. It remains future work and should stay outside brr's
   repo-local runtime unless a narrow brr-side primitive is clearly needed.
+  Recontextualised in [`notes-pondering-fleet.md`](notes-pondering-fleet.md)
+  §3 as a separate further-postponed product distinct from managed-brr.
 
 The live product boundary is still per-repo brr. A brr daemon owns one
 repo's inbox, task files, conversations, env execution, responses, and
@@ -71,10 +79,26 @@ module by default.
    decisions.
 2. [`plan-overlays.md`](plan-overlays.md) for the paused overlay
    implementation plan and its blocking research gate.
-3. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) for capture-only
-   fleet, registry, brnrd, supervisor, and plugin-candidate notes.
-4. [`subject-envs.md`](subject-envs.md) for the active environment axis.
-5. [`decision-remove-triage.md`](decision-remove-triage.md),
+3. [`subject-managed-mode.md`](subject-managed-mode.md) for the
+   managed-mode page family promoted out of the pondering on
+   2026-05-22: hosted gates (Dimension A), BYO cloud execution
+   (Dimension B), daemon hosting, and the OSS / paid split that
+   ships at launch. The hub fans out to a design
+   ([`design-managed-gates.md`](design-managed-gates.md)), a
+   research page
+   ([`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)),
+   and three plan pages
+   ([`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
+   [`plan-env-fly-machines.md`](plan-env-fly-machines.md),
+   [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)).
+4. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) for the
+   remaining capture: §1 / §2 are now provenance for the managed-mode
+   page family; §3-§6 still cover `brnrd`, the cross-platform
+   supervisor, the self-maintaining registry, and the overlay shape
+   strands as capture-only. `brnrd` is recontextualised there as a
+   separate further-postponed product distinct from managed-brr.
+5. [`subject-envs.md`](subject-envs.md) for the active environment axis.
+6. [`decision-remove-triage.md`](decision-remove-triage.md),
    [`decision-drop-streams.md`](decision-drop-streams.md), and
    [`decision-kb-shape.md`](decision-kb-shape.md) for later simplifications
    that supersede several specifics in the original deck.

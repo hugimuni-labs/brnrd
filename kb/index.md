@@ -116,12 +116,40 @@ dive-in map) and are stable until something contradicts them.
   docs live in `src/brr/docs/` and ship with the package rather than
   in `kb/`.
 
-## Fleet & overlays *(paused — env axis is the only active strand)*
+## Fleet & overlays *(managed mode active; overlays / brnrd paused)*
 
 - **Hub: [fleet and overlays](subject-fleet-overlays.md)** —
   synthesis of the three-axis split: overlays as user-level steering,
   `brnrd` as a future fleet operator outside repo-local brr, and
   environments as the active axis now handled by the env hub.
+- **Hub: [managed mode](subject-managed-mode.md)** — *active*. The
+  hosted-gates and BYO-cloud-execution tier promoted on 2026-05-22
+  out of pondering. Covers the two-dimension split (Dimension A —
+  managed gates / IO; Dimension B — BYO cloud execution) plus the
+  orthogonal daemon-hosting concern, with deployment-target ranking
+  and the OSS / paid split that ships at launch.
+- [Managed gates protocol design](design-managed-gates.md) —
+  *proposed*. Locks the cloud-gate adapter shape on the daemon
+  side and the brr.run inbox-as-service REST API on the server
+  side; both consumers build against this once accepted.
+- [Cloud-runner patterns research](research-cloud-runner-patterns.md) —
+  cross-adapter patterns (credential / repo / result delivery,
+  cold-start budgets, network policy) and per-platform briefs (Fly
+  Machines, Modal, Daytona, E2B, Codespaces, vanilla VMs) for
+  Dimension B. Promoted from `notes-pondering-fleet.md` §2.
+- [Managed gates launch plan](plan-managed-gates-launch.md) —
+  *not started*. Two slices: GH App adapter first (largest BYO
+  pain relief), TG bot adapter as fast-follow on the same backend.
+  Backend skeleton is a FastAPI app + postgres in a separate
+  `brr-run` repo.
+- [Fly Machines env plan](plan-env-fly-machines.md) — *not
+  started*. First BYO cloud-runner adapter; ships as the
+  `brr-env-fly-machines` plugin package, not a built-in.
+- [Daemon deployment templates plan](plan-daemon-deployment-templates.md) —
+  *not started*. Dockerfile split (`brr/daemon` vs `brr/runner`)
+  plus a `deploy/{fly,render,heroku,upsun,railway,vps,docker-compose}/`
+  folder of one-click / one-CLI-command templates and a "deploying
+  brr" docs page.
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
   *roadmap (env axis partly shipped, overlays/brnrd paused)*. Three-axis
   framing (overlays · brnrd · environments); read for the strategic
@@ -129,11 +157,12 @@ dive-in map) and are stable until something contradicts them.
   design for the live state.
 - [Overlays plan](plan-overlays.md) — *blocked* on the env work and
   a research gate for single-file vs multi-file overlays.
-- [Notes: Fleet pondering](notes-pondering-fleet.md) — *paused*.
-  Capture-only thinking: open questions on overlays-as-single-file,
-  dropping `brr eject`, self-maintaining repo registry,
-  brnrd-as-agentic-operator, cross-platform supervisor, decentralised
-  merge.
+- [Notes: Fleet, managed mode & steering](notes-pondering-fleet.md) —
+  *partially promoted*. §1 (managed-mode synthesis) and §2 (cloud
+  execution candidates) are now provenance for the managed-mode
+  page family above; older overlay / registry / brnrd / supervisor
+  notes still live here as §3-§6 capture-only. Reshape history is
+  preserved.
 
 ## Knowledge base itself
 
