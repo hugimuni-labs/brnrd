@@ -307,6 +307,18 @@ def _build_task_context_bundle(
         sections.append(f"- Host context branch: {host_context_branch}")
     if branch_name:
         sections.append(f"- Current branch: {branch_name}")
+    if (
+        branch_name
+        and expected_publish_branch
+        and branch_name != expected_publish_branch
+    ):
+        sections.append(
+            "- Branch note: you start on the task branch above; the event "
+            f"expects commits published as `{expected_publish_branch}`. "
+            "When the task asks you to rebase or continue work on that "
+            "named branch, operate and commit there — brr publishes the "
+            "branch you end on."
+        )
     if runtime_dir:
         sections.append(f"- Shared runtime dir: {runtime_dir}")
     if context_path:
