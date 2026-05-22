@@ -130,6 +130,18 @@ class TestPromptBuilding:
         )
         assert "Ergonomics review:" in prompt
 
+    def test_daemon_prompt_branch_note_when_publish_branch_differs(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "rebase brr/feature onto main",
+            "evt-2",
+            "/tmp/resp.md",
+            tmp_path,
+            branch_name="brr/task-99",
+            expected_publish_branch="brr/feature",
+        )
+        assert "Branch note:" in prompt
+        assert "brr/feature" in prompt
+
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
