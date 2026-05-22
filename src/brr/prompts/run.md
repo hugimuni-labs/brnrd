@@ -55,11 +55,6 @@ the remote was force-pushed and the local copy can no longer
 fast-forward. Starting from `origin/<branch>` is the safe default;
 rebase, rename, or push from there as the task requires.
 
-**Bundle metadata vs where you work.** `Current branch` in the Task
-Context Bundle is the task branch brr created for routing. When
-`Expected publish branch` appears, that is where brr will publish your
-commits — switch to it and commit there, not on the task branch.
-
 ## Knowledge base writes
 
 Optional, not mandatory. Write to `kb/` only when your work produced
