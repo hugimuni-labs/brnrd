@@ -121,18 +121,6 @@ class TestPromptBuilding:
         )
         assert "Ergonomics review:" in prompt
 
-    def test_daemon_prompt_branch_note_when_publish_branch_differs(self, tmp_path):
-        prompt = build_daemon_prompt(
-            "rebase brr/feature onto main",
-            "evt-2",
-            "/tmp/resp.md",
-            tmp_path,
-            branch_name="brr/task-99",
-            expected_publish_branch="brr/feature",
-        )
-        assert "Branch note:" in prompt
-        assert "brr/feature" in prompt
-
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
@@ -143,9 +131,8 @@ class TestPromptBuilding:
             task_id="task-123",
             source="telegram",
             environment="docker",
-            branch_name="brr/task-123",
+            branch_name="feat/task-abstraction",
             seed_ref="feat/task-abstraction",
-            expected_publish_branch="feat/task-abstraction",
             branch_source="event:target_branch",
             runtime_dir="/repo/.brr",
             context_path="/repo/.brr/runs/task-123/context.md",
@@ -153,15 +140,12 @@ class TestPromptBuilding:
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
         assert "Seed ref: feat/task-abstraction" in prompt
-        assert "Expected publish branch: feat/task-abstraction" in prompt
-        assert "Current branch: brr/task-123" in prompt
+        assert "Current branch: feat/task-abstraction" in prompt
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "Run context file: /repo/.brr/runs/task-123/context.md" in prompt
         assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
         assert "fix it" in prompt
         assert "kb/log-" not in prompt
-        # When the event named the publish branch, brr publishes there
-        # automatically. No PR is needed, so the gh nudge stays out.
         assert "gh pr create" not in prompt
 
     def test_daemon_prompt_includes_mode_block(self, tmp_path):
@@ -222,19 +206,15 @@ class TestPromptBuilding:
             task_id="task-123",
             branch_name="brr/task-123",
             seed_ref="main",
-            expected_publish_branch=None,
             branch_source="fallback:preserve",
             host_context_branch="feature/host",
         )
 
         assert "Seed ref: main" in prompt
-        assert "Expected publish branch: none" in prompt
         assert "Branch source: fallback:preserve" in prompt
         assert "Host context branch: feature/host" in prompt
-        assert "publish that branch" in prompt
-        # No expected publish target → nudge the agent to rename the
-        # branch to something descriptive so the forge URL brr will
-        # publish reads well on the forge's branch list.
+        # No target branch → nudge the agent to rename the brr/<task-id>
+        # placeholder to something descriptive.
         assert "rename the branch" in prompt
         assert "brr/<short-slug>" in prompt
         # The forge-locked `gh pr create` nudge is gone — brr now emits
@@ -257,7 +237,6 @@ class TestPromptBuilding:
             task_id="task-123",
             branch_name="brr/task-123",
             seed_ref="main",
-            expected_publish_branch=None,
         )
 
         assert "remotely" in prompt
@@ -291,7 +270,6 @@ class TestPromptBuilding:
             task_id="task-123",
             branch_name="brr/task-123",
             seed_ref="feat/task",
-            expected_publish_branch="feat/task",
             runtime_dir="/repo/.brr",
             recent_conversation=recent,
             event_body="please fix the login flow",
@@ -305,7 +283,7 @@ class TestPromptBuilding:
         assert "please fix the login flow" in prompt
         assert "Task ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
-        assert "Expected publish branch: feat/task" in prompt
+        assert "Seed ref: feat/task" in prompt
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
 
