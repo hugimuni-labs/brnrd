@@ -1281,6 +1281,7 @@ def start(
     repo_root: Path,
     *,
     dev_reload: bool | None = None,
+    self_review: bool | None = None,
 ) -> None:
     """Run the daemon main loop (blocking, foreground).
 
@@ -1328,6 +1329,8 @@ def start(
         dev_reload if dev_reload is not None
         else bool(cfg.get("dev_reload", False))
     )
+    if self_review is not None and self_review:
+        cfg["runner.self_review"] = True
     reload_watcher = (
         reload_mod.DevReloadWatcher.for_repo(repo_root)
         if dev_reload_mode else None
