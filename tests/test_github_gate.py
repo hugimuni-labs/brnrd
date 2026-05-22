@@ -96,6 +96,81 @@ def test_auth_uses_gh_cli_token_without_storing(tmp_path, monkeypatch):
     assert state["token_source"] == "gh-cli"
 
 
+# ── HTTP helper ─────────────────────────────────────────────────────
+
+
+class _FakeGitHubResponse:
+    def __init__(
+        self,
+        status_code: int,
+        payload: object | None,
+        *,
+        headers: dict[str, str] | None = None,
+        text: str = "",
+        reason: str = "",
+    ):
+        self.status_code = status_code
+        self._payload = payload
+        self.headers = headers or {}
+        self.text = text
+        self.reason = reason
+        self.content = b"x" if payload is not None else b""
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
+
+
+def test_request_uses_requests_params_json_and_headers(monkeypatch):
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return _FakeGitHubResponse(200, {"ok": True}, headers={"X-RateLimit-Remaining": "1"})
+
+    monkeypatch.setattr(github.requests, "request", fake_request)
+
+    payload, headers = github._request(
+        "secret",
+        "POST",
+        "/repos/o/r/issues",
+        params={"state": "open", "cursor": "", "none": None},
+        body={"title": "hello"},
+    )
+
+    assert payload == {"ok": True}
+    assert headers == {"X-RateLimit-Remaining": "1"}
+    assert len(calls) == 1
+    method, url, kwargs = calls[0]
+    assert method == "POST"
+    assert url == "https://api.github.com/repos/o/r/issues"
+    assert kwargs["params"] == {"state": "open"}
+    assert kwargs["json"] == {"title": "hello"}
+    assert kwargs["headers"]["Authorization"] == "Bearer secret"
+    assert kwargs["headers"]["Accept"] == "application/vnd.github+json"
+    assert kwargs["timeout"] == github._HTTP_TIMEOUT
+
+
+def test_request_error_uses_github_json_message(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        return _FakeGitHubResponse(
+            403,
+            {"message": "API rate limit exceeded"},
+            headers={"x-ratelimit-remaining": "0"},
+            text='{"message":"API rate limit exceeded"}',
+        )
+
+    monkeypatch.setattr(github.requests, "request", fake_request)
+
+    with pytest.raises(github.GitHubAPIError) as caught:
+        github._request("secret", "GET", "/rate_limit")
+
+    assert caught.value.status == 403
+    assert caught.value.message == "API rate limit exceeded"
+    assert caught.value.headers == {"x-ratelimit-remaining": "0"}
+
+
 # ── repo autodetect ────────────────────────────────────────────────
 
 

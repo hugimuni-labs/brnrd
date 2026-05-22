@@ -328,9 +328,8 @@ work ships.
 
 Once the env PR merges, `brr.envs` is an open plugin point. Everything
 below is a candidate for a **third-party plugin package**, not a
-built-in. Keeping brr core zero-dep and self-hosted-first means these
-ship as separate pip packages (or script envs), never in the main
-repo.
+built-in. Keeping brr core lean and self-hosted-first means these ship
+as separate pip packages (or script envs), never in the main repo.
 
 ### Daytona — the planned dogfood target
 

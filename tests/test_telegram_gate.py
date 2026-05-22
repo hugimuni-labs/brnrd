@@ -1,3 +1,5 @@
+import pytest
+
 from brr import protocol
 from brr.gates import telegram
 
@@ -178,3 +180,49 @@ def test_send_message_omits_reply_to_when_unset(monkeypatch):
 
     assert "reply_to_message_id" not in captured["params"]
     assert "allow_sending_without_reply" not in captured["params"]
+
+
+def test_api_call_uses_requests_json_and_typed_not_modified(monkeypatch):
+    class FakeResponse:
+        status_code = 400
+        text = '{"description":"Bad Request: message is not modified"}'
+        reason = "Bad Request"
+
+        def json(self):
+            return {
+                "ok": False,
+                "error_code": 400,
+                "description": "Bad Request: message is not modified",
+            }
+
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr(telegram.requests, "post", fake_post)
+
+    with pytest.raises(telegram._TelegramNotModified):
+        telegram._api_call("secret", "editMessageText", {"chat_id": 1})
+
+    assert calls == [
+        (
+            "https://api.telegram.org/botsecret/editMessageText",
+            {"json": {"chat_id": 1}, "timeout": 90},
+        )
+    ]
+
+
+def test_api_call_redacts_token_from_request_errors(monkeypatch):
+    def fake_post(url, **kwargs):
+        raise telegram.requests.RequestException(f"failed for {url}")
+
+    monkeypatch.setattr(telegram.requests, "post", fake_post)
+
+    with pytest.raises(RuntimeError) as caught:
+        telegram._api_call("secret-token", "getMe")
+
+    message = str(caught.value)
+    assert "secret-token" not in message
+    assert "<token>" in message

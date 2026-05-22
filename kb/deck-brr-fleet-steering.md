@@ -378,7 +378,7 @@ Daemon code collapses to: `env = envs[task.env]; env.prepare → env.invoke → 
 | `ssh`         | rsync to remote          | `ssh … runner "$prompt"`  | rsync back        |
 | `kube`        | `kubectl create job`     | stream logs               | `kubectl delete`  |
 
-Built-ins ship with brr. Third-party envs register via `entry_points = {"brr.envs": [...]}`. Zero runtime deps stays intact because built-ins use only stdlib + the executable on PATH.
+Built-ins ship with brr. Third-party envs register via `entry_points = {"brr.envs": [...]}`. Core dependencies stay small and avoid native compilation requirements; third-party envs bring their own dependencies.
 
 ---
 

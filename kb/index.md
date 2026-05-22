@@ -45,6 +45,11 @@ dive-in map) and are stable until something contradicts them.
   *shipped*. Opt-in brr self-development reload mode: editable install
   plus quiescent re-exec between tasks when brr package files change;
   kept explicit via `--dev-reload` / `dev_reload=true`, not a default.
+- [Runtime dependency stance](decision-runtime-dependencies.md) —
+  *accepted on 2026-05-22*. Drops zero runtime dependencies as a
+  project value, allows small runtime deps that do not require native
+  compilation when they pay for themselves, and accepts `requests` for
+  the built-in gates while deferring per-forge SDKs.
 - [`AGENTS.md`](../AGENTS.md) — universal agent playbook (canonical
   copy lives at `src/brr/AGENTS.md`, symlinked here).
 
@@ -199,9 +204,9 @@ dive-in map) and are stable until something contradicts them.
 - [Positioning and runtime dependencies, 2026-05-21](research-positioning-and-runtime-deps-2026-05-21.md) —
   reframes the zero-dependency constraint as one symptom of a broader
   positioning question. Per-candidate cost-benefit (`dulwich`: pass;
-  `requests`: take; per-forge SDKs: defer), then a Part 2 on what
-  brr has to do to "pop" with the AI-tool creator crowd — tagline,
-  README compression, `uvx`-first install, demo video shot-list, and
-  ranked moves. Headline recommendations: stop leading the README
-  with "zero runtime dependencies"; the highest-leverage adoption
-  move is a 60-90s Telegram demo video, not code.
+  `requests`: take; per-forge SDKs: defer — the `requests` slice was
+  accepted in [`decision-runtime-dependencies.md`](decision-runtime-dependencies.md)),
+  then a Part 2 on what brr has to do to "pop" with the AI-tool
+  creator crowd — tagline, README compression, `uvx`-first install,
+  demo video shot-list, and ranked moves. The highest-leverage
+  remaining adoption move is a 60-90s Telegram demo video, not code.

@@ -15,7 +15,7 @@ mentions), or anything that writes a file.
 2. **Full tool** — brr daemon handles remote execution, gate I/O, knowledge
    persistence, and git push.
 
-Zero runtime dependencies.  Stdlib Python only.  No database, no cloud, no lock-in.
+No database, no cloud, no lock-in.
 
 ## Install
 

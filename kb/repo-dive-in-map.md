@@ -256,7 +256,7 @@ Keep in mind:
   daemon internals.
 - Telegram and Slack opt into `render_update()` and store one progress
   card state file per task.
-- GitHub polls with stdlib `urllib`, supports label, mention, and
+- GitHub polls with `requests`, supports label, mention, and
   `any` triggers, and posts final responses as comments. PR events and
   PR comments carry `branch_target` so the sync hook can refresh the
   PR head before the worker starts.

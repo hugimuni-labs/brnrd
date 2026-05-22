@@ -137,10 +137,11 @@ them ship as separate pip packages:
 firecracker = "myorg_brr_envs.firecracker:FirecrackerEnv"
 ```
 
-`brr` keeps zero runtime deps; plugins bring their own. A future
-Daytona plugin would live outside `brr` core, in its own repo, as
-proof of the mechanism. See `notes-pondering-fleet.md` §10 for the
-list of plugin candidates.
+Core `brr` keeps runtime dependencies small and avoids native
+compilation requirements by default; plugins bring their own. A future
+Daytona plugin would live outside `brr` core, in its own repo, as proof
+of the mechanism. See `notes-pondering-fleet.md` §10 for the list of
+plugin candidates.
 
 #### Script envs (drop-in, zero install)
 

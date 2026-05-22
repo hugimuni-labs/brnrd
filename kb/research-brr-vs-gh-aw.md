@@ -184,10 +184,14 @@ stronger when everything is inside one GitHub org.
   GitHub-centric (`COPILOT_GITHUB_TOKEN`, Anthropic via GitHub App, etc.).
   The April 2026 audits show auth misconfig is the #1 failure mode.
 
-### 3.8 · zero runtime dependencies
+### 3.8 · runtime dependencies
 
-- **brr:** hard constraint. stdlib only, pip-installable, MIT. Runs on any
-  Python 3.10+.
+- **brr:** small Python package, pip-installable, MIT. The original hard
+  zero-runtime-dependencies stance was superseded on 2026-05-22 by
+  [`decision-runtime-dependencies.md`](decision-runtime-dependencies.md):
+  stdlib is preferred, small deps that avoid native compilation
+  requirements are allowed when they pay for themselves, and `requests`
+  is accepted for built-in gates.
 - **gh-aw:** Go binary as a `gh` extension, plus an astro/vite docs site,
   npm/js for scripts, a Go test suite, and the companion services AWF and
   MCPG. Installing it is a `curl | bash` or `gh extension install github/gh-aw`,
@@ -234,8 +238,9 @@ GitHub as its substrate. The "self-hosted agentic operator on a box I own"
 niche is what projects like OpenClaw / Clawdbot / Trigger.dev / n8n-plus-
 Claude-Code are all reaching for. brr's differentiators in that niche:
 
-1. **zero runtime deps** (Python stdlib) — beats the Docker-compose-heavy
-   alternatives on install friction,
+1. **small dependency surface** — keeps install friction far below the
+   Docker-compose-heavy alternatives without pretending the exact
+   dependency count is the moat,
 2. **gate-as-filesystem** — adding a new transport is 20 lines of shell,
 3. **playbook-first** — the deliverable is `AGENTS.md + kb/` which works
    even when you throw brr away, giving every user a no-lock-in on-ramp.
@@ -484,8 +489,9 @@ than you'd gain by collapsing them.
 - `github/gh-aw` discussions #20558, #23173, #27292, #27432 (internal audits, 2026-03 → 2026-04)
 - `kb/deck-brr-fleet-steering.md`, `kb/design-env-interface.md`, `kb/notes-pondering-fleet.md`
 - [`kb/research-positioning-and-runtime-deps-2026-05-21.md`](research-positioning-and-runtime-deps-2026-05-21.md)
-  — peer research extending §3.8 and §4.2: reframes brr's zero-dep
-  constraint and "differentiators in that niche" list (zero-deps,
-  gate-as-filesystem, playbook-first) into a positioning critique aimed
-  at the AI-tool creator crowd, with ranked moves for adoption.
+  — peer research extending §3.8 and §4.2: reframes brr's former
+  zero-dep constraint and "differentiators in that niche" list into a
+  positioning critique aimed at the AI-tool creator crowd, with ranked
+  moves for adoption. The runtime-dependency slice was accepted in
+  [`decision-runtime-dependencies.md`](decision-runtime-dependencies.md).
 - `awesome-ai-agents-2026` for adjacent-project framing (Trigger.dev, OpenClaw, n8n)

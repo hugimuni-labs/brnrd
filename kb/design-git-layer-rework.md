@@ -131,7 +131,7 @@ must not block the task).
 Status: shipped on 2026-05-15.
 
 [`gates/github.py`](../src/brr/gates/github.py) is a built-in gate that
-talks to `https://api.github.com` over stdlib `urllib`. Mirrors
+talks to `https://api.github.com` through `requests`. Mirrors
 slack/telegram in shape: `is_configured`, `run_loop`, `setup`, `auth`,
 `bind`. State at `.brr/gates/github.json`: token (when stored),
 `bot_login`, `repo`, `triggers`, polling cursors.
