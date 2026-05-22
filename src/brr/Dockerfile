@@ -39,7 +39,7 @@ RUN apt-get update \
         wget \
         zip \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip \
-    && pip install --no-cache-dir pytest \
+    && pip install --no-cache-dir 'pytest>=7.0' \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI via the official upstream APT source. Debian's own ``gh``

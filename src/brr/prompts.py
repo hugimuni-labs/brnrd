@@ -303,11 +303,9 @@ def _build_task_context_bundle(
         and branch_name != expected_publish_branch
     ):
         sections.append(
-            "- Branch note: you start on the task branch above; the event "
-            f"expects commits published as `{expected_publish_branch}`. "
-            "When the task asks you to rebase or continue work on that "
-            "named branch, operate and commit there — brr publishes the "
-            "branch you end on."
+            f"- Branch note: commits must land on `{expected_publish_branch}`, "
+            "not on the task branch above. Switch to that branch and commit "
+            "there — brr publishes the branch you end on."
         )
     if runtime_dir:
         sections.append(f"- Shared runtime dir: {runtime_dir}")
