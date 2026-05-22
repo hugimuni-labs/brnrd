@@ -593,7 +593,7 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
         conversation_key="github:owner/repo#17",
         meta={
             "publish_branch": "brr/deliver-before-kb-maintenance",
-            "expected_publish_branch": "brr/deliver-before-kb-maintenance",
+            "target_branch": "brr/deliver-before-kb-maintenance",
             "expected_remote_oid": "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
         },
     )

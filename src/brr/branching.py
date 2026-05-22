@@ -2,15 +2,14 @@
 
 The plan is a thin pre-run record naming the ref the
 ``brr/<task-id>`` worktree branch sprouts from, the branch (if any)
-the event expects work to land under on the remote, and the
-remote-tracking oid captured at task start so a leased rebase push can
-refuse to clobber a concurrent writer.
+the event names as the target, and the remote-tracking oid captured at
+task start so a leased rebase push can refuse to clobber a concurrent
+writer.
 
-Branch *intent* — "should this work continue a prior thread branch?",
-"does the task body name a branch?" — belongs to the worker agent. The
-agent already sees the recent conversation and the task body in its
-prompt and can ``git switch`` inside the worktree. The daemon only owns
-the mechanical safety contract around that runtime choice.
+When ``target_branch`` is set, ``WorktreeEnv.prepare`` switches the
+worktree HEAD to that branch before launching the agent, so the agent
+starts on the right branch without any prompt nudge. The throwaway
+``brr/<task-id>`` branch is cleaned up as part of finalization.
 
 Resolution order:
 
@@ -55,7 +54,7 @@ class PublishPlan:
     """Pre-run publish plan resolved without asking the worker model."""
 
     seed_ref: str
-    expected_publish_branch: str | None
+    target_branch: str | None
     source: str
     host_context_branch: str | None
     expected_remote_oid: str | None = None
@@ -66,8 +65,8 @@ class PublishPlan:
             "seed_ref": self.seed_ref,
             "branch_source": self.source,
         }
-        if self.expected_publish_branch:
-            out["expected_publish_branch"] = self.expected_publish_branch
+        if self.target_branch:
+            out["target_branch"] = self.target_branch
         if self.host_context_branch:
             out["host_context_branch"] = self.host_context_branch
         if self.expected_remote_oid:
@@ -106,7 +105,7 @@ def resolve_publish_plan(
     _warn_on_legacy_fallback(cfg)
     return PublishPlan(
         seed_ref=default_seed,
-        expected_publish_branch=None,
+        target_branch=None,
         source="fallback:preserve",
         host_context_branch=host_context,
     )
@@ -148,7 +147,7 @@ def _plan_for_event_target(
 
     return PublishPlan(
         seed_ref=seed_ref,
-        expected_publish_branch=target,
+        target_branch=target,
         source=source,
         host_context_branch=host_context_branch,
         expected_remote_oid=expected_remote_oid,

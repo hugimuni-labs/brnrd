@@ -42,6 +42,7 @@ class RunContext:
     response_path_host: Path
     response_path_env: Path
     branch_name: str | None = None
+    task_branch: str | None = None
     branch_plan: branching.PublishPlan | None = None
     env_state: dict[str, Any] = field(default_factory=dict)
 
@@ -135,11 +136,20 @@ class WorktreeEnv(HostEnv):
         branch_plan: branching.PublishPlan,
         response_path: Path,
     ) -> RunContext:
-        run_root, branch_name = worktree.create(
+        run_root, task_branch_name = worktree.create(
             repo_root, task.id, base_ref=branch_plan.seed_ref,
         )
+        # When the event named a target branch, switch the worktree HEAD
+        # there before the agent starts so it commits on the right branch
+        # without any prompt instruction. The throwaway brr/<task-id>
+        # placeholder stays as a local ref and is cleaned up at finalize.
+        if branch_plan.target_branch:
+            worktree.switch_to(run_root, branch_plan.target_branch)
+            starting_branch = branch_plan.target_branch
+        else:
+            starting_branch = task_branch_name
         task.meta["worktree_path"] = str(run_root)
-        task.meta["branch_name"] = branch_name
+        task.meta["branch_name"] = starting_branch
         task.meta.update(branch_plan.meta_items())
         return RunContext(
             name=self.name,
@@ -148,7 +158,8 @@ class WorktreeEnv(HostEnv):
             runtime_dir=gitops.shared_brr_dir(repo_root),
             response_path_host=response_path,
             response_path_env=response_path,
-            branch_name=branch_name,
+            branch_name=starting_branch,
+            task_branch=task_branch_name,
             branch_plan=branch_plan,
             env_state={"worktree_path": str(run_root)},
         )
@@ -176,7 +187,8 @@ class WorktreeEnv(HostEnv):
         operator can inspect what the agent left behind.
         """
         worktree_path = Path(ctx.env_state.get("worktree_path") or ctx.cwd)
-        initial_branch = ctx.branch_name or worktree.task_branch_name(task.id)
+        task_branch = ctx.task_branch or worktree.task_branch_name(task.id)
+        initial_branch = ctx.branch_name or task_branch
 
         if task.status != "done":
             task.save(tasks_dir)
@@ -212,12 +224,17 @@ class WorktreeEnv(HostEnv):
 
         worktree.remove(
             ctx.repo_root, task.id,
-            branch=initial_branch,
+            branch=task_branch,
             delete_branch=outcome.delete_task_branch,
             force=True,
         )
         if outcome.delete_unused_initial:
-            self._delete_unused_initial_branch(ctx.repo_root, initial_branch)
+            self._delete_unused_initial_branch(ctx.repo_root, task_branch)
+        elif outcome.publish_branch and task_branch != outcome.publish_branch:
+            # task_branch is a throwaway placeholder (brr/<task-id>) that
+            # was switched away from before the agent ran; it won't be
+            # pushed, so clean it up now.
+            self._delete_unused_initial_branch(ctx.repo_root, task_branch)
         return task
 
     def _resolve_outcome(
@@ -236,8 +253,8 @@ class WorktreeEnv(HostEnv):
         - final branch has no commits beyond the seed ref:
           ``status=nothing``, no publish branch, delete the task branch
           along with the worktree.
-        - final branch has commits, agent stayed on the task branch:
-          ``status=ready``, publish the task branch. Worktree is torn
+        - final branch has commits, agent stayed on the starting branch:
+          ``status=ready``, publish the starting branch. Worktree is torn
           down unless it has uncommitted leftovers.
         - final branch has commits, agent switched branches:
           ``status=ready``, publish the new branch. Worktree is torn
@@ -282,10 +299,10 @@ class WorktreeEnv(HostEnv):
         )
 
     def _delete_unused_initial_branch(self, repo_root: Path, branch: str) -> None:
-        """Best-effort delete of the throwaway ``brr/<task-id>`` branch.
+        """Best-effort delete of the throwaway ``brr/<task-id>`` placeholder.
 
-        When the agent switched off it before committing, the branch
-        still points at the base commit and can be safely removed.
+        Called when the agent ended on a different branch, so the task
+        branch still points at the seed commit and can be safely removed.
         Failures are non-fatal — branches are cheap.
         """
         result = subprocess.run(
