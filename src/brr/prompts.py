@@ -164,20 +164,10 @@ def build_init_prompt(repo_root: Path) -> str:
     return f"{setup}\n\n{template}"
 
 
-def build_run_prompt(
-    task: str,
-    repo_root: Path,
-    *,
-    self_review: bool = False,
-) -> str:
+def build_run_prompt(task: str, repo_root: Path) -> str:
     """Build the prompt for ``brr run`` — run.md + recent context + task."""
     preamble = read_prompt("run.md", repo_root)
-    return _join_prompt_parts(
-        preamble,
-        repo_root,
-        f"---\nTask: {task}",
-        self_review=self_review,
-    )
+    return _join_prompt_parts(preamble, repo_root, f"---\nTask: {task}")
 
 
 def build_daemon_prompt(
