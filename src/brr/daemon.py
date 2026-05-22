@@ -204,16 +204,21 @@ def publish(
 
     - The agent leaves work on a branch. ``task.meta["publish_branch"]``
       names it (set by ``WorktreeEnv.finalize``).
-    - When the event named an ``expected_publish_branch`` and the
-      agent stayed on the task branch ``brr/<task-id>``, publish to
-      the expected branch via a refspec
-      (``git push origin brr/<task-id>:refs/heads/<expected>``) so
-      the daemon never has to update the local target ref.
-    - When the resulting source ref equals the expected publish
-      branch AND ``task.meta["expected_remote_oid"]`` is set AND the
-      local source is not an ancestor of the remote target, push with
-      ``--force-with-lease`` anchored to ``expected_remote_oid``. This
-      is the PR-rebase case.
+    - Normally the agent starts on ``target_branch`` (set up by
+      ``WorktreeEnv.prepare``) and commits there, so ``publish_branch``
+      and ``target_branch`` are the same and this is a plain push.
+    - If the agent switched to a different branch, that branch is
+      published as-is.
+    - Refspec fallback: if ``publish_branch`` still diverges from
+      ``target_branch`` (e.g. the agent left the worktree on the
+      ``brr/<task-id>`` placeholder), push via a refspec
+      ``brr/<task-id>:refs/heads/<target>`` so the daemon never has
+      to update the local target ref.
+    - When the source ref equals ``target_branch`` AND
+      ``task.meta["expected_remote_oid"]`` is set AND the local source
+      is not an ancestor of the remote target, push with
+      ``--force-with-lease`` anchored to that oid. This is the
+      PR-rebase case.
     - Otherwise plain push, with ``-u`` when the local branch has no
       upstream.
 
@@ -230,10 +235,14 @@ def publish(
         brr_dir, task.conversation_key or "", task.event_id or "",
     )
 
-    expected = task.meta.get("expected_publish_branch") or None
+    # Compat: tasks created before the rename still carry the old key.
+    expected = (
+        task.meta.get("target_branch")
+        or task.meta.get("expected_publish_branch")
+        or None
+    )
     expected_remote_oid = task.meta.get("expected_remote_oid") or None
-    # Refspec push: agent kept the task branch (``brr/<task-id>``)
-    # but the event named a different ``expected`` to publish under.
+    # Refspec fallback: agent ended on a different branch than target.
     # Push the local source to the named remote ref without touching
     # the local target ref first.
     remote_branch = expected if expected and expected != push_branch else push_branch
@@ -579,7 +588,7 @@ def _run_worker(
         env=task.env,
         branch_name=branch_name,
         seed_ref=branch_plan.seed_ref,
-        expected_publish_branch=branch_plan.expected_publish_branch,
+        target_branch=branch_plan.target_branch,
         branch_source=branch_plan.source,
     )
 
@@ -590,7 +599,7 @@ def _run_worker(
             env=task.env, status=task.status,
             branch_name=branch_name,
             seed_ref=branch_plan.seed_ref,
-            expected_publish_branch=branch_plan.expected_publish_branch,
+            target_branch=branch_plan.target_branch,
             branch_source=branch_plan.source,
             host_context_branch=branch_plan.host_context_branch,
         )
@@ -625,7 +634,7 @@ def _run_worker(
         task_id=task.id,
         branch=branch_name,
         seed_ref=branch_plan.seed_ref,
-        expected_publish_branch=branch_plan.expected_publish_branch,
+        target_branch=branch_plan.target_branch,
         env=task.env,
         runner=runner_name,
     )
@@ -641,7 +650,6 @@ def _run_worker(
                 environment=task.env,
                 branch_name=branch_name,
                 seed_ref=branch_plan.seed_ref,
-                expected_publish_branch=branch_plan.expected_publish_branch,
                 branch_source=branch_plan.source,
                 host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
@@ -661,7 +669,6 @@ def _run_worker(
                 environment=task.env,
                 branch_name=branch_name,
                 seed_ref=branch_plan.seed_ref,
-                expected_publish_branch=branch_plan.expected_publish_branch,
                 branch_source=branch_plan.source,
                 host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
@@ -747,7 +754,7 @@ def _run_worker(
             # publish branch overlaps another concurrent worker's, the
             # publish step must serialise on that name. Tasks
             # targeting different branches don't contend.
-            with _branch_lock(branch_plan.expected_publish_branch):
+            with _branch_lock(branch_plan.target_branch):
                 task = env_backend.finalize(env_ctx, task, tasks_dir)
             _cleanup_traces_on_success(brr_dir, tasks_dir, task)
             _emit_preserved_containers(emit, task)
@@ -803,7 +810,7 @@ def _run_worker(
     # is what gates see last, so its payload must be the canonical
     # explanation.
     emit("finalizing", task_id=task.id, stage="failed")
-    with _branch_lock(branch_plan.expected_publish_branch):
+    with _branch_lock(branch_plan.target_branch):
         task = env_backend.finalize(env_ctx, task, tasks_dir)
     _emit_preserved_containers(emit, task)
     failed_payload: dict[str, object] = {

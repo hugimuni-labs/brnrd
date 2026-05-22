@@ -127,6 +127,38 @@ def create(repo_root: Path, task_id: str, *, base_ref: str = "HEAD") -> tuple[Pa
     return worktree_path, branch
 
 
+def switch_to(worktree_path: Path, branch: str) -> None:
+    """Switch a worktree's HEAD to *branch*, creating it if it doesn't exist.
+
+    Uses ``git switch <branch>`` when the branch already exists locally,
+    otherwise ``git switch -c <branch>`` to create it at the current HEAD.
+    Called by ``WorktreeEnv.prepare`` to move the agent's starting point
+    from the throwaway ``brr/<task-id>`` placeholder to the event's named
+    target branch before the agent runs.
+    """
+    result = subprocess.run(
+        ["git", "switch", branch],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+    result = subprocess.run(
+        ["git", "switch", "-c", branch],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(
+            detail or f"failed to switch worktree to branch {branch!r}"
+        )
+
+
 def current_branch(worktree_path: Path) -> str | None:
     """Return the branch HEAD points at inside *worktree_path*, or None.
 

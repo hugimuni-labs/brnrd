@@ -64,13 +64,13 @@ def render_context(
     ]
     if ctx.branch_plan:
         lines.append(f"- Seed ref: {ctx.branch_plan.seed_ref}")
-        if ctx.branch_plan.expected_publish_branch:
+        if ctx.branch_plan.target_branch:
             lines.append(
-                f"- Expected publish branch: {ctx.branch_plan.expected_publish_branch}"
+                f"- Target branch: {ctx.branch_plan.target_branch}"
             )
         else:
             lines.append(
-                "- Expected publish branch: none (task branch will be published as-is)"
+                "- Target branch: none (task branch will be published as-is)"
             )
         lines.append(f"- Branch source: {ctx.branch_plan.source}")
         if ctx.branch_plan.host_context_branch:
@@ -137,7 +137,8 @@ def _render_recent_conversation(records: list[dict[str, Any]]) -> str:
             status = record.get("status") or "pending"
             branch = (
                 record.get("publish_branch")
-                or record.get("expected_publish_branch")
+                or record.get("target_branch")
+                or record.get("expected_publish_branch")  # compat: old task files
                 or record.get("branch_name")
                 or ""
             )

@@ -25,12 +25,12 @@ def test_default_fallback_preserves_task_branch_from_default_seed(tmp_path):
     plan = branching.resolve_publish_plan(repo, {}, {})
 
     assert plan.seed_ref == "main"
-    assert plan.expected_publish_branch is None
+    assert plan.target_branch is None
     assert plan.source == "fallback:preserve"
     assert plan.host_context_branch == "feature/host"
 
 
-def test_structured_event_branch_names_expected_publish_branch(tmp_path):
+def test_structured_event_branch_names_target_branch(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
@@ -46,7 +46,7 @@ def test_structured_event_branch_names_expected_publish_branch(tmp_path):
     )
 
     assert plan.seed_ref == "feature/task"
-    assert plan.expected_publish_branch == "feature/task"
+    assert plan.target_branch == "feature/task"
     assert plan.source == "event:target_branch"
     # No remote in this repo, so the lease anchor stays empty.
     assert plan.expected_remote_oid is None
@@ -65,7 +65,7 @@ def test_conversation_branch_is_not_inferred(tmp_path):
 
     plan = branching.resolve_publish_plan(repo, {}, {})
 
-    assert plan.expected_publish_branch is None
+    assert plan.target_branch is None
     assert plan.source == "fallback:preserve"
     assert plan.seed_ref == "main"
 
@@ -88,7 +88,7 @@ def test_legacy_fallback_modes_downgrade_to_preserve(tmp_path, capsys):
         repo, {}, {"branch.fallback": "current"},
     )
 
-    assert plan.expected_publish_branch is None
+    assert plan.target_branch is None
     assert plan.source == "fallback:preserve"
     captured = capsys.readouterr()
     assert "branch.fallback" in captured.out
@@ -108,7 +108,7 @@ def test_legacy_branch_field_sentinels_skipped(tmp_path):
 
     for sentinel in ("auto", "current", "task", "none"):
         plan = branching.resolve_publish_plan(repo, {"branch": sentinel}, {})
-        assert plan.expected_publish_branch is None, sentinel
+        assert plan.target_branch is None, sentinel
         assert plan.source == "fallback:preserve", sentinel
 
 
@@ -206,7 +206,7 @@ def test_event_branch_seeds_from_remote_when_local_diverged(tmp_path):
 
     assert plan.seed_ref == "origin/feature/x"
     assert plan.expected_remote_oid == remote_oid
-    assert plan.expected_publish_branch == "feature/x"
+    assert plan.target_branch == "feature/x"
     assert plan.source == "event:branch_target"
 
 

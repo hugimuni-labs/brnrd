@@ -181,7 +181,6 @@ def build_daemon_prompt(
     environment: str | None = None,
     branch_name: str | None = None,
     seed_ref: str | None = None,
-    expected_publish_branch: str | None = None,
     branch_source: str | None = None,
     host_context_branch: str | None = None,
     runtime_dir: str | None = None,
@@ -206,7 +205,6 @@ def build_daemon_prompt(
         environment=environment,
         branch_name=branch_name,
         seed_ref=seed_ref,
-        expected_publish_branch=expected_publish_branch,
         branch_source=branch_source,
         host_context_branch=host_context_branch,
         runtime_dir=runtime_dir,
@@ -246,7 +244,6 @@ def _build_task_context_bundle(
     environment: str | None,
     branch_name: str | None,
     seed_ref: str | None,
-    expected_publish_branch: str | None,
     branch_source: str | None,
     host_context_branch: str | None,
     runtime_dir: str | None,
@@ -285,28 +282,12 @@ def _build_task_context_bundle(
     sections.append(f"- Execution root: {repo_root}")
     if seed_ref:
         sections.append(f"- Seed ref: {seed_ref}")
-    if expected_publish_branch:
-        sections.append(f"- Expected publish branch: {expected_publish_branch}")
-    elif seed_ref:
-        sections.append(
-            "- Expected publish branch: none (task branch will be published as-is)"
-        )
     if branch_source:
         sections.append(f"- Branch source: {branch_source}")
     if host_context_branch:
         sections.append(f"- Host context branch: {host_context_branch}")
     if branch_name:
         sections.append(f"- Current branch: {branch_name}")
-    if (
-        branch_name
-        and expected_publish_branch
-        and branch_name != expected_publish_branch
-    ):
-        sections.append(
-            f"- Branch note: commits must land on `{expected_publish_branch}`, "
-            "not on the task branch above. Switch to that branch and commit "
-            "there — brr publishes the branch you end on."
-        )
     if runtime_dir:
         sections.append(f"- Shared runtime dir: {runtime_dir}")
     if context_path:
@@ -346,25 +327,12 @@ def _build_task_context_bundle(
         "this task explicitly asks for."
     )
     if branch_name and seed_ref:
-        if expected_publish_branch:
-            sections.append(
-                f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
-                f"Because `{expected_publish_branch}` is the expected publish "
-                "branch (the event named it), brr will publish your commits "
-                "under that name after the run — stay on this branch and "
-                "commit normally, or switch to another branch if the task "
-                "clearly belongs somewhere else; brr will publish whichever "
-                "branch you end up on."
-            )
-        else:
-            sections.append(
-                f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
-                "No expected publish branch was resolved, so commit on the "
-                "current task branch by default; brr will publish that branch "
-                "for human routing when a remote is configured. If the task "
-                "body or recent conversation point to a specific branch, "
-                "switch to it before editing."
-            )
+        sections.append(
+            f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
+            "Commit here by default; brr publishes whichever branch you "
+            "end on after the run."
+        )
+        if branch_name.startswith("brr/"):
             sections.append(
                 f"- The placeholder branch name `{branch_name}` is opaque on "
                 "a forge branch list. If your work has a clear theme — a "
@@ -421,7 +389,8 @@ def _format_recent_conversation(
             status = record.get("status") or "pending"
             branch = (
                 record.get("publish_branch")
-                or record.get("expected_publish_branch")
+                or record.get("target_branch")
+                or record.get("expected_publish_branch")  # compat: old records
                 or record.get("branch_name")
                 or ""
             )
