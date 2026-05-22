@@ -1,6 +1,6 @@
 # Project
 
-> Revision: 2026-05-16. Structural arc:
+> Revision: 2026-05-22. Structural arc:
 > [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
 > Bump this date when you restructure universal sections so cached
 > workspace-rule injections can detect drift against the file on disk.
@@ -165,6 +165,30 @@ first line.
 If you wrote files, commit them. The diff is the receipt that the work
 happened. Read-only tasks (Q&A, review, verify) are the only
 commit-free case, and only because nothing changed.
+
+### Pushing, rebasing, and open PRs
+
+When you've pushed work on a feature branch and the branch has an
+open PR, judge whether the same situation also calls for two
+follow-ons. Skip them when they don't fit:
+
+- **Rebase onto the base branch** when the branch is materially
+  behind, when your work would conflict with recent base work, or
+  when the PR description claims a state main has since changed.
+  `git fetch && git rebase origin/<base>`; resolve conflicts; force
+  push (`--force-with-lease`, never `--force`). Skip the rebase
+  when the branch is only a few non-conflicting commits behind and
+  a merge-base diff is still clear — extra history rewrites cost
+  reviewer attention.
+- **Update the PR title and body** when the substance of the change
+  has shifted since open (scope grew or shrank, the diff now spans
+  unrelated material, the original title was an auto-generated
+  branch name). `gh pr edit <num> --title ... --body ...`. Skip
+  when the PR is still a faithful summary of HEAD.
+
+Don't force-push to `main` / `master`. Don't bypass hooks
+(`--no-verify`). If a rebase would rewrite commits you didn't
+author, stop and surface the conflict instead.
 
 ### When the brr daemon runs you
 
