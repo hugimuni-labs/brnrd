@@ -247,20 +247,131 @@ endpoints.
 
 ## Stripe integration shape
 
+### Legal + account setup
+
 - **Legal entity**: HugiMuni SAS (France). Stripe France
-  relationship handles charges + payouts to a Qonto account.
-- **Stripe Tax**: enabled — auto-calculates EU VAT, US sales
-  tax, UK VAT etc. based on customer location. We file via
-  Stripe Tax reports.
-- **Tax invoice generation**: enabled — Stripe auto-issues
-  invoices for every charge; customer downloads from the
-  dashboard's wallet page. Required for B2B customers in the
-  EU.
+  account (Stripe Payments Europe Ltd is the EEA-of-record
+  entity; French SAS is the merchant of record on invoices).
+- **Payouts to Qonto** (the French neobank's regular IBAN).
+  Settle in EUR; standard daily / weekly / monthly payout
+  schedule, configurable in the Stripe Dashboard. No FX cost
+  when settling EUR charges to a EUR account; small FX cost
+  when EU customers top up with non-EUR cards.
+
+### Payment methods enabled at launch
+
+Charging is in USD on the wallet ledger; Stripe Checkout
+displays the local-currency equivalent at top-up time and
+converts at charge time (+1% FX when customer currency ≠
+settlement currency).
+
+| Method | Why |
+|--------|-----|
+| Card (Visa / Mastercard / Amex) | Default everywhere |
+| **Apple Pay / Google Pay** | Friction-killer on mobile; one tap |
+| **SEPA Direct Debit** | EU bank-account top-ups; low fees; no card needed |
+| **iDEAL** | NL standard; high conversion rate vs card |
+| **Bancontact** | BE standard |
+| **EPS** | AT standard |
+| **Giropay** | DE option |
+| **P24** | PL standard |
+
+All toggleable in the Stripe Dashboard with zero integration
+work — Stripe Checkout renders them based on the customer's
+location automatically. Worth enabling all EEA local methods
+day-one; conversion rates for EU users paying with a non-card
+method are materially higher than card-only.
+
+### Strong Customer Authentication (PSD2 / SCA)
+
+Mandatory under EU PSD2 for almost all EEA card charges. Stripe
+Checkout handles 3D Secure 2 transparently — the challenge
+triggers in-flow when required, the user completes it without
+leaving Checkout. No code on brnrd's side. Stripe surfaces SCA
+exemptions automatically when the transaction qualifies (low-
+value, recurring, trusted-beneficiary).
+
+### VAT compliance
+
+The part most independent software vendors get wrong.
+
+- **Stripe Tax** (paid add-on: 0.5%/transaction, no monthly
+  fee) auto-calculates VAT based on customer location:
+  - French customers → 20% TVA.
+  - EU customers (non-FR, B2C) → customer-country VAT rate.
+  - EU customers (B2B with valid VAT ID) → reverse-charge,
+    zero VAT, VAT ID printed on the invoice (Stripe validates
+    VAT IDs against VIES in real time at checkout).
+  - UK customers → UK VAT.
+  - US customers → state sales tax (auto-calculated).
+  - Customers outside taxed regions → no tax.
+- **OSS scheme registration** with the French DGFiP. This is
+  not optional for selling digital services across the EU —
+  without OSS, the SAS would need to VAT-register in every EU
+  member state where it has customers. With OSS, you file one
+  quarterly EU-wide VAT return through the French tax
+  authority. Stripe Tax exports the OSS-formatted report.
+- **TVA intracommunautaire** (HugiMuni SAS's intra-EU VAT
+  number) — must appear on every invoice issued to EU B2B
+  customers. Stripe inserts it automatically when configured
+  on the Stripe Tax settings page.
+
+### Tax invoicing
+
+- Stripe auto-issues a tax invoice for every charge; the
+  invoice complies with French B2B invoice requirements
+  (HugiMuni SAS name + SIREN + TVA intracommunautaire,
+  sequential numbering, customer details, VAT breakdown).
+- Customer downloads the invoice from the dashboard's wallet
+  page (the dashboard links to the Stripe-hosted invoice URL;
+  brnrd doesn't generate PDFs itself).
+- Invoices archived for 10 years per French commercial law —
+  Stripe's invoice retention satisfies this; we don't operate
+  a parallel archive.
+
+### Stripe fees (2026 standard EU pricing)
+
+| Customer card | Rate |
+|---------------|------|
+| EEA cards (the common case) | 1.5% + €0.25 |
+| UK cards | 2.5% + €0.25 |
+| Non-EEA cards | 3.25% + €0.25 |
+| SEPA Direct Debit | 0.8% (capped €5) |
+| iDEAL / Bancontact / EPS / Giropay / P24 | €0.80 per transaction |
+| Apple Pay / Google Pay | Same as the underlying card |
+| Currency conversion | +1% if charging currency ≠ settlement |
+| Stripe Checkout | No additional fee |
+| Stripe Tax | 0.5% per transaction (taxed transactions only) |
+
+**Worked example — €20 top-up from a French Visa user**:
+€0.25 + 1.5% + 0.5% (Stripe Tax) = €0.65 → 3.25% overhead.
+
+**Worked example — €20 top-up via SEPA from a German user**:
+0.8% + 0.5% (Stripe Tax) = €0.26 → 1.3% overhead. (SEPA is
+materially cheaper than cards for small EU top-ups.)
+
+The 1.5-3.5% overhead on top-ups is brnrd's platform cost; it
+needs to be absorbed by the managed-compute margin. The
+headline 30-50% margin over wholesale Fly cost lands closer to
+**27-47% net of Stripe + Stripe Tax**, which is still healthy.
+
+### What's configured on the brnrd side
+
 - **No subscriptions at launch**; only `checkout.session` for
   one-shot purchases.
-- **No card vaulting at launch**, except when the user opts into
-  auto-topup. Without auto-topup, no customer object holds card
-  data on brnrd.
+- **No card vaulting at launch**, except when the user opts
+  into auto-topup. Without auto-topup, no customer object
+  holds card data on brnrd. (When auto-topup is on, a Stripe
+  `Customer` is created and the payment method is attached,
+  scoped to the auto-topup operation only.)
+- **Webhook receiver** at `POST /v1/internal/stripe/webhook`,
+  signature-verified with the Stripe signing secret; idempotent
+  on `payment_intent.id`; small redelivery queue for transient
+  failures.
+- **Test mode** during dev: separate Stripe test API key in
+  `BRNRD_STRIPE_API_KEY` env var; test webhook secret in
+  `BRNRD_STRIPE_WEBHOOK_SECRET`. Stripe's test card numbers +
+  SCA-triggering test cards cover the launch test matrix.
 
 ## What we do NOT do at launch
 
@@ -316,4 +427,16 @@ endpoints.
   approach via Stripe + HugiMuni SAS + Qonto. Pondering
   provenance in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1
-  (fifth reframe breadcrumb).
+  (fourth 2026-05-25 reframe breadcrumb).
+- 2026-05-25 (pass 4 follow-up) — Stripe integration shape
+  expanded into four subsections (legal + payouts, payment
+  methods enabled at launch, SCA, VAT compliance, tax
+  invoicing, fee table). Explicit list of EU-local payment
+  methods to enable day-one (SEPA, iDEAL, Bancontact, EPS,
+  Giropay, P24, Apple/Google Pay). OSS scheme registration via
+  DGFiP called out as not-optional for cross-EU digital
+  services. Fee table added with worked examples for a French
+  card user (3.25% overhead) and a German SEPA user (1.3%
+  overhead); 27-47% net managed-compute margin after Stripe
+  spelled out. Driven by the user's "want to natively support
+  European users, never used Stripe before" follow-up.

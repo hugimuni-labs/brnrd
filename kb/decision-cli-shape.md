@@ -120,23 +120,111 @@ Removes the discoverability problem ("what can I configure?")
 without forcing users to read the source. The doc-string per key
 becomes part of the API contract.
 
-## Self-hosting and `brr brnrd connect <url>`
+## `brr brnrd connect` — three-layer smart bootstrap
 
-`brr brnrd connect` defaults `url=https://brnrd.dev`. Users can
-override:
+`brr brnrd connect` is **not** just account-pairing. It's the
+one-command per-repo bootstrap for managed mode, walking three
+layers (account-pair → project-create → gate-pair), each step
+skippable if already done, each step prompting before acting.
+Each layer is also a separate verb (`brr brnrd pair <gate>`,
+`brr brnrd projects bind`, etc.) — the walkthrough is just the
+same code paths sequenced behind one entry point.
+
+### Detection rules (mechanical, no LLM)
+
+- **GitHub App** offered when `git remote get-url origin`
+  matches a GH URL (`github.com:org/repo` or
+  `https://github.com/org/repo`).
+- **Telegram** offered if `.brr/config` has existing TG
+  settings (migration path: re-bind the existing chat to the
+  managed bot); otherwise prompted in low-emphasis form
+  (`[y/N]`, default skip).
+- **GitLab / Slack / Discord** join the prompt list when those
+  gates ship; same detection-then-prompt pattern.
+- Anything not matched → not prompted. No nagging.
+
+### First-time, repo-aware (the common path)
 
 ```
-brr brnrd connect                              # production brnrd.dev
-brr brnrd connect https://my-brnrd.example.com # self-hosted
-brr brnrd connect http://localhost:8000        # local dev
+$ brr brnrd connect           # run from inside a brr-init'd repo
+
+> No brnrd account paired on this machine yet.
+> Opening browser to https://brnrd.dev/pair?code=ABC123
+> (waiting for you to sign in / sign up + approve)
+> ✓ Paired as account: arseni@hugimuni.fr (machine: <hostname>)
+
+> This repo isn't yet a brnrd project.
+> Detected git remote: github.com/Gurio/brr
+> Create project "brr" on brnrd? [Y/n] Y
+> ✓ Project "brr" created.
+
+> Set up managed gates for this project?
+>   • GitHub App (detected github.com/Gurio/brr) — install? [Y/n] Y
+>     Opening: https://github.com/apps/brnrd/installations/new?state=...
+>     (waiting for installation webhook…)
+>     ✓ Installed on Gurio/brr; auto-bound to project "brr".
+>   • Telegram — pair a chat with @brr_bot? [y/N] N
+>     (skip; run `brr brnrd pair telegram --project brr` later)
+
+> ✓ Done. Try commenting `@brr <task>` on a PR or issue.
 ```
 
-No flag-gating, no environment-variable indirection — just an
-arg. Self-hosting is a first-class path; the trust pitch ("we
-don't have your code; here, run your own brnrd") needs the path
-to be real. The friction of running your own brnrd is deployment
-itself (cloud account, Stripe-equivalent for self-hosted, etc.);
-the CLI shouldn't add hoops on top of that.
+### Subsequent repo from the same machine
+
+```
+$ brr brnrd connect           # different repo, same machine
+> Already paired as: arseni@hugimuni.fr (since 2026-05-15)
+> Detected git remote: github.com/Gurio/other-repo
+> Create project "other-repo" on brnrd? [Y/n] Y
+> ✓ Project created.
+> GitHub App already installed for Gurio org — auto-bind? [Y/n] Y
+> ✓ Bound to project "other-repo".
+> Telegram — pair a chat with @brr_bot? [y/N] …
+```
+
+### Self-hosted brnrd
+
+```
+$ brr brnrd connect https://my-brnrd.example.com
+# everything else identical — same three-layer walkthrough
+```
+
+### Flags for scripted / non-interactive use
+
+```
+brr brnrd connect [<url>]               # bare = interactive walkthrough
+  --account-only                        # pair account, skip project + gates
+  --project <name>                      # override default (repo basename)
+  --no-auto-pair                        # skip the gate-pair phase entirely
+  --pair github,telegram                # pre-select gates non-interactively
+  --yes / -y                            # answer Y to all prompts (still detection-gated)
+```
+
+### Why this layering
+
+- Single command does the right thing in the most common case
+  (you're inside a brr-init'd repo with a GH remote, you want
+  it on brnrd; one command + a few `[Y/n]` taps).
+- Each layer is independently scripted via its own verb, so
+  power users / CI scripts keep fine-grained control.
+- Detection is mechanical — fast, predictable, debuggable; no
+  LLM call gates the setup flow.
+- Self-hosting stays first-class: the URL is a positional arg
+  with a default, the walkthrough is identical against any
+  brnrd instance.
+- The agentic-init philosophy from `brr init` (interactive
+  walkthrough with smart defaults) gets a smaller sibling here,
+  scoped to the managed-mode surface.
+
+### Self-hosting policy
+
+No flag-gating, no environment-variable indirection — just the
+positional URL arg. Self-hosting is a first-class path; the
+trust pitch ("we don't have your code; here, run your own
+brnrd") needs the path to be real. The friction of running
+your own brnrd is deployment itself (cloud account,
+Stripe-equivalent for self-hosted, etc.); the CLI shouldn't
+add hoops on top of that.
 
 ## Subcommand-discovery aids
 
@@ -219,4 +307,16 @@ Estimate: ~2-3 days for the CLI itself + docs; integration with
   `brr brnrd` over `brr remote` / `brr service` / etc. in the
   same exchange. Pondering provenance in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1
-  (fifth reframe breadcrumb).
+  (fourth 2026-05-25 reframe breadcrumb).
+- 2026-05-25 (pass 4 follow-up) — `brr brnrd connect` shape
+  formalised as a **three-layer smart bootstrap** (account-pair
+  → project-create → gate-pair, each skippable if already done,
+  each prompting before acting), after the user pushed back on
+  pure account-only connect ("we should autosetup gates when
+  `brr brnrd connect`"). Mechanical detection rules added (GH
+  via `git remote get-url`, TG via existing `.brr/config`
+  settings). Non-interactive flags (`--account-only`,
+  `--no-auto-pair`, `--pair`, `--yes`, `--project`) defined for
+  scripted use. Walkthrough does not invent verbs — each layer
+  is the same code path as the standalone `brr brnrd pair` /
+  `brr brnrd projects bind`, just sequenced.

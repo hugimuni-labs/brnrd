@@ -446,12 +446,88 @@ the server-side env-invocation path consumes.
 
 ## Pairing flow
 
-### Telegram
+### `brr brnrd connect` — three-layer smart bootstrap
+
+The user-facing entry point for managed-mode setup. Walks
+**three layers** (account-pair → project-create → gate-pair),
+each skippable if already done, each prompting before acting.
+Each layer is also a separately-callable verb (`brr brnrd
+pair <gate>`, `brr brnrd projects bind`, etc.) — the bootstrap
+just sequences the same code paths behind one entry point. CLI
+shape lives at
+[`decision-cli-shape.md`](decision-cli-shape.md) → "three-layer
+smart bootstrap"; this section describes the protocol-side
+endpoints each layer hits.
+
+Layer-by-layer:
 
 ```
-1. User: `brr brnrd pair telegram --project <project_id>` on the box running their daemon
-   (the daemon is already account-paired via an earlier `brr brnrd connect`)
-   → CLI calls POST /v1/accounts/pair/telegram with project_id, gets `pairing_code = "BR1234"`
+Layer 1 — account pair (one-time per machine)
+  → POST /v1/accounts/pair             { machine_hostname }
+    ← { pair_code, pair_url, account_id_when_done }
+  → CLI prints `pair_url`; user opens in browser, signs in /
+    signs up, approves the pairing
+  → CLI long-polls GET /v1/accounts/pair/{pair_code} until
+    status: paired
+  → CLI stores the account-scoped daemon token in
+    `~/.config/brr/brnrd.token`
+
+Layer 2 — project create (per repo)
+  → CLI inspects the cwd: reads `.git/config` for origin URL,
+    derives a default project name from the repo basename
+  → CLI prompts "Create project <name>? [Y/n]"
+  → POST /v1/accounts/projects         { name, git_remote? }
+    ← { project_id }
+  → CLI stores `project_id` in `.brr/config` so subsequent
+    commands resolve to the right project without asking
+
+Layer 3 — gate pair (per project per gate; runs only if not
+already wired)
+  → CLI walks each managed-gate "detector":
+      • GitHub detector — fires when `git remote get-url origin`
+        matches a GH URL. Hits POST /v1/accounts/pair/github
+        with { project_id, repo_full_name }. If a GH App
+        installation already exists for the org, the response
+        contains `install_already_present: true` and the CLI
+        offers auto-bind (POST /v1/accounts/projects/{project_id}/
+        gates/github { installation_id, repo_full_name }).
+        Otherwise, the CLI opens the install URL and polls for
+        the installation webhook.
+      • Telegram detector — fires if `.brr/config` had a
+        legacy TG token (migration path) OR if the user
+        explicitly opted in. Hits POST /v1/accounts/pair/
+        telegram { project_id }, gets a pairing code, prints
+        the `/start <code>` instruction.
+      • GitLab / Slack / Discord — same shape, added when each
+        gate ships.
+  → Each detector is independently skippable via [y/N] /
+    [Y/n] prompts; bare `brr brnrd connect` defaults the
+    detected-and-likely ones to Y and the others to N.
+
+Idempotency:
+  • Layer 1 skipped if `~/.config/brr/brnrd.token` is valid.
+  • Layer 2 skipped if `.brr/config` already has a
+    `brnrd.project_id` resolving on the brnrd side.
+  • Layer 3 detector entries skipped if the
+    (project_id, gate_kind, repo_or_chat) binding already
+    exists.
+```
+
+Endpoints introduced or extended by this flow:
+
+| Method | Path | Description | Persists |
+|--------|------|-------------|----------|
+| `POST` | `/v1/accounts/pair` | Layer 1: start account-pair; returns `pair_code`, `pair_url`, polling key. | pair_request row, TTL 10 min |
+| `GET` | `/v1/accounts/pair/{pair_code}` | Layer 1: poll for pair status; on `paired`, returns daemon token. | Read-only on pair_request |
+| `POST` | `/v1/accounts/projects` | Layer 2: create a project for this account. Idempotent on `(account_id, name)`. | project row |
+| `POST` | `/v1/accounts/projects/{project_id}/gates/{kind}` | Layer 3: bind an existing gate (GH installation, TG chat, ...) to a project without going through the pair-code dance. Used when the detector finds an already-installed App. | project_gate_binding row |
+
+### Telegram (Layer 3 detector — explicit pair)
+
+```
+1. CLI (via the Layer-3 detector OR explicit `brr brnrd pair
+   telegram --project <project_id>`):
+   → POST /v1/accounts/pair/telegram with project_id, gets `pairing_code = "BR1234"`
    → CLI prints: "Send `/start BR1234` to @brr_bot"
 
 2. User: messages @brr_bot with `/start BR1234`
@@ -468,23 +544,30 @@ the server-side env-invocation path consumes.
    → if none online AND failover disabled: queues until a daemon returns
 ```
 
-### GitHub
+### GitHub (Layer 3 detector — install + auto-bind, or explicit pair)
 
 ```
-1. User: `brr brnrd pair github`
-   (the daemon is already account-paired via an earlier `brr brnrd connect`)
-   → CLI calls POST /v1/accounts/pair/github, gets the GitHub App
-     install URL with `state=` encoding account_id
-   → CLI opens the URL in browser; user installs the brnrd App on
-     selected repos
+1. CLI (via the Layer-3 detector OR explicit `brr brnrd pair
+   github`):
+   → POST /v1/accounts/pair/github, gets one of:
+       a) `install_already_present: true` + installation_id for
+          the org matching the detected remote → CLI prompts
+          "Auto-bind this repo to project <name>? [Y/n]" → POST
+          /v1/accounts/projects/{project_id}/gates/github
+          { installation_id, repo_full_name }. Done.
+       b) GitHub App install URL with `state=` encoding
+          (account_id, project_id) → CLI opens in browser; user
+          installs on selected repos.
 
-2. GitHub: POSTs installation webhook to brnrd
+2. (Path b only) GitHub: POSTs installation webhook to brnrd
    → brnrd reads `state` from the install event payload, binds
-     (account_id, installation_id) and auto-creates one project
-     per repo (or prompts in the dashboard if multi-repo install:
-     "which projects should these repos belong to?")
-   → user adjusts bindings in the dashboard or via
-     `brr brnrd projects bind` CLI if defaults don't suit
+     (account_id, installation_id, project_id) for the matched
+     repo (and auto-creates one project per other repo in the
+     install if the user picked multiple — surfaced for review
+     in the dashboard)
+   → CLI's poll on GET /v1/accounts/pair/github/{state} returns
+     paired; CLI prints "✓ Installed on <repo>; bound to
+     project <name>."
 
 3. User: opens a PR / issue, comments `@brr <task>`
    → GitHub delivers issue_comment webhook to brnrd
@@ -1055,6 +1138,22 @@ write the Upsun shape once, use it twice.
   failover path is a daemon-equivalent bootstrap +
   `envs.get_env("fly_machines")` invocation, not a separate
   "cloud-runner adapter"). Cloud-runner-adapter framing dropped
-  in the spawn step + the BYO-deferred section. Sixth reframe
-  breadcrumb in
+  in the spawn step + the BYO-deferred section. Fourth
+  2026-05-25 reframe breadcrumb in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
+- 2026-05-25 (pass 4 follow-up) — "Pairing flow" section
+  reorganised around a new top-level
+  **"`brr brnrd connect` — three-layer smart bootstrap"**
+  description. Layer 1 (account pair) introduces
+  `POST /v1/accounts/pair` + `GET /v1/accounts/pair/{pair_code}`
+  endpoints; Layer 2 (project create) introduces
+  `POST /v1/accounts/projects`; Layer 3 (gate pair via
+  detectors) introduces
+  `POST /v1/accounts/projects/{project_id}/gates/{kind}` for
+  auto-bind when the detector finds an already-installed App
+  (avoiding the pair-code dance). Telegram + GitHub sections
+  now framed as Layer-3 detectors that can also be invoked
+  explicitly via `brr brnrd pair <gate>`. Idempotency rules
+  documented (each layer skipped if already satisfied). Drove
+  by the user's "we should autosetup gates when
+  `brr brnrd connect`" feedback.

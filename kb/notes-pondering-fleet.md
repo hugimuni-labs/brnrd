@@ -290,6 +290,40 @@ the current state. §6 is the re-promotion guide.
 > [`design-billing.md`](design-billing.md),
 > [`research-cloud-envs.md`](research-cloud-envs.md) for the
 > three new / reshaped page focuses this pass.
+>
+> **2026-05-25 follow-up to pass 4.** Two narrow shape
+> clarifications after the user read through:
+>
+> - **`brr brnrd connect` becomes a three-layer smart bootstrap**
+>   (account-pair → project-create → gate-pair), not just
+>   account-pair. Each layer idempotent + skippable if already
+>   done; Layer 3 gate-pair fires via mechanical detectors
+>   (`git remote get-url origin` for GH; existing `.brr/config`
+>   for TG). Each layer is also a standalone verb (`brr brnrd
+>   pair <gate>`, etc.); the walkthrough sequences existing
+>   code paths, doesn't invent verbs. Non-interactive flags
+>   for scripts (`--account-only`, `--no-auto-pair`, `--pair`,
+>   `--yes`, `--project`). Details in
+>   [`decision-cli-shape.md`](decision-cli-shape.md) →
+>   "three-layer smart bootstrap" + protocol-side endpoints in
+>   [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
+>   "Pairing flow."
+> - **Stripe EU specifics formalised** in
+>   [`design-billing.md`](design-billing.md). Five things to
+>   enable that most independent vendors miss: SCA via
+>   Checkout (zero code), Stripe Tax add-on (0.5%/txn,
+>   mandatory for VAT calc), OSS scheme registration via
+>   DGFiP (not optional for cross-EU digital services),
+>   EU-local payment methods toggled day-one (SEPA / iDEAL /
+>   Bancontact / EPS / Giropay / P24 / Apple-Google Pay), and
+>   TVA intracommunautaire on B2B invoices. Headline 30-50%
+>   managed-compute margin lands at **27-47% net of Stripe +
+>   Stripe Tax** with worked examples for French card vs
+>   German SEPA.
+>
+> Three pages updated; no new pages. The substantive launch
+> shape from pass 4 is unchanged; this is purely
+> implementation-detail surfacing.
 
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.

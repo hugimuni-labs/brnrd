@@ -2980,3 +2980,87 @@ daemon-side conversation_id propagation
 could be the first two code slices in parallel with
 `src/brnrd/` scaffolding.
 
+## 2026-05-25 — pass 4 follow-up: connect-flow shape + Stripe EU specifics
+
+Two narrow updates after the pass-4 commit landed and the user
+read through:
+
+### Trigger
+
+User asked two clarifying questions:
+
+1. Should `brr brnrd connect` auto-setup gates, given gate
+   pairing is still a "separate thing" conceptually?
+   ("we should autosetup gates when `brr brnrd connect` i guess,
+    or what is the shape you're proposing")
+2. Stripe handles European users natively, right? Wanted
+   confirmation + specifics, never used Stripe before.
+
+Both answered + the answers formalised into the docs so the
+next reader doesn't have to dig into chat history.
+
+### Net direction
+
+- **`brr brnrd connect` is a three-layer smart bootstrap** —
+  not just account-pair. Layer 1: account-pair (one-time per
+  machine). Layer 2: project-create (per repo, default name
+  from repo basename). Layer 3: gate-pair via mechanical
+  detectors (GH detector fires when `git remote get-url
+  origin` matches a GH URL; TG detector fires if legacy
+  `.brr/config` has TG settings; each detector also
+  invocable as a standalone `brr brnrd pair <gate>`).
+  Idempotent — each layer skipped if already satisfied.
+  Non-interactive flags (`--account-only`, `--no-auto-pair`,
+  `--pair`, `--yes`, `--project`) for scripts. Walkthrough
+  invents no new verbs; just sequences existing ones.
+- **Stripe EU support is turnkey** — but with five things to
+  enable explicitly that most independent vendors miss: SCA
+  (handled by Checkout automatically, no code), Stripe Tax
+  add-on (0.5%/txn, mandatory for compliant VAT calculation),
+  OSS scheme registration via DGFiP (not optional for
+  cross-EU digital services), EU-local payment methods (SEPA,
+  iDEAL, Bancontact, EPS, Giropay, P24, Apple/Google Pay —
+  toggleable in Dashboard, big conversion wins), and the
+  TVA intracommunautaire on every B2B invoice (Stripe
+  inserts when configured).
+- **Headline managed-compute margin lands at 27-47% net of
+  Stripe + Stripe Tax** (down from the 30-50% gross target),
+  with the worked-example breakdown spelled out for a French
+  card user (3.25% overhead) and a German SEPA user (1.3%
+  overhead).
+
+### Pages changed in this follow-up
+
+- `kb/decision-cli-shape.md` — "Self-hosting and
+  `brr brnrd connect <url>`" section replaced with
+  **"`brr brnrd connect` — three-layer smart bootstrap"**,
+  detailing layer-by-layer behaviour + detection rules +
+  flags. Self-hosting policy moved into a final subsection
+  ("Self-hosting policy"). Lineage entry appended.
+- `kb/design-brnrd-protocol.md` — "Pairing flow" section
+  reorganised: new
+  **"`brr brnrd connect` — three-layer smart bootstrap"**
+  top-level subsection describing the protocol-side endpoints
+  for each layer (Layer 1: `POST /v1/accounts/pair` +
+  `GET /v1/accounts/pair/{pair_code}`; Layer 2:
+  `POST /v1/accounts/projects`; Layer 3:
+  `POST /v1/accounts/projects/{project_id}/gates/{kind}` for
+  auto-bind when an App is already installed). New endpoint
+  table for the connect-flow endpoints. Telegram + GitHub
+  subsections retitled as "(Layer 3 detector — explicit
+  pair)" and "(Layer 3 detector — install + auto-bind, or
+  explicit pair)" — clarifying they're the same code paths
+  the walkthrough invokes. Lineage entry appended.
+- `kb/design-billing.md` — Stripe integration section expanded
+  into four subsections (legal + payouts, payment methods
+  enabled at launch, SCA, VAT compliance, tax invoicing) with
+  an explicit fee table + worked examples. SEPA / iDEAL /
+  Bancontact / EPS / Giropay / P24 / Apple/Google Pay listed
+  as day-one toggles. OSS scheme registration via DGFiP called
+  out as not-optional. TVA intracommunautaire on B2B invoices
+  documented. Margin implication of Stripe overhead
+  (~27-47% net) spelled out. Lineage entry appended.
+
+Three pages updated; one short follow-up commit on top of the
+pass-4 commit. No new pages.
+
