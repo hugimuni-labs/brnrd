@@ -15,7 +15,11 @@ mentions), or anything that writes a file.
 2. **Full tool** — brr daemon handles remote execution, gate I/O, knowledge
    persistence, and git push.
 
-No database, no cloud, no lock-in.
+Self-hosted mode has no mandatory database, no mandatory cloud, and no lock-in.
+
+Managed mode planning (global bot dispatch + optional cloud fallback) is tracked
+in [`kb/design-managed-gates-and-brnrd.md`](kb/design-managed-gates-and-brnrd.md).
+That design is in planning; current shipped behavior remains repo-local `brr`.
 
 ## Install
 

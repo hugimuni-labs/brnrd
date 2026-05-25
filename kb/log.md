@@ -2289,3 +2289,15 @@ remain design surface; `WorktreeEnv.finalize` records
 The remaining deterministic preflight item is the Research-section
 hub-coverage info nudge; no hub was added because the section is a mixed
 artifact bucket rather than one coherent subject area.
+
+## [2026-05-25] plan | Managed gates + BRNRD docs direction for issue #39
+
+Documented the active managed-mode direction without claiming shipped runtime
+changes. Added `kb/design-managed-gates-and-brnrd.md` as the canonical planning
+spec (problem/goals, explicit contradictions with prior docs, `brr` vs `brnrd`
+architecture split, managed routing contract, host-first cloud policy,
+estimated+final cost telemetry, pricing framing, connector segregation,
+Upsun deployment constraints, phased 80/20 rollout, open questions). Updated
+`kb/subject-fleet-overlays.md`, `kb/index.md`, and `README.md` so the managed
+path is discoverable and clearly marked as planning/in-flight while
+self-hosted/local `brr` remains free.

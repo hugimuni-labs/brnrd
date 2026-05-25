@@ -116,24 +116,25 @@ dive-in map) and are stable until something contradicts them.
   docs live in `src/brr/docs/` and ship with the package rather than
   in `kb/`.
 
-## Fleet & overlays *(paused — env axis is the only active strand)*
+## Fleet, managed gates & overlays
 
-- **Hub: [fleet and overlays](subject-fleet-overlays.md)** —
-  synthesis of the three-axis split: overlays as user-level steering,
-  `brnrd` as a future fleet operator outside repo-local brr, and
-  environments as the active axis now handled by the env hub.
+- **Hub: [fleet, overlays, and managed gates](subject-fleet-overlays.md)** —
+  concise canonical state for the active direction: keep `brr` as the
+  free repo-local execution plane and introduce optional `brnrd`
+  control-plane routing/policy for managed mode.
+- [Managed gates + BRNRD design](design-managed-gates-and-brnrd.md) —
+  *active (planning/in-flight, not shipped)*. Concrete architecture,
+  contradiction resolution, managed routing model, host-first cloud
+  policy, telemetry/cost model, pricing framing, connector segregation,
+  Upsun constraints, and phased 80/20 rollout.
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
-  *roadmap (env axis partly shipped, overlays/brnrd paused)*. Three-axis
-  framing (overlays · brnrd · environments); read for the strategic
-  shape, not as a current spec — see decision pages and the env
-  design for the live state.
-- [Overlays plan](plan-overlays.md) — *blocked* on the env work and
-  a research gate for single-file vs multi-file overlays.
-- [Notes: Fleet pondering](notes-pondering-fleet.md) — *paused*.
-  Capture-only thinking: open questions on overlays-as-single-file,
-  dropping `brr eject`, self-maintaining repo registry,
-  brnrd-as-agentic-operator, cross-platform supervisor, decentralised
-  merge.
+  historical strategic framing; useful context but no longer canonical
+  for current managed-gates decisions.
+- [Overlays plan](plan-overlays.md) — *blocked/superseded by newer
+  managed-gates direction for near-term priority*. Preserved for
+  overlay-shape reasoning.
+- [Notes: Fleet pondering](notes-pondering-fleet.md) — capture-only
+  exploratory notes that predate the issue #39 managed-mode shape.
 
 ## Knowledge base itself
 
