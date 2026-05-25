@@ -1,65 +1,101 @@
-# Decision: monorepo structure for brr, brnrd, dashboard, plugins
+# Decision: monorepo structure for brr, brnrd, dashboard, envs
 
 **Status: proposed, not yet accepted on 2026-05-25.** Names the
 repo / package layout for the brr family of components, so the
-brnrd backend, dashboard, and first-party plugins can grow
-alongside the daemon without fragmenting the shared kb or
-inventing a multi-repo release dance prematurely.
+brnrd backend, dashboard, and first-party envs (including cloud
+envs) can grow alongside the daemon without fragmenting the
+shared kb or inventing a multi-repo release dance prematurely.
 
 ## Decision
 
-**One monorepo (`brr/`), multiple sub-packages.** The kb stays
-shared. The daemon core stays at `src/brr/` (no path change for
-existing code). The brnrd backend and dashboard land as
-siblings under `src/`. First-party plugins start vendored under
-`src/` and split into their own repos when they mature.
+**One monorepo (`brr/`), single pip-installable package with
+optional extras.** The kb stays shared. The daemon core stays at
+`src/brr/` (no path change for existing code). The brnrd backend
+and dashboard land as siblings under `src/`. First-party envs
+(including cloud envs like Fly Machines) live under
+`src/brr/envs/` next to the existing built-ins
+(`host`, `worktree`, `docker`), gated by pip extras for the
+optional dependency footprint. Third-party envs use the existing
+`brr.envs` entry-point mechanism per
+[`design-env-interface.md`](design-env-interface.md).
 
 ```
 brr/  (repo root, the existing brr repo)
 ├── src/
-│   ├── brr/                   daemon core (today's location, unchanged)
-│   ├── brnrd/               brnrd backend (FastAPI + workers + sandbox image build)
-│   ├── brnrd_web/           dashboard (HTMX templates first; SPA later if needed)
-│   └── brr_env_fly_machines/  first cloud-runner plugin (vendored at first)
-├── kb/                        shared kb (unchanged)
-├── tests/                     tests for all sub-packages
-├── deploy/                    shared deployment templates (Upsun first for brnrd; Fly / Render / VPS for daemon hosting)
-├── pyproject.toml             multi-package config; sub-packages declared as optional-deps
-└── README.md                  monorepo overview
+│   ├── brr/                    daemon core (today's location)
+│   │   ├── envs/
+│   │   │   ├── host.py         built-in (always available)
+│   │   │   ├── worktree.py     built-in (always available)
+│   │   │   ├── docker.py       built-in (always available)
+│   │   │   ├── fly_machines/   first-party cloud env (extra: brr[fly])
+│   │   │   ├── modal/          first-party cloud env (extra: brr[modal])
+│   │   │   └── ...
+│   │   └── ...
+│   ├── brnrd/                  brnrd backend (FastAPI + workers + sandbox image build)
+│   └── brnrd_web/              dashboard (HTMX templates first; SPA later if needed)
+├── kb/                         shared kb (unchanged)
+├── tests/                      tests for all sub-packages
+├── deploy/                     shared deployment templates (Upsun first for brnrd; Fly / Render / VPS for daemon hosting)
+├── pyproject.toml              single package with optional-deps groups
+└── README.md                   monorepo overview
 ```
 
-**Pip-install surfaces:**
+**Pip-install surfaces (all the same package, gated by extras):**
 
-- `pip install brr` — the daemon core; today's user experience,
-  unchanged.
-- `pip install brr[backend]` — brnrd backend (FastAPI app +
-  workers). Self-hosters use this.
-- `pip install brr-env-fly-machines` — first-party plugin
-  installable independently; lives in `src/brr_env_fly_machines/`
-  but published as its own pypi name. Splits out into its own
-  git repo when it matures.
+```
+pip install brr                       # daemon core (today's UX, unchanged)
+pip install brr[backend]              # + brnrd backend (FastAPI + workers + dashboard)
+pip install brr[fly]                  # + Fly Machines env (one cloud)
+pip install brr[modal,daytona]        # + multiple cloud envs (each its own extra)
+pip install brr[backend,fly,modal]    # combine freely
+pip install brr[all]                  # everything first-party
+```
 
-The dashboard (`src/brnrd_web/`) is not pip-installable
-directly — it's bundled into the brnrd backend's static-serve
-path. HTMX-first; if it grows into an SPA, an `npm run build`
-step lands in the brnrd build pipeline.
+The dashboard (`src/brnrd_web/`) is not separately pip-installable —
+it's bundled into the `brr[backend]` extra and served from the
+backend's static-serve path. HTMX-first; if it grows into an SPA,
+an `npm run build` step lands in the brnrd build pipeline.
 
-## Plugin packages — when to split out
+**Why a single package with extras** (vs separate pypi names like
+`brr-env-fly-machines`):
 
-Vendored at first (lives in `src/brr_env_*/` in the monorepo),
-split into its own repo when **any** of these is true:
+- Single version surface — no plugin/core version-skew bugs.
+- One repo, one CI, one release.
+- Discovery is trivial (`pip install brr[fly]` is obvious;
+  finding a separate package on pypi is not).
+- Third-party env authors still get the `brr.envs` entry-point
+  path for true separation; first-party doesn't need that
+  ceremony.
+- Optional-dependency groups are well-established Python (used
+  by every major package: requests, sqlalchemy, fastapi, etc.).
+- Plugins that mature into their own thing can still split out
+  later via the entry-point mechanism — the extras approach
+  doesn't prevent that.
 
-- The plugin has its own maintainer cadence (different release
+## First-party envs — when to split out
+
+First-party envs stay vendored under `src/brr/envs/<name>/` as
+extras until **any** of these triggers fires:
+
+- The env has its own maintainer cadence (different release
   schedule, different bug-fix priority).
-- The plugin's user base diverges from brr core (e.g. a
-  cloud-provider-specific plugin that platform users adopt
-  without using brr's other surfaces).
-- The plugin grows >2k LOC.
-- The plugin's tests dominate CI time for unrelated brr changes.
+- The env's user base diverges from brr core (e.g. a cloud-
+  provider-specific env that platform users adopt without using
+  brr's other surfaces).
+- The env grows >2k LOC and dominates the install footprint
+  even when not selected.
+- The env's tests dominate CI time for unrelated brr changes.
 
-Until one of those triggers fires, vendoring is cheaper: shared
+Splitting out moves the code to its own repo + its own pypi
+name (`brr-env-<x>`); it registers via the existing `brr.envs`
+entry-point mechanism (per
+[`design-env-interface.md`](design-env-interface.md) §Registry).
+Users install it independently: `pip install brr-env-<x>`. The
+brr CLI discovers it the same way as third-party envs.
+
+Until a trigger fires, extras-as-a-package is cheaper: shared
 kb, shared CI, shared release coordination, shared shipping
-discipline.
+discipline, no version-skew risk.
 
 ## Why a monorepo
 
@@ -93,27 +129,34 @@ Five reasons, in declining order of weight:
    one repo, runs one test suite, reads one kb. Multi-repo means
    "ok, but which repo has the bit I care about?"
 
-## Why some things still split out as separate repos
+## Why some envs eventually split out as separate repos
 
-Plugin packages eventually split because:
+First-party envs vendored as extras eventually split because:
 
 1. **Independent versioning matters per platform.** When the Fly
-   Machines API changes and brr-env-fly-machines needs a patch
-   release tomorrow, the brr core release calendar shouldn't gate
-   it. Independent repos = independent release cadence.
-2. **Different user populations.** Someone who uses brr only for
-   Codespaces shouldn't have to care about Fly's CI failing.
-3. **Vendoring everything makes CI slow.** Once N plugins each
-   have integration tests against real platforms, vendoring them
-   all means every brr-core PR pays the integration-test bill.
-4. **Discoverable by `pip search`.** Independent packages get
-   their own pypi page, README, install story — better
-   discoverability than "look in the brr monorepo for the env
-   sub-package."
+   Machines API changes and the Fly env needs a patch release
+   tomorrow, the brr core release calendar shouldn't gate it.
+   Independent repos = independent release cadence.
+2. **Different user populations.** Someone who uses brr only
+   with Codespaces shouldn't have to care about Fly's CI
+   failing or its install footprint.
+3. **Vendoring everything makes CI slow.** Once N cloud envs
+   each have integration tests against real platforms, even
+   gated extras + skip-tests-without-the-extra has a CI cost
+   for every brr-core PR.
+4. **Discoverability by `pip search`.** Independent packages
+   get their own pypi page, README, install story — better
+   discoverability for an env aimed at a non-brr-native
+   audience (e.g. "the Fly Machines env that you can use
+   standalone with brr").
 
-The first-party split-out criterion (see above) is roughly the
-heuristic for when those benefits start outweighing the kb-graph
-benefit of vendoring.
+The first-party split-out criterion (see above) is the
+heuristic for when those benefits start outweighing the
+shared-monorepo benefits. When a split happens, the env moves
+to its own repo + its own `brr-env-<name>` pypi name, uses the
+`brr.envs` entry-point registry, and the `brr[fly]` etc.
+extras get a transitional release that re-exports the new
+location (or drops the extra in a major version).
 
 ## What the existing brr repo becomes
 
@@ -123,13 +166,15 @@ doesn't move). New siblings:
 
 - `src/brnrd/` for the brnrd backend (new).
 - `src/brnrd_web/` for the dashboard (new).
-- `src/brr_env_fly_machines/` when the first plugin lands (new,
-  per [`plan-env-fly-machines.md`](plan-env-fly-machines.md)).
+- `src/brr/envs/<name>/` for each first-party env that needs
+  optional dependencies (Fly first per
+  [`plan-env-fly-machines.md`](plan-env-fly-machines.md);
+  Modal / Daytona / etc. follow).
 
-`pyproject.toml` updates to declare the multi-package layout via
-`[tool.hatch.build.targets.wheel.shared-data]` or equivalent
-(specifics TBD pre-implementation; whichever build backend brr
-currently uses extends most naturally).
+`pyproject.toml` updates to declare the single-package layout
+with `[project.optional-dependencies]` groups for `backend`,
+`fly`, `modal`, `daytona`, `all`. Build backend stays whichever
+brr currently uses; extras work the same regardless.
 
 `deploy/` already implied; this decision formalises it as the
 home for both brnrd backend deploy templates (Upsun first;
@@ -156,21 +201,27 @@ Rejected because:
   (which is conceptually inseparable from the protocol it
   serves).
 
-### Alt 2 — Monorepo with one Python package
+### Alt 2 — Multiple distinct Python packages in the monorepo
 
-Single `brr` package, sub-modules for `brnrd` and `brr.web`.
-Rejected because:
+`brr` (daemon), `brnrd` (backend), `brnrd-web` (dashboard),
+`brr-env-fly-machines` (env plugin) — each its own pypi name
+published from the same monorepo. Rejected because:
 
-- Forces `pip install brr` users to pull down the FastAPI /
-  HTMX / DB dependencies they don't need.
-- Conflates the daemon (which has minimal deps) with the
-  backend (which needs a real web stack).
-- Makes self-hosting brnrd harder to communicate ("install
-  brr, but only some of brr").
+- Adds version-skew bugs at the boundaries (daemon vN +
+  brnrd-env vM compatibility matrix).
+- Multiplies pypi maintenance work (multiple package pages,
+  multiple release flows, multiple READMEs to keep aligned).
+- Discoverability problem (`pip install brr-env-fly-machines`
+  vs `pip install brr[fly]` — the latter is obviously a brr
+  thing).
+- Doesn't buy enough at single-maintainer scale.
 
-The optional-dependency split (`pip install brr[backend]`)
-preserves the monorepo shape while keeping the install surfaces
-minimal per use case.
+The single-package-with-extras approach
+(`pip install brr[backend,fly]`) preserves the monorepo shape
+AND keeps the pip-install surface minimal per use case AND
+avoids version-skew. Third-party envs still get the entry-point
+path for true separation; first-party doesn't need that
+ceremony.
 
 ### Alt 3 — Monorepo with workspace tooling (Bazel / Nx / Pants)
 
@@ -207,19 +258,23 @@ Rejected because:
   own CI job, or one big job? Sub-package jobs are faster to fail
   but more complex to maintain. Start with one CI job; split when
   the dashboard's frontend tests start dominating runtime.
-- **Plugin discoverability story.** A README in `src/` explaining
-  the layout would help. Or a `plugins/` index page in the kb.
-  Decide when the first vendored plugin (`brr-env-fly-machines`)
-  lands.
+- **First-party env discoverability.** A `src/brr/envs/README.md`
+  enumerating built-in + extras-gated envs with one-line
+  descriptions and the `pip install brr[<extra>]` invocation.
+  Land with the first vendored cloud env (Fly).
 - **Self-hoster's onboarding.** "Clone brr, install with
   `[backend]`, deploy with `deploy/upsun/`" should be the
   one-page README. Land that page with the first brnrd
   release.
-- **Plugin split-out mechanics.** When a vendored plugin
-  graduates to its own repo, what's the migration story?
-  `git filter-repo` extract, plus a redirect note in
-  `src/brr_env_X/README.md` pointing at the new repo. Document
-  in this page when the first graduation happens.
+- **First-party env split-out mechanics.** When a vendored env
+  graduates to its own repo + its own `brr-env-<name>` pypi
+  name, what's the migration story? `git filter-repo` extract
+  the env's history, publish under the new pypi name, register
+  via the `brr.envs` entry point in the new package, ship a
+  transitional brr release that drops the in-tree env from
+  `src/brr/envs/<name>/` (or keeps a deprecation shim importing
+  from the new package) and removes the extra. Document in
+  this page when the first graduation happens.
 
 ## Read next
 
@@ -250,3 +305,18 @@ Rejected because:
   as the sub-package names; renamed to `src/brnrd/` and
   `src/brnrd_web/` later the same day when the hosted-product
   name settled on `brnrd` (canonical domain `brnrd.dev`).
+- 2026-05-25 (pass 4) — reshaped to a single-package +
+  optional-extras model after the user pushed back on separate
+  `pip install brr-env-*` pypi packages for first-party envs
+  ("over-engineered for first-party; should be a plugin /
+  component"). First-party envs now live under
+  `src/brr/envs/<name>/` (next to existing built-ins
+  `host`/`worktree`/`docker`) and ship gated by extras
+  (`pip install brr[fly]`). Third-party envs still use the
+  existing `brr.envs` entry-point mechanism — the registry from
+  [`design-env-interface.md`](design-env-interface.md) was
+  always plugin-capable; extras for first-party just removes
+  the pypi-naming ceremony. Alt 2 (multiple-pypi-packages-in-
+  monorepo) added to alternatives. First-party split-out
+  criterion now describes the env-graduates-to-its-own-repo
+  path more precisely.

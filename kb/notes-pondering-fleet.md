@@ -214,6 +214,82 @@ the current state. §6 is the re-promotion guide.
 > graph + TG ring buffer). See
 > [`subject-managed-mode.md`](subject-managed-mode.md) for the
 > current synthesis.
+>
+> **2026-05-25 reframe — fourth pass.** Five concrete
+> mechanics shifts after the user surfaced specific
+> productisation gaps (legal entity ready in France; envs vs
+> cloud-runners architectural mismatch; plugin-packaging
+> over-engineering; CLI verb taxonomy; cross-platform
+> daemoning; self-hosting friction):
+>
+> - **Credits-wallet billing adopted** (companion design page:
+>   `design-billing.md`). One credit = $0.01; top-up via Stripe
+>   Checkout (no card-on-file by default); debit at spawn-
+>   finalize; opt-in auto-topup; pro-rata refund on unused paid
+>   credits within 30 days; free-tier monthly grant of ~300
+>   credits (≈100 worst-case spawns). Stripe France handles the
+>   payment + Stripe Tax for EU VAT; payouts to Qonto. HugiMuni
+>   SAS as the legal entity. Pricing decision page updated to
+>   reflect the wallet model; "no card-on-file by default" added
+>   as the fourth trust signal on the pricing page.
+> - **Plugin packaging collapsed: extras over separate pypi
+>   names.** `brr-env-fly-machines` (separate pypi) dropped in
+>   favour of `pip install brr[fly]` (extras-gated env in
+>   `src/brr/envs/fly_machines/`). Single version surface, one
+>   repo, simpler discovery. Third-party envs still use the
+>   `brr.envs` entry-point mechanism. First-party envs can split
+>   out later via the same entry-point path if their cadence /
+>   user base diverges. Monorepo decision page reshaped; env
+>   interface page got a clarifying "first-party (extras)
+>   vs third-party (entry points)" subsection.
+> - **Cloud runs ARE envs — full unification.** Dropped the
+>   separate "cloud-runner adapter" framing; cloud envs
+>   implement the existing `EnvBackend` Protocol like every
+>   other env. The brnrd backend invokes the same env class
+>   the daemon would use; brnrd just does a daemon-equivalent
+>   bootstrap (clone repo with per-spawn GH App token,
+>   materialise AI creds, construct a `RunContext`) before
+>   calling `envs.get_env("fly_machines")`. One implementation,
+>   two callers. `research-cloud-runner-patterns.md` renamed
+>   to `research-cloud-envs.md` and reframed accordingly;
+>   `design-env-interface.md` grew a "brnrd server-side caller"
+>   subsection; `plan-env-fly-machines.md` reshaped from
+>   "first plugin package" to "first cloud env (extras-gated)";
+>   `design-brnrd-protocol.md` dropped the cloud-runner-adapter
+>   framing in its spawn step + BYO-deferred section.
+> - **CLI shape decision page added** (`decision-cli-shape.md`).
+>   Six top-level verbs (`init` / `run` / `daemon` / `gate` /
+>   `brnrd` / `config`); collapses today's `up` / `down` into
+>   `brr daemon up|down|status`; collapses today's `auth` /
+>   `bind` / `setup` into `brr gate <name> <verb>`; adds
+>   `brr brnrd <subcommand>` namespace for hosted-service
+>   management (`connect` / `creds` / `policy` / `topup` /
+>   `balance` / `projects` / ...); adds `brr config
+>   list|get|set|doc` for parameter introspection across local
+>   + remote. `brr accounts` (placeholder in earlier drafts)
+>   dropped. `brr brnrd connect [url]` defaults to
+>   `https://brnrd.dev` and accepts any URL — self-hosting is a
+>   first-class path with no extra CLI hoops (deployment
+>   friction is its own friction; CLI shouldn't add to it).
+> - **Cross-platform daemoning tracked at issue #29.** Managed
+>   mode reduces the urgency (failover compute covers gaps when
+>   the daemon isn't running); the systemd-first track at #29
+>   proceeds independently of the deployment-templates plan
+>   here. `plan-daemon-deployment-templates.md` got a small
+>   cross-reference; no new architectural commitment.
+>
+> Net effect after pass 4: launch shape settled with concrete
+> billing mechanics (credit wallet + Stripe + HugiMuni SAS),
+> envs and cloud-runners unified into one architectural concept
+> (envs that happen to run remotely), packaging simplified to
+> extras, CLI reshaped to a 6-verb noun-first taxonomy, and
+> the laptop-side daemoning roadmap pointed at #29. See
+> [`subject-managed-mode.md`](subject-managed-mode.md) for the
+> current synthesis;
+> [`decision-cli-shape.md`](decision-cli-shape.md),
+> [`design-billing.md`](design-billing.md),
+> [`research-cloud-envs.md`](research-cloud-envs.md) for the
+> three new / reshaped page focuses this pass.
 
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.

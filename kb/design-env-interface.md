@@ -126,10 +126,29 @@ def get_env(name: str, repo_root: Path) -> Env:
     raise RuntimeError(f"unknown env: {name}")
 ```
 
-#### Python plugins
+#### Python envs — first-party (extras) and third-party (entry points)
 
-For typed, reusable, shareable envs. The accepted registry design has
-them ship as separate pip packages:
+Two distribution paths, one Protocol:
+
+**First-party envs** live under `src/brr/envs/<name>/` and are
+gated by pip optional-dependency groups per
+[`decision-monorepo-structure.md`](decision-monorepo-structure.md).
+The env is registered in the `_BUILTIN` table; the extra controls
+whether the env's heavy dependencies (Fly SDK, Modal client,
+etc.) are actually installed. Importing the env's module raises
+a clear "install brr[<extra>] to use this env" message if the
+extras dependencies aren't present.
+
+```
+# Install paths
+pip install brr                # core only — host, worktree, docker
+pip install brr[fly]           # + fly_machines env
+pip install brr[modal,daytona] # + multiple cloud envs
+pip install brr[all]           # + every first-party env
+```
+
+**Third-party envs** ship as separate pip packages and register
+via the `brr.envs` entry-point group:
 
 ```toml
 # someone-else/pyproject.toml
@@ -137,11 +156,19 @@ them ship as separate pip packages:
 firecracker = "myorg_brr_envs.firecracker:FirecrackerEnv"
 ```
 
-Core `brr` keeps runtime dependencies small and avoids native
-compilation requirements by default; plugins bring their own. A future
-Daytona plugin would live outside `brr` core, in its own repo, as proof
-of the mechanism. See `notes-pondering-fleet.md` §10 for the list of
-plugin candidates.
+`brr` core keeps runtime dependencies small; first-party envs
+opt in via the user's pip-extras choice; third-party envs ship
+out-of-tree on their own clock. Both flow through the same
+`get_env(name, repo_root)` registry above. A first-party env
+that matures into something with a different release cadence
+can graduate to a separate `brr-env-<name>` pypi package via
+the entry-point path, with a transitional shim in the in-tree
+location — the user-facing UX doesn't change. See
+[`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+"first-party env split-out criterion."
+
+See `notes-pondering-fleet.md` §10 for the list of cloud env
+candidates.
 
 #### Script envs (drop-in, zero install)
 
@@ -423,6 +450,52 @@ The daemon owns retries, response validation, kb maintenance, progress
 packets, and push. Env backends own workspace setup, runner transport,
 scratch cleanup/preservation, and branch classification inside their
 workspace.
+
+---
+
+## brnrd server-side caller
+
+The `EnvBackend` Protocol has two callers:
+
+1. **The daemon** — today's caller; described above.
+2. **The brnrd backend** — invokes the same env classes from
+   server-side as part of the managed-compute failover path
+   per [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+   → "Failover dispatch."
+
+The env does not know which caller it is. The brnrd backend
+runs a **daemon-equivalent bootstrap** before calling the env,
+so the env receives the same kind of `RunContext` the daemon
+would build:
+
+```
+brnrd-side bootstrap (per failover spawn):
+  1. Issue per-spawn GH App installation token for the project.
+  2. `git clone` the repo into a scratch dir using the token.
+  3. Decrypt the user's AI credential from the vault into
+     either an env var (api-key shape) or a temp dir (dir-
+     tarball shape, expanded).
+  4. Construct a RunContext with cwd=scratch, repo_root=scratch,
+     runtime_dir=scratch/.brr, response_path_host=scratch/.brr/
+     responses/<id>.md (response will be POSTed back via the
+     task-key, not read from disk).
+  5. envs.get_env("fly_machines").prepare(task, scratch, cfg,
+     branch_plan=..., response_path=...).
+  6. .invoke(ctx, runner_name, invocation, cfg).
+  7. .finalize(ctx, task, tasks_dir=scratch/.brr/tasks).
+  8. Tear down the scratch dir; debit the wallet per
+     `design-billing.md`.
+```
+
+Result: the same `src/brr/envs/fly_machines/` module the daemon
+loads when the user has `pip install brr[fly]` is the same
+module brnrd imports for its managed-compute spawn path. One
+env implementation, two deployment targets, no second protocol.
+
+See [`research-cloud-envs.md`](research-cloud-envs.md) →
+"Caller axis" for the per-concern delta between the two callers
+(token source, repo delivery, AI-cred delivery, response sink,
+failure salvage, cost ceiling).
 
 ---
 

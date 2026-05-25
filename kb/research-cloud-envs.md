@@ -1,123 +1,158 @@
-# Research: cloud-runner patterns and per-platform deltas
+# Research: cloud envs — patterns and per-platform deltas
 
-Cross-adapter analysis for cloud-execution adapters in brr. The
-same adapter code is consumable from two callers (see "Caller
-axis" below):
+Cross-env analysis for env backends that execute remotely (in
+the cloud, in a container hosted somewhere other than the
+daemon's host). Load-bearing reframe (2026-05-25, pass 4):
 
-- **Laptop daemon caller** — user installs a `brr-env-*` plugin
-  and uses their own cloud account. Independent of managed mode;
-  this is user-driven plugin work shipped on each plugin's own
-  clock.
-- **brnrd server-side caller** — brnrd uses one (or a few)
-  adapter(s) on its **own** cloud account to power the managed-
-  compute failover surface from
-  [`subject-managed-mode.md`](subject-managed-mode.md) (Surface
-  B). Fly Machines is the first adapter used this way.
+**Cloud runners are envs.** There is no separate "cloud-runner
+adapter" concept. Anything that executes a task implements
+[`design-env-interface.md`](design-env-interface.md)'s
+`EnvBackend` Protocol (`prepare → invoke → finalize`). The
+existing `host`, `worktree`, `docker` envs run locally; cloud
+envs like `fly_machines`, `modal`, `codespaces` run in someone
+else's compute. Same protocol, different transport.
 
-At launch, brnrd ships exactly one server-side adapter (Fly
-Machines on a brnrd-owned Fly app). Other adapters are
-available to laptop-daemon users but **not** wired up server-side
-on brnrd — BYO server-side compute (a user's cloud token stored
-on brnrd, used by brnrd to spawn in their account) is
-deferred from launch per
-[`decision-pricing-shape.md`](decision-pricing-shape.md); the
-wire shape is preserved in
+The same env class is consumable from two callers — see
+"Caller axis" below — without needing two implementations:
+
+- **Laptop daemon caller** — user runs the daemon; the daemon
+  picks the env from `.brr/config` (e.g. `env=fly_machines`)
+  and runs the task in the user's own cloud account. Token
+  comes from the user's env.
+- **brnrd server-side caller** — brnrd runs the dispatcher
+  for failover; when the user's daemon is offline and failover
+  is approved per policy + budget, brnrd instantiates the
+  same env class against **brnrd's own cloud account** (managed
+  compute) and runs the same `prepare → invoke → finalize`
+  sequence. At launch, only the `fly_machines` env is wired up
+  server-side.
+
+A *third* caller shape — brnrd server-side using a **user's
+stored cloud token** to spawn in the user's cloud account ("BYO
+server-side compute") — is supported by the Protocol but **not
+shipped at launch** per
+[`decision-pricing-shape.md`](decision-pricing-shape.md); wire
+shape preserved in
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
 "BYO compute — designed, deferred."
 
 Promoted from
 [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §2 to be
-a durable reference that per-platform adapter plans cite.
+a durable reference that per-env plans cite. Renamed from
+`research-cloud-runner-patterns.md` on 2026-05-25 (pass 4)
+together with the framing reshape.
 
 ## TL;DR
 
-1. Every cloud-runner adapter implements the existing
+1. Every cloud env implements the existing
    [`design-env-interface.md`](design-env-interface.md) Protocol
-   (`prepare → invoke → finalize`). No new protocol needed; cloud
-   runners are variations of the designed `ssh` env with the
-   transport swapped for a per-platform SDK or REST API.
-2. Each adapter is structurally callable from **either** the
+   (`prepare → invoke → finalize`). **No new protocol exists for
+   cloud envs.** Cloud envs are variations of the designed `ssh`
+   env with the transport swapped for a per-platform SDK or
+   REST API.
+2. Each cloud env is structurally callable from **either** the
    laptop daemon (user's own cloud account) **or** brnrd
    server-side (brnrd's own cloud account for managed compute,
-   OR — when BYO server-side spawn lands post-launch — the user's
-   account using a stored token). At launch, only Fly Machines is
-   wired up server-side; other adapters are laptop-daemon-only.
-3. The cross-adapter complexity lives in three patterns:
+   OR — when BYO server-side spawn lands post-launch — the
+   user's account using a stored token). At launch, only the
+   `fly_machines` env is wired up server-side.
+3. The cross-env complexity lives in three patterns:
    credential delivery, repo delivery, and result delivery. Each
-   has 2-3 ranked options; each platform picks per its constraints.
+   has 2-3 ranked options; each env picks per its platform's
+   constraints.
 4. Per-platform cold start ranges from ~90ms (Daytona from
    snapshot) to ~minutes (cold Codespaces). Per-task cost floor
    for a 5-minute small task ranges from a fraction of a cent
    (Fly Machines per-second) to free-tier (Codespaces personal
    account).
-5. First adapter to ship is **Fly Machines** — fastest cold start,
-   REST API, cheapest per-task, AND the chosen brnrd server-side
-   managed-compute backend. **Codespaces** is the cheap
-   fast-follow on the laptop-daemon-only side (`gh` CLI,
+5. First cloud env to ship is **`fly_machines`** — fastest cold
+   start, REST API, cheapest per-task, AND the chosen brnrd
+   server-side managed-compute backend. **`codespaces`** is the
+   cheap fast-follow on the laptop-daemon-only side (`gh` CLI,
    devcontainer-native, huge audience overlap).
-6. Read-only PaaS platforms (Heroku, Upsun, Render, Railway, App
-   Platform) are NOT cloud-runner candidates — wrong runtime
-   shape. They are *daemon-hosting* candidates and *brnrd
-   backend-hosting* candidates; see
+6. Read-only PaaS platforms (Heroku, Upsun, Render, Railway,
+   App Platform) are NOT cloud-env candidates — wrong runtime
+   shape (no per-task ephemeral sandbox API, no
+   bring-your-own-OCI image, read-only `/app` blocks git
+   worktree-style operations). They ARE *daemon-hosting* and
+   *brnrd backend-hosting* candidates; see
    [`subject-managed-mode.md`](subject-managed-mode.md) → Daemon
    hosting and
    [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
    "Upsun deployment notes."
 
-## Caller axis — same adapter, callable from two places
+## Caller axis — same env, callable from two places
 
-The adapter Protocol is symmetric across callers. What that
-means in practice:
+The env Protocol is symmetric across callers. What that means
+in practice:
 
 - **Laptop daemon caller** (today's `EnvBackend` shape). The
-  user runs the daemon; the daemon picks the adapter from
-  `.brr/config`; the adapter reads the platform token from the
-  user's env. This is the existing designed shape from
-  [`design-env-interface.md`](design-env-interface.md). Available
-  for every adapter listed below as soon as that adapter's
-  plugin ships.
-- **brnrd server-side caller** (managed-compute Surface B).
+  user runs the daemon; the daemon picks the env from
+  `.brr/config` (e.g. `env: fly_machines`); the env reads the
+  platform token from the user's env. This is the existing
+  designed shape from
+  [`design-env-interface.md`](design-env-interface.md).
+  Available for every cloud env listed below as soon as that
+  env's extra ships (per
+  [`decision-monorepo-structure.md`](decision-monorepo-structure.md):
+  `pip install brr[fly]` enables `src/brr/envs/fly_machines/`).
+- **brnrd server-side caller** (managed-compute failover).
   brnrd runs the dispatcher; when a user's daemon is offline
-  and failover is approved per policy, the dispatcher
-  instantiates the adapter against brnrd's own cloud account
-  (managed compute) and runs the same `prepare → invoke →
-  finalize` sequence. At launch, **only Fly Machines is wired up
-  server-side**; the brnrd backend imports the
-  `brr-env-fly-machines` plugin and calls it with its own
-  pool-control token. Specified in
+  and failover is approved per policy, the dispatcher first
+  does a **daemon-equivalent bootstrap** (clone the repo with
+  the per-spawn GH App token into a scratch dir; materialise AI
+  credentials from the vault; construct a `RunContext`
+  equivalent to what a daemon would build), then instantiates
+  the env class against brnrd's own cloud account (managed
+  compute) and runs the same `prepare → invoke → finalize`
+  sequence the daemon would. At launch, **only `fly_machines`
+  is wired up server-side**; brnrd imports the same env
+  class the daemon imports. Specified in
   [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
   "Failover dispatch."
 
-A *third* caller — brnrd server-side using a **user's stored
-cloud token** to spawn in the user's cloud account ("BYO
+The **daemon-equivalent bootstrap layer** is the key
+architectural insight that lets one env class serve both
+callers cleanly: the env doesn't know it's being called from
+brnrd vs a daemon; the caller does the prep work first. The
+env still receives a `RunContext` with `cwd`, `repo_root`,
+`runtime_dir`, etc. — brnrd just constructed them from
+ephemeral scratch rather than from a long-lived local checkout.
+
+A *third* caller — brnrd server-side using a user's stored
+cloud token to spawn in the user's cloud account ("BYO
 server-side compute") — is supported by the Protocol but **not
 shipped at launch** per
 [`decision-pricing-shape.md`](decision-pricing-shape.md). The
 wire shape is preserved in
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
-"BYO compute — designed, deferred" for clean add-back when usage
-justifies. When this third caller comes back, the deltas table
-below covers it under "brnrd server-side caller."
+"BYO compute — designed, deferred" for clean add-back when
+usage justifies. When this third caller comes back, the deltas
+table below covers it under "brnrd server-side caller."
 
-The adapter code is identical between callers. What differs:
+The env code is identical between callers. What differs:
 
 | Concern | Laptop daemon caller | brnrd server-side caller |
 |---------|---------------------|----------------------------|
-| **Token source** | `os.environ[adapter.api_token_env]` | brnrd's own pool-control token (managed compute, launch); decrypted from the user's stored cloud-credential vault at spawn time, cleared after (BYO server-side, deferred) |
-| **Repo delivery** | Per Pattern B below — usually `git clone` with a token from the user's env | Per Pattern B below — but the git token comes from a per-spawn GH App installation token (for GitHub remotes) OR a per-account deploy key (for other remotes) |
-| **AI-credential delivery** | Per Pattern A below — env vars / mounted dirs from the user's home | Decrypted from brnrd's AI-credential vault at spawn time per `design-brnrd-protocol.md` → "AI-credential vault"; injected as env var (api-key shape) OR tar-expanded into `$HOME/<provider>` (dir-tarball shape) |
+| **Token source** | `os.environ[env.api_token_env]` | brnrd's own pool-control token (managed compute, launch); decrypted from the user's stored cloud-credential vault at spawn time, cleared after (BYO server-side, deferred) |
+| **Repo delivery** | Per Pattern B below — usually `git clone` with a token from the user's env | Per Pattern B below — git token comes from a per-spawn GH App installation token (for GitHub remotes) OR a per-account deploy key (for other remotes); brnrd-side bootstrap clones into a scratch dir before invoking the env |
+| **AI-credential delivery** | Per Pattern A below — env vars / mounted dirs from the user's home | Decrypted from brnrd's AI-credential vault at spawn time per `design-brnrd-protocol.md` → "AI-credential vault"; injected as env var (api-key shape) OR tar-expanded into `$HOME/<provider>` (dir-tarball shape) on the bootstrap side, then env's normal mount/inject logic carries it into the sandbox |
 | **Response delivery** | Writes to `.brr/responses/` on the daemon host | Sandbox carries a one-shot `task-key` (Bearer token scoped to one `event_id`, 1h TTL) and POSTs to `/v1/daemons/responses` directly |
 | **Failure salvage** | Daemon's `salvage` rule from [`subject-envs.md`](subject-envs.md): preserve on `error` / `conflict`, destroy on `done` | Server-side default destroy-on-anything; on failure, orphan response written to `.brr/failover-orphans/<event-id>.md` and pushed via git so user sees the trace |
-| **Cost ceiling** | Not the adapter's concern (user pays their own bill in real time) | Enforced before spawn by the dispatcher per `failover-policy.monthly_spawn_cap` and `monthly_cost_cap_usd` |
+| **Cost ceiling** | Not the env's concern (user pays their own bill in real time) | Enforced before spawn by the dispatcher per `failover-policy.monthly_spawn_cap` and `monthly_cost_cap_credits`; debited from the wallet at spawn-finalize per [`design-billing.md`](design-billing.md) |
 
-Implementation guarantee: any adapter written for the laptop
-caller can be invoked from the server caller by wrapping it in a
-small caller-context object that injects the token source and the
-response sink. Adapters do not need two implementations.
+Implementation guarantee: any env written for the laptop caller
+can be invoked from the server caller without env-side changes.
+The caller-context wrapper that injects the token source, the
+bootstrap layer for repo / AI credentials, and the response
+sink is the brnrd backend's responsibility — not the env's.
 
-This is the load-bearing reason adapters ship as plugin packages:
-the same plugin package the laptop daemon `pip install`s as
-`brr-env-fly-machines` is the same package the brnrd backend
+This is the load-bearing reason envs ship as part of `brr`
+itself (gated by extras per
+[`decision-monorepo-structure.md`](decision-monorepo-structure.md))
+and not as a separate "cloud-runner" subsystem: the same
+`src/brr/envs/fly_machines/` module the daemon loads when the
+user has `pip install brr[fly]` is the same module brnrd
 imports for its managed-compute spawn path. One implementation,
 two deployment targets.
 
@@ -460,3 +495,22 @@ way around.
   OAuth) explicitly first-class on the server-side path via the
   dir-tarball shape. Third reframe breadcrumb in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
+- 2026-05-25 (pass 4) — renamed from
+  `research-cloud-runner-patterns.md` to `research-cloud-envs.md`
+  with the "cloud runs ARE envs" architectural unification.
+  TL;DR and "Caller axis" sections reframed: cloud envs
+  implement the existing `EnvBackend` Protocol from
+  [`design-env-interface.md`](design-env-interface.md); there
+  is no separate "cloud-runner adapter" concept. The brnrd
+  server-side caller does a daemon-equivalent bootstrap (clone
+  repo with per-spawn GH App token, materialise AI creds,
+  construct a `RunContext`) before invoking the same env class
+  the daemon would use. Caller-axis table updated to reflect
+  the new bootstrap + env-class shape; cost ceiling row now
+  points at [`design-billing.md`](design-billing.md). Plugin /
+  packaging language updated for the
+  [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+  reshape (extras-gated first-party envs at `src/brr/envs/`).
+  Sixth reframe breadcrumb in
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1
+  (fourth 2026-05-25 pass).

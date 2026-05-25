@@ -58,8 +58,10 @@ Out of scope, explicitly:
   `src/brnrd/` in the monorepo per
   [`decision-monorepo-structure.md`](decision-monorepo-structure.md);
   this page is its API spec, not its code).
-- Payment / billing surfaces beyond per-task accounting hooks (the
-  pricing model lives in
+- Wallet / Stripe / debit / refund mechanics — these are spec'd
+  in [`design-billing.md`](design-billing.md); this page only
+  exposes the per-task accounting hooks the billing design
+  consumes. Pricing model lives in
   [`decision-pricing-shape.md`](decision-pricing-shape.md)).
 - **BYO cloud-platform tokens** for failover spawn (Fly / Modal /
   Daytona / etc. tokens stored on brnrd). Designed shape
@@ -188,9 +190,11 @@ The daemon's task pipeline is **unchanged** — only the transport
 layer for events and responses is new. The existing BYO gates write
 to `.brr/inbox/` and read from `.brr/responses/`; the cloud-gate
 adapter is a peer, not a replacement. The failover-spawn path
-reuses the same cloud-runner adapter the daemon would use if it
-were running, called from brnrd server-side against brnrd's
-own cloud account — same adapter code, different caller, different
+reuses the same env class the daemon would use if it were
+running (cloud envs are envs — see
+[`research-cloud-envs.md`](research-cloud-envs.md)), called from
+brnrd server-side against brnrd's own cloud account — same env
+code, different caller, different
 token.
 
 ## Multi-project routing
@@ -381,12 +385,12 @@ store.
 CLI surface:
 
 ```
-brr accounts add-credential anthropic --key sk-ant-...
-brr accounts add-credential anthropic --dir ~/.claude
-brr accounts add-credential openai --key sk-...
-brr accounts add-credential github --key ghp_...
-brr accounts list-credentials
-brr accounts remove-credential <id>
+brr brnrd creds add anthropic --key sk-ant-...
+brr brnrd creds add anthropic --dir ~/.claude
+brr brnrd creds add openai --key sk-...
+brr brnrd creds add github --key ghp_...
+brr brnrd creds list
+brr brnrd creds remove <id>
 ```
 
 The `--dir` path tars the directory, base64-encodes, uploads. At
@@ -432,20 +436,21 @@ The prompt payload posted via the gate carries:
 
 These are called by brnrd's dispatcher, not directly by clients;
 documented here because they're part of the protocol surface that
-the cloud-runner adapter consumes.
+the server-side env-invocation path consumes.
 
 | Method | Path | Description | Persists |
 |--------|------|-------------|----------|
 | `POST` | `/v1/internal/dispatch/{event_id}` | Internal dispatcher entry point. Decides online → enqueue OR offline → policy → prompt-or-spawn. | Dispatch log row |
 | `POST` | `/v1/internal/spawns` | Record a spawn attempt (account_id, project_id, event_id, started_at, est_cost_usd). | spawn row |
-| `PATCH` | `/v1/internal/spawns/{spawn_id}` | Update spawn outcome (finished_at, exit_code, actual_cost_usd). Drives billing accounting per [`decision-pricing-shape.md`](decision-pricing-shape.md). | spawn row update |
+| `PATCH` | `/v1/internal/spawns/{spawn_id}` | Update spawn outcome (finished_at, exit_code, actual_cost_usd). Triggers the wallet debit per [`design-billing.md`](design-billing.md) ("Debit mechanics") — USD converted to credits in the billing layer. | spawn row update; wallet ledger row |
 
 ## Pairing flow
 
 ### Telegram
 
 ```
-1. User: `brr accounts pair telegram --project <project_id>` on the box running their daemon
+1. User: `brr brnrd pair telegram --project <project_id>` on the box running their daemon
+   (the daemon is already account-paired via an earlier `brr brnrd connect`)
    → CLI calls POST /v1/accounts/pair/telegram with project_id, gets `pairing_code = "BR1234"`
    → CLI prints: "Send `/start BR1234` to @brr_bot"
 
@@ -466,7 +471,8 @@ the cloud-runner adapter consumes.
 ### GitHub
 
 ```
-1. User: `brr accounts pair github`
+1. User: `brr brnrd pair github`
+   (the daemon is already account-paired via an earlier `brr brnrd connect`)
    → CLI calls POST /v1/accounts/pair/github, gets the GitHub App
      install URL with `state=` encoding account_id
    → CLI opens the URL in browser; user installs the brnrd App on
@@ -478,7 +484,7 @@ the cloud-runner adapter consumes.
      per repo (or prompts in the dashboard if multi-repo install:
      "which projects should these repos belong to?")
    → user adjusts bindings in the dashboard or via
-     `brr accounts bind-repo` CLI if defaults don't suit
+     `brr brnrd projects bind` CLI if defaults don't suit
 
 3. User: opens a PR / issue, comments `@brr <task>`
    → GitHub delivers issue_comment webhook to brnrd
@@ -489,14 +495,14 @@ the cloud-runner adapter consumes.
 ### AI-credential setup
 
 ```
-1. User: `brr accounts add-credential anthropic --key sk-ant-...`
-   OR     `brr accounts add-credential anthropic --dir ~/.claude`
+1. User: `brr brnrd creds add anthropic --key sk-ant-...`
+   OR     `brr brnrd creds add anthropic --dir ~/.claude`
    → CLI POSTs to /v1/accounts/ai-credentials with the chosen shape
    → brnrd encrypts and stores; returns credential_id
 
 2. User: repeats for openai / google / github as needed
 
-3. User: `brr accounts failover --enable --mode ask --monthly-cap 100`
+3. User: `brr brnrd policy set --enable --mode ask --monthly-cap 100`
    → CLI POSTs to /v1/accounts/failover-policy
    → brnrd flips failover_enabled = true for the account, sets caps
    → Now: any event arriving while no daemon is online and the
@@ -539,8 +545,11 @@ decision tree:
      "never"                      → enqueue; done
 
 6. (Spawn path) Issue a one-shot task-key, decrypt AI creds into
-   process memory, invoke the cloud-runner adapter server-side
-   against brnrd's Fly Machines pool with:
+   process memory, run the daemon-equivalent bootstrap (clone
+   repo with the per-spawn GH App token, materialise AI creds),
+   construct a `RunContext`, then invoke the `fly_machines` env
+   class (same class the daemon would use) against brnrd's Fly
+   Machines pool with:
      - the AI credentials (env vars or dir-tarball expansion)
      - a per-spawn GH App installation token (push permission)
      - the event payload + project_id
@@ -555,8 +564,13 @@ decision tree:
      - POSTs the response with the task-key
      - tears itself down on clean exit
 
-8. brnrd records the spawn outcome (cost, duration, exit code,
-   project_id) for billing accounting and audit log.
+8. brnrd records the spawn outcome (cost USD, duration, exit
+   code, project_id), the billing layer converts to credits and
+   debits the wallet per
+   [`design-billing.md`](design-billing.md) → "Debit mechanics"
+   (free credits drawn first; paid drawn only after; spawn
+   completes even if it overshoots, but next spawn blocks
+   pending top-up), and the audit log appends a metadata row.
 ```
 
 The decision is per-event, not per-account-session — the user can
@@ -829,11 +843,11 @@ The trust model:
   Spawn-time decryption happens in process memory; the cleartext
   token is passed to the runner CLI / API call and immediately
   cleared.
-- **Easy revoke.** `brr accounts remove-credential <id>` and
-  `brr accounts failover --disable` both work without affecting
+- **Easy revoke.** `brr brnrd creds remove <id>` and
+  `brr brnrd policy set --disable` both work without affecting
   in-flight tasks. In-flight tasks complete; new spawns refuse.
 - **Per-account audit log.** Every spawn surfaced in
-  `brr accounts audit` with timestamp, event_id, project_id,
+  `brr brnrd audit` with timestamp, event_id, project_id,
   cost estimate, exit status, AI provider used.
 - **Blast-radius bound.** Even if brnrd's database is
   compromised, the per-provider tokens grant only what their
@@ -879,11 +893,12 @@ Adapter code is identical (same cloud-runner plugin called either
 way); only the token source and the cost-accounting side differ
 (BYO doesn't bill brnrd-side compute; user pays own cloud bill).
 
-Daemon-side cloud-runner adapters (a laptop daemon fans out to
-the user's cloud via a `brr-env-*` plugin) remain independent of
-managed mode entirely. Those are user-driven plugin work, not
-part of brnrd, and ship per
-[`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
+Daemon-side cloud envs (a laptop daemon fans out to the user's
+cloud via a first-party env extra like `brr[fly]` or a
+third-party `brr-env-<name>` registered via the `brr.envs`
+entry point) remain independent of managed mode entirely. Those
+are part of the env work, not part of brnrd, and ship per
+[`research-cloud-envs.md`](research-cloud-envs.md)
 on their own clock.
 
 ## Upsun deployment notes (brnrd backend)
@@ -953,24 +968,32 @@ write the Upsun shape once, use it twice.
    conversation graph.
 3. [`decision-pricing-shape.md`](decision-pricing-shape.md) for
    the pricing model the per-task accounting hooks feed.
-4. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
+4. [`design-billing.md`](design-billing.md) for the wallet /
+   Stripe / debit-at-finalize / refund mechanics that turn
+   spawn outcomes from this design into actual billing
+   operations.
+5. [`decision-cli-shape.md`](decision-cli-shape.md) for the
+   `brr brnrd <subcommand>` CLI verbs that wrap these
+   endpoints.
+6. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
    for the gate-adapter implementation sequencing (GH App slice
    first, TG bot fast-follow on the same backend).
-5. [`plan-failover-compute.md`](plan-failover-compute.md) for
+7. [`plan-failover-compute.md`](plan-failover-compute.md) for
    the failover-spawn implementation sequencing (AI-credential
    vault, dispatcher decision tree, brnrd-owned Fly pool,
    permission gate API).
-6. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
+8. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
    for the dashboard built on top of these endpoints.
-7. [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
-   for the cross-adapter patterns the server-side caller uses.
-8. [`decision-connectors-layering.md`](decision-connectors-layering.md)
-   for why gates stay per-project and connectors live at the
-   platform level.
-9. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
-   for where `src/brnrd/` lives and how the dashboard / plugins
-   relate.
-10. [`src/brr/gates/README.md`](../src/brr/gates/README.md) for the
+9. [`research-cloud-envs.md`](research-cloud-envs.md)
+   for the cross-env patterns the server-side caller uses
+   (cloud runs are envs).
+10. [`decision-connectors-layering.md`](decision-connectors-layering.md)
+    for why gates stay per-project and connectors live at the
+    platform level.
+11. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+    for where `src/brnrd/` lives and how the dashboard / envs
+    relate.
+12. [`src/brr/gates/README.md`](../src/brr/gates/README.md) for the
     existing BYO gate protocol the cloud gate is peer to.
 
 ## Lineage
@@ -1019,3 +1042,19 @@ write the Upsun shape once, use it twice.
   product-name references in this page updated from `brr.run`
   to `brnrd`; the API surface, endpoint paths, and protocol
   contract are unchanged.
+- 2026-05-25 (pass 4) — spawn-finalize accounting hook now
+  triggers a wallet debit per the new
+  [`design-billing.md`](design-billing.md) (the page that now
+  owns wallet / Stripe / refund mechanics; this page only
+  exposes the per-task accounting hooks the billing design
+  consumes). Cost fields stay USD on the API surface;
+  conversion to credits happens at debit time in the billing
+  layer. Failover-spawn step 6 description updated to call the
+  env class directly (since "cloud runners are envs" per
+  [`research-cloud-envs.md`](research-cloud-envs.md), the
+  failover path is a daemon-equivalent bootstrap +
+  `envs.get_env("fly_machines")` invocation, not a separate
+  "cloud-runner adapter"). Cloud-runner-adapter framing dropped
+  in the spawn step + the BYO-deferred section. Sixth reframe
+  breadcrumb in
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
