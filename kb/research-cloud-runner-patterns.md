@@ -1,13 +1,33 @@
 # Research: cloud-runner patterns and per-platform deltas
 
-Cross-adapter analysis for the cloud-execution work in
-[managed mode](subject-managed-mode.md). The same adapter code is
-called from two callers (see "Caller axis" below): the laptop
-daemon (Surface B / BYO compute, *active* mode) and brr.run
-server-side (Surface B / *failover* mode and Surface C / *managed
-compute*). Promoted from
-[`notes-pondering-fleet.md`](notes-pondering-fleet.md) §2 to be a
-durable reference that per-platform adapter plans cite.
+Cross-adapter analysis for cloud-execution adapters in brr. The
+same adapter code is consumable from two callers (see "Caller
+axis" below):
+
+- **Laptop daemon caller** — user installs a `brr-env-*` plugin
+  and uses their own cloud account. Independent of managed mode;
+  this is user-driven plugin work shipped on each plugin's own
+  clock.
+- **brr.run server-side caller** — brr.run uses one (or a few)
+  adapter(s) on its **own** cloud account to power the managed-
+  compute failover surface from
+  [`subject-managed-mode.md`](subject-managed-mode.md) (Surface
+  B). Fly Machines is the first adapter used this way.
+
+At launch, brr.run ships exactly one server-side adapter (Fly
+Machines on a brr.run-owned Fly app). Other adapters are
+available to laptop-daemon users but **not** wired up server-side
+on brr.run — BYO server-side compute (a user's cloud token stored
+on brr.run, used by brr.run to spawn in their account) is
+deferred from launch per
+[`decision-pricing-shape.md`](decision-pricing-shape.md); the
+wire shape is preserved in
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+"BYO compute — designed, deferred."
+
+Promoted from
+[`notes-pondering-fleet.md`](notes-pondering-fleet.md) §2 to be
+a durable reference that per-platform adapter plans cite.
 
 ## TL;DR
 
@@ -16,10 +36,12 @@ durable reference that per-platform adapter plans cite.
    (`prepare → invoke → finalize`). No new protocol needed; cloud
    runners are variations of the designed `ssh` env with the
    transport swapped for a per-platform SDK or REST API.
-2. Each adapter has **two callers** — the laptop daemon and
-   brr.run server-side — same code, two callers (see "Caller
-   axis" below for the shared-surface guarantees and the small
-   deltas each caller imposes).
+2. Each adapter is structurally callable from **either** the
+   laptop daemon (user's own cloud account) **or** brr.run
+   server-side (brr.run's own cloud account for managed compute,
+   OR — when BYO server-side spawn lands post-launch — the user's
+   account using a stored token). At launch, only Fly Machines is
+   wired up server-side; other adapters are laptop-daemon-only.
 3. The cross-adapter complexity lives in three patterns:
    credential delivery, repo delivery, and result delivery. Each
    has 2-3 ranked options; each platform picks per its constraints.
@@ -28,54 +50,76 @@ durable reference that per-platform adapter plans cite.
    for a 5-minute small task ranges from a fraction of a cent
    (Fly Machines per-second) to free-tier (Codespaces personal
    account).
-5. First adapter to ship is **Fly Machines** (fastest cold start,
-   REST API, cheapest per-task). **Codespaces** is the cheap
-   fast-follow (`gh` CLI, devcontainer-native, huge audience
-   overlap).
+5. First adapter to ship is **Fly Machines** — fastest cold start,
+   REST API, cheapest per-task, AND the chosen brr.run server-side
+   managed-compute backend. **Codespaces** is the cheap
+   fast-follow on the laptop-daemon-only side (`gh` CLI,
+   devcontainer-native, huge audience overlap).
 6. Read-only PaaS platforms (Heroku, Upsun, Render, Railway, App
    Platform) are NOT cloud-runner candidates — wrong runtime
-   shape. They are *daemon-hosting* candidates; see
+   shape. They are *daemon-hosting* candidates and *brr.run
+   backend-hosting* candidates; see
    [`subject-managed-mode.md`](subject-managed-mode.md) → Daemon
-   hosting.
+   hosting and
+   [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+   "Upsun deployment notes."
 
-## Caller axis — same adapter, two callers
+## Caller axis — same adapter, callable from two places
 
-Each cloud-runner adapter is consumed by both:
+The adapter Protocol is symmetric across callers. What that
+means in practice:
 
-- **Laptop daemon caller.** The user runs the daemon; the daemon
-  picks the adapter from `.brr/config`; the adapter reads the
-  platform token from the user's env. This is the existing
-  designed shape from
-  [`design-env-interface.md`](design-env-interface.md).
-- **brr.run server-side caller.** brr.run runs the dispatcher;
-  when a user's daemon is offline and failover is enabled, the
-  dispatcher decrypts the user's stored token (or uses brr.run's
-  own token for Surface C / managed compute), instantiates the
-  adapter, and runs the same `prepare → invoke → finalize`
-  sequence. Specified in
+- **Laptop daemon caller** (today's `EnvBackend` shape). The
+  user runs the daemon; the daemon picks the adapter from
+  `.brr/config`; the adapter reads the platform token from the
+  user's env. This is the existing designed shape from
+  [`design-env-interface.md`](design-env-interface.md). Available
+  for every adapter listed below as soon as that adapter's
+  plugin ships.
+- **brr.run server-side caller** (managed-compute Surface B).
+  brr.run runs the dispatcher; when a user's daemon is offline
+  and failover is approved per policy, the dispatcher
+  instantiates the adapter against brr.run's own cloud account
+  (managed compute) and runs the same `prepare → invoke →
+  finalize` sequence. At launch, **only Fly Machines is wired up
+  server-side**; the brr.run backend imports the
+  `brr-env-fly-machines` plugin and calls it with its own
+  pool-control token. Specified in
   [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
-  "Failover dispatch".
+  "Failover dispatch."
+
+A *third* caller — brr.run server-side using a **user's stored
+cloud token** to spawn in the user's cloud account ("BYO
+server-side compute") — is supported by the Protocol but **not
+shipped at launch** per
+[`decision-pricing-shape.md`](decision-pricing-shape.md). The
+wire shape is preserved in
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+"BYO compute — designed, deferred" for clean add-back when usage
+justifies. When this third caller comes back, the deltas table
+below covers it under "brr.run server-side caller."
 
 The adapter code is identical between callers. What differs:
 
 | Concern | Laptop daemon caller | brr.run server-side caller |
 |---------|---------------------|----------------------------|
-| **Token source** | `os.environ[adapter.api_token_env]` | Decrypted in-memory from credential store at spawn time, cleared after |
-| **Repo delivery** | Per Pattern B below — usually `git clone` with a token from the user's env | Per Pattern B below — but the git token comes from the GH App install (for GitHub remotes) OR a per-account deploy key (for other remotes) |
+| **Token source** | `os.environ[adapter.api_token_env]` | brr.run's own pool-control token (managed compute, launch); decrypted from the user's stored cloud-credential vault at spawn time, cleared after (BYO server-side, deferred) |
+| **Repo delivery** | Per Pattern B below — usually `git clone` with a token from the user's env | Per Pattern B below — but the git token comes from a per-spawn GH App installation token (for GitHub remotes) OR a per-account deploy key (for other remotes) |
+| **AI-credential delivery** | Per Pattern A below — env vars / mounted dirs from the user's home | Decrypted from brr.run's AI-credential vault at spawn time per `design-brr-run-protocol.md` → "AI-credential vault"; injected as env var (api-key shape) OR tar-expanded into `$HOME/<provider>` (dir-tarball shape) |
 | **Response delivery** | Writes to `.brr/responses/` on the daemon host | Sandbox carries a one-shot `task-key` (Bearer token scoped to one `event_id`, 1h TTL) and POSTs to `/v1/daemons/responses` directly |
-| **Failure salvage** | Daemon's `salvage` rule from [`subject-envs.md`](subject-envs.md): preserve on `error` / `conflict`, destroy on `done` | Server-side default destroy-on-anything; salvage requires explicit `--debug-failover` opt-in to avoid stranded paid resources |
-| **Cost ceiling** | Not the adapter's concern (user pays their own bill in real time) | Enforced before spawn by the dispatcher per `failover-policy.monthly_cost_cap_usd` |
+| **Failure salvage** | Daemon's `salvage` rule from [`subject-envs.md`](subject-envs.md): preserve on `error` / `conflict`, destroy on `done` | Server-side default destroy-on-anything; on failure, orphan response written to `.brr/failover-orphans/<event-id>.md` and pushed via git so user sees the trace |
+| **Cost ceiling** | Not the adapter's concern (user pays their own bill in real time) | Enforced before spawn by the dispatcher per `failover-policy.monthly_spawn_cap` and `monthly_cost_cap_usd` |
 
 Implementation guarantee: any adapter written for the laptop
 caller can be invoked from the server caller by wrapping it in a
 small caller-context object that injects the token source and the
 response sink. Adapters do not need two implementations.
 
-This is the load-bearing reason all the per-platform briefs below
-ship as plugins, not built-ins: the same plugin package is
-imported by the laptop daemon's gate-resolution path AND by the
-brr.run backend's failover-spawn path. One implementation, two
-deployment targets.
+This is the load-bearing reason adapters ship as plugin packages:
+the same plugin package the laptop daemon `pip install`s as
+`brr-env-fly-machines` is the same package the brr.run backend
+imports for its managed-compute spawn path. One implementation,
+two deployment targets.
 
 ## Part 1 · The minimum protocol delta
 
@@ -134,6 +178,26 @@ ranked vehicles, least-to-most operationally demanding:
 
 All adapters should consume `_DOCKER_DEFAULT_CRED_PATHS` rather
 than inventing per-platform variants.
+
+**Server-side caller specifics.** The brr.run server-side caller
+sources its credentials from the AI-credential vault per
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+"AI-credential vault endpoints." The vault accepts two payload
+shapes (api-key + dir-tarball) on a single endpoint; the
+dispatcher decrypts them in process memory at spawn time and
+injects via the appropriate vehicle from the list above:
+
+- api-key shape → vehicle 1 (env var injection at machine create).
+- dir-tarball shape → vehicle 2 if the platform supports an
+  encrypted secret store for tar payloads (Fly Machines has this
+  via `flyctl secrets set --staged` + a small startup decode), OR
+  vehicle 3 (one-shot upload before the runner CLI starts) as
+  fallback.
+
+Subscription-auth (Pro / Plus / OAuth) users are first-class on
+the server-side path via the dir-tarball shape — no API-key
+provisioning required, same UX as the local docker env's
+mounted-dir flow.
 
 ### Pattern B — Repo delivery
 
@@ -381,3 +445,18 @@ way around.
   part of the managed-mode KB shape rollout. Per-platform briefs
   grounded in 2026 vendor docs surveyed during the pondering
   reshape.
+- 2026-05-22 — added Caller-axis section formalising that
+  adapters are consumed by two callers (laptop daemon, brr.run
+  server-side) with small per-caller deltas.
+- 2026-05-25 — Caller-axis section refreshed: BYO server-side
+  compute (user's stored cloud token used by brr.run) deferred
+  from launch per
+  [`decision-pricing-shape.md`](decision-pricing-shape.md); only
+  the brr.run-owned managed-compute caller wires up at launch
+  (Fly Machines only). Pattern A grew a "server-side caller
+  specifics" subsection covering the AI-credential vault's two
+  payload shapes (api-key + dir-tarball) and how the dispatcher
+  injects them per platform. Subscription-auth (Pro / Plus /
+  OAuth) explicitly first-class on the server-side path via the
+  dir-tarball shape. Third reframe breadcrumb in
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.

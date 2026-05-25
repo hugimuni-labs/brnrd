@@ -4,8 +4,8 @@ Hub for brr's "managed" tier: the work that lets adopters skip the
 per-user bot setup, keeps their tasks moving when their laptop is
 offline, and offers a coherent paid path without contradicting the
 "everything is OSS self-hostable" stance. Companion to
-[`subject-envs.md`](subject-envs.md) (the env protocol the
-cloud-runner adapters extend) and
+[`subject-envs.md`](subject-envs.md) (the env protocol that the
+managed-compute sandbox image is built around) and
 [`subject-fleet-overlays.md`](subject-fleet-overlays.md) (the
 broader fleet axes, of which managed mode is one strand).
 Provenance lives in
@@ -16,20 +16,39 @@ Provenance lives in
 The brr pitch is "your laptop, accessible from anywhere." A user
 buying that pitch is buying *work continuity* — they want their
 ongoing work (deploys, log checks, quick code asks, light-bulb
-fixes) to keep happening when they're not in front of their laptop.
-The laptop is the default *home* for the work because that's where
-their editor, dotfiles, credentials, conversation history, and
+fixes) to keep happening when they're not in front of their
+laptop. The laptop is the default *home* for the work because
+that's where their editor, dotfiles, conversation history, and
 trust live. But "home" and "always-on" are different requirements:
 when the laptop is briefly away, the work should still progress,
 landing back home when home returns.
 
 This frame matters because it eliminates a bad-shape answer
 (deploy brr to an always-on third box, operate it as infra) and
-clarifies a good-shape answer (brr.run is the always-on dispatcher;
-ephemeral cloud sandboxes execute when home is offline; results
-flow back to home via git). Earlier pondering had the always-on
-box as the preferred BYO answer to laptop-down dispatch; the
-2026-05-22 reframe demoted it — see Daemon hosting below.
+clarifies a good-shape answer (brr.run is the always-on
+dispatcher; ephemeral cloud sandboxes execute when home is
+offline; results flow back to home via git). Earlier pondering had
+the always-on box as the preferred BYO answer to laptop-down
+dispatch; the 2026-05-22 reframe demoted it. See Daemon hosting
+below.
+
+## brr.run as the product
+
+brr.run is two complementary angles on the same thing:
+
+- **brr.run as a service** — hosted bots + dispatcher +
+  credential vault + managed compute pool + dashboard. The thing
+  a user signs up for to skip the bot-setup hassle and keep work
+  flowing when the laptop sleeps.
+- **brr.run as a fleet manager** — the dashboard view of a
+  user's daemons, projects, bindings, AI credentials, audit log,
+  cost ledger, and (eventually) cross-project agentic behaviours.
+
+These were briefly separated under the codename "brnrd" while
+each was being scoped; the 2026-05-25 reshape collapsed them.
+There's one product, one name. The dashboard is "the brr.run
+dashboard." If a future agentic-secretary layer earns its own
+brand, it can be named then; pre-naming buys nothing.
 
 ## Current state
 
@@ -38,24 +57,56 @@ constraint shaping it: the same paid tier needs to ship at launch
 so early adopters see a clearly-articulated free / paid split
 rather than a bait-and-switch after they've invested. Pricing
 shape is captured in
-[`decision-pricing-shape.md`](decision-pricing-shape.md); the wire
-contract that ties everything together is in
-[`design-brr-run-protocol.md`](design-brr-run-protocol.md).
+[`decision-pricing-shape.md`](decision-pricing-shape.md); the
+wire contract that ties everything together is in
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md); the
+dashboard MVP is in
+[`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md).
 
-Three paid surfaces, all riding the same brr.run protocol:
+**Two surfaces at launch, one designed-deferred:**
 
 | Surface | What it is | Pricing | Adoption pain it removes |
 |---------|-----------|---------|--------------------------|
-| **A. Managed gates / IO** | Hosted bots (GitHub App, Telegram, later Slack / Discord / GitLab) routing events to a per-account brr.run inbox | Free tier (with rate caps) | Per-user GitHub App / BotFather setup — currently the longest single friction in adoption |
-| **B. BYO failover compute** | When the user's daemon is offline, brr.run spawns a per-task ephemeral sandbox in the user's cloud account (Fly / Modal / Daytona / E2B / Codespaces / etc.) and forwards the result through the gate | Free tier (with rate caps on dispatches; user pays own cloud bill) | "My laptop has to be up" — without the user operating a separate always-on box |
-| **C. Managed compute** | Same failover spawn, but in brr.run's cloud account; user pays per-task with margin | Usage-based, pass-through with margin | "I don't want to set up any cloud account" — easiest BYO-less path |
+| **A. Managed dispatcher** — hosted bots + multi-project routing + permission prompts + audit | Hosted GH App + Telegram bot routing events to a per-account brr.run inbox, multi-project routing on top of one bot per platform, permission prompts before failover spawns, audit log | Free tier (rate caps, 1000 events/month, 100 failover spawns/month) | Per-user GH App / BotFather setup — currently the longest friction in adoption — AND "my laptop has to be up" — together, in one flow |
+| **B. Managed compute** — failover spawn on brr.run-owned cloud | Same dispatcher; when the user's daemon is offline and the user opts in, brr.run spawns a per-task ephemeral sandbox on its own Fly Machines pool, decrypts the user's AI credentials into the sandbox, runs the task, returns the response via the gate | Usage-based, pass-through with margin (free tier covers 100 spawns/month per above) | "I want managed continuity without a credit card surprise" — paid only when failover actually fires AND the user approved |
+| **C. BYO compute** (deferred) | Same failover spawn but in the user's cloud account using a user-stored cloud-platform token | Free dispatcher tier covers it | Out of scope at launch per `decision-pricing-shape.md`; wire shape preserved in the design page for clean add-back when usage justifies |
 
 Surface A is the *entry point* (free, broad reach). Surface B is
-the *self-hostable elaboration* (same code, user's tokens, user's
-cloud bill). Surface C is the *paid convenience* (same code,
-brr.run's cloud account, usage-billed with margin). All three are
-the same dispatcher + same cloud-runner adapters; what differs is
-who holds the cloud token and who pays the cloud bill.
+the *paid convenience* (same dispatcher, brr.run's cloud account,
+usage-billed with margin). Surface C is deferred — the protocol
+supports it, but implementation surface area was disproportionate
+to the ~5% of users who'd value it at launch.
+
+Daemon-side cloud-runner adapters (a laptop daemon fans out to
+*the user's* cloud via a `brr-env-*` plugin) remain independent
+of managed mode entirely. Those are user-driven plugin work,
+shipped per
+[`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
+on their own clock; they don't need brr.run.
+
+## Data minimization — load-bearing for the trust story
+
+brr.run is intentionally **thin**: a dispatcher + a credential
+vault + an accounting ledger. User content (prompts, code,
+responses, conversation history, repo state) lives on the daemon
+side and is never mirrored to brr.run. Concretely:
+
+- Event content is dropped from brr.run once dispatched. Metadata
+  retained for audit (who/when/which platform/which project/
+  outcome).
+- Response bodies pass through the gate, are not stored.
+- Conversation history rendered live in the dashboard by querying
+  the daemon when online; no shadow copy on brr.run.
+- AI credentials encrypted at rest with per-account envelope
+  keys; root key in a KMS managed separately from the database.
+- Audit log is metadata-only.
+
+The promise: "brr.run doesn't have your code." This shapes user
+trust, bounds breach blast radius, and matches the
+OSS-self-hostable framing (we hold less; users hold their data).
+Full principle and per-endpoint annotations in
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+"Data minimization".
 
 ## How the dispatcher works
 
@@ -67,41 +118,49 @@ event arrives at brr.run (TG message / GH @brr comment / etc.)
          │
          ▼
 ┌──────────────────────────┐
-│  is the user's daemon    │
-│  online (recent poll)?   │
+│  resolve project_id from │
+│  (chat binding or repo)  │
+└──────┬───────────────────┘
+       ▼
+┌──────────────────────────┐
+│  is a daemon for this    │
+│  project online?         │
 └──────┬───────────────┬───┘
        │ yes           │ no
        ▼               ▼
-  enqueue        ┌───────────────────────┐
-  for daemon     │  failover enabled     │
-  to drain       │  AND under caps?      │
-  (today's       └─┬─────────────────┬───┘
-   path)           │ yes             │ no
-                   ▼                 ▼
-            spawn per-task     queue event +
-            sandbox in         notify user
-            configured cloud   via gate
-            (BYO token OR
-             brr.run's token)
+  enqueue        ┌────────────────────────┐
+  for daemon     │  failover enabled,     │
+  to drain       │  required AI credentials│
+  (existing      │  present, under caps?  │
+   gate path)    └─┬──────────────────┬───┘
+                   │ yes              │ no
+                   ▼                  ▼
+            policy mode?         queue + notify
+              ask: prompt via    user via gate
+                   gate, await
+              auto: spawn now
                    │
                    ▼
-            sandbox runs the
-            runner, pushes the
-            branch, POSTs the
-            response, tears
-            itself down
+            spawn per-task sandbox
+            in brr.run's Fly pool
+            with AI creds decrypted
+            and per-spawn GH App
+            token. Sandbox runs the
+            runner, pushes branch,
+            POSTs response, tears
+            itself down.
 ```
 
-The same cloud-runner adapter that a laptop daemon uses for BYO
-compute (Surface B in *active* mode) runs server-side under
-brr.run when the daemon is offline (Surface B in *failover* mode,
-or Surface C with brr.run's token). Same protocol, two callers.
-See [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+Same code path serves the spawn step whether it was triggered by
+auto-approve or by an explicit "Approve" tap on a prompt. The
+dispatcher's job is to walk the policy tree and emit one of four
+outcomes (enqueue, spawn, prompt, error). See
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
 "Failover dispatch" for the precise decision tree and
 [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
-for the per-adapter implementation notes.
+for the cross-adapter patterns the server-side spawn uses.
 
-## Surface A — managed gates
+## Surface A — managed dispatcher (gates + routing + prompts)
 
 Today's gates are BYO: each adopter creates a Telegram bot via
 @BotFather or registers a GitHub App, copies the token / app
@@ -112,84 +171,187 @@ adoption (more so for GitHub than Telegram).
 Managed gates collapse this to one CLI verb plus a bot
 interaction:
 
-1. User runs `brr connect brr.run`, authenticates, gets a pairing
-   code or install URL.
-2. User `/invite @brr_bot` on Telegram or installs the brr.run
-   GitHub App on selected repos.
-3. brr.run's hosted bot receives events, routes them to the
-   user's per-account inbox-as-service.
-4. The user's daemon (wherever it runs) long-polls brr.run and
-   drains the inbox the same way it drains `.brr/inbox/` today.
+1. User runs `brr accounts pair telegram` (or `... github`),
+   authenticates, gets a pairing code or install URL.
+2. User `/start <code>` to @brr_bot on Telegram, or installs the
+   brr.run GitHub App on selected repos.
+3. brr.run's hosted bot receives events and routes them to the
+   user's per-account inbox-as-service, scoped by project.
+4. The user's daemon long-polls brr.run and drains the inbox the
+   same way it drains `.brr/inbox/` today.
 
-The wire protocol and brr.run-side API surface live in
-[`design-brr-run-protocol.md`](design-brr-run-protocol.md). The
-launch sequencing — GH App adapter first (largest pain relief),
-TG bot adapter as fast-follow on the same backend — is in
-[`plan-managed-gates-launch.md`](plan-managed-gates-launch.md).
+### Multi-project routing
 
-## Surface B — BYO failover compute
+A single hosted bot per platform serves all of a user's projects.
+Two resolution mechanisms:
 
-Per-task fan-out when the user's daemon is offline (or — as a
-v-next opt-in — when it's overloaded). The architectural shape is
-already covered by the existing
-[`design-env-interface.md`](design-env-interface.md) — cloud-runner
-envs are variations of the designed `ssh` env, with the transport
-swapped for a per-platform SDK or REST API. No new env-protocol
-design needed.
+- **GitHub** has it naturally: each repo lives under one
+  installation; one repo → one project binding.
+- **Telegram / Slack / Discord** need a per-chat sticky binding
+  plus an in-message override:
+  - `/connect <project-name>` binds the current chat to a
+    project.
+  - `/project <name> <task>` or `@<name> <task>` routes a single
+    message elsewhere without changing the binding.
+  - `/projects` lists projects + their daemon status + their
+    bound chats.
+  - `/status` shows the current chat's project, daemon state,
+    queue depth, recent activity.
 
-The *new* work for Surface B is server-side: brr.run holds the
-user's per-platform tokens, calls the adapter on the user's behalf
-when the daemon is offline, and accounts for the spawn. That
-machinery is specified in
+Wire protocol and command grammar in
 [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
-"Failover dispatch" + "Cloud-token security model" and sequenced
-in [`plan-failover-compute.md`](plan-failover-compute.md).
+"Multi-project routing".
 
-The shape from the user's perspective:
+### Permission prompts
+
+For users who'd rather not auto-spawn at every event, the
+dispatcher posts a permission prompt via the gate before firing
+a managed-compute spawn. The prompt carries:
+
+- estimated runtime (per-machine-size empiric)
+- estimated cost (per-machine per-platform rate table)
+- current free-tier usage ("23/100 spawns used this month")
+- two action buttons: **Approve** / **Queue**
+- optional third on first prompt: **Never ask again under $X**
+  (raises the auto-approve threshold)
+
+The prompt is the cost-transparency surface. Users who hit
+"Approve" know what it costs; users who hit "Queue" know what
+they're deferring. Mode defaults to `ask`; one cap raise or one
+"never ask" tap migrates to the auto-approve path without
+ceremony.
+
+The launch sequencing — GH App adapter first (largest pain
+relief), TG bot adapter as fast-follow on the same backend, then
+permission-prompt API and routing once both gates are live — is
+in [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md).
+
+## Surface B — managed compute (failover spawn)
+
+Per-task spawn when the user's daemon is offline (or — as a
+v-next opt-in — when it's overloaded). brr.run holds the user's
+AI credentials in the vault, holds its own pool-control token for
+the managed Fly app, and runs the spawn flow server-side using
+the same env-adapter shape a daemon would use locally.
+
+### AI-credential vault — two shapes, one endpoint
+
+The vault stores AI-runner credentials encrypted, in two payload
+shapes on the same `POST /v1/accounts/ai-credentials` endpoint:
+
+- **API key**: `brr accounts add-credential anthropic --key
+  sk-ant-...`. The default for most users.
+- **Credential directory tarball**: `brr accounts add-credential
+  anthropic --dir ~/.claude`. The CLI tars the directory, base64-
+  encodes, uploads; the sandbox bootstrap script extracts it back
+  into `$HOME/.claude/` at spawn time. Preserves subscription-
+  auth flows (Claude Pro, Codex Plus, Gemini OAuth) for users
+  who'd rather not provision API keys.
+
+Both shapes flow into the same encrypted store; only the spawn
+bootstrap branches on shape. The local docker env's existing
+"either an API key or a mounted credential dir" UX is preserved
+in the cloud, which matters because subscription auth is real
+ergonomic value for users already paying for it.
+
+### Shape from the user's perspective
 
 ```
-brr accounts add-credential fly      ; paste a Fly app-scoped token
-brr accounts failover --enable \     ; flip the policy bit
-  --platform fly \
-  --monthly-cap 100
+brr accounts add-credential anthropic --key sk-ant-...
+brr accounts failover --enable \
+  --mode ask \
+  --monthly-cap 100 \
+  --monthly-cost-cap-usd 25
 ```
 
-After that, daemon-down events spawn a per-task Fly machine, run
-the task, push the branch, post the response — without the user
-ever operating a second box. The token is scoped to one Fly app
-(`brr-failover`) with machine-create + destroy only; brr.run
-stores it encrypted and uses it solely at spawn time.
+After that, daemon-down events trigger a permission prompt via
+the originating gate (TG inline buttons, GH comment commands);
+the user taps Approve, the sandbox spawns, the task runs, the
+result lands via the gate, the branch is on the remote when the
+laptop wakes. The full mechanics, including the dispatcher tree
+and the spawn flow, are in
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+"Failover dispatch"; sequencing is in
+[`plan-failover-compute.md`](plan-failover-compute.md).
 
-Per-platform "what brr has to add" deltas and the cross-adapter
-patterns (credential delivery, repo delivery, result delivery,
-cold-start handling) live in
-[`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md).
-The first adapter has its own plan at
-[`plan-env-fly-machines.md`](plan-env-fly-machines.md); a
-Codespaces plan follows as the cheapest second adapter with the
-biggest audience overlap.
+### Cost transparency
 
-## Surface C — managed compute
+Every spawn is metered (start time, end time, machine size, est
+cost, actual cost) and rolled into `brr accounts audit` / the
+dashboard. Users see exactly what each task cost and how close
+they are to their cap. The pricing rate published in
+[`decision-pricing-shape.md`](decision-pricing-shape.md) carries
+a small margin over wholesale Fly Machines pricing — sustainable,
+transparent, no surprises.
 
-Same failover spawn machinery as Surface B, but the cloud account
-is brr.run's and the user pays per-task with margin. Implemented
-as a flag in the failover policy: `platform = "brr-managed"`
-selects brr.run's pool instead of a user-stored credential.
-Pricing model in
-[`decision-pricing-shape.md`](decision-pricing-shape.md).
+## Surface C — BYO compute (designed, deferred)
 
-This is *not* the older "fully-managed compute tier" v-next note —
-that framing assumed a scheduler. There's no scheduler; it's just
-per-task spawn-and-teardown invoked through the same code path as
-Surface B. The complexity is in billing accounting and capacity
-planning, not in orchestration.
+The earlier draft of this hub had BYO compute as a launch
+surface: the user stores their own Fly / Modal / Daytona / etc.
+token on brr.run; brr.run spawns into the user's cloud account
+using it. Dropped from launch on 2026-05-25 because the
+implementation cost was disproportionate to the launch user
+value:
+
+- ~30% more backend surface area (per-platform credential
+  storage UI, scope validation, per-platform onboarding docs,
+  per-platform failure modes, dispatcher branching on platform
+  selection).
+- ~5% of launch users care (the cloud-control crowd); the other
+  95% would rather paste an API key and have brr.run handle the
+  rest.
+- Maintenance load is unbounded — each platform we support means
+  partial-support-matrix for someone else's cloud.
+
+Easy add-back when usage justifies: the wire protocol supports
+BYO additively (new `/v1/accounts/cloud-credentials` endpoint
+family parallel to AI credentials; one new field in the failover
+policy; one branch in the dispatcher's spawn step). Adapter code
+is identical (same plugin, different token source). See
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+"BYO compute — designed, deferred" for the preserved sketch and
+[`decision-pricing-shape.md`](decision-pricing-shape.md) for the
+add-back rationale.
+
+## Dashboard
+
+The user-facing layer on top of brr.run. Minimal at launch (seven
+views), HTMX-first to keep build/maintenance cost down,
+upgradable to SPA later if interactivity demands it.
+
+Seven views:
+
+1. **Accounts / projects** — list, create, delete; per-project
+   daemon status, last activity.
+2. **Project detail** — bindings (chats, repos), daemons (online
+   status, last seen, name), recent events.
+3. **Task / event detail** — per-event timeline (received,
+   dispatched, executed, responded); for executed-on-managed-
+   compute, the spawn record (cost, duration, exit code); link to
+   the resulting branch.
+4. **Conversation view** — proxied from the daemon when online;
+   per-project chat-style scroll of events + responses.
+5. **AI credentials** — list, add, remove; per-credential
+   metadata (provider, shape, created, last used).
+6. **Failover policy** — enable / disable, mode, caps, current
+   usage; cost chart for the month.
+7. **Audit log** — paginated, filterable by project / platform /
+   outcome / spend window.
+
+Full breakdown in
+[`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md).
+
+The dashboard is a *consumer* of the same REST endpoints the
+daemon-side cloud-gate adapter consumes — no separate API surface
+to maintain.
 
 ## Daemon hosting
 
 The "where does the daemon live" question is orthogonal to the
-three surfaces. Default is the user's laptop. For the *common*
-laptop-down case, brr.run-as-failover-dispatcher (Surface B / C)
-is the answer — not a separately-operated always-on host.
+managed surfaces. Default is the user's laptop. For the *common*
+laptop-down case, the brr.run dispatcher + managed compute
+(Surface B above) is the answer — not a separately-operated
+always-on host.
 
 For users who genuinely want a cloud-first home for the daemon
 (security policy, no laptop at all, persistent home server vibe),
@@ -222,68 +384,101 @@ results flow back home. The templates remain useful for the
 niche "cloud-first by choice" case; they stop being the answer
 for the common case.
 
+## Where the code lives
+
+Per [`decision-monorepo-structure.md`](decision-monorepo-structure.md):
+
+- `src/brr/` — daemon core (today)
+- `src/brr_run/` — brr.run backend (FastAPI + workers + sandbox
+  image build)
+- `src/brr_run_web/` — dashboard (HTMX templates first; SPA later
+  if needed)
+- `deploy/upsun/` — Upsun deployment template for the brr.run
+  backend
+- `deploy/fly-daemon/`, `deploy/upsun-daemon/` etc. — daemon-
+  hosting templates
+
+Plugin packages (`brr-env-fly-machines`, `brr-env-codespaces`,
+future BYO cloud adapters when they come back) live in their own
+repos as separately-installable pip packages.
+
 ## Boundary
 
 In scope for managed-mode launch:
 
-- Surface A (managed gates) — the cloud-gate adapter on the
+- Surface A (managed dispatcher) — the cloud-gate adapter on the
   daemon side, the brr.run inbox-as-service API, GH App + TG bot
-  webhooks. Free tier.
-- Surface B (BYO failover compute) — cloud-credential storage on
-  brr.run, the dispatcher decision tree, the cloud-runner
-  adapter server-side caller, the first platform (Fly Machines).
-  Free tier (with rate caps; user pays own cloud bill).
-- Surface C (managed compute) — the same code path with
-  brr.run's pool. Paid usage-based.
-- The `deploy/` templates folder and the `brr/daemon` Docker
-  image variant (demoted to launch-nice-to-have, cloud-first
-  users only).
+  webhooks, multi-project routing, permission-prompt API, audit
+  log. Free tier.
+- Surface B (managed compute) — AI-credential vault, dispatcher
+  decision tree, brr.run-owned Fly Machines pool, sandbox image,
+  per-spawn task-key + GH App installation token, accounting +
+  CSV exporter for manual invoicing. Paid usage-based.
+- Dashboard MVP — seven views, HTMX-first.
+- `deploy/` templates folder and the `brr/daemon` Docker image
+  variant (demoted to launch-nice-to-have, cloud-first users
+  only).
 - `brr install-service` on macOS + Linux.
+- Data minimization principle baked into every endpoint.
+- Monorepo restructuring (`src/brr_run/`, `src/brr_run_web/`
+  alongside `src/brr/`).
 
 Out of scope, explicitly:
 
-- **brnrd.** Operator-agent product on its own clock; consumes
-  brr and brr.run later, doesn't extend them. The work-continuity
-  frame makes the boundary clearer: managed mode keeps individual
-  task work flowing; brnrd thinks at the fleet / planning level.
-  See [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §3.
-- **Scheduler-shaped managed compute.** The earlier "v-next
-  needs a scheduler" framing was wrong — Surface C is per-task
-  spawn-and-teardown via the same path as Surface B, just with a
-  different token. No scheduler needed.
+- **BYO compute** (Surface C) — designed, deferred per the
+  rationale above; protocol supports clean add-back.
+- **Agentic secretary** — the cross-project proactive layer
+  (e.g. "schedule a deploy review every Monday", "notice when
+  CI breaks across multiple projects and propose a fix"). Tracked
+  in [`decision-connectors-layering.md`](decision-connectors-layering.md)
+  for the connectors layering question. Not at launch.
+- **Scheduler-shaped managed compute.** Surface B is per-task
+  spawn-and-teardown via the same path as a daemon's local env;
+  just with a different token. No scheduler needed.
 - **Server-side spawn for online daemons (load-shedding).**
   Possibly worth doing as a convenience; explicitly deferred
   until usage shows whether it matters.
 - **Windows daemon supervision.** Defer per
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §4.
-- **Web dashboard for managing accounts / bindings /
-  credentials.** CLI-first; dashboard is v-next.
+- **Stripe / Paddle integration.** Manual invoicing at launch
+  (CSV exporter from the accounting table); add a payments
+  integration when monthly volume justifies the integration
+  cost.
 
-## Read Next
+## Read next
 
 1. [`decision-pricing-shape.md`](decision-pricing-shape.md) for
-   the pricing model that ties the three surfaces together (free
-   dispatcher; usage-based managed compute; optional team tier
-   later).
+   the pricing model that ties the surfaces together (free
+   dispatcher + paid managed compute; per-seat team tier later;
+   self-hosted always free).
 2. [`design-brr-run-protocol.md`](design-brr-run-protocol.md) for
    the wire format the daemon-side adapter and the brr.run
-   service both build against. Covers gates + failover dispatch +
-   cloud-token security in one page.
-3. [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
+   service both build against. Covers gates + failover dispatch
+   + AI-credential vault + multi-project routing + permission
+   prompts + data minimization in one page.
+3. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
+   for the Surface A launch sequencing (GH-then-TG + routing UX
+   + permission-prompt integration).
+4. [`plan-failover-compute.md`](plan-failover-compute.md) for
+   the Surface B launch sequencing (AI-credential vault,
+   dispatcher decision tree, brr.run-owned Fly pool, permission
+   gate API, Upsun backend deployment).
+5. [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+   for the dashboard launch sequencing.
+6. [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
    for the cross-adapter patterns and per-platform briefs
-   underpinning Surfaces B and C.
-4. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
-   for the Surface A launch sequencing (GH-then-TG).
-5. [`plan-failover-compute.md`](plan-failover-compute.md) for
-   the Surface B + C launch sequencing (credential storage,
-   dispatcher decision tree, first server-side adapter caller).
-6. [`plan-env-fly-machines.md`](plan-env-fly-machines.md) for the
-   first BYO cloud-runner adapter — used by Surface B locally and
-   server-side both.
-7. [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)
+   underpinning the managed-compute sandbox + daemon-side
+   plugins (independent of managed mode, useful for power users).
+7. [`decision-connectors-layering.md`](decision-connectors-layering.md)
+   for the gates-vs-connectors split that the agentic-mode
+   upgrade path depends on.
+8. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+   for where the brr.run backend, dashboard, and plugins live.
+9. [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)
    for the `deploy/` folder and the `brr/daemon` Docker image
    variant (demoted to launch-nice-to-have; useful for cloud-first
    users).
-8. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1, §2,
-   §4 for the original pondering provenance and the 2026-05-22
-   reframe breadcrumb that drove the current shape.
+10. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1,
+    §2, §4 for the original pondering provenance and the
+    2026-05-22 / 2026-05-25 reframe breadcrumbs that drove the
+    current shape.

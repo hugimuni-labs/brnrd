@@ -123,49 +123,79 @@ dive-in map) and are stable until something contradicts them.
   `brnrd` as a future fleet operator outside repo-local brr, and
   environments as the active axis now handled by the env hub.
 - **Hub: [managed mode](subject-managed-mode.md)** — *active*. The
-  three-paid-surface story: managed gates (Surface A), BYO failover
-  compute (Surface B), managed compute (Surface C), all riding the
-  same brr.run-as-failover-dispatcher model. Promoted on 2026-05-22
-  out of pondering; reshaped same day around the work-continuity
-  frame after recognising the always-on-host model was a shape
-  mismatch with the pitch.
+  brr.run story: free dispatcher (gates + multi-project routing +
+  permission prompts + 100 failover spawns/month) + usage-based
+  managed compute over the cap. Data minimization ("we don't have
+  your code") baked into the design. Promoted on 2026-05-22 out of
+  pondering; reshaped 2026-05-22 around the work-continuity frame
+  after recognising the always-on-host model was a shape mismatch
+  with the pitch; reshaped again 2026-05-25 to drop BYO compute
+  from launch, retire `brnrd` as a separate name, add the
+  dashboard MVP, and adopt the monorepo layout.
 - [brr.run protocol design](design-brr-run-protocol.md) —
   *proposed*. The wire format between brr daemons and brr.run.
   Covers gates (managed-gates path), failover dispatch (decision
-  tree), cloud-credential storage and security model, and the
-  per-task accounting hooks. Renamed from `design-managed-gates.md`
-  on 2026-05-22 when spawn-compute joined the protocol.
+  tree), AI-credential vault (api-key + dir-tarball shapes on one
+  endpoint), multi-project routing, permission-prompt API, data
+  minimization principle, and Upsun deployment notes. Renamed
+  from `design-managed-gates.md` on 2026-05-22 when spawn-compute
+  joined the protocol; reshaped 2026-05-25.
 - [Pricing shape decision](decision-pricing-shape.md) —
-  *proposed*. Three-tier shape mapped to marginal cost: free
-  dispatcher (gates + BYO failover); usage-based managed compute
-  (pass-through with margin); optional team / SLA tier later.
+  *proposed*. Two-tier shape mapped to marginal cost: free
+  dispatcher (gates + 100 managed-compute spawns/month);
+  usage-based managed compute over cap; deferred per-seat team
+  tier. "We charge for ops, not for AI usage." Reshaped 2026-05-25
+  to drop the launch BYO tier.
+- [Connectors layering decision](decision-connectors-layering.md) —
+  *proposed*. Names the gates vs connectors split: gates are
+  per-project / inbound (existing shape); connectors are
+  per-account / outbound / proactive (for the future
+  agentic-secretary layer). No connectors ship at launch; the
+  split lives here so the future agentic-mode upgrade doesn't
+  have to retrofit the gate API.
+- [Monorepo structure decision](decision-monorepo-structure.md) —
+  *proposed*. `src/brr/` (daemon) + `src/brr_run/` (backend) +
+  `src/brr_run_web/` (dashboard) + `src/brr_env_*/` (vendored
+  plugins) in one repo, sharing the kb. Plugin packages split into
+  their own repos when they mature.
 - [Cloud-runner patterns research](research-cloud-runner-patterns.md) —
   cross-adapter patterns (credential / repo / result delivery,
   cold-start budgets, network policy), the caller axis (same
   adapter code called from laptop daemon AND from brr.run
-  server-side for failover), and per-platform briefs (Fly Machines,
-  Modal, Daytona, E2B, Codespaces, vanilla VMs). Promoted from
-  `notes-pondering-fleet.md` §2.
+  server-side managed compute), and per-platform briefs (Fly
+  Machines, Modal, Daytona, E2B, Codespaces, vanilla VMs).
+  Promoted from `notes-pondering-fleet.md` §2; refreshed 2026-05-25
+  to reflect that only Fly Machines wires up server-side at
+  launch (BYO server-side deferred).
 - [Managed gates launch plan](plan-managed-gates-launch.md) —
-  *not started*. Surface A. Two slices: GH App adapter first
-  (largest BYO pain relief), TG bot adapter as fast-follow on the
-  same backend. Backend skeleton is a FastAPI app + postgres in a
-  separate `brr-run` repo, shared with the failover-compute plan.
+  *not started*. Surface A. Three slices: GH App adapter +
+  backend skeleton + auto-binding (first, largest pain relief);
+  TG bot adapter + multi-project routing UX (fast-follow);
+  permission-prompt API + gate-side integration (third). Backend
+  lives at `src/brr_run/` in the monorepo.
 - [Failover compute plan](plan-failover-compute.md) — *not
-  started*. Surfaces B + C on top of the same backend skeleton:
-  cloud-credential storage, dispatcher decision tree, the first
-  server-side cloud-runner adapter caller (Fly Machines), the
-  brr-managed pseudo-platform for paid managed compute, and the
-  CLI surface for the `brr accounts` verbs.
+  started*. Managed-compute spawn on brr.run-owned Fly pool:
+  AI-credential vault (api-key + dir-tarball), dispatcher
+  decision tree, permission-prompt-resolving spawn invocation,
+  audit log, and the CLI surface for the `brr accounts` verbs.
+  BYO compute deferred from launch.
+- [Dashboard MVP plan](plan-brr-run-dashboard-mvp.md) — *not
+  started*. Seven views (accounts/projects, project detail, task
+  detail, conversation proxy, AI credentials, failover policy +
+  cost chart, audit log). HTMX-first to keep build/maintenance
+  cost down; SPA later if interactivity demands it.
 - [Fly Machines env plan](plan-env-fly-machines.md) — *not
-  started*. First BYO cloud-runner adapter; ships as the
+  started*. First cloud-runner adapter; ships as the
   `brr-env-fly-machines` plugin package. Used by the laptop
-  daemon (active BYO) and by brr.run server-side (failover) both.
+  daemon (user's Fly account, user-driven plugin) and by brr.run
+  server-side (brr.run's Fly account, managed compute) both.
 - [Daemon deployment templates plan](plan-daemon-deployment-templates.md) —
   *demoted to launch-nice-to-have on 2026-05-22*. Earlier framing
   positioned the always-on-host as the preferred laptop-down
   answer; the failover-compute path replaced it. These templates
-  remain useful for the niche cloud-first audience.
+  remain useful for the niche cloud-first audience. The Upsun
+  template shares its read-only-container shape with the brr.run
+  backend Upsun deployment.
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
   *roadmap (env axis partly shipped, overlays/brnrd paused)*. Three-axis
   framing (overlays · brnrd · environments); read for the strategic
