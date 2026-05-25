@@ -3,22 +3,40 @@
 **Status: proposed, not yet accepted on 2026-05-22; reshaped
 2026-05-25 (BYO compute deferred, free-tier spawn cap revised
 down, data-minimization trust signal promoted, framing tightened
-to "we charge for ops, not for AI usage").** Sets the pricing
-model for brnrd's managed-mode surfaces. Companion to
+to "we charge for ops, not for AI usage"); reshaped again
+2026-05-25 (credits wallet adopted as the payment model — see
+[`design-billing.md`](design-billing.md) for the full
+mechanics).** Sets the pricing model for brnrd's managed-mode
+surfaces. Companion to
 [`subject-managed-mode.md`](subject-managed-mode.md) (the
-surfaces being priced) and
+surfaces being priced),
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) (the
-per-task accounting hooks the model rides on).
+per-task accounting hooks the model rides on), and
+[`design-billing.md`](design-billing.md) (the wallet / Stripe /
+debit mechanics that implement the cost model).
 
 ## Decision
 
-Two-tier shape at launch (plus a deferred third):
+Two-tier shape at launch (plus a deferred third), settled via a
+**credit wallet** (top-up, no card on file by default):
 
 | Tier | What it includes | Cost model |
 |------|------------------|-----------|
-| **Free dispatcher** | Managed gates (TG bot, GH App, later Slack / Discord / GitLab), multi-project routing, permission-prompt API, audit log, dashboard read access, *and* failover compute on brnrd's managed pool within a generous monthly cap | Free, with rate caps (initial: 1000 gate events / month; **100 failover spawns / month** — explicitly framed as a fallback feature, not a free SaaS) |
-| **Usage-based managed compute** | Managed-compute failover spawns *over* the free-tier cap | Pure pass-through + margin (target margin: 30-50% over wholesale cloud cost). No subscription fee — only kicks in when the free-tier cap is exceeded. |
-| **Per-seat team tier (later, post-launch)** | Org-level features: audit log retention, SSO, priority support, longer event/response retention, higher rate caps, multi-user dashboard | $X / seat / month; ships post-launch when individual usage proves out |
+| **Free dispatcher** | Managed gates (TG bot, GH App, later Slack / Discord / GitLab), multi-project routing, permission-prompt API, audit log, dashboard read access, *and* failover compute on brnrd's managed pool within a generous monthly free-credit grant | Free, with rate caps (initial: 1000 gate events / month; **~300 free credits / month** ≈ 100 failover spawns at worst-case cost — explicitly framed as a fallback feature, not a free SaaS). Unused free credits expire end-of-month; paid credits never expire. |
+| **Usage-based managed compute** | Managed-compute failover spawns *over* the free-tier grant | Credit wallet, drawn at spawn-finalize. 1 credit = $0.01; pass-through Fly billing + brnrd platform margin (target margin: 30-50% over wholesale cloud cost). No subscription, no card-on-file by default, no minimum spend; one-shot top-ups via Stripe Checkout ($5 / $20 / $50 / $100 / custom). Opt-in auto-topup for heavy users. |
+| **Per-seat team tier (later, post-launch)** | Org-level features: audit log retention, SSO, priority support, longer event/response retention, higher rate caps, multi-user dashboard | $X / seat / month (subscription model — the one place card-on-file makes sense at the team tier); ships post-launch when individual usage proves out |
+
+The wallet model is load-bearing: it matches the metered cost
+shape (you pay for the spawns you fire, not a flat fee that
+over/under-charges occasional users), aligns with the
+data-minimization pitch (no card-on-file by default = no
+recurring identity-mapping), and matches industry standard for
+usage-metered services (OpenAI, Anthropic, AWS, Mailgun, Twilio
+all use credits / metered billing). Full wallet mechanics —
+top-up flow, debit-at-finalize, zero-balance UX, refund
+policy, free-credit grant, audit log entries, Stripe
+integration shape — live in
+[`design-billing.md`](design-billing.md).
 
 The free dispatcher is the entry point AND covers the common case
 of fallback continuity (100 spawns/month covers a hobby user
@@ -69,10 +87,11 @@ back post-launch, it lands cleanly in the free tier (we don't
 charge for routing events you spawn against your own cloud
 account).
 
-Daemon-side cloud-runner adapters (a laptop daemon fans out to
-the user's cloud via a `brr-env-*` plugin) remain independent of
-managed mode entirely — brnrd isn't in that path, nothing to
-price.
+Daemon-side cloud envs (a laptop daemon fans out to the user's
+cloud via a first-party env extra like `brr[fly]` or a
+third-party env registered via the `brr.envs` entry point)
+remain independent of managed mode entirely — brnrd isn't in
+that path, nothing to price.
 
 ## Why this shape
 
@@ -274,9 +293,17 @@ spawn time, never logged). It does *not* intermediate AI billing.
 - "Self-hostable end-to-end" — every server-side piece is OSS in
   the monorepo (per
   [`decision-monorepo-structure.md`](decision-monorepo-structure.md));
-  hosted is convenience, not lock-in.
+  hosted is convenience, not lock-in. The CLI's `brr brnrd
+  connect <url>` takes any URL, defaulting to `brnrd.dev` —
+  self-hosted deployments are first-class.
 - "We charge for ops, not for AI usage" — per the "what we
   charge for" section above.
+- "No card-on-file by default" — credit top-ups via Stripe
+  Checkout are one-shot purchases; no recurring identity to
+  cancel, no surprise bills. Card-on-file is only stored when
+  the user opts into auto-topup (a convenience for heavy users
+  who explicitly want it). Full mechanics in
+  [`design-billing.md`](design-billing.md).
 - "Per-account audit log" — every credential read, context
   fetch (cross-gate or TG-ring-buffer read), spawn, prompt
   resolution surfaced to the user; surprises are bugs, not
@@ -298,3 +325,15 @@ spawn time, never logged). It does *not* intermediate AI billing.
   usage" framing added explicitly. Self-hosted brnrd framed
   more positively as a parallel path. Third reframe breadcrumb
   in [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
+- 2026-05-25 (pass 4) — credits wallet adopted as the payment
+  model (1 credit = $0.01; one-shot Stripe Checkout top-ups;
+  no card-on-file by default; free-tier grant ≈ 300 free
+  credits/month covering ~100 spawns; paid credits never
+  expire; opt-in auto-topup for heavy users; pro-rata refund of
+  unused paid credits within 30 days). Full wallet mechanics
+  moved out to a new
+  [`design-billing.md`](design-billing.md) page. "No
+  card-on-file by default" added as a fourth trust signal on
+  the pricing page. Pricing tier table updated to reflect the
+  wallet model. Fifth reframe breadcrumb in
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.

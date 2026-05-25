@@ -47,8 +47,9 @@ add-back is small when usage justifies it.
   PR even if the user's laptop is asleep, as long as the user has
   uploaded an AI credential and failover is enabled.
 - A user can set up failover in under 5 minutes:
-  `brr accounts add-credential anthropic --key sk-ant-...` (or
-  `--dir ~/.claude`) → `brr accounts failover --enable
+  `brr brnrd connect` → `brr brnrd topup 20` →
+  `brr brnrd creds add anthropic --key sk-ant-...` (or
+  `--dir ~/.claude`) → `brr brnrd policy set --enable
   --mode ask --monthly-cap 100`.
 - Spawn-to-response latency under 90 seconds for the warm
   Fly-Machines case (cold image rebuild excluded).
@@ -57,12 +58,12 @@ add-back is small when usage justifies it.
   latency vs auto-approve.
 - Per-task accounting hooks emit every spawn outcome (cost,
   duration, exit status, project_id) to an account-scoped audit
-  log queryable via `brr accounts audit`.
+  log queryable via `brr brnrd audit`.
 - Subscription-auth users (Claude Pro, Codex Plus, Gemini OAuth)
   can use failover without provisioning API keys, by uploading
   their credential directory once.
 - Free-tier user with 100 spawns/month cap sees clear remaining-
-  budget signal in every permission prompt and via `brr accounts
+  budget signal in every permission prompt and via `brr brnrd
   audit`.
 
 ## Done definition
@@ -95,13 +96,13 @@ add-back is small when usage justifies it.
   credential shapes (env vars OR credential dir expansion before
   runner spawn).
 - CLI surface:
-  - `brr accounts add-credential <provider> {--key | --dir}`
-  - `brr accounts list-credentials`
-  - `brr accounts remove-credential <id>`
-  - `brr accounts failover --enable | --disable | --mode <m>
+  - `brr brnrd creds add <provider> {--key | --dir}`
+  - `brr brnrd creds list`
+  - `brr brnrd creds remove <id>`
+  - `brr brnrd policy --enable | --disable | --mode <m>
     | --monthly-cap N | --monthly-cost-cap-usd N
     | --auto-approve-under-usd N | --auto-approve-under-per-day N`
-  - `brr accounts audit [--since <date>]`
+  - `brr brnrd audit [--since <date>]`
 - One-shot per-task `task-key` issuance and acceptance on
   `POST /v1/daemons/responses` so failover sandboxes can post
   responses without holding an account-level API key.
@@ -144,11 +145,11 @@ Steps:
    modes, monthly_spawn_cap (default 100), monthly_cost_cap_usd,
    per-mode thresholds, and an `enabled` bit.
 6. CLI surface:
-   - `brr accounts add-credential` (both shapes; CLI handles
+   - `brr brnrd creds add` (both shapes; CLI handles
      dir → tar + base64 transparently)
-   - `brr accounts list-credentials`
-   - `brr accounts remove-credential`
-   - `brr accounts failover --enable|--disable|--mode|--monthly-cap`
+   - `brr brnrd creds list`
+   - `brr brnrd creds remove`
+   - `brr brnrd policy --enable|--disable|--mode|--monthly-cap`
 
 **Estimate.** ~500-600 LOC backend + ~200 LOC CLI + ~250 LOC
 tests.
@@ -251,7 +252,7 @@ Cashes out the value into something a user can pick up.
 
 Steps:
 
-1. `brr accounts audit` CLI surface — paginated list of recent
+1. `brr brnrd audit` CLI surface — paginated list of recent
    spawn-and-prompt events with timestamp, event_id, project,
    provider used, estimated cost, actual cost, exit status,
    approval mode applied.
@@ -265,7 +266,7 @@ Steps:
 3. Troubleshooting section: revoked AI credential, cap hit,
    sandbox crash, missing git remote, no branch push permission,
    prompt timeout.
-4. `brr accounts` CLI man-page-style help text with the common
+4. `brr brnrd` CLI man-page-style help text with the common
    flows inline.
 
 **Estimate.** ~200 LOC CLI + ~600 LOC docs + screenshots + 1
@@ -280,7 +281,7 @@ short demo recording.
 | Dispatcher decision tree | `src/brnrd/` |
 | Server-side Fly Machines spawn flow | `src/brnrd/` |
 | Failover-sandbox Docker image | `src/brnrd/sandbox/` (built into Fly app on deploy) |
-| `brr accounts` CLI verbs | `src/brr/cli/accounts.py` |
+| `brr brnrd` CLI verbs | `src/brr/cli/brnrd.py` |
 | Documentation | `src/brr/docs/managed-mode.md` (bundled with brr) |
 | Managed Fly pool app + secrets | brnrd operator (runbook, not code) |
 | Audit-log table + queries | `src/brnrd/` |
@@ -305,10 +306,11 @@ app + their own AI-credential vault.
   etc. tokens stored on brnrd, used to spawn in the user's own
   cloud). Wire shape is preserved in the design page as
   "designed, deferred"; add-back is small when usage justifies
-  it. Daemon-side cloud-runner adapters (laptop fans out to
-  user's cloud via a `brr-env-*` plugin) remain independent of
-  managed mode entirely and ship per
-  [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
+  it. Daemon-side cloud envs (a laptop daemon fans out to the
+  user's cloud via a first-party env extra like `brr[fly]` or a
+  third-party env registered via the `brr.envs` entry point)
+  remain independent of managed mode entirely and ship per
+  [`research-cloud-envs.md`](research-cloud-envs.md)
   on their own clock.
 - Modal / Daytona / E2B / Codespaces server-side callers — those
   follow the same shape as Fly; each is a separate small plan
@@ -350,7 +352,7 @@ app + their own AI-credential vault.
   may invalidate session-style auth on IP change or device
   change, causing dir-tarball-shape credentials to break after
   upload. Mitigation: document the API-key fallback prominently;
-  add a `brr accounts test-credential <id>` CLI that runs a noop
+  add a `brr brnrd creds test <id>` CLI that runs a noop
   task against the credential and surfaces auth errors before
   the user discovers them at failover time.
 - **Permission prompt fatigue.** If `ask` is the default mode,
@@ -382,7 +384,7 @@ app + their own AI-credential vault.
    + AI-credential vault + Permission-prompt sections).
 3. [`decision-pricing-shape.md`](decision-pricing-shape.md) for
    the billing model the per-task accounting hooks feed.
-4. [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
+4. [`research-cloud-envs.md`](research-cloud-envs.md)
    for the cross-adapter patterns the server-side Fly caller is
    one instance of.
 5. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)

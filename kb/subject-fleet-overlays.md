@@ -104,7 +104,7 @@ module by default.
    core + brnrd backend + dashboard + plugins coherent. The
    hub fans out to:
    - a design ([`design-brnrd-protocol.md`](design-brnrd-protocol.md))
-   - a research page ([`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md))
+   - a research page ([`research-cloud-envs.md`](research-cloud-envs.md))
    - three decision pages
      ([`decision-pricing-shape.md`](decision-pricing-shape.md),
      [`decision-connectors-layering.md`](decision-connectors-layering.md),

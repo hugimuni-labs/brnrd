@@ -37,7 +37,7 @@ covers the dashboard view of all of this.
 
 ## Goals
 
-- Both adapters reachable via `brr accounts pair {telegram,github}`
+- Both adapters reachable via `brr brnrd pair {telegram,github}`
   on launch day.
 - A single managed bot per platform serves multiple of a user's
   projects via the multi-project routing protocol (no per-project
@@ -56,7 +56,7 @@ covers the dashboard view of all of this.
 - The `cloud` gate adapter ships in `src/brr/gates/cloud.py`,
   registered alongside `telegram` / `slack` / `github` in the
   gate registry.
-- `brr accounts pair {telegram,github}` CLI verbs work
+- `brr brnrd pair {telegram,github}` CLI verbs work
   end-to-end: signup, API key issuance, pairing for both
   platforms.
 - Multi-project routing protocol implemented end-to-end:
@@ -100,8 +100,8 @@ The bigger pain-relief slice. Ship first.
    (lifecycle, long-poll loop, response-post loop, cursor
    persistence). Common to GH and TG; the webhook side is
    brnrd's concern, not the daemon's.
-3. CLI plumbing: `brr accounts pair github`, `brr accounts
-   list-projects`, `brr accounts bind-repo`. The pair verb
+3. CLI plumbing: `brr brnrd pair github`, `brr brnrd
+   list-projects`, `brr brnrd bind-repo`. The pair verb
    opens the GH App install URL in the user's browser and
    waits for brnrd to confirm the install webhook landed.
 4. brnrd-side webhook receiver for `installation`,
@@ -113,7 +113,7 @@ The bigger pain-relief slice. Ship first.
 6. Repo-project binding: auto-bind on `installation` and
    `installation_repositories` events (one repo → one project,
    defaulting to a project named after the repo); re-bindable
-   via `brr accounts bind-repo <installation_id> <repo>
+   via `brr brnrd bind-repo <installation_id> <repo>
    <project>`.
 7. End-to-end smoke test: install brnrd GitHub App on a test
    repo → comment `@brr <task>` → event resolves to project →
@@ -137,7 +137,7 @@ response formatter, and the chat-binding flow.
    normalisation to the same event shape used for GH.
 2. brnrd-side response forwarder: post to `chat_id` via
    Telegram `sendMessage` API.
-3. `brr accounts pair telegram` CLI flow (pairing-code path
+3. `brr brnrd pair telegram` CLI flow (pairing-code path
    from the design).
 4. Telegram-specific command grammar: `/start <code>` for
    pairing, `/connect <project>` for chat-to-project binding,
@@ -191,8 +191,8 @@ gate-specific formatters + callback handlers).
 | Component | Lives at |
 |-----------|----------|
 | `src/brr/gates/cloud.py` — cloud gate adapter | `src/brr/` |
-| `brr accounts pair {telegram,github}` CLI verbs | `src/brr/cli/accounts.py` |
-| `brr accounts {list-projects,bind-chat,bind-repo}` CLI verbs | `src/brr/cli/accounts.py` |
+| `brr brnrd pair {telegram,github}` CLI verbs | `src/brr/cli/accounts.py` |
+| `brr brnrd {list-projects,bind-chat,bind-repo}` CLI verbs | `src/brr/cli/accounts.py` |
 | `src/brr/docs/managed-mode.md` (pairing + routing + prompt UX) | `src/brr/docs/` |
 | brnrd backend (FastAPI + postgres + workers) | `src/brnrd/` |
 | Multi-project routing tables + binding endpoints | `src/brnrd/` |

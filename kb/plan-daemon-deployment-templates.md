@@ -25,6 +25,15 @@ Lightly coupled to
 Dockerfile-split work — both plans need the daemon-only image to
 land first.
 
+**Cross-platform daemoning (laptop side)** is a separate
+strand tracked at
+[issue #29](https://github.com/Gurio/brr/issues/29) — systemd
+for Linux first, with macOS / Windows equivalents to follow as
+the implementation matures. Managed mode reduces the urgency
+(failover compute covers gaps when the daemon isn't running),
+so the laptop-side daemoning work and the cloud-host
+deployment-templates work here proceed independently.
+
 ## Goals
 
 - Lower the "where do I run brr" friction *for the cloud-first
@@ -117,7 +126,7 @@ work, very little Python.
 - Cloud-runner env adapters (those are separate plans:
   [`plan-env-fly-machines.md`](plan-env-fly-machines.md), and
   future plans per
-  [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)).
+  [`research-cloud-envs.md`](research-cloud-envs.md)).
 - `brr install-service` for macOS + Linux daemon supervision —
   separate plan (`plan-install-service.md`, not yet drafted).
 - Kubernetes / Helm chart — defer until a real user asks; the

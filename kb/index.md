@@ -153,10 +153,33 @@ dive-in map) and are stable until something contradicts them.
   2026-05-25 with the brnrd-naming-keep decision.
 - [Pricing shape decision](decision-pricing-shape.md) —
   *proposed*. Two-tier shape mapped to marginal cost: free
-  dispatcher (gates + 100 managed-compute spawns/month);
-  usage-based managed compute over cap; deferred per-seat team
-  tier. "We charge for ops, not for AI usage." Reshaped 2026-05-25
-  to drop the launch BYO tier.
+  dispatcher (gates + ~300 free credits/month covering ~100
+  managed-compute spawns); usage-based managed compute over the
+  free grant; deferred per-seat team tier. "We charge for ops,
+  not for AI usage." Credit wallet model (no card-on-file by
+  default; one-shot top-ups via Stripe Checkout). Reshaped
+  2026-05-25 to drop the launch BYO tier; further reshaped
+  same-day to adopt the credit-wallet payment model.
+- [Billing design](design-billing.md) — *proposed*. Wallet
+  mechanics that back the pricing model: top-up flow (Stripe
+  Checkout, no card-on-file by default), debit at spawn-finalize,
+  zero-balance UX with enqueue + gate notify, opt-in auto-topup,
+  pro-rata refund policy, free-tier monthly credit grant
+  (~300 credits/month), audit log entries for every wallet
+  operation, Stripe integration shape (HugiMuni SAS + Stripe
+  France + Qonto payouts + Stripe Tax for EU VAT).
+- [CLI shape decision](decision-cli-shape.md) — *proposed*.
+  Six top-level verbs (`init` / `run` / `daemon` / `gate` /
+  `brnrd` / `config`) with subcommands. Collapses today's
+  `up` / `down` into `brr daemon up|down|status`; collapses
+  today's `auth` / `bind` / `setup` into `brr gate <name>
+  <verb>`; adds the load-bearing `brr brnrd` namespace for
+  hosted-service management (`connect` / `creds` / `policy` /
+  `topup` / `balance` / `projects` / ...); adds `brr config
+  list|get|set|doc` for parameter introspection across local +
+  remote. Rejects the earlier `brr accounts` placeholder.
+  `brr brnrd connect [url]` defaults to `https://brnrd.dev`
+  and accepts any URL for first-class self-hosting.
 - [Connectors layering decision](decision-connectors-layering.md) —
   *proposed*. Names the gates vs connectors split: gates are
   per-project / inbound (existing shape); connectors are
@@ -165,16 +188,24 @@ dive-in map) and are stable until something contradicts them.
   split lives here so the future agentic-mode upgrade doesn't
   have to retrofit the gate API.
 - [Monorepo structure decision](decision-monorepo-structure.md) —
-  *proposed*. `src/brr/` (daemon) + `src/brnrd/` (backend) +
-  `src/brnrd_web/` (dashboard) + `src/brr_env_*/` (vendored
-  plugins) in one repo, sharing the kb. Plugin packages split into
-  their own repos when they mature.
-- [Cloud-runner patterns research](research-cloud-runner-patterns.md) —
-  cross-adapter patterns (credential / repo / result delivery,
-  cold-start budgets, network policy), the caller axis (same
-  adapter code called from laptop daemon AND from brnrd
-  server-side managed compute), and per-platform briefs (Fly
-  Machines, Modal, Daytona, E2B, Codespaces, vanilla VMs).
+  *proposed*. Single `brr` pip package + optional extras.
+  `src/brr/` (daemon) + `src/brnrd/` (backend) + `src/brnrd_web/`
+  (dashboard) + `src/brr/envs/<name>/` for first-party cloud
+  envs gated by extras (`pip install brr[fly,modal,...]`).
+  Third-party envs use the existing `brr.envs` entry-point
+  mechanism. Envs split out to their own `brr-env-<name>` pypi
+  package when their maintainer cadence diverges or their
+  install footprint grows.
+- [Cloud envs research](research-cloud-envs.md) —
+  cross-env patterns (credential / repo / result delivery,
+  cold-start budgets, network policy) for envs that execute
+  remotely, the caller axis (same env class invoked from laptop
+  daemon AND from brnrd server-side managed compute, with
+  brnrd doing a daemon-equivalent bootstrap first), and
+  per-platform briefs (Fly Machines, Modal, Daytona, E2B,
+  Codespaces, vanilla VMs). Renamed from
+  `research-cloud-runner-patterns.md` on 2026-05-25 (pass 4)
+  with the "cloud runners are envs" unification.
   Promoted from `notes-pondering-fleet.md` §2; refreshed 2026-05-25
   to reflect that only Fly Machines wires up server-side at
   launch (BYO server-side deferred).
@@ -188,8 +219,9 @@ dive-in map) and are stable until something contradicts them.
   started*. Managed-compute spawn on brnrd-owned Fly pool:
   AI-credential vault (api-key + dir-tarball), dispatcher
   decision tree, permission-prompt-resolving spawn invocation,
-  audit log, and the CLI surface for the `brr accounts` verbs.
-  BYO compute deferred from launch.
+  audit log, and the CLI surface for the `brr brnrd` verbs
+  (creds / policy / audit / balance / topup). BYO compute
+  deferred from launch.
 - [Conversation_id propagation plan](plan-conversation-id-propagation.md) —
   *not started*. Small daemon-side enabler: `Brnrd-Conversation-Id`
   git commit trailer + `conversation_id` field on the
@@ -203,10 +235,11 @@ dive-in map) and are stable until something contradicts them.
   cost chart, audit log). HTMX-first to keep build/maintenance
   cost down; SPA later if interactivity demands it.
 - [Fly Machines env plan](plan-env-fly-machines.md) — *not
-  started*. First cloud-runner adapter; ships as the
-  `brr-env-fly-machines` plugin package. Used by the laptop
-  daemon (user's Fly account, user-driven plugin) and by brnrd
-  server-side (brnrd's Fly account, managed compute) both.
+  started*. First cloud env; lives at `src/brr/envs/fly_machines/`
+  gated by the `brr[fly]` extra. Used by the laptop daemon
+  (user's Fly account, BYO via `FLY_API_TOKEN`) and by brnrd
+  server-side (brnrd's Fly account, managed compute) — same env
+  class, two callers; see "Caller axis" in the research page.
 - [Daemon deployment templates plan](plan-daemon-deployment-templates.md) —
   *demoted to launch-nice-to-have on 2026-05-22*. Earlier framing
   positioned the always-on-host as the preferred laptop-down

@@ -2773,3 +2773,210 @@ The daemon-side conversation_id propagation is the natural
 first code slice — small, no schema migration needed, harmless
 metadata for OSS users — and it gates everything cross-gate.
 
+## 2026-05-25 — pass 4: billing, envs unification, plugin packaging, CLI shape
+
+Triggered by user feedback after pass 3 surfaced five concrete
+productisation gaps. Each shifted a piece of the managed-mode
+architecture; the launch shape itself didn't move, but the
+mechanics under it got considerably more concrete.
+
+### Trigger
+
+User flagged five things:
+
+1. **Billing**: legal entity ready in France (HugiMuni SAS +
+   Qonto bank); proposed a credits-purchase model (like the
+   OpenAI API); asked whether this was too much for MVP or
+   atypical enough to scare users away.
+2. **Plugin packaging**: didn't like `pip install
+   brr-env-fly-machines` as a separate command — felt
+   over-engineered; suggested it should be a plugin /
+   component of `brr[backend]`.
+3. **Envs vs cloud-runs architectural contradiction**: noted
+   that cloud runs (as previously framed) contradicted the
+   env shape; asked for "a unification of sorts."
+4. **CLI verb naming**: disliked `brr accounts`; offered
+   `brr config` / `brr service` as alternatives but
+   acknowledged they weren't ideal either.
+5. **Cross-platform daemoning**: reaffirmed systemd-first
+   tracked at issue #29; invited counter-proposals that fit
+   the new architecture better.
+
+Plus a strategic question on the `brr connect-to-brnrd`
+command's URL arg: how easy should self-hosting be, given the
+risk of "leaking" users to their own deployment?
+
+### Net direction
+
+- **Credits-wallet billing adopted.** Yes to credits — they're
+  industry-standard for usage-metered services (OpenAI,
+  Anthropic, AWS), match the "we charge for ops, not for AI
+  usage" pricing framing, and align with the data-minimization
+  pitch (no card-on-file by default = no recurring identity-
+  mapping). MVP effort is ~1 week (Stripe Checkout for top-ups,
+  one ledger table, debit-at-finalize hook). Drafted
+  `design-billing.md` covering the full mechanics; updated
+  `decision-pricing-shape.md` to reflect the wallet model;
+  added "no card-on-file by default" as the fourth trust
+  signal.
+- **Plugin packaging collapsed to extras.** Dropped
+  `brr-env-fly-machines` as a separate pypi name. First-party
+  cloud envs live at `src/brr/envs/<name>/` and ship gated by
+  `brr[<name>]` pip extras. Third-party envs still use the
+  `brr.envs` entry-point mechanism — that path stays unchanged
+  per [`design-env-interface.md`](design-env-interface.md), so
+  external plugin authors aren't disadvantaged. Wins:
+  single-version surface, no plugin/core version-skew bugs,
+  simpler discovery. Reshaped
+  `decision-monorepo-structure.md`; updated `plan-env-fly-
+  machines.md` to reflect the new env location +
+  `brr[fly]` extra; added a "first-party (extras) vs
+  third-party (entry points)" subsection to
+  `design-env-interface.md`.
+- **Cloud envs unification — "cloud runs ARE envs."** Dropped
+  the separate "cloud-runner adapter" framing.
+  `research-cloud-runner-patterns.md` renamed to
+  `research-cloud-envs.md` and reframed: cloud envs implement
+  the existing `EnvBackend` Protocol; the brnrd backend
+  invokes the same env class the daemon would use, after a
+  daemon-equivalent bootstrap (clone repo with per-spawn GH
+  App token, materialise AI creds, construct a `RunContext`).
+  Added a "brnrd server-side caller" subsection to
+  `design-env-interface.md` documenting the bootstrap +
+  invocation flow. `design-brnrd-protocol.md` updated to
+  drop the cloud-runner-adapter framing in its spawn step +
+  BYO-deferred section. One env implementation, two
+  deployment targets, no second protocol.
+- **CLI shape decision drafted.** New page
+  `decision-cli-shape.md` outlines a 6-verb noun-first
+  taxonomy: `init`, `run`, `daemon` (replaces top-level `up` /
+  `down`), `gate` (replaces top-level `auth` / `bind` /
+  `setup`), `brnrd` (new namespace for hosted-service
+  management — `connect`, `creds`, `policy`, `topup`,
+  `balance`, `projects`, ...), `config` (new namespace for
+  parameter introspection — `list`, `get`, `set`, `doc`).
+  Compared `brr brnrd` vs `brr remote` / `brr service` /
+  `brr cloud` / `brr config-remote`; locked in `brr brnrd`
+  for self-documentation. Renamed all `brr accounts <verb>`
+  references in `plan-failover-compute.md` +
+  `plan-managed-gates-launch.md` to the new `brr brnrd`
+  verbs (`brr brnrd creds add|list|remove`,
+  `brr brnrd policy set|get`, `brr brnrd audit`).
+- **Cross-platform daemoning.** Added a one-line cross-
+  reference to [issue #29](https://github.com/Gurio/brr/issues/29)
+  in `plan-daemon-deployment-templates.md`. Managed mode
+  reduces the urgency (failover compute covers gaps); the
+  systemd-first track at #29 proceeds independently. No new
+  architectural commitment in the kb; deferred to the issue.
+- **Self-hosting friction.** Decision: don't add any. `brr
+  brnrd connect <url>` accepts any URL, defaulting to
+  `https://brnrd.dev`. Reasoning: the friction of running
+  your own brnrd is deployment itself; the CLI shouldn't
+  add hoops. Power users self-host anyway and are likely OSS
+  contributors; making the path real (not symbolic) is what
+  backs the "we don't have your code" trust pitch. Captured
+  in `decision-cli-shape.md` § Self-hosting.
+
+### Pages changed in this pass
+
+- `kb/design-billing.md` — **new**. Wallet model, top-up flow
+  (Stripe Checkout, no card on file by default), debit
+  mechanics (at spawn-finalize, USD → credits conversion),
+  zero-balance UX (enqueue + gate notify, optional auto-topup),
+  pro-rata refund policy, free-tier monthly credit grant,
+  audit log entries per wallet operation, Stripe + HugiMuni
+  SAS + Qonto + Stripe Tax integration shape, alternatives
+  considered (subscription, card-on-file PAYG, invoicing,
+  no-billing). Status: proposed.
+- `kb/decision-pricing-shape.md` — wallet model adopted on the
+  pricing tier table; "no card-on-file by default" added as
+  the fourth trust signal; lineage entry appended for the
+  pass-4 reshape pointing at `design-billing.md`.
+- `kb/decision-cli-shape.md` — **new**. Six-verb noun-first
+  taxonomy; alternatives table for `brr brnrd` vs `brr remote`
+  / `brr service` / `brr cloud` / `brr config-remote`;
+  intentionally-not-added verbs; migration note (no users
+  to migrate); open questions on aliases, completions,
+  daemon-logs sibling, JSON output mode. Status: proposed.
+- `kb/decision-monorepo-structure.md` — reshaped to
+  single-package + optional-extras model;
+  `src/brr/envs/<name>/` location for first-party cloud envs;
+  `brr.envs` entry-point mechanism preserved for third-party
+  envs; Alt 2 (multi-pypi-in-monorepo) added to alternatives;
+  lineage entry appended for the pass-4 reshape.
+- `kb/research-cloud-envs.md` — **renamed** from
+  `research-cloud-runner-patterns.md`. TL;DR + "Caller axis"
+  reframed: cloud runs ARE envs (no separate concept);
+  caller-axis table updated for the new env-class invocation
+  + daemon-equivalent bootstrap pattern; reference to
+  `design-billing.md` for the cost ceiling enforcement.
+- `kb/design-env-interface.md` — "Python envs — first-party
+  (extras) and third-party (entry points)" subsection
+  rewritten to distinguish the two paths;
+  **new "brnrd server-side caller" subsection** detailing the
+  daemon-equivalent bootstrap before env invocation.
+- `kb/plan-env-fly-machines.md` — reshaped: env now lives at
+  `src/brr/envs/fly_machines/` inside the brr package, gated
+  by the `brr[fly]` extra; same env class invoked from both
+  daemon and brnrd server-side; lineage entry appended.
+- `kb/plan-failover-compute.md` — all `brr accounts <verb>`
+  references renamed to `brr brnrd <verb>` per
+  `decision-cli-shape.md`; "Implementation location" row for
+  CLI verbs renamed (`src/brr/cli/accounts.py` →
+  `src/brr/cli/brnrd.py`); cloud-runner-adapter framing
+  dropped in the BYO-deferred mention; user flow now starts
+  with `brr brnrd connect` + `brr brnrd topup 20`.
+- `kb/plan-managed-gates-launch.md` — `brr accounts` →
+  `brr brnrd` rename applied throughout.
+- `kb/plan-daemon-deployment-templates.md` — added a
+  cross-reference paragraph to
+  [issue #29](https://github.com/Gurio/brr/issues/29) for
+  cross-platform daemoning; framed as a parallel-strand
+  decoupled by managed mode's failover coverage.
+- `kb/subject-managed-mode.md` — Surface B description now
+  references the envs unification (same env class invoked from
+  daemon + brnrd server-side); CLI examples updated to use
+  `brr brnrd <subcommand>` verbs; new "Billing — credit wallet,
+  no card on file by default" subsection under Surface B with
+  pointer to `design-billing.md`; "Where the code lives"
+  section updated to reference the extras + first-party-env
+  approach; "Out of scope" Stripe-integration bullet rewritten
+  to say "card-on-file subscriptions deferred to v-next"
+  (since one-shot Stripe Checkout now ships at launch); Read
+  next list expanded for the new pages.
+- `kb/design-brnrd-protocol.md` — spawn-finalize endpoint
+  description now mentions the wallet debit trigger pointing
+  at `design-billing.md`; "Out of scope" updated to defer
+  wallet/Stripe mechanics to `design-billing.md`; failover-
+  spawn step 6 description rewritten to use the env-class
+  invocation language ("daemon-equivalent bootstrap +
+  `envs.get_env('fly_machines')`") instead of "cloud-runner
+  adapter"; BYO-deferred section drops the cloud-runner-
+  adapter framing; spawn-finalize step 8 updated to walk
+  through the USD-to-credits debit; lineage entry appended
+  for the pass-4 reshape.
+- `kb/notes-pondering-fleet.md` — appended the **fourth
+  2026-05-25 reframe breadcrumb** to §1 capturing all five
+  shifts (billing, plugin packaging, envs unification, CLI
+  shape, daemoning), pointing at the new + updated pages.
+- `kb/index.md` — pricing description updated for the wallet
+  model + free-credit grant framing; new `design-billing.md`
+  entry; new `decision-cli-shape.md` entry; monorepo
+  description rewritten for the single-package + extras
+  approach; cloud envs research description updated for the
+  rename + reframe; Fly Machines plan description rewritten
+  to reflect the new env location.
+
+No code changes this pass either; designs and plans remain
+status:proposed. Three new pages (`design-billing.md`,
+`decision-cli-shape.md`), one rename + reshape
+(`research-cloud-runner-patterns.md` →
+`research-cloud-envs.md`), eight existing pages updated.
+
+Next blocker is still the brnrd backend prototype. The
+daemon-side conversation_id propagation
+(`plan-conversation-id-propagation.md`) and the CLI reshape
+(`decision-cli-shape.md`) are both small enough that they
+could be the first two code slices in parallel with
+`src/brnrd/` scaffolding.
+
