@@ -25,14 +25,15 @@ Lightly coupled to
 Dockerfile-split work — both plans need the daemon-only image to
 land first.
 
-**Cross-platform daemoning (laptop side)** is a separate
-strand tracked at
-[issue #29](https://github.com/Gurio/brr/issues/29) — systemd
-for Linux first, with macOS / Windows equivalents to follow as
-the implementation matures. Managed mode reduces the urgency
-(failover compute covers gaps when the daemon isn't running),
-so the laptop-side daemoning work and the cloud-host
-deployment-templates work here proceed independently.
+**Cross-platform daemoning (laptop side)** has its own plan at
+[`plan-laptop-daemoning.md`](plan-laptop-daemoning.md), tracked
+at [issue #29](https://github.com/Gurio/brr/issues/29). Linux
+gets a per-user systemd unit, macOS gets a launchd
+LaunchAgent, Windows is deferred. Both via `brr daemon
+install`. Managed mode reduces the urgency (failover compute
+covers gaps when the daemon isn't running), so the laptop-side
+daemoning work and the cloud-host deployment-templates work
+here proceed independently.
 
 ## Goals
 
@@ -127,8 +128,10 @@ work, very little Python.
   [`plan-env-fly-machines.md`](plan-env-fly-machines.md), and
   future plans per
   [`research-cloud-envs.md`](research-cloud-envs.md)).
-- `brr install-service` for macOS + Linux daemon supervision —
-  separate plan (`plan-install-service.md`, not yet drafted).
+- `brr daemon install` for macOS + Linux laptop-side daemon
+  supervision — covered by
+  [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md), not
+  this plan.
 - Kubernetes / Helm chart — defer until a real user asks; the
   bare docker-compose template is the "just give me a container"
   alternative.
@@ -167,3 +170,11 @@ work, very little Python.
   decision to "Read next" so the `deploy/` location is
   unambiguous. Third reframe breadcrumb in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
+- 2026-05-25 (pass-4 follow-up — second wave) —
+  cross-reference to the laptop-side daemoning work renamed
+  from "placeholder #29 reference" to the new concrete plan
+  at [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md).
+  "Out of scope" entry rewritten accordingly. No structural
+  changes here; this plan stays focused on cloud-host
+  deployment templates, the laptop-side concerns are
+  formalised in their own plan.

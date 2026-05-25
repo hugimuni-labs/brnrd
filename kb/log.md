@@ -3064,3 +3064,137 @@ next reader doesn't have to dig into chat history.
 Three pages updated; one short follow-up commit on top of the
 pass-4 commit. No new pages.
 
+## 2026-05-25 — pass 4 follow-up, second wave: kb command + cross-platform daemoning + three-scope config
+
+Three substantive additions to the managed-mode launch shape,
+all triggered by a single user message reviewing the pass-4
+result.
+
+### Trigger
+
+User raised three concerns in one pass:
+
+1. **"We need them for mac and linux, ideally natively
+   installable."** Daemons should survive reboot without
+   `tmux` rituals; the existing systemd-only track at #29
+   needs explicit macOS coverage and a concrete CLI shape.
+2. **"Better KB management for non-brr operated agents …
+   maybe we could come up with a command for kb."** Tied
+   directly to [#41](https://github.com/Gurio/brr/issues/41).
+   The kb is half the value prop but has no first-class read
+   surface from the CLI; non-brr agents (Cursor, Codex CLI,
+   Claude Code) have to walk pages by hand to know state.
+3. **"Sync the local settings file with the remote runs …
+   nice way of seeing all the possible config properties
+   visible."** `.brr/config` is gitignored, so brnrd-side
+   spawns can't read project preferences (Docker image,
+   runner choice). Teammates can't share project-level
+   settings either. And the "what knobs exist?" gap is still
+   unaddressed.
+
+### Net direction
+
+- **Seventh top-level CLI verb `brr kb`** with six sub-verbs
+  (`status` / `pages [filters]` / `proposed` / `log` / `check`
+  / `doc`), all with `--json` mode. Same surface for users
+  (who get "what needs my review?") and non-brr agents (who
+  get structured kb health for orientation and post-edit
+  validation). AGENTS.md → "Health checks" gets a forward
+  pointer; the manual scan stays in place until the verb
+  ships.
+- **`brr daemon install | uninstall | logs`** sub-verbs,
+  cross-platform (Linux systemd user unit, macOS launchd
+  LaunchAgent). Per-user, no sudo (except optional one-time
+  `loginctl enable-linger`). Falls back to today's foreground
+  supervisor when not installed. Windows deferred.
+- **Three-scope config model**: `project` (`brr.toml`
+  committed at repo root), `local` (`.brr/config` gitignored),
+  `account` (brnrd-side, via new `/v1/accounts/settings`
+  endpoint family). TOML format both files. Merge precedence
+  `local > project > account > default`. Per-key schema
+  declares scope. `brr config template | validate` rounds out
+  the existing list/get/set/doc verbs.
+- **brnrd-side spawn bootstrap reads `brr.toml`** from the
+  cloned repo as part of the daemon-equivalent bootstrap step
+  in failover dispatch. Project preferences (Docker image,
+  runner choice, env default) flow from the repo to brnrd-side
+  spawns automatically — no protocol push needed; the repo IS
+  the message. Private docker images flagged as a launch-blocker
+  for the spawn path (clear gate-side error message); generic
+  credential-vault extension (registry creds alongside AI
+  creds) tracked as an open question, deferred to v-next.
+- **BYO cloud env vs managed compute clarified** in
+  `subject-managed-mode.md` as orthogonal coexisting paths:
+  daemon-side BYO env (your cloud account, fires every task)
+  vs brnrd-side managed compute (brnrd's cloud account, fires
+  only when daemon offline and policy allows). Same env class
+  serves both callers per the envs unification.
+
+### Pages added / modified
+
+New pages:
+
+- `kb/plan-laptop-daemoning.md` — cross-platform daemoning plan
+  (Linux systemd user units + macOS launchd LaunchAgents; `brr
+  daemon install | uninstall | logs` mechanics; per-project
+  unit naming via `--name`; out-of-scope: Windows, system-wide
+  install, non-systemd Linux distros). Cross-refs #29.
+- `kb/plan-kb-subcommand.md` — `brr kb` subcommand plan
+  (six sub-verbs, what each verb checks, AGENTS.md integration,
+  implementation sketch in `src/brr/kb/`). Cross-refs #41.
+- `kb/design-config-layout.md` — three-scope config model
+  (project / local / account), TOML format, per-key schema,
+  scope assignments table, brnrd-side spawn bootstrap reading
+  `brr.toml`, private-docker-image open question.
+
+Modified:
+
+- `kb/decision-cli-shape.md` — Six-verb shape promoted to
+  seven (added `brr kb`); `brr daemon` gets `install` /
+  `uninstall` / `logs` sub-verbs; `brr config` gets
+  `template` / `validate` sub-verbs; `brr config list`
+  description rewritten around the three-scope model; `--json`
+  promoted from "open question" to "default-on across the verb
+  tree"; "Differences" table updated; "Open questions" updated;
+  "Read next" expanded; lineage entry appended.
+- `kb/design-brnrd-protocol.md` — new "Account-scope settings
+  endpoints" subsection (`GET / PUT / DELETE /v1/accounts/
+  settings[/{key}]`); failover-dispatch step 6 (spawn path)
+  rewritten to spell out the daemon-equivalent bootstrap
+  reading `brr.toml` from the cloned repo + layering with
+  account-scope settings; private docker image flagged as a
+  launch-blocker with a clear error path; lineage entry
+  appended; "Read next" expanded.
+- `kb/subject-managed-mode.md` — new "BYO cloud env vs
+  managed compute" subsection with a comparison table
+  spelling out caller / cloud account / when it fires /
+  payment model; "Daemon hosting" table updated to reference
+  `brr daemon install` instead of the placeholder
+  `brr install-service`; "Where the code lives" expanded with
+  `src/brr/daemon_install/`, `src/brr/kb/`, `src/brr/config/`,
+  `brr.toml`; "Boundary → In scope" updated to list the new
+  verbs and the three-scope config model; "Read next"
+  expanded with three new entries (laptop daemoning, kb
+  subcommand, config layout).
+- `src/brr/AGENTS.md` — Revision bumped to 2026-05-25.
+  Knowledge base → Health checks gets a final paragraph
+  pointing forward to `brr kb status` and `brr kb check` once
+  the verb ships (per #41); the manual scan stays as the
+  current contract since the verb isn't shipped yet. Added a
+  bullet to the scan list for "pages marked `proposed, not
+  yet accepted` that have been sitting for a while."
+- `kb/index.md` — CLI shape description rewritten for seven
+  verbs + new sub-verbs; new entries for
+  `plan-laptop-daemoning.md`, `design-config-layout.md`,
+  `plan-kb-subcommand.md`.
+- `kb/notes-pondering-fleet.md` — appended "second wave"
+  paragraph to the pass-4 follow-up breadcrumb in §1.
+
+Three new pages, six updates. No code changes this pass; all
+designs and plans remain `Status: proposed`. The implementation
+order suggested by the page set: `brr.toml` + three-scope
+config (because it unlocks brnrd-side preference reading);
+then `brr kb` (because it's the lowest-coupling slice with the
+highest agent-experience leverage); then `brr daemon install`
+(can ship anytime, no upstream coupling).
+
