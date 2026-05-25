@@ -1,6 +1,6 @@
 # Project
 
-> Revision: 2026-05-22. Structural arc:
+> Revision: 2026-05-25. Structural arc:
 > [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
 > Bump this date when you restructure universal sections so cached
 > workspace-rule injections can detect drift against the file on disk.
@@ -413,6 +413,8 @@ When resuming work or between tasks, scan `kb/` for:
 - Pages reading like running diffs of their own past wording ("originally
   X, then Y, now Z") instead of describing the current shape with a
   lineage breadcrumb. Compress.
+- Pages marked `Status: proposed, not yet accepted` that have been sitting
+  for a while — surface them so the user can accept / reject / supersede.
 - **Aspirational drift.** Pages describing *what was designed* — "X is
   pluggable", "supports A, B, C", "future Y includes…" — as if it were
   shipped. Spot-check against the source the page links to (resolver, CLI
@@ -432,6 +434,17 @@ absorbed by a successor, a review whose findings are addressed and never
 will be revisited — delete it; record the deletion in `kb/log.md` if it's
 worth a sentence. Lifecycle markers preserve history when the history
 matters; deletion is for noise.
+
+> **Once `brr kb` ships** (per
+> [`kb/plan-kb-subcommand.md`](kb/plan-kb-subcommand.md), addressing
+> [#41](https://github.com/Gurio/brr/issues/41)) this scan collapses to
+> two commands: `brr kb status` for the orientation-time summary
+> (counts, proposed-pending, log activity, warnings) and `brr kb check`
+> for the post-edit validation (broken cross-references, missing
+> lifecycle markers, orphans, aspirational-drift smells). Both support
+> `--json` for agent consumption. Until then, the manual scan above is
+> what every brr-operated, Cursor, Codex CLI, or Claude Code session
+> runs.
 
 ## Artifacts
 
