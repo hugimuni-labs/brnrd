@@ -149,7 +149,7 @@ Steps:
 5. Base layout: top nav (logo, account email, "+ New project"
    shortcut, log-out), main content area.
 6. Empty state: "No projects yet. Pair your first daemon with
-   `brr accounts pair telegram` or install the GitHub App
+   `brr brnrd connect` or install the GitHub App
    here."
 
 **Estimate.** ~600-900 LOC templates + ~400 LOC routes + ~150

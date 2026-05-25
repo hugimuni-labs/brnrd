@@ -89,11 +89,13 @@ usage-billed with margin). Surface C is deferred — the protocol
 supports it, but implementation surface area was disproportionate
 to the ~5% of users who'd value it at launch.
 
-Daemon-side cloud-runner adapters (a laptop daemon fans out to
-*the user's* cloud via a `brr-env-*` plugin) remain independent
-of managed mode entirely. Those are user-driven plugin work,
+Daemon-side cloud envs (a laptop daemon fans out to *the user's*
+cloud via a first-party env extra like `brr[fly]` or a
+third-party env registered via the `brr.envs` entry point per
+[`design-env-interface.md`](design-env-interface.md)) remain
+independent of managed mode entirely. Those are env work,
 shipped per
-[`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
+[`research-cloud-envs.md`](research-cloud-envs.md)
 on their own clock; they don't need brnrd.
 
 ## Data minimization — load-bearing for the trust story
@@ -222,7 +224,7 @@ dispatcher's job is to walk the policy tree and emit one of four
 outcomes (enqueue, spawn, prompt, error). See
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
 "Failover dispatch" for the precise decision tree and
-[`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
+[`research-cloud-envs.md`](research-cloud-envs.md)
 for the cross-adapter patterns the server-side spawn uses.
 
 ## Surface A — managed dispatcher (gates + routing + prompts)
@@ -236,8 +238,9 @@ adoption (more so for GitHub than Telegram).
 Managed gates collapse this to one CLI verb plus a bot
 interaction:
 
-1. User runs `brr accounts pair telegram` (or `... github`),
-   authenticates, gets a pairing code or install URL.
+1. User runs `brr brnrd connect`, gets a pairing flow / auth
+   URL (CLI shape per
+   [`decision-cli-shape.md`](decision-cli-shape.md)).
 2. User `/start <code>` to @brr_bot on Telegram, or installs the
    brnrd GitHub App on selected repos.
 3. brnrd's hosted bot receives events and routes them to the
@@ -295,18 +298,27 @@ in [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md).
 
 Per-task spawn when the user's daemon is offline (or — as a
 v-next opt-in — when it's overloaded). brnrd holds the user's
-AI credentials in the vault, holds its own pool-control token for
-the managed Fly app, and runs the spawn flow server-side using
-the same env-adapter shape a daemon would use locally.
+AI credentials in the vault, holds its own pool-control token
+for the managed Fly app, and runs the spawn flow server-side
+using the **same env class** a daemon would use locally — cloud
+runners are envs (per
+[`research-cloud-envs.md`](research-cloud-envs.md) and
+[`design-env-interface.md`](design-env-interface.md) →
+"brnrd server-side caller"), so the `src/brr/envs/fly_machines/`
+module the daemon would `pip install brr[fly]` to use is the
+same module brnrd imports. The brnrd backend just does a
+daemon-equivalent bootstrap (clone repo with the per-spawn GH
+App token, materialise AI creds, construct a `RunContext`)
+before invoking the env.
 
 ### AI-credential vault — two shapes, one endpoint
 
 The vault stores AI-runner credentials encrypted, in two payload
 shapes on the same `POST /v1/accounts/ai-credentials` endpoint:
 
-- **API key**: `brr accounts add-credential anthropic --key
+- **API key**: `brr brnrd creds add anthropic --key
   sk-ant-...`. The default for most users.
-- **Credential directory tarball**: `brr accounts add-credential
+- **Credential directory tarball**: `brr brnrd creds add
   anthropic --dir ~/.claude`. The CLI tars the directory, base64-
   encodes, uploads; the sandbox bootstrap script extracts it back
   into `$HOME/.claude/` at spawn time. Preserves subscription-
@@ -322,8 +334,10 @@ ergonomic value for users already paying for it.
 ### Shape from the user's perspective
 
 ```
-brr accounts add-credential anthropic --key sk-ant-...
-brr accounts failover --enable \
+brr brnrd connect                     # pair to brnrd.dev (or self-hosted URL)
+brr brnrd topup 20                    # $20 → 2000 credits, via Stripe Checkout
+brr brnrd creds add anthropic --key sk-ant-...
+brr brnrd policy set --enable \
   --mode ask \
   --monthly-cap 100 \
   --monthly-cost-cap-usd 25
@@ -337,17 +351,40 @@ laptop wakes. The full mechanics, including the dispatcher tree
 and the spawn flow, are in
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
 "Failover dispatch"; sequencing is in
-[`plan-failover-compute.md`](plan-failover-compute.md).
+[`plan-failover-compute.md`](plan-failover-compute.md); the CLI
+verb taxonomy is in
+[`decision-cli-shape.md`](decision-cli-shape.md).
+
+### Billing — credit wallet, no card on file by default
+
+brnrd uses a **credit wallet** (1 credit = $0.01) topped up via
+one-shot Stripe Checkout purchases. Spawns debit at finalize.
+Free-tier accounts get ~300 credits granted monthly (≈100
+worst-case spawns); paid credits never expire. No card-on-file
+unless the user opts into auto-topup. Refunds on unused paid
+credits within 30 days, pro-rata.
+
+This shape matches the metered cost (you pay for what you fire),
+aligns with the data-minimization pitch (no recurring identity-
+mapping), and is industry-standard for usage-metered services
+(OpenAI / Anthropic / AWS / Mailgun / Twilio all use credits or
+metered billing).
+
+Full wallet mechanics — top-up flow, debit-at-finalize, zero-
+balance UX (event enqueued + gate notify, not dropped), refund
+policy, auto-topup, Stripe + HugiMuni SAS + Qonto integration,
+audit-log entries — in [`design-billing.md`](design-billing.md).
 
 ### Cost transparency
 
 Every spawn is metered (start time, end time, machine size, est
-cost, actual cost) and rolled into `brr accounts audit` / the
-dashboard. Users see exactly what each task cost and how close
-they are to their cap. The pricing rate published in
+cost, actual cost in credits) and rolled into `brr brnrd audit`
+/ the dashboard. Users see exactly what each task cost and how
+close they are to their monthly free-credit grant + their
+remaining paid balance. The pricing rate published in
 [`decision-pricing-shape.md`](decision-pricing-shape.md) carries
-a small margin over wholesale Fly Machines pricing — sustainable,
-transparent, no surprises.
+a small margin over wholesale Fly Machines pricing —
+sustainable, transparent, no surprises.
 
 ## Surface C — BYO compute (designed, deferred)
 
@@ -463,9 +500,17 @@ Per [`decision-monorepo-structure.md`](decision-monorepo-structure.md):
 - `deploy/fly-daemon/`, `deploy/upsun-daemon/` etc. — daemon-
   hosting templates
 
-Plugin packages (`brr-env-fly-machines`, `brr-env-codespaces`,
-future BYO cloud adapters when they come back) live in their own
-repos as separately-installable pip packages.
+First-party cloud envs (`fly_machines`, `codespaces`, future
+ones) live at `src/brr/envs/<name>/` inside the brr package,
+gated by `brr[<name>]` pip extras (per the single-package +
+extras decision). Third-party envs use the `brr.envs`
+entry-point mechanism per
+[`design-env-interface.md`](design-env-interface.md) and
+publish as their own `brr-env-<name>` pypi packages — the same
+mechanism applies if a first-party env later graduates to its
+own repo (per
+[`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+"split-out criterion").
 
 ## Boundary
 
@@ -505,10 +550,10 @@ Out of scope, explicitly:
   until usage shows whether it matters.
 - **Windows daemon supervision.** Defer per
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §4.
-- **Stripe / Paddle integration.** Manual invoicing at launch
-  (CSV exporter from the accounting table); add a payments
-  integration when monthly volume justifies the integration
-  cost.
+- **Card-on-file recurring subscriptions.** Launch uses one-shot
+  Stripe Checkout top-ups + opt-in auto-topup. Recurring
+  subscription billing (for a team tier or SLA) is v-next per
+  [`design-billing.md`](design-billing.md).
 
 ## Read next
 
@@ -530,20 +575,27 @@ Out of scope, explicitly:
    gate API, Upsun backend deployment).
 5. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
    for the dashboard launch sequencing.
-6. [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
-   for the cross-adapter patterns and per-platform briefs
-   underpinning the managed-compute sandbox + daemon-side
-   plugins (independent of managed mode, useful for power users).
-7. [`decision-connectors-layering.md`](decision-connectors-layering.md)
+6. [`design-billing.md`](design-billing.md) for the credit-
+   wallet mechanics behind Surface B's pricing.
+7. [`decision-cli-shape.md`](decision-cli-shape.md) for the
+   `brr brnrd <subcommand>` namespace and the rest of the CLI
+   verb taxonomy.
+8. [`research-cloud-envs.md`](research-cloud-envs.md)
+   for the cross-env patterns and per-platform briefs
+   underpinning the managed-compute sandbox + daemon-side cloud
+   envs (independent of managed mode, useful for power users).
+9. [`decision-connectors-layering.md`](decision-connectors-layering.md)
    for the gates-vs-connectors split that the agentic-mode
    upgrade path depends on.
-8. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
-   for where the brnrd backend, dashboard, and plugins live.
-9. [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)
-   for the `deploy/` folder and the `brr/daemon` Docker image
-   variant (demoted to launch-nice-to-have; useful for cloud-first
-   users).
-10. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1,
+10. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+    for where the brnrd backend, dashboard, and envs live
+    (single package + extras).
+11. [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)
+    for the `deploy/` folder and the `brr/daemon` Docker image
+    variant (demoted to launch-nice-to-have; useful for
+    cloud-first users; cross-platform daemoning tracked at
+    [issue #29](https://github.com/Gurio/brr/issues/29)).
+12. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1,
     §2, §4 for the original pondering provenance and the
     2026-05-22 / 2026-05-25 reframe breadcrumbs that drove the
     current shape.
