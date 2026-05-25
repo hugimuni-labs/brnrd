@@ -5,8 +5,9 @@ repo-local daemon to a user-owned fleet. The canonical split was
 originally three axes: user-level steering overlays, a future fleet
 operator (`brnrd`), and execution environments. The environment axis
 has its own live hub in [`subject-envs.md`](subject-envs.md). The
-fleet-operator axis collapsed into brr.run on 2026-05-25 (one
-platform, one name) and lives in
+fleet-operator axis collapsed into the same product as the managed
+service on 2026-05-25 (one platform, one name — `brnrd`, hosted at
+`brnrd.dev`) and lives in
 [`subject-managed-mode.md`](subject-managed-mode.md). This page keeps
 the overlay strand coherent while it is paused and points at the
 relevant successor pages for the other axes.
@@ -26,17 +27,19 @@ The fleet agenda is deliberately not one feature.
   the overlay shape before implementation starts.
 - **Managed mode** answers what ships as a paid tier at launch — hosted
   gates (Telegram + GitHub App), multi-project routing, permission-
-  prompt-gated managed compute on a brr.run-owned Fly pool, AI-
+  prompt-gated managed compute on a brnrd-owned Fly pool, AI-
   credential vault, a dashboard MVP, and a data-minimization principle
-  that keeps user content off brr.run. Active design strand; see
+  that keeps user content off brnrd. Active design strand; see
   [`subject-managed-mode.md`](subject-managed-mode.md). Cross-cuts
   the env axis (the failover sandbox image is built on the env
   protocol). BYO cloud execution adapters remain user-driven plugin
   work, independent of managed mode.
-- **Fleet / brnrd** — *retired as a separate name on 2026-05-25*. The
-  fleet-management angle collapsed into brr.run as the same product
-  (one platform, one name). The dashboard surface in
-  [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+- **Fleet / brnrd** — *collapsed into the managed-mode product on
+  2026-05-25; `brnrd` is now the kept name for the whole hosted
+  product (dispatcher + compute pool + dashboard + fleet manager)
+  rather than a separate fleet-operator brand.* The dashboard
+  surface in
+  [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
   carries the fleet view (project list, daemon status, per-project
   detail, conversation proxy). Any future agentic-secretary layer
   ("proactive cross-project assistant") gets named when it lands;
@@ -95,12 +98,12 @@ module by default.
    2026-05-22 and reshaped through 2026-05-25: two launch
    surfaces (free dispatcher with 100 managed-compute spawns /
    month; usage-based managed compute over the cap) on a thin
-   brr.run (data minimization principle), with multi-project
+   brnrd (data minimization principle), with multi-project
    routing and cost-transparent permission prompts baked in,
    plus a dashboard MVP and a monorepo layout that keeps brr
-   core + brr.run backend + dashboard + plugins coherent. The
+   core + brnrd backend + dashboard + plugins coherent. The
    hub fans out to:
-   - a design ([`design-brr-run-protocol.md`](design-brr-run-protocol.md))
+   - a design ([`design-brnrd-protocol.md`](design-brnrd-protocol.md))
    - a research page ([`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md))
    - three decision pages
      ([`decision-pricing-shape.md`](decision-pricing-shape.md),
@@ -109,7 +112,7 @@ module by default.
    - five plan pages
      ([`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
      [`plan-failover-compute.md`](plan-failover-compute.md),
-     [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md),
+     [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md),
      [`plan-env-fly-machines.md`](plan-env-fly-machines.md),
      [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)).
 4. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) for the

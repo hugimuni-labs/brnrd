@@ -30,13 +30,15 @@ the current state. §6 is the re-promotion guide.
 
 > **PROMOTED on 2026-05-22 — see
 > [`subject-managed-mode.md`](subject-managed-mode.md) (hub),
-> [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
-> (locked protocol; renamed from `design-managed-gates.md` when
-> spawn-compute joined its scope), and the plan and decision
+> [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+> (locked protocol; originally `design-managed-gates.md`,
+> renamed once when spawn-compute joined its scope, and again
+> on 2026-05-25 when the hosted product settled on the brnrd
+> name), and the plan and decision
 > pages
 > ([`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
 > [`plan-failover-compute.md`](plan-failover-compute.md),
-> [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md),
+> [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md),
 > [`plan-env-fly-machines.md`](plan-env-fly-machines.md),
 > [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md),
 > [`decision-pricing-shape.md`](decision-pricing-shape.md),
@@ -52,9 +54,9 @@ the current state. §6 is the re-promotion guide.
 > reflection that strayed from the work-continuity pitch — making
 > the user operate a third thing for what is mostly a paper
 > benefit (30% utilisation at 100% cost). The current shape
-> instead frames brr.run itself as the always-on dispatcher:
+> instead frames brnrd itself as the always-on dispatcher:
 > laptop online → forward to laptop; laptop offline AND failover
-> enabled → brr.run spawns a per-task ephemeral sandbox in the
+> enabled → brnrd spawns a per-task ephemeral sandbox in the
 > user's cloud (BYO) or its own (managed compute), execute the
 > task, push the branch home, tear the sandbox down. The
 > always-on-host model survives as a niche path for cloud-first
@@ -64,12 +66,12 @@ the current state. §6 is the re-promotion guide.
 > current synthesis.
 >
 > **2026-05-25 reframe — second pass.** Shape reworked again
-> after a deeper pass on what brr.run actually has to do at
+> after a deeper pass on what brnrd actually has to do at
 > launch vs what's actually defensible to ship:
 >
 > - **BYO compute (Surface B) deferred from launch.** The wire
 >   protocol still supports it (preserved in
->   [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+>   [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
 >   "BYO compute — designed, deferred"), but the
 >   per-platform credential storage UI, per-platform onboarding
 >   docs, dispatcher branching, and partial-support-matrix
@@ -78,20 +80,18 @@ the current state. §6 is the re-promotion guide.
 >   usage justifies; daemon-side cloud-runner adapters (laptop
 >   fans out to user's cloud via a `brr-env-*` plugin) remain
 >   independent of managed mode entirely.
-> - **brnrd retired as a name.** brnrd was useful when we
->   thought it was a separate operator-agent product; once it
->   collapsed into brr.run (the dashboard angle of the same
->   product), one name beat two. brr.run is the product (the
->   domain is concrete, "brr as a service" reads on the tin);
->   the dashboard is "the brr.run dashboard." Any future
->   agentic-secretary layer gets named when it lands, not now.
->   See [`subject-managed-mode.md`](subject-managed-mode.md)
->   "brr.run as the product."
+> - **One product, one name.** brnrd was useful when we thought
+>   it was a separate operator-agent product; once it collapsed
+>   into brr.run (the dashboard angle of the same product), one
+>   name beat two. At this point of pass 2 we picked `brr.run`
+>   as the kept name (concrete domain, descriptive); the pass-3
+>   breadcrumb below flipped this to `brnrd` on cost-and-brand
+>   grounds — the rest of the pass-2 logic stands.
 > - **Multi-project routing protocol added.** One managed bot
 >   per platform serves all of a user's projects via
 >   chat-binding + per-message prefix override (for TG/Slack/
 >   Discord) or repo-binding (for GH). Spec in
->   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+>   [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
 >   "Multi-project routing"; UX integration in
 >   [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
 >   Slice 2.
@@ -100,7 +100,7 @@ the current state. §6 is the re-promotion guide.
 >   est runtime, current-month usage, two action buttons
 >   (Approve / Queue), optional "Never ask under $X." Mode
 >   defaults to `ask`. Spec in
->   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+>   [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
 >   "Permission-prompt endpoints"; integration in
 >   [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
 >   Slice 3.
@@ -117,20 +117,20 @@ the current state. §6 is the re-promotion guide.
 >   percentage of paying users on top. See
 >   [`decision-pricing-shape.md`](decision-pricing-shape.md).
 > - **Data minimization principle promoted to load-bearing**
->   across the design and pricing. brr.run is a thin
+>   across the design and pricing. brnrd is a thin
 >   dispatcher + a credential vault; user content (prompts,
 >   code, responses, conversation history, repo state) lives
->   on the daemon side and is never mirrored to brr.run. Event
+>   on the daemon side and is never mirrored to brnrd. Event
 >   bodies dropped after dispatch; response bodies pass through
 >   without storage; AI credentials encrypted at rest with
 >   per-account envelope keys; audit log metadata-only. Trust
 >   signal on the pricing page is "we don't have your code."
 >   Full principle in
->   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+>   [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
 >   "Data minimization."
-> - **Monorepo structure decided.** brr core + brr.run backend +
+> - **Monorepo structure decided.** brr core + brnrd backend +
 >   dashboard + first-party plugins live in `src/brr/`,
->   `src/brr_run/`, `src/brr_run_web/`, `src/brr_env_*/` in one
+>   `src/brnrd/`, `src/brnrd_web/`, `src/brr_env_*/` in one
 >   monorepo, sharing the kb. Plugin packages split into their
 >   own repos when they mature. Decision in
 >   [`decision-monorepo-structure.md`](decision-monorepo-structure.md).
@@ -143,22 +143,77 @@ the current state. §6 is the re-promotion guide.
 >   so the future agentic-mode upgrade doesn't have to retrofit
 >   the gate API.
 > - **Upsun is the prototype hosting environment** for the
->   brr.run backend; read-only-app-container constraints
+>   brnrd backend; read-only-app-container constraints
 >   handled via the build-vs-deploy split, declared writable
 >   mounts, postgres add-on, and Upsun-secret-store for the
 >   pool tokens. Spec in
->   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+>   [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
 >   "Upsun deployment notes."
 >
 > Net effect: the launch shape is **two surfaces** (free
 > dispatcher inc. 100 managed-compute spawns/month, plus
-> usage-based managed compute over cap) on a **thin** brr.run
+> usage-based managed compute over cap) on a **thin** brnrd
 > (data minimization), hosted on **Upsun**, exposing a
 > **dashboard MVP**, with **multi-project routing** + **cost-
 > transparent permission prompts** baked in, and a **monorepo**
 > layout that keeps brr core / backend / dashboard / plugins
 > coherent. See [`subject-managed-mode.md`](subject-managed-mode.md)
 > for the current synthesis.
+>
+> **2026-05-25 reframe — third pass.** Two more revisions
+> after surveying domain economics and confronting the
+> "conversation history" gap honestly:
+>
+> - **brnrd kept as the name; canonical domain `brnrd.dev`.**
+>   Pass 2 had retired `brnrd` in favour of `brr.run` ("one
+>   product, one name; brr.run wins"). Once domain costs
+>   surfaced (`brr.run` runs ~$120/yr as a premium domain;
+>   `brnrd.dev` ~$15/yr), the brand-asset value of the
+>   `brr → brnrd → ⟍brr` reflection-palindrome animation, and
+>   the sibling-name fit with "brr", the choice flipped:
+>   `brnrd` is the product name, `brnrd.dev` is the canonical
+>   domain. The pass-2 reasoning about *collapsing two names
+>   into one* still stands — only which name survives changed.
+>   The hub's "brnrd as the product" section carries the
+>   updated framing.
+> - **Cross-gate conversation context via metadata-only graph
+>   + on-demand fetch.** Pass 2 left conversation history as
+>   "lives on the daemon; gone when daemon is offline" which
+>   loses cross-gate continuity (e.g., user asked about a
+>   deploy in TG; later commented on the resulting GH PR;
+>   failover spawn would see only the GH PR). Pass 3 closes
+>   this with a metadata-only graph on brnrd
+>   (`event_id ↔ conversation_id ↔ branch_name`, no body,
+>   30-day TTL; conversation_id sourced from a
+>   `Brnrd-Conversation-Id` git commit trailer the daemon
+>   writes, plus the response POST), three-source spawn-context
+>   assembly (originating event + gate-side history fetch from
+>   the platform's own API + git log replay), and one named
+>   concession — Telegram's Bot API has no retroactive history,
+>   so brnrd holds a per-chat ring buffer (50 msgs × 72h,
+>   encrypted, audited, drops on `/disconnect`). Slack /
+>   Discord don't need a ring buffer; their APIs expose history
+>   natively.
+> - **"What we DO hold" promoted to a load-bearing
+>   subsection** of the data-minimization principle, with every
+>   persistent surface listed (scope + TTL + reason). The
+>   conversation graph and TG ring buffer are named there, not
+>   hidden. Trust signal stays "we don't have your code" with
+>   the held surfaces explicit on the pricing page.
+> - **New small plan: daemon-side conversation_id propagation.**
+>   `Brnrd-Conversation-Id` git commit trailer + conversation_id
+>   field on the response POST. ~80 LOC daemon-side; gates
+>   brnrd's metadata-graph machinery from being meaningful in
+>   practice. See
+>   [`plan-conversation-id-propagation.md`](plan-conversation-id-propagation.md).
+>
+> Net effect after pass 3: same two-surface launch shape; the
+> hosted product is `brnrd` at `brnrd.dev`; cross-gate
+> continuity for failover is preserved without brnrd holding
+> conversation contents (only the metadata table-of-contents
+> graph + TG ring buffer). See
+> [`subject-managed-mode.md`](subject-managed-mode.md) for the
+> current synthesis.
 
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.
@@ -175,7 +230,7 @@ self-hosted path 1:1:
 
 These two dimensions are independent. A user can take managed gates
 without managed execution (their daemon stays local, just talks to
-brr.run for transport); they can take BYO cloud execution without
+brnrd for transport); they can take BYO cloud execution without
 managed gates (their tokens stay theirs, but tasks fan out to their
 cloud); or both. Bundling them at the product level is a marketing
 decision, not an architectural one.
@@ -215,13 +270,13 @@ single friction in adoption.
 
 Managed-gates shape:
 
-- brr.run operates **one bot per channel kind**: `@brr_bot` on
+- brnrd operates **one bot per channel kind**: `@brr_bot` on
   Telegram, a single brr Slack app, a single brr GitHub App.
 - Users `/invite @brr_bot` to a channel or install the GitHub App on
   a repo. No tokens to manage.
-- The hosted bot writes events to an inbox-as-service on brr.run,
+- The hosted bot writes events to an inbox-as-service on brnrd,
   scoped to the user.
-- The user's local daemon long-polls (or websocket-connects) brr.run
+- The user's local daemon long-polls (or websocket-connects) brnrd
   for events and posts responses back the same way.
 - The daemon still runs the runner on the user's hardware. Repo
   contents never leave the user's box.
@@ -238,7 +293,7 @@ Architectural fit with the current code:
   that idea operationalised as a user-facing product instead of a
   brnrd internal.
 - New surface needed on brr's side: one CLI verb (`brr connect`,
-  `brr connect brr.run`, or similar) that authenticates the local
+  `brr connect brnrd`, or similar) that authenticates the local
   daemon to the hosted inbox and starts the cloud-gate thread. No
   per-bot setup verbs.
 
@@ -247,7 +302,7 @@ What this does *not* change:
 - Token-based, fully self-hosted gates stay first-class. The OSS
   path remains `brr setup telegram` with the user's own bot. The
   managed tier is one alternative gate, not a replacement.
-- No code execution happens on brr.run in this tier. It is pure
+- No code execution happens on brnrd in this tier. It is pure
   transport — the security model is "we route messages; we never see
   repos".
 
@@ -269,14 +324,14 @@ Two product tiers nest cleanly here:
 
 - **BYO cloud key.** User adds a Fly token / Modal token / Daytona
   key / SSH host to `.brr/config`. brr launches sandboxes on the
-  user's account. brr.run charges nothing per sandbox; it charges
+  user's account. brnrd charges nothing per sandbox; it charges
   for the orchestration convenience (the scheduling, the gate
   routing, the receipt of "your task is done" notifications). User
   pays platform directly. **This is the near-term target** because
   it preserves the self-hosted ideology and it's what the user wants
   for the laptop-down case right now.
-- **Fully managed compute.** brr.run runs sandboxes on its own infra
-  (most likely Fly Machines or similar). User pays brr.run a
+- **Fully managed compute.** brnrd runs sandboxes on its own infra
+  (most likely Fly Machines or similar). User pays brnrd a
   per-task / per-second rate with margin. This is the higher-margin
   tier and the higher-trust ask (we touch their code), so it ships
   second.
@@ -290,20 +345,20 @@ the code does not:
 
 - **OSS / BYO compute**: user operates the daemon (on a box of their
   choice — see §4), holds the cloud token, the daemon hits the
-  platform API directly. brr.run is out of the per-task path; its
+  platform API directly. brnrd is out of the per-task path; its
   only role for BYO users is the gates side (Dimension A, optional).
-- **Fully managed compute**: brr.run operates the compute on its own
-  infra. User pays per-task with margin. Adds a brr.run-side
+- **Fully managed compute**: brnrd operates the compute on its own
+  infra. User pays per-task with margin. Adds a brnrd-side
   scheduler that is its own v-next thing.
 
-**Who dispatches when the laptop is down?** Not brr.run, in the BYO
+**Who dispatches when the laptop is down?** Not brnrd, in the BYO
 case — the answer is "the daemon doesn't run on the laptop in the
 first place". It runs on an always-on host the user controls, which
-long-polls brr.run for gates events and dispatches tasks the usual
-way. See §4 for the deployment-targets list. brr.run holding the
+long-polls brnrd for gates events and dispatches tasks the usual
+way. See §4 for the deployment-targets list. brnrd holding the
 user's cloud token and spawning sandboxes on their behalf is a
 v-next convenience layer, not the primary BYO answer — the
-always-on-host model is simpler operationally and keeps brr.run's
+always-on-host model is simpler operationally and keeps brnrd's
 scope tight.
 
 ### 1.4. Monetisation timing — ship the paid tier at launch
@@ -329,7 +384,7 @@ What "ship at launch" means concretely, minimum:
   execution. Everything brr currently does.
 - **Paid tier v0 — managed gates only.** Hosted `@brr_bot` on
   Telegram (the easiest one to operate; one bot scales to thousands
-  of users). User installs `brr connect brr.run`, the daemon
+  of users). User installs `brr connect brnrd`, the daemon
   long-polls. Charged at maybe $10-30/mo flat — priced as
   convenience, not as compute.
 - **Defer to v1.** BYO cloud execution. Fully managed execution.
@@ -421,7 +476,7 @@ design page:
   default to open egress; some let users restrict it (Daytona's
   network allow-list, Modal's `outbound_cidr_allowlist`). Brr
   probably wants permissive default with an opt-in tightening.
-- **AGPL exposure.** Daytona is AGPL-3.0; if brr.run uses Daytona
+- **AGPL exposure.** Daytona is AGPL-3.0; if brnrd uses Daytona
   as an upstream sandbox backend, AGPL covers only modifications to
   Daytona itself (which we wouldn't need to make — we'd be an API
   client). Worth confirming with a lawyer-or-equivalent before
@@ -699,7 +754,7 @@ That separation makes both directions easier to reason about:
 - **brnrd** is a separate product with its own brain, kb, UI,
   multi-channel surface. Ships much later, after brr itself has
   proven traction and managed mode has stabilised. brnrd consumes
-  brr (and probably the brr.run managed APIs), it does not extend
+  brr (and probably the brnrd managed APIs), it does not extend
   brr's own runtime.
 
 What brr should ship now to leave room for brnrd later:
@@ -748,7 +803,7 @@ still stands as the survey. Updates since:
 - **Two-layer daemon hosting (the managed-mode angle).** *2026-05-22
   reframe: the "always-on host as the preferred BYO answer to
   laptop-down" claim below was demoted. The current preferred
-  answer is brr.run-as-failover-dispatcher (Surface B in
+  answer is brnrd-as-failover-dispatcher (Surface B in
   [`subject-managed-mode.md`](subject-managed-mode.md)) — the
   always-on host survives as a niche path for cloud-first users
   only. Body below retained as provenance.* In Dimension B the
@@ -756,11 +811,11 @@ still stands as the survey. Updates since:
   disappears: if the daemon itself runs on a small always-on host
   the user controls, the laptop-down case is solved by the box-up
   case. This was originally framed as the preferred answer for
-  BYO compute dispatch (§1.3) — simpler than brr.run spawning
+  BYO compute dispatch (§1.3) — simpler than brnrd spawning
   sandboxes on the user's account, and OSS-pure end-to-end. The
   model is two-layer:
   - *Always-on daemon host* = where the brr process lives.
-    Long-polls brr.run for gates events; dispatches tasks via
+    Long-polls brnrd for gates events; dispatches tasks via
     whatever env is configured.
   - *Per-task sandbox host* = where individual tasks fan out when
     bigger compute / GPU / stronger isolation is needed. Optional;
@@ -803,7 +858,7 @@ Unchanged from older §5:
   exists.
 
 Still trivial; still useful; still not urgent. The managed-mode
-angle adds one consumer: a hosted brr.run dashboard that pulls the
+angle adds one consumer: a hosted brnrd dashboard that pulls the
 registry over the daemon's authenticated API to render "your repos"
 without scanning anything.
 
@@ -840,7 +895,7 @@ highest priority first:
 
 - **Managed mode (Dimension A — managed gates).** Promote into a
   small page family: `subject-managed-mode.md` (hub covering
-  Surfaces A / B / C + daemon hosting), `design-brr-run-protocol.md`
+  Surfaces A / B / C + daemon hosting), `design-brnrd-protocol.md`
   (the wire format spanning gates + failover dispatch + cloud-
   token security; renamed from `design-managed-gates.md` once
   spawn-compute joined its scope), and
@@ -864,7 +919,7 @@ highest priority first:
   `deploy/{fly,render,heroku,upsun,vps,docker-compose}/` examples
   folder + a "deploying brr" docs page. The "deploy brr in 30
   seconds" promise is what cashes out the BYO compute story without
-  brr.run having to hold cloud credentials.
+  brnrd having to hold cloud credentials.
 - **`brr install-service` for macOS + Linux.** Promote into
   `plan-install-service.md`. Cheap; part of the launch shape per §4.
 - **Self-maintaining registry (§5).** Trivial; promote into a

@@ -116,30 +116,41 @@ dive-in map) and are stable until something contradicts them.
   docs live in `src/brr/docs/` and ship with the package rather than
   in `kb/`.
 
-## Fleet & overlays *(managed mode active; overlays / brnrd paused)*
+## Fleet & overlays *(managed mode active; overlays paused)*
 
 - **Hub: [fleet and overlays](subject-fleet-overlays.md)** —
   synthesis of the three-axis split: overlays as user-level steering,
-  `brnrd` as a future fleet operator outside repo-local brr, and
-  environments as the active axis now handled by the env hub.
+  the fleet operator (originally codenamed `brnrd`, now the kept
+  name for the whole hosted product), and environments as the
+  active axis now handled by the env hub. The fleet axis itself
+  collapsed into the managed-mode hub on 2026-05-25.
 - **Hub: [managed mode](subject-managed-mode.md)** — *active*. The
-  brr.run story: free dispatcher (gates + multi-project routing +
-  permission prompts + 100 failover spawns/month) + usage-based
-  managed compute over the cap. Data minimization ("we don't have
-  your code") baked into the design. Promoted on 2026-05-22 out of
+  `brnrd` story (hosted at `brnrd.dev`): free dispatcher (gates +
+  multi-project routing + permission prompts + 100 failover
+  spawns/month) + usage-based managed compute over the cap. Data
+  minimization ("we don't have your code") baked into the design;
+  cross-gate conversation continuity via a metadata-only graph +
+  on-demand gate-history fetch. Promoted on 2026-05-22 out of
   pondering; reshaped 2026-05-22 around the work-continuity frame
   after recognising the always-on-host model was a shape mismatch
-  with the pitch; reshaped again 2026-05-25 to drop BYO compute
-  from launch, retire `brnrd` as a separate name, add the
-  dashboard MVP, and adopt the monorepo layout.
-- [brr.run protocol design](design-brr-run-protocol.md) —
-  *proposed*. The wire format between brr daemons and brr.run.
+  with the pitch; reshaped 2026-05-25 to drop BYO compute from
+  launch, add the dashboard MVP, and adopt the monorepo layout;
+  reshaped again the same day (pass 3) to settle on `brnrd` as
+  the canonical hosted-product name (was briefly `brr.run` after
+  collapsing the two), `brnrd.dev` as the domain, and to land
+  the cross-gate conversation context machinery.
+- [brnrd protocol design](design-brnrd-protocol.md) —
+  *proposed*. The wire format between brr daemons and `brnrd`.
   Covers gates (managed-gates path), failover dispatch (decision
   tree), AI-credential vault (api-key + dir-tarball shapes on one
   endpoint), multi-project routing, permission-prompt API, data
-  minimization principle, and Upsun deployment notes. Renamed
-  from `design-managed-gates.md` on 2026-05-22 when spawn-compute
-  joined the protocol; reshaped 2026-05-25.
+  minimization principle, conversation context for failover and
+  dashboard (metadata graph + git trailer + on-demand fetch + TG
+  ring buffer), and Upsun deployment notes. Originally
+  `design-managed-gates.md`; renamed to
+  `design-brr-run-protocol.md` on 2026-05-22 when spawn-compute
+  joined the protocol; renamed to `design-brnrd-protocol.md` on
+  2026-05-25 with the brnrd-naming-keep decision.
 - [Pricing shape decision](decision-pricing-shape.md) —
   *proposed*. Two-tier shape mapped to marginal cost: free
   dispatcher (gates + 100 managed-compute spawns/month);
@@ -154,14 +165,14 @@ dive-in map) and are stable until something contradicts them.
   split lives here so the future agentic-mode upgrade doesn't
   have to retrofit the gate API.
 - [Monorepo structure decision](decision-monorepo-structure.md) —
-  *proposed*. `src/brr/` (daemon) + `src/brr_run/` (backend) +
-  `src/brr_run_web/` (dashboard) + `src/brr_env_*/` (vendored
+  *proposed*. `src/brr/` (daemon) + `src/brnrd/` (backend) +
+  `src/brnrd_web/` (dashboard) + `src/brr_env_*/` (vendored
   plugins) in one repo, sharing the kb. Plugin packages split into
   their own repos when they mature.
 - [Cloud-runner patterns research](research-cloud-runner-patterns.md) —
   cross-adapter patterns (credential / repo / result delivery,
   cold-start budgets, network policy), the caller axis (same
-  adapter code called from laptop daemon AND from brr.run
+  adapter code called from laptop daemon AND from brnrd
   server-side managed compute), and per-platform briefs (Fly
   Machines, Modal, Daytona, E2B, Codespaces, vanilla VMs).
   Promoted from `notes-pondering-fleet.md` §2; refreshed 2026-05-25
@@ -172,14 +183,21 @@ dive-in map) and are stable until something contradicts them.
   backend skeleton + auto-binding (first, largest pain relief);
   TG bot adapter + multi-project routing UX (fast-follow);
   permission-prompt API + gate-side integration (third). Backend
-  lives at `src/brr_run/` in the monorepo.
+  lives at `src/brnrd/` in the monorepo.
 - [Failover compute plan](plan-failover-compute.md) — *not
-  started*. Managed-compute spawn on brr.run-owned Fly pool:
+  started*. Managed-compute spawn on brnrd-owned Fly pool:
   AI-credential vault (api-key + dir-tarball), dispatcher
   decision tree, permission-prompt-resolving spawn invocation,
   audit log, and the CLI surface for the `brr accounts` verbs.
   BYO compute deferred from launch.
-- [Dashboard MVP plan](plan-brr-run-dashboard-mvp.md) — *not
+- [Conversation_id propagation plan](plan-conversation-id-propagation.md) —
+  *not started*. Small daemon-side enabler: `Brnrd-Conversation-Id`
+  git commit trailer + `conversation_id` field on the
+  `/v1/daemons/responses` POST. Gates brnrd's metadata-only
+  conversation graph from being meaningful in practice so
+  cross-gate continuity for failover can actually work without
+  brnrd holding conversation contents. ~80 LOC daemon-side.
+- [Dashboard MVP plan](plan-brnrd-dashboard-mvp.md) — *not
   started*. Seven views (accounts/projects, project detail, task
   detail, conversation proxy, AI credentials, failover policy +
   cost chart, audit log). HTMX-first to keep build/maintenance
@@ -187,14 +205,14 @@ dive-in map) and are stable until something contradicts them.
 - [Fly Machines env plan](plan-env-fly-machines.md) — *not
   started*. First cloud-runner adapter; ships as the
   `brr-env-fly-machines` plugin package. Used by the laptop
-  daemon (user's Fly account, user-driven plugin) and by brr.run
-  server-side (brr.run's Fly account, managed compute) both.
+  daemon (user's Fly account, user-driven plugin) and by brnrd
+  server-side (brnrd's Fly account, managed compute) both.
 - [Daemon deployment templates plan](plan-daemon-deployment-templates.md) —
   *demoted to launch-nice-to-have on 2026-05-22*. Earlier framing
   positioned the always-on-host as the preferred laptop-down
   answer; the failover-compute path replaced it. These templates
   remain useful for the niche cloud-first audience. The Upsun
-  template shares its read-only-container shape with the brr.run
+  template shares its read-only-container shape with the brnrd
   backend Upsun deployment.
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
   *roadmap (env axis partly shipped, overlays/brnrd paused)*. Three-axis

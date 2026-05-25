@@ -3,7 +3,7 @@
 Implementation plan for **Surface A** (managed dispatcher: hosted
 gates + multi-project routing + permission prompts) of
 [managed mode](subject-managed-mode.md), specified in
-[`design-brr-run-protocol.md`](design-brr-run-protocol.md). Three
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md). Three
 slices ship at launch, in this order: **GitHub App adapter first**
 (largest BYO-setup pain relief), **Telegram bot adapter as
 fast-follow** on the same backend, **multi-project routing +
@@ -13,21 +13,21 @@ Sister plan
 [`plan-failover-compute.md`](plan-failover-compute.md) covers the
 managed-compute failover spawn on top of the same backend
 skeleton this plan stands up. Sister plan
-[`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+[`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
 covers the dashboard view of all of this.
 
 ## Status
 
 **Not started.** Blocked on:
 
-- A small brr.run backend prototype (~3 days work) demonstrating
+- A small brnrd backend prototype (~3 days work) demonstrating
   the inbox-as-service protocol end-to-end (Telegram update →
   inbox → daemon poll → response → Telegram message). FastAPI
   app + postgres on Upsun per
-  [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
-  "Upsun deployment notes." Lives at `src/brr_run/` per
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
+  "Upsun deployment notes." Lives at `src/brnrd/` per
   [`decision-monorepo-structure.md`](decision-monorepo-structure.md).
-- [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+- [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
   acceptance — the wire format (gates, routing, prompts) needs
   to be locked before both sides start building in parallel.
 - [`decision-pricing-shape.md`](decision-pricing-shape.md)
@@ -92,50 +92,50 @@ The bigger pain-relief slice. Ship first.
 
 **Steps:**
 
-1. `src/brr_run/` skeleton: FastAPI app, postgres schema
+1. `src/brnrd/` skeleton: FastAPI app, postgres schema
    (accounts, projects, daemons, bindings, events, audit_log),
    alembic migrations, Upsun deployment template at
    `deploy/upsun/`.
 2. `src/brr/gates/cloud.py` — the cloud gate adapter
    (lifecycle, long-poll loop, response-post loop, cursor
    persistence). Common to GH and TG; the webhook side is
-   brr.run's concern, not the daemon's.
+   brnrd's concern, not the daemon's.
 3. CLI plumbing: `brr accounts pair github`, `brr accounts
    list-projects`, `brr accounts bind-repo`. The pair verb
    opens the GH App install URL in the user's browser and
-   waits for brr.run to confirm the install webhook landed.
-4. brr.run-side webhook receiver for `installation`,
+   waits for brnrd to confirm the install webhook landed.
+4. brnrd-side webhook receiver for `installation`,
    `installation_repositories`, `issue_comment`,
    `pull_request_review_comment` events; normalisation to the
    event shape from the design.
-5. brr.run-side response forwarder: post comment / review reply
+5. brnrd-side response forwarder: post comment / review reply
    on the originating PR / issue.
 6. Repo-project binding: auto-bind on `installation` and
    `installation_repositories` events (one repo → one project,
    defaulting to a project named after the repo); re-bindable
    via `brr accounts bind-repo <installation_id> <repo>
    <project>`.
-7. End-to-end smoke test: install brr.run GitHub App on a test
+7. End-to-end smoke test: install brnrd GitHub App on a test
    repo → comment `@brr <task>` → event resolves to project →
    task lands in daemon inbox → daemon completes task →
    response posts back as a PR comment.
 
 **Estimate.** ~700-900 LOC daemon-side (cloud gate adapter +
-CLI verbs); ~1000-1400 LOC brr.run-side (FastAPI skeleton +
+CLI verbs); ~1000-1400 LOC brnrd-side (FastAPI skeleton +
 postgres schema + webhook handler + GH App JWT exchange +
 comment-post logic + binding management).
 
 ### Slice 2 — Telegram bot adapter (fast-follow)
 
-One to two weeks after slice 1 ships. Reuses the brr.run backend
+One to two weeks after slice 1 ships. Reuses the brnrd backend
 entirely; adds one webhook endpoint, one platform-specific
 response formatter, and the chat-binding flow.
 
 **Steps:**
 
-1. brr.run-side webhook receiver for Telegram Bot API updates;
+1. brnrd-side webhook receiver for Telegram Bot API updates;
    normalisation to the same event shape used for GH.
-2. brr.run-side response forwarder: post to `chat_id` via
+2. brnrd-side response forwarder: post to `chat_id` via
    Telegram `sendMessage` API.
 3. `brr accounts pair telegram` CLI flow (pairing-code path
    from the design).
@@ -151,7 +151,7 @@ response formatter, and the chat-binding flow.
    override; sticky binding survives bot restart.
 
 **Estimate.** Daemon-side ~0 new code (reuse from slice 1).
-brr.run-side ~500-700 LOC (webhook + sendMessage + command
+brnrd-side ~500-700 LOC (webhook + sendMessage + command
 parser + binding management).
 
 ### Slice 3 — Permission-prompt API + gate-side integration
@@ -194,15 +194,15 @@ gate-specific formatters + callback handlers).
 | `brr accounts pair {telegram,github}` CLI verbs | `src/brr/cli/accounts.py` |
 | `brr accounts {list-projects,bind-chat,bind-repo}` CLI verbs | `src/brr/cli/accounts.py` |
 | `src/brr/docs/managed-mode.md` (pairing + routing + prompt UX) | `src/brr/docs/` |
-| brr.run backend (FastAPI + postgres + workers) | `src/brr_run/` |
-| Multi-project routing tables + binding endpoints | `src/brr_run/` |
-| Permission-prompt API + gate-side formatters | `src/brr_run/` |
-| Upsun deployment template for brr.run backend | `deploy/upsun/` |
-| Hosted bot operations (running `@brr_bot`, the brr.run GitHub App) | brr.run operator — not a code artifact |
+| brnrd backend (FastAPI + postgres + workers) | `src/brnrd/` |
+| Multi-project routing tables + binding endpoints | `src/brnrd/` |
+| Permission-prompt API + gate-side formatters | `src/brnrd/` |
+| Upsun deployment template for brnrd backend | `deploy/upsun/` |
+| Hosted bot operations (running `@brr_bot`, the brnrd GitHub App) | brnrd operator — not a code artifact |
 
 Monorepo layout per
 [`decision-monorepo-structure.md`](decision-monorepo-structure.md):
-backend lives at `src/brr_run/` alongside the daemon at
+backend lives at `src/brnrd/` alongside the daemon at
 `src/brr/`, sharing the kb and `pyproject.toml`.
 
 ## Out of scope
@@ -213,7 +213,7 @@ backend lives at `src/brr_run/` alongside the daemon at
   design page).
 - Web dashboard for managing daemons / bindings / pairings —
   lives in
-  [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md);
+  [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md);
   CLI-first for this plan.
 - Payment / billing automation (manual invoicing for launch
   tier per
@@ -227,18 +227,18 @@ backend lives at `src/brr_run/` alongside the daemon at
 ## Risks
 
 - **Wire-format churn.** If
-  [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
   changes during the build, both sides need coordinated
   releases. Mitigation: lock the design with a `Status:
   accepted` banner before starting slice 1.
 - **GitHub App approval delays.** Public GitHub Apps need a
   manual approval step for verified-creator badge; not blocking
   for launch but worth filing early.
-- **Per-tenant blast radius.** A bug in brr.run's account
+- **Per-tenant blast radius.** A bug in brnrd's account
   scoping could leak events across accounts. Mitigation:
   query-level account context, integration tests per endpoint,
   audit logging from day one, data-minimization principle from
-  `design-brr-run-protocol.md` baked into every endpoint.
+  `design-brnrd-protocol.md` baked into every endpoint.
 - **Multi-project routing confusion.** Users with multiple
   projects could mis-bind chats and have events go to the
   wrong project. Mitigation: clear `/status` command to show
@@ -259,13 +259,13 @@ backend lives at `src/brr_run/` alongside the daemon at
 
 ## Read next
 
-1. [`design-brr-run-protocol.md`](design-brr-run-protocol.md) —
+1. [`design-brnrd-protocol.md`](design-brnrd-protocol.md) —
    the contract this plan implements (Gates + Multi-project
    routing + Permission-prompt endpoints sections).
 2. [`plan-failover-compute.md`](plan-failover-compute.md) — the
    sister plan covering managed compute on top of the same
    backend skeleton this plan stands up.
-3. [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+3. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
    — the sister plan for the dashboard view of all of this.
 4. [`subject-managed-mode.md`](subject-managed-mode.md) — the
    strategic context (free dispatcher + paid managed compute,
@@ -274,20 +274,29 @@ backend lives at `src/brr_run/` alongside the daemon at
    the pricing model that drives the free-tier rate caps and
    the 100-spawn cap the prompt API references.
 6. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
-   — where `src/brr_run/` lives.
+   — where `src/brnrd/` lives.
 
 ## Lineage
 
 - 2026-05-22 — drafted as part of the managed-mode KB shape
   rollout.
-- 2026-05-22 — repointed at `design-brr-run-protocol.md`
-  (renamed from `design-managed-gates.md`) and cross-linked to
-  the new `plan-failover-compute.md` sister plan after the
+- 2026-05-22 — repointed at the protocol design (then
+  `design-brr-run-protocol.md`, since renamed to
+  `design-brnrd-protocol.md` on 2026-05-25 with the brnrd
+  naming flip; both were renames from the original
+  `design-managed-gates.md`) and cross-linked to the new
+  `plan-failover-compute.md` sister plan after the
   work-continuity reframe expanded the design's scope.
 - 2026-05-25 — added multi-project routing UX (chat / repo
   binding mechanics, `/connect`, `/project`, `@<name>` command
   grammar) and permission-prompt API + gate-side integration as
   Slice 3. Repointed at the reshaped protocol + pricing +
-  monorepo decisions. brr.run backend repo replaced with
-  `src/brr_run/` in the monorepo. Third reframe breadcrumb in
+  monorepo decisions. brnrd backend repo replaced with
+  `src/brnrd/` in the monorepo. Third reframe breadcrumb in
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
+- 2026-05-25 (pass 3) — repointed all references to
+  `design-brnrd-protocol.md` after the brnrd naming was
+  retained as the canonical hosted-product name (was briefly
+  going to be `brr.run`; reverted on cost + brand-asset
+  grounds). Fourth reframe breadcrumb in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.

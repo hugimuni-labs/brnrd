@@ -431,7 +431,7 @@ video for the landing page / Twitter / Show HN.
 
 #### No public surface
 
-No `brr.run` or similar landing. No Discord. No public X presence. No
+No `brnrd.dev` or similar landing. No Discord. No public X presence. No
 Show HN. No tech-channel demo video. Once "ready" is reached, these
 *are* the leverage points. They should be planned now, not
 retrofitted.
@@ -459,8 +459,14 @@ defensibly fine — short names with no intrinsic meaning have worked
 (Stripe, Vercel, Fly, Anthropic). Compensate via:
 
 - Strong tagline (see above) doing all the explanatory work.
-- A search-friendly subdomain: `brr.run` reads naturally, `brr.tools`
-  works too, `usebrr.dev` if both are taken.
+- Sibling product name for the hosted service: `brnrd` at
+  `brnrd.dev` — short, ownable, reads as a reflection-palindrome
+  of brr+rrb (designed for an animated hero gif). The hosted
+  service product name complements the OSS daemon name without
+  duplicating it. Decided 2026-05-25 after surveying domain
+  costs (`brr.run` ~$120/yr premium domain vs `brnrd.dev`
+  ~$15/yr) and weighing the brand-asset value of the palindrome
+  animation.
 - Consistent "brr" lowercase everywhere as a brand signature.
 
 #### CLI verb friction

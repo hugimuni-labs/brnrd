@@ -4,10 +4,10 @@
 2026-05-25 (BYO compute deferred, free-tier spawn cap revised
 down, data-minimization trust signal promoted, framing tightened
 to "we charge for ops, not for AI usage").** Sets the pricing
-model for brr.run's managed-mode surfaces. Companion to
+model for brnrd's managed-mode surfaces. Companion to
 [`subject-managed-mode.md`](subject-managed-mode.md) (the
 surfaces being priced) and
-[`design-brr-run-protocol.md`](design-brr-run-protocol.md) (the
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md) (the
 per-task accounting hooks the model rides on).
 
 ## Decision
@@ -16,7 +16,7 @@ Two-tier shape at launch (plus a deferred third):
 
 | Tier | What it includes | Cost model |
 |------|------------------|-----------|
-| **Free dispatcher** | Managed gates (TG bot, GH App, later Slack / Discord / GitLab), multi-project routing, permission-prompt API, audit log, dashboard read access, *and* failover compute on brr.run's managed pool within a generous monthly cap | Free, with rate caps (initial: 1000 gate events / month; **100 failover spawns / month** — explicitly framed as a fallback feature, not a free SaaS) |
+| **Free dispatcher** | Managed gates (TG bot, GH App, later Slack / Discord / GitLab), multi-project routing, permission-prompt API, audit log, dashboard read access, *and* failover compute on brnrd's managed pool within a generous monthly cap | Free, with rate caps (initial: 1000 gate events / month; **100 failover spawns / month** — explicitly framed as a fallback feature, not a free SaaS) |
 | **Usage-based managed compute** | Managed-compute failover spawns *over* the free-tier cap | Pure pass-through + margin (target margin: 30-50% over wholesale cloud cost). No subscription fee — only kicks in when the free-tier cap is exceeded. |
 | **Per-seat team tier (later, post-launch)** | Org-level features: audit log retention, SSO, priority support, longer event/response retention, higher rate caps, multi-user dashboard | $X / seat / month; ships post-launch when individual usage proves out |
 
@@ -25,7 +25,7 @@ of fallback continuity (100 spawns/month covers a hobby user
 through every laptop-asleep moment for the month). Paid usage
 only kicks in when the user routinely needs more failover than
 the cap, at which point the value is concretely demonstrated.
-Self-hosted brr.run gets everything free by construction.
+Self-hosted brnrd gets everything free by construction.
 
 ## What we charge for, what we don't
 
@@ -49,7 +49,7 @@ architecture and avoids "rent-seeking on free software" vibes.
 ## BYO compute — designed, deferred (not in launch pricing)
 
 Earlier draft included BYO failover compute (user stores their
-own Fly / Modal / Daytona / etc. token on brr.run; brr.run spawns
+own Fly / Modal / Daytona / etc. token on brnrd; brnrd spawns
 into the user's cloud account) as a free-tier feature. Dropped
 from launch on 2026-05-25 because:
 
@@ -58,20 +58,20 @@ from launch on 2026-05-25 because:
   per-platform failure modes, dispatcher branching on platform
   selection) — disproportionate to launch user value.
 - ~5% of launch users care; the other 95% would rather paste an
-  AI credential and let brr.run handle the spawn.
+  AI credential and let brnrd handle the spawn.
 - Per-platform maintenance burden is unbounded.
 
 Pricing implication is small: the free-tier dispatcher covers the
 "BYO operator" persona already (they pay their own AI bill, they
 pay their own cloud bill if they use a daemon-side cloud env
-plugin to fan out, brr.run charges them nothing). When BYO comes
+plugin to fan out, brnrd charges them nothing). When BYO comes
 back post-launch, it lands cleanly in the free tier (we don't
 charge for routing events you spawn against your own cloud
 account).
 
 Daemon-side cloud-runner adapters (a laptop daemon fans out to
 the user's cloud via a `brr-env-*` plugin) remain independent of
-managed mode entirely — brr.run isn't in that path, nothing to
+managed mode entirely — brnrd isn't in that path, nothing to
 price.
 
 ## Why this shape
@@ -82,7 +82,7 @@ Four constraints shaped the decision:
    tier has to be either at-or-near zero marginal cost to operate,
    or revenue-positive per unit of usage. No subsidised growth.
 2. **Everything is OSS self-hostable.** A user who doesn't like
-   the pricing can fork brr.run and run their own. The pricing
+   the pricing can fork brnrd and run their own. The pricing
    has to be honest enough that most users prefer hosted *not*
    because they can't self-host, but because operating it isn't
    worth their time. Pricing that looks like rent-seeking
@@ -93,7 +93,7 @@ Four constraints shaped the decision:
    the user can reason about up front. *And* the free tier is
    generous enough that hobby users genuinely never hit it.
 4. **Data minimization as trust signal.** "We don't store your
-   code" makes hosted brr.run defensible vs self-hosted on
+   code" makes hosted brnrd defensible vs self-hosted on
    security grounds (we hold strictly less than you'd think we
    do). This belongs on the pricing/landing page as much as on
    the design page.
@@ -112,7 +112,7 @@ to its marginal cost:
   ≈ ~$0.28/user/month max cloud cost at our rate). Over the cap
   is usage-based with margin — revenue-positive by construction.
 - **AI compute belongs to the user.** Anthropic / OpenAI / Google
-  bill the user directly; brr.run doesn't intermediate that
+  bill the user directly; brnrd doesn't intermediate that
   relationship. Removes a class of "are you reselling the
   models?" confusion and avoids the operational hell of being a
   reseller.
@@ -123,12 +123,12 @@ to its marginal cost:
 The hosted-vs-self-host pitch reads cleanly: *"we run the ops so
 you don't, and we hold less of your data than you'd expect"* —
 not *"we charge for the privilege."* Users who want to operate
-brr.run themselves can; users who'd rather not pay modest usage
+brnrd themselves can; users who'd rather not pay modest usage
 rates for the parts that cost us real money.
 
 ## Free-tier cap math
 
-At 100 spawns / month, 15-minute average task, brr.run-side cloud
+At 100 spawns / month, 15-minute average task, brnrd-side cloud
 cost on Fly Machines `shared-cpu-1x@2GB`:
 
 - ~$0.000045/sec * 900s * 100 = **~$4.05/user/month worst case**
@@ -201,14 +201,14 @@ The shape considered through 2026-05-24 included BYO failover
 compute on the free tier. Dropped 2026-05-25 because the
 implementation-cost vs launch-user-value didn't justify shipping
 it day one. Wire shape preserved in
-[`design-brr-run-protocol.md`](design-brr-run-protocol.md) for
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md) for
 clean add-back; pricing for BYO when it comes back: free tier
 (same as today's deferred plan — we don't intermediate the user's
 own cloud bill).
 
 ### Alt 6 — Reseller of AI compute (Anthropic credits resold)
 
-Brief consideration: brr.run as middleman buying bulk AI usage
+Brief consideration: brnrd as middleman buying bulk AI usage
 and reselling at margin. Rejected because:
 
 - Real reseller economics need scale we don't have.
@@ -244,9 +244,9 @@ spawn time, never logged). It does *not* intermediate AI billing.
   auto-approve; default mode (`ask`) is the conservative choice.
   Revisit if churn data shows users disabling failover because of
   prompt fatigue.
-- **Self-hosted brr.run.** When someone runs their own brr.run,
+- **Self-hosted brnrd.** When someone runs their own brnrd,
   they get all tiers for free by construction (they're paying
-  their own infra). The brand and pricing of *hosted* brr.run
+  their own infra). The brand and pricing of *hosted* brnrd
   should not depend on suppressing self-hosting — quite the
   opposite. The team tier is the only place where hosted has
   real differentiation (SLA, support); free tier and managed
@@ -255,18 +255,30 @@ spawn time, never logged). It does *not* intermediate AI billing.
 ## Trust signals that ship with the pricing page
 
 - "We don't have your code" — per
-  [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
   "Data minimization". Event content dropped after dispatch;
-  responses pass through; conversation history lives on the
-  daemon; AI credentials encrypted at rest with per-account
-  envelope keys.
+  responses pass through; conversation contents rendered live
+  from platform APIs and git remotes (not mirrored to brnrd);
+  AI credentials encrypted at rest with per-account envelope
+  keys.
+- "What we DO hold, named and bounded" — full table in the
+  design page's "What we DO hold" subsection: account email +
+  password hash; AI credentials (encrypted, until revoke);
+  project bindings; event metadata graph (30-day TTL, no body /
+  no preview / no participant names — the cross-gate table of
+  contents that powers failover continuity); Telegram per-chat
+  ring buffer (50 msgs × 72h, the one named concession because
+  TG's Bot API lacks retroactive history); audit log (metadata,
+  90 days); spawn outcomes (12 months for billing). Every read
+  of these surfaces hits the audit log.
 - "Self-hostable end-to-end" — every server-side piece is OSS in
   the monorepo (per
   [`decision-monorepo-structure.md`](decision-monorepo-structure.md));
   hosted is convenience, not lock-in.
 - "We charge for ops, not for AI usage" — per the "what we
   charge for" section above.
-- "Per-account audit log" — every credential read, spawn, prompt
+- "Per-account audit log" — every credential read, context
+  fetch (cross-gate or TG-ring-buffer read), spawn, prompt
   resolution surfaced to the user; surprises are bugs, not
   features.
 
@@ -283,6 +295,6 @@ spawn time, never logged). It does *not* intermediate AI billing.
   deferred per-seat team tier). Free-tier spawn cap revised down
   from 200 → 100. Data-minimization trust signal promoted to a
   load-bearing pricing surface. "We charge for ops, not for AI
-  usage" framing added explicitly. Self-hosted brr.run framed
+  usage" framing added explicitly. Self-hosted brnrd framed
   more positively as a parallel path. Third reframe breadcrumb
   in [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.

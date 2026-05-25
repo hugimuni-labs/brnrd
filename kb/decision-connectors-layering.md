@@ -15,19 +15,19 @@ Two integration kinds, two layers, one stack:
 |--|----------|----------------|
 | Scope | Per-project (one binding = one project) | Per-account (platform-wide; agent uses across projects) |
 | Direction | Inbound (events → daemon) and reactive outbound (responses to those events) | Outbound (agent reaches out) and pull (agent reads), proactive |
-| Layer | brr daemon (BYO) or brr.run (managed dispatcher) | brr.run platform — used by the agentic-mode layer when it lands |
+| Layer | brr daemon (BYO) or brnrd (managed dispatcher) | brnrd platform — used by the agentic-mode layer when it lands |
 | Trust posture | Per-project secret scope; project owns the secret | Per-account secret scope; account owns the secret; finer-grained per-action consent |
 | Example | Telegram bot, GitHub App, Slack bot, Discord bot | Linear, Notion, Google Calendar, Gmail, Stripe billing, Sentry, internal HTTP webhooks |
 | Today | Shipped (BYO TG / GH / Slack); managed variant in progress | Doesn't exist; placeholder for the agentic-mode upgrade path |
 
 Gates ship at launch (managed-mode variant). Connectors don't —
-they're the upgrade path for when brr.run grows an agentic
+they're the upgrade path for when brnrd grows an agentic
 secretary layer, and are named here so the layering doesn't
 collapse later under "everything is a gate."
 
 ## Why the split
 
-The framing came from noticing that the "what if brr.run had a
+The framing came from noticing that the "what if brnrd had a
 Google Apps integration" question was ambiguous: was it a gate (a
 new way to receive tasks, scoped to one project) or a connector
 (a tool the agentic layer reaches into across projects)? The
@@ -62,8 +62,8 @@ re-bound per project.
 
 ## What "agentic mode" actually means here
 
-A future brr.run capability — *not in launch scope* — where
-brr.run runs a small persistent agent on the account level
+A future brnrd capability — *not in launch scope* — where
+brnrd runs a small persistent agent on the account level
 (distinct from the per-task runners) that:
 
 - knows the user's projects (from the dispatcher state)
@@ -110,14 +110,14 @@ None of these ship at launch. The list exists to validate that
 Concretely, at launch:
 
 - Only gates exist. No connector concept implemented.
-- The brr.run protocol's project-binding API is built for the
+- The brnrd protocol's project-binding API is built for the
   per-project shape (chat ↔ project, repo ↔ project) — see
-  [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
   "Multi-project routing".
 - No agentic-secretary endpoint family. No connector vault. No
   cross-project agent state.
 - The dashboard MVP doesn't have a "connectors" view.
-  [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+  [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
   is gate-shaped through and through.
 
 The split lives only in this decision page and in a one-paragraph
@@ -167,7 +167,7 @@ Add a third layer for "tools the runner has during a single task"
 - Per-task tooling is already covered by the runner CLI's tool
   configuration (MCP servers in `claude-cli` config, etc.); not
   a brr-level concern.
-- Adding a third layer at the brr.run level confuses the
+- Adding a third layer at the brnrd level confuses the
   agentic-mode upgrade path with the per-task runner story.
 
 The two-layer split (gates + connectors) is the load-bearing
@@ -177,10 +177,10 @@ distinction; per-task tooling lives entirely in the runner.
 
 1. [`subject-managed-mode.md`](subject-managed-mode.md) for how
    gates fit into the launch shape.
-2. [`design-brr-run-protocol.md`](design-brr-run-protocol.md) for
+2. [`design-brnrd-protocol.md`](design-brnrd-protocol.md) for
    the per-project binding mechanics that the gate-shape rests
    on.
-3. [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+3. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
    for the gate-shaped dashboard that ships at launch (no
    connectors view).
 4. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1 for
@@ -189,8 +189,8 @@ distinction; per-task tooling lives entirely in the runner.
 
 ## Lineage
 
-- 2026-05-25 — drafted as part of the brr.run reshape that
-  collapsed "brnrd" as a separate name into brr.run. The
+- 2026-05-25 — drafted as part of the brnrd reshape that
+  collapsed "brnrd" as a separate name into brnrd. The
   agentic-secretary pondering from
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) needed
   a coherent place to live; this page is that place's frame.

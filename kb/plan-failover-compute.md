@@ -1,14 +1,14 @@
-# Plan: failover compute — brr.run-spawns-on-laptop-down
+# Plan: failover compute — brnrd-spawns-on-laptop-down
 
 Implementation plan for the **managed-compute failover** surface
 of [managed mode](subject-managed-mode.md): when a user's daemon
-is offline and failover is enabled, brr.run spawns a per-task
+is offline and failover is enabled, brnrd spawns a per-task
 sandbox in **its own** cloud account, decrypts the user's AI
 credentials into the sandbox, runs the task, returns the response
 via the originating gate, tears down.
 
 The wire contract lives in
-[`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
 "Failover dispatch" + "AI-credential vault" + "Permission-prompt
 endpoints"; the pricing shape lives in
 [`decision-pricing-shape.md`](decision-pricing-shape.md).
@@ -21,16 +21,16 @@ endpoints"; the pricing shape lives in
   accounting hooks the dispatcher emits feed the billing model;
   the pricing tier (free vs paid) and the free-tier cap need to
   be locked before billing surfaces are committed.
-- `design-brr-run-protocol.md` acceptance — the AI-credential
+- `design-brnrd-protocol.md` acceptance — the AI-credential
   vault endpoints, failover-dispatch decision tree, and
   permission-prompt API need to lock before backend
   implementation starts.
-- The brr.run backend skeleton from
+- The brnrd backend skeleton from
   [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
   — failover compute extends that skeleton, doesn't precede it.
 
 Ship order: managed gates (the dispatcher) → failover compute on
-brr.run-owned Fly pool → dashboard surfaces for usage / audit /
+brnrd-owned Fly pool → dashboard surfaces for usage / audit /
 permission prompts → (post-launch, if asked-for) BYO platform
 tokens.
 
@@ -38,7 +38,7 @@ tokens.
 `decision-pricing-shape.md` updated rationale: implementation
 surface area was disproportionate to the ~5% of users who'd value
 it at launch. The wire protocol still supports BYO (designed,
-deferred shape preserved in `design-brr-run-protocol.md`) so the
+deferred shape preserved in `design-brnrd-protocol.md`) so the
 add-back is small when usage justifies it.
 
 ## Goals
@@ -70,7 +70,7 @@ add-back is small when usage justifies it.
 - AI-credential vault endpoints (
   `POST /v1/accounts/ai-credentials`,
   `GET /v1/accounts/ai-credentials`,
-  `DELETE /v1/accounts/ai-credentials/{id}`) live on brr.run
+  `DELETE /v1/accounts/ai-credentials/{id}`) live on brnrd
   with per-account envelope-key encryption and both shapes
   (api-key + dir-tarball) accepted on the same endpoint.
 - Failover-policy endpoints
@@ -84,11 +84,11 @@ add-back is small when usage justifies it.
   GH App + Telegram gates from
   [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md).
 - Failover-dispatch internal flow (decision tree per the design)
-  runs in the brr.run dispatcher; the cap check + spawn
+  runs in the brnrd dispatcher; the cap check + spawn
   reservation are serialised in a single transaction so a burst
   of events can't race past the cap.
-- brr.run-owned Fly Machines pool registered, with a pool-control
-  token in brr.run's own secret store (separate from the
+- brnrd-owned Fly Machines pool registered, with a pool-control
+  token in brnrd's own secret store (separate from the
   per-account AI-credential vault).
 - Failover sandbox image: small Debian-slim base + the runner
   binary; sized to support both API-key and dir-tarball AI
@@ -190,14 +190,14 @@ Steps:
 
 **Estimate.** ~700-900 LOC backend + ~300 LOC tests.
 
-### Slice 3 — brr.run-owned Fly Machines pool + sandbox image
+### Slice 3 — brnrd-owned Fly Machines pool + sandbox image
 
 The compute side — managed pool, sandbox image, spawn flow.
 
 Steps:
 
 1. Operator-side: register the `brr-managed` Fly app, store the
-   pool-control token in brr.run's own secret store (separate
+   pool-control token in brnrd's own secret store (separate
    namespace from the per-account AI-credential vault).
 2. Build the failover-sandbox Docker image:
    - Debian-slim base
@@ -218,7 +218,7 @@ Steps:
      - on failure: writes orphan response to
        `.brr/failover-orphans/<event-id>.md` and pushes that,
        exits non-zero
-3. Spawn invocation flow on brr.run side:
+3. Spawn invocation flow on brnrd side:
    - decrypt the user's AI credentials into a process-memory
      buffer
    - issue a per-spawn GH App installation token (scoped to one
@@ -275,22 +275,22 @@ short demo recording.
 
 | Component | Lives at |
 |-----------|----------|
-| AI-credential vault + failover policy endpoints | `src/brr_run/` (monorepo backend) |
-| Permission-prompt endpoints + gate-callback handlers | `src/brr_run/` |
-| Dispatcher decision tree | `src/brr_run/` |
-| Server-side Fly Machines spawn flow | `src/brr_run/` |
-| Failover-sandbox Docker image | `src/brr_run/sandbox/` (built into Fly app on deploy) |
+| AI-credential vault + failover policy endpoints | `src/brnrd/` (monorepo backend) |
+| Permission-prompt endpoints + gate-callback handlers | `src/brnrd/` |
+| Dispatcher decision tree | `src/brnrd/` |
+| Server-side Fly Machines spawn flow | `src/brnrd/` |
+| Failover-sandbox Docker image | `src/brnrd/sandbox/` (built into Fly app on deploy) |
 | `brr accounts` CLI verbs | `src/brr/cli/accounts.py` |
 | Documentation | `src/brr/docs/managed-mode.md` (bundled with brr) |
-| Managed Fly pool app + secrets | brr.run operator (runbook, not code) |
-| Audit-log table + queries | `src/brr_run/` |
-| Manual invoicing workflow at launch | brr.run operator (CSV exporter on backend, email template, payment processor account) |
+| Managed Fly pool app + secrets | brnrd operator (runbook, not code) |
+| Audit-log table + queries | `src/brnrd/` |
+| Manual invoicing workflow at launch | brnrd operator (CSV exporter on backend, email template, payment processor account) |
 
 Monorepo layout per
 [`decision-monorepo-structure.md`](decision-monorepo-structure.md):
-backend lives at `src/brr_run/` alongside `src/brr/` (the daemon
+backend lives at `src/brnrd/` alongside `src/brr/` (the daemon
 core), sharing the kb and the `pyproject.toml`. Self-hosters of
-brr.run can target the same backend code against their own Fly
+brnrd can target the same backend code against their own Fly
 app + their own AI-credential vault.
 
 ## Out of scope
@@ -300,9 +300,9 @@ app + their own AI-credential vault.
   [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md);
   failover dispatches them the same way once they ship.
 - Server-side spawn for *online* daemons (load-shedding); deferred
-  per `design-brr-run-protocol.md` "Out of scope".
+  per `design-brnrd-protocol.md` "Out of scope".
 - **BYO platform tokens** (Fly / Modal / Daytona / Codespaces /
-  etc. tokens stored on brr.run, used to spawn in the user's own
+  etc. tokens stored on brnrd, used to spawn in the user's own
   cloud). Wire shape is preserved in the design page as
   "designed, deferred"; add-back is small when usage justifies
   it. Daemon-side cloud-runner adapters (laptop fans out to
@@ -317,11 +317,11 @@ app + their own AI-credential vault.
   at launch is enough until usage justifies the integration cost.
 - Web dashboard for credentials / audit log / billing — CLI-first
   for this plan; dashboard is in
-  [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md).
+  [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md).
 
 ## Risks
 
-- **AI-credential blast radius.** A compromised brr.run database
+- **AI-credential blast radius.** A compromised brnrd database
   leaks per-account AI credentials. Mitigation: per-account
   envelope keys; root key in KMS separately from the application
   database; subscription-auth shape (dir-tarball) is similarly
@@ -366,7 +366,7 @@ app + their own AI-credential vault.
   patterns (high spawn rate against low-event-count accounts);
   rate-limit per-IP account creation.
 - **Pricing margin too thin (managed-compute tier).** If
-  wholesale cloud prices drift up and brr.run can't pass it
+  wholesale cloud prices drift up and brnrd can't pass it
   through fast enough, margin compresses. Mitigation: monthly
   margin review pre-launch and per-quarter post-launch; build in
   a "margin floor" alert; the published rate in
@@ -377,7 +377,7 @@ app + their own AI-credential vault.
 
 1. [`subject-managed-mode.md`](subject-managed-mode.md) for the
    strategic frame.
-2. [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+2. [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
    for the wire contract this plan implements (Failover dispatch
    + AI-credential vault + Permission-prompt sections).
 3. [`decision-pricing-shape.md`](decision-pricing-shape.md) for
@@ -387,11 +387,11 @@ app + their own AI-credential vault.
    one instance of.
 5. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
    for the gate-side work the prompt callbacks integrate with.
-6. [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+6. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
    for the dashboard view on top of the audit log + cap + cost
    surfaces.
 7. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
-   for where `src/brr_run/` lives and how it relates to the
+   for where `src/brnrd/` lives and how it relates to the
    daemon core.
 
 ## Lineage
@@ -400,12 +400,12 @@ app + their own AI-credential vault.
   compute as Surfaces B and C) as part of the work-continuity
   reframe. Pondering provenance in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1
-  (reframe breadcrumb: always-on-box demoted, brr.run-as-
+  (reframe breadcrumb: always-on-box demoted, brnrd-as-
   failover-dispatcher is the answer).
 - 2026-05-25 — rewritten: BYO scope dropped at launch (preserved
-  as designed-deferred sketch in `design-brr-run-protocol.md`);
+  as designed-deferred sketch in `design-brnrd-protocol.md`);
   refocused on AI-credential vault (api-key + dir-tarball shapes
-  on one endpoint), brr.run-owned Fly pool, permission-prompt
+  on one endpoint), brnrd-owned Fly pool, permission-prompt
   API, monthly cap default of 100 spawns/month, and Upsun
   backend deployment notes. Third reframe breadcrumb in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.

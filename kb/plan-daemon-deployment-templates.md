@@ -11,7 +11,7 @@ of platform-specific templates + a "deploying brr" docs page.
 **Demoted to launch-nice-to-have on 2026-05-22.** Earlier framing
 positioned the always-on-host model as the *preferred* answer to
 "my laptop is offline" — that answer is now
-[`plan-failover-compute.md`](plan-failover-compute.md) (brr.run
+[`plan-failover-compute.md`](plan-failover-compute.md) (brnrd
 spawns per-task sandboxes in the user's or its own cloud account,
 without the user operating a separate always-on box). These
 templates remain useful for the niche where the user genuinely
@@ -52,9 +52,9 @@ land first.
   - `deploy/upsun/` — `.upsun/config.yaml` template covering the
     writable-mount config for `.brr/` and repo clones (read-only
     `/app` doesn't accommodate `git worktree` directly). Shares
-    the read-only-container shape with the brr.run *backend*
+    the read-only-container shape with the brnrd *backend*
     Upsun deployment (per
-    [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+    [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
     "Upsun deployment notes"); the daemon template and the
     backend template will share patterns (build-vs-deploy split,
     routes-yaml, writable mounts, secrets) and should be authored
@@ -131,13 +131,13 @@ work, very little Python.
 2. [`plan-failover-compute.md`](plan-failover-compute.md) for the
    work that replaced this plan as the *load-bearing* answer to
    laptop-down dispatch.
-3. [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
-   "Upsun deployment notes" for the brr.run *backend* Upsun
+3. [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
+   "Upsun deployment notes" for the brnrd *backend* Upsun
    template — shares the read-only-container shape, should be
    authored together with this plan's `deploy/upsun/` template.
 4. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
    for where `deploy/` lives in the monorepo (shared across the
-   daemon and the brr.run backend templates).
+   daemon and the brnrd backend templates).
 5. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §4 for
    the original deployment-targets table that drove the first
    draft of this plan, plus the 2026-05-22 reframe breadcrumb in
@@ -152,7 +152,7 @@ work, very little Python.
   [`plan-failover-compute.md`](plan-failover-compute.md) the
   load-bearing answer to laptop-down dispatch. Scope and goals
   retained but recontextualised to the cloud-first audience.
-- 2026-05-25 — Upsun template entry cross-linked to the brr.run
+- 2026-05-25 — Upsun template entry cross-linked to the brnrd
   backend's Upsun deployment work (shared read-only-container
   shape; should be authored together). Added monorepo-structure
   decision to "Read next" so the `deploy/` location is

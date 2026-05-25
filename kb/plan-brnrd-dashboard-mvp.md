@@ -1,24 +1,24 @@
-# Plan: brr.run dashboard MVP
+# Plan: brnrd dashboard MVP
 
-Implementation plan for the brr.run dashboard — the user-facing
-web layer on top of the brr.run backend that gives users a view
+Implementation plan for the brnrd dashboard — the user-facing
+web layer on top of the brnrd backend that gives users a view
 of their accounts, projects, daemons, bindings, AI credentials,
 failover policy, audit log, and cost ledger.
 
 Companion to [`subject-managed-mode.md`](subject-managed-mode.md)
 (the surfaces the dashboard renders),
-[`design-brr-run-protocol.md`](design-brr-run-protocol.md) (the
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md) (the
 REST endpoints the dashboard consumes — same surface the
 daemon-side cloud-gate adapter consumes; no separate API to
 maintain), and
 [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
-(`src/brr_run_web/` lives in the monorepo).
+(`src/brnrd_web/` lives in the monorepo).
 
 ## Status
 
 **Not started.** Blocked on:
 
-- `design-brr-run-protocol.md` acceptance — the REST endpoints
+- `design-brnrd-protocol.md` acceptance — the REST endpoints
   the dashboard reads from need to lock first.
 - `plan-managed-gates-launch.md` and `plan-failover-compute.md`
   slices 1+2 each — the dashboard's data sources are the
@@ -114,9 +114,9 @@ covers this shape natively:
   the events table."
 - One static asset bundle → easy to serve from Upsun's
   read-only-app container per
-  [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
   "Upsun deployment notes."
-- No `node_modules` in the brr.run backend deploy pipeline.
+- No `node_modules` in the brnrd backend deploy pipeline.
 
 If the cost / spawn chart or the conversation view grows real
 interactivity demands (live tail, drag-to-reorder, etc.), we add
@@ -132,10 +132,10 @@ can pick this up to confirm their backend is wired.
 
 Steps:
 
-1. `src/brr_run_web/` package layout:
+1. `src/brnrd_web/` package layout:
    - `templates/` Jinja2 templates (one per view + a base layout)
    - `static/` HTMX asset, a small CSS, no JS-build pipeline
-   - `__init__.py` registers the routes onto the brr.run FastAPI
+   - `__init__.py` registers the routes onto the brnrd FastAPI
      app (no separate web server).
 2. Auth flow: `/login` GET (form), POST → POST to
    `/v1/accounts/sessions`, set session cookie, redirect.
@@ -236,14 +236,14 @@ Steps:
 
 | Component | Lives at |
 |-----------|----------|
-| Templates, static assets, view routes | `src/brr_run_web/` |
-| FastAPI app composition (mounts web routes on the existing API app) | `src/brr_run/app.py` (or wherever it lives) |
-| Session middleware | `src/brr_run/middleware/session.py` |
-| Auth views (`/login`, `/signup`, `/logout`) | `src/brr_run_web/routes/auth.py` |
-| Project / binding / credential / failover / audit views | `src/brr_run_web/routes/*.py` |
-| Tests | `tests/brr_run_web/` |
+| Templates, static assets, view routes | `src/brnrd_web/` |
+| FastAPI app composition (mounts web routes on the existing API app) | `src/brnrd/app.py` (or wherever it lives) |
+| Session middleware | `src/brnrd/middleware/session.py` |
+| Auth views (`/login`, `/signup`, `/logout`) | `src/brnrd_web/routes/auth.py` |
+| Project / binding / credential / failover / audit views | `src/brnrd_web/routes/*.py` |
+| Tests | `tests/brnrd_web/` |
 | Build | None — Python-only, no JS bundler at MVP |
-| Deploy | Bundled with brr.run backend; served from same Upsun app per `design-brr-run-protocol.md` → "Upsun deployment notes" |
+| Deploy | Bundled with brnrd backend; served from same Upsun app per `design-brnrd-protocol.md` → "Upsun deployment notes" |
 
 ## Out of scope
 
@@ -282,7 +282,7 @@ Steps:
   container needs static assets written at build time, not
   runtime. Mitigation: bundle assets into the deploy image
   during `build:` step; declare them via the routes config.
-  Covered in `design-brr-run-protocol.md` → "Upsun deployment
+  Covered in `design-brnrd-protocol.md` → "Upsun deployment
   notes" already.
 - **Slice 4 (polish) is a tar pit.** It's easy to spend a month
   polishing. Mitigation: time-box to one focused week; accept
@@ -292,10 +292,10 @@ Steps:
 
 1. [`subject-managed-mode.md`](subject-managed-mode.md) for the
    surfaces the dashboard renders.
-2. [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+2. [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
    for the REST endpoints the dashboard consumes.
 3. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
-   for where `src/brr_run_web/` fits.
+   for where `src/brnrd_web/` fits.
 4. [`decision-pricing-shape.md`](decision-pricing-shape.md) for
    what the cost chart needs to show.
 5. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
@@ -306,7 +306,7 @@ Steps:
 
 ## Lineage
 
-- 2026-05-25 — drafted as part of the brr.run reshape that
-  collapsed brnrd as a separate name into brr.run. The
+- 2026-05-25 — drafted as part of the brnrd reshape that
+  collapsed brnrd as a separate name into brnrd. The
   dashboard absorbs what would have been `plan-brnrd-mvp.md`
   in an earlier draft of the reshape.

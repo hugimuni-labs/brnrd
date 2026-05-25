@@ -2311,7 +2311,7 @@ the credential-delivery gap explicitly: local docker bind-mounts
 ranked vehicles (env vars only, platform secret store, one-shot
 upload). Recontextualised `brnrd` as a separate further-postponed
 operator-agent product distinct from managed-brr (managed-brr ships
-first; brnrd consumes brr and brr.run later). Argued for shipping
+first; brnrd consumes brr and brnrd later). Argued for shipping
 the first paid tier at launch as adopter-goodwill cover and
 solo-OSS maintenance funding. Dropped the stale "promoted" pointer
 subsections (older §1, §2) and collapsed the shipped decentralised-
@@ -2331,9 +2331,9 @@ story that resolves it:
 
 1. §1.3 (Dimension B) gained a "Who dispatches when the laptop is
    down?" paragraph: the answer is "daemon-on-an-always-on-host",
-   not brr.run-spawns-sandboxes. The OSS / BYO / fully-managed
-   distinction is sharpened — BYO has brr.run out of the per-task
-   path; only fully-managed adds a brr.run-side scheduler.
+   not brnrd-spawns-sandboxes. The OSS / BYO / fully-managed
+   distinction is sharpened — BYO has brnrd out of the per-task
+   path; only fully-managed adds a brnrd-side scheduler.
 2. §2.8 (what we're not building) gained the read-only PaaS bullet
    (Heroku / Upsun / Render / Railway / App Platform): wrong shape
    for per-task sandboxes (no per-task API, no BYO OCI image,
@@ -2372,12 +2372,12 @@ adoption-index leverage, and ease of BYO setup. New pages:
   execution) plus the orthogonal daemon-hosting concern.
   References down to design, research, and three plan pages.
 - `kb/design-managed-gates.md` — *proposed*. Locks the cloud-gate
-  adapter shape on the daemon side and the brr.run inbox-as-service
+  adapter shape on the daemon side and the brnrd inbox-as-service
   REST API on the server side. Specifies the normalised event
   shape (uniform across TG and GH), the long-poll + response loop,
   the pairing flows for both platforms, multi-daemon routing
   policies, failure modes, and operational concerns. Wire format
-  is the boundary that lets daemon-side and brr.run-side ship in
+  is the boundary that lets daemon-side and brnrd-side ship in
   parallel once accepted.
 - `kb/research-cloud-runner-patterns.md` — durable reference
   lifted from pondering §2. Cross-adapter patterns (credential
@@ -2397,7 +2397,7 @@ adoption-index leverage, and ease of BYO setup. New pages:
   (`brr/daemon` vs `brr/runner`) + the
   `deploy/{fly,render,heroku,upsun,railway,vps,docker-compose}/`
   template folder + a "deploying brr" docs page. Cashes out the
-  daemon-hosting story without brr.run holding cloud credentials.
+  daemon-hosting story without brnrd holding cloud credentials.
 
 No new design page for cloud-runner protocol —
 `design-env-interface.md` already covers it; cloud adapters are
@@ -2418,11 +2418,11 @@ KB wiring updates:
   provenance.
 
 No code changes; all designs are status:proposed (gates) or pending
-acceptance (plans). The brr.run backend prototype is the blocker
+acceptance (plans). The brnrd backend prototype is the blocker
 for the gates launch plan, sized at ~3 days for the
 end-to-end inbox-as-service smoke test.
 
-## [2026-05-22] plan | Managed-mode reshape — work continuity via brr.run
+## [2026-05-22] plan | Managed-mode reshape — work continuity via brnrd
 
 Reframed managed mode around **work continuity, not laptop
 continuity** after spotting that the previously-preferred
@@ -2434,21 +2434,21 @@ operational surface for a 30%-utilisation case at 100% cost, and
 nudges brr toward an infra-deployment story when its wedge is
 "my laptop has superpowers."
 
-The replacement answer uses what's already always-on: **brr.run
+The replacement answer uses what's already always-on: **brnrd
 itself**. The dispatcher gains a failover path — when a user's
-daemon is offline AND failover is enabled, brr.run spawns a
+daemon is offline AND failover is enabled, brnrd spawns a
 per-task ephemeral sandbox (in the user's cloud via BYO token,
-or in brr.run's account via paid managed compute), runs the
+or in brnrd's account via paid managed compute), runs the
 task, pushes the branch home, posts the response via the gate,
 tears down. Three paid surfaces emerge cleanly: managed gates
 (free); BYO failover compute (free; user pays own cloud bill);
-managed compute (paid usage-based; brr.run's cloud account). All
+managed compute (paid usage-based; brnrd's cloud account). All
 three ride the same dispatcher and the same cloud-runner
 adapters — same code, different callers.
 
 Pricing settled on a three-tier shape mapped to marginal cost:
 
-- **Free dispatcher** — gates + BYO failover. brr.run is a
+- **Free dispatcher** — gates + BYO failover. brnrd is a
   public-good for the OSS user; rate caps bound the loss-leader
   exposure. Honest because per-user dispatch cost is
   approximately zero.
@@ -2469,7 +2469,7 @@ KB changes from the reshape:
   and the three-surface frame. Daemon hosting demoted to a niche
   path for cloud-first users.
 - `kb/design-managed-gates.md` → renamed to
-  `kb/design-brr-run-protocol.md` and grown with the
+  `kb/design-brnrd-protocol.md` and grown with the
   spawn-compute / failover-dispatch endpoint family, cloud-
   credential storage endpoints, and the cloud-token security
   model.
@@ -2485,7 +2485,7 @@ KB changes from the reshape:
   sister plan sharing the backend skeleton.
 - `kb/research-cloud-runner-patterns.md` — added "Caller axis"
   section formalising that each adapter is consumed by laptop
-  daemon AND brr.run server-side, with same code and small
+  daemon AND brnrd server-side, with same code and small
   per-caller deltas (token source, repo delivery, response
   delivery, failure salvage, cost ceiling).
 - `kb/notes-pondering-fleet.md` — added reframe breadcrumbs to
@@ -2496,7 +2496,7 @@ KB changes from the reshape:
   overlays section reflects the new page family and the rename.
 
 No code changes; designs are status:proposed pending acceptance
-before backend implementation can start. The brr.run backend
+before backend implementation can start. The brnrd backend
 prototype remains the immediate blocker. brnrd unaffected — the
 work-continuity frame makes the boundary even clearer: managed
 mode keeps individual task work flowing; brnrd thinks at the
@@ -2505,12 +2505,12 @@ fleet / planning level.
 ## [2026-05-25] plan | Managed-mode reshape pass 2 — drop BYO from launch, retire brnrd as a name, add dashboard + monorepo decisions
 
 Second reshape pass on the managed-mode KB family, driven by a
-deeper look at what brr.run actually has to do at launch vs what's
+deeper look at what brnrd actually has to do at launch vs what's
 defensible to ship. Surfaces shifted:
 
 - **BYO compute (Surface B) dropped from launch.** The wire
   protocol still supports it (preserved as a "designed,
-  deferred" sketch in `design-brr-run-protocol.md`), but the
+  deferred" sketch in `design-brnrd-protocol.md`), but the
   per-platform credential storage UI, per-platform onboarding
   docs, dispatcher branching, and partial-support-matrix
   maintenance burden didn't justify shipping it day one for
@@ -2518,13 +2518,17 @@ defensible to ship. Surfaces shifted:
   usage justifies. Daemon-side cloud-runner adapters (laptop
   fans out to user's cloud via a `brr-env-*` plugin) remain
   independent of managed mode entirely.
-- **brnrd retired as a name.** Collapsed into brr.run as the
-  one product / one name. brr.run is the platform; the
-  dashboard is "the brr.run dashboard." Any future
-  agentic-secretary layer gets named when it lands, not now.
+- **One product, one name.** brnrd as a separate fleet-operator
+  brand was retired in this pass; the hosted product collapses
+  into a single name (the dashboard becomes "the &lt;product&gt;
+  dashboard"). At this pass we picked `brr.run` as the kept
+  name. **Superseded by the 2026-05-25 pass-3 entry below**,
+  which flipped the kept name to `brnrd` (hosted at
+  `brnrd.dev`) on cost + brand-asset grounds. The collapse
+  itself stands; only which name survives changed.
   The previously-proposed `subject-brnrd.md` / `plan-brnrd-mvp.md`
   family folds into the managed-mode hub + a new
-  `plan-brr-run-dashboard-mvp.md`.
+  `plan-brnrd-dashboard-mvp.md`.
 - **Multi-project routing protocol added.** One managed bot
   per platform serves all of a user's projects via chat-binding
   + per-message prefix override (TG/Slack/Discord) or
@@ -2549,15 +2553,15 @@ defensible to ship. Surfaces shifted:
   worst-case cloud cost is sustainable with a small percentage
   of paying users on top.
 - **Data minimization principle promoted to load-bearing.**
-  brr.run is a thin dispatcher + a credential vault; user
+  brnrd is a thin dispatcher + a credential vault; user
   content (prompts, code, responses, conversation history, repo
   state) lives on the daemon side and is never mirrored to
-  brr.run. Event bodies dropped after dispatch; response bodies
+  brnrd. Event bodies dropped after dispatch; response bodies
   pass through without storage; AI credentials encrypted at
   rest with per-account envelope keys; audit log metadata-only.
   Trust signal on the pricing page: "we don't have your code."
 - **Monorepo structure decided.** `src/brr/` (daemon today) +
-  `src/brr_run/` (backend) + `src/brr_run_web/` (dashboard) +
+  `src/brnrd/` (backend) + `src/brnrd_web/` (dashboard) +
   `src/brr_env_*/` (vendored plugins, split out when they
   mature) in one repo. Shared kb, shared CI, separate pip
   install surfaces via optional dependencies.
@@ -2576,7 +2580,7 @@ defensible to ship. Surfaces shifted:
 
 KB changes from this reshape:
 
-- `kb/design-brr-run-protocol.md` — reshaped: BYO platform-
+- `kb/design-brnrd-protocol.md` — reshaped: BYO platform-
   tokens dropped from launch (preserved as "designed,
   deferred" section); AI-credential vault added (api-key +
   dir-tarball shapes on one endpoint); multi-project routing
@@ -2587,13 +2591,13 @@ KB changes from this reshape:
   section governing every endpoint; Upsun deployment notes
   added.
 - `kb/plan-failover-compute.md` — rewritten: BYO scope dropped
-  entirely; refocused on AI-credential vault + brr.run-owned
+  entirely; refocused on AI-credential vault + brnrd-owned
   Fly pool + permission-gate API + Upsun backend deployment.
   Four slices (vault + policy; dispatcher + prompts; pool +
   sandbox image; audit + docs).
 - `kb/subject-managed-mode.md` — reshaped: two surfaces (free
   dispatcher; paid managed compute) with BYO as deferred;
-  brnrd absorbed as "brr.run as fleet manager" angle of the
+  brnrd absorbed as "brnrd as fleet manager" angle of the
   same product; multi-project routing + permission gating +
   dashboard sections; data-minimization callout; "where the
   code lives" pointer at the monorepo decision.
@@ -2602,19 +2606,19 @@ KB changes from this reshape:
   compute spawns/month + usage-based over cap); revised free-
   tier spawn cap 200 → 100; data-minimization trust signal
   promoted; "we charge for ops, not for AI usage" framing
-  added; self-hosted brr.run framed as parallel path.
+  added; self-hosted brnrd framed as parallel path.
 - New: `kb/decision-connectors-layering.md` (status: proposed) —
   gates vs connectors split; agentic-mode upgrade path frame.
 - New: `kb/decision-monorepo-structure.md` (status: proposed) —
   monorepo layout + plugin-split-out criterion + alternatives.
-- New: `kb/plan-brr-run-dashboard-mvp.md` — seven views,
+- New: `kb/plan-brnrd-dashboard-mvp.md` — seven views,
   HTMX-first, four slices (bootstrap + login; config surfaces;
   observability surfaces; polish).
 - `kb/plan-managed-gates-launch.md` — added multi-project
   routing UX (chat / repo binding, `/connect`, `/project`,
   `@<name>` command grammar) and permission-prompt API +
   gate-side integration as Slice 3. Backend repo replaced with
-  `src/brr_run/` per the monorepo decision.
+  `src/brnrd/` per the monorepo decision.
 - `kb/research-cloud-runner-patterns.md` — refreshed: caller-
   axis section now reflects that only Fly Machines wires up
   server-side at launch (BYO server-side deferred); Pattern A
@@ -2622,7 +2626,7 @@ KB changes from this reshape:
   AI-credential vault's two payload shapes and per-platform
   injection.
 - `kb/plan-daemon-deployment-templates.md` — Upsun entry
-  cross-linked to the brr.run backend Upsun deployment
+  cross-linked to the brnrd backend Upsun deployment
   (shared read-only-container shape; should be authored
   together).
 - `kb/notes-pondering-fleet.md` — appended second 2026-05-25
@@ -2631,12 +2635,141 @@ KB changes from this reshape:
 - `kb/index.md` — Fleet & overlays section updated for the new
   pages (`decision-connectors-layering.md`,
   `decision-monorepo-structure.md`,
-  `plan-brr-run-dashboard-mvp.md`) and reshaped descriptions
+  `plan-brnrd-dashboard-mvp.md`) and reshaped descriptions
   for the existing managed-mode pages.
 
 No code changes; designs remain status:proposed pending
-acceptance. Next blocker is the brr.run backend prototype
+acceptance. Next blocker is the brnrd backend prototype
 (unchanged from the previous pass), now scoped against the
 reshaped protocol + the monorepo layout. Implementation can
 start once the design + pricing pages are accepted.
+
+## [2026-05-25] plan | Managed-mode reshape pass 3 — brnrd kept as the name; cross-gate conversation context via metadata graph
+
+Third reshape pass on the managed-mode KB family, two changes:
+
+- **brnrd kept as the canonical hosted-product name; domain
+  `brnrd.dev`.** Pass 2 had picked `brr.run` as the kept name
+  after collapsing the two-name proposal. Domain pricing
+  surfaced post-pass-2 (`brr.run` runs ~$120/yr as a premium
+  domain; `brnrd.dev` ~$15/yr), plus the brand-asset value of
+  the `brr → brnrd → ⟍brr` reflection-palindrome animation,
+  plus the sibling-naming fit with "brr" itself — net flip:
+  `brnrd` is the kept name. The pass-2 collapse logic
+  (one product, one name) stands; only which name survives
+  changed.
+- **Cross-gate conversation context via metadata-only graph +
+  on-demand fetch.** Pass 2 left conversation history as
+  "lives on the daemon; gone when daemon is offline," which
+  loses cross-gate continuity (a conversation that spans TG
+  and a GH PR would fragment on failover). Pass 3 closes the
+  gap without brnrd holding conversation contents:
+  - **Metadata graph on brnrd**: `event_metadata(event_id,
+    gate, source_channel, project_id, conversation_id,
+    branch_name, received_at)` — no body, no preview, no
+    participant names; ~200 bytes per row; 30-day TTL on the
+    live graph; aggregated count-only summaries past that.
+  - **Conversation_id sources**: a `Brnrd-Conversation-Id`
+    git commit trailer the daemon writes on every commit
+    (source of truth — brnrd can re-derive the linkage by
+    walking git log on any branch), plus the conversation_id
+    field on the daemon's response POST (keeps the metadata
+    index current as a cache).
+  - **Three-source spawn-context assembly**: originating event
+    payload (already in dispatch memory) + gate-side history
+    fetch from the platform's own API + git remote replay.
+    Cross-gate continuity adds a fourth: query the metadata
+    graph for other events in the same conversation_id and
+    fetch their platform-side context on demand.
+  - **One named concession — Telegram per-chat ring buffer**
+    (50 messages × 72 hours, encrypted at rest, dropped on
+    `/disconnect`, every read in the audit log). TG's Bot API
+    has no retroactive `getChatHistory`; the ring buffer is
+    the minimum viable held data to make failover and
+    dashboard rendering work on TG without forcing users to
+    push history into their own infra. Slack / Discord don't
+    need a ring buffer — their APIs expose history natively.
+  - **Dashboard rendering split**: when daemon online, the
+    dashboard proxies live (no brnrd-held copy); when offline,
+    contents are rendered from gate-side history + git log +
+    ring buffer (TG only), marked clearly in the UI as "live
+    from &lt;platform&gt;; daemon offline."
+
+KB changes from this pass:
+
+- **Renames** (preserving content; rename history captured in
+  each file's lineage and the design's preamble):
+  - `kb/design-brr-run-protocol.md` →
+    `kb/design-brnrd-protocol.md`
+  - `kb/plan-brr-run-dashboard-mvp.md` →
+    `kb/plan-brnrd-dashboard-mvp.md`
+  - All `brr.run` → `brnrd` text replacements across the
+    kb (the API surface, endpoint paths, and protocol
+    contract are unchanged; only the product name changed).
+  - All `brr_run` / `brr_run_web` → `brnrd` / `brnrd_web`
+    path replacements (sub-package layout in
+    `decision-monorepo-structure.md`).
+- `kb/design-brnrd-protocol.md` — added
+  **"Conversation context for failover and dashboard"** as a
+  top-level section between Failover dispatch and Multi-daemon
+  routing: schema for the event_metadata graph,
+  conversation_id sources (git trailer + response POST) and
+  inference rules, three-source spawn-context assembly,
+  per-gate history-fetch mechanics, Telegram ring buffer spec,
+  dashboard rendering split, `GET /v1/internal/context/
+  {event_id}` endpoint. Also: **"What we DO hold"** subsection
+  promoted inside Data minimization, with every persistent
+  surface listed (scope + TTL + reason). Audit-log section now
+  records context-fetch reads.
+- New: `kb/plan-conversation-id-propagation.md` — small
+  daemon-side enabler plan (~80 LOC): `git commit --trailer
+  "Brnrd-Conversation-Id: <ulid>"` everywhere brr commits, plus
+  `conversation_id` field on the response POST. Three slices
+  (trailer stamping; response field; docs). Gates the metadata
+  graph from being meaningful in practice.
+- `kb/subject-managed-mode.md` — added a
+  **"Conversation context"** section after Data minimization
+  summarising the three-source approach + ring buffer; updated
+  the "brnrd as the product" section to flip the
+  pass-2 narrative ("brnrd retired" → "brnrd kept"), citing
+  cost + brand-asset + sibling-naming reasoning.
+- `kb/decision-pricing-shape.md` — Trust signals section
+  expanded with the new **"What we DO hold, named and
+  bounded"** signal (full table reference) so the trust
+  promise stays honest about the named concessions
+  (conversation graph, TG ring buffer). Audit-log mention
+  picks up context-fetch reads.
+- `kb/notes-pondering-fleet.md` — appended the **third
+  2026-05-25 reframe breadcrumb** to §1 capturing both the
+  brnrd-kept name flip and the cross-gate context machinery,
+  pointing at the new + updated pages. Updated the
+  pass-2 "brnrd retired as a name" sub-bullet to mark itself
+  superseded by the breadcrumb below.
+- `kb/subject-fleet-overlays.md` — reframed the brnrd
+  treatment: "fleet-operator axis collapsed into the
+  managed-mode hub on 2026-05-25 (one platform, one name —
+  `brnrd`, hosted at `brnrd.dev`)" — was "retired as a
+  separate name on 2026-05-25."
+- `kb/decision-monorepo-structure.md` — sub-package paths
+  renamed in-place (`src/brr_run/` → `src/brnrd/`,
+  `src/brr_run_web/` → `src/brnrd_web/`); lineage entry
+  appended explaining the rename.
+- `kb/plan-managed-gates-launch.md` — lineage entry appended
+  for the pass-3 references update.
+- `kb/research-positioning-and-runtime-deps-2026-05-21.md` —
+  "no public surface" section updated from `brr.run` to
+  `brnrd.dev`; "Name" subsection rewritten with the
+  sibling-product naming rationale (brnrd as a brand asset,
+  domain cost rationale).
+- `kb/index.md` — Fleet & overlays section updated for the
+  pass-3 reshape: hub description flipped, design page
+  description gained the conversation-context bullet, new
+  `plan-conversation-id-propagation.md` listed.
+
+No code changes; designs remain status:proposed pending
+acceptance. Next blocker is still the brnrd backend prototype,
+now scoped against the conversation-context machinery as well.
+The daemon-side conversation_id propagation is the natural
+first code slice — small, no schema migration needed, harmless
+metadata for OSS users — and it gates everything cross-gate.
 

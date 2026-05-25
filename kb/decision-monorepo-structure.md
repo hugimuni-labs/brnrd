@@ -1,8 +1,8 @@
-# Decision: monorepo structure for brr, brr.run, dashboard, plugins
+# Decision: monorepo structure for brr, brnrd, dashboard, plugins
 
 **Status: proposed, not yet accepted on 2026-05-25.** Names the
 repo / package layout for the brr family of components, so the
-brr.run backend, dashboard, and first-party plugins can grow
+brnrd backend, dashboard, and first-party plugins can grow
 alongside the daemon without fragmenting the shared kb or
 inventing a multi-repo release dance prematurely.
 
@@ -10,7 +10,7 @@ inventing a multi-repo release dance prematurely.
 
 **One monorepo (`brr/`), multiple sub-packages.** The kb stays
 shared. The daemon core stays at `src/brr/` (no path change for
-existing code). The brr.run backend and dashboard land as
+existing code). The brnrd backend and dashboard land as
 siblings under `src/`. First-party plugins start vendored under
 `src/` and split into their own repos when they mature.
 
@@ -18,12 +18,12 @@ siblings under `src/`. First-party plugins start vendored under
 brr/  (repo root, the existing brr repo)
 ├── src/
 │   ├── brr/                   daemon core (today's location, unchanged)
-│   ├── brr_run/               brr.run backend (FastAPI + workers + sandbox image build)
-│   ├── brr_run_web/           dashboard (HTMX templates first; SPA later if needed)
+│   ├── brnrd/               brnrd backend (FastAPI + workers + sandbox image build)
+│   ├── brnrd_web/           dashboard (HTMX templates first; SPA later if needed)
 │   └── brr_env_fly_machines/  first cloud-runner plugin (vendored at first)
 ├── kb/                        shared kb (unchanged)
 ├── tests/                     tests for all sub-packages
-├── deploy/                    shared deployment templates (Upsun first for brr.run; Fly / Render / VPS for daemon hosting)
+├── deploy/                    shared deployment templates (Upsun first for brnrd; Fly / Render / VPS for daemon hosting)
 ├── pyproject.toml             multi-package config; sub-packages declared as optional-deps
 └── README.md                  monorepo overview
 ```
@@ -32,17 +32,17 @@ brr/  (repo root, the existing brr repo)
 
 - `pip install brr` — the daemon core; today's user experience,
   unchanged.
-- `pip install brr[backend]` — brr.run backend (FastAPI app +
+- `pip install brr[backend]` — brnrd backend (FastAPI app +
   workers). Self-hosters use this.
 - `pip install brr-env-fly-machines` — first-party plugin
   installable independently; lives in `src/brr_env_fly_machines/`
   but published as its own pypi name. Splits out into its own
   git repo when it matures.
 
-The dashboard (`src/brr_run_web/`) is not pip-installable
-directly — it's bundled into the brr.run backend's static-serve
+The dashboard (`src/brnrd_web/`) is not pip-installable
+directly — it's bundled into the brnrd backend's static-serve
 path. HTMX-first; if it grows into an SPA, an `npm run build`
-step lands in the brr.run build pipeline.
+step lands in the brnrd build pipeline.
 
 ## Plugin packages — when to split out
 
@@ -65,7 +65,7 @@ discipline.
 
 Five reasons, in declining order of weight:
 
-1. **The kb is a shared graph.** Splitting brr core, brr.run, and
+1. **The kb is a shared graph.** Splitting brr core, brnrd, and
    plugins into separate repos either forces the kb to live in
    one of them (the others lose visibility) or fragments the kb
    into N copies (closely-related ideas get split). Either is
@@ -74,18 +74,18 @@ Five reasons, in declining order of weight:
    closely related projects and ideas" — points at monorepo by
    construction.
 2. **One contributor, many surfaces.** At brr's current scale,
-   single-maintainer iteration crosses brr / brr.run / dashboard
+   single-maintainer iteration crosses brr / brnrd / dashboard
    in a typical week. Multi-repo would mean N PRs for one
    conceptual change, with the change history scattered across
    repos. Monorepo lets a single PR touch the daemon protocol,
-   the brr.run server, the dashboard view, and the docs in one
+   the brnrd server, the dashboard view, and the docs in one
    reviewable unit.
-3. **Tight conceptual coupling.** brr.run's protocol literally is
+3. **Tight conceptual coupling.** brnrd's protocol literally is
    the daemon's cloud-gate adapter contract. Changes to one
    require coordinated changes to the other. Same repo means the
    change is one diff; separate repos means coordinating two
    independent merges with version-pin gymnastics in between.
-4. **Release coordination.** brr.run + the daemon's cloud-gate
+4. **Release coordination.** brnrd + the daemon's cloud-gate
    adapter need to ship compatible versions. Same repo, one
    `version.py`, one tag, one release. Separate repos means a
    matrix of which-version-works-with-which.
@@ -121,8 +121,8 @@ The existing `brr` repo becomes the monorepo. No new git repo
 created. Existing `src/brr/` location preserved (daemon code
 doesn't move). New siblings:
 
-- `src/brr_run/` for the brr.run backend (new).
-- `src/brr_run_web/` for the dashboard (new).
+- `src/brnrd/` for the brnrd backend (new).
+- `src/brnrd_web/` for the dashboard (new).
 - `src/brr_env_fly_machines/` when the first plugin lands (new,
   per [`plan-env-fly-machines.md`](plan-env-fly-machines.md)).
 
@@ -132,7 +132,7 @@ doesn't move). New siblings:
 currently uses extends most naturally).
 
 `deploy/` already implied; this decision formalises it as the
-home for both brr.run backend deploy templates (Upsun first;
+home for both brnrd backend deploy templates (Upsun first;
 Fly / Render / etc. follow per
 [`plan-failover-compute.md`](plan-failover-compute.md)) and
 daemon-hosting templates (per
@@ -152,20 +152,20 @@ Rejected because:
   (protocol-on-both-sides).
 - Adds release-matrix friction without buying anything at
   single-maintainer scale.
-- The split-out criteria for plugins don't apply to brr.run
+- The split-out criteria for plugins don't apply to brnrd
   (which is conceptually inseparable from the protocol it
   serves).
 
 ### Alt 2 — Monorepo with one Python package
 
-Single `brr` package, sub-modules for `brr.run` and `brr.web`.
+Single `brr` package, sub-modules for `brnrd` and `brr.web`.
 Rejected because:
 
 - Forces `pip install brr` users to pull down the FastAPI /
   HTMX / DB dependencies they don't need.
 - Conflates the daemon (which has minimal deps) with the
   backend (which needs a real web stack).
-- Makes self-hosting brr.run harder to communicate ("install
+- Makes self-hosting brnrd harder to communicate ("install
   brr, but only some of brr").
 
 The optional-dependency split (`pip install brr[backend]`)
@@ -192,7 +192,7 @@ Rejected because:
 - Splits the kb (the user's concern again).
 - Forces protocol changes to coordinate across two repos
   (back to the N-way PR problem).
-- The brr daemon's cloud-gate adapter and the brr.run server
+- The brr daemon's cloud-gate adapter and the brnrd server
   are two sides of the same protocol; they want to live next to
   each other.
 
@@ -213,7 +213,7 @@ Rejected because:
   lands.
 - **Self-hoster's onboarding.** "Clone brr, install with
   `[backend]`, deploy with `deploy/upsun/`" should be the
-  one-page README. Land that page with the first brr.run
+  one-page README. Land that page with the first brnrd
   release.
 - **Plugin split-out mechanics.** When a vendored plugin
   graduates to its own repo, what's the migration story?
@@ -225,14 +225,14 @@ Rejected because:
 
 1. [`subject-managed-mode.md`](subject-managed-mode.md) for the
    "where the code lives" section that points back here.
-2. [`design-brr-run-protocol.md`](design-brr-run-protocol.md) for
-   the protocol the daemon-side adapter and the brr.run server
+2. [`design-brnrd-protocol.md`](design-brnrd-protocol.md) for
+   the protocol the daemon-side adapter and the brnrd server
    share — the tight coupling that makes monorepo right.
 3. [`plan-failover-compute.md`](plan-failover-compute.md) for
-   the brr.run backend's first major feature, all of which lives
-   at `src/brr_run/`.
-4. [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
-   for the dashboard at `src/brr_run_web/`.
+   the brnrd backend's first major feature, all of which lives
+   at `src/brnrd/`.
+4. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
+   for the dashboard at `src/brnrd_web/`.
 5. [`plan-env-fly-machines.md`](plan-env-fly-machines.md) for
    the first cloud-runner plugin, which lands vendored at
    `src/brr_env_fly_machines/`.
@@ -241,9 +241,12 @@ Rejected because:
 
 ## Lineage
 
-- 2026-05-25 — drafted as part of the brr.run reshape that
-  introduced the brr.run backend, dashboard, and the first
+- 2026-05-25 — drafted as part of the managed-mode reshape
+  that introduced the brnrd backend, dashboard, and the first
   plugin into the project shape. The user's explicit preference
   for "reasonable monorepos, mindful of the kb" pushed this
   page over the threshold from implicit assumption to explicit
-  decision.
+  decision. Initially used `src/brr_run/` and `src/brr_run_web/`
+  as the sub-package names; renamed to `src/brnrd/` and
+  `src/brnrd_web/` later the same day when the hosted-product
+  name settled on `brnrd` (canonical domain `brnrd.dev`).
