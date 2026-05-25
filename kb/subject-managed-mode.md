@@ -98,6 +98,38 @@ shipped per
 [`research-cloud-envs.md`](research-cloud-envs.md)
 on their own clock; they don't need brnrd.
 
+### BYO cloud env vs managed compute — they coexist
+
+These two routes look similar (both run tasks on cloud
+hardware) but answer different questions and never compete.
+Spelling the distinction out once so the docs are unambiguous:
+
+| Concern | BYO cloud env (daemon-side) | Managed compute (brnrd-side, Surface B) |
+|---------|---------------------------|----------------------------------------|
+| **Who's the caller?** | Your local daemon | brnrd's dispatcher |
+| **Whose cloud account?** | Yours (your `FLY_API_TOKEN`) | brnrd's (operator-controlled at the deployment level — hosted `brnrd.dev` uses brnrd's Fly Machines pool; self-hosted brnrd operators wire whatever cloud envs they want) |
+| **When does it fire?** | Every task the daemon picks up (or only tasks marked `env: fly_machines` per the schema) | Only when your daemon is offline AND brnrd is connected AND policy allows |
+| **Who picks the cloud platform?** | You, by choosing which `brr[<extra>]` env extra to install | brnrd operator, at deployment time. Users don't get a runtime choice in this path. |
+| **Is brnrd involved?** | No. Daemon talks directly to your cloud provider's API. | Yes. brnrd holds the AI creds + cloud-provider token (its own) and orchestrates the spawn. |
+| **Need brnrd to use it?** | No. Available with or without brnrd connected. | Yes. Requires `brr brnrd connect` + AI creds in the vault + failover enabled. |
+| **What does the user pay?** | Their cloud bill directly | brnrd's credit wallet (see [`design-billing.md`](design-billing.md)) |
+
+**Coexistence**: both can be configured simultaneously. Daemon
+online → BYO env handles every task. Daemon offline → brnrd's
+managed compute covers the gap (if enabled). No conflict, no
+runtime arbitration needed — the trigger conditions are
+mutually exclusive.
+
+**The env class is the same.** When BYO cloud env support lands
+for Fly Machines via `pip install brr[fly]`, the `src/brr/envs/
+fly_machines/` module it ships is the **same module** brnrd
+imports server-side for managed-compute spawns (per
+[`research-cloud-envs.md`](research-cloud-envs.md) → "cloud
+envs are envs" and
+[`design-env-interface.md`](design-env-interface.md) →
+"brnrd server-side caller"). One env implementation; two
+callers; two token sources. No protocol fork.
+
 ## Data minimization — load-bearing for the trust story
 
 brnrd is intentionally **thin**: a dispatcher + a credential
@@ -465,13 +497,14 @@ deployment templates are still worth shipping but their role is
 | Free-tier always-on cloud apps (Fly app, Render free worker, Railway) | `flyctl launch` from template / one-click deploy | "Deploy brr in 30 seconds" — for cloud-first users who don't want a laptop daemon at all |
 | Read-only PaaS templates (Heroku, Upsun, Render Blueprint, Railway, App Platform) | One-click deploy button | Broadest developer-audience reach; per-task work must fan out to cloud-runner envs (no `docker` env without docker-in-docker) |
 | Cheap always-on VPS (Hetzner CX11 €3.79/mo, Oracle Free Tier ARM, low-end OVH / DO / Vultr) | `docker compose up -d brr` + systemd unit | Most flexible (full `docker` env); cheapest at scale for power users running many concurrent tasks |
-| Laptop / home server | `brr install-service` for macOS + Linux | Existing default; install-service verb removes the "go add it to your startup scripts" friction |
+| Laptop / home server | `brr daemon install` (per-user systemd unit on Linux, LaunchAgent on macOS) | Existing default; the `install` verb removes the "go add it to your startup scripts" friction without sudo, without re-implementing supervision |
 
-The deployment-templates work has its own plan at
+The cloud-host deployment-templates work has its own plan at
 [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md);
-the install-service verb is a separate future plan
-(`plan-install-service.md`, not yet drafted; tracked in
-[`notes-pondering-fleet.md`](notes-pondering-fleet.md) §7).
+the laptop-side cross-platform daemoning (macOS + Linux native
+service install via `brr daemon install`) has its own plan at
+[`plan-laptop-daemoning.md`](plan-laptop-daemoning.md), tracked
+at [issue #29](https://github.com/Gurio/brr/issues/29).
 
 **Why deployment templates demoted.** Earlier framing positioned
 the always-on host as the *preferred* answer to laptop-down
@@ -498,7 +531,21 @@ Per [`decision-monorepo-structure.md`](decision-monorepo-structure.md):
 - `deploy/upsun/` — Upsun deployment template for the brnrd
   backend
 - `deploy/fly-daemon/`, `deploy/upsun-daemon/` etc. — daemon-
-  hosting templates
+  hosting templates (cloud-host case)
+- `src/brr/daemon_install/` — laptop-side cross-platform
+  service-unit writer (`linux.py` for systemd user units,
+  `macos.py` for launchd LaunchAgents) used by `brr daemon
+  install | uninstall | logs` per
+  [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md)
+- `src/brr/kb/` — `brr kb` subcommand surface (parse / graph /
+  check / cli) per
+  [`plan-kb-subcommand.md`](plan-kb-subcommand.md), shared
+  read surface for human users and non-brr agents (#41)
+- `src/brr/config/` — three-scope config model (project /
+  local / account) with TOML I/O and per-key schema per
+  [`design-config-layout.md`](design-config-layout.md)
+- `brr.toml` at adopters' repo roots — committed project-scope
+  config; brnrd-side spawns read this from the cloned repo
 
 First-party cloud envs (`fly_machines`, `codespaces`, future
 ones) live at `src/brr/envs/<name>/` inside the brr package,
@@ -528,7 +575,16 @@ In scope for managed-mode launch:
 - `deploy/` templates folder and the `brr/daemon` Docker image
   variant (demoted to launch-nice-to-have, cloud-first users
   only).
-- `brr install-service` on macOS + Linux.
+- `brr daemon install | uninstall | logs` on macOS + Linux,
+  per [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md).
+- `brr kb status | pages | proposed | log | check | doc` per
+  [`plan-kb-subcommand.md`](plan-kb-subcommand.md) — the kb
+  read surface for human users and non-brr agents.
+- Three-scope config model (`brr.toml` + `.brr/config` +
+  account-scope on brnrd) per
+  [`design-config-layout.md`](design-config-layout.md), with
+  `brr config template | validate` rounding out the existing
+  list/get/set/doc verbs.
 - Data minimization principle baked into every endpoint.
 - Monorepo restructuring (`src/brnrd/`, `src/brnrd_web/`
   alongside `src/brr/`).
@@ -593,9 +649,19 @@ Out of scope, explicitly:
 11. [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)
     for the `deploy/` folder and the `brr/daemon` Docker image
     variant (demoted to launch-nice-to-have; useful for
-    cloud-first users; cross-platform daemoning tracked at
-    [issue #29](https://github.com/Gurio/brr/issues/29)).
-12. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1,
+    cloud-first users; cross-platform laptop daemoning tracked
+    at [issue #29](https://github.com/Gurio/brr/issues/29) and
+    in [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md)).
+12. [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md) for
+    the `brr daemon install` cross-platform unit-writing work
+    (per-user systemd unit on Linux, LaunchAgent on macOS).
+13. [`plan-kb-subcommand.md`](plan-kb-subcommand.md) for the
+    `brr kb` surface that addresses the kb-state-for-non-brr-
+    agents gap raised in [#41](https://github.com/Gurio/brr/issues/41).
+14. [`design-config-layout.md`](design-config-layout.md) for
+    the three-scope config model that lets brnrd-side spawns
+    pick up project preferences from the cloned repo.
+15. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1,
     §2, §4 for the original pondering provenance and the
     2026-05-22 / 2026-05-25 reframe breadcrumbs that drove the
     current shape.

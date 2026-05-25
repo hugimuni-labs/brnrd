@@ -3,19 +3,25 @@
 **Status: proposed, not yet accepted on 2026-05-25.** Names the
 top-level command shape for brr after the managed-mode reshape
 (always-online managed gates, brnrd-managed compute, multi-
-project routing, credit wallet). The current CLI grew
-incrementally; this page resets it before any user surface
-adopts it. Companion to
+project routing, credit wallet, three-scope config). The current
+CLI grew incrementally; this page resets it before any user
+surface adopts it. Companion to
 [`subject-managed-mode.md`](subject-managed-mode.md) (the
 surfaces these verbs configure),
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) (the
-REST endpoints `brr brnrd` wraps), and
+REST endpoints `brr brnrd` wraps),
 [`design-billing.md`](design-billing.md) (the wallet endpoints
-`brr brnrd topup | balance | autotopup` wrap).
+`brr brnrd topup | balance | autotopup` wrap),
+[`design-config-layout.md`](design-config-layout.md) (the
+three-scope config model `brr config` operates over),
+[`plan-laptop-daemoning.md`](plan-laptop-daemoning.md) (the
+`brr daemon install | uninstall` cross-platform unit-writing
+work), and [`plan-kb-subcommand.md`](plan-kb-subcommand.md) (the
+`brr kb` surface).
 
 ## Decision
 
-**Six top-level verbs** organised by noun, with subcommands
+**Seven top-level verbs** organised by noun, with subcommands
 under each noun.
 
 ```
@@ -25,6 +31,10 @@ brr daemon ...                 # daemon lifecycle (new noun; collapses today's u
   brr daemon up
   brr daemon down
   brr daemon status            # is it running, where, since when, last activity
+  brr daemon install [--name <project>]    # write+register native service unit
+                                           # (systemd user / launchd LaunchAgent)
+  brr daemon uninstall [--name <project>]  # stop + deregister + remove unit
+  brr daemon logs [--follow]   # tail logs (journalctl --user / launchd log path)
 
 brr gate ...                   # gate management (new noun; collapses today's auth/bind/setup)
   brr gate <name> setup        # one-shot: auth + bind + verify (today's `brr setup`)
@@ -34,8 +44,9 @@ brr gate ...                   # gate management (new noun; collapses today's au
   brr gate list                # list configured gates + their bindings
 
 brr brnrd ...                  # hosted-service management (new noun)
-  brr brnrd connect [<url>]    # pair this daemon to a brnrd instance (account-level);
-                               # default url=https://brnrd.dev
+  brr brnrd connect [<url>]    # three-layer smart bootstrap (account-pair →
+                               # project-create → gate-pair); default
+                               # url=https://brnrd.dev
   brr brnrd disconnect         # unpair this daemon from the brnrd account
   brr brnrd status             # paired? online? last sync, daemons under this account
   brr brnrd pair <gate> --project <id>   # bind a managed-gate channel (TG chat,
@@ -51,15 +62,41 @@ brr brnrd ...                  # hosted-service management (new noun)
   brr brnrd autotopup on|off|configure   # opt-in auto-top-up on low balance
 
 brr config ...                 # configuration introspection (new noun)
-  brr config list              # ALL parameters: local .brr/config + remote brnrd-side
-  brr config get <key>
-  brr config set <key> <value>
-  brr config doc <key>         # show docs for one parameter
+  brr config list              # ALL parameters across scopes: project (brr.toml),
+                               # local (.brr/config), account (brnrd-side)
+  brr config get <key> [--source]            # merged value; --source adds origin
+  brr config set <key> <value> [--scope]     # writes to schema-declared scope
+                                             # unless --scope overrides
+  brr config doc <key>         # show docs / type / valid range
+  brr config template [--scope project] > brr.toml   # emit a fully-commented
+                                                     # template for that scope
+  brr config validate          # walk all sources, validate against schema;
+                               # non-zero exit on errors (pre-commit friendly)
+
+brr kb ...                     # knowledge-base health + introspection (new noun)
+  brr kb status                # one-screen health summary (counts, proposed-pending,
+                               # log activity, warnings)
+  brr kb pages [filters]       # --proposed | --accepted | --superseded |
+                               # --abandoned | --untouched-since 30d | --orphaned
+  brr kb proposed              # shortcut for `brr kb pages --proposed`
+  brr kb log [--since <date>]  # tail of kb/log.md, filterable
+  brr kb check                 # graph + status-marker + drift validation;
+                               # non-zero exit on errors
+  brr kb doc <page>            # per-page summary (status, lineage, links, age)
 ```
 
-Six top-level verbs (`init`, `run`, `daemon`, `gate`, `brnrd`,
-`config`) cover everything; the rest is subcommand structure
-under those nouns.
+Seven top-level verbs (`init`, `run`, `daemon`, `gate`, `brnrd`,
+`config`, `kb`) cover everything; the rest is subcommand structure
+under those nouns. Every sub-verb supports `--json` for machine
+consumption (default output is human-readable).
+
+The seventh verb (`kb`) bends the earlier "six minimal verbs"
+promise by one. Justification: kb is half the project's identity
+(the methodology layer); putting it under `config` would mean
+typing `brr config kb …` every time, friction the agent audience
+hits often. Top-level noun is the right home — see
+[`plan-kb-subcommand.md`](plan-kb-subcommand.md) for the full
+rationale.
 
 ## Differences from today's CLI
 
@@ -75,7 +112,9 @@ under those nouns.
 | — | `brr gate list` | New: enumerate configured gates. |
 | — | `brr gate <name> remove` | New: tear down a gate cleanly. |
 | — | `brr brnrd <subcommand>` | New noun head for the managed-service surface. Did not exist; this is the load-bearing new addition for managed mode. |
-| — | `brr config <subcommand>` | New noun head for parameter introspection. Did not exist; addresses the long-standing "what config keys exist?" gap. |
+| — | `brr config <subcommand>` | New noun head for parameter introspection. Did not exist; addresses the long-standing "what config keys exist?" gap. Backed by [`design-config-layout.md`](design-config-layout.md). |
+| — | `brr kb <subcommand>` | New noun head for kb health + introspection. Addresses [issue #41](https://github.com/Gurio/brr/issues/41) (kb maintenance for non-brr agents) and the long-standing gap that the kb is half the project's value prop but has no first-class read surface. Backed by [`plan-kb-subcommand.md`](plan-kb-subcommand.md). |
+| — | `brr daemon install \| uninstall` | New sub-verbs: write/register a per-user systemd unit (Linux) or LaunchAgent (macOS) so the daemon survives reboot without `tmux` rituals. Backed by [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md); tracked at [issue #29](https://github.com/Gurio/brr/issues/29). |
 
 `brr daemon up` is a one-key-more typing tradeoff for organising
 lifecycle under a noun; the noun pays for itself once
@@ -100,25 +139,47 @@ introducing an alias is one PR if brnrd ever gets renamed. The
 upside (a self-documenting verb that immediately tells the user
 what they're configuring) is worth it.
 
-## Why `brr config list` (across local + remote)
+## Why `brr config list` (across project + local + account)
 
 The original CLI never exposed a "what config can I set?"
-listing. The new shape adds one:
+listing. The new shape adds one, driven by the three-scope
+config model from
+[`design-config-layout.md`](design-config-layout.md):
 
 - `brr config list` enumerates every config parameter:
-  - Local: keys in `.brr/config`, defaults, current value,
-    where it's set (file path).
-  - Remote (when `brr brnrd connect` has happened): keys on the
-    brnrd-side configuration (failover policy, autotopup,
-    project bindings, etc.), via the brnrd REST API.
-- `brr config get <key>` reads the merged value.
-- `brr config set <key> <value>` writes to the right place:
-  local → file; remote → REST call.
+  - **Project scope** (`brr.toml`, committed to the repo;
+    teammates + brnrd-side spawns see it): docker image, runner
+    default, env default, kb maintenance schedule, etc.
+  - **Local scope** (`.brr/config`, gitignored; this machine
+    only): daemon host/port, per-developer git identity, local
+    API-key env-var names, daemon-install name.
+  - **Account scope** (brnrd-side, fetched via
+    `GET /v1/accounts/settings`; visible to all the user's
+    daemons + spawns): user-wide runner preference, failover
+    policy, autotopup config.
+  Each row shows the merged value, the source it came from,
+  the scope, and the doc snippet.
+- `brr config get <key>` reads the merged value (precedence:
+  local > project > account > default). `--source` shows
+  origin.
+- `brr config set <key> <value>` looks up the schema, writes to
+  the right place automatically. `--scope` overrides if the
+  schema scope is wrong for the situation.
 - `brr config doc <key>` shows docs / type / valid range.
+- `brr config template [--scope project] > brr.toml` writes a
+  fully-commented template with every key in that scope,
+  defaults, valid-value hints, inline docstrings. The "where I'd
+  start a brr.toml" surface — answer to the "what knobs exist?"
+  question for people who prefer reading an example file.
+- `brr config validate` walks all three sources, validates every
+  value against the schema. Pre-commit hook friendly (non-zero
+  exit on errors).
 
 Removes the discoverability problem ("what can I configure?")
-without forcing users to read the source. The doc-string per key
-becomes part of the API contract.
+without forcing users to read the source. The schema becomes the
+single source of truth — `brr config doc`, `brr config list`,
+the template generator, and `brr config validate` all read from
+it.
 
 ## `brr brnrd connect` — three-layer smart bootstrap
 
@@ -271,12 +332,6 @@ lands the implementation.
   yes; the noun-first shape benefits a lot from completions
   ("brr gate <TAB>" → list of gate names you have configured).
   Small slice; goes in the CLI implementation plan.
-- **`brr daemon logs`** as a sibling of `brr daemon status`?
-  Probably yes; uses the same noun head naturally. Defer to a
-  daemon-observability plan when one exists.
-- **JSON output mode** (`--json` flag on every verb)? Useful for
-  scripting / dashboarding. Defer to v-next unless a clear ask
-  emerges.
 
 ## Implementation slice (when this gets built)
 
@@ -293,9 +348,19 @@ Estimate: ~2-3 days for the CLI itself + docs; integration with
 1. [`subject-managed-mode.md`](subject-managed-mode.md) for the
    user flows these verbs configure.
 2. [`design-brnrd-protocol.md`](design-brnrd-protocol.md) for
-   the REST endpoints `brr brnrd <subcommand>` wraps.
+   the REST endpoints `brr brnrd <subcommand>` wraps (and the
+   `/v1/accounts/settings` endpoints the `brr config` account
+   scope uses).
 3. [`design-billing.md`](design-billing.md) for the wallet
    endpoints `brr brnrd topup | balance | autotopup` wrap.
+4. [`design-config-layout.md`](design-config-layout.md) for the
+   three-scope config model and per-key schema that `brr
+   config` operates over.
+5. [`plan-kb-subcommand.md`](plan-kb-subcommand.md) for the
+   `brr kb` sub-verb design and the agent/user split it serves.
+6. [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md) for
+   the `brr daemon install | uninstall` cross-platform
+   unit-writing work.
 
 ## Lineage
 
@@ -320,3 +385,24 @@ Estimate: ~2-3 days for the CLI itself + docs; integration with
   scripted use. Walkthrough does not invent verbs — each layer
   is the same code path as the standalone `brr brnrd pair` /
   `brr brnrd projects bind`, just sequenced.
+- 2026-05-25 (pass 4 follow-up — second wave) — three additions
+  in one pass after the user raised "we need daemons natively
+  installable for mac and linux," "we need a kb command for
+  non-brr agents (related to #41)," and "we need a way to see
+  all config knobs across local/remote, sync project prefs to
+  brnrd":
+  1. **Seventh top-level verb `brr kb`** added (status / pages
+     / proposed / log / check / doc, with `--json` mode on
+     each). Backed by [`plan-kb-subcommand.md`](plan-kb-subcommand.md).
+  2. **`brr daemon install | uninstall | logs`** sub-verbs
+     added. Backed by
+     [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md);
+     tracked at [issue #29](https://github.com/Gurio/brr/issues/29).
+  3. **`brr config template | validate`** sub-verbs added, and
+     the `brr config list` description rewritten around the
+     three-scope model (project / local / account). Backed by
+     [`design-config-layout.md`](design-config-layout.md).
+  Closed the open question on `--json` (now default-on across
+  the verb tree, not deferred) and on `brr daemon logs` (now
+  part of the install/uninstall slice since the same plan owns
+  the OS-service integration).

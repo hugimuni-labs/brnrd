@@ -169,17 +169,21 @@ dive-in map) and are stable until something contradicts them.
   operation, Stripe integration shape (HugiMuni SAS + Stripe
   France + Qonto payouts + Stripe Tax for EU VAT).
 - [CLI shape decision](decision-cli-shape.md) — *proposed*.
-  Six top-level verbs (`init` / `run` / `daemon` / `gate` /
-  `brnrd` / `config`) with subcommands. Collapses today's
-  `up` / `down` into `brr daemon up|down|status`; collapses
-  today's `auth` / `bind` / `setup` into `brr gate <name>
-  <verb>`; adds the load-bearing `brr brnrd` namespace for
-  hosted-service management (`connect` / `creds` / `policy` /
-  `topup` / `balance` / `projects` / ...); adds `brr config
-  list|get|set|doc` for parameter introspection across local +
-  remote. Rejects the earlier `brr accounts` placeholder.
-  `brr brnrd connect [url]` defaults to `https://brnrd.dev`
-  and accepts any URL for first-class self-hosting.
+  Seven top-level verbs (`init` / `run` / `daemon` / `gate` /
+  `brnrd` / `config` / `kb`) with subcommands. Collapses today's
+  `up` / `down` into `brr daemon up|down|status|install|
+  uninstall|logs`; collapses today's `auth` / `bind` / `setup`
+  into `brr gate <name> <verb>`; adds the load-bearing `brr
+  brnrd` namespace for hosted-service management (`connect` /
+  `creds` / `policy` / `topup` / `balance` / `projects` / ...);
+  adds `brr config list|get|set|doc|template|validate` for
+  three-scope (project / local / account) parameter
+  introspection; adds `brr kb status|pages|proposed|log|check|
+  doc` as the kb read surface for users and non-brr agents.
+  Every sub-verb supports `--json`. Rejects the earlier `brr
+  accounts` placeholder. `brr brnrd connect [url]` is a
+  three-layer smart bootstrap defaulting to `https://brnrd.dev`
+  and accepting any URL for first-class self-hosting.
 - [Connectors layering decision](decision-connectors-layering.md) —
   *proposed*. Names the gates vs connectors split: gates are
   per-project / inbound (existing shape); connectors are
@@ -247,6 +251,39 @@ dive-in map) and are stable until something contradicts them.
   remain useful for the niche cloud-first audience. The Upsun
   template shares its read-only-container shape with the brnrd
   backend Upsun deployment.
+- [Laptop daemoning plan](plan-laptop-daemoning.md) — *proposed*.
+  Cross-platform laptop-side daemoning via `brr daemon install`:
+  writes a per-user systemd unit on Linux (`~/.config/systemd/
+  user/brr.service` + optional `loginctl enable-linger`), a
+  LaunchAgent on macOS (`~/Library/LaunchAgents/dev.brnrd.brr.
+  plist`). Survives reboot without sudo. `brr daemon up | down
+  | status | logs` operate the OS service when installed, fall
+  back to the foreground supervisor when not. Tracked at
+  [issue #29](https://github.com/Gurio/brr/issues/29); Windows
+  deferred.
+- [Config layout design](design-config-layout.md) — *proposed*.
+  Three-scope config model: `project` (`brr.toml` at repo root,
+  committed — teammates + brnrd-side spawns see it), `local`
+  (`.brr/config`, gitignored, this machine only), `account`
+  (brnrd-side store via `/v1/accounts/settings`, all the user's
+  daemons see it). TOML format both files. Merge precedence
+  `local > project > account > defaults`. Per-key schema
+  declares scope; `brr config list/get/set/doc/template/
+  validate` operate over it. Lets brnrd-side spawns pick up
+  project preferences (Docker image, runner choice, env
+  default) from the cloned repo.
+- [KB subcommand plan](plan-kb-subcommand.md) — *proposed*.
+  `brr kb` as the seventh top-level verb, addressing
+  [issue #41](https://github.com/Gurio/brr/issues/41). Six
+  sub-verbs (`status` / `pages [filters]` / `proposed` / `log`
+  / `check` / `doc`) shared between human users (who get
+  "what needs my review?") and non-brr agents (who get
+  `--json` health + check output without rolling their own kb
+  walker). `brr kb check` validates reachability, cross-
+  references, status-marker syntax, stale-active warnings,
+  aspirational-drift and sibling-drift smells; non-zero exit
+  on errors. AGENTS.md → "Health checks" collapses to "run
+  `brr kb check`" once shipped.
 - [Deck: brr fleet & steering](deck-brr-fleet-steering.md) —
   *roadmap (env axis partly shipped, overlays/brnrd paused)*. Three-axis
   framing (overlays · brnrd · environments); read for the strategic

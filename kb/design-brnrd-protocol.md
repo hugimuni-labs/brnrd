@@ -406,6 +406,37 @@ OAuth) for users who don't want to provision API keys.
 | `POST` | `/v1/accounts/failover-policy` | Set policy: `{enabled: bool, mode: "ask" | "auto-approve-always" | "auto-approve-under-usd" | "auto-approve-under-per-day" | "never", auto_approve_threshold_usd, auto_approve_threshold_per_day, monthly_spawn_cap, monthly_cost_cap_usd}`. | failover_policy row |
 | `GET` | `/v1/accounts/failover-policy` | Read current policy + usage counters (spawns-this-month, cost-this-month). | Read-only |
 
+### Account-scope settings endpoints
+
+Per [`design-config-layout.md`](design-config-layout.md), the
+config model has three scopes (project / local / account). The
+**account** scope lives here on brnrd — settings that apply
+across all the user's daemons and spawns (e.g. user-wide runner
+preference, default failover thresholds, account-wide kb
+preferences). Distinct from `failover-policy` above because that
+endpoint groups the failover-specific knobs into one PUT for
+atomicity; this endpoint family is for individual key/value
+account-scope settings the schema declares.
+
+| Method | Path | Description | Persists |
+|--------|------|-------------|----------|
+| `GET` | `/v1/accounts/settings` | Read all account-scope settings for this account. Returns `{key: value}` map. | Read-only |
+| `GET` | `/v1/accounts/settings/{key}` | Read one setting. 404 if not set (falls back to schema default on the client side). | Read-only |
+| `PUT` | `/v1/accounts/settings/{key}` | Write one setting. Body: `{value: ...}`. Schema-validated on the brnrd side. | settings row |
+| `DELETE` | `/v1/accounts/settings/{key}` | Reset to default (deletes the row; subsequent reads return schema default). | settings row removed |
+
+Daemons fetch `/v1/accounts/settings` at startup and refresh
+every 5 minutes while connected. Brnrd-side spawns fetch at
+bootstrap as part of the daemon-equivalent bootstrap (see
+"Failover dispatch" step 6 below). Push-style invalidation
+(brnrd notifies daemons of changes via the inbox long-poll) is
+a v-next refinement; polling is fine at launch volumes.
+
+Account-scope keys are schema-declared on the client side; brnrd
+stores them as opaque blobs (TOML-serialised) per `key`. Schema
+versioning is the client's responsibility — the brnrd side
+treats the store as a key-value bag scoped to `account_id`.
+
 ### Permission-prompt endpoints
 
 When `mode = "ask"` and a spawn is pending, brnrd posts a
@@ -628,17 +659,41 @@ decision tree:
      "never"                      → enqueue; done
 
 6. (Spawn path) Issue a one-shot task-key, decrypt AI creds into
-   process memory, run the daemon-equivalent bootstrap (clone
-   repo with the per-spawn GH App token, materialise AI creds),
-   construct a `RunContext`, then invoke the `fly_machines` env
-   class (same class the daemon would use) against brnrd's Fly
-   Machines pool with:
-     - the AI credentials (env vars or dir-tarball expansion)
+   process memory, run the **daemon-equivalent bootstrap**:
+     - clone repo with the per-spawn GH App token
+     - **read `brr.toml` from the cloned repo** for project-scope
+       config (Docker image, runner choice, env preference, etc.
+       — per
+       [`design-config-layout.md`](design-config-layout.md))
+     - fetch account-scope settings from
+       `GET /v1/accounts/settings` (user-wide runner preference,
+       failover thresholds)
+     - build the effective config: account < project (local
+       scope is intentionally ignored — it's not in the repo,
+       by design)
+     - materialise AI creds into the sandbox layout the runner
+       expects (env vars or `$HOME/.claude/` dir-tarball
+       expansion)
+     - construct a `RunContext` using the effective config
+   Then invoke the `fly_machines` env class (same class the
+   daemon would use) against brnrd's Fly Machines pool with:
+     - the `RunContext` (carries Docker image, runner choice,
+       env config, AI creds)
      - a per-spawn GH App installation token (push permission)
      - the event payload + project_id
      - the task-key (Bearer scoped to this event_id, 1h TTL,
        single use for POST /v1/daemons/responses)
    Clear AI cred material from memory after hand-off.
+
+   **Private docker image** (e.g. `image = "ghcr.io/myorg/foo"`
+   on a private registry): brnrd's `docker pull` fails. At
+   launch, the spawn fails with a clear "private image; either
+   make it public, self-host brnrd, or wait for the credential
+   vault extension" message via the gate. The generic credential
+   vault extension (registry credentials alongside AI creds) is
+   tracked as an open question in
+   [`design-config-layout.md`](design-config-layout.md) →
+   "Private docker image — open question".
 
 7. (Sandbox runs) Sandbox:
      - clones the repo via the GH token
@@ -1057,7 +1112,14 @@ write the Upsun shape once, use it twice.
    operations.
 5. [`decision-cli-shape.md`](decision-cli-shape.md) for the
    `brr brnrd <subcommand>` CLI verbs that wrap these
-   endpoints.
+   endpoints, and for the seventh top-level verb (`brr kb`)
+   and the `brr config` sub-verbs (template / validate) added
+   in the same pass.
+5a. [`design-config-layout.md`](design-config-layout.md) for
+   the three-scope config model that the account-scope
+   settings endpoints back, and for the `brr.toml` project-
+   scope file that the daemon-equivalent bootstrap reads at
+   spawn time.
 6. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
    for the gate-adapter implementation sequencing (GH App slice
    first, TG bot fast-follow on the same backend).
@@ -1157,3 +1219,27 @@ write the Upsun shape once, use it twice.
   documented (each layer skipped if already satisfied). Drove
   by the user's "we should autosetup gates when
   `brr brnrd connect`" feedback.
+- 2026-05-25 (pass 4 follow-up — second wave) — two additions
+  driven by the user's "could we sync local config with remote
+  runs / use the user's docker image in fly machines too?"
+  feedback:
+  1. New **account-scope settings endpoint family**
+     (`GET / PUT / DELETE /v1/accounts/settings[/{key}]`) for
+     the account scope of the three-scope config model. Daemons
+     fetch at startup + every 5 min; brnrd-side spawns fetch
+     at bootstrap. Schema lives client-side (see
+     [`design-config-layout.md`](design-config-layout.md));
+     brnrd treats values as opaque TOML-serialised blobs per
+     `(account_id, key)`.
+  2. **Daemon-equivalent bootstrap now reads `brr.toml`** from
+     the cloned repo (failover dispatch step 6) and layers it
+     with account-scope settings to build the effective config
+     before invoking the env. Project-level preferences
+     (docker image, runner choice, env default) now flow from
+     the repo to brnrd-side spawns automatically — no protocol
+     push, the repo is the message. Private docker images are
+     flagged as a launch-blocker for the spawn path with a
+     clear gate-side error; the generic credential-vault
+     extension (registry creds alongside AI creds) tracked as
+     an open question in
+     [`design-config-layout.md`](design-config-layout.md).

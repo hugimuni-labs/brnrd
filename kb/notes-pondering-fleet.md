@@ -324,6 +324,69 @@ the current state. §6 is the re-promotion guide.
 > Three pages updated; no new pages. The substantive launch
 > shape from pass 4 is unchanged; this is purely
 > implementation-detail surfacing.
+>
+> **2026-05-25 pass-4 follow-up — second wave.** Three
+> substantive additions in one pass after the user re-raised
+> three orthogonal concerns while reviewing the pass-4 result:
+> cross-platform daemoning, kb maintenance for non-brr agents,
+> and config visibility + sync to brnrd-side spawns.
+>
+> - **Seventh top-level CLI verb `brr kb`** (six sub-verbs:
+>   `status` / `pages [filters]` / `proposed` / `log` / `check`
+>   / `doc`, all with `--json`). Same surface for users (who
+>   get "what needs my review?") and non-brr agents (who get
+>   structured kb health). Addresses
+>   [#41](https://github.com/Gurio/brr/issues/41). Bends the
+>   "six minimal verbs" promise by one; justified because kb
+>   is half the project's identity and burying it under
+>   `config` is friction every time. Details in
+>   [`plan-kb-subcommand.md`](plan-kb-subcommand.md) and
+>   [`decision-cli-shape.md`](decision-cli-shape.md).
+> - **`brr daemon install | uninstall | logs`** for
+>   cross-platform laptop daemoning. Linux: systemd user unit
+>   at `~/.config/systemd/user/brr.service` + optional one-time
+>   `loginctl enable-linger`. macOS: launchd LaunchAgent at
+>   `~/Library/LaunchAgents/dev.brnrd.brr.plist`. Per-user
+>   (no sudo for the unit file itself); survives reboot;
+>   integrates with the OS's logging / status / restart
+>   mechanisms. Falls back to today's foreground supervisor
+>   when not installed. Windows deferred. Details in
+>   [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md);
+>   tracked at [#29](https://github.com/Gurio/brr/issues/29).
+> - **Three-scope config model** (`project` / `local` /
+>   `account`) replaces the single gitignored `.brr/config`.
+>   `brr.toml` at repo root (committed) carries project-scope
+>   settings; `.brr/config` (TOML now) stays gitignored for
+>   local overrides; account-scope lives on brnrd via new
+>   `/v1/accounts/settings` endpoints. Merge precedence
+>   `local > project > account > defaults`. Per-key schema
+>   declares scope; `brr config template | validate` round out
+>   the existing list/get/set/doc verbs. **brnrd-side spawn
+>   bootstrap now reads `brr.toml`** from the cloned repo,
+>   layered with account-scope settings — project preferences
+>   (Docker image, runner choice, env default) flow to spawns
+>   automatically, no protocol push. The repo IS the message.
+>   Private docker images flagged as launch-blocker for the
+>   spawn path (clear gate-side error); generic credential-
+>   vault extension deferred. Details in
+>   [`design-config-layout.md`](design-config-layout.md) and
+>   [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
+>   "Account-scope settings endpoints" + "Failover dispatch"
+>   step 6.
+> - **BYO cloud env vs managed compute clarified** in
+>   `subject-managed-mode.md` as orthogonal coexisting paths
+>   (table comparing caller / cloud account / when it fires /
+>   who pays). Same env class serves both callers per the
+>   envs unification; the routes never compete because their
+>   trigger conditions are mutually exclusive.
+>
+> Three new pages, six updates. Same pattern as the first
+> wave: no code; all designs and plans remain
+> `Status: proposed`. Implementation order suggested by the
+> page set: config-layout first (unlocks brnrd-side preference
+> reading), then `brr kb` (highest agent-experience leverage,
+> lowest coupling), then `brr daemon install` (can ship
+> anytime, no upstream dependencies).
 
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.
@@ -1030,8 +1093,13 @@ highest priority first:
   folder + a "deploying brr" docs page. The "deploy brr in 30
   seconds" promise is what cashes out the BYO compute story without
   brnrd having to hold cloud credentials.
-- **`brr install-service` for macOS + Linux.** Promote into
-  `plan-install-service.md`. Cheap; part of the launch shape per §4.
+- **`brr daemon install` for macOS + Linux.** *Promoted on
+  2026-05-25 (pass-4 follow-up — second wave)* into
+  [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md). The
+  earlier sketch called it `brr install-service`; the verb
+  name shifted to `brr daemon install` to fit the noun-first
+  CLI taxonomy from
+  [`decision-cli-shape.md`](decision-cli-shape.md).
 - **Self-maintaining registry (§5).** Trivial; promote into a
   small plan page when convenient. Useful for managed-mode
   inspection as well as for brnrd.
