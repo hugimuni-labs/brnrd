@@ -145,7 +145,9 @@ contents**. Three on-demand sources:
    history store; we don't double-up.
 3. **Git remote replay** — `git log -n 50 <branch>` + recent
    commit bodies + `kb/log.md` tail if present, fetched with
-   the per-spawn GH App installation token.
+   the per-spawn GH App installation token. This is just an
+   approximation. The actual context should be in sync with
+   the local daemon.  
 
 For **cross-gate** continuity (the same conversation spans TG
 and a GH PR), brnrd keeps a small **metadata graph** —
