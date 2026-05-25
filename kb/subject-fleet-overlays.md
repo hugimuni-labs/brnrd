@@ -1,11 +1,15 @@
 # Subject: fleet and overlays
 
 This hub synthesizes brr's current thinking about scaling from one
-repo-local daemon to a user-owned fleet. The canonical split is three
-axes: user-level steering overlays, a future fleet operator (`brnrd`),
-and execution environments. The environment axis has its own live hub in
-[`subject-envs.md`](subject-envs.md); this page keeps the overlay and
-fleet strands coherent while they are paused.
+repo-local daemon to a user-owned fleet. The canonical split was
+originally three axes: user-level steering overlays, a future fleet
+operator (`brnrd`), and execution environments. The environment axis
+has its own live hub in [`subject-envs.md`](subject-envs.md). The
+fleet-operator axis collapsed into brr.run on 2026-05-25 (one
+platform, one name) and lives in
+[`subject-managed-mode.md`](subject-managed-mode.md). This page keeps
+the overlay strand coherent while it is paused and points at the
+relevant successor pages for the other axes.
 
 ## Current State
 
@@ -21,16 +25,23 @@ The fleet agenda is deliberately not one feature.
   [`plan-overlays.md`](plan-overlays.md)'s research gate, which must pick
   the overlay shape before implementation starts.
 - **Managed mode** answers what ships as a paid tier at launch — hosted
-  gates (Telegram + GitHub App) and BYO cloud execution adapters — and
-  where the daemon lives when the laptop is down. Active design strand;
-  see [`subject-managed-mode.md`](subject-managed-mode.md). Cross-cuts
-  the env axis (cloud-runner adapters extend the env protocol) and
-  intentionally distinct from `brnrd`.
-- **Fleet / brnrd** answers how a user sees and commands many brr-managed
-  repos as a set. It remains future work and should stay outside brr's
-  repo-local runtime unless a narrow brr-side primitive is clearly needed.
-  Recontextualised in [`notes-pondering-fleet.md`](notes-pondering-fleet.md)
-  §3 as a separate further-postponed product distinct from managed-brr.
+  gates (Telegram + GitHub App), multi-project routing, permission-
+  prompt-gated managed compute on a brr.run-owned Fly pool, AI-
+  credential vault, a dashboard MVP, and a data-minimization principle
+  that keeps user content off brr.run. Active design strand; see
+  [`subject-managed-mode.md`](subject-managed-mode.md). Cross-cuts
+  the env axis (the failover sandbox image is built on the env
+  protocol). BYO cloud execution adapters remain user-driven plugin
+  work, independent of managed mode.
+- **Fleet / brnrd** — *retired as a separate name on 2026-05-25*. The
+  fleet-management angle collapsed into brr.run as the same product
+  (one platform, one name). The dashboard surface in
+  [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+  carries the fleet view (project list, daemon status, per-project
+  detail, conversation proxy). Any future agentic-secretary layer
+  ("proactive cross-project assistant") gets named when it lands;
+  the connector-vs-gate split that would underpin it lives in
+  [`decision-connectors-layering.md`](decision-connectors-layering.md).
 
 The live product boundary is still per-repo brr. A brr daemon owns one
 repo's inbox, task files, conversations, env execution, responses, and
@@ -81,27 +92,34 @@ module by default.
    implementation plan and its blocking research gate.
 3. [`subject-managed-mode.md`](subject-managed-mode.md) for the
    managed-mode page family promoted out of the pondering on
-   2026-05-22: three paid surfaces (managed gates, BYO failover
-   compute, managed compute) all riding a brr.run-as-failover-
-   dispatcher model, plus the demoted daemon-hosting deployment
-   templates and the OSS / paid split that ships at launch. The
-   hub fans out to a design
-   ([`design-brr-run-protocol.md`](design-brr-run-protocol.md)),
-   a research page
-   ([`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)),
-   a decision page
-   ([`decision-pricing-shape.md`](decision-pricing-shape.md)),
-   and four plan pages
-   ([`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
-   [`plan-failover-compute.md`](plan-failover-compute.md),
-   [`plan-env-fly-machines.md`](plan-env-fly-machines.md),
-   [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)).
+   2026-05-22 and reshaped through 2026-05-25: two launch
+   surfaces (free dispatcher with 100 managed-compute spawns /
+   month; usage-based managed compute over the cap) on a thin
+   brr.run (data minimization principle), with multi-project
+   routing and cost-transparent permission prompts baked in,
+   plus a dashboard MVP and a monorepo layout that keeps brr
+   core + brr.run backend + dashboard + plugins coherent. The
+   hub fans out to:
+   - a design ([`design-brr-run-protocol.md`](design-brr-run-protocol.md))
+   - a research page ([`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md))
+   - three decision pages
+     ([`decision-pricing-shape.md`](decision-pricing-shape.md),
+     [`decision-connectors-layering.md`](decision-connectors-layering.md),
+     [`decision-monorepo-structure.md`](decision-monorepo-structure.md))
+   - five plan pages
+     ([`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
+     [`plan-failover-compute.md`](plan-failover-compute.md),
+     [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md),
+     [`plan-env-fly-machines.md`](plan-env-fly-machines.md),
+     [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)).
 4. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) for the
    remaining capture: §1 / §2 are now provenance for the managed-mode
-   page family; §3-§6 still cover `brnrd`, the cross-platform
+   page family (with 2026-05-22 and 2026-05-25 reframe breadcrumbs
+   covering the work-continuity shift, the BYO-deferral, brnrd's
+   retirement as a name, the data-minimization principle, and the
+   monorepo decision). §3-§6 still cover the cross-platform
    supervisor, the self-maintaining registry, and the overlay shape
-   strands as capture-only. `brnrd` is recontextualised there as a
-   separate further-postponed product distinct from managed-brr.
+   strands as capture-only.
 5. [`subject-envs.md`](subject-envs.md) for the active environment axis.
 6. [`decision-remove-triage.md`](decision-remove-triage.md),
    [`decision-drop-streams.md`](decision-drop-streams.md), and

@@ -2501,3 +2501,142 @@ prototype remains the immediate blocker. brnrd unaffected — the
 work-continuity frame makes the boundary even clearer: managed
 mode keeps individual task work flowing; brnrd thinks at the
 fleet / planning level.
+
+## [2026-05-25] plan | Managed-mode reshape pass 2 — drop BYO from launch, retire brnrd as a name, add dashboard + monorepo decisions
+
+Second reshape pass on the managed-mode KB family, driven by a
+deeper look at what brr.run actually has to do at launch vs what's
+defensible to ship. Surfaces shifted:
+
+- **BYO compute (Surface B) dropped from launch.** The wire
+  protocol still supports it (preserved as a "designed,
+  deferred" sketch in `design-brr-run-protocol.md`), but the
+  per-platform credential storage UI, per-platform onboarding
+  docs, dispatcher branching, and partial-support-matrix
+  maintenance burden didn't justify shipping it day one for
+  the ~5% of launch users who'd care. Add-back is small when
+  usage justifies. Daemon-side cloud-runner adapters (laptop
+  fans out to user's cloud via a `brr-env-*` plugin) remain
+  independent of managed mode entirely.
+- **brnrd retired as a name.** Collapsed into brr.run as the
+  one product / one name. brr.run is the platform; the
+  dashboard is "the brr.run dashboard." Any future
+  agentic-secretary layer gets named when it lands, not now.
+  The previously-proposed `subject-brnrd.md` / `plan-brnrd-mvp.md`
+  family folds into the managed-mode hub + a new
+  `plan-brr-run-dashboard-mvp.md`.
+- **Multi-project routing protocol added.** One managed bot
+  per platform serves all of a user's projects via chat-binding
+  + per-message prefix override (TG/Slack/Discord) or
+  repo-binding (GH). Spec in protocol design; UX integration in
+  `plan-managed-gates-launch.md` Slice 2.
+- **Permission-prompt API added.** Cost-transparency before each
+  failover spawn: est cost, est runtime, current-month usage,
+  two action buttons (Approve / Queue), optional "Never ask
+  under $X" on first prompt. Mode defaults to `ask`. Spec in
+  protocol design; integration in `plan-managed-gates-launch.md`
+  Slice 3.
+- **AI-credential vault supports both shapes on one endpoint.**
+  API-key (`--key sk-ant-...`) and credential-directory tarball
+  (`--dir ~/.claude`) — both flow into the same encrypted store.
+  Subscription-auth users (Claude Pro, Codex Plus, Gemini OAuth)
+  are first-class on the server-side failover path via the
+  dir-tarball shape, matching the local docker env's mounted-dir
+  UX.
+- **Free-tier failover spawn cap revised down: 100/month**
+  (was 200). Framed as a fallback feature, not a free
+  continuous-execution SaaS. Math at ~$0.28/user/month
+  worst-case cloud cost is sustainable with a small percentage
+  of paying users on top.
+- **Data minimization principle promoted to load-bearing.**
+  brr.run is a thin dispatcher + a credential vault; user
+  content (prompts, code, responses, conversation history, repo
+  state) lives on the daemon side and is never mirrored to
+  brr.run. Event bodies dropped after dispatch; response bodies
+  pass through without storage; AI credentials encrypted at
+  rest with per-account envelope keys; audit log metadata-only.
+  Trust signal on the pricing page: "we don't have your code."
+- **Monorepo structure decided.** `src/brr/` (daemon today) +
+  `src/brr_run/` (backend) + `src/brr_run_web/` (dashboard) +
+  `src/brr_env_*/` (vendored plugins, split out when they
+  mature) in one repo. Shared kb, shared CI, separate pip
+  install surfaces via optional dependencies.
+- **Gates vs connectors split named.** Gates are per-project /
+  inbound (existing shape); connectors are per-account /
+  outbound / proactive (for the future agentic-secretary
+  layer). No connectors ship at launch; the decision page
+  exists so the future agentic-mode upgrade doesn't retrofit
+  the gate API.
+- **Upsun confirmed as prototype hosting environment.**
+  Read-only-app-container constraints handled via the
+  build-vs-deploy split, declared writable mounts, postgres
+  add-on, Upsun-secret-store for pool tokens. The daemon
+  template's Upsun shape shares patterns with the backend
+  template.
+
+KB changes from this reshape:
+
+- `kb/design-brr-run-protocol.md` — reshaped: BYO platform-
+  tokens dropped from launch (preserved as "designed,
+  deferred" section); AI-credential vault added (api-key +
+  dir-tarball shapes on one endpoint); multi-project routing
+  protocol added (project_id resolution per platform,
+  chat-binding + prefix override grammar); permission-prompt
+  API added (`/v1/internal/prompts` + gate-callback webhooks);
+  data minimization principle promoted to a load-bearing
+  section governing every endpoint; Upsun deployment notes
+  added.
+- `kb/plan-failover-compute.md` — rewritten: BYO scope dropped
+  entirely; refocused on AI-credential vault + brr.run-owned
+  Fly pool + permission-gate API + Upsun backend deployment.
+  Four slices (vault + policy; dispatcher + prompts; pool +
+  sandbox image; audit + docs).
+- `kb/subject-managed-mode.md` — reshaped: two surfaces (free
+  dispatcher; paid managed compute) with BYO as deferred;
+  brnrd absorbed as "brr.run as fleet manager" angle of the
+  same product; multi-project routing + permission gating +
+  dashboard sections; data-minimization callout; "where the
+  code lives" pointer at the monorepo decision.
+- `kb/decision-pricing-shape.md` — updated: dropped launch BYO
+  tier (collapsed to two-tier free dispatcher inc. 100 managed-
+  compute spawns/month + usage-based over cap); revised free-
+  tier spawn cap 200 → 100; data-minimization trust signal
+  promoted; "we charge for ops, not for AI usage" framing
+  added; self-hosted brr.run framed as parallel path.
+- New: `kb/decision-connectors-layering.md` (status: proposed) —
+  gates vs connectors split; agentic-mode upgrade path frame.
+- New: `kb/decision-monorepo-structure.md` (status: proposed) —
+  monorepo layout + plugin-split-out criterion + alternatives.
+- New: `kb/plan-brr-run-dashboard-mvp.md` — seven views,
+  HTMX-first, four slices (bootstrap + login; config surfaces;
+  observability surfaces; polish).
+- `kb/plan-managed-gates-launch.md` — added multi-project
+  routing UX (chat / repo binding, `/connect`, `/project`,
+  `@<name>` command grammar) and permission-prompt API +
+  gate-side integration as Slice 3. Backend repo replaced with
+  `src/brr_run/` per the monorepo decision.
+- `kb/research-cloud-runner-patterns.md` — refreshed: caller-
+  axis section now reflects that only Fly Machines wires up
+  server-side at launch (BYO server-side deferred); Pattern A
+  grew a "server-side caller specifics" subsection covering the
+  AI-credential vault's two payload shapes and per-platform
+  injection.
+- `kb/plan-daemon-deployment-templates.md` — Upsun entry
+  cross-linked to the brr.run backend Upsun deployment
+  (shared read-only-container shape; should be authored
+  together).
+- `kb/notes-pondering-fleet.md` — appended second 2026-05-25
+  reframe breadcrumb to §1 capturing all of the shifts above
+  and pointing at the new + reshaped pages.
+- `kb/index.md` — Fleet & overlays section updated for the new
+  pages (`decision-connectors-layering.md`,
+  `decision-monorepo-structure.md`,
+  `plan-brr-run-dashboard-mvp.md`) and reshaped descriptions
+  for the existing managed-mode pages.
+
+No code changes; designs remain status:proposed pending
+acceptance. Next blocker is the brr.run backend prototype
+(unchanged from the previous pass), now scoped against the
+reshaped protocol + the monorepo layout. Implementation can
+start once the design + pricing pages are accepted.
+

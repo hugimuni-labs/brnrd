@@ -36,9 +36,12 @@ the current state. §6 is the re-promotion guide.
 > pages
 > ([`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
 > [`plan-failover-compute.md`](plan-failover-compute.md),
+> [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md),
 > [`plan-env-fly-machines.md`](plan-env-fly-machines.md),
 > [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md),
-> [`decision-pricing-shape.md`](decision-pricing-shape.md)).
+> [`decision-pricing-shape.md`](decision-pricing-shape.md),
+> [`decision-connectors-layering.md`](decision-connectors-layering.md),
+> [`decision-monorepo-structure.md`](decision-monorepo-structure.md)).
 > Body below retained as provenance — the agreed shape lives in the
 > promoted pages.**
 >
@@ -59,6 +62,103 @@ the current state. §6 is the re-promotion guide.
 > compute, managed compute) all ride the same dispatcher; see
 > [`subject-managed-mode.md`](subject-managed-mode.md) for the
 > current synthesis.
+>
+> **2026-05-25 reframe — second pass.** Shape reworked again
+> after a deeper pass on what brr.run actually has to do at
+> launch vs what's actually defensible to ship:
+>
+> - **BYO compute (Surface B) deferred from launch.** The wire
+>   protocol still supports it (preserved in
+>   [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+>   "BYO compute — designed, deferred"), but the
+>   per-platform credential storage UI, per-platform onboarding
+>   docs, dispatcher branching, and partial-support-matrix
+>   maintenance burden didn't justify shipping it day one for
+>   the ~5% of launch users who'd care. Add-back is small when
+>   usage justifies; daemon-side cloud-runner adapters (laptop
+>   fans out to user's cloud via a `brr-env-*` plugin) remain
+>   independent of managed mode entirely.
+> - **brnrd retired as a name.** brnrd was useful when we
+>   thought it was a separate operator-agent product; once it
+>   collapsed into brr.run (the dashboard angle of the same
+>   product), one name beat two. brr.run is the product (the
+>   domain is concrete, "brr as a service" reads on the tin);
+>   the dashboard is "the brr.run dashboard." Any future
+>   agentic-secretary layer gets named when it lands, not now.
+>   See [`subject-managed-mode.md`](subject-managed-mode.md)
+>   "brr.run as the product."
+> - **Multi-project routing protocol added.** One managed bot
+>   per platform serves all of a user's projects via
+>   chat-binding + per-message prefix override (for TG/Slack/
+>   Discord) or repo-binding (for GH). Spec in
+>   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+>   "Multi-project routing"; UX integration in
+>   [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
+>   Slice 2.
+> - **Permission-prompt API added.** Cost-transparency before
+>   each failover spawn: prompt via the gate carries est cost,
+>   est runtime, current-month usage, two action buttons
+>   (Approve / Queue), optional "Never ask under $X." Mode
+>   defaults to `ask`. Spec in
+>   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+>   "Permission-prompt endpoints"; integration in
+>   [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
+>   Slice 3.
+> - **AI-credential vault preserved across both shapes.** Both
+>   API-key and credential-directory-tarball payload shapes
+>   accepted on the same `POST /v1/accounts/ai-credentials`
+>   endpoint, so subscription-auth users (Claude Pro, Codex
+>   Plus, Gemini OAuth) get failover without provisioning API
+>   keys — same UX as the local docker env's mounted-dir flow.
+> - **Free-tier failover spawn cap revised down: 100/month**
+>   (was 200). The cap is framed as a fallback feature, not a
+>   free continuous-execution SaaS. Math at ~$0.28/user/month
+>   worst-case cloud cost makes this sustainable with a small
+>   percentage of paying users on top. See
+>   [`decision-pricing-shape.md`](decision-pricing-shape.md).
+> - **Data minimization principle promoted to load-bearing**
+>   across the design and pricing. brr.run is a thin
+>   dispatcher + a credential vault; user content (prompts,
+>   code, responses, conversation history, repo state) lives
+>   on the daemon side and is never mirrored to brr.run. Event
+>   bodies dropped after dispatch; response bodies pass through
+>   without storage; AI credentials encrypted at rest with
+>   per-account envelope keys; audit log metadata-only. Trust
+>   signal on the pricing page is "we don't have your code."
+>   Full principle in
+>   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+>   "Data minimization."
+> - **Monorepo structure decided.** brr core + brr.run backend +
+>   dashboard + first-party plugins live in `src/brr/`,
+>   `src/brr_run/`, `src/brr_run_web/`, `src/brr_env_*/` in one
+>   monorepo, sharing the kb. Plugin packages split into their
+>   own repos when they mature. Decision in
+>   [`decision-monorepo-structure.md`](decision-monorepo-structure.md).
+> - **Gates vs connectors split named.** Gates are
+>   per-project / inbound (existing shape); connectors are
+>   per-account / outbound / proactive (for the future
+>   agentic-secretary layer). No connectors ship at launch; the
+>   split lives in
+>   [`decision-connectors-layering.md`](decision-connectors-layering.md)
+>   so the future agentic-mode upgrade doesn't have to retrofit
+>   the gate API.
+> - **Upsun is the prototype hosting environment** for the
+>   brr.run backend; read-only-app-container constraints
+>   handled via the build-vs-deploy split, declared writable
+>   mounts, postgres add-on, and Upsun-secret-store for the
+>   pool tokens. Spec in
+>   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
+>   "Upsun deployment notes."
+>
+> Net effect: the launch shape is **two surfaces** (free
+> dispatcher inc. 100 managed-compute spawns/month, plus
+> usage-based managed compute over cap) on a **thin** brr.run
+> (data minimization), hosted on **Upsun**, exposing a
+> **dashboard MVP**, with **multi-project routing** + **cost-
+> transparent permission prompts** baked in, and a **monorepo**
+> layout that keeps brr core / backend / dashboard / plugins
+> coherent. See [`subject-managed-mode.md`](subject-managed-mode.md)
+> for the current synthesis.
 
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.

@@ -1,16 +1,20 @@
 # Plan: managed gates — launch sequencing
 
-Implementation plan for **Surface A** (managed gates / IO) of
+Implementation plan for **Surface A** (managed dispatcher: hosted
+gates + multi-project routing + permission prompts) of
 [managed mode](subject-managed-mode.md), specified in
-[`design-brr-run-protocol.md`](design-brr-run-protocol.md). Two
+[`design-brr-run-protocol.md`](design-brr-run-protocol.md). Three
 slices ship at launch, in this order: **GitHub App adapter first**
 (largest BYO-setup pain relief), **Telegram bot adapter as
-fast-follow** on the same backend.
+fast-follow** on the same backend, **multi-project routing +
+permission-prompt API** on top of both.
 
 Sister plan
-[`plan-failover-compute.md`](plan-failover-compute.md) covers
-Surfaces B (BYO failover compute) and C (managed compute) on top
-of the same backend skeleton this plan stands up.
+[`plan-failover-compute.md`](plan-failover-compute.md) covers the
+managed-compute failover spawn on top of the same backend
+skeleton this plan stands up. Sister plan
+[`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+covers the dashboard view of all of this.
 
 ## Status
 
@@ -18,97 +22,188 @@ of the same backend skeleton this plan stands up.
 
 - A small brr.run backend prototype (~3 days work) demonstrating
   the inbox-as-service protocol end-to-end (Telegram update →
-  inbox → daemon poll → response → Telegram message). Most likely
-  a FastAPI app + postgres on whichever PaaS is cheapest. Lives in
-  a separate `brr-run` repo.
+  inbox → daemon poll → response → Telegram message). FastAPI
+  app + postgres on Upsun per
+  [`design-brr-run-protocol.md`](design-brr-run-protocol.md) →
+  "Upsun deployment notes." Lives at `src/brr_run/` per
+  [`decision-monorepo-structure.md`](decision-monorepo-structure.md).
 - [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
-  acceptance — the wire format needs to be locked before both
-  sides start building in parallel.
+  acceptance — the wire format (gates, routing, prompts) needs
+  to be locked before both sides start building in parallel.
 - [`decision-pricing-shape.md`](decision-pricing-shape.md)
-  acceptance — the launch needs a free-tier rate-cap floor
-  decided before the gate adapters wire up rate limiting.
+  acceptance — the launch needs free-tier rate caps and the
+  100-spawns-per-month cap decided before the gate adapters
+  wire up enforcement.
 
 ## Goals
 
-- Both adapters reachable via `brr connect brr.run` on launch day.
-- Launch announcement headlines both equally (TG + GH bot as the
-  paid tier's two front doors).
+- Both adapters reachable via `brr accounts pair {telegram,github}`
+  on launch day.
+- A single managed bot per platform serves multiple of a user's
+  projects via the multi-project routing protocol (no per-project
+  bot setup).
+- Permission prompts via the gate (TG inline buttons, GH issue
+  comment commands) gate any failover spawn that needs explicit
+  approval per the user's policy.
 - OSS paths for Telegram and GitHub gates remain 1:1 untouched —
   existing `[gate.telegram]` and `[gate.github]` config sections
   keep working exactly as today.
+- Launch announcement headlines both equally (TG + GH bot as the
+  free dispatcher's two front doors).
 
 ## Done definition
 
 - The `cloud` gate adapter ships in `src/brr/gates/cloud.py`,
-  registered alongside `telegram` / `slack` / `github` in the gate
-  registry.
-- `brr connect brr.run` CLI verb works end-to-end: signup, API key
-  issuance, pairing for both TG and GH.
-- One small docs page in `src/brr/docs/managed-mode.md`.
+  registered alongside `telegram` / `slack` / `github` in the
+  gate registry.
+- `brr accounts pair {telegram,github}` CLI verbs work
+  end-to-end: signup, API key issuance, pairing for both
+  platforms.
+- Multi-project routing protocol implemented end-to-end:
+  - GH App webhook resolves `(installation_id, repo_full_name)
+    → project_id` via the `repo_project_bindings` table; auto-
+    bound on install, re-bindable from CLI / dashboard.
+  - Telegram bot resolves `(account_id, chat_id) → project_id`
+    via `chat_project_bindings`; `/connect <project>` binds the
+    current chat; `/project <name> <task>` overrides for one
+    message; `@<name> <task>` terse form; `/projects` and
+    `/status` for introspection.
+- Permission-prompt API live end-to-end:
+  - `POST /v1/internal/prompts` posts a prompt via the
+    originating gate.
+  - Gate-side: TG inline buttons (Approve / Queue), GH issue
+    comment commands (`@brr-bot approve` / `@brr-bot queue`).
+  - `POST /v1/webhooks/prompts/{platform}/{prompt_id}/{outcome}`
+    handles user response; resolves the prompt; either fires the
+    spawn (via the failover-compute pathway) or queues the event.
+- One docs page at `src/brr/docs/managed-mode.md` covering the
+  pairing flow, multi-project routing UX, and permission-prompt
+  UX.
 - Tests cover: long-poll happy path, long-poll timeout, response
-  post, 401 on revoked key, restart-resume from persisted cursor.
-- A sample brr.run backend skeleton is open-sourceable as a
-  reference implementation in its own repo (so self-hosters can run
-  their own brr.run-equivalent).
+  post, 401 on revoked key, restart-resume from persisted
+  cursor, multi-project routing resolution per platform, prompt
+  posting + callback round trip on both platforms.
 
-## Slice 1 — GitHub App adapter
+## Slices
+
+### Slice 1 — Backend skeleton + GitHub App adapter
 
 The bigger pain-relief slice. Ship first.
 
 **Steps:**
 
-1. `src/brr/gates/cloud.py` — the cloud gate adapter (lifecycle,
-   long-poll loop, response-post loop, cursor persistence). Common
-   to both adapters: TG and GH both use this same gate; the
-   webhook side is brr.run's concern, not the daemon's.
-2. CLI plumbing: `brr connect brr.run`, `brr accounts pair github`.
-   The pair verb opens the install URL in the user's browser and
+1. `src/brr_run/` skeleton: FastAPI app, postgres schema
+   (accounts, projects, daemons, bindings, events, audit_log),
+   alembic migrations, Upsun deployment template at
+   `deploy/upsun/`.
+2. `src/brr/gates/cloud.py` — the cloud gate adapter
+   (lifecycle, long-poll loop, response-post loop, cursor
+   persistence). Common to GH and TG; the webhook side is
+   brr.run's concern, not the daemon's.
+3. CLI plumbing: `brr accounts pair github`, `brr accounts
+   list-projects`, `brr accounts bind-repo`. The pair verb
+   opens the GH App install URL in the user's browser and
    waits for brr.run to confirm the install webhook landed.
-3. brr.run-side webhook receiver for `installation`,
+4. brr.run-side webhook receiver for `installation`,
    `installation_repositories`, `issue_comment`,
-   `pull_request_review_comment` events; normalisation to the event
-   shape from the design.
-4. brr.run-side response forwarder: post comment / review reply on
-   the originating PR / issue.
-5. End-to-end smoke test: comment `@brr <task>` on a test repo →
-   task lands in daemon inbox → daemon completes task → response
-   posts back as a PR comment.
+   `pull_request_review_comment` events; normalisation to the
+   event shape from the design.
+5. brr.run-side response forwarder: post comment / review reply
+   on the originating PR / issue.
+6. Repo-project binding: auto-bind on `installation` and
+   `installation_repositories` events (one repo → one project,
+   defaulting to a project named after the repo); re-bindable
+   via `brr accounts bind-repo <installation_id> <repo>
+   <project>`.
+7. End-to-end smoke test: install brr.run GitHub App on a test
+   repo → comment `@brr <task>` → event resolves to project →
+   task lands in daemon inbox → daemon completes task →
+   response posts back as a PR comment.
 
-**Estimate.** ~600-800 LOC daemon-side (mostly the cloud gate
-adapter, mostly shared with slice 2); ~500-700 LOC brr.run-side
-(webhook handler + GitHub App JWT exchange + comment-post logic).
+**Estimate.** ~700-900 LOC daemon-side (cloud gate adapter +
+CLI verbs); ~1000-1400 LOC brr.run-side (FastAPI skeleton +
+postgres schema + webhook handler + GH App JWT exchange +
+comment-post logic + binding management).
 
-## Slice 2 — Telegram bot adapter (fast-follow)
+### Slice 2 — Telegram bot adapter (fast-follow)
 
 One to two weeks after slice 1 ships. Reuses the brr.run backend
-entirely; adds one webhook endpoint and one platform-specific
-response formatter.
+entirely; adds one webhook endpoint, one platform-specific
+response formatter, and the chat-binding flow.
 
 **Steps:**
 
 1. brr.run-side webhook receiver for Telegram Bot API updates;
    normalisation to the same event shape used for GH.
-2. brr.run-side response forwarder: post to `chat_id` via Telegram
-   `sendMessage` API.
-3. `brr accounts pair telegram` CLI flow (pairing-code path from
-   the design).
-4. Daemon-side: no new code — the cloud gate adapter handles TG
+2. brr.run-side response forwarder: post to `chat_id` via
+   Telegram `sendMessage` API.
+3. `brr accounts pair telegram` CLI flow (pairing-code path
+   from the design).
+4. Telegram-specific command grammar: `/start <code>` for
+   pairing, `/connect <project>` for chat-to-project binding,
+   `/project <name> <task>` per-message override, `@<name>
+   <task>` terse form, `/projects` and `/status` for
+   introspection.
+5. Daemon-side: no new code — the cloud gate adapter handles TG
    events the same as GH events; the event shape is uniform.
-5. Smoke test mirroring slice 1.
+6. Smoke test mirroring slice 1, plus routing-specific cases:
+   one bot serving two of the user's projects; per-message
+   override; sticky binding survives bot restart.
 
 **Estimate.** Daemon-side ~0 new code (reuse from slice 1).
-brr.run-side ~200-300 LOC.
+brr.run-side ~500-700 LOC (webhook + sendMessage + command
+parser + binding management).
+
+### Slice 3 — Permission-prompt API + gate-side integration
+
+Wires the failover-compute permission gate (from
+[`plan-failover-compute.md`](plan-failover-compute.md) Slice 2)
+to actually surface via the gate. This slice depends on the
+failover-compute Slice 2 landing first.
+
+**Steps:**
+
+1. `POST /v1/internal/prompts` endpoint that takes a prompt
+   payload (event_id, est_cost, est_runtime, current-month
+   usage) and selects the appropriate gate to post via.
+2. Telegram-side prompt formatter: message text + two inline
+   buttons (`Approve` / `Queue`); optional "Never ask under
+   $X" inline button on first prompt.
+3. GitHub-side prompt formatter: issue comment text describing
+   the spawn + command syntax (`@brr-bot approve` /
+   `@brr-bot queue`); follows the same comment thread.
+4. `POST /v1/webhooks/prompts/{platform}/{prompt_id}/{outcome}`
+   endpoints — both signed by the originating platform; on
+   resolution, `PATCH /v1/internal/prompts/{prompt_id}` and
+   trigger the spawn or queue per outcome.
+5. Prompt timeout handling: 6h TTL; on expiry, auto-queue
+   with a "permission timed out, event queued" notification
+   via the gate.
+6. Cost transparency in the prompt payload: include
+   est_runtime, est_cost, current-month usage ("23/100 spawns
+   used") prominently.
+
+**Estimate.** ~400-600 LOC backend (prompt endpoints +
+gate-specific formatters + callback handlers).
 
 ## What ships where
 
-| Component | Repo |
-|-----------|------|
-| `src/brr/gates/cloud.py` — cloud gate adapter | brr core |
-| `brr connect brr.run` CLI verb | brr core |
-| `brr accounts pair {telegram,github}` CLI verbs | brr core |
-| `src/brr/docs/managed-mode.md` | brr core (bundled docs) |
-| brr.run backend (FastAPI + postgres) | separate `brr-run` repo, OSS, reference implementation for self-hosters |
+| Component | Lives at |
+|-----------|----------|
+| `src/brr/gates/cloud.py` — cloud gate adapter | `src/brr/` |
+| `brr accounts pair {telegram,github}` CLI verbs | `src/brr/cli/accounts.py` |
+| `brr accounts {list-projects,bind-chat,bind-repo}` CLI verbs | `src/brr/cli/accounts.py` |
+| `src/brr/docs/managed-mode.md` (pairing + routing + prompt UX) | `src/brr/docs/` |
+| brr.run backend (FastAPI + postgres + workers) | `src/brr_run/` |
+| Multi-project routing tables + binding endpoints | `src/brr_run/` |
+| Permission-prompt API + gate-side formatters | `src/brr_run/` |
+| Upsun deployment template for brr.run backend | `deploy/upsun/` |
 | Hosted bot operations (running `@brr_bot`, the brr.run GitHub App) | brr.run operator — not a code artifact |
+
+Monorepo layout per
+[`decision-monorepo-structure.md`](decision-monorepo-structure.md):
+backend lives at `src/brr_run/` alongside the daemon at
+`src/brr/`, sharing the kb and `pyproject.toml`.
 
 ## Out of scope
 
@@ -116,43 +211,83 @@ brr.run-side ~200-300 LOC.
   rollout — likely one to two months after launch each).
 - The `fanout` multi-daemon routing policy (deferred per the
   design page).
-- A web dashboard for managing daemons / bindings / pairings —
-  CLI-first; dashboard is v-next.
-- Payment / billing automation (manual invoicing for launch tier).
+- Web dashboard for managing daemons / bindings / pairings —
+  lives in
+  [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md);
+  CLI-first for this plan.
+- Payment / billing automation (manual invoicing for launch
+  tier per
+  [`decision-pricing-shape.md`](decision-pricing-shape.md)).
+- Failover spawn invocation (separated into
+  [`plan-failover-compute.md`](plan-failover-compute.md); this
+  plan only ships the prompt API surface).
+- BYO compute (deferred per
+  [`decision-pricing-shape.md`](decision-pricing-shape.md)).
 
 ## Risks
 
 - **Wire-format churn.** If
   [`design-brr-run-protocol.md`](design-brr-run-protocol.md)
-  changes during the build, both sides need coordinated releases.
-  Mitigation: lock the design with a `Status: accepted` banner
-  before starting slice 1.
-- **GitHub App approval delays.** Public GitHub Apps need a manual
-  approval step for verified-creator badge; not blocking for
-  launch but worth filing early.
-- **Per-tenant blast radius.** A bug in brr.run's account scoping
-  could leak events across accounts. Mitigation: query-level
-  account context, integration tests per endpoint, audit logging
-  from day one.
+  changes during the build, both sides need coordinated
+  releases. Mitigation: lock the design with a `Status:
+  accepted` banner before starting slice 1.
+- **GitHub App approval delays.** Public GitHub Apps need a
+  manual approval step for verified-creator badge; not blocking
+  for launch but worth filing early.
+- **Per-tenant blast radius.** A bug in brr.run's account
+  scoping could leak events across accounts. Mitigation:
+  query-level account context, integration tests per endpoint,
+  audit logging from day one, data-minimization principle from
+  `design-brr-run-protocol.md` baked into every endpoint.
+- **Multi-project routing confusion.** Users with multiple
+  projects could mis-bind chats and have events go to the
+  wrong project. Mitigation: clear `/status` command to show
+  the current binding; clear errors on mis-bind ("this chat is
+  bound to <project-X>; switch with `/connect <project-Y>`");
+  prefix override (`/project <name>`) as a safety valve.
+- **Permission-prompt fatigue.** If the default mode is `ask`
+  and users get prompted constantly, they'll either disable
+  failover or jump to `auto-approve-always` without reading the
+  cost. Mitigation: prompt copy frames usage clearly
+  ("23/100 free spawns this month"); first-prompt "Never ask
+  under $X" shortcut nudges toward `auto-approve-under-usd`.
+- **Telegram message-ordering on /project prefix.** If a user
+  sends `/project foo <task>` then a follow-up reply without
+  prefix, the reply may go to the original sticky-bound
+  project, not `foo`. Mitigation: document this behaviour
+  explicitly; revisit if user feedback shows it's confusing.
 
 ## Read next
 
 1. [`design-brr-run-protocol.md`](design-brr-run-protocol.md) —
-   the contract this plan implements.
+   the contract this plan implements (Gates + Multi-project
+   routing + Permission-prompt endpoints sections).
 2. [`plan-failover-compute.md`](plan-failover-compute.md) — the
-   sister plan covering Surfaces B + C on top of the same
+   sister plan covering managed compute on top of the same
    backend skeleton this plan stands up.
-3. [`subject-managed-mode.md`](subject-managed-mode.md) — the
-   strategic context (three paid surfaces, work-continuity
-   frame).
-4. [`decision-pricing-shape.md`](decision-pricing-shape.md) — the
-   pricing model that drives the free-tier rate caps.
+3. [`plan-brr-run-dashboard-mvp.md`](plan-brr-run-dashboard-mvp.md)
+   — the sister plan for the dashboard view of all of this.
+4. [`subject-managed-mode.md`](subject-managed-mode.md) — the
+   strategic context (free dispatcher + paid managed compute,
+   work-continuity frame).
+5. [`decision-pricing-shape.md`](decision-pricing-shape.md) —
+   the pricing model that drives the free-tier rate caps and
+   the 100-spawn cap the prompt API references.
+6. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+   — where `src/brr_run/` lives.
 
 ## Lineage
 
 - 2026-05-22 — drafted as part of the managed-mode KB shape
   rollout.
-- 2026-05-22 — repointed at `design-brr-run-protocol.md` (renamed
-  from `design-managed-gates.md`) and cross-linked to the new
-  `plan-failover-compute.md` sister plan after the work-
-  continuity reframe expanded the design's scope.
+- 2026-05-22 — repointed at `design-brr-run-protocol.md`
+  (renamed from `design-managed-gates.md`) and cross-linked to
+  the new `plan-failover-compute.md` sister plan after the
+  work-continuity reframe expanded the design's scope.
+- 2026-05-25 — added multi-project routing UX (chat / repo
+  binding mechanics, `/connect`, `/project`, `@<name>` command
+  grammar) and permission-prompt API + gate-side integration as
+  Slice 3. Repointed at the reshaped protocol + pricing +
+  monorepo decisions. brr.run backend repo replaced with
+  `src/brr_run/` in the monorepo. Third reframe breadcrumb in
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
