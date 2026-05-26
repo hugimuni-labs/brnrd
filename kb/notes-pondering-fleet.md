@@ -1283,11 +1283,12 @@ design page:
 ## 2. Cloud execution candidates — what brr has to add per platform
 
 > **PROMOTED on 2026-05-22 — see
-> [`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
-> for the durable reference (cross-adapter patterns + per-platform
-> briefs), and [`plan-env-fly-machines.md`](plan-env-fly-machines.md)
-> for the first concrete adapter plan. Body below retained as
-> provenance — the structured form lives in the promoted pages.**
+> [`research-cloud-envs.md`](research-cloud-envs.md) for the durable
+> reference (cross-adapter patterns + per-platform briefs; formerly
+> `research-cloud-runner-patterns.md`), and
+> [`plan-env-fly-machines.md`](plan-env-fly-machines.md) for the first
+> concrete adapter plan. Body below retained as provenance — the
+> structured form lives in the promoted pages.**
 
 This rewrites the older §10 plugin-candidate list around a single
 question: *for each platform, what is the minimum brr has to add to
@@ -1701,7 +1702,7 @@ highest priority first:
   parser). Backend skeleton is a FastAPI app + postgres; sized in
   the chat thread that produced this guide.
 - **Managed mode (Dimension B — BYO cloud execution).** Promote
-  `research-cloud-runner-patterns.md` (lifting §2 of this page into
+  `research-cloud-envs.md` (lifting §2 of this page into
   a durable reference: credential / repo / result-delivery patterns
   plus per-platform deltas) and the first adapter
   `plan-env-fly-machines.md`. **No new design page needed** —
@@ -1746,9 +1747,9 @@ The old §7 (brnrd-as-service productisation note), §8 (decentralised
 merge concrete examples), §9 (older re-promotion guide), and §10
 (plugin candidates for `brr.envs`) sections were promoted out as
 part of the 2026-05-22 reshape: §10 lifted into
-[`research-cloud-runner-patterns.md`](research-cloud-runner-patterns.md)
-(with the Daytona dogfood candidate joined by Fly Machines / Modal /
-E2B / Codespaces / vanilla VMs); §7-§9 absorbed into the new §7
-re-promotion guide above and the
+[`research-cloud-envs.md`](research-cloud-envs.md) (then named
+`research-cloud-runner-patterns.md`, with the Daytona dogfood
+candidate joined by Fly Machines / Modal / E2B / Codespaces / vanilla
+VMs); §7-§9 absorbed into the new §7 re-promotion guide above and the
 [`subject-managed-mode.md`](subject-managed-mode.md) hub's "Boundary"
 section.

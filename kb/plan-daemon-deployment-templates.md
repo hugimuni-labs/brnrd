@@ -1,12 +1,15 @@
 # Plan: daemon deployment templates
 
+Status: accepted on 2026-05-26 (launch-nice-to-have; demoted from
+the laptop-down hot path on 2026-05-22).
+
 Small content / template work that cashes out the *cloud-first
 daemon hosting* story from
 [`subject-managed-mode.md`](subject-managed-mode.md) → Daemon
 hosting: one `brr/daemon` Docker image variant + a `deploy/` folder
 of platform-specific templates + a "deploying brr" docs page.
 
-## Status
+## Scope and demotion rationale
 
 **Demoted to launch-nice-to-have on 2026-05-22; accepted
 2026-05-26** (locked in PR #40 MR review, locking pass IV —
