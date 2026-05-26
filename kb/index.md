@@ -480,7 +480,8 @@ dive-in map) and are stable until something contradicts them.
   status | logs | uninstall` through the user service when
   installed, falling back to the foreground supervisor when not.
   The macOS LaunchAgent counterpart
-  (`~/Library/LaunchAgents/dev.brnrd.brr.plist`) remains paired
+  (`~/Library/LaunchAgents/dev.brnrd.brr.plist`), registry-aware
+  multi-project runtime, and daemon project-management verbs remain
   follow-up work; Windows is deferred. Tracked at
   [issue #29](https://github.com/Gurio/brr/issues/29).
 - [Config layout design](design-config-layout.md) —
