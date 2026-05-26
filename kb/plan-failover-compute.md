@@ -122,9 +122,18 @@ parallel-shipped with managed".
   bonus, 30-day expiry, plus any purchased top-ups;
   Subscribed: 300 credits/month from the subscriber grant
   plus any purchased top-ups), monthly cost cap, and the
-  five approval modes (`ask`, `auto-approve-always`,
+  **six approval modes** (`ask`, `auto-approve-always`,
   `auto-approve-under-usd`, `auto-approve-under-per-day`,
-  `never`).
+  `auto-approve-below-monthly-limit`, `never`). Per-tier
+  launch defaults per
+  [`decision-pricing-shape.md`](decision-pricing-shape.md) §
+  "Launch-tunable knobs": Free defaults to **`ask`** (no
+  monthly grant → no natural envelope to auto-approve
+  within); Subscribed defaults to
+  **`auto-approve-below-monthly-limit`** (the 300-credit
+  monthly grant + any purchased balance is the natural
+  envelope; auto-approve any spawn whose estimated cost
+  fits, falls back to `ask` once exhausted).
 - Subscription endpoints
   (`/v1/accounts/subscription[/checkout|cancel|resume|portal]`)
   live and the brnrd-side Stripe webhook receiver handles
@@ -160,7 +169,8 @@ parallel-shipped with managed".
   - `brr brnrd creds remove <id>`
   - `brr brnrd policy --enable | --disable | --mode <m>
     | --monthly-cap N | --monthly-cost-cap-usd N
-    | --auto-approve-under-usd N | --auto-approve-under-per-day N`
+    | --auto-approve-under-usd N | --auto-approve-under-per-day N
+    | --auto-approve-below-monthly-limit`
   - `brr brnrd subscription status | start | cancel | resume | portal`
     (+ `brr brnrd subscribe` as shortcut for `subscription start`)
   - `brr brnrd audit [--since <date>]`
@@ -456,12 +466,22 @@ app + their own credential vault.
   add a `brr brnrd creds test <id>` CLI that runs a noop
   task against the credential and surfaces auth errors before
   the user discovers them at failover time.
-- **Permission prompt fatigue.** If `ask` is the default mode,
-  users get a prompt every time their laptop is asleep — fast
-  path to disable failover or hit "auto-approve-always" without
-  reading the cost. Mitigation: default to `ask` with a clear
-  "Never ask again under $X" shortcut on the first prompt; nudge
-  toward `auto-approve-under-usd` mode after first approve.
+- **Permission prompt fatigue.** Mitigated by per-tier
+  defaults per
+  [`decision-pricing-shape.md`](decision-pricing-shape.md) §
+  "Launch-tunable knobs": Free defaults to `ask` (the
+  conservative default for accounts with no monthly compute
+  envelope); Subscribed defaults to
+  `auto-approve-below-monthly-limit`, which uses the existing
+  300-credit monthly grant + any purchased balance as the
+  natural auto-approve envelope. Subscribers don't see a
+  permission prompt for routine in-budget spawns; they only
+  see one when the monthly envelope is exhausted (which
+  becomes the upsell moment: top up to keep auto-approving,
+  or wait for the cycle reset). The first-prompt shortcut
+  ("Never ask again under $X") still exists for users who
+  want a tighter per-spawn cap on top of the monthly
+  envelope.
 - **Free-tier abuse.** 10 spawn-credits one-time per Free
   account is intentionally bounded by signup count, not by
   active-user retention — Free is the try-it-out path, the
@@ -613,3 +633,25 @@ app + their own credential vault.
   unlimited as soon as they spent smth small but reasonable
   on credits" + "the one time grant on free is probably good"
   + "we maybe need to implement project ownership."
+- 2026-05-26 (locking pass III — sixth approval mode +
+  per-tier defaults). **Sixth approval mode
+  `auto-approve-below-monthly-limit` added** alongside the
+  existing five (`ask`, `auto-approve-always`,
+  `auto-approve-under-usd`, `auto-approve-under-per-day`,
+  `never`). Semantics: auto-approve any spawn whose estimated
+  cost fits inside the account's remaining monthly grant +
+  any purchased balance; fall back to `ask` once the
+  envelope is exhausted, until cycle reset or a top-up. The
+  per-tier launch defaults
+  ([`decision-pricing-shape.md`](decision-pricing-shape.md) §
+  "Launch-tunable knobs") move from "ask everyone" to "ask
+  for Free, auto-approve-below-monthly-limit for Subscribed"
+  — subscribers stop getting routine in-budget prompts; the
+  prompt appears only at the natural upsell moment when the
+  monthly envelope is exhausted. CLI flag
+  `--auto-approve-below-monthly-limit` added to the
+  `brr brnrd policy set` verb. Permission-prompt-fatigue
+  risk section rewritten to point at the per-tier default
+  shape as the mitigation. Driven by the user's
+  "auto-approve-below-monthly-limit is a good idea for a
+  user facing config property."

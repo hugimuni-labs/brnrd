@@ -227,7 +227,22 @@ dive-in map) and are stable until something contradicts them.
   from flat 10 to **25 default / unlimited after $10
   cumulative top-ups**, added binding-uniqueness multi-
   account abuse mitigation, and codified the dashboard +
-  gate honest-nudge UX with explicit anti-patterns.
+  gate honest-nudge UX with explicit anti-patterns. Locking
+  pass III on 2026-05-26 (the same day's MR-review pass)
+  closed 7 of 8 open questions by locking launch-default
+  values + adding `BRNRD_*` env knobs for post-launch
+  tuning (Free signup bonus = 10, project-cap unlock =
+  $10, included compute = 300, supporter cohort = 200,
+  dormancy = 24/36, Free project cap = 3), added the
+  **`auto-approve-below-monthly-limit`** permission mode
+  (default for Subscribed; uses the monthly grant +
+  purchased balance as the natural auto-approve envelope),
+  **reframed event-cap overage from hard-queue to
+  soft-throttle that keeps events flowing** at a slow rate
+  with the nudge as the resolution to the throttled-flow
+  situation (not as a paywall), added a Stripe-integrated-
+  billing callout, and groomed the dashboard / subject-hub
+  duplications.
 - [Billing design](design-billing.md) — *proposed*. **Two
   billing legs**: subscription (Stripe recurring,
   monthly/annual, Customer Portal for self-service) and credit

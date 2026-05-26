@@ -14,14 +14,17 @@ margin).** Two billing legs that back the pricing model in
 [`decision-pricing-shape.md`](decision-pricing-shape.md):
 
 1. **Subscription** — $5/month recurring Stripe subscription
-   ($50/year annual alternative). Unlocks bigger project
-   headroom (10 vs 3 on Free), generous event + compute
-   included grants, full dashboard, 90-day audit, email
-   support. Reshaped on 2026-05-25 (pass-4 follow-up, third
-   wave) after the credits-only model proved self-defeating
-   for sustainability; reshaped again 2026-05-26 to drop the
+   ($50/year annual alternative) for the first 200 supporters,
+   then $7/$70 for the public cohort. Unlocks bigger project
+   headroom (25 vs 3 on Free, unlimited after $10 of
+   cumulative top-ups), generous event + compute included
+   grants, full dashboard, 90-day audit, email support.
+   Reshaped on 2026-05-25 (pass-4 follow-up, third wave)
+   after the credits-only model proved self-defeating for
+   sustainability; reshaped again 2026-05-26 to drop the
    "Plus" branding and to land on $5/month + 300 included
-   credits.
+   credits; refreshed 2026-05-26 (locking pass II) with the
+   tiered project cap + signup-bonus shape.
 2. **Credit wallet** — $0.01/credit, one-shot Stripe Checkout
    top-ups, no card-on-file by default (except opt-in
    auto-topup). Backs metered compute over the included grant
@@ -895,6 +898,36 @@ by cash-runway management, not by escrow-shaped accounting.
 The activity-gating logic that the recurring grant required
 is no longer relevant.
 
+## Launch defaults + tunable knobs
+
+All launch-shape numbers below are sourced from
+[`decision-pricing-shape.md`](decision-pricing-shape.md) §
+"Launch-tunable knobs" — that page is the canonical list,
+this page is the implementation. Each value the billing
+layer reads is wired to a `BRNRD_*` env knob so ops can
+re-tune without a code release:
+
+| Used by | Env var | Default | Source line in pricing-shape |
+|---------|---------|---------|------------------------------|
+| Free signup-bonus grant | `BRNRD_FREE_SIGNUP_BONUS_CREDITS` | `10` | one-time grant on Free account creation |
+| Free signup-bonus expiry | `BRNRD_FREE_SIGNUP_BONUS_EXPIRY_DAYS` | `30` | days from grant before expiry |
+| Project-cap unlock threshold | `BRNRD_PROJECT_CAP_UNLOCK_USD` | `10` | cumulative top-up $ that flips `project_cap_unlocked` |
+| Subscriber-monthly grant size | `BRNRD_SUBSCRIBER_MONTHLY_CREDITS` | `300` | credits granted on every renewal |
+| Supporter cohort size | `BRNRD_SUPPORTER_COHORT_SIZE` | `200` | atomic counter; after this, new subs default to public price |
+| Supporter price (monthly USD) | `BRNRD_SUBSCRIBER_PRICE_SUPPORTER_USD` | `5` | grandfathered forever for the first cohort |
+| Public price (monthly USD) | `BRNRD_SUBSCRIBER_PRICE_PUBLIC_USD` | `7` | second Stripe `Price` ID |
+| Annual discount %      | (derived; both prices map to ~17% off via fixed `$50` / `$70` annual `Price` IDs) | ~17% | |
+| Account-dormancy pause | `BRNRD_DORMANCY_PAUSE_MONTHS` | `24` | months inactive → pause services, preserve `purchased` |
+| Account-dormancy prompt | `BRNRD_DORMANCY_PROMPT_MONTHS` | `36` | months inactive → dashboard reactivation prompt persists |
+
+The billing service reads these via the standard env-config
+loader on startup; values are immutable for the lifetime of
+a process (no hot-reload). Re-tuning is a config change +
+rolling restart, not a code change. Two prices stay distinct
+Stripe `Price` objects (cohort-grandfathering only works if
+each subscriber's `subscription.items[].price` references the
+price they signed up at).
+
 ## What we do NOT do at launch
 
 - **Card-on-file for wallet by default**. Only opt-in via
@@ -1096,3 +1129,18 @@ is no longer relevant.
   ownership" + "could we have a separate bank account for
   the promise" + "start a bit stingier and relax as we go"
   + "throttling is a good idea, like it" framing.
+- 2026-05-26 (locking pass III — env knobs + stale claims).
+  **New "Launch defaults + tunable knobs" section** ties
+  every launch-shape number this page implements to a
+  `BRNRD_*` env var (Free signup-bonus credits + expiry,
+  project-cap unlock USD, subscriber monthly grant size,
+  supporter cohort size, both per-cohort prices, dormancy
+  timings). Canonical list lives in
+  [`decision-pricing-shape.md`](decision-pricing-shape.md) §
+  "Launch-tunable knobs"; this page wires each value to the
+  ledger / Stripe-product / dormancy-state-machine code that
+  reads it. **Stale "(10 vs 3 on Free)" project-cap mention
+  in the opening "Subscription" bullet** updated to the
+  locked tiered shape "25 (unlimited after $10 of cumulative
+  top-ups)". Driven by the user's "lock these as defaults +
+  config knobs" MR-review feedback.

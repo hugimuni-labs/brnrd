@@ -141,14 +141,22 @@ it.
 
 ## Allowance gauges + honest-nudge UX
 
-The dashboard surfaces allowance consumption as a first-class
-view AND inline gauges across every other view where they're
-relevant. Nudges toward subscribe / top-up appear when the
-user crosses an allowance threshold. **Honest nudges, not dark
-patterns** — see
-[`decision-pricing-shape.md`](decision-pricing-shape.md) §
-"Dashboard nudges + transparency" for the full policy +
-anti-pattern list.
+> **Canonical policy lives in
+> [`decision-pricing-shape.md`](decision-pricing-shape.md) §
+> "Dashboard nudges + transparency"** — that page owns the
+> trigger / copy / anti-patterns table. This section spells out
+> only what the dashboard has to *build* to implement that
+> policy: gauge placements, banner-component shape, dismissal
+> persistence, and the gate-side footer wiring. If you want to
+> change *when* or *what* the dashboard nudges say, change the
+> pricing-shape page; if you want to change *how* the dashboard
+> renders the nudge, change here.
+
+The nudge is conceptually the **resolution to a real
+user-facing situation** (slow reply, paused compute, blocked
+action), not a generic upsell. The dashboard's job is to make
+that resolution visible + actionable without ever blocking
+the user's flow.
 
 ### Inline gauges (always visible, never blocking)
 
@@ -157,69 +165,54 @@ anti-pattern list.
   any cap), orange (≥90%), red (≥100%, throttle active).
   Click → allowance view.
 - **Project list view**: project-count gauge in the header
-  (`8 / 25 projects`).
+  (`8 / 25 projects` or `2 / 3 projects` etc., tier-aware).
 - **Failover view**: monthly events + monthly credits gauges
   alongside the existing usage line.
 - **Allowance view**: full gauges for events, credits (with
   bucket breakdown), and projects (with unlock progress for
   subscribers).
 
-### Banner nudges (per session, dismissible)
+One Jinja partial renders all four placements; differs only
+by which gauges are visible and at what size.
 
-Banners appear at the top of the page content area (not the
-nav). One banner max at a time; if multiple thresholds are
-crossed, prioritise the most severe (throttling active → near-
-cap → expiry-soon → upgrade-prompt). Dismissed banners stay
-hidden for the session; next session they reappear if the
-condition still holds.
+### Banner-nudge component
 
-| Trigger | Banner copy | CTA(s) |
-|---------|-------------|--------|
-| Free user ≥80 events this month | "You're at 80% of your free event allowance this month." | "Subscribe for 10K/mo →" |
-| Free user at 100 events this month (throttling) | "Events throttled — you've hit the Free cap. Throttle clears \<next month boundary\>." | "Subscribe to lift now →" / "Self-host instead" |
-| Free user's signup bonus consumed | "Free signup bonus consumed. Top up or subscribe for ongoing failover compute." | "Top up at $0.01/credit" / "Subscribe →" |
-| Free user's signup bonus expires within 5 days unused | "Your signup bonus expires \<date\> — \<N\> credits unused." | "Try failover now" / "Subscribe for ongoing credits →" |
-| Subscriber ≥80% of credit grant this month | "You've used 80% of this month's 300 included credits." | "Top up at $0.01/credit (~33 spawns per $1)" |
-| Subscriber at 25-project cap, not unlocked | (form-side error on 26th project creation) "Subscriber accounts support up to 25 projects by default — unlock unlimited after $10 of cumulative top-ups (\$X.XX to go)." | "Top up now →" |
-| Subscriber ≥80% of event cap | "You're at 80% of your monthly event cap." | "Email us — we'll raise it" |
-| Throttling active for ANY user | (red banner, not dismissible until cleared) "Your events are being throttled. \<reason + clear-time\>." | (contextual: subscribe / wait / contact) |
+The component the dashboard renders for each banner trigger
+defined in
+[`decision-pricing-shape.md`](decision-pricing-shape.md) §
+"Banner nudges (per session, dismissible)":
+
+- Top of the page content area (not the nav).
+- One banner max at a time; if multiple thresholds are
+  crossed, prioritise the most severe (throttle active →
+  near-cap → expiry-soon → upgrade-prompt).
+- Dismissal stored in the session cookie as a per-trigger key;
+  next session the banner reappears if the condition still
+  holds.
+- Dismiss affordance is the same visual weight as the CTA
+  affordance (per the canonical anti-pattern list).
+
+The banner copy + CTA strings live in a single Python module
+(e.g. `src/brnrd_web/nudges.py`) that mirrors the pricing-shape
+trigger table. When pricing-shape's table changes, this module
+gets a one-line update; nothing else moves.
 
 ### Gate-side nudge footer
 
-Beyond the dashboard, gate replies (TG / GH / Slack) include a
-one-line subscribe footer **only** when the user just hit a
-throttle / cap / out-of-credit event. Never on successful
-responses. Format:
+The gate adapter (TG / GH / Slack) reads from the same
+`nudges.py` module to construct the one-line footer it appends
+to soft-throttled / out-of-credit / cap-blocked replies. The
+reply itself is always delivered — events keep flowing during
+soft-throttle, per
+[`decision-pricing-shape.md`](decision-pricing-shape.md) §
+"Event-cap overage — soft throttle, not a hard wall"; the
+footer is the resolution to the "why is this slow?" / "why is
+this paused?" question, not a "subscribe to get a reply"
+gate.
 
-```
-[ this task was queued — Free event cap reached.
-  subscribe at brnrd.dev/subscribe → ]
-```
-
-Single line, plain text (rendered as such on each platform's
-formatting layer).
-
-### Anti-patterns (explicitly avoided)
-
-- **No modal blockers.** Banners are inline; the user is never
-  forced to click anything to continue.
-- **No cancellation friction.** Cancel button on the
-  subscription settings goes straight to Stripe Customer
-  Portal — no "are you sure?" + "what could we do better?"
-  + retention offers.
-- **No dismissal asymmetry.** The "dismiss" affordance is the
-  same visual weight as the "subscribe" affordance.
-- **No countdown timers / "limited-time" pressure.** The
-  early-supporter $5 price is mentioned matter-of-factly on
-  the subscribe page, not as a pressure tactic on the
-  dashboard.
-- **No silent throttling.** Every throttle is signposted; the
-  user always knows why a request was slowed / queued. This
-  is the load-bearing version of "honest" — the user is in
-  control of the situation because they understand it.
-- **No nudge spam.** At most one banner per page-load; at most
-  one gate footer per throttle event (not per queued event);
-  dismissed banners stay dismissed for the session.
+The dashboard surfaces the same footer-state as a session
+banner if the user opens the dashboard while in a throttled
+state, so the dashboard and the gate stay aligned.
 
 ## Slices
 
@@ -464,3 +457,25 @@ Steps:
   [`decision-pricing-shape.md`](decision-pricing-shape.md) §
   "Dashboard nudges + transparency" as the canonical policy
   source.
+- 2026-05-26 (locking pass III — grooming). **"Allowance
+  gauges + honest-nudge UX" section trimmed** to remove the
+  duplicated trigger / copy / anti-patterns table (canonical
+  home: `decision-pricing-shape.md` § "Dashboard nudges +
+  transparency"). This page now spells out only the *build*
+  side of the nudge UX — gauge component, banner component,
+  dismissal-persistence shape, gate-footer wiring — and
+  delegates the *policy* side (when to nudge, what to say,
+  what NOT to do) to pricing-shape. The two-place
+  duplication was the highest drift risk in the locking-
+  pass-II shape; the canonical-pointer shape removes it
+  without losing the implementation detail the slice-3
+  work needs. Gate-side footer also reworded to match the
+  pricing-shape soft-throttle reframe — events still flow
+  during soft-throttle, the footer is the resolution to a
+  throttled-flow situation rather than a paywall. Banner
+  copy + gate footer strings now live in a single
+  `src/brnrd_web/nudges.py` module that the gate adapter
+  AND the dashboard both read from, so the two surfaces
+  stay aligned. Driven by the user's "I think there's a
+  lot of data duplication ... maybe we still could prune
+  and groom it" MR-review feedback.
