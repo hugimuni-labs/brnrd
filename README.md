@@ -1,5 +1,7 @@
 # brr
 
+![Local agents go brr](https://hugimuni.fr/brr-logo.gif)
+
 Structured AI agent playbook with persistent knowledge base and remote execution.
 
 brr produces `AGENTS.md` — a playbook that encodes your project's conventions,
