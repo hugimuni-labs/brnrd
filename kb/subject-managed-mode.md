@@ -83,8 +83,8 @@ name) with metered compute on top of either; full table in
 
 | Surface | What it is | What Free gets | What Subscribed ($5/mo, or $50/yr) gets | Adoption pain it removes |
 |---------|-----------|----------------|----------------------------------------|--------------------------|
-| **A. Managed dispatcher** — hosted bots + multi-project routing + permission prompts + audit | Hosted GH App + Telegram bot routing events to a per-account brnrd inbox, multi-project routing on top of one bot per platform, permission prompts before failover spawns, audit log | Up to 3 projects, 100 events/month, basic read-only dashboard, 7-day audit | Up to 10 projects, 10K events/month, full dashboard (cost charts, cross-project view, permission-prompt customisation), 90-day audit, email support | Per-user GH App / BotFather setup — currently the longest friction in adoption — AND "my laptop has to be up" — together, in one flow |
-| **B. Compute** — failover spawn, two sub-options for subscribers | When the user's daemon is offline and the user opts in, brnrd dispatches a per-task ephemeral sandbox. **Managed (default)**: spawns on brnrd-owned Fly Machines pool, decrypts user's AI credentials into the sandbox, runs the task, returns response via the gate. **BYO (subscriber opt-in)**: subscriber stores a cloud-platform credential in the vault (`brr brnrd creds add cloud-platform --provider fly --token …`); the same dispatcher invokes the same env class with the subscriber's token; spawn runs in subscriber's own cloud account; user pays the cloud provider directly. Same env class, two callers per the "Caller axis" pattern in [`research-cloud-envs.md`](research-cloud-envs.md). | Managed only; 5 spawn-credits/month included ($0.05) | Managed by default with 300 spawn-credits/month included ($3 of compute). OR BYO Fly (subscriber opt-in) — zero compute-side billing, pure subscription revenue, same dispatcher | "I want managed continuity without a credit card surprise" — subscribers get generous included compute on managed; "I already have a Fly account and don't want compute markup" — subscribers BYO and the wallet is bypassed entirely |
+| **A. Managed dispatcher** — hosted bots + multi-project routing + permission prompts + audit | Hosted GH App + Telegram bot routing events to a per-account brnrd inbox, multi-project routing on top of one bot per platform, permission prompts before failover spawns, audit log | Up to 3 projects, 100 events/month, basic read-only dashboard with allowance gauges, 7-day audit | **25 projects** (unlimited after $10 of cumulative top-ups), 10K events/month, full dashboard (cost charts, cross-project view, permission-prompt customisation, allowance gauges), 90-day audit, email support | Per-user GH App / BotFather setup — currently the longest friction in adoption — AND "my laptop has to be up" — together, in one flow |
+| **B. Compute** — failover spawn, two sub-options for subscribers | When the user's daemon is offline and the user opts in, brnrd dispatches a per-task ephemeral sandbox. **Managed (default)**: spawns on brnrd-owned Fly Machines pool, decrypts user's AI credentials into the sandbox, runs the task, returns response via the gate. **BYO (subscriber opt-in)**: subscriber stores a cloud-platform credential in the vault (`brr brnrd creds add cloud-platform --provider fly --token …`); the same dispatcher invokes the same env class with the subscriber's token; spawn runs in subscriber's own cloud account; user pays the cloud provider directly. Same env class, two callers per the "Caller axis" pattern in [`research-cloud-envs.md`](research-cloud-envs.md). | Managed only; **10 spawn-credit one-time signup bonus (30-day expiry)** + optional pay-as-you-go top-ups at $0.01/credit | Managed by default with 300 spawn-credits/month included ($3 of compute). OR BYO Fly (subscriber opt-in) — zero compute-side billing, pure subscription revenue, same dispatcher | "I want managed continuity without a credit card surprise" — subscribers get generous included compute on managed; "I already have a Fly account and don't want compute markup" — subscribers BYO and the wallet is bypassed entirely |
 
 Surface A is the entry point (Free tier is genuinely usable for
 hobbyists with 1-3 projects; the subscription unlocks bigger
@@ -435,9 +435,10 @@ verb taxonomy is in
 Two billing legs, each matched to its cost shape:
 
 - **Subscription** ($5/month or $50/year via Stripe recurring)
-  covers the platform — bigger project headroom (10 vs 3 on
-  Free), full dashboard, 10K events/month, 300 spawn-credits/
-  month included, 90-day audit retention, email support.
+  covers the platform — bigger project headroom (25 vs 3 on
+  Free, unlimited after $10 cumulative top-ups), full
+  dashboard, 10K events/month, 300 spawn-credits/month
+  included, 90-day audit retention, email support.
   Cancel-anytime via the Stripe Customer Portal (`brr brnrd
   subscription portal`).
 - **Credit wallet** (1 credit = $0.01) covers compute over the
@@ -448,8 +449,9 @@ Two billing legs, each matched to its cost shape:
   pro-rata.
 
 Spawns debit at finalize from the appropriate sub-bucket
-(monthly grant first, then paid credits). Free credits draw
-first for Free users; subscriber credits draw first for
+(grant first, then purchased credits). The Free signup bonus
+draws first for Free users; the subscriber monthly grant
+draws first for
 subscribers; paid credits draw only after the included grant
 is exhausted.
 
@@ -559,14 +561,14 @@ docs needing to be Free-friendly.
 
 ## Dashboard
 
-The user-facing layer on top of brnrd. Minimal at launch (seven
+The user-facing layer on top of brnrd. Minimal at launch (eight
 views), HTMX-first to keep build/maintenance cost down,
 upgradable to SPA later if interactivity demands it.
 
-Seven views:
+Eight views:
 
 1. **Accounts / projects** — list, create, delete; per-project
-   daemon status, last activity.
+   daemon status, last activity; tier-aware project-cap gauge.
 2. **Project detail** — bindings (chats, repos), daemons (online
    status, last seen, name), recent events.
 3. **Task / event detail** — per-event timeline (received,
@@ -581,9 +583,22 @@ Seven views:
    usage; cost chart for the month.
 7. **Audit log** — paginated, filterable by project / platform /
    outcome / spend window.
+8. **Allowance + usage** — first-class read of standing against
+   tier limits: events bar, credits bar with bucket breakdown
+   (signup bonus / subscriber monthly / purchased), projects
+   bar (with the "to-unlock" delta if subscribed and not yet
+   unlocked), throttle banner when active, spend chart. Anchor
+   for the dashboard nudge UX (banner triggers when crossing
+   80% / 100% / out-of-bonus / out-of-credit thresholds —
+   honest nudges, no modals or dark patterns).
 
-Full breakdown in
-[`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md).
+Full breakdown — including the gauge component placement, the
+banner-nudge trigger / copy table, and the gate-side one-line
+subscribe footer — in
+[`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md);
+canonical nudge-UX policy lives in
+[`decision-pricing-shape.md`](decision-pricing-shape.md) §
+"Dashboard nudges + transparency."
 
 The dashboard is a *consumer* of the same REST endpoints the
 daemon-side cloud-gate adapter consumes — no separate API surface
@@ -690,7 +705,9 @@ In scope for managed-mode launch:
 - Subscription billing leg (Stripe recurring, monthly +
   annual, Customer Portal) on top of the existing credit
   wallet, per [`design-billing.md`](design-billing.md).
-- Dashboard MVP — seven views, HTMX-first.
+- Dashboard MVP — eight views, HTMX-first; includes the
+  allowance + usage view as a first-class surface with
+  honest-nudge banners.
 - `deploy/` templates folder and the `brr/daemon` Docker image
   variant (demoted to launch-nice-to-have, cloud-first users
   only).

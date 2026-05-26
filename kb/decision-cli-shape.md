@@ -79,8 +79,8 @@ brr brnrd ...                  # hosted-service management (new noun)
                                     # card update / invoice download / plan switch
   brr brnrd topup [<amount>]        # opens Stripe Checkout for a credit top-up
                                     # (compute overage on top of any tier)
-  brr brnrd balance                 # current credit balance (paid + subscriber_monthly +
-                                    # free_monthly split) + subscription tier
+  brr brnrd balance                 # current credit balance (purchased + subscriber_monthly +
+                                    # free_signup_bonus + promotional split) + subscription tier
   brr brnrd autotopup on|off|configure   # opt-in auto-top-up on low balance
 
 brr config ...                 # configuration introspection (new noun)

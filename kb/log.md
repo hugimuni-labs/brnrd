@@ -3795,3 +3795,184 @@ small over already-planned work: credential vault grows one
 LOC); the bucket model is a renaming + activity-gate + a
 small dormancy-state machine (~150 LOC for the dormancy
 state machine, otherwise mostly already-designed).
+
+## [2026-05-26] plan | brnrd pricing locking pass II — Free signup bonus, subscriber project cap unlock, honest-nudge UX, deferred-revenue accounting
+
+Second locking pass on the brnrd pricing + dashboard surfaces,
+in response to the user's "start a bit stingier and relax as
+we go" + "lets allow subscribers to have unlimited as soon as
+they spent smth small but reasonable on credits" + "a
+dashboard to show the allowance consumption and a nudge to go
+subscribe — that's not too mean, right?" + "throttling is a
+good idea, like it" framing. All decisions tighten the
+pricing model's economic shape AND its UX honesty.
+
+### What's locked
+
+1. **Free monthly grant reshaped into a one-time signup
+   bonus.** 10 credits granted on Free account creation,
+   expires 30 days from creation OR on full consumption,
+   whichever first. Replaces the prior "5/month activity-
+   gated recurring" shape. Bounded by signup count (not
+   active-user retention): at 100K signups total, cost caps
+   at $10K of compute (one-time, not per year). The
+   activity-gating logic is removed entirely. Tightening
+   reads as betrayal, loosening reads as winning — start
+   stingier than required, relax later if data warrants.
+2. **Subscriber project cap reshaped from flat to tiered.**
+   25 projects by default; **unlimited after $10 of
+   cumulative top-ups** (monotonic counter
+   `cumulative_purchased_usd_lifetime`, never decremented on
+   refund). `project_cap_unlocked` is a permanent flag once
+   set — survives subscription cancel + re-subscribe. 25
+   covers almost every solo developer; the unlock rewards
+   sustained-usage power users with no rent-seeking layer.
+3. **Multi-account abuse mitigation via binding uniqueness,
+   not fingerprinting.** Database-level UNIQUE constraints
+   on `(platform, chat_id)` for chat bindings and on
+   `repo_full_name` for repo bindings. Enforced anyway for
+   routing correctness; framing it as abuse-mitigation
+   gives ~95% of the value at zero incremental cost.
+   Conflict response returns an obfuscated
+   `bound_to_account` (no PII leak). Explicitly no
+   fingerprinting / IP velocity / "suspicious account"
+   flagging at launch.
+4. **Dashboard nudges + transparency policy codified.**
+   Eighth dashboard view added: "Allowance + usage" with
+   bucket-breakdown credits bar, events bar, projects bar
+   (with unlock-progress delta), throttle banner when
+   active. Banner-nudge triggers + copy table covers Free
+   80% / 100% events, bonus-consumed, bonus-expiring,
+   subscriber 80% credits, 25-project cap, 80% event cap.
+   Anti-patterns explicitly named: no modals, no
+   cancellation friction, no countdown timers, no silent
+   throttling, no nudge spam. Gate-side one-line subscribe
+   footer ONLY on throttle / cap / out-of-credit events.
+   "Throttling is always surfaced" is the load-bearing
+   honest pattern.
+5. **Deferred-revenue accounting framing locked in.**
+   Purchased credits + subscription fees are deferred
+   revenue under French GAAP / IFRS; Stripe Revenue
+   Recognition automates the daily proration on
+   subscriptions + per-debit recognition on purchased
+   credits; grants are NOT deferred revenue (they're
+   operational COGS). HugiMuni SAS chart-of-accounts
+   sketch included for the launch-stage accountant. Bank-
+   account separation (operating vs reserve) is called out
+   as treasury hygiene at ≥€10K MRR, NOT a legal
+   requirement at launch. No legal segregation needed for
+   SaaS prepaid balances in France.
+
+### Files updated
+
+- **`kb/decision-pricing-shape.md`** — tier table refreshed
+  (Free signup bonus, Subscribed 25/unlimited cap); two
+  new sections "Free compute grant — one-time signup
+  bonus, not recurring" + "Subscriber project cap — 25
+  default, unlimited after $10 of cumulative top-ups";
+  bucket table renamed `free_monthly` → `free_signup_bonus`;
+  new "Multi-account abuse mitigation: binding uniqueness,
+  not fingerprinting" section; new "Dashboard nudges +
+  transparency" section with trigger/copy table +
+  anti-patterns list + gate-side footer spec; open
+  questions updated for the cap-unlock threshold + signup-
+  bonus size; throttling explicitly noted as always
+  surfaced. Lineage entry appended.
+- **`kb/design-billing.md`** — bucket table renamed
+  `free_monthly` → `free_signup_bonus` with new mechanics
+  (one-time on Free signup, 30-day expiry, no activity
+  gating); audit ops renamed (`grant_free_signup_bonus` /
+  `expire_free_signup_bonus` with `reason` field);
+  balance-UI examples updated; debit priority updated. New
+  "Cumulative purchase tracking and the subscriber project
+  cap unlock" section codifies the two new monotonic
+  counters + the derived `project_cap_unlocked` flag +
+  effective-cap function + new `project_cap_unlocked`
+  audit op. New "Deferred-revenue accounting" section
+  (purchased + subscription = deferred revenue with
+  Stripe Revenue Recognition automation; grants = COGS;
+  HugiMuni SAS chart-of-accounts; bank separation as
+  treasury hygiene not legal requirement). Lineage entry
+  appended.
+- **`kb/design-brnrd-protocol.md`** — project-creation
+  endpoint updated to enforce the new effective project
+  cap (3 / 25 / unlimited) with `subscription_hint` field
+  on the 409 response. New "Binding uniqueness —
+  correctness + abuse-mitigation" section below the
+  bindings endpoints (global UNIQUE on `(platform,
+  chat_id)` and `repo_full_name`; 409 with obfuscated
+  `bound_to_account`; no fingerprinting at launch). "What
+  we DO hold" table grew a row for the cumulative-purchase
+  counters + their mirror keys in account-scope settings.
+  Lineage entry appended.
+- **`kb/design-config-layout.md`** — three new account-
+  scope read-only derived keys added:
+  `subscription.project_cap` (3 / 25 / unlimited),
+  `subscription.project_cap_unlocked` (boolean, permanent
+  once true), `cumulative_purchased_usd_lifetime`
+  (monotonic counter). All derived from the brnrd-side
+  ledger state. Lineage entry appended.
+- **`kb/plan-failover-compute.md`** — Free compute math
+  reframed around the 10-credit one-time signup bonus
+  (30-day expiry) replacing the prior 5/month activity-
+  gated recurring grant. Done-definition + Goals updated.
+  Project-cap shape updated to 25 / unlimited. Multi-
+  account abuse framing added to the Free-tier-abuse
+  risk note. Lineage entry appended.
+- **`kb/plan-brnrd-dashboard-mvp.md`** — eight views
+  instead of seven; new View 8 "Allowance + usage" with
+  full spec; new "Allowance gauges + honest-nudge UX"
+  section between Done-definition and Slices, with the
+  inline-gauge placements + banner-nudge trigger / copy /
+  CTA table + anti-patterns list + gate-side footer
+  spec; Slice 3 extended to deliver the allowance view +
+  inline gauge component + banner-nudge component, LOC
+  estimates raised; projects-view grew tier-aware
+  project-cap gauge. Lineage entry appended.
+- **`kb/subject-managed-mode.md`** — Surface A description
+  updated to "25 projects (unlimited after $10 of
+  cumulative top-ups)" and "basic dashboard with
+  allowance gauges"; Surface B description updated to
+  "10 spawn-credit one-time signup bonus (30-day
+  expiry)"; Dashboard section says "eight views" with
+  the allowance view as item 8; "Dashboard MVP" scope
+  entry updated; debit-priority blurb updated to use the
+  new bucket names.
+- **`kb/index.md`** — pricing-shape blurb refreshed with
+  Free signup bonus + 25/unlimited cap + binding
+  uniqueness + dashboard nudges + locking-pass-II
+  breadcrumb; billing blurb refreshed with the
+  `free_signup_bonus` bucket + cumulative purchase
+  tracking + deferred-revenue framing; dashboard MVP
+  blurb refreshed for eight views + honest-nudge UX.
+- **`kb/log.md`** — this entry.
+- **`kb/notes-pondering-fleet.md`** — locking-pass-II
+  breadcrumb appended to §1.
+
+### Why this lock-in matters
+
+The pricing shape locks the economics in the direction the
+business needs to go (stingier on Free, more rewarding on
+sustained-paying subscribers) while the dashboard nudges
+lock the UX in the direction the user trust needs to go
+(honest, always-signposted, no dark patterns). Together
+they answer the user's pivotal question — "is this too
+mean?" — with no: throttling that's announced is fair;
+caps that the user sees coming are fair; subscribe-prompts
+that respect dismissal are fair. The deferred-revenue
+framing tells the implementer + accountant how the
+purchased-credits-never-expire promise is held safely on
+the books at launch, and at what scale treasury hygiene
+should evolve into operating-vs-reserve account
+separation.
+
+Implementation cost is small over already-planned work:
+bucket rename + activity-gate removal + 30-day expiry is
+~50 LOC of mechanical changes; cumulative-purchase
+counter + cap-unlock flag is a few columns + ~30 LOC of
+threshold check; binding uniqueness is two DB UNIQUE
+constraints + ~20 LOC of conflict response handling;
+allowance dashboard view + gauge + banner components are
+~800 LOC of templates + routes + tests. Total ~1K LOC
+spread across the slice-3 dashboard work + the
+already-planned billing + protocol slices.
