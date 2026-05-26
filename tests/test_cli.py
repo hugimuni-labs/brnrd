@@ -40,6 +40,54 @@ def test_up_dev_reload_flag_passes_to_daemon(monkeypatch, tmp_path):
     assert calls == [(tmp_path, True)]
 
 
+def test_daemon_up_foreground_uses_existing_daemon_start(monkeypatch, tmp_path):
+    calls = []
+
+    monkeypatch.setattr("brr.cli._repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        "brr.daemon.start",
+        lambda repo_root, *, dev_reload=None: calls.append(
+            (repo_root, dev_reload),
+        ),
+    )
+
+    main(["daemon", "up", "--foreground", "--dev-reload"])
+
+    assert calls == [(tmp_path, True)]
+
+
+def test_daemon_install_dispatches_to_linux_installer(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        "brr.daemon_install.linux.install",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    main(["daemon", "install", "--no-start", "--no-linger"])
+
+    assert calls == [
+        {
+            "no_start": True,
+            "prompt_linger": False,
+            "assume_yes_linger": False,
+        },
+    ]
+
+
+def test_daemon_logs_dispatches_to_journalctl(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr("brr.daemon_install.linux.supported", lambda: True)
+    monkeypatch.setattr(
+        "brr.daemon_install.linux.logs",
+        lambda: calls.append("logs") or 0,
+    )
+
+    assert main(["daemon", "logs"]) == 0
+    assert calls == ["logs"]
+
+
 def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):
     calls = []
 
