@@ -153,7 +153,7 @@ Things we explicitly do **not** hold:
 - Response bodies (pass-through to gate; never persisted)
 - Conversation contents beyond the TG ring buffer (rendered live from platform APIs or git on demand)
 - Source code, prompts, agent traces, repo state (lives on daemon + git remote)
-- Cloud-platform tokens (Fly / Modal / etc. — BYO deferred from launch)
+- Plain-text cloud-platform tokens (Fly / Modal / etc.) — only ever held encrypted at rest in the credential vault for subscribers who opt into BYO compute, never in cleartext logs / metrics / DB
 - Per-user OAuth refresh tokens that grant broad provider access
 
 ## The protocol shape, at a glance
