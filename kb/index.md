@@ -126,9 +126,11 @@ dive-in map) and are stable until something contradicts them.
   collapsed into the managed-mode hub on 2026-05-25.
 - **Hub: [managed mode](subject-managed-mode.md)** — *active*. The
   `brnrd` story (hosted at `brnrd.dev`): two surfaces (managed
-  dispatcher + managed compute) billed across two tiers (Free
-  for up to 3 projects + Subscribed at $5/mo for up to 10 +
-  the full dashboard + 300 included compute credits) with
+  dispatcher + compute, with compute offering a subscriber-
+  opt-in BYO sub-option) billed across two tiers (Free for up
+  to 3 projects + Subscribed at $5/mo for up to 10 + the full
+  dashboard + 300 included compute credits + BYO compute
+  opt-in) with
   metered compute on top. Data minimization ("we don't have
   your code") baked into the design; cross-gate conversation
   continuity via a metadata-only graph + on-demand gate-history
@@ -149,14 +151,21 @@ dive-in map) and are stable until something contradicts them.
   credential vault to support private docker images at launch;
   refined 2026-05-26 with the final pricing + naming shape
   (no "Plus" branding, $5/month with 300 included credits,
-  3-project Free tier).
+  3-project Free tier); locked 2026-05-26 with the $5
+  supporter / $7 public early-adopter step and the BYO-
+  everything-for-subscribers posture (subscribers can BYO
+  Fly Machines at launch; BYO availability follows managed
+  support 1:1 per cloud; same BYO-for-subscribers principle
+  pre-applies to future agentic-secretary connectors).
 - [brnrd protocol design](design-brnrd-protocol.md) —
   *proposed*. The wire format between brr daemons and `brnrd`.
   Covers gates (managed-gates path), failover dispatch (decision
-  tree with `docker login` step for private images), generalised
-  credential vault (AI-runner credentials with api-key +
-  dir-tarball shapes AND docker-registry credentials in one
-  encrypted store), subscription endpoints
+  tree with `docker login` step for private images AND a BYO
+  branch on `cloud-platform` credential presence), generalised
+  credential vault — three domains (AI-runner with api-key +
+  dir-tarball shapes; docker-registry credentials; and
+  `cloud-platform` credentials for BYO compute, subscriber-
+  gated), subscription endpoints
   (`/v1/accounts/subscription[/checkout|cancel|resume|portal]`,
   with state values `tier=subscribed|subscribed_past_due|free`
   and plan codes `monthly|annual`), multi-project routing,
@@ -172,14 +181,21 @@ dive-in map) and are stable until something contradicts them.
   *proposed*. **Subscription for the platform + metered credits
   for compute.** Two tiers at launch: Free (3 projects, 100
   events/month, 5 spawn-credits/month, basic dashboard, 7-day
-  audit) + Subscribed (**$5/month for the first 200 supporters
-  → $7/month for the public cohort afterward**; or $50 /
-  $70 annual; up to 10 projects, 10K events/month, 300 spawn-
-  credits/month included, full dashboard, 90-day audit, email
-  support). Subscription tier deliberately unnamed (no "Plus" /
-  "Pro" branding). Metered compute top-ups on either tier
-  ($0.01/credit, Stripe Checkout one-shot, no card-on-file
-  except opt-in auto-topup). Self-hosted brnrd stays always-
+  audit, managed-compute-only) + Subscribed (**$5/month for the
+  first 200 supporters → $7/month for the public cohort
+  afterward**; or $50 / $70 annual; up to 10 projects, 10K
+  events/month, 300 spawn-credits/month included, full
+  dashboard, 90-day audit, email support, **BYO compute
+  opt-in for cloud envs we ship managed**). Subscription tier
+  deliberately unnamed (no "Plus" / "Pro" branding). Metered
+  compute top-ups on either tier ($0.01/credit, Stripe
+  Checkout one-shot, no card-on-file except opt-in auto-topup).
+  **Credit buckets formalised** with per-source expiry:
+  `free_monthly` / `subscriber_monthly` use-it-or-lose-it
+  end-of-cycle, `purchased` never expires (account-dormancy-
+  bounded at 24mo pause / 36mo prompt; deletion only on
+  explicit request or GDPR), `promotional` future-proofed.
+  Activity-gated Free grants. Self-hosted brnrd stays always-
   free with full feature parity. Per-seat team tier deferred
   to v-next. Reshaped 2026-05-25 multiple times — adopted
   credits wallet (pass 4), then reframed (pass-4 follow-up
@@ -189,7 +205,12 @@ dive-in map) and are stable until something contradicts them.
   $5/month with 300 included credits, 3-project Free tier).
   Locked 2026-05-26 with the $5 supporter / $7 public step
   per
-  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md).
+  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md);
+  re-locked the same day with **BYO-for-subscribers**
+  (subscriber-only cloud-platform credentials in the vault;
+  BYO Fly Machines at launch; one-for-one BYO-with-managed
+  rule for subsequent clouds) and the **credit-bucket /
+  per-source expiry policy** lock-in.
 - [Billing design](design-billing.md) — *proposed*. **Two
   billing legs**: subscription (Stripe recurring,
   monthly/annual, Customer Portal for self-service) and credit
@@ -198,8 +219,19 @@ dive-in map) and are stable until something contradicts them.
   subscriber credit grant (300/month vs Free's 5/month).
   Wallet mechanics: top-up flow, debit-at-finalize, zero-balance
   UX with enqueue + gate notify, opt-in auto-topup, pro-rata
-  refund policy, sub-bucket ledger (paid / subscriber_monthly /
-  free_monthly), audit log entries. Stripe integration shape
+  refund policy. **Credit bucket ledger** with per-source
+  expiry: `free_monthly` / `subscriber_monthly` use-it-or-lose-
+  it end-of-cycle (Free activity-gated), `purchased` never
+  expires (account-dormancy bounded), `promotional` future-
+  proofed. Debit priority is grants first, purchased last
+  (FIFO within bucket). **BYO compute bypasses the wallet**
+  for subscribers (subscribers who BYO contribute pure
+  subscription revenue; `spawn_byo` audit op replaces
+  `debit_spawn`). **Account dormancy policy** bounds the
+  "purchased never expires" tail (24mo pause / 36mo prompt;
+  deletion only on explicit user request or GDPR). Audit log
+  entries cover every billing operation including the new
+  promotional + dormancy ops. Stripe integration shape
   (HugiMuni SAS + Stripe France + Qonto payouts + Stripe Tax
   for EU VAT + OSS scheme + SCA via Checkout) applies to both
   legs under one Stripe account.
@@ -230,7 +262,11 @@ dive-in map) and are stable until something contradicts them.
   per-account / outbound / proactive (for the future
   agentic-secretary layer). No connectors ship at launch; the
   split lives here so the future agentic-mode upgrade doesn't
-  have to retrofit the gate API.
+  have to retrofit the gate API. **BYO-for-subscribers pre-
+  applies to connectors when they land** — same credentials
+  table, new `kind` value, same subscriber gate; one pattern
+  for cloud envs + connectors + any future subscriber-only
+  credential surface.
 - [Monorepo structure decision](decision-monorepo-structure.md) —
   *proposed*. Single `brr` pip package + optional extras.
   `src/brr/` (daemon) + `src/brnrd/` (backend) + `src/brnrd_web/`
@@ -262,9 +298,15 @@ dive-in map) and are stable until something contradicts them.
   BUSL/ELv2/SSPL (community-goodwill cost > defense gain at
   current scale), gating any feature behind hosted-only
   (breaks the always-free-self-host promise), racing to the
-  bottom on price, and pre-buying defensive domains
+  bottom on price, and   pre-buying defensive domains
   (trademark + UDRP covers the actual attack pattern at
-  lower ongoing cost).
+  lower ongoing cost). **Anti-pattern surface expanded
+  2026-05-26 with "don't lock subscribers into brnrd's
+  cloud" — subscribers can BYO their own cloud-platform
+  tokens for any env we ship managed, parallel-shipped per
+  cloud. The BYO posture doubles as a moat amplifier: a
+  competing fork can't out-open us on credentials without
+  giving up revenue their model can't afford.**
 - [Cloud envs research](research-cloud-envs.md) —
   cross-env patterns (credential / repo / result delivery,
   cold-start budgets, network policy) for envs that execute
@@ -285,13 +327,18 @@ dive-in map) and are stable until something contradicts them.
   permission-prompt API + gate-side integration (third). Backend
   lives at `src/brnrd/` in the monorepo.
 - [Failover compute plan](plan-failover-compute.md) — *not
-  started*. Managed-compute spawn on brnrd-owned Fly pool:
-  generalised credential vault (AI runner + docker-registry,
-  encrypted at rest), dispatcher decision tree,
-  permission-prompt-resolving spawn invocation, audit log, and
-  the CLI surface for the `brr brnrd` verbs (creds / policy /
-  audit / balance / topup / subscription). BYO compute
-  deferred from launch.
+  started*. Compute spawn (managed + BYO) for subscribers, on
+  brnrd-owned Fly pool for the managed path and on the
+  subscriber's own Fly account for the BYO path: generalised
+  credential vault (AI runner + docker-registry + cloud-platform
+  for subscribers, encrypted at rest), dispatcher decision tree
+  with branch on BYO-cred presence, permission-prompt-resolving
+  spawn invocation, audit log (with `spawn_byo` for BYO wallet
+  bypass), and the CLI surface for the `brr brnrd` verbs (creds
+  / policy / audit / balance / topup / subscription). **BYO Fly
+  Machines ships at launch** as a subscriber feature parallel-
+  shipped with managed Fly; subsequent clouds get BYO when they
+  get managed.
 - [Conversation_id propagation plan](plan-conversation-id-propagation.md) —
   *not started*. Small daemon-side enabler: `Brnrd-Conversation-Id`
   git commit trailer + `conversation_id` field on the
@@ -338,7 +385,11 @@ dive-in map) and are stable until something contradicts them.
   declares scope; `brr config list/get/set/doc/template/
   validate` operate over it. Lets brnrd-side spawns pick up
   project preferences (Docker image, runner choice, env
-  default) from the cloned repo.
+  default) from the cloned repo. The account-scope
+  `credentials.*` entry covers all three credential vault
+  kinds (AI runner + docker-registry + cloud-platform);
+  `cloud-platform` writes / reads are subscriber-gated at
+  the brnrd endpoint level.
 - [KB subcommand plan](plan-kb-subcommand.md) — *proposed*.
   `brr kb` as the seventh top-level verb, addressing
   [issue #41](https://github.com/Gurio/brr/issues/41). Six

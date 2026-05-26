@@ -388,6 +388,20 @@ decisions:
   rational competitor can't undercut it materially without
   losing money per sub. Documented in
   [`decision-pricing-shape.md`](decision-pricing-shape.md).
+- **BYO-everything-for-subscribers** as an "open and honest"
+  signal that doubles as a moat. By design, paying customers
+  can bring their own Fly token (and, in the future, their
+  own connector OAuth tokens for Google / Linear / etc.)
+  instead of routing through brnrd-side credentials. A
+  competing fork can't easily out-open us — being more open
+  on credentials means giving up more revenue, which only
+  works if their model already runs at higher per-customer
+  revenue (e.g. paid usage / per-seat / etc.); ours runs at
+  $5/$7. Documented in
+  [`decision-pricing-shape.md`](decision-pricing-shape.md)
+  § "Compute: managed vs BYO" and
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+  § "BYO compute".
 
 ## What we explicitly do NOT do
 
@@ -405,6 +419,24 @@ decisions:
   brnrd's advantages must come from running it for the user
   (uptime, scale, integrations, support), not from withholding
   code.
+- **Don't lock subscribers into brnrd's cloud account when
+  their env class supports BYO.** The subscription buys access
+  to the *platform* (the always-on bots, the multi-project
+  dispatcher, the dashboard, the audit log, the curated
+  managed-compute fallback) — it does not buy exclusive use
+  of brnrd's compute. Subscribers can bring their own Fly /
+  Modal / Daytona / etc. token for any cloud env we ship
+  managed (per
+  [`decision-pricing-shape.md`](decision-pricing-shape.md)
+  § "Compute: managed vs BYO" and
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+  § "BYO compute"). Same principle pre-applies to future
+  agentic-secretary connectors. This is the "open and honest"
+  posture that distinguishes brnrd from rent-seeking
+  reseller-shaped competitors AND strengthens the community-
+  trust moat — subscribers stay because the platform is worth
+  the sub, not because their data / credentials / spawns are
+  hostage to our cloud account.
 - **Don't race to the bottom on price.** If a $3 competitor
   appears, do not match. Their math doesn't work
   (Stripe + compute + infra eats their margin); they will
@@ -558,3 +590,13 @@ worth more than that.
   form. Pondering provenance in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md)
   §1 latest breadcrumb.
+- 2026-05-26 (locking pass — BYO posture) — "Don't lock
+  subscribers into brnrd's cloud" promoted to a load-bearing
+  anti-pattern alongside the existing "don't gate features
+  behind hosted-only" line. Adjacent moves grew a fifth entry
+  for BYO-everything-for-subscribers as a moat amplifier
+  ("open and honest" signal that's hard for a competing fork
+  to beat without giving up more revenue than their model can
+  bear). Driven by the user's "we can actually not defend
+  ourself too much and allow byo everything on top of that"
+  framing.

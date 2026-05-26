@@ -180,7 +180,7 @@ The schema declares scope per key. Headline assignments:
 | `runner.preferred` | `account` | User-wide preference: "across all my projects, use codex unless overridden". Pushed to all daemons under the account. |
 | `failover.policy` | `account` | Cross-daemon account state; lives on brnrd. |
 | `failover.threshold_usd` | `account` | Same. |
-| `credentials.*` | `account` | The vault (AI runner + docker-registry); never stored locally. |
+| `credentials.*` | `account` | The vault (AI runner + docker-registry + cloud-platform for subscribers); never stored locally. `kind=cloud-platform` writes / reads gate on `subscription.tier == "subscribed"` — see [`design-brnrd-protocol.md`](design-brnrd-protocol.md) § "Credential vault endpoints". |
 | `autotopup.*` | `account` | Billing prefs, server-side. |
 | `subscription.tier` | `account` (read-only) | Current tier: `subscribed` / `subscribed_past_due` / `free`. Written by brnrd on Stripe webhook events; read by the daemon + brnrd-side dispatcher to apply tier-based caps (project count, event ceiling, audit retention). Clients can read via `brr config get subscription.tier` but cannot write — use `brr brnrd subscribe` / `brr brnrd subscription cancel` instead. |
 | `subscription.plan` | `account` (read-only) | `monthly` / `annual` / `none`. Same write rules as `subscription.tier`. |
@@ -413,3 +413,21 @@ degrades to "empty" when brnrd isn't connected).
   subscription cancel`, replacing the draft's `brr brnrd
   plus upgrade/downgrade`. Driven by the user's naming
   feedback in [`decision-pricing-shape.md`](decision-pricing-shape.md).
+- 2026-05-26 (locking pass — credential vault scope clarification).
+  **`credentials.*` schema entry extended** to cover a third
+  `kind` value: `cloud-platform` (BYO compute, subscriber-only
+  at launch with Fly Machines; Modal / Daytona / etc. as
+  managed support ships per
+  [`decision-pricing-shape.md`](decision-pricing-shape.md)).
+  Vault writes + reads on `kind=cloud-platform` gate on
+  `subscription.tier == "subscribed"` (403 otherwise) — the
+  gate lives in the brnrd-side credential endpoint, not in
+  config; this page only notes that the account-scope
+  `credentials.*` entry has a subscriber-gated sub-shape.
+  No on-disk change to `brr.toml` / `.brr/config` schemas;
+  cloud-platform credentials never live locally, same as AI
+  + docker-registry credentials. Driven by the BYO-for-
+  subscribers framing in
+  [`decision-pricing-shape.md`](decision-pricing-shape.md) and
+  the credential-vault extension in
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md).

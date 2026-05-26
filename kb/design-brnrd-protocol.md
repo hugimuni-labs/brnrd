@@ -16,15 +16,24 @@ Originally `design-managed-gates.md`; renamed to
 spawn-compute path joined the protocol, then renamed to
 `design-brnrd-protocol.md` on 2026-05-25 with the
 brnrd-as-canonical-name decision. Reshaped on 2026-05-25 to
-drop BYO cloud-platform tokens (managed compute uses brnrd's own
-cloud account), add the credential vault (AI-runner credentials
-+ docker-registry credentials in one store), the multi-project
-routing protocol, the permission-gate API, the data-
-minimization principle, the cross-gate conversation context
-machinery (metadata graph + on-demand fetch + TG ring buffer),
-and the subscription endpoints. Subscription-state value names
-finalised on 2026-05-26 (no "Plus" branding; tier value is
-`"subscribed"`, plan codes are `"monthly"` / `"annual"`).
+drop BYO cloud-platform tokens at launch (managed compute uses
+brnrd's own cloud account), add the credential vault (AI-runner
+credentials + docker-registry credentials in one store), the
+multi-project routing protocol, the permission-gate API, the
+data-minimization principle, the cross-gate conversation
+context machinery (metadata graph + on-demand fetch + TG ring
+buffer), and the subscription endpoints. Subscription-state
+value names finalised on 2026-05-26 (no "Plus" branding; tier
+value is `"subscribed"`, plan codes are `"monthly"` /
+`"annual"`). Reshaped again on 2026-05-26 (locking pass) to
+**re-introduce BYO compute as a subscriber-only feature at
+launch** — the credential vault grew a third `kind`
+(`cloud-platform` with a `provider` discriminator); the
+dispatcher branches on BYO-cred presence at dispatch time
+(same env class, two callers); BYO Fly Machines ships at
+launch alongside managed Fly; subsequent clouds get BYO when
+they get managed. Same BYO-for-subscribers principle pre-
+applies to future agentic-secretary connectors.
 
 ## Scope
 
@@ -70,10 +79,12 @@ Out of scope, explicitly:
   exposes the per-task accounting hooks the billing design
   consumes. Pricing model lives in
   [`decision-pricing-shape.md`](decision-pricing-shape.md)).
-- **BYO cloud-platform tokens** for failover spawn (Fly / Modal /
-  Daytona / etc. tokens stored on brnrd). Designed shape
-  preserved as a *deferred* sketch in "BYO compute — designed,
-  deferred" below; not built at launch. Daemon-side cloud-runner
+- **BYO cloud-platform tokens for non-Fly clouds** at launch
+  (Modal / Daytona / etc. tokens). Each cloud's BYO ships in
+  the same release as its managed support; only Fly ships at
+  launch, so only BYO Fly ships at launch. Subscriber-only;
+  documented in "BYO compute — subscriber feature, parallel-
+  shipped with managed" below. Daemon-side cloud-runner
   adapters (user's daemon fans out to user's cloud) remain
   independent of managed mode — those are user-driven plugin work,
   not part of brnrd.
@@ -405,7 +416,7 @@ Event body dropped from brnrd after dispatch.
 
 ### Credential vault endpoints
 
-Generalised credential vault. Two domains share the same
+Generalised credential vault. **Three domains** share the same
 encryption / audit / revoke infrastructure:
 
 1. **AI-runner credentials** (Anthropic / OpenAI / Google /
@@ -413,50 +424,70 @@ encryption / audit / revoke infrastructure:
    spawn sandbox. Two payload shapes: API key or credential
    directory tarball (preserves Claude Pro / Codex Plus /
    Gemini OAuth subscription-auth for users who'd rather not
-   provision API keys).
-2. **Docker registry credentials** (ghcr.io / docker.io /
+   provision API keys). Available on all tiers (Free /
+   Subscribed).
+2. **Docker-registry credentials** (ghcr.io / docker.io /
    quay.io / private registries) — needed when the project's
    `brr.toml` declares a private image. Single payload shape:
    username + password/token. Used by the spawn bootstrap to
-   `docker login <host>` before `docker pull`.
+   `docker login <host>` before `docker pull`. Available on
+   all tiers (Free / Subscribed).
+3. **Cloud-platform credentials** (Fly Machines at launch;
+   Modal / Daytona / etc. as managed support ships) — needed
+   for **BYO compute**: subscribers' spawns are dispatched to
+   their own cloud account using these credentials. Single
+   payload shape: an API token scoped to the platform's
+   spawn-relevant operations (Fly: org/app create + machine
+   start/stop). **Subscriber-only** — vault writes for this
+   kind require `subscription.tier == "subscribed"`, vault
+   reads happen only on dispatch and check the same gate.
 
-Both live in the same `credentials` table with a `kind`
+All three live in the same `credentials` table with a `kind`
 discriminator; identical encryption-at-rest (per-account
-envelope keys), identical audit-log shape, identical
-revoke flow.
+envelope keys), identical audit-log shape, identical revoke
+flow. The subscriber gate is a single conditional on the
+write + read paths, not a separate schema.
 
 | Method | Path | Description | Persists |
 |--------|------|-------------|----------|
-| `POST` | `/v1/accounts/credentials` | Store an encrypted credential. Body: `{kind: "ai-anthropic" | "ai-openai" | "ai-google" | "ai-github" | "docker-registry", shape: "api-key" | "dir-tarball" | "registry-userpass", payload: "...", host?: "ghcr.io"}`. `host` required for `docker-registry`. | Encrypted blob, metadata (kind, shape, host, created_at) |
-| `GET` | `/v1/accounts/credentials` | List stored credentials (id, kind, shape, host, created_at, last_used_at). Never returns secret material. Filterable: `?kind=ai-*` or `?kind=docker-registry`. | Read-only |
-| `DELETE` | `/v1/accounts/credentials/{credential_id}` | Revoke. In-flight spawns complete; new spawns refuse if they would have used this credential. | Hard delete |
+| `POST` | `/v1/accounts/credentials` | Store an encrypted credential. Body: `{kind: "ai-anthropic" | "ai-openai" | "ai-google" | "ai-github" | "docker-registry" | "cloud-platform", shape: "api-key" | "dir-tarball" | "registry-userpass" | "cloud-token", provider?: "fly" | "modal" | ..., payload: "...", host?: "ghcr.io"}`. `host` required for `docker-registry`; `provider` required for `cloud-platform`. **`kind=cloud-platform` rejects with 403 if subscription.tier != "subscribed".** | Encrypted blob, metadata (kind, shape, host, provider, created_at) |
+| `GET` | `/v1/accounts/credentials` | List stored credentials (id, kind, shape, host, provider, created_at, last_used_at). Never returns secret material. Filterable: `?kind=ai-*` or `?kind=docker-registry` or `?kind=cloud-platform`. | Read-only |
+| `DELETE` | `/v1/accounts/credentials/{credential_id}` | Revoke. In-flight spawns complete; new spawns refuse if they would have used this credential. For cloud-platform creds: subsequent BYO spawns fall back to managed (if subscriber) or fail with "missing cloud credential, top up the wallet or restore the credential" (if managed compute is also unavailable). | Hard delete |
 
 CLI surface:
 
 ```
-# AI credentials
+# AI credentials (all tiers)
 brr brnrd creds add anthropic --key sk-ant-...
 brr brnrd creds add anthropic --dir ~/.claude        # preserves subscription auth
 brr brnrd creds add openai    --key sk-...
 brr brnrd creds add google    --key AIza-...
 brr brnrd creds add github    --key ghp_...
 
-# Docker-registry credentials
+# Docker-registry credentials (all tiers)
 brr brnrd creds add docker-registry --registry ghcr.io \
   --username myorg --token <ghcr-pat>
 brr brnrd creds add docker-registry --registry docker.io \
   --username myuser --password <pat>
 
+# Cloud-platform credentials (subscriber-only; BYO compute)
+brr brnrd creds add cloud-platform --provider fly --token <fly-pat>
+# Future, when managed support ships:
+brr brnrd creds add cloud-platform --provider modal --token <modal-pat>
+brr brnrd creds add cloud-platform --provider daytona --token <daytona-pat>
+
 # Common
-brr brnrd creds list                      # all
+brr brnrd creds list                              # all kinds
 brr brnrd creds list --kind docker-registry
+brr brnrd creds list --kind cloud-platform        # 403 if not subscribed
 brr brnrd creds remove <id>
 ```
 
 Storage detail (informational, not normative):
 
 - `credentials` table columns: `id`, `account_id`, `kind`,
-  `shape`, `host` (nullable), `encrypted_payload`,
+  `shape`, `host` (nullable, for `docker-registry`), `provider`
+  (nullable, for `cloud-platform`), `encrypted_payload`,
   `envelope_key_id`, `created_at`, `last_used_at`,
   `revoked_at` (nullable).
 - Encryption: per-account envelope key wraps a per-credential
@@ -487,6 +518,47 @@ Public images bypass the lookup (no `docker login` step).
 Private images with no matching cred fail with a clear gate-side
 message: "private image `<host>/...`; add registry creds with
 `brr brnrd creds add docker-registry --registry <host> ...`".
+
+Cloud-platform credentials match by `provider` at dispatch
+time: when a spawn is about to start AND the account is
+`subscribed` AND a `cloud-platform` credential exists for the
+target env's provider, the dispatcher invokes the env class
+with the user's token instead of the brnrd-side managed token.
+Same `EnvBackend` env class, two callers — exactly the "Caller
+axis" pattern documented in
+[`research-cloud-envs.md`](research-cloud-envs.md). The
+credential is decrypted into the dispatcher's process memory at
+dispatch time and zeroed immediately after the env class
+returns the running machine handle.
+
+BYO-compute spawn path (subscriber, has `cloud-platform` cred):
+
+```
+Dispatcher receives a permission-resolved task to spawn:
+  if account.tier == "subscribed":
+    cred = credentials.find(kind=cloud_platform, provider=target_env.provider)
+    if cred:
+      # BYO path
+      decrypted = vault.decrypt(cred)
+      machine = target_env_class.start(token=decrypted, ...)
+      audit_log.append("spawn_byo", account_id, spawn_id, provider, machine_id)
+      # No wallet debit; the user pays the cloud provider directly
+    else:
+      # Managed path
+      machine = target_env_class.start(token=brnrd_managed_token, ...)
+      wallet.debit(at_finalize=cost_credits(machine))
+      audit_log.append("debit_spawn", account_id, spawn_id, ..., sub_bucket)
+  else:
+    # Free: managed-only by policy
+    machine = target_env_class.start(token=brnrd_managed_token, ...)
+    wallet.debit(at_finalize=cost_credits(machine))
+```
+
+The `audit_log.append("spawn_byo", ...)` operation is documented
+in [`design-billing.md`](design-billing.md) →
+"BYO-compute spawns — wallet bypass" alongside the wallet-side
+implication (no debit; estimated cost surfaced on the dashboard
+for the user's own visibility).
 
 ### Failover-policy endpoints
 
@@ -1125,40 +1197,81 @@ What we do NOT do:
   The credential lives only on the build/host worker that runs
   `docker pull`; the resulting image is what the sandbox sees.
 
-## BYO compute — designed, deferred
+## BYO compute — subscriber feature, parallel-shipped with managed
 
-The earlier draft of this page had BYO cloud-platform tokens
-(Fly / Modal / Daytona / etc. stored on brnrd, used to spawn in
-the user's account) as a launch surface. Dropped from launch on
-2026-05-25 because the implementation cost was disproportionate
-to the user value at launch — see
-[`decision-pricing-shape.md`](decision-pricing-shape.md) for the
-rationale.
+Reframed on 2026-05-26 from the earlier "designed, deferred"
+posture. The earlier draft framed BYO as a Free-tier feature
+dropped from launch entirely; the current shape lands BYO at
+launch as a **subscriber-only** feature that ships alongside
+each cloud's managed support. Full policy rationale in
+[`decision-pricing-shape.md`](decision-pricing-shape.md)
+§ "Compute: managed vs BYO"; the protocol shape is in this
+section.
 
-The wire shape that supports BYO is small and additive when we
-come back to it:
+### What the wire actually does at launch
 
-- A new `kind` value on the credential vault (e.g.
-  `cloud-platform-fly`, `cloud-platform-modal`,
-  `cloud-platform-daytona`), per-platform tokens encrypted via
-  the same envelope-key infrastructure.
-- One new field in failover-policy: `compute_target:
-  "brr-managed" | "fly:user" | "modal:user" | …` defaulting to
-  `"brr-managed"`.
-- One branch in the dispatcher's spawn step: select adapter +
-  token based on `compute_target`.
+- **One new credential `kind`**: `cloud-platform` with a
+  `provider` discriminator (`fly` at launch). Token encrypted
+  via the same envelope-key infrastructure as AI + docker-
+  registry creds. **Vault writes require
+  `subscription.tier == "subscribed"`** (403 otherwise);
+  vault reads check the same gate at dispatch time.
+- **Failover-policy adds an effective compute target** per
+  account (not stored as a new field; derived at dispatch
+  time): if the account is `subscribed` AND has a
+  `cloud-platform` cred for the target env's provider, BYO is
+  chosen; otherwise managed is chosen. No new policy knob —
+  the credential's presence is the signal. (A user opting back
+  to managed deletes the cred or adds a project-level override
+  in `brr.toml`, both of which are existing surfaces.)
+- **One branch in the dispatcher's spawn step**: select token
+  source (brnrd-managed vs vault-decrypted user token) and
+  audit-log shape (`debit_spawn` vs `spawn_byo`) based on
+  whether a BYO cred is in play. The env class itself is
+  unchanged — same `EnvBackend.start(token=...)` invocation,
+  different `token`.
 
-Adapter code is identical (same cloud-runner plugin called either
-way); only the token source and the cost-accounting side differ
-(BYO doesn't bill brnrd-side compute; user pays own cloud bill).
+### What ships when
+
+- **Launch**: BYO Fly Machines (subscriber-only). The
+  `cloud-platform` kind + `fly` provider both ship; one
+  managed cloud, one BYO option, same env class.
+- **Post-launch**: each new managed cloud env (Modal /
+  Daytona / Codespaces / VPS / …) ships BYO support for the
+  same provider in the same release. BYO's per-cloud cost is
+  small over managed (the env class is shared); we never
+  bottom-up build a BYO path without a managed path.
+- **Never**: BYO-only-for-clouds-we-don't-ship-managed. If we
+  don't manage it, we don't BYO it. Avoids unbounded
+  per-platform support tail.
+
+### Same model applies to future agentic-secretary connectors
+
+Per
+[`decision-connectors-layering.md`](decision-connectors-layering.md),
+when the agentic-secretary layer lands and brings hosted
+Google / Linear / Notion / Stripe-billing-read / etc.
+connectors, the same BYO-for-subscribers principle applies:
+the `credentials` table grows a fourth `kind` (e.g.
+`connector-oauth` with a `provider` discriminator), the
+subscriber gate sits on the same write/read paths, and Free
+users get managed-only connectors with brnrd-side credentials
+(which is itself a reason connectors are subscriber-only in
+the first place). One pattern, multiple subscriber-only
+surfaces, one vault.
+
+### Daemon-side cloud envs remain independent
 
 Daemon-side cloud envs (a laptop daemon fans out to the user's
 cloud via a first-party env extra like `brr[fly]` or a
 third-party `brr-env-<name>` registered via the `brr.envs`
-entry point) remain independent of managed mode entirely. Those
-are part of the env work, not part of brnrd, and ship per
-[`research-cloud-envs.md`](research-cloud-envs.md)
-on their own clock.
+entry point) remain independent of managed mode entirely.
+Those are part of the env work, not part of brnrd, and ship
+per [`research-cloud-envs.md`](research-cloud-envs.md) on
+their own clock. The "BYO at the brnrd layer" described here
+is specifically about the **managed dispatcher routing spawns
+to the subscriber's cloud account** — the dispatcher and the
+vault are brnrd-side; only the compute target shifts.
 
 ## Upsun deployment notes (brnrd backend)
 
@@ -1414,3 +1527,33 @@ write the Upsun shape once, use it twice.
   Endpoint paths themselves unchanged. Driven by the user's
   "I don't like Plus as a name or verb; tweaked Free might
   not need the 1-project cap" feedback.
+- 2026-05-26 (locking pass — BYO compute at launch + credit
+  buckets). **Credential vault grew a third domain** —
+  `cloud-platform` with a `provider` discriminator (`fly` at
+  launch; Modal / Daytona / etc. when their managed support
+  ships). Write + read paths gate on
+  `subscription.tier == "subscribed"`; Free accounts can't
+  store cloud-platform creds. Vault internals (table schema,
+  encryption, audit log shape) unchanged — the new kind sits
+  in the same row layout with the existing per-account
+  envelope-key encryption + audit shape. **Dispatcher
+  branches on BYO-cred presence**: if the subscribed account
+  has a `cloud-platform` cred for the target env's provider,
+  the env class is invoked with the user's token and the spawn
+  emits `spawn_byo` to the audit log (no wallet debit; user
+  pays cloud provider directly); otherwise managed path runs
+  unchanged. Same env class, two callers — the "Caller axis"
+  pattern from
+  [`research-cloud-envs.md`](research-cloud-envs.md). **"BYO
+  compute — designed, deferred" section rewritten** as "BYO
+  compute — subscriber feature, parallel-shipped with managed":
+  policy is "if we ship a cloud managed, BYO ships in the same
+  release; never BYO-only-for-clouds-we-don't-manage." At
+  launch only Fly is managed, so only BYO Fly ships. Same BYO-
+  for-subscribers principle pre-applies to future agentic-
+  secretary connectors via the same `credentials` table
+  (different `kind`, same gate, same vault). Driven by the
+  user's "since we charge per paying customer anyway we can
+  actually allow byo everything on top of that" framing,
+  combined with the credit-bucket / per-source-expiry lock-in
+  in [`design-billing.md`](design-billing.md).

@@ -3606,3 +3606,192 @@ moves are just locking already-implicit architectural
 choices into explicit, defensible form before launch reveals
 them to the world.
 
+## [2026-05-26] decision | locking pass: BYO-for-subscribers + credit-bucket / per-source expiry policy
+
+Closing pass on two intertwined topics: the BYO-everything-
+for-subscribers policy across cloud envs (and pre-applied to
+future agentic-secretary connectors), and the explicit credit-
+bucket ledger schema with per-source expiry policy that
+backs the "$5/mo for the platform + $3 of bundled compute on
+the house" framing without leaking into "we owe users their
+unused grants forever."
+
+### Decisions locked
+
+- **BYO compute is a subscriber-only sub-option of Surface B,
+  parallel-shipped with managed support for each cloud.** At
+  launch, only Fly Machines ships managed → only BYO Fly ships
+  at launch. Subsequent clouds (Modal / Daytona / Codespaces /
+  …) get BYO when they get managed, one-for-one. Free stays
+  managed-only on purpose: BYO is structurally a cost-saving
+  feature, subscribing is the cost-saving move; Free's role is
+  "try it without setup friction." The subscriber gate sits on
+  the credential-vault write + read paths for `kind=cloud-
+  platform`.
+- **Credit buckets formalised** with per-source expiry policy
+  (the "temporal grouped resources" abstraction, solved with
+  the standard bucketed-ledger shape used by OpenAI /
+  Anthropic / AWS / GCP / Stripe Customer Balance):
+  - `free_monthly` and `subscriber_monthly`: use-it-or-lose-it
+    at cycle boundary (mobile-plan intuition). Free's monthly
+    grant is **activity-gated** — only refreshes if the
+    account had any prior-month activity, bounds dormant-
+    account compute cost at zero.
+  - `purchased`: **never expires** (account-dormancy bounded,
+    not credit-expiry bounded — 24mo pause / 36mo prompt /
+    deletion only on explicit user request or GDPR). "I paid
+    you, my credits are mine forever" is the EU-friendly
+    strongest-consumer-protection posture and exceeds OpenAI /
+    Anthropic's 1-year default.
+  - `promotional`: future-proofing for signup bonuses /
+    referrals / support-issued goodwill, per-grant
+    `expires_at`. Not used at launch but schema-ready.
+  - **Debit priority**: grants first (soonest-expiring within
+    grants), purchased last (FIFO). Preserves the user's
+    purchased balance as long as possible.
+  - **Dashboard never says "credits expired"** — says "your
+    monthly allowance refreshes on &lt;date&gt;." Same
+    mechanic, opposite emotional valence.
+- **Sub-bucket name rename**: `paid` → `purchased`
+  everywhere (audit ops, debit-spawn `sub_bucket`, refund op).
+  `purchased` describes the semantic precisely ("user
+  explicitly purchased these via Stripe top-up Checkout")
+  and pairs cleanly with `granted` as the category boundary.
+- **Reimbursement framing rejected** in favour of "$5
+  platform fee + $3 of bundled compute on the house" — the
+  platform fee is the platform fee, the credits aren't a
+  refund. Subscribers who BYO let the grant lapse unused (or
+  spend it on a different managed env they didn't bring).
+- **"Don't lock subscribers into brnrd's cloud" promoted to
+  load-bearing anti-pattern** in
+  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md);
+  BYO-everything-for-subscribers added as a fifth adjacent
+  defense move (a competing fork can't out-open us without
+  giving up more revenue than their model bears).
+- **Per-paying-customer** as the canonical terminology
+  (replacing per-account when the meaning is "the gate sits
+  on subscription state").
+
+### Pages updated
+
+- **`kb/decision-pricing-shape.md`** — new "Compute: managed
+  vs BYO" section codifying the two-flow shape, the
+  subscriber-gate rationale, and the cloud-env-by-cloud-env
+  shipping rule. Subscription-feature table grew a row for
+  BYO opt-in. New "Credit buckets and expiry policy"
+  subsection summarises the four buckets + debit priority +
+  activity-gated Free grants + the dashboard-language pass.
+  "Compute included" framing rewritten as "300 credits of
+  bundled compute on the house" + grant-not-reimbursement
+  nuance. Existing "BYO compute — designed, deferred"
+  section reframed as "BYO compute — subscriber feature,
+  parallel-shipped with managed." Open-questions extended
+  with Free-grant-size-at-scale + account-dormancy-timing.
+  Lineage entry appended.
+- **`kb/design-billing.md`** — full new "Credit buckets and
+  expiry policy" section (replaces and subsumes the prior
+  "Monthly credit grants" section) with the bucket table,
+  per-bucket expiry mechanics, activity-gated Free grants,
+  account-dormancy state machine, and the
+  dashboard-language pass. Audit log entries renamed: `paid`
+  → `purchased`, new `grant_promotional` /
+  `expire_promotional` / `account_marked_dormant` /
+  `account_reactivated` / `spawn_byo` ops. Refund policy
+  cleaned up: pro-rata within 30 days for `purchased`;
+  grants never cash-refundable; beyond 30d purchased credits
+  stay valid forever but aren't cash-refundable. New
+  "BYO-compute spawns — wallet bypass" section codifies the
+  zero-debit BYO path. Scope expanded; lineage entry
+  appended.
+- **`kb/design-brnrd-protocol.md`** — credential vault grew
+  a third domain `cloud-platform` with a `provider`
+  discriminator (Fly at launch). Vault writes + reads
+  subscriber-gated on `kind=cloud-platform`. CLI surface in
+  the vault section grew `brr brnrd creds add cloud-platform
+  --provider fly --token …`. New "BYO compute — subscriber
+  feature, parallel-shipped with managed" section replaces
+  the prior "BYO compute — designed, deferred" section; the
+  dispatch path documents the same env class with two
+  callers (managed token vs decrypted user token). Scope
+  "What we explicitly do NOT do" updated. Lineage entry
+  appended.
+- **`kb/plan-failover-compute.md`** — ship-order updated to
+  parallel-ship BYO Fly alongside managed Fly at launch.
+  Credential-vault done-definition extended with the fourth
+  payload shape + subscriber gate. "Out of scope" entry on
+  BYO platform tokens rewritten to make clear non-Fly BYO
+  follows non-Fly managed support (one-for-one rule).
+  Dispatcher's pre-spawn balance check now walks the bucket
+  priority order. Lineage entry appended.
+- **`kb/decision-licensing-and-defense.md`** — "Don't lock
+  subscribers into brnrd's cloud" added to the anti-pattern
+  surface; BYO-everything-for-subscribers added as a fifth
+  entry under "Adjacent moves" with the "competing fork
+  can't out-open us without giving up revenue" rationale.
+  Lineage entry appended.
+- **`kb/decision-connectors-layering.md`** — new
+  "BYO-for-subscribers applies to connectors" section
+  pre-applies the cloud-compute BYO posture to the
+  agentic-secretary connectors layer (same vault, new `kind`
+  value `connector-oauth`, same subscriber gate). One
+  pattern across compute + connectors + future surfaces.
+  Lineage entry appended.
+- **`kb/subject-managed-mode.md`** — Surface table reshaped:
+  the prior "B. Managed compute" + "C. BYO compute
+  (deferred)" rows collapsed into a single Surface B with a
+  managed-default-vs-BYO-opt-in sub-structure. Subscriber-
+  only BYO rationale captured. "Surface C" section
+  re-titled "BYO compute (subscriber sub-option of Surface
+  B)" with the pre-2026-05-26 deferral rationale preserved
+  for context. In-scope / out-of-scope lists updated.
+- **`kb/design-config-layout.md`** — `credentials.*` schema
+  entry extended to cover the third `kind` value
+  `cloud-platform` with the subscriber-gate note. No
+  on-disk schema change (cloud-platform creds never live
+  locally). Lineage entry appended.
+- **`kb/index.md`** — pricing-shape blurb extended with
+  buckets + BYO; managed-mode hub blurb updated for
+  Surface B's BYO sub-option; brnrd-protocol blurb covers
+  the three credential vault domains + BYO dispatch branch;
+  billing blurb covers the bucketed ledger + dormancy
+  policy + BYO wallet bypass; failover-compute blurb
+  reflects BYO Fly at launch; licensing blurb gains the new
+  anti-pattern + adjacent move; connectors-layering blurb
+  notes BYO pre-applies; config-layout blurb mentions the
+  subscriber-gated `cloud-platform` extension.
+- **`kb/log.md`** — this entry.
+- **`kb/notes-pondering-fleet.md`** — locking-pass breadcrumb
+  appended to §1.
+
+### Why this lock-in matters
+
+The pricing-shape page already had "BYO deferred forever" as
+its working assumption; in practice this turned out to be
+inconsistent with the "open and honest" trust posture we
+need to sustain the community-trust moat at $5/$7. The
+locking pass reconciles by tying BYO availability one-for-
+one to managed support per cloud — at launch the cost is
+small (one credential `kind` value + one dispatcher branch)
+because Fly's managed path is anyway on the critical path;
+post-launch the rule is simple ("if we ship it managed,
+subscribers can BYO it"); the posture doubles as a moat
+amplifier (a competing fork would have to be more open on
+credentials, meaning less revenue per customer, in a model
+that already runs at $5/$7).
+
+The credit-bucket / per-source-expiry pass codifies what
+was implicit before: monthly grants are "this month's
+allowance" (mobile-plan intuition), purchased credits are
+property (EU-friendly + trust signal vs OpenAI / Anthropic's
+1-year expiry), promotional credits are activation tools.
+Activity-gating Free grants bounds the dormant-account
+compute tail at zero — important when Free scales to 10K /
+100K accounts. The rename `paid` → `purchased` is small but
+semantically precise.
+
+All status markers stay `proposed`. Implementation cost is
+small over already-planned work: credential vault grows one
+`kind` value (~30 LOC); dispatcher grows one branch (~20
+LOC); the bucket model is a renaming + activity-gate + a
+small dormancy-state machine (~150 LOC for the dormancy
+state machine, otherwise mostly already-designed).

@@ -173,6 +173,42 @@ Add a third layer for "tools the runner has during a single task"
 The two-layer split (gates + connectors) is the load-bearing
 distinction; per-task tooling lives entirely in the runner.
 
+## BYO-for-subscribers applies to connectors
+
+When the agentic-secretary layer lands and brings hosted
+connectors (Google Calendar / Linear / Notion / Stripe-
+billing-read / etc.), the same BYO-for-subscribers principle
+that governs cloud compute (per
+[`decision-pricing-shape.md`](decision-pricing-shape.md)
+§ "Compute: managed vs BYO") applies to connectors:
+
+- **Subscribers can BYO their own OAuth credentials** for any
+  connector we ship managed. Same `credentials` table on
+  brnrd, new `kind` value (e.g. `connector-oauth` with a
+  `provider` discriminator: `google` / `linear` / `notion` /
+  …), same per-account envelope-key encryption, same
+  subscriber gate on the write + read paths.
+- **Free users get managed-only connectors** with brnrd-side
+  credentials (which is why connectors are subscriber-only in
+  the first place — brnrd carries the connector's per-provider
+  OAuth app setup + per-account token storage + provider
+  rate-limit pool on behalf of Free users).
+- **Self-hosters** run their own connector OAuth apps under
+  their own deployment, regardless of subscription tier (the
+  "self-hosted brnrd stays always-free with full feature
+  parity" promise from
+  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md)).
+
+The mechanic is one pattern across cloud envs (per
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+§ "BYO compute") AND connectors AND any future subscriber-
+only surface where the user has a credential they could
+plausibly own — the vault grows a `kind` value, the write +
+read paths gate on `subscription.tier == "subscribed"`,
+dispatch / call-out chooses the user's credential over the
+brnrd-side one when present. One rule, many surfaces, one
+vault.
+
 ## Read next
 
 1. [`subject-managed-mode.md`](subject-managed-mode.md) for how
@@ -194,3 +230,13 @@ distinction; per-task tooling lives entirely in the runner.
   agentic-secretary pondering from
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) needed
   a coherent place to live; this page is that place's frame.
+- 2026-05-26 (locking pass — BYO connectors) — new "BYO-for-
+  subscribers applies to connectors" section pre-applies the
+  cloud-compute BYO posture to connectors when the agentic-
+  secretary layer lands. Same vault, new `kind` value
+  (`connector-oauth` with `provider` discriminator), same
+  subscriber gate on write + read. One pattern across compute
+  envs + connectors + any future subscriber-only credential
+  surface. Driven by the user's "since we charge per paying
+  customer we can allow byo everything on top of that, same
+  with future agentic secretary feature" framing.

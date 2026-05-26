@@ -66,7 +66,8 @@ cost and real user value:
 |------------------------|------------------------|
 | **Bigger project headroom** (10 projects, vs 3 on Free) | The dispatcher's multi-project resolution path (chat-binding + prefix override on TG/Slack/Discord, per-installation routing on GH App) is genuinely more code, more state, more support burden the more projects an account fans out across. Free's 3-project cap handles the "side project + day-job + scratchpad" case; the jump to 10 covers serious adopters. |
 | **Full dashboard** (cost charts, cross-project view, permission-prompt config, project-binding UI) | More views = more build + maintenance cost. Free gets the read-only essentials; subscribers get the operational surface. |
-| **Generous compute included** (300 credits = $3 of compute) | Removes the "do I have credits?" mental overhead for common use; covers ~100 spawns/month at typical task size. Heavy users still top up; light subscribers effectively never think about credits. |
+| **300 credits / month of managed compute included** | Bundled grant covers ~100 spawns/month at typical task size. The $5 platform fee buys the platform AND a $3 grant of managed compute on the house. Light subscribers effectively never think about credits; heavy users top up at $0.01/credit. |
+| **BYO cloud compute** (subscribers can bring their own Fly / Modal / etc. token instead of using managed compute) | "If we ship it managed, you can BYO it." Subscribers who prefer to keep their cloud spend on accounts they already own (or who want to skip the managed-compute margin) bring a credential to the vault; dispatcher routes spawns to the user's cloud account. The sub is the gate; cloud envs available depend on which envs we've shipped managed. See "Compute: managed vs BYO" below. |
 | **10K events/month** (vs 100 on Free) | High enough that real subscribers effectively never hit the ceiling. Free's 100 is a try-it cap, not a usable production cap. |
 | **90-day audit retention** | Compliance signal for users who care about post-hoc forensics. Free's 7 days covers debugging; 90 days covers "what happened in March?" |
 | **Email support** | Real cost (someone reads + responds). Subscribers pay for it. |
@@ -74,6 +75,20 @@ cost and real user value:
 The pitch reads as "I'm buying these specific things" rather
 than "I'm buying past an artificial wall," which is the
 difference between sustainable pricing and rent-seeking.
+
+**Framing nuance on the included compute grant:** the $5
+platform fee is the platform fee. The 300 credits aren't a
+"reimbursement" that effectively makes the platform cost
+$2 — they're a bundled grant of managed compute on the
+house. Mental model: "I pay $5 for the platform, and I get
+$3 of compute included." Not "I pay $2 net and the $3 is a
+refund." Subscribers who BYO or self-host their compute
+still pay $5 for the platform; the grant lapses unused (or
+covers an unbrought env). This framing matters for both the
+sell ("the platform is worth $5; the compute is free on
+top") and for our own unit economics tracking (the $5 is
+clean revenue; the $3 grant is a controllable cost-of-goods,
+not a price reduction).
 
 ## What we charge for, what we don't
 
@@ -99,6 +114,93 @@ A clean line drawn explicitly so it shows up on the landing page:
 This framing reads as "platform + ops as a service" rather than
 "SaaS layered on top of an OSS thing," which matches the actual
 architecture and avoids "rent-seeking on free software" vibes.
+
+## Compute: managed vs BYO (subscriber choice)
+
+Subscribers see one of two compute flows. **Free stays
+managed-only on purpose** (rationale below).
+
+| | **Managed compute (default)** | **BYO compute (subscriber opt-in)** |
+|---|------|------|
+| **Who** | Free + Subscribed | Subscribed only |
+| **Where spawns run** | brnrd's cloud account (Fly Machines at launch) | Subscriber's own cloud account |
+| **Credentials** | brnrd-side, invisible to the user | Subscriber stores a cloud-platform credential in the vault (`brr brnrd creds add cloud-platform --provider fly --token …`) |
+| **Who pays the cloud** | brnrd, recovered via credit debits ($0.01/credit, 300 credits included with sub) | Subscriber, directly to the cloud provider |
+| **brnrd revenue per spawn** | $5/$7 platform sub + small compute margin on overages | $5/$7 platform sub, full stop (zero compute markup) |
+| **Setup friction** | Zero (works out of the box) | One-time vault upload of a cloud-platform token + scope check |
+| **Best for** | "I want this to work, don't care where it runs" | "I already have a Fly account / company billing routes through one cloud / I want to skip the managed-compute margin" |
+
+**One rule covers all clouds we ship**: if brnrd ships managed
+support for a cloud env (Fly at launch; Modal / Daytona /
+Codespaces / etc. later), subscribers can BYO that cloud the
+same day the managed support ships. "BYO-only" doesn't exist —
+the cloud-platform credential vault entry is plumbed through
+the same env class that powers managed mode (per the "Caller
+axis" pattern in
+[`research-cloud-envs.md`](research-cloud-envs.md): same env
+class, two callers).
+
+The 300 included credits **stay granted regardless of BYO
+choice**. A subscriber who BYOs Fly might let the credits
+lapse unused that month, or spend them on a different env
+they didn't bring (e.g. managed Modal once shipped). The
+grant is "bundled compute on the house," not "refundable
+unused budget."
+
+### Why BYO is subscriber-only (not on Free)
+
+Three reasons the policy gate on `subscription.tier ==
+subscribed`:
+
+1. **Free's whole purpose is "try this without setup
+   friction."** Adding "first, configure your Fly token,
+   verify scopes, debug per-platform onboarding edge cases"
+   defeats that role.
+2. **BYO is structurally a cost-saving feature; subscribing
+   is the cost-saving move.** Users who care enough about
+   compute cost to BYO should already be subscribers.
+   Otherwise we'd create a strict-better-than-paid Free path
+   (Free + BYO compute + managed bots) and undercut our own
+   revenue.
+3. **Implementation cleanliness.** Vault unlock and dispatcher
+   credential lookup gate on a single condition
+   (`subscription.tier == "subscribed"`); one code path, one
+   support story.
+
+The subscription itself is the per-paying-customer gate;
+the BYO posture flows naturally from "subscribers are
+already paying for the platform — they shouldn't be locked
+into our cloud account on top of that."
+
+### Cloud envs available for BYO at launch vs over time
+
+- **Launch**: BYO Fly Machines only (we're shipping Fly
+  managed; the same env class invoked with the subscriber's
+  token is a small incremental on top of managed).
+- **Post-launch**: each cloud env we add managed support for
+  (Modal, Daytona, Codespaces, …) unlocks BYO for that env
+  in the same release. No deferred-forever promises; BYO
+  shipping cadence follows managed-support shipping cadence
+  one-for-one.
+
+This avoids the BYO-explodes-the-launch-surface problem from
+the earlier draft (~30% backend surface per cloud platform:
+credential storage UI, scope validation, onboarding docs,
+per-platform failure modes, dispatcher branching) while
+keeping the promise honest. Launch ships one cloud; BYO
+parallel-ships with managed for every cloud after.
+
+### Same principle applies to future agentic-secretary connectors
+
+When the agentic-secretary layer lands (per
+[`decision-connectors-layering.md`](decision-connectors-layering.md))
+and brings hosted Google / Linear / Notion / etc.
+connectors, the same BYO-for-subscribers rule applies:
+subscribers can bring their own OAuth credentials for any
+connector we ship managed; Free gets the managed-only path.
+The rule is platform-wide ("BYO available for any
+subscriber-only feature we ship managed"), not cloud-env-
+specific.
 
 ## Event-cap overage — soft throttle, not metered
 
@@ -200,6 +302,71 @@ tool I use casually" psychological threshold is far below the
 $9/$10 line). At equal subscriber counts the alternatives are
 revenue-similar; the bet is that $5 with 300 credits converts
 materially more users than $9 with 500.
+
+## Credit buckets and expiry (per-source policy)
+
+Credits are tracked in a **bucketed ledger** with per-source
+expiry — the standard "credit pools / entitlement buckets"
+shape used by OpenAI / Anthropic / AWS / GCP / most metered
+SaaS billing systems. The exact ledger schema, debit
+priority, and Stripe wiring live in
+[`design-billing.md`](design-billing.md) §
+"Credit buckets and expiry policy"; the headline shape:
+
+| Bucket | Granted on | Expires | Rolls over | Refundable |
+|--------|-----------|---------|-----------|------------|
+| `free_monthly` | Free account creation + every cycle (activity-gated, see below) | End of current cycle | **No** | No |
+| `subscriber_monthly` | Subscription start + every renewal | End of current billing cycle | **No** | No |
+| `purchased` | Stripe Checkout top-up confirmed | **Never** (dormancy-bounded) | Yes | Pro-rata within 30 days |
+| `promotional` *(future)* | Signup bonus / referral / support goodwill | Specified at grant time (30-90 days typical) | No | No |
+
+Debit priority on spend: `free_monthly` → `subscriber_monthly`
+→ `promotional` (soonest-expiring first) → `purchased`
+(oldest-first FIFO). Users' purchased balance is always
+preserved last — the grant gets consumed first.
+
+**Why monthly grants expire end-of-cycle:** mobile-plan /
+cloud-quota intuition. "This month's allowance" is the
+universally-understood frame; "use it or lose it" reads as
+the allowance refreshing, not as the platform being stingy.
+Rolling grants would let Free users stockpile $0.60 / year
+of compute and subscribers stockpile $36 / year — small money,
+but it muddies the "$3 of optional bundled compute" framing
+and creates accounting tail on what should be zero-liability
+grants.
+
+**Why purchased credits don't expire:** "I paid you $10, my
+1,000 credits should still exist next year" is the strongest
+consumer-protection expectation and the EU-friendly posture
+(France has no hard expiry rule on pre-paid digital balances
+but industry convention is 12+ months; "never" is a cheap
+moat-strengthening move over OpenAI / Anthropic who default
+to 1 year). Dormant-account liability is bounded by an
+**account-dormancy policy** (see
+[`design-billing.md`](design-billing.md)):
+24 months inactive → pause services, credits remain valid;
+36+ months → dashboard prompt for reactivation; deletion
+only on explicit user request or GDPR right-to-erasure.
+
+**Activity-gated Free monthly grants:** Free's 5 credits/mo
+only refresh if the account had any event-processing or
+dashboard-login activity in the prior month. Active Free
+users see the refresh exactly as today; dormant Free
+accounts (no activity for a full cycle) don't accumulate
+grant cost. This is invisible to active users and only costs
+inactive accounts $0; lets us run a generous "5 free spawns
+a month" Free tier without bleeding compute on the long tail
+of one-time-signup accounts. Subscriber grants refresh
+unconditionally — the subscription itself is the activity
+signal.
+
+**Dashboard language:** the dashboard never says "your
+credits expired"; it says "your monthly allowance refreshes
+on <date>" / "your monthly allowance reset on <date>, new
+balance: 5 credits." Same mechanic, opposite emotional
+valence. The bucket UI labels the user's balance as a single
+number with "X credits this month + Y purchased" breakdown
+only on hover / details.
 
 ## Early-adopter price step ($5 supporter → $7 public)
 
@@ -320,32 +487,44 @@ metered compute on top of the included grant, not the entire
 billing model. The subscription is a new billing leg in
 parallel.
 
-## BYO compute — designed, deferred (not in launch pricing)
+## BYO compute — subscriber feature, parallel-shipped with managed
 
-Earlier draft included BYO failover compute (user stores their
-own Fly / Modal / Daytona / etc. token on brnrd; brnrd spawns
-into the user's cloud account) as a free-tier feature. Dropped
-from launch on 2026-05-25 because:
+Reframed on 2026-05-26 from the earlier "designed, deferred"
+posture. Earlier draft framed BYO as a Free-tier feature
+dropped from launch entirely because of the per-platform
+backend cost (~30%: credential storage UI, scope validation,
+onboarding docs, per-platform failure modes, dispatcher
+branching). The current framing keeps the per-platform cost
+real but reshapes around it:
 
-- ~30% more backend surface area (per-platform credential
-  storage UI, scope validation, per-platform onboarding docs,
-  per-platform failure modes, dispatcher branching on platform
-  selection) — disproportionate to launch user value.
-- ~5% of launch users care; the other 95% would rather paste
-  an AI credential and let brnrd handle the spawn.
-- Per-platform maintenance burden is unbounded.
+- **Policy**: BYO is a **subscriber feature** for whichever
+  cloud envs ship managed. Free stays managed-only by design.
+- **Launch scope**: BYO Fly Machines ships at launch alongside
+  managed Fly (the same env class invoked with the user's
+  token is a small incremental over managed; no separate cloud
+  to onboard).
+- **Post-launch scope**: BYO availability for each cloud
+  follows managed support for that cloud one-for-one. Adding
+  managed Modal also adds BYO Modal in the same release.
 
-Pricing implication is small: when BYO comes back post-launch,
-it lands cleanly on the subscription as a power-user feature
-(the user pays the platform sub for the dispatcher; their cloud
-spawns hit their own cloud bill; brnrd doesn't charge for the
-spawns themselves, just for routing).
+Pricing implication: subscribers who BYO contribute pure
+$5/$7 subscription revenue per month with **zero compute
+markup**. Subscribers who use managed contribute $5/$7 plus
+small per-spawn margin on overages. Both are
+revenue-positive; BYO trades a slim margin stream for a
+cleaner trust posture (subscribers aren't locked into
+brnrd's cloud account, they're choosing managed for the
+convenience).
 
-Daemon-side cloud envs (a laptop daemon fans out to the user's
-cloud via a first-party env extra like `brr[fly]` or a
-third-party env registered via the `brr.envs` entry point)
-remain independent of managed mode entirely — brnrd isn't in
-that path, nothing to price.
+Daemon-side cloud envs (a laptop daemon fans out to the
+user's cloud via a first-party env extra like `brr[fly]` or
+a third-party env registered via the `brr.envs` entry
+point) remain independent of managed mode entirely — brnrd
+isn't in that path, nothing to price. The "BYO at the brnrd
+layer" we're describing here is specifically about the
+**managed-dispatcher routing spawns to the user's cloud
+account** — the dispatcher and the credential vault are
+brnrd-side; only the compute target shifts.
 
 ## Alternatives considered
 
@@ -471,6 +650,22 @@ billing.
   experience at the cost of platform margin. Pre-launch
   decision; current 300-credit shape leaves $2/month
   platform-fee headroom over the included compute.
+- **Free monthly grant size at scale.** 5 credits/mo ×
+  10,000 Free accounts = $500/mo of compute (manageable);
+  × 100,000 Free accounts = $5,000/mo (no longer
+  ignorable). Activity-gating helps but doesn't eliminate
+  the tail. Revisit at the 1,000 / 10,000 / 100,000 Free-
+  account thresholds; knobs we have are tightening the
+  grant (5 → 3), converting to one-time onboarding (5
+  credits at signup, then top-up), or accepting the cost
+  as CAC investment. Default is to accept the cost until
+  it becomes operationally painful.
+- **Account-dormancy timing.** 24 months pause / 36 months
+  prompt is the proposed default; could be longer (36/48,
+  more user-friendly, higher dormancy tail) or shorter
+  (18/24, more aggressive cleanup, more friction risk).
+  Revisit if dormant-account count crosses 10% of total
+  accounts.
 - **Permission-prompt friction vs auto-approve defaults.** The
   subscription bundles generous compute, which reduces the
   "I'll review every cost" pressure that drove `ask` as the
@@ -599,3 +794,35 @@ billing.
   early adopters, $6/$7 for the afterparty — license is
   the right thing, trademark is a post-launch priority"
   framing.
+- 2026-05-26 (compute model + credit-bucket lock-in).
+  **BYO compute reframed from "deferred forever" to
+  "subscriber feature, parallel-shipped with managed."**
+  Policy: if brnrd ships managed support for a cloud env,
+  subscribers can BYO that env in the same release. Launch
+  ships BYO Fly Machines (alongside managed Fly); other
+  clouds get BYO when they get managed. Free stays managed-
+  only on purpose (the sub is the gate; BYO is cost-saving,
+  subscribing is the cost-saving move). Same BYO-for-
+  subscribers principle applies to future agentic-secretary
+  connectors. New "Compute: managed vs BYO" section codifies
+  the two-flow shape. **Credit buckets formalised** with
+  per-source expiry policy: `free_monthly` /
+  `subscriber_monthly` (use-it-or-lose-it end-of-cycle),
+  `purchased` (never expires, dormancy-bounded), `promotional`
+  (future, expires per grant). Debit priority is grants
+  first, purchased last (FIFO within bucket); preserves the
+  user's paid balance. **Activity-gated Free monthly grants**:
+  the 5 credits/mo only refresh if the Free account had any
+  prior-month activity — bounds the long-tail cost of dormant
+  one-time-signup accounts at zero. **Reimbursement framing
+  rejected** in favour of "$5 platform fee + $3 of bundled
+  compute on the house" — the platform fee is the platform
+  fee, the credits aren't a refund. Dashboard never says
+  "credits expired"; says "monthly allowance refreshes on
+  &lt;date&gt;." Full ledger / debit / Stripe wiring lives
+  in [`design-billing.md`](design-billing.md); this page
+  carries the policy summary. Driven by the user's "we
+  probably also gonna have to expire granted credits
+  somehow, unless you think it would be perceived
+  negatively, what's the right shape?" + "agree on no BYO
+  for Free + per-paying-customer language."

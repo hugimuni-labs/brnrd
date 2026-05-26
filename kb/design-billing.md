@@ -5,8 +5,12 @@
 second billing leg alongside the existing credit wallet, after
 the credits-only shape proved self-defeating for sustainability.
 Subscription tier deliberately has no marketing name; CLI verb
-is `brr brnrd subscription`.** Two billing legs that back the
-pricing model in
+is `brr brnrd subscription`. Refined 2026-05-26 (locking pass)
+with the explicit credit-bucket / per-source expiry policy,
+account-dormancy bound on purchased credits, and the
+subscriber-only BYO-compute billing implication (subscribers
+who BYO contribute pure subscription revenue with zero compute
+margin).** Two billing legs that back the pricing model in
 [`decision-pricing-shape.md`](decision-pricing-shape.md):
 
 1. **Subscription** — $5/month recurring Stripe subscription
@@ -37,10 +41,14 @@ In scope:
 
 - Subscription mechanics (price, billing cadence, Stripe
   product, upgrade/downgrade prorating, period boundaries).
-- Wallet model (credit unit, top-up amounts, free / subscriber
-  credit grants, paid-credit non-expiry).
+- Wallet model + **credit bucket ledger schema and per-source
+  expiry policy** (`free_monthly` / `subscriber_monthly` /
+  `purchased` / `promotional`), debit priority, activity-gated
+  Free grants, account-dormancy bound on the
+  purchased-never-expires guarantee.
 - Debit mechanics (when does a spawn debit; what happens on
-  partial / failed spawns).
+  partial / failed spawns; BYO-compute spawns that bypass the
+  wallet entirely).
 - Top-up flow (Stripe Checkout one-shot purchases; opt-in
   auto-topup).
 - Zero-balance UX.
@@ -50,6 +58,9 @@ In scope:
   shared Stripe account across both subscription + one-shot
   products).
 - Audit log entries for every billing operation.
+- BYO-compute billing impact (subscribers who BYO contribute
+  pure subscription revenue; the wallet is bypassed for BYO
+  spawns).
 
 Out of scope, explicitly:
 
@@ -57,10 +68,14 @@ Out of scope, explicitly:
   ([`design-brnrd-protocol.md`](design-brnrd-protocol.md)).
 - Pricing tier shape / sustainability math / what gates each
   tier ([`decision-pricing-shape.md`](decision-pricing-shape.md)).
-- The generalised credential vault (lives in
+- The generalised credential vault internals (lives in
   [`design-brnrd-protocol.md`](design-brnrd-protocol.md) —
   not a billing concern, even though subscribers using
-  private Docker images need registry credentials too).
+  private Docker images and BYO cloud need credentials in the
+  vault).
+- The dormancy state-machine wiring (lives in the brnrd
+  backend's account-state engine; we only specify what
+  dormancy means for the billing ledger here).
 - Per-team / per-seat tier (v-next).
 - Crypto, invoicing (per-invoice prepay), or any non-Stripe
   payment rail at launch.
@@ -83,18 +98,16 @@ The platform-coverage billing leg.
 
 ## Wallet model
 
-The compute-coverage billing leg.
+The compute-coverage billing leg. Headline contract:
 
 | Concept | Value |
 |---------|-------|
 | Credit unit | **1 credit = $0.01** (10,000 credits = $100). Simple math, no exchange-rate weirdness on internal accounting |
 | Top-up amounts (UI presets) | $5, $20, $50, $100, custom (min $5, max $500/single transaction at launch) |
 | Currency at launch | USD on the wallet ledger; EUR / GBP / etc. accepted via Stripe at purchase time (Stripe converts; we hold credit-USD on the ledger) |
-| Paid credit expiry | **Never** — paid credits don't expire; they're the user's purchased capacity |
-| Free-tier credit grant | **5 credits / month** per Free account; expires end-of-month if unused (don't accumulate). Covers ~1-2 failover spawns / month — the "try it once" budget. |
-| Subscriber credit grant | **300 credits / month** per subscribed account (granted on subscribe + every renewal); expires end-of-month if unused. Covers ~100 spawns / month at typical task size — removes the "do I have credits?" mental overhead for common use. |
-| Debit order | Free / subscriber monthly grant drawn first; paid credits drawn only when monthly grant is exhausted |
-| Account balance UI | Always shows split: "200 paid + 230 subscriber this month = 430 available" or "200 paid + 4 Free this month = 204 available" |
+| Account balance UI | Always shows split: "200 purchased + 230 subscriber this month = 430 available" or "4 Free this month = 4 available" |
+| Bucket model | **Four sub-buckets at launch, with per-source expiry**: `free_monthly`, `subscriber_monthly`, `purchased`, plus `promotional` reserved for future use. Full table + debit priority + expiry policy in the next section. |
+| Debit order | Grants first (soonest-expiring within grants); `purchased` last, FIFO. Preserves the user's purchased balance. |
 
 ## Top-up flow
 
@@ -175,6 +188,43 @@ Failure-mode debits:
 | Spawn cancelled by user mid-run | Cost up to cancellation point |
 | Spawn timed out at brnrd hard cap | Full cost up to cap |
 
+## BYO-compute spawns — wallet bypass
+
+Subscribers who BYO their cloud (per
+[`decision-pricing-shape.md`](decision-pricing-shape.md)
+§ "Compute: managed vs BYO") have their spawns dispatched to
+the subscriber's own cloud account using credentials from the
+vault. These spawns **do not touch the credit wallet** — the
+subscriber pays the cloud provider directly, brnrd has no
+visibility into the underlying cloud cost, no debit happens.
+
+Billing implications:
+
+- **Subscribers who BYO contribute pure subscription revenue**
+  ($5/$7 per month, zero compute markup).
+- **Subscribers who mix BYO + managed** (e.g. BYO Fly for some
+  projects, managed compute for others) hit the wallet only on
+  the managed spawns. The included `subscriber_monthly` grant
+  applies to managed spawns only.
+- **Audit log** for BYO spawns: `debit_spawn` is not emitted;
+  instead `spawn_byo` is logged with metadata (account_id, ts,
+  spawn_id, project_id, provider, scheduled_machine_id) so the
+  dashboard can show "spawn ran in your Fly account, ~$X
+  estimated cost" without us actually billing.
+- **Free users** cannot BYO (the policy gate is
+  `subscription.tier == "subscribed"`), so the wallet stays
+  the universal compute-cost surface for Free.
+- **Self-hosters** running their own brnrd don't enter this
+  surface at all — their billing is whatever Stripe / cloud
+  setup they configure on their own deployment.
+
+The wallet's only role for BYO subscribers is preserving any
+top-up balance they purchased before switching to BYO. The
+balance stays on the ledger forever (per the `purchased`
+no-expiry policy) and can be spent on managed envs the user
+adds later (managed Modal once shipped, etc.) or refunded if
+unused within 30 days of purchase.
+
 ## Zero-balance UX
 
 When a spawn would be dispatched but the wallet is at or near zero:
@@ -215,20 +265,29 @@ Documented on the pricing page. Two billing legs, two policies:
 
 **Wallet (one-shot top-ups):**
 
-- **Unused paid credits**: refundable pro-rata within 30 days of
-  purchase. User requests via dashboard or email; refund
-  processed within 5 business days. Stripe handles the actual
-  refund; brnrd debits the ledger correspondingly.
+- **Unused `purchased` credits**: refundable pro-rata within 30
+  days of purchase. User requests via dashboard or email;
+  refund processed within 5 business days. Stripe handles the
+  actual refund (against the original `payment_intent` where
+  Stripe's 6-month refund window allows); brnrd debits the
+  ledger correspondingly. Beyond the 30-day window the credits
+  remain valid forever; they're just not cash-refundable
+  anymore.
 - **Used credits**: not refundable (the compute was consumed;
   brnrd paid Fly already).
 - **Spawn failures attributable to brnrd** (Fly-side outage,
   brnrd-side bug): credit auto-refunded; user notified.
 - **Spawn failures attributable to the user's task** (agent
   errored, code didn't compile): not refunded; the spawn ran.
-- **Free / subscriber monthly grant credits** are not refundable
-  (they were never paid for).
-- **Account closure**: paid balance refunded in full within 30
-  days; user receives final ledger statement.
+- **`free_monthly` / `subscriber_monthly` / `promotional`
+  grant credits** are not refundable (they were never paid for
+  in cash; they were granted on the house or bundled with a
+  subscription / promotion).
+- **Account closure**: unused `purchased` balance refunded to
+  the original Stripe payment method within 30 days where
+  Stripe's window allows, OR via manual refund process where
+  it doesn't; user receives final ledger statement. Grant
+  buckets are zeroed without refund.
 
 **Subscription:**
 
@@ -246,8 +305,10 @@ Documented on the pricing page. Two billing legs, two policies:
 - **Annual subscription cancel mid-year**: prorated refund of
   the unused months, returned to Stripe within 5 business days.
 - **Subscriber credits granted that month** stay on the
-  account through the period end; unused subscriber credits
-  expire at the period boundary alongside the subscription.
+  account through the period end; unused `subscriber_monthly`
+  credits expire at the period boundary alongside the
+  subscription (the bucket is cleared in the same transaction
+  that flips `tier=free`).
 
 The 30-day wallet window is generous enough for "I made a
 mistake" recovery and short enough that brnrd's cash position
@@ -255,36 +316,178 @@ stays predictable. The cancel-at-period-end subscription
 default avoids the "I cancelled mid-month, did I lose
 everything?" panic that always-immediate cancels create.
 
-## Monthly credit grants
+## Credit buckets and expiry policy
 
-Granted at the start of each calendar month (UTC), sized per
-tier:
+The "temporal grouped resources" problem (grants vs purchases,
+recurring vs one-shot, with-expiry vs without) is solved with
+the standard **bucketed-ledger** shape used by OpenAI / Anthropic
+/ AWS / GCP / Stripe Customer Balance / most metered SaaS
+billing platforms. Each bucket has its own source, expiry
+policy, rollover policy, and refund policy:
+
+| Bucket | Granted on | Expires | Rolls over | Refundable | Audit op |
+|--------|-----------|---------|-----------|------------|----------|
+| `free_monthly` | Account creation (prorated) + every cycle for Free accounts (activity-gated) | End of current cycle | **No** | No (was never charged for) | `grant_free_monthly` / `expire_free_monthly` |
+| `subscriber_monthly` | Subscription start (prorated) + every renewal | End of current billing cycle | **No** | No (included in the sub) | `grant_subscriber_monthly` / `expire_subscriber_monthly` |
+| `purchased` | Stripe Checkout top-up confirmed | **Never** (account-dormancy bounded; see "Account dormancy" below) | Yes | Pro-rata within 30 days (see Refund policy) | `topup` / `refund_purchased` |
+| `promotional` *(future-proofing; not used at launch)* | Signup bonus / referral / support-issued goodwill | Per-grant `expires_at` (typically 30-90 days) | No | No | `grant_promotional` / `expire_promotional` |
+
+### Debit priority (FIFO within bucket, expiry-aware across buckets)
 
 ```
-On the 1st of each month:
-  for each account:
-    if tier == "subscribed":
-      grant 300 subscriber_grant credits  (separate sub-bucket; doesn't accumulate)
-      expire any unused subscriber_grant from the previous month
+On debit(amount):
+  1. Drain free_monthly until empty or amount satisfied
+  2. Drain subscriber_monthly until empty or amount satisfied
+  3. Drain promotional grants in soonest-expiring-first order
+  4. Drain purchased grants FIFO (oldest top-up first)
+  5. If still short, the spawn's final debit is allowed to leave
+     purchased slightly negative (≤ one spawn's hard cap);
+     enqueue subsequent events until top-up.
+```
+
+This means a user's `purchased` balance is **always preserved
+last**. The monthly allowance gets consumed first, exactly
+matching the user's intuition ("my grant runs out, then I dip
+into what I paid for"). Promotional credits with near-term
+expiry drain ahead of long-lived purchases. The implementation
+is one priority-ordered loop over bucket records, ~30 lines.
+
+### Per-bucket expiry mechanics
+
+**`free_monthly` and `subscriber_monthly` — use-it-or-lose-it
+at cycle boundary.**
+
+```
+On the 1st of each UTC month (Free accounts):
+  for each Free account:
+    if account had any activity in the prior month:
+      expire any unused free_monthly balance
+      grant 5 free_monthly credits
     else:
-      grant 5 free_grant credits  (separate sub-bucket; doesn't accumulate)
-      expire any unused free_grant from the previous month
+      account is "dormant Free"; no new grant issued;
+      existing free_monthly balance also expires
+      (activity-gated; resumes on next active month)
+
+On subscription renewal (subscribed accounts, per Stripe's renewal):
+  expire any unused subscriber_monthly balance
+  grant 300 subscriber_monthly credits
+
+On subscription cancel-at-period-end (period boundary):
+  expire any unused subscriber_monthly balance
+  flip tier=free; next month grants free_monthly under
+  activity-gating
 ```
 
-On subscribe mid-month: grant `300 × days_remaining / days_in_month`
-credits as the prorated subscriber grant. On cancel at period
-end: the next month's grant doesn't issue; existing month's
-unused subscriber grant expires at the period boundary
-(sub-bucket cleared).
+The **activity gate on Free** is the small but important lever:
+5 credits / month × 100,000 long-tail one-time-signup accounts
+would be $5,000 / month of pointless compute cost on the
+liability side without it. Activity = any event processed in the
+prior month OR any dashboard login OR any CLI command that hit
+the backend. Active Free users never notice the gate; dormant
+ones simply don't accumulate a grant they're not using.
+Subscriber grants refresh unconditionally — the subscription
+itself is the activity signal.
 
-New accounts (Free at signup): 5 credits granted prorated to the
-remainder of the calendar month (joining on the 15th = ~2 credits
-for that month, full 5 the next). Removes free-month-gaming.
+**`purchased` — no expiry, bounded by account dormancy.**
 
-The two grants live in separate sub-buckets so the UI shows the
-right thing ("300 subscriber this month" vs "5 Free this month")
-and so that cancel → Free correctly clears the subscriber bucket
-without touching paid or Free balances.
+Purchased credits are user property. The user paid; the user
+keeps them, forever, period. This exceeds OpenAI's / Anthropic's
+1-year expiry (which both generate user complaints) and matches
+the strongest EU consumer-protection expectation on prepaid
+digital balances.
+
+The "forever" promise is bounded operationally by an account-
+dormancy policy, not by credit expiry:
+
+- **24 months of account inactivity** → account marked
+  `dormant`; brnrd-side services pause (no spawn dispatch, no
+  event processing, optional bot disconnection prompted). All
+  `purchased` credits remain on the ledger, untouched.
+- **36+ months of dormancy** → dashboard prompt for
+  reactivation on next login; banner persists across sessions
+  until acknowledged.
+- **Reactivation** (login OR explicit user action) → account
+  un-dormants, credits remain exactly as they were, services
+  resume.
+- **Deletion** (only on explicit user request OR GDPR
+  right-to-erasure) → unused `purchased` credits refunded to
+  the user's original Stripe payment method (where the
+  6-month-old Stripe refund window allows) OR to a manual
+  refund process; account + ledger entries deleted.
+
+This bounds the operational tail on dormant accounts at
+zero (paused = no compute spend by definition) without
+touching the "credits are yours forever" promise that drives
+the trust signal.
+
+**`promotional` — per-grant `expires_at`.**
+
+Reserved for future use (signup bonuses, referral credits,
+support-issued goodwill). Each grant carries its own explicit
+expiry timestamp; the bucket entries include both `expires_at`
+and `source_campaign_id` for analytics. At launch the bucket
+exists in the schema but no grants are issued — the launch
+mechanic is the supporter cohort price, not a promotional
+credit grant.
+
+### Dashboard language (the optics layer)
+
+The dashboard **never says "your credits expired."** It says:
+
+- "Your monthly allowance refreshes on &lt;date&gt;." (forward-looking)
+- "Your monthly allowance reset on &lt;date&gt;, new balance: 5
+  credits." (just-happened)
+- "Your purchased balance: 420 credits ($4.20 prepaid)." (long-
+  lived, always visible)
+
+The balance UI shows a single top-line number with a
+breakdown on hover / expand:
+
+```
+430 credits available
+    230  this month (subscriber, refreshes Jun 1)
+    200  purchased (no expiry)
+```
+
+For Free users:
+
+```
+4 credits available
+    4  this month (Free, refreshes Jun 1)
+```
+
+For subscribers who BYO and don't spend the grant:
+
+```
+500 credits available
+    300  this month (subscriber, refreshes Jun 1)
+    200  purchased (no expiry)
+```
+
+The grant being prominently called "this month" + "refreshes"
+makes the use-it-or-lose-it mechanic feel like an allowance,
+not a deadline. Empirically this is how every monthly-allowance
+product is communicated (mobile data, cloud quotas, gym
+classes).
+
+### Account dormancy and the "purchased never expires" tail
+
+| Account state | Trigger | Effect on services | Effect on `purchased` balance |
+|---------------|---------|-------------------|------------------------------|
+| `active` | Default | All services on | Spendable normally |
+| `dormant` | 24 mo no activity | Spawn dispatch paused; events queued or dropped per policy; bots may disconnect | Preserved exactly; no expiry |
+| `dormant_long` | 36 mo no activity | Same as dormant + dashboard prompt persists | Preserved exactly; no expiry |
+| `deleted` | Explicit user request OR GDPR | Account + ledger entries removed | Refunded to the original Stripe payment method (within Stripe's 6-month refund window) OR manual refund process |
+
+The dormancy policy is a separate account-state machine from
+the billing ledger. The ledger entries for `purchased` credits
+have **no `expires_at` value at all**; the bucket has no expiry
+sweep job. Dormancy is enforced at the service layer (dispatcher
++ event processor + bot adapter), not at the ledger layer. This
+keeps the property "purchased credits are immortal data" clean
+and verifiable from the ledger schema alone — important if a
+user audits their balance, important for the trust signal,
+important for any future migration off Stripe.
 
 ## Audit log entries
 
@@ -300,14 +503,19 @@ per the data-minimization principle:
 | `subscription_plan_switched` | account_id, ts, from_plan, to_plan, prorated_amount |
 | `grant_subscriber_monthly` | account_id, ts, amount_credits, month, prorated_from? |
 | `expire_subscriber_monthly` | account_id, ts, amount_credits, month |
-| `grant_free_monthly` | account_id, ts, amount_credits, month |
+| `grant_free_monthly` | account_id, ts, amount_credits, month, activity_gate_state (`gated` / `passed`) |
 | `expire_free_monthly` | account_id, ts, amount_credits, month |
-| `topup` | account_id, ts, amount_credits, stripe_payment_intent_id, source (manual / auto) |
-| `debit_spawn` | account_id, ts, amount_credits, spawn_id, project_id, sub_bucket (`paid` / `subscriber_monthly` / `free_monthly`), est_vs_actual_delta |
-| `refund_paid` | account_id, ts, amount_credits, reason (user_request / brnrd_failure), stripe_refund_id |
+| `grant_promotional` | account_id, ts, amount_credits, expires_at, campaign_id |
+| `expire_promotional` | account_id, ts, amount_credits, campaign_id |
+| `topup` | account_id, ts, amount_credits, stripe_payment_intent_id, source (manual / auto), bucket=`purchased` |
+| `debit_spawn` | account_id, ts, amount_credits, spawn_id, project_id, sub_bucket (`free_monthly` / `subscriber_monthly` / `promotional` / `purchased`), est_vs_actual_delta |
+| `spawn_byo` *(BYO subscribers; no wallet debit)* | account_id, ts, spawn_id, project_id, provider (`fly` / future), scheduled_machine_id, estimated_cost_usd |
+| `refund_purchased` | account_id, ts, amount_credits, reason (user_request / brnrd_failure / dormancy_deletion), stripe_refund_id |
 | `refund_grant_brnrd_failure` | account_id, ts, amount_credits, spawn_id, sub_bucket |
 | `auto_topup_enabled` / `auto_topup_disabled` | account_id, ts |
 | `payment_method_added` / `removed` | account_id, ts, stripe_payment_method_id |
+| `account_marked_dormant` | account_id, ts, last_activity_at, dormant_state (`dormant` / `dormant_long`) |
+| `account_reactivated` | account_id, ts, prior_dormant_state |
 
 User-visible via `brr brnrd balance` (current totals + sub
 status) and the dashboard's Cost / Audit view (full ledger).
@@ -621,3 +829,34 @@ headline 30-50% margin over wholesale Fly cost lands closer to
   user's "I don't like Plus as a name or verb; $5 a month
   with the credits to make up for it; properly tweaked Free
   might not need the 1-project cap" feedback.
+- 2026-05-26 (locking pass — credit buckets + BYO billing).
+  **Explicit credit-bucket / per-source expiry policy locked
+  in.** Replaced "Monthly credit grants" section with a fuller
+  "Credit buckets and expiry policy" section that defines the
+  four sub-buckets (`free_monthly`, `subscriber_monthly`,
+  `purchased`, `promotional`), per-bucket expiry mechanics,
+  debit priority (grants first, purchased last, FIFO),
+  activity-gated Free monthly grants (only refresh if the
+  prior month had any activity — bounds dormant-account
+  compute cost at zero), the "purchased never expires"
+  guarantee, and the account-dormancy policy that bounds the
+  liability tail (24mo pause / 36mo prompt / deletion only on
+  explicit request or GDPR). Sub-bucket name `paid` →
+  `purchased` everywhere (audit ops, debit-spawn `sub_bucket`,
+  refund op). New audit ops: `grant_promotional` /
+  `expire_promotional` (future-proofing),
+  `account_marked_dormant` / `account_reactivated`,
+  `spawn_byo` (BYO subscribers, no wallet debit). Refund
+  policy clarified: pro-rata within 30 days for `purchased`;
+  grants never refundable in cash; beyond 30d purchased
+  credits stay valid forever but aren't cash-refundable.
+  Dashboard never says "credits expired"; says "monthly
+  allowance refreshes on &lt;date&gt;." **BYO-compute billing
+  implications added**: subscribers who BYO contribute pure
+  subscription revenue, wallet bypassed entirely; mixed-mode
+  (BYO + managed) hits the wallet only on managed spawns;
+  audit log distinguishes via `spawn_byo`. Scope expanded to
+  cover the bucket policy + BYO billing impact. Driven by
+  the user's "credit expiry shape + holistic credit-issuing
+  optics" + "BYO everything for paying customers, no BYO for
+  Free" framing.

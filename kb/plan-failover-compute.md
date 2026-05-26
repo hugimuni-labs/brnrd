@@ -49,16 +49,27 @@ the dispatcher reads from account-scope settings.
   — failover compute extends that skeleton, doesn't precede it.
 
 Ship order: managed gates (the dispatcher) → failover compute on
-brnrd-owned Fly pool → dashboard surfaces for usage / audit /
-permission prompts → (post-launch, if asked-for) BYO platform
-tokens.
+brnrd-owned Fly pool → **BYO Fly Machines for subscribers
+(parallel-ships with managed Fly)** → dashboard surfaces for
+usage / audit / permission prompts. Each subsequent cloud env
+we add managed support for (Modal / Daytona / etc.) ships BYO
+for that env in the same release.
 
-**BYO compute dropped from launch scope** on 2026-05-25 per
-`decision-pricing-shape.md` updated rationale: implementation
-surface area was disproportionate to the ~5% of users who'd value
-it at launch. The wire protocol still supports BYO (designed,
-deferred shape preserved in `design-brnrd-protocol.md`) so the
-add-back is small when usage justifies it.
+**BYO at launch — subscriber-only, Fly Machines only**
+(reframed on 2026-05-26 per the locking pass in
+`decision-pricing-shape.md` and the BYO-compute section in
+`design-brnrd-protocol.md`). The earlier 2026-05-25 framing
+deferred BYO entirely; the current framing recognises that BYO
+on top of an already-shipping managed env is a small
+incremental (~one credential `kind` value, one dispatcher
+branch on credential presence) given the env class is shared
+between managed and BYO callers. **Policy: if we ship a cloud
+managed, BYO ships in the same release; we never BYO-only-for-
+clouds-we-don't-manage.** Free stays managed-only on purpose
+(the sub is the gate, BYO is cost-saving, subscribing is the
+cost-saving move). Implementation details live in
+`design-brnrd-protocol.md` § "BYO compute — subscriber feature,
+parallel-shipped with managed".
 
 ## Goals
 
@@ -93,12 +104,17 @@ add-back is small when usage justifies it.
   (`POST /v1/accounts/credentials`,
   `GET /v1/accounts/credentials`,
   `DELETE /v1/accounts/credentials/{id}`) live on brnrd
-  with per-account envelope-key encryption. Three payload
+  with per-account envelope-key encryption. Four payload
   shapes accepted: `api-key` (AI runner), `dir-tarball` (AI
   runner, preserves Claude Pro / Codex Plus / Gemini OAuth
-  subscription auth), and `registry-userpass` (Docker
-  registry). `kind` discriminator: `ai-anthropic` /
-  `ai-openai` / `ai-google` / `ai-github` / `docker-registry`.
+  subscription auth), `registry-userpass` (Docker registry),
+  and `cloud-token` (BYO cloud, subscriber-only at launch).
+  `kind` discriminator: `ai-anthropic` / `ai-openai` /
+  `ai-google` / `ai-github` / `docker-registry` /
+  `cloud-platform`. `cloud-platform` writes + reads gate on
+  `subscription.tier == "subscribed"` (403 otherwise);
+  `provider` field on the credential matches the env class
+  at dispatch time (`fly` at launch).
 - Failover-policy endpoints
   (`POST/GET /v1/accounts/failover-policy`) live with monthly
   spawn cap (per-tier defaults: 5 spawn-credits Free, 300
@@ -374,19 +390,24 @@ app + their own credential vault.
   failover dispatches them the same way once they ship.
 - Server-side spawn for *online* daemons (load-shedding); deferred
   per `design-brnrd-protocol.md` "Out of scope".
-- **BYO platform tokens** (Fly / Modal / Daytona / Codespaces /
-  etc. tokens stored on brnrd, used to spawn in the user's own
-  cloud). Wire shape is preserved in the design page as
-  "designed, deferred"; add-back is small when usage justifies
-  it. Daemon-side cloud envs (a laptop daemon fans out to the
-  user's cloud via a first-party env extra like `brr[fly]` or a
-  third-party env registered via the `brr.envs` entry point)
-  remain independent of managed mode entirely and ship per
-  [`research-cloud-envs.md`](research-cloud-envs.md)
-  on their own clock.
+- **BYO platform tokens for non-Fly clouds** at launch
+  (Modal / Daytona / Codespaces / etc.). Each cloud's BYO
+  ships in the same release as its managed support per the
+  one-for-one rule; only Fly is managed at launch, so only
+  BYO Fly ships at launch. Subscriber-only; vault gate sits
+  on the same `kind=cloud-platform` write+read paths. See
+  `design-brnrd-protocol.md` § "BYO compute — subscriber
+  feature, parallel-shipped with managed". Daemon-side cloud
+  envs (a laptop daemon fans out to the user's cloud via a
+  first-party env extra like `brr[fly]` or a third-party env
+  registered via the `brr.envs` entry point) remain
+  independent of managed mode entirely and ship per
+  [`research-cloud-envs.md`](research-cloud-envs.md) on
+  their own clock.
 - Modal / Daytona / E2B / Codespaces server-side callers — those
   follow the same shape as Fly; each is a separate small plan
-  once usage justifies a second managed-compute backend.
+  once usage justifies a second managed-compute backend, and
+  each lands managed + BYO together in the same release.
 - Payments integration (Stripe / Paddle / etc.); manual invoicing
   at launch is enough until usage justifies the integration cost.
 - Web dashboard for credentials / audit log / billing — CLI-first
@@ -538,3 +559,29 @@ app + their own credential vault.
   $5 a month with the credits to make up for it" feedback.
   Latest pondering breadcrumb in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
+- 2026-05-26 (locking pass — BYO Fly at launch + credit
+  buckets in the dispatcher path). **BYO Fly Machines added
+  to launch scope** as a subscriber-only feature parallel-
+  shipping with managed Fly. Credential vault shape extended
+  (fourth `kind` value `cloud-platform`, `provider`
+  discriminator); subscriber gate on write + read paths;
+  dispatcher branches on BYO-cred presence at dispatch time
+  (same env class, two callers — managed token vs decrypted
+  user token). Ship order updated to reflect the parallel
+  release. "BYO platform tokens" out-of-scope entry rewritten
+  to make clear non-Fly BYO follows non-Fly managed support
+  (one-for-one rule). Done-definition's credential-vault
+  bullet extended with the fourth payload shape +
+  subscriber-gate semantics. **Per-tier credit caps now read
+  from the bucketed ledger** (per `design-billing.md` §
+  "Credit buckets and expiry policy"): the per-tier
+  `monthly_spawn_cap` is sourced from
+  `free_monthly` / `subscriber_monthly` grant size + any
+  `purchased` balance the user holds; activity-gated Free
+  grants only refresh on prior-month activity. Dispatcher's
+  pre-spawn balance check now walks the bucket priority order
+  (`free_monthly` → `subscriber_monthly` → `promotional` →
+  `purchased`) before deciding to enqueue vs spawn. Driven
+  by the user's "since we charge per paying customer we can
+  allow byo everything on top of that" + "we probably also
+  gonna have to expire granted credits somehow" framing.

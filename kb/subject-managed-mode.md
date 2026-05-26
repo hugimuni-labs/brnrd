@@ -75,26 +75,32 @@ wire contract that ties everything together is in
 dashboard MVP is in
 [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md).
 
-**Two surfaces at launch, one designed-deferred. Billed across
-two tiers (Free + Subscribed, no marketing tier name) with
-metered compute on top of either; full table in
+**Two surfaces at launch. Surface B has a subscriber-only
+BYO sub-option that parallel-ships with the managed default.
+Billed across two tiers (Free + Subscribed, no marketing tier
+name) with metered compute on top of either; full table in
 [`decision-pricing-shape.md`](decision-pricing-shape.md):**
 
 | Surface | What it is | What Free gets | What Subscribed ($5/mo, or $50/yr) gets | Adoption pain it removes |
 |---------|-----------|----------------|----------------------------------------|--------------------------|
 | **A. Managed dispatcher** — hosted bots + multi-project routing + permission prompts + audit | Hosted GH App + Telegram bot routing events to a per-account brnrd inbox, multi-project routing on top of one bot per platform, permission prompts before failover spawns, audit log | Up to 3 projects, 100 events/month, basic read-only dashboard, 7-day audit | Up to 10 projects, 10K events/month, full dashboard (cost charts, cross-project view, permission-prompt customisation), 90-day audit, email support | Per-user GH App / BotFather setup — currently the longest friction in adoption — AND "my laptop has to be up" — together, in one flow |
-| **B. Managed compute** — failover spawn on brnrd-owned cloud | Same dispatcher; when the user's daemon is offline and the user opts in, brnrd spawns a per-task ephemeral sandbox on its own Fly Machines pool, decrypts the user's AI credentials into the sandbox, runs the task, returns the response via the gate | 5 spawn-credits/month included ($0.05) | 300 spawn-credits/month included ($3 of compute) | "I want managed continuity without a credit card surprise" — subscribers get generous included compute; Free + over-cap is metered top-up (no surprise charges) |
-| **C. BYO compute** (deferred) | Same failover spawn but in the user's cloud account using a user-stored cloud-platform token | n/a at launch | n/a at launch | Out of scope at launch per `decision-pricing-shape.md`; wire shape preserved in the design page for clean add-back when usage justifies |
+| **B. Compute** — failover spawn, two sub-options for subscribers | When the user's daemon is offline and the user opts in, brnrd dispatches a per-task ephemeral sandbox. **Managed (default)**: spawns on brnrd-owned Fly Machines pool, decrypts user's AI credentials into the sandbox, runs the task, returns response via the gate. **BYO (subscriber opt-in)**: subscriber stores a cloud-platform credential in the vault (`brr brnrd creds add cloud-platform --provider fly --token …`); the same dispatcher invokes the same env class with the subscriber's token; spawn runs in subscriber's own cloud account; user pays the cloud provider directly. Same env class, two callers per the "Caller axis" pattern in [`research-cloud-envs.md`](research-cloud-envs.md). | Managed only; 5 spawn-credits/month included ($0.05) | Managed by default with 300 spawn-credits/month included ($3 of compute). OR BYO Fly (subscriber opt-in) — zero compute-side billing, pure subscription revenue, same dispatcher | "I want managed continuity without a credit card surprise" — subscribers get generous included compute on managed; "I already have a Fly account and don't want compute markup" — subscribers BYO and the wallet is bypassed entirely |
 
 Surface A is the entry point (Free tier is genuinely usable for
 hobbyists with 1-3 projects; the subscription unlocks bigger
 project headroom + the full dashboard + bigger event/compute
 caps — the natural "I'm using brr seriously" line). Surface B
-is the paid-compute leg, with the subscription including
-generous compute and metered top-ups for overage. Surface C is
-deferred — the protocol supports it, but implementation surface
-area was disproportionate to the ~5% of users who'd value it
-at launch.
+is the compute leg, with the subscription including generous
+managed compute (300 credits/mo on the house) AND optional BYO
+for subscribers who prefer to keep their cloud spend on accounts
+they already own. Free stays managed-only by design — the sub
+is the BYO gate (BYO is structurally a cost-saving feature; if
+you want to save on compute, subscribe; if you're on Free,
+you're trying the platform). Full Compute: managed vs BYO
+discussion lives in
+[`decision-pricing-shape.md`](decision-pricing-shape.md). Each
+new cloud env we add managed support for (Modal / Daytona /
+etc.) ships BYO for that env in the same release.
 
 **Self-hosted brnrd** stays always-free with full feature
 parity. The hosted subscription pays for hosted-service
@@ -471,7 +477,61 @@ remaining paid balance. The pricing rate published in
 a small margin over wholesale Fly Machines pricing —
 sustainable, transparent, no surprises.
 
-## Surface C — BYO compute (designed, deferred)
+## BYO compute (subscriber sub-option of Surface B)
+
+**Reframed on 2026-05-26**: BYO compute is no longer a
+separate deferred surface. It's a **subscriber-opt-in
+sub-option of Surface B that parallel-ships with managed
+support for each cloud env**. At launch only Fly Machines
+ships managed; therefore only BYO Fly ships at launch. Each
+subsequent managed cloud (Modal / Daytona / Codespaces / …)
+unlocks BYO for that env in the same release.
+
+The pre-2026-05-26 "Surface C — designed, deferred" framing
+is preserved below for context — it explained the
+implementation cost trade-off that drove the original
+deferral. The current framing recognises that BYO on top of
+already-shipping managed support is a small incremental
+(same env class, one new credential `kind`, one dispatcher
+branch on credential presence), so the cost-vs-value math
+flipped once Fly's managed path was anyway on the launch
+critical path.
+
+### Subscriber-only by design
+
+The vault gate on `cloud-platform` credentials sits on
+`subscription.tier == "subscribed"`. Free accounts can't store
+cloud-platform creds; their compute path is managed-only. Three
+reasons (mirrored from `decision-pricing-shape.md`):
+
+1. Free's whole purpose is "try this without setup friction" —
+   adding cloud-token onboarding defeats that.
+2. BYO is structurally a cost-saving feature; subscribing is
+   the cost-saving move. Free + BYO would create a strict-
+   better-than-paid path and undercut our own revenue.
+3. The subscription is the natural per-paying-customer gate;
+   gating BYO behind it gives one clean code path.
+
+### What ships at launch
+
+- **Managed Fly Machines** (default for Free + Subscribed) +
+  **BYO Fly Machines** (subscriber-only, parallel-shipped) —
+  same `EnvBackend.start(token=...)` invocation with different
+  `token`. Implementation lives in
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+  § "BYO compute" + the BYO dispatch path pseudo-code in the
+  credential-vault section.
+- **Audit log distinguishes**: BYO spawns emit `spawn_byo` (no
+  wallet debit; estimated cloud cost surfaced on the dashboard
+  for the user's visibility). Managed spawns emit `debit_spawn`
+  with the wallet sub-bucket per `design-billing.md`.
+- **Wallet bypass for BYO**: subscribers' BYO spawns never
+  touch the credit wallet. Mixed-mode subscribers (BYO Fly,
+  managed Modal once shipped) hit the wallet only on managed
+  spawns; the included `subscriber_monthly` grant applies to
+  managed spawns only.
+
+### Pre-2026-05-26 deferral rationale (preserved for context)
 
 The earlier draft of this hub had BYO compute as a launch
 surface: the user stores their own Fly / Modal / Daytona / etc.
@@ -490,15 +550,12 @@ value:
 - Maintenance load is unbounded — each platform we support means
   partial-support-matrix for someone else's cloud.
 
-Easy add-back when usage justifies: the wire protocol supports
-BYO additively (new `/v1/accounts/cloud-credentials` endpoint
-family parallel to AI credentials; one new field in the failover
-policy; one branch in the dispatcher's spawn step). Adapter code
-is identical (same plugin, different token source). See
-[`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
-"BYO compute — designed, deferred" for the preserved sketch and
-[`decision-pricing-shape.md`](decision-pricing-shape.md) for the
-add-back rationale.
+The 2026-05-26 lock-in resolved this by tying BYO availability
+1:1 to managed support per cloud — at launch only Fly is
+managed, so only Fly is BYO; the cost stays small and bounded.
+Free stays managed-only on purpose; the subscriber gate handles
+the "who gets BYO" question without per-platform onboarding
+docs needing to be Free-friendly.
 
 ## Dashboard
 
@@ -620,10 +677,14 @@ In scope for managed-mode launch:
   daemon side, the brnrd inbox-as-service API, GH App + TG bot
   webhooks, multi-project routing, permission-prompt API, audit
   log. Free + Subscribed tier.
-- Surface B (managed compute) — generalised credential vault
-  (AI runner + docker-registry, encrypted at rest), dispatcher
-  decision tree, brnrd-owned Fly Machines pool, sandbox image,
-  per-spawn task-key + GH App installation token, accounting +
+- Surface B (compute) — generalised credential vault (AI runner
+  + docker-registry + cloud-platform `kind`s, encrypted at rest;
+  cloud-platform writes/reads subscriber-gated), dispatcher
+  decision tree with managed-vs-BYO branch on credential
+  presence, brnrd-owned Fly Machines pool for the managed path,
+  BYO Fly for the subscriber-opt-in path (same env class invoked
+  with the user's token), sandbox image, per-spawn task-key + GH
+  App installation token, accounting +
   CSV exporter for manual invoicing. Included credits in the
   subscription; metered top-ups for overage.
 - Subscription billing leg (Stripe recurring, monthly +
@@ -649,8 +710,13 @@ In scope for managed-mode launch:
 
 Out of scope, explicitly:
 
-- **BYO compute** (Surface C) — designed, deferred per the
-  rationale above; protocol supports clean add-back.
+- **BYO compute for non-Fly clouds** at launch (Modal /
+  Daytona / Codespaces / etc.). Each cloud's BYO ships in the
+  same release as its managed support per the one-for-one
+  rule; only Fly is managed at launch, so only BYO Fly ships
+  at launch. The old "Surface C — designed, deferred" framing
+  is collapsed into Surface B as a subscriber-opt-in sub-
+  option, NOT a separately-deferred surface.
 - **Agentic secretary** — the cross-project proactive layer
   (e.g. "schedule a deploy review every Monday", "notice when
   CI breaks across multiple projects and propose a fix"). Tracked
