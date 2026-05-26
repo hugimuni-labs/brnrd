@@ -510,6 +510,80 @@ the current state. §6 is the re-promotion guide.
 > Stripe product, dispatcher are all the same shape; only
 > labels + numbers + a few enum values changed.
 
+> **2026-05-26 — locking pass: licensing + competitive-
+> defense posture.** User asked: "yeah lets add a few notes
+> to lock it. 5 for early adopters (six seven :D for the
+> afterparty) sounds great. the license also is a right
+> thing. don't have money on the trademark yet, but we need
+> to have it as a prio post launch." Driven by the question
+> "what stops a competitor from cloning the OSS and
+> undercutting us at $4?"
+>
+> New page: **`kb/decision-licensing-and-defense.md`**.
+> Locks three concrete moves into canonical, defensible form:
+>
+> - **License split**: `src/brr/` (daemon) stays **MIT** —
+>   maximum community goodwill, fork freely. `src/brnrd/`
+>   + `src/brnrd_web/` (backend + dashboard) ship
+>   **AGPLv3** — neutralises the "Big Cloud rehosts our
+>   OSS as a competing managed service" attack while
+>   keeping self-hosters fully unaffected (running
+>   unmodified brnrd has no AGPL obligations beyond
+>   copyright notice + source availability, which we
+>   publish ourselves). AGPL chosen over BUSL / ELv2 / SSPL
+>   specifically because it preserves OSI-approved status
+>   + community trust + protects against the realistic
+>   attacker. Per-package `LICENSE` files; the package
+>   boundary from `decision-monorepo-structure.md` doubles
+>   as the license boundary.
+> - **Early-adopter pricing**: first **200 subscribers
+>   at $5 / month**, **grandfathered forever** on Stripe
+>   (existing subs never migrate `Price` IDs), then **$7 /
+>   month** for the public cohort (joiners after the 200th
+>   sub OR after launch+12-months, whichever first).
+>   Annual variants $50 / $70 (~17% off in both phases).
+>   Two `Price` IDs on one Stripe Product; atomic counter
+>   on brnrd gates the supporter boundary. The user's "5
+>   for early adopters, six seven for the afterparty"
+>   framing in canonical form. Loyalty + long-tail revenue
+>   headroom in one step (adds ~$600/mo at 500 subs,
+>   ~$1,600/mo at 1,000 subs vs an all-supporter universe).
+> - **Trademark `brr` + `brnrd`**: deferred at launch for
+>   budget reasons (€800-1500 via EUIPO through HugiMuni
+>   SAS / French IP lawyer; classes 9 + 42). Post-launch
+>   priority with explicit trigger: **first of**
+>   launch+12-months OR first €10K cumulative revenue OR
+>   first observed competitor. Single highest-leverage
+>   defensive move per euro spent; only #3 in priority due
+>   to budget timing.
+>
+> Explicit anti-patterns named: don't go BUSL / ELv2 /
+> SSPL (community-goodwill cost > defense gain at our
+> scale); don't gate any feature behind hosted-only (breaks
+> the always-free-self-host promise); don't race to bottom
+> on price; don't pre-buy defensive look-alike domains
+> (trademark + UDRP procedure covers the actual attack
+> pattern at lower ongoing cost); don't require a CLA at
+> launch.
+>
+> Pages modified beyond the new file:
+> `decision-pricing-shape.md` (tier table shows both
+> `Price` variants + new "Early-adopter price step" section
+> + sustainability math re-run with blended pricing),
+> `decision-monorepo-structure.md` (new "License boundary
+> aligns with the package boundary" section), `index.md`
+> (pricing-shape blurb updated + new
+> licensing-and-defense entry + monorepo license-boundary
+> callout), `log.md`, this breadcrumb. Implementation
+> impact at launch is small (top-level `LICENSE-OVERVIEW.md`
+> + per-package `LICENSE` files ~30min with the monorepo
+> restructuring PR; two Stripe `Price` IDs + atomic
+> supporter counter ~half-day during Stripe product setup;
+> trademark is post-launch). The defensive posture is
+> overwhelmingly already-built; this pass just locks the
+> implicit moves into explicit, defensible form before
+> launch reveals them to the world.
+
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.
 `brnrd` is one product axis; managed-brr is a different one.
