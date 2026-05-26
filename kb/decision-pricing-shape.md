@@ -27,6 +27,15 @@ wallet + Stripe mechanics that implement the cost model), and
 (the moat the pricing is part of: license split + early-
 adopter step + deferred trademark).
 
+> **This page assumes Stripe-integrated billing from day one**
+> per [`design-billing.md`](design-billing.md) — subscription
+> via Stripe recurring + Customer Portal, top-ups via Stripe
+> Checkout one-shot, EU compliance via Stripe Tax + OSS scheme.
+> No manual-invoicing fallback at launch. Edits to this page
+> and to `design-billing.md` should move together; if you
+> revisit one without the other you'll create silent drift
+> between the policy and its implementation.
+
 ## Decision
 
 **Two tiers at launch**, with metered compute on top of either:
@@ -205,20 +214,38 @@ The rule is platform-wide ("BYO available for any
 subscriber-only feature we ship managed"), not cloud-env-
 specific.
 
-## Event-cap overage — soft throttle, not metered
+## Event-cap overage — soft throttle, not a hard wall
 
-Hitting the event cap on either tier triggers a **soft throttle
-+ notify**, not a metered overage charge:
+Hitting the event cap on either tier triggers a **soft
+throttle that keeps events flowing, just slower**, not a hard
+queue-until-next-month and not a metered overage charge.
+**Events should always reach the user eventually** — the cap
+is a speed limit, not a wall.
 
-- **Free** at 100/month: subsequent events queue with a gate
-  reply "monthly event cap reached — subscribe, switch to
-  self-hosted brnrd, or wait until <date> for monthly reset."
-  Events resume at the next month boundary.
-- **Subscribed** at 10K/month: realistically never hit by solo
-  users. If hit, soft-throttle to ~1 event/sec with a
-  "you're at the soft limit — email us, we'll raise it"
-  notification. No metered event billing — feels punitive
-  for a thing that's cheap to operate on brnrd's side.
+- **Free** at 100/month: subsequent events keep dispatching
+  at **~1 event/hour** (≈720/month at the throttled rate,
+  still much slower than an unthrottled active user's
+  3+/day). Each throttled gate reply carries the single-line
+  nudge footer (see "Dashboard nudges + transparency" below)
+  so the user always knows why the response is slow + how
+  to lift the throttle (subscribe / self-host). Throttle
+  clears at the next month boundary; the user's normal flow
+  resumes automatically with no action required.
+- **Subscribed** at 10K/month: realistically never hit by
+  solo users. If hit, soft-throttle to **~1 event/sec** with
+  a "you're at the soft limit — email us, we'll raise it"
+  notification on each throttled event. No metered event
+  billing — feels punitive for a thing that's cheap to
+  operate on brnrd's side.
+
+The point: a Free user who never subscribes can keep using
+brnrd indefinitely at the slow rate, with a polite "here's
+why this is slow" on each event. **The nudge is the resolution
+to the throttled-flow situation, not a payment bait**: the
+event still gets dispatched, the gate still replies, the user
+sees a one-line note explaining the slowdown + how to lift
+it. Subscribing is *one* of the resolutions, the other being
+"wait for the monthly reset" or "switch to self-hosted brnrd."
 
 Events should *feel* free / unlimited in normal use; the caps
 exist for abuse / runaway-integration protection, not as a
@@ -431,8 +458,8 @@ session, never modal:
 
 | Trigger | Banner | Action |
 |---------|--------|--------|
-| Free user crosses 80 events / month | "You're at 80% of your free event allowance this month." | Link: "Subscribe for 10,000 events / month →" |
-| Free user hits event cap (events being throttled) | "Events are being throttled — you've hit the 100 / month Free cap. Throttle clears <next month boundary>." | Link: "Subscribe to lift the throttle now →" |
+| Free user crosses 80 events / month | "You're at 80% of your free event allowance this month. Beyond 100, events keep flowing at ~1/hour until the monthly reset." | Link: "Subscribe for 10,000 events / month →" |
+| Free user hits event cap (soft throttle active) | "Events are processing slowly — you've hit the 100 / month Free cap, so events now dispatch at ~1/hour. Throttle clears <next month boundary>." | Link: "Subscribe to lift the throttle now →" |
 | Free user's signup bonus fully consumed | "Free signup bonus consumed. Top up or subscribe for ongoing failover compute." | Two links: "Top up at $0.01/credit" / "Subscribe for 300 credits / month →" |
 | Free user's signup bonus expires unused at day 30 | "Your signup bonus expired. Top up or subscribe to use failover compute." | Same two links. |
 | Free user tries to create a 4th project | (form-side error) "Free supports up to 3 projects. Subscribe for 25 (unlimited after $10 of credit spending)." | CLI / dashboard returns the same message with a subscribe URL. |
@@ -460,17 +487,42 @@ session, never modal:
 ### Gate-side nudge (one-liner footer)
 
 When a gate (TG / GH / Slack) replies to the user with a
-throttle / out-of-credit / cap-hit message, the reply includes
-a single-line footer:
+soft-throttled / out-of-credit / cap-hit response, the reply
+includes a single-line footer explaining the slowdown and how
+to lift it. The reply itself is **still delivered** — events
+keep flowing during soft-throttle, just slower; the footer is
+the resolution to the "why did this take so long?" question,
+not a "subscribe to get a reply" gate.
 
 ```
-[ this task was queued — Free event cap reached.
-  subscribe at brnrd.dev/subscribe → ]
+[ slow reply: Free event cap reached, processing at ~1/hr.
+  monthly reset on <date>, or subscribe at brnrd.dev/subscribe → ]
 ```
 
 Never more than one line. Never adds the footer to a
-successful response. The user sees the nudge only when it's
-relevant to the action that just happened.
+successful (un-throttled) response. The user sees the nudge
+only when it's relevant to the action that just happened.
+
+For the out-of-credit case (Free user with signup bonus
+consumed who tried to use failover compute):
+
+```
+[ signup bonus consumed — failover compute paused.
+  top up at brnrd.dev/topup or subscribe → ]
+```
+
+For the at-cap project creation case (Free user tried to
+create a 4th project via CLI):
+
+```
+[ Free supports up to 3 projects. subscribe for 25
+  (unlimited after $10 of top-ups) → brnrd.dev/subscribe ]
+```
+
+The principle: the gate footer is a *resolution* to a real
+user-facing situation (slow reply, paused compute, blocked
+action), not a generic upsell. We only nudge when there's
+a thing the user just saw happen that the nudge explains.
 
 ## Why this shape
 
@@ -875,70 +927,70 @@ Brnrd intermediates AI credentials (encrypted vault, used at
 spawn time, never logged). It does *not* intermediate AI
 billing.
 
-## Open questions to settle before launch
+## Launch-tunable knobs (locked-in defaults + config keys)
 
-- **Free project cap (3 vs 2 vs higher).** Currently 3, chosen
-  for community reception (the "generous but bounded" pattern
-  that Plausible / Supabase / PostHog / Cal.com use). The
-  more-conservative-commercial alternative is 2 (still avoids
-  the "trial mode" reading, slightly more pressure to
-  subscribe). Revisit post-launch with actual conversion data.
-- **Subscription project cap unlock threshold.** $10 of
-  cumulative top-ups is the proposed default. Could be lower
-  ($5 = one typical top-up; faster unlock; weaker spend
-  signal) or higher ($25 / $50; slower unlock; stronger
-  spend signal). Default $10 covers two top-ups, signals real
-  usage, doesn't gate too aggressively. Revisit if early
-  subscriber data shows it's binding too often.
-- **Annual discount level.** $50/year (supporter) and
-  $70/year (public) sit at ~17% off monthly. Could go more
-  aggressive on annual (e.g. $45/year supporter, $60/year
-  public = 25% off) to push annual specifically. Defer; one
-  pricing knob at a time, and the supporter step is already
-  the launch's annual-conversion lever.
-- **Included compute level.** 300 credits ($3) covers ~100
-  spawns/month; could be tightened (e.g. 200) to push metered
-  top-ups earlier, or loosened (e.g. 500) for a "feels free"
-  experience at the cost of platform margin. Pre-launch
-  decision; current 300-credit shape leaves $2/month
-  platform-fee headroom over the included compute.
-- **Free signup bonus size.** 10 credits one-time is the
-  current proposal — bounded by signup count (not by
-  retention), so the math is clean: 100K Free signups
-  total = $10K of compute total (not / year). Could go
-  lower (5 credits, $5K at 100K signups) for tighter cost
-  bounds, or higher (20 credits, $20K at 100K signups) for
-  more generous activation. 10 covers ~3 failover spawns
-  at typical task size — enough to validate the path. The
-  earlier "5 credits/month recurring + activity-gated"
-  shape was revisited 2026-05-26 (locking pass II) per
-  "start stingy, relax later" — the one-time-bonus shape
-  is both simpler to reason about AND structurally bounded
-  by signup count rather than active-user count.
-- **Account-dormancy timing.** 24 months pause / 36 months
-  prompt is the proposed default; could be longer (36/48,
-  more user-friendly, higher dormancy tail) or shorter
-  (18/24, more aggressive cleanup, more friction risk).
-  Revisit if dormant-account count crosses 10% of total
-  accounts.
-- **Permission-prompt friction vs auto-approve defaults.** The
-  subscription bundles generous compute, which reduces the
-  "I'll review every cost" pressure that drove `ask` as the
-  default. Subscribers may want `auto-approve-under-X-credits`
-  as the default. Revisit during early-subscriber onboarding
-  data.
-- **Subscription-tier brand name (post-launch).** Currently
-  unnamed (just "Subscribed"). If user demand or marketing
-  data suggests a brand name would land well, options like
-  "Member" (community / OSS-aligned) or "Gear" (brand-
-  cohesive with the gear logo, "geared up" energy) can be
-  retro-fitted without churning the CLI verb (`brr brnrd
-  subscription` / `brr brnrd subscribe` stays).
-- **Self-hosted brnrd messaging.** "Always free, full feature
-  parity" is the line. The pricing page should explicitly call
-  this out so users don't feel coerced — the trust line is
-  "we run hosted because operating brnrd isn't worth your
-  time, not because we've crippled the OSS."
+Each of the launch-shape numbers has a `BRNRD_*` env knob so
+ops can re-tune it without a code release. These are the
+**locked-in launch defaults**; they are not open decisions
+any more.
+
+| Knob | Launch default | Env var | Drives |
+|------|---------------|---------|--------|
+| Free signup bonus size | **10 credits** ($0.10) | `BRNRD_FREE_SIGNUP_BONUS_CREDITS` | One-time grant on Free account creation; 30-day expiry. Cost cap = signups × $0.10 lifetime. |
+| Free signup bonus expiry | **30 days** from grant | `BRNRD_FREE_SIGNUP_BONUS_EXPIRY_DAYS` | Time before unused bonus expires; expiry also fires on full consumption. |
+| Free project cap | **3 projects** | `BRNRD_FREE_PROJECT_CAP` | Locked at 3 (community-reception "generous but bounded" pattern from Plausible / Supabase / PostHog / Cal.com). Considered 2; rejected as too close to "trial mode" framing. |
+| Subscriber project cap (pre-unlock) | **25 projects** | `BRNRD_SUBSCRIBER_PROJECT_CAP` | Default for subscribed accounts that haven't crossed the cumulative-top-up unlock. |
+| Project-cap unlock threshold | **$10 of cumulative top-ups** | `BRNRD_PROJECT_CAP_UNLOCK_USD` | Once `cumulative_purchased_usd_lifetime` crosses this, `project_cap_unlocked` flips permanently true. |
+| Subscriber monthly compute grant | **300 credits** ($3 of compute) | `BRNRD_SUBSCRIBER_MONTHLY_CREDITS` | Use-it-or-lose-it at the billing cycle. Leaves $2/month platform-fee headroom over included compute on the supporter $5 tier. |
+| Subscriber price (supporter cohort) | **$5/month** ($50/year, ~17% annual discount) | `BRNRD_SUBSCRIBER_PRICE_SUPPORTER_USD` | Locked for the first 200 supporters (also locked: **200**). Grandfathered forever. |
+| Subscriber cohort cutover size | **200 subscribers** | `BRNRD_SUPPORTER_COHORT_SIZE` | After the 200th supporter, new subscribers default to the public price. |
+| Subscriber price (public cohort) | **$7/month** ($70/year, ~17% annual discount) | `BRNRD_SUBSCRIBER_PRICE_PUBLIC_USD` | Locked. Annual discount stays ~17% in both cohorts. |
+| Account dormancy timings | **24 months pause / 36 months prompt** | `BRNRD_DORMANCY_PAUSE_MONTHS` / `BRNRD_DORMANCY_PROMPT_MONTHS` | Treat any future change as a billing-policy update with a 60-day user notice. |
+| Free event cap | **100 events / month** | `BRNRD_FREE_EVENT_CAP_MONTHLY` | Cap; **events still flow above it at the soft-throttle rate**, see Event-cap overage section above. |
+| Free soft-throttle rate (post-cap) | **~1 event / hour** | `BRNRD_FREE_SOFT_THROTTLE_RATE_PER_HOUR` | The slow-but-not-stopped rate the user falls into past the monthly event cap. |
+| Subscriber event cap | **10,000 events / month** | `BRNRD_SUBSCRIBER_EVENT_CAP_MONTHLY` | Cap; soft-throttle to ~1 event/sec post-cap (the rate is itself a knob: `BRNRD_SUBSCRIBER_SOFT_THROTTLE_RATE_PER_SEC`). |
+| Permission-prompt default mode (Free) | **`ask`** | (per-account override; see [`plan-failover-compute.md`](plan-failover-compute.md) for the full mode set) | Conservative default for users with no monthly compute grant. |
+| Permission-prompt default mode (Subscribed) | **`auto-approve-below-monthly-limit`** | (per-account override) | Subscribers have a defined monthly compute envelope; the permission-prompt threshold is "anywhere within the envelope, just go." Once the envelope is exhausted, mode behaves like `ask` until the cycle reset OR a top-up. |
+
+### Post-launch tuning checklist
+
+The launch-default numbers above ship as proposed values; the
+ops process is "instrument, watch, retune." The metrics to
+instrument from day one:
+
+- **Median + p95 credit consumption per active subscriber** —
+  drives whether the 300-credit grant is the right size; if
+  p95 is below 150, the grant is over-sized and could be
+  tightened to push more revenue through metered top-ups; if
+  median is above 250, the grant is under-sized and the
+  $5 / $7 tier is unprofitable.
+- **Signup-bonus consumption distribution** — drives whether
+  10 is the right number; if >50% of signups consume the full
+  10 within the first week, the bonus is too generous; if
+  <20% touch it at all, it's not driving the activation it's
+  meant to.
+- **Project-count-at-unlock distribution** — drives whether
+  $10 of cumulative top-ups is the right unlock threshold; if
+  most unlocks happen on second top-up at $20 and then sit
+  unused at 5-10 projects, the threshold could go lower.
+- **Soft-throttle hit rate (% of Free accounts crossing
+  100 events / month)** — drives whether 100 is the right
+  monthly cap; if 60% of active Free accounts hit it, the
+  cap is too low and people are getting nudged-out before
+  experiencing the product fairly.
+
+## Open questions (only one, the rest is locked)
+
+- **Subscription-tier brand name (post-launch only).**
+  Currently unnamed (just "Subscribed"); CLI verb is
+  `brr brnrd subscription` / `brr brnrd subscribe`. Current
+  lean is to keep this shape — "subscription" reads as
+  utility / community-aligned rather than as a marketing
+  tier. If post-launch user demand suggests a brand name
+  would land well, options like "Member" (community / OSS-
+  aligned) or "Gear" (brand-cohesive with the gear logo,
+  "geared up" energy) can be retro-fitted without churning
+  the CLI verb. Treat as v-next decision; no launch impact.
 
 ## Trust signals that ship with the pricing page
 
@@ -1121,3 +1173,19 @@ billing.
   in events and credits, and a nudge to go subscribe if
   anything got above the allowance — that's not too mean,
   right?" + "throttling is a good idea, like it."
+- 2026-05-26 (locking pass III — open-questions closed,
+  soft-throttle reframed, Stripe-callout added).
+  **Open-questions section pruned from 8 entries to 1.**
+  Locked launch-default values (all backed by `BRNRD_*` env
+  knobs for post-launch tuning):
+  - Free project cap = **3** (locked; "2" considered + rejected for community-perception reasons).
+  - Project-cap unlock threshold = **$10** of cumulative top-ups (locked; tunable via `BRNRD_PROJECT_CAP_UNLOCK_USD`).
+  - Annual discount = **~17%** ($50/$70/year on $5/$7/month; supporter cohort size = **200**, locked).
+  - Subscriber monthly grant = **300 credits** (locked at $3 of compute, leaves $2 platform-fee headroom; instrumented for median/p95 consumption to re-tune post-launch).
+  - Free signup bonus size = **10 credits** (locked; tunable via `BRNRD_FREE_SIGNUP_BONUS_CREDITS`).
+  - Account dormancy = **24mo pause / 36mo prompt** (locked; any future change is a 60-day-notice billing-policy update).
+  - Permission-prompt default = **`ask`** on Free, **`auto-approve-below-monthly-limit`** on Subscribed (new mode added to `plan-failover-compute.md`; auto-approves any spawn whose estimated cost fits inside the user's remaining monthly grant + purchased balance; falls back to `ask` once the envelope is exhausted, until cycle reset or a top-up).
+  Only remaining open question is the **subscription-tier brand name** (post-launch only; current lean: keep as "Subscribed"). New "Launch-tunable knobs" section replaces "Open questions" as the canonical knob list. New "Post-launch tuning checklist" section names the four metrics to instrument from day one (median/p95 subscriber consumption, signup-bonus consumption distribution, project-count-at-unlock distribution, soft-throttle hit rate).
+  **Event-cap overage reframed from hard-queue to soft-throttle that keeps events flowing.** Free at 100/mo doesn't stop dispatching — it slows to ~1 event/hour with a gate-side footer on each throttled reply explaining the slowdown + how to lift it (subscribe / wait for monthly reset / self-host). Same shape as the existing Subscribed soft-throttle (~1 event/sec at 10K/mo). Gate-side nudge footer copy rewritten: the nudge is the **resolution** to a throttled-flow situation, not a paywall — events still arrive, just slowly, with one line explaining why. Driven by the user's "the nudge itself wasn't meant as a payment bait anyway, rather a way to resolve a throttled events flow situation, on reaching the event processing limits."
+  **Stripe-integrated-billing callout added near the top of the page** to prevent future drift between this page's policy and `design-billing.md`'s implementation — no manual-invoicing fallback at launch.
+  Six stale claims left over from earlier passes (BYO-deferred mentions, manual-invoicing-at-launch claims) pruned across `index.md`, `subject-managed-mode.md`, `plan-managed-gates-launch.md`, `plan-brnrd-dashboard-mvp.md`, `plan-failover-compute.md`, `design-brnrd-protocol.md`. Driven by the user's MR-review pass through the locking-pass II changes.

@@ -61,7 +61,9 @@ brr brnrd ...                  # hosted-service management (new noun)
                                          # returns a pairing code or install URL
   brr brnrd creds add|list|remove   # credentials in the vault (AI runner +
                                     # docker-registry; --kind filters list)
-  brr brnrd policy get|set          # failover policy: mode (ask/auto/never) + caps
+  brr brnrd policy get|set          # failover policy: mode (ask / auto-approve-always /
+                                    # auto-approve-under-usd / auto-approve-under-per-day /
+                                    # auto-approve-below-monthly-limit / never) + caps
   brr brnrd projects list           # projects bound on the brnrd side
   brr brnrd projects bind <gate>    # bind/rebind an existing gate channel to a project
   brr brnrd audit [--since <date>]  # paginated audit log

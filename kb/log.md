@@ -3976,3 +3976,176 @@ allowance dashboard view + gauge + banner components are
 ~800 LOC of templates + routes + tests. Total ~1K LOC
 spread across the slice-3 dashboard work + the
 already-planned billing + protocol slices.
+
+## [2026-05-26] plan | brnrd pricing locking pass III — MR-review grooming, open questions closed, soft-throttle reframed
+
+Third locking pass, driven by the user's MR-review walkthrough of
+the pass-II changes. Three goals: close as many open questions
+as we can with launch-default-plus-config-knob locks, prune
+duplication that snuck in during pass II, and resolve / bubble
+up contradictions.
+
+### What's locked
+
+1. **Free signup bonus size = 10 credits** + env knob
+   `BRNRD_FREE_SIGNUP_BONUS_CREDITS`. Demoted from "open
+   question" to "tunable post-launch."
+2. **Free project cap = 3 projects** + env knob. "Could it be
+   2" considered and rejected (too close to "trial mode"
+   framing for community perception). Open question dropped.
+3. **Project-cap unlock threshold = $10 cumulative top-ups** +
+   env knob `BRNRD_PROJECT_CAP_UNLOCK_USD`. Demoted from
+   open question.
+4. **Supporter cohort = first 200 subscribers** at $5/mo /
+   $50/yr (locked, grandfathered forever); public cohort at
+   $7/mo / $70/yr afterward. Annual discount = ~17%, locked.
+   The "could annual go to 25%" open question dropped — one
+   pricing knob at a time, supporter step is already the
+   launch's annual-conversion lever.
+5. **Subscriber monthly grant = 300 credits** ($3 of compute)
+   + env knob `BRNRD_SUBSCRIBER_MONTHLY_CREDITS`. Locked at
+   launch; tuning is post-launch based on median/p95
+   subscriber consumption instrumentation. Open question
+   replaced by an instrumentation note.
+6. **Permission-prompt defaults**: Free = `ask`; Subscribed =
+   **`auto-approve-below-monthly-limit`** (NEW MODE — sixth
+   in the failover-policy mode list). Auto-approves any
+   spawn whose estimated cost fits inside the user's
+   remaining monthly grant + purchased balance; falls back
+   to `ask` once the envelope is exhausted, until cycle
+   reset or top-up. Subscribers stop seeing routine
+   in-budget prompts; the prompt appears at the natural
+   upsell moment when the envelope is exhausted.
+7. **Account dormancy timing = 24mo pause / 36mo prompt** +
+   env knobs. Any future change is a 60-day-notice billing-
+   policy update. Open question dropped.
+
+Only **one open question remains**: subscription-tier brand
+name (post-launch only; current lean = keep as "Subscribed").
+
+### Reframed: event-cap overage = soft-throttle, not hard wall
+
+The pass-II shape had Free events at 100/month *queue*
+indefinitely until the next month boundary, with the nudge
+sitting as a paywall on the queued events.
+
+The user clarified during MR review: **the nudge is the
+resolution to a throttled-flow situation, not a paywall**.
+Events should still flow past 100/month, just slowly (~1/hour
+post-cap). The gate-side footer is "here's why this is slow,
+here's how to lift it" — events still arrive, the user still
+gets their reply, the subscribe link is one of several
+resolutions (subscribe / wait for cycle / self-host). Same
+shape as the existing Subscribed soft-throttle (~1 event/sec
+post-10K/month).
+
+Free users can keep using brnrd indefinitely at the slow rate
+without subscribing. The "speed limit, not a wall" framing
+better matches the open / honest posture the project is
+building on.
+
+### Pruned: duplication grooming pass
+
+- **Nudge trigger / copy / anti-patterns table** lived in both
+  `decision-pricing-shape.md` and `plan-brnrd-dashboard-mvp.md`.
+  Canonical home is now pricing-shape; dashboard-mvp's
+  "Allowance gauges + honest-nudge UX" section trimmed to
+  describe only the *build* side (gauge component, banner
+  component, dismissal persistence, gate-footer wiring) and
+  delegates the *policy* side back to pricing-shape. Banner
+  copy + gate footer strings now live in a single
+  `src/brnrd_web/nudges.py` module that both the dashboard
+  AND the gate adapter read from, eliminating drift at the
+  code level too.
+- **Surface table tier captions** in `subject-managed-mode.md`
+  duplicated the pricing-shape tier table. Reduced to a
+  surfaces-only table ("What it is" + "Adoption pain it
+  removes" columns); pricing details (caps, included compute,
+  bonus, etc.) only exist in pricing-shape now.
+- **Dashboard view list** in `subject-managed-mode.md`
+  duplicated the plan-brnrd-dashboard-mvp.md view spec.
+  Reduced to a one-line summary + delegate to the plan page.
+
+### Stale claims pruned (6 sites)
+
+Already committed separately as [`67b0bad`]: stale
+"BYO-deferred from launch" mentions in `design-brnrd-protocol.md`
++ `index.md` + `plan-managed-gates-launch.md`; stale "manual
+invoicing at launch" mentions in `subject-managed-mode.md` +
+`plan-brnrd-dashboard-mvp.md` + `plan-failover-compute.md`.
+
+### Stripe-integrated billing callout added
+
+Top of `decision-pricing-shape.md` now carries an explicit
+"this page assumes Stripe-integrated billing from day one
+per design-billing.md" callout, preventing future drift
+between the policy page and the implementation page.
+
+### Files updated
+
+- **`kb/decision-pricing-shape.md`** — Stripe callout near
+  the top; event-cap-overage section reframed (soft throttle
+  ~1/hour, footer = resolution not paywall, gate footer
+  copy rewritten for three throttle/out-of-credit/blocked
+  cases); open questions section replaced by "Launch-tunable
+  knobs" (15-row config-keys table) + "Post-launch tuning
+  checklist" (4 metrics to instrument) + a single remaining
+  open question (tier brand name); trust signals
+  consolidated; lineage entry appended.
+- **`kb/plan-failover-compute.md`** — sixth approval mode
+  `auto-approve-below-monthly-limit` added; per-tier
+  defaults (Free=ask, Subscribed=auto-approve-below-monthly-limit)
+  documented; CLI flag added to `brr brnrd policy set`;
+  permission-prompt-fatigue risk-mitigation rewritten;
+  lineage entry appended.
+- **`kb/plan-brnrd-dashboard-mvp.md`** — "Allowance gauges +
+  honest-nudge UX" section trimmed (canonical pointer to
+  pricing-shape replaces the duplicated trigger table);
+  gate-footer wiring section updated for soft-throttle
+  ("events still flow"); `nudges.py` module called out as
+  the single source of truth for banner / footer copy at
+  the code level; lineage entry appended.
+- **`kb/subject-managed-mode.md`** — Surface table reduced
+  from 4 columns to 2 (surfaces only, no pricing
+  duplication); dashboard view list reduced to a one-line
+  summary + delegate to plan-brnrd-dashboard-mvp.
+- **`kb/decision-cli-shape.md`** — `brr brnrd policy get|set`
+  help text grew the new `auto-approve-below-monthly-limit`
+  mode in the inline mode-list comment.
+- **`kb/design-billing.md`** — new "Launch defaults +
+  tunable knobs" section with the 10-row env-knob → ledger /
+  Stripe-product mapping; stale "(10 vs 3 on Free)"
+  project-cap mention in the opening bullet updated to the
+  locked tiered shape; lineage entry appended.
+- **`kb/index.md`** — pricing-shape blurb extended with the
+  locking-pass-III summary (knob-locks, new permission
+  mode, soft-throttle reframe).
+- **`kb/log.md`** — this entry.
+- **`kb/notes-pondering-fleet.md`** — locking-pass-III
+  breadcrumb appended to §1.
+
+### Why this lock-in matters
+
+Locking pass III is the pass that takes the design from
+"proposed shapes + 8 open questions" to "implementable launch
+shape + 1 brand-name question." The combination of
+config-knob locks (every launch-default-number has a
+`BRNRD_*` env var) + post-launch instrumentation checklist
+makes the launch numbers explicitly tunable without code
+changes — which is the right shape for a product whose
+unit-economics need 6-12 weeks of real usage to validate.
+
+The soft-throttle reframe is the more important UX win: the
+pass-II shape had Free events HARD queue past 100/month,
+which is the actually-mean thing the project's positioning
+argues against. The new shape is "speed limit, not wall" —
+which fits the open / honest posture cleanly.
+
+The duplication grooming is the smaller but meaningful win:
+nudge copy now has one canonical home (pricing-shape) + one
+canonical code module (`nudges.py`), eliminating the two
+biggest drift surfaces the MR introduced.
+
+Implementation cost over already-planned work is ~0 LOC — the
+locking pass is all policy + organisational work, no new
+code paths.
