@@ -3502,3 +3502,107 @@ the implementation surface (vault + endpoints + Stripe
 product + dispatcher are the same shape; only labels +
 numbers + a few enum value names changed).
 
+## 2026-05-26 — locking pass: licensing + competitive-defense posture
+
+Fifth small wave on the managed-mode / pricing surface — the
+"OK lock these decisions in" pass. User asked:
+
+> "yeah lets add a few notes to lock it. 5 for early adopters
+>  (six seven :D for the afterparty) sounds great. the license
+>  also is a right thing. don't have money on the trademark
+>  yet, but we need to have it as a prio post launch."
+
+### What changed
+
+- **New page: `kb/decision-licensing-and-defense.md`.** Locks
+  the three competitive-defense moves into canonical form:
+  - **License split**: `src/brr/` stays MIT (daemon —
+    maximises community goodwill, fork freely); `src/brnrd/`
+    + `src/brnrd_web/` ship **AGPLv3** (backend / dashboard —
+    closes the "Big Cloud rebrands our OSS as managed
+    service" attack while keeping self-hosters fully
+    unaffected). Per-package `LICENSE` files; top-level
+    `LICENSE-OVERVIEW.md` documents the split; AGPL chosen
+    over BUSL / ELv2 / SSPL specifically because it preserves
+    OSI-approved status + community trust + protects against
+    the specific realistic attacker.
+  - **Early-adopter pricing**: **first 200 subscribers at $5
+    / month grandfathered forever**, then **$7 / month for
+    public-cohort joiners** (with $50 / $70 annual
+    variants). Stripe-native grandfathering: two `Price` IDs
+    on one Product, existing subs never migrate. Atomic
+    counter on the brnrd backend gates the supporter
+    boundary; live counter on the pricing page shows
+    "Y / 200 spots remaining" during the cohort window.
+  - **Trademark on `brr` + `brnrd`**: deferred at launch for
+    budget reasons (€800-1500 via EUIPO through HugiMuni SAS
+    / French IP lawyer; classes 9 + 42). Becomes priority
+    work when **first of** launch+12-months OR €10K
+    cumulative revenue OR first observed competitor fires.
+    No defensive look-alike domain pre-buys; trademark +
+    UDRP covers the realistic attack pattern at lower cost.
+  - Explicit anti-patterns named: don't go BUSL / ELv2 /
+    SSPL; don't gate any feature behind hosted-only (breaks
+    always-free-self-host); don't race to bottom on price;
+    don't require a CLA at launch.
+  - Adjacent moats already in other pages (verified bot
+    accounts on `brnrd.dev`, integration stickiness,
+    data-minimization trust signal, security posture, brand
+    + community) cross-referenced without duplicating.
+- **`kb/decision-pricing-shape.md`** — tier table updated to
+  show **two `Price` variants** ($5 supporter / $7 public)
+  with the cohort boundary noted; new "Early-adopter price
+  step" section locks the Stripe mechanics + cohort-counter
+  contract + dashboard surface. "Subscription mechanics"
+  section reframed around the supporter→public step.
+  "Sustainability math" table re-run with blended pricing
+  (200 supporters × $5 + remainder × $7) — shows the step
+  adds ~$600/mo at 500 subs and ~$1,600/mo at 1,000 subs vs
+  an all-supporter-price universe. Open-questions entry on
+  annual discount level updated. Lineage entry appended.
+- **`kb/decision-monorepo-structure.md`** — new short
+  "License boundary aligns with the package boundary"
+  section locks the per-package `LICENSE` files (MIT for
+  `src/brr/LICENSE`, AGPLv3 for `src/brnrd/LICENSE` +
+  `src/brnrd_web/LICENSE`) and notes that the monorepo
+  restructuring PR should land them together. Read-next
+  expanded with the licensing-and-defense decision.
+  Lineage entry appended.
+- **`kb/index.md`** — pricing-shape entry updated for the
+  $5/$7 supporter→public step; new
+  `decision-licensing-and-defense.md` entry added in the
+  Fleet & overlays / managed-mode section; monorepo-
+  structure entry mentions the license-boundary alignment.
+
+### Pages modified
+
+- `kb/decision-licensing-and-defense.md` — **new file**.
+- `kb/decision-pricing-shape.md` — tier table + Status
+  intro + new "Early-adopter price step" section +
+  subscription-mechanics rephrase + sustainability-math
+  blended numbers + open-question on annual discount +
+  lineage entry.
+- `kb/decision-monorepo-structure.md` — new "License
+  boundary aligns with the package boundary" section +
+  read-next expansion + lineage entry.
+- `kb/index.md` — pricing-shape blurb + new licensing-
+  and-defense blurb + monorepo-structure license-boundary
+  callout.
+- `kb/log.md` — this entry.
+- `kb/notes-pondering-fleet.md` — locking-pass breadcrumb
+  appended to §1 (separate edit below).
+
+One new page; three pages refined; index + log + pondering
+breadcrumb updated. All status markers stay `proposed`.
+Implementation impact is small at launch: a top-level
+`LICENSE-OVERVIEW.md` + per-package `LICENSE` files (~30
+min of work, lands with the monorepo restructuring PR); two
+Stripe `Price` IDs instead of one + an atomic supporter
+counter on the backend (~half-day during Stripe product
+setup); trademark registration is post-launch (€800-1500
+when triggered). The defensive posture is overwhelmingly
+**already-built** — the license / pricing-step / trademark
+moves are just locking already-implicit architectural
+choices into explicit, defensible form before launch reveals
+them to the world.
+
