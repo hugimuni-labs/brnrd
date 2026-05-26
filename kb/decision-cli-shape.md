@@ -1,17 +1,24 @@
 # Decision: brr CLI shape
 
-**Status: proposed, not yet accepted on 2026-05-25.** Names the
-top-level command shape for brr after the managed-mode reshape
-(always-online managed gates, brnrd-managed compute, multi-
-project routing, credit wallet, three-scope config). The current
-CLI grew incrementally; this page resets it before any user
-surface adopts it. Companion to
+**Status: proposed, not yet accepted on 2026-05-25; reshaped
+2026-05-25 (pass-4 follow-up, third wave) — subscription
+sub-verb family added for the new subscription billing leg.
+Reshaped again 2026-05-26 (third-wave follow-up) — renamed
+from `brr brnrd plus [...]` to noun-first `brr brnrd
+subscription [...]` (with `brr brnrd subscribe` as a
+shortcut for `subscription start`).** Names the top-level
+command shape for brr after the managed-mode reshape (always-
+online managed gates, brnrd-managed compute, multi-project
+routing, platform subscription + credit wallet, three-scope
+config). The current CLI grew incrementally; this page resets
+it before any user surface adopts it. Companion to
 [`subject-managed-mode.md`](subject-managed-mode.md) (the
 surfaces these verbs configure),
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) (the
 REST endpoints `brr brnrd` wraps),
-[`design-billing.md`](design-billing.md) (the wallet endpoints
-`brr brnrd topup | balance | autotopup` wrap),
+[`design-billing.md`](design-billing.md) (the subscription
+endpoints `brr brnrd subscription` wraps and the wallet
+endpoints `brr brnrd topup | balance | autotopup` wrap),
 [`design-config-layout.md`](design-config-layout.md) (the
 three-scope config model `brr config` operates over),
 [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md) (the
@@ -52,13 +59,28 @@ brr brnrd ...                  # hosted-service management (new noun)
   brr brnrd pair <gate> --project <id>   # bind a managed-gate channel (TG chat,
                                          # GH App install, ...) to a project;
                                          # returns a pairing code or install URL
-  brr brnrd creds add|list|remove   # AI credentials in the vault
+  brr brnrd creds add|list|remove   # credentials in the vault (AI runner +
+                                    # docker-registry; --kind filters list)
   brr brnrd policy get|set          # failover policy: mode (ask/auto/never) + caps
   brr brnrd projects list           # projects bound on the brnrd side
   brr brnrd projects bind <gate>    # bind/rebind an existing gate channel to a project
   brr brnrd audit [--since <date>]  # paginated audit log
+  brr brnrd subscription status     # current state: free | subscribed | subscribed_past_due,
+                                    # period_end, cancel-at-period-end, last invoices
+  brr brnrd subscription start      # opens Stripe Checkout for the subscription
+                                    # (monthly $5 OR annual $50); prints checkout URL
+                                    # — defaults to monthly; --annual selects yearly
+  brr brnrd subscribe               # shortcut for `brr brnrd subscription start`
+  brr brnrd subscription cancel     # cancel-at-period-end via the Stripe API; user
+                                    # retains subscriber access until period boundary
+  brr brnrd subscription resume     # clear cancel-at-period-end on a sub that
+                                    # hasn't lapsed yet
+  brr brnrd subscription portal     # open the Stripe Customer Portal in browser for
+                                    # card update / invoice download / plan switch
   brr brnrd topup [<amount>]        # opens Stripe Checkout for a credit top-up
-  brr brnrd balance                 # current credit balance (paid + free split)
+                                    # (compute overage on top of any tier)
+  brr brnrd balance                 # current credit balance (paid + subscriber_monthly +
+                                    # free_monthly split) + subscription tier
   brr brnrd autotopup on|off|configure   # opt-in auto-top-up on low balance
 
 brr config ...                 # configuration introspection (new noun)
@@ -115,6 +137,7 @@ rationale.
 | — | `brr config <subcommand>` | New noun head for parameter introspection. Did not exist; addresses the long-standing "what config keys exist?" gap. Backed by [`design-config-layout.md`](design-config-layout.md). |
 | — | `brr kb <subcommand>` | New noun head for kb health + introspection. Addresses [issue #41](https://github.com/Gurio/brr/issues/41) (kb maintenance for non-brr agents) and the long-standing gap that the kb is half the project's value prop but has no first-class read surface. Backed by [`plan-kb-subcommand.md`](plan-kb-subcommand.md). |
 | — | `brr daemon install \| uninstall` | New sub-verbs: write/register a per-user systemd unit (Linux) or LaunchAgent (macOS) so the daemon survives reboot without `tmux` rituals. Backed by [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md); tracked at [issue #29](https://github.com/Gurio/brr/issues/29). |
+| — | `brr brnrd subscription <subcommand>` + `brr brnrd subscribe` shortcut | New: subscription management (`status \| start \| cancel \| resume \| portal`). Backs the subscription billing leg in [`design-billing.md`](design-billing.md) and the pricing reshape in [`decision-pricing-shape.md`](decision-pricing-shape.md). Did not exist; added when subscription billing replaced the credits-only model. Initially sketched as `brr brnrd plus [upgrade \| downgrade \| ...]`; renamed to drop the "Plus" branding and adopt noun-first taxonomy. |
 
 `brr daemon up` is a one-key-more typing tradeoff for organising
 lifecycle under a noun; the noun pays for itself once
@@ -406,3 +429,41 @@ Estimate: ~2-3 days for the CLI itself + docs; integration with
   the verb tree, not deferred) and on `brr daemon logs` (now
   part of the install/uninstall slice since the same plan owns
   the OS-service integration).
+- 2026-05-25 (pass 4 follow-up — third wave) — added a
+  subscription sub-verb family under `brr brnrd` to wrap the
+  new subscription endpoints in
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md) and
+  the subscription billing leg in
+  [`design-billing.md`](design-billing.md). Driven by the
+  pricing reframe in
+  [`decision-pricing-shape.md`](decision-pricing-shape.md) —
+  the credits-only model proved self-defeating; subscription
+  for the platform + metered credits for compute is the new
+  shape, and the CLI needs verbs to manage the subscription
+  side. Initial sketch named the family `brr brnrd plus
+  [status | upgrade | downgrade | resume | portal]`. `brr
+  brnrd creds add` description updated to clarify it now
+  accepts `docker-registry` as a credential kind alongside
+  the existing AI-runner kinds, per the credential vault
+  generalisation (private docker images supported at launch
+  via the same encrypted vault as AI creds). No new top-level
+  verb — the seventh-verb count (`init`, `run`, `daemon`,
+  `gate`, `brnrd`, `config`, `kb`) is unchanged; the new
+  family is a sub-verb under the existing `brnrd` noun head.
+- 2026-05-26 (third-wave follow-up) — **subscription sub-verb
+  family renamed**. `brr brnrd plus [status | upgrade |
+  downgrade | resume | portal]` → noun-first `brr brnrd
+  subscription [status | start | cancel | resume | portal]`
+  + `brr brnrd subscribe` shortcut for the `subscription
+  start` case (the most common first-time interaction). Verb
+  changes within the family: `upgrade` → `start` (it's not
+  really an "upgrade" — there's just one tier), `downgrade`
+  → `cancel` (cancel-at-period-end is what it actually does;
+  "downgrade" implied a multi-tier ladder that doesn't
+  exist). Help-text changes: subscription price corrected
+  from $9/$90 → $5/$50, and the balance breakdown sub-bucket
+  renamed from `plus_monthly` → `subscriber_monthly`.
+  Driven by the user's "I don't like Plus as a name or
+  verb" feedback alongside the price + project-cap
+  refinements documented in
+  [`decision-pricing-shape.md`](decision-pricing-shape.md).
