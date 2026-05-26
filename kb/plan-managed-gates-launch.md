@@ -1,5 +1,9 @@
 # Plan: managed gates — launch sequencing
 
+**Status: accepted 2026-05-26** (locked in PR #40 MR review;
+implementation feedback may reshape — treat the slice
+breakdown as a working spine, not a contract).
+
 Implementation plan for **Surface A** (managed dispatcher: hosted
 gates + multi-project routing + permission prompts) of
 [managed mode](subject-managed-mode.md), specified in

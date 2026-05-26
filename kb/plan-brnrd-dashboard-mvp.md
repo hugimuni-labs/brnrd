@@ -1,5 +1,12 @@
 # Plan: brnrd dashboard MVP
 
+**Status: accepted 2026-05-26** (locked in PR #40 MR review,
+**explicitly fluid** — user plans to adjust a lot of the
+design during implementation as the UX shape becomes
+concrete; treat the view inventory + slice plan as a
+working frame, not a contract; expect re-grooming each
+time a slice lands).
+
 Implementation plan for the brnrd dashboard — the user-facing
 web layer on top of the brnrd backend that gives users a view
 of their accounts, projects, daemons, bindings, AI credentials,

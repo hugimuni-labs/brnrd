@@ -1,5 +1,9 @@
 # Subject: managed mode — work continuity via brnrd
 
+**Status: accepted 2026-05-26** (locked in PR #40 MR review;
+hub page for the managed-mode page family — fluid as the
+linked design / plan pages evolve during implementation).
+
 Hub for brr's "managed" tier: the work that lets adopters skip the
 per-user bot setup, keeps their tasks moving when their laptop is
 offline, and offers a coherent paid path without contradicting the
