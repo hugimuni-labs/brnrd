@@ -1,6 +1,6 @@
 # brr
 
-![Local agents go brr](https://hugimuni.fr/brr-logo.gif)
+<video src="https://hugimuni.fr/brr-logo.mp4" autoplay loop muted playsinline></video>
 
 Structured AI agent playbook with persistent knowledge base and remote execution.
 
