@@ -1,12 +1,15 @@
 # Design: config layout — three scopes, two files, one account store
 
-**Status: proposed, not yet accepted on 2026-05-25.** Defines the
-three-scope config model that replaces today's single gitignored
-`.brr/config`. The model has two on-disk files (project-scope
-`brr.toml` committed to the repo; local-scope `.brr/config`
-gitignored) plus account-scope state on brnrd reached through the
-existing protocol, with a merge precedence and a per-key scope
-annotation in the schema. Pre-requisite for brnrd-side spawn
+**Status: proposed, not yet accepted on 2026-05-25; reshaped
+2026-05-25 (pass-4 follow-up, third wave) — private-image open
+question resolved via the generic credential vault;
+`subscription.tier` added as an account-scope read-only key.**
+Defines the three-scope config model that replaces today's
+single gitignored `.brr/config`. The model has two on-disk files
+(project-scope `brr.toml` committed to the repo; local-scope
+`.brr/config` gitignored) plus account-scope state on brnrd
+reached through the existing protocol, with a merge precedence
+and a per-key scope annotation in the schema. Pre-requisite for brnrd-side spawn
 bootstraps reading project preferences (Docker image, runner
 choice, etc.) from the cloned repo and for the "what knobs exist?"
 discoverability gap that
@@ -177,8 +180,10 @@ The schema declares scope per key. Headline assignments:
 | `runner.preferred` | `account` | User-wide preference: "across all my projects, use codex unless overridden". Pushed to all daemons under the account. |
 | `failover.policy` | `account` | Cross-daemon account state; lives on brnrd. |
 | `failover.threshold_usd` | `account` | Same. |
-| `ai_credentials.*` | `account` | The vault; never stored locally. |
+| `credentials.*` | `account` | The vault (AI runner + docker-registry); never stored locally. |
 | `autotopup.*` | `account` | Billing prefs, server-side. |
+| `subscription.tier` | `account` (read-only) | Current tier: `subscribed` / `subscribed_past_due` / `free`. Written by brnrd on Stripe webhook events; read by the daemon + brnrd-side dispatcher to apply tier-based caps (project count, event ceiling, audit retention). Clients can read via `brr config get subscription.tier` but cannot write — use `brr brnrd subscribe` / `brr brnrd subscription cancel` instead. |
+| `subscription.plan` | `account` (read-only) | `monthly` / `annual` / `none`. Same write rules as `subscription.tier`. |
 
 Concrete merge: if `brr.toml` says `runner.default = "claude"`,
 the account-scope `runner.preferred` is `"codex"`, and the local
@@ -209,32 +214,43 @@ myorg/codex:py3.12 --scope project`, commit `brr.toml`, and have
 brnrd-side spawns immediately use the new image — no protocol
 field to push, no daemon round-trip. The repo is the message.
 
-### Private docker image — open question
+### Private docker image — resolved via the generic credential vault
 
 If the project's `docker.image` points at a private registry,
-brnrd can't pull it. Two paths:
+brnrd needs registry credentials to pull. **Resolved
+2026-05-25 (pass-4 follow-up, third wave): supported at launch
+via the generalised credential vault** in
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md). User
+flow:
 
-1. **Generic credential vault** (preferred long-term). Extend
-   the existing AI-credential vault from "AI-credential vault"
-   to "credential vault" with a `kind` field
-   (`ai-anthropic` / `ai-openai` / `docker-registry` / etc.).
-   `brr brnrd creds add docker-registry --registry ghcr.io
-   --username … --token …` writes; brnrd uses the stored
-   creds for `docker login` before pull. Same encryption-at-rest,
-   same audit log.
-2. **Fail loudly at spawn time** (launch shape). brnrd's pull
-   fails; the spawn returns a clear "private image; either
-   make it public, self-host brnrd, or wait for the credential
-   vault extension." Simpler at launch; addresses ~95% of users
-   (public images are the default).
+```
+$ brr brnrd creds add docker-registry --registry ghcr.io \
+    --username myorg --token <ghcr-pat>
+```
 
-Path 2 at launch; revisit path 1 if registry-cred requests
-appear in user feedback. Tracked here as an open question.
+At spawn time, brnrd extracts the image's registry host
+(`ghcr.io` from `ghcr.io/myorg/foo`), looks up a matching
+`docker-registry` credential for the account, and runs
+`docker login <host>` before `docker pull`. Public images skip
+this step entirely. Same encryption-at-rest, same audit log,
+same revoke flow as AI-runner credentials — the vault hosts
+both kinds in one store.
+
+The user-visible contract: declare a private image in `brr.toml`
+and add the registry credential once. The same `brr.toml`
+declaration works for the local daemon (which uses the
+machine's existing docker config — `docker login` runs
+out-of-band) and for brnrd-side spawns (which use the vault).
+The credential is never passed to the spawn sandbox itself;
+it lives on the build/host worker for the duration of the
+pull and is then cleared from memory (the resulting image is
+what the sandbox sees, not the cred).
 
 ## Account-scope endpoints
 
 New endpoint family on brnrd parallel to the existing
-ai-credentials / failover-policy endpoints. Spec belongs in
+credential vault / failover-policy / subscription endpoints.
+Spec belongs in
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md);
 summary here for completeness:
 
@@ -286,13 +302,6 @@ out in the same pass).
   repo-root). Putting it under `.brr/project.toml` would require
   partially un-gitignoring `.brr/`, which is awkward. Repo-root
   unless a strong reason emerges.
-- **Generic credential vault timing.** Defer until users ask;
-  most projects use public Docker images, and the failover path
-  fails loudly enough that "this isn't supported yet" is a
-  reasonable answer at launch. If even one user asks for
-  private-registry pulls, the vault extension is a few hours
-  of work (the underlying encryption + audit machinery is
-  already in place for AI creds).
 - **Should `brr config set --scope project` auto-`git add
   brr.toml`?** Probably not — would surprise users. Print a
   hint instead ("modified brr.toml; git add it to share with
@@ -365,3 +374,42 @@ degrades to "empty" when brnrd isn't connected).
   reads from the clone. Pondering provenance in
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1
   (pass-4 follow-up — second wave).
+- 2026-05-25 (pass 4 follow-up — third wave) — two updates:
+  1. **"Private docker image — open question" resolved** as
+     "Private docker image — resolved via the generic credential
+     vault." The credential vault generalisation in
+     [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+     means `brr brnrd creds add docker-registry --registry
+     ghcr.io --username --token` is a launch surface; the
+     spawn bootstrap does `docker login` before `docker pull`
+     for private images. Same encryption / audit / revoke as
+     AI credentials. Driven by the user's "I would actually
+     want the images and also the credential dir mounting
+     (stored encrypted as we discussed)" feedback.
+  2. **`subscription.tier` and `subscription.plan` added as
+     account-scope read-only keys.** Mirrored by brnrd from
+     the Stripe subscription state on every relevant webhook;
+     the daemon + brnrd-side dispatcher read these to apply
+     tier-based caps (project count, event ceiling, audit
+     retention). Clients read via `brr config get
+     subscription.tier`; writes happen via the dedicated
+     `brr brnrd subscribe` / `brr brnrd subscription cancel`
+     verbs, not via `brr config set`. Driven by the pricing
+     reframe in
+     [`decision-pricing-shape.md`](decision-pricing-shape.md)
+     (third wave) that introduced the platform subscription
+     tier.
+  3. **`ai_credentials.*` schema entry renamed to
+     `credentials.*`** to match the generalised credential
+     vault (the schema entry now covers both AI-runner and
+     docker-registry credentials).
+- 2026-05-26 (third-wave follow-up) — subscription tier
+  string-value names finalised (`subscribed` /
+  `subscribed_past_due` / `free`, replacing the third-wave
+  draft's `plus` / `plus_past_due` / `free`); plan codes
+  finalised as `monthly` / `annual` (replacing `plus_monthly`
+  / `plus_annual`). CLI verbs writing the subscription state
+  are now `brr brnrd subscribe` (start) and `brr brnrd
+  subscription cancel`, replacing the draft's `brr brnrd
+  plus upgrade/downgrade`. Driven by the user's naming
+  feedback in [`decision-pricing-shape.md`](decision-pricing-shape.md).

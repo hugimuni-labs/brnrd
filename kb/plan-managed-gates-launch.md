@@ -48,8 +48,10 @@ covers the dashboard view of all of this.
 - OSS paths for Telegram and GitHub gates remain 1:1 untouched —
   existing `[gate.telegram]` and `[gate.github]` config sections
   keep working exactly as today.
-- Launch announcement headlines both equally (TG + GH bot as the
-  free dispatcher's two front doors).
+- Launch announcement headlines both equally (TG + GH bot as
+  the managed dispatcher's two front doors — Free for up to 3
+  projects, Subscribed for up to 10 + the rest of the
+  platform bundle).
 
 ## Done definition
 
@@ -268,11 +270,12 @@ backend lives at `src/brnrd/` alongside the daemon at
 3. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
    — the sister plan for the dashboard view of all of this.
 4. [`subject-managed-mode.md`](subject-managed-mode.md) — the
-   strategic context (free dispatcher + paid managed compute,
-   work-continuity frame).
+   strategic context (managed dispatcher + managed compute
+   surfaces, Free + Subscribed tier shape, work-continuity frame).
 5. [`decision-pricing-shape.md`](decision-pricing-shape.md) —
-   the pricing model that drives the free-tier rate caps and
-   the 100-spawn cap the prompt API references.
+   the pricing model (platform subscription + metered credits
+   for compute) that drives the per-tier caps the prompt API
+   references.
 6. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
    — where `src/brnrd/` lives.
 

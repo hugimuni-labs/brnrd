@@ -387,6 +387,128 @@ the current state. §6 is the re-promotion guide.
 > reading), then `brr kb` (highest agent-experience leverage,
 > lowest coupling), then `brr daemon install` (can ship
 > anytime, no upstream dependencies).
+>
+> **2026-05-25 pass-4 follow-up — third wave.** Pricing
+> reframe + credential vault generalisation, driven by two
+> threads of user feedback that landed at the same time:
+> "actually want the [private] images and also the credential
+> dir mounting (stored encrypted as we discussed)" and "the
+> current pricing won't make this project successful — we
+> need to reframe it slightly to be more coherent, more
+> sustainable, yet still ideally friendly."
+>
+> - **Pricing reframe**: the "free dispatcher + paid managed
+>   compute (credits)" shape was self-defeating — active users
+>   wouldn't hit the compute cap, casual users wouldn't hit
+>   anything, nobody would pay, project starves. Adopted
+>   **subscription for the platform + metered credits for
+>   compute**: Free (1 project, 100 events/month, 5 credits) +
+>   **Brnrd Plus $9/month** (up to 10 projects, 10K events/month,
+>   500 credits included, full dashboard, 90-day audit) +
+>   metered compute overage via existing wallet. Multi-project
+>   routing is the load-bearing premium gate (honest because
+>   multi-project genuinely has more implementation + support
+>   surface than single-project); Plus also bundles the full
+>   dashboard, 90-day audit, and email support. Self-hosted
+>   brnrd stays always-free with full feature parity. Event
+>   overages on either tier are soft-throttle + notify, not
+>   metered. Per-seat team tier deferred to v-next. Details in
+>   [`decision-pricing-shape.md`](decision-pricing-shape.md).
+> - **Plus subscription billing leg** added alongside the
+>   credit wallet: Stripe recurring subscription (monthly +
+>   annual variants), Customer Portal for self-service,
+>   prorated upgrade, cancel-at-period-end downgrade, dunning
+>   grace, monthly Plus credit grant (500 credits, expires
+>   end-of-month). EU compliance machinery (Stripe France,
+>   HugiMuni SAS, Qonto, Stripe Tax + OSS, SCA via Checkout)
+>   applies to the subscription product identically. New
+>   `/v1/accounts/subscription` endpoint family; subscription
+>   state mirrored to account-scope settings as
+>   `subscription.tier` for in-band reads by daemon +
+>   dispatcher. Details in
+>   [`design-billing.md`](design-billing.md) and
+>   [`design-brnrd-protocol.md`](design-brnrd-protocol.md).
+> - **Credential vault generalised**: `/v1/accounts/
+>   ai-credentials` → `/v1/accounts/credentials` with a `kind`
+>   discriminator covering both AI-runner credentials
+>   (Anthropic / OpenAI / Google / GitHub — preserving the
+>   `dir-tarball` shape for Claude Pro / Codex Plus / Gemini
+>   OAuth) AND docker-registry credentials (ghcr.io /
+>   docker.io / etc.). Same encryption, same audit, same
+>   revoke. Failover dispatch step 6 now performs `docker
+>   login` before `docker pull` for private images —
+>   **resolves the "private image launch-blocker" open
+>   question** that the second wave deferred. Registry creds
+>   live only in the build worker's `~/.docker/config.json`
+>   for the spawn's duration; sandbox itself never sees them.
+> - **`brr brnrd plus` sub-verb family** added to the CLI
+>   (`status | upgrade | downgrade | resume | portal`) wrapping
+>   the new subscription endpoints. `brr brnrd creds add`
+>   accepts both AI-runner kinds and `docker-registry`.
+>   Seven-verb top-level taxonomy unchanged.
+>
+> No new pages; six pages modified
+> (`decision-pricing-shape.md`, `design-billing.md`,
+> `design-brnrd-protocol.md`, `decision-cli-shape.md`,
+> `design-config-layout.md`, `subject-managed-mode.md`), plus
+> index + log + this breadcrumb. All designs remain
+> `Status: proposed`. Implementation order: credential vault
+> generalisation first (smallest extension; unlocks private
+> images at launch), then Plus subscription endpoints + Stripe
+> product setup (largest piece; unblocks revenue model), then
+> `brr brnrd plus` CLI verbs (thin wrapper over the
+> endpoints).
+
+> **2026-05-26 — third-wave refinement (naming + pricing).**
+> User pushback on the just-proposed third-wave shape: "I
+> don't like the plus as a name for the subscription and
+> neither as a subcommand verb; we could offer the
+> subscription even at 5 a month, and give the fallback
+> compute credits to make up for it; I'm not sure we want to
+> limit to 1 project — maybe a properly tweaked Free tier
+> limit will do the job for a real hobbyist."
+>
+> - **Subscription tier deliberately unnamed.** No "Plus" /
+>   "Pro" / "Premium" branding; UI + docs say "Subscribed"
+>   / "Subscriber" / "Subscription tier." A brand name can
+>   be retro-fitted post-launch with market data; un-naming
+>   a launched tier is painful.
+> - **Subscription price set to $5/month** ($50/year, ~17%
+>   off) — was $9 in the third-wave draft. Sub-$5 threshold
+>   bias toward conversion volume vs sub-$10 "is this worth
+>   it?" friction.
+> - **Included compute set to 300 credits/month** ($3 of
+>   compute) — was 500 in the third-wave draft. Leaves $2/mo
+>   true platform-fee headroom over included compute.
+> - **Free tier project cap raised from 1 → 3** for
+>   community reception. 1-project Free reads as "trial
+>   mode" (HN / dev-twitter audience); 3 captures the "side
+>   project + day-job + scratchpad" hobbyist cleanly; the
+>   "generous-but-bounded Free" pattern Plausible / Supabase
+>   / PostHog / Cal.com all use earned their adoption from
+>   that posture. Subscription cap unchanged at 10
+>   (still 3.3× headroom + the rest of the bundle).
+> - **CLI verb family renamed.** `brr brnrd plus
+>   [status|upgrade|downgrade|resume|portal]` → noun-first
+>   `brr brnrd subscription [status|start|cancel|resume|
+>   portal]` + `brr brnrd subscribe` as a shortcut for
+>   `subscription start`. `upgrade` → `start`, `downgrade`
+>   → `cancel`.
+> - **Subscription state value names finalised.** Tier value
+>   `plus` → `subscribed`, `plus_past_due` →
+>   `subscribed_past_due`, plan codes `plus_monthly` /
+>   `plus_annual` → `monthly` / `annual`, wallet sub-bucket
+>   `plus_monthly` → `subscriber_monthly`.
+>
+> Nine pages refined (pricing-shape, billing, brnrd-
+> protocol, cli-shape, config-layout, managed-mode subject,
+> failover-compute plan, managed-gates-launch plan, index),
+> plus log + this breadcrumb. Implementation order from the
+> third wave still holds; this pass refines externally-
+> visible surfaces (price, name, project cap) without
+> touching the implementation surface — vault, endpoints,
+> Stripe product, dispatcher are all the same shape; only
+> labels + numbers + a few enum values changed.
 
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.

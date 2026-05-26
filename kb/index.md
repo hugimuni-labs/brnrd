@@ -125,49 +125,80 @@ dive-in map) and are stable until something contradicts them.
   active axis now handled by the env hub. The fleet axis itself
   collapsed into the managed-mode hub on 2026-05-25.
 - **Hub: [managed mode](subject-managed-mode.md)** — *active*. The
-  `brnrd` story (hosted at `brnrd.dev`): free dispatcher (gates +
-  multi-project routing + permission prompts + 100 failover
-  spawns/month) + usage-based managed compute over the cap. Data
-  minimization ("we don't have your code") baked into the design;
-  cross-gate conversation continuity via a metadata-only graph +
-  on-demand gate-history fetch. Promoted on 2026-05-22 out of
-  pondering; reshaped 2026-05-22 around the work-continuity frame
-  after recognising the always-on-host model was a shape mismatch
-  with the pitch; reshaped 2026-05-25 to drop BYO compute from
-  launch, add the dashboard MVP, and adopt the monorepo layout;
-  reshaped again the same day (pass 3) to settle on `brnrd` as
-  the canonical hosted-product name (was briefly `brr.run` after
-  collapsing the two), `brnrd.dev` as the domain, and to land
-  the cross-gate conversation context machinery.
+  `brnrd` story (hosted at `brnrd.dev`): two surfaces (managed
+  dispatcher + managed compute) billed across two tiers (Free
+  for up to 3 projects + Subscribed at $5/mo for up to 10 +
+  the full dashboard + 300 included compute credits) with
+  metered compute on top. Data minimization ("we don't have
+  your code") baked into the design; cross-gate conversation
+  continuity via a metadata-only graph + on-demand gate-history
+  fetch. Generalised credential vault holds both AI-runner
+  credentials and docker-registry credentials in one encrypted
+  store. Promoted on 2026-05-22 out of pondering; reshaped
+  2026-05-22 around the work-continuity frame after recognising
+  the always-on-host model was a shape mismatch with the
+  pitch; reshaped 2026-05-25 to drop BYO compute from launch,
+  add the dashboard MVP, and adopt the monorepo layout;
+  reshaped again the same day (pass 3) to settle on `brnrd`
+  as the canonical hosted-product name (was briefly `brr.run`
+  after collapsing the two), `brnrd.dev` as the domain, and
+  to land the cross-gate conversation context machinery;
+  reshaped again (pass-4 follow-up third wave) when the
+  credits-only model proved self-defeating — adopted platform
+  subscription + metered credits for compute, generalised the
+  credential vault to support private docker images at launch;
+  refined 2026-05-26 with the final pricing + naming shape
+  (no "Plus" branding, $5/month with 300 included credits,
+  3-project Free tier).
 - [brnrd protocol design](design-brnrd-protocol.md) —
   *proposed*. The wire format between brr daemons and `brnrd`.
   Covers gates (managed-gates path), failover dispatch (decision
-  tree), AI-credential vault (api-key + dir-tarball shapes on one
-  endpoint), multi-project routing, permission-prompt API, data
-  minimization principle, conversation context for failover and
-  dashboard (metadata graph + git trailer + on-demand fetch + TG
-  ring buffer), and Upsun deployment notes. Originally
-  `design-managed-gates.md`; renamed to
-  `design-brr-run-protocol.md` on 2026-05-22 when spawn-compute
-  joined the protocol; renamed to `design-brnrd-protocol.md` on
-  2026-05-25 with the brnrd-naming-keep decision.
+  tree with `docker login` step for private images), generalised
+  credential vault (AI-runner credentials with api-key +
+  dir-tarball shapes AND docker-registry credentials in one
+  encrypted store), subscription endpoints
+  (`/v1/accounts/subscription[/checkout|cancel|resume|portal]`,
+  with state values `tier=subscribed|subscribed_past_due|free`
+  and plan codes `monthly|annual`), multi-project routing,
+  permission-prompt API, data minimization principle,
+  conversation context for failover and dashboard (metadata
+  graph + git trailer + on-demand fetch + TG ring buffer), and
+  Upsun deployment notes. Originally `design-managed-gates.md`;
+  renamed to `design-brr-run-protocol.md` on 2026-05-22 when
+  spawn-compute joined the protocol; renamed to
+  `design-brnrd-protocol.md` on 2026-05-25 with the
+  brnrd-naming-keep decision.
 - [Pricing shape decision](decision-pricing-shape.md) —
-  *proposed*. Two-tier shape mapped to marginal cost: free
-  dispatcher (gates + ~300 free credits/month covering ~100
-  managed-compute spawns); usage-based managed compute over the
-  free grant; deferred per-seat team tier. "We charge for ops,
-  not for AI usage." Credit wallet model (no card-on-file by
-  default; one-shot top-ups via Stripe Checkout). Reshaped
-  2026-05-25 to drop the launch BYO tier; further reshaped
-  same-day to adopt the credit-wallet payment model.
-- [Billing design](design-billing.md) — *proposed*. Wallet
-  mechanics that back the pricing model: top-up flow (Stripe
-  Checkout, no card-on-file by default), debit at spawn-finalize,
-  zero-balance UX with enqueue + gate notify, opt-in auto-topup,
-  pro-rata refund policy, free-tier monthly credit grant
-  (~300 credits/month), audit log entries for every wallet
-  operation, Stripe integration shape (HugiMuni SAS + Stripe
-  France + Qonto payouts + Stripe Tax for EU VAT).
+  *proposed*. **Subscription for the platform + metered credits
+  for compute.** Two tiers at launch: Free (3 projects, 100
+  events/month, 5 spawn-credits/month, basic dashboard, 7-day
+  audit) + Subscribed ($5/month or $50/year — up to 10
+  projects, 10K events/month, 300 spawn-credits/month included,
+  full dashboard, 90-day audit, email support). Subscription
+  tier deliberately unnamed (no "Plus" / "Pro" branding).
+  Metered compute top-ups on either tier ($0.01/credit, Stripe
+  Checkout one-shot, no card-on-file except opt-in
+  auto-topup). Self-hosted brnrd stays always-free with full
+  feature parity. Per-seat team tier deferred to v-next.
+  Reshaped 2026-05-25 multiple times — adopted credits wallet
+  (pass 4), then reframed (pass-4 follow-up third wave) when
+  the credits-only shape proved self-defeating for
+  sustainability. Refined 2026-05-26 with the final pricing +
+  naming shape (no marketing tier name, $5/month, 300 included
+  credits, 3-project Free tier).
+- [Billing design](design-billing.md) — *proposed*. **Two
+  billing legs**: subscription (Stripe recurring,
+  monthly/annual, Customer Portal for self-service) and credit
+  wallet (one-shot Stripe Checkout top-ups). Subscription
+  mechanics: $5/month, prorated start, cancel-at-period-end,
+  subscriber credit grant (300/month vs Free's 5/month).
+  Wallet mechanics: top-up flow, debit-at-finalize, zero-balance
+  UX with enqueue + gate notify, opt-in auto-topup, pro-rata
+  refund policy, sub-bucket ledger (paid / subscriber_monthly /
+  free_monthly), audit log entries. Stripe integration shape
+  (HugiMuni SAS + Stripe France + Qonto payouts + Stripe Tax
+  for EU VAT + OSS scheme + SCA via Checkout) applies to both
+  legs under one Stripe account.
 - [CLI shape decision](decision-cli-shape.md) — *proposed*.
   Seven top-level verbs (`init` / `run` / `daemon` / `gate` /
   `brnrd` / `config` / `kb`) with subcommands. Collapses today's
@@ -175,15 +206,20 @@ dive-in map) and are stable until something contradicts them.
   uninstall|logs`; collapses today's `auth` / `bind` / `setup`
   into `brr gate <name> <verb>`; adds the load-bearing `brr
   brnrd` namespace for hosted-service management (`connect` /
-  `creds` / `policy` / `topup` / `balance` / `projects` / ...);
-  adds `brr config list|get|set|doc|template|validate` for
-  three-scope (project / local / account) parameter
-  introspection; adds `brr kb status|pages|proposed|log|check|
-  doc` as the kb read surface for users and non-brr agents.
-  Every sub-verb supports `--json`. Rejects the earlier `brr
-  accounts` placeholder. `brr brnrd connect [url]` is a
-  three-layer smart bootstrap defaulting to `https://brnrd.dev`
-  and accepting any URL for first-class self-hosting.
+  `creds` / `policy` / `topup` / `balance` / `projects` /
+  `subscription [status|start|cancel|resume|portal]` + `brr
+  brnrd subscribe` shortcut for the subscription / ...); adds
+  `brr config list|get|set|doc|template|validate` for three-
+  scope (project / local / account) parameter introspection;
+  adds `brr kb status|pages|proposed|log|check|doc` as the kb
+  read surface for users and non-brr agents. `brr brnrd creds
+  add` accepts both AI-runner kinds and `docker-registry`
+  (registry credentials for private images go in the same
+  encrypted vault as AI creds). Every
+  sub-verb supports `--json`. Rejects the earlier `brr accounts`
+  placeholder. `brr brnrd connect [url]` is a three-layer smart
+  bootstrap defaulting to `https://brnrd.dev` and accepting any
+  URL for first-class self-hosting.
 - [Connectors layering decision](decision-connectors-layering.md) —
   *proposed*. Names the gates vs connectors split: gates are
   per-project / inbound (existing shape); connectors are
@@ -221,10 +257,11 @@ dive-in map) and are stable until something contradicts them.
   lives at `src/brnrd/` in the monorepo.
 - [Failover compute plan](plan-failover-compute.md) — *not
   started*. Managed-compute spawn on brnrd-owned Fly pool:
-  AI-credential vault (api-key + dir-tarball), dispatcher
-  decision tree, permission-prompt-resolving spawn invocation,
-  audit log, and the CLI surface for the `brr brnrd` verbs
-  (creds / policy / audit / balance / topup). BYO compute
+  generalised credential vault (AI runner + docker-registry,
+  encrypted at rest), dispatcher decision tree,
+  permission-prompt-resolving spawn invocation, audit log, and
+  the CLI surface for the `brr brnrd` verbs (creds / policy /
+  audit / balance / topup / subscription). BYO compute
   deferred from launch.
 - [Conversation_id propagation plan](plan-conversation-id-propagation.md) —
   *not started*. Small daemon-side enabler: `Brnrd-Conversation-Id`
@@ -235,9 +272,10 @@ dive-in map) and are stable until something contradicts them.
   brnrd holding conversation contents. ~80 LOC daemon-side.
 - [Dashboard MVP plan](plan-brnrd-dashboard-mvp.md) — *not
   started*. Seven views (accounts/projects, project detail, task
-  detail, conversation proxy, AI credentials, failover policy +
-  cost chart, audit log). HTMX-first to keep build/maintenance
-  cost down; SPA later if interactivity demands it.
+  detail, conversation proxy, credentials vault (AI + docker
+  registry), failover policy + cost chart, audit log). HTMX-first
+  to keep build/maintenance cost down; SPA later if interactivity
+  demands it.
 - [Fly Machines env plan](plan-env-fly-machines.md) — *not
   started*. First cloud env; lives at `src/brr/envs/fly_machines/`
   gated by the `brr[fly]` extra. Used by the laptop daemon

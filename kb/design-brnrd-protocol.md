@@ -17,10 +17,14 @@ spawn-compute path joined the protocol, then renamed to
 `design-brnrd-protocol.md` on 2026-05-25 with the
 brnrd-as-canonical-name decision. Reshaped on 2026-05-25 to
 drop BYO cloud-platform tokens (managed compute uses brnrd's own
-cloud account), add the AI-credential vault, the multi-project
+cloud account), add the credential vault (AI-runner credentials
++ docker-registry credentials in one store), the multi-project
 routing protocol, the permission-gate API, the data-
-minimization principle, and the cross-gate conversation context
-machinery (metadata graph + on-demand fetch + TG ring buffer).
+minimization principle, the cross-gate conversation context
+machinery (metadata graph + on-demand fetch + TG ring buffer),
+and the subscription endpoints. Subscription-state value names
+finalised on 2026-05-26 (no "Plus" branding; tier value is
+`"subscribed"`, plan codes are `"monthly"` / `"annual"`).
 
 ## Scope
 
@@ -30,9 +34,10 @@ In scope:
   configuration, failure semantics.
 - The brnrd-side REST API surface the daemon adapter and the
   brnrd-internal spawn paths talk to: account / pairing
-  endpoints, inbox endpoints, platform webhook endpoints (Telegram,
-  GitHub App), AI-credential storage endpoints, failover-policy
-  endpoints, permission-prompt endpoints, project endpoints.
+  endpoints, subscription endpoints, inbox endpoints, platform
+  webhook endpoints (Telegram, GitHub App), credential vault
+  endpoints (AI + docker-registry), failover-policy endpoints,
+  permission-prompt endpoints, project endpoints.
 - The event-shape translation between Telegram Bot API updates /
   GH App webhook events and the brr in-process event format that
   `.brr/inbox/` consumers already understand.
@@ -41,9 +46,11 @@ In scope:
   user's projects.
 - The failover dispatch decision tree (laptop-online → forward;
   laptop-offline → ask-or-spawn) and the per-task spawn flow.
-- The AI-credential vault on brnrd (encrypted at rest;
-  API-key and credential-dir-upload payload shapes; used at
-  failover spawn time).
+- The credential vault on brnrd (encrypted at rest; two
+  domains in one store — AI-runner credentials with API-key
+  or credential-dir-tarball shapes for Anthropic / OpenAI /
+  Google / GitHub; and docker-registry credentials for
+  private images on ghcr.io / docker.io / etc.).
 - The **permission-prompt API** for ask-before-spawn UX.
 - The **data minimization principle** (what brnrd does and
   doesn't persist).
@@ -93,10 +100,13 @@ lives on the daemon. Bake the following into every endpoint:
 - **Conversation history lives on the daemon side**, never
   mirrored to brnrd. The dashboard renders live by querying the
   daemon when online; no shadow copy on brnrd.
-- **AI credentials encrypted at rest** with per-account envelope
-  keys + a separately-held KMS root key. Decrypted in process
-  memory at spawn time only; cleared immediately after spawn
-  hand-off.
+- **Credentials encrypted at rest** with per-account envelope
+  keys + a separately-held KMS root key. Same scheme covers AI
+  credentials AND docker-registry credentials (per the
+  generalised credential vault). Decrypted in process memory at
+  spawn time only; cleared immediately after spawn hand-off
+  (AI creds) or after `docker login` completes (registry
+  creds).
 - **Audit log is metadata-only** — who, when, what platform, what
   outcome, what cost. Never task contents.
 - **Account email separated from credential storage** — different
@@ -117,7 +127,8 @@ sense, and listed in the audit log:
 | Held | Scope | TTL | Why |
 |------|-------|-----|-----|
 | Account email + password hash | Per account | Lifetime of account | Auth + billing contact |
-| AI credentials (encrypted at rest) | Per account | Until user revokes | Required for managed-compute spawns; see "AI-credential vault" below |
+| Credentials (encrypted at rest) | Per account | Until user revokes | Two domains in one vault: (a) AI-runner credentials (Anthropic / OpenAI / Google / GitHub — API key OR `~/.claude`-style dir tarball for subscription-auth users); (b) Docker-registry credentials for private images. Both required for managed-compute spawns that use them. See "Credential vault endpoints" below. |
+| Subscription state (tier, plan, period_end, Stripe customer/subscription IDs) | Per account | Lifetime of account | Subscription leg of billing; see [`design-billing.md`](design-billing.md). Mirrored to account-scope settings as `subscription.tier` for in-band reads. |
 | Project bindings (chat ↔ project, repo ↔ project) | Per account | Until unbind / delete | Multi-project routing |
 | Event metadata (event_id, gate, source_channel, project_id, conversation_id, branch_name, received_at) | Per account | 30 days live, count-only aggregates after | Cross-gate conversation graph for failover continuity. **No body, no preview, no participant names.** See "Conversation context for failover and dashboard" below |
 | Telegram per-chat ring buffer (50 msgs × 72h) | Per chat | 72h | One concession: TG bot API lacks a retroactive `getChatHistory` for our use; the ring buffer makes failover spawns and dashboard rendering work on TG without needing to push history into the user's own infra. Slack / Discord don't need this — their APIs expose history natively |
@@ -326,11 +337,35 @@ at-a-glance triage.
 | `POST` | `/v1/accounts/sessions` | Login; returns a session JWT for web / CLI use. | Session row (TTL) |
 | `POST` | `/v1/accounts/api-keys` | Issue an additional API key. | API-key hash + metadata |
 | `DELETE` | `/v1/accounts/api-keys/{key_id}` | Revoke. | Mark revoked |
-| `POST` | `/v1/accounts/projects` | Create a project. Body: `{name}`. Returns `project_id`. | Project row (name, account_id) |
+| `POST` | `/v1/accounts/projects` | Create a project. Body: `{name}`. Returns `project_id`. **Enforced against the account's tier project cap** (`max_projects` per [`design-billing.md`](design-billing.md): 3 on Free, 10 on Subscribed); 409 with upgrade-prompt body when at cap. | Project row (name, account_id) |
 | `GET` | `/v1/accounts/projects` | List the account's projects (id, name, daemon count, last activity). | Read-only |
 | `DELETE` | `/v1/accounts/projects/{project_id}` | Delete project. Cascades to bindings; in-flight events drain. | Hard delete |
 | `POST` | `/v1/accounts/pair/telegram` | Initiate a Telegram pairing — returns a one-time pairing code valid for 10 min. | Pairing row (TTL) |
 | `POST` | `/v1/accounts/pair/github` | Initiate a GitHub App install flow — returns the install URL with `state=` encoding the account. | Install-intent row (TTL) |
+
+### Subscription endpoints
+
+The platform-subscription leg of the billing model. Full
+mechanics live in [`design-billing.md`](design-billing.md); the
+endpoint shape is summarised here because it's part of the
+brnrd protocol surface that the CLI consumes (`brr brnrd
+subscription [status | start | cancel | resume | portal]`, with
+`brr brnrd subscribe` as a shortcut for `subscription start`).
+
+| Method | Path | Description | Persists |
+|--------|------|-------------|----------|
+| `GET` | `/v1/accounts/subscription` | Current state: `tier` (`free` / `subscribed` / `subscribed_past_due`), `plan` (`monthly` / `annual`), `period_end`, `cancel_at_period_end`, last 6 invoices summary. | Read-only |
+| `POST` | `/v1/accounts/subscription/checkout` | Create Stripe Checkout session for the subscription product. Body: `{plan: "monthly" | "annual"}`. Returns `checkout_url`. | Stripe customer + checkout session |
+| `POST` | `/v1/accounts/subscription/cancel` | Mark `cancel_at_period_end=true` on the Stripe subscription. | Stripe subscription update |
+| `POST` | `/v1/accounts/subscription/resume` | Clear `cancel_at_period_end` (re-activate a subscription marked for cancellation that hasn't expired yet). | Stripe subscription update |
+| `POST` | `/v1/accounts/subscription/portal` | Create Stripe Customer Portal session for card-update / invoice-download / plan-switch. Returns `portal_url`. | Stripe portal session |
+
+Subscription state is **also** mirrored to the account-scope
+settings store as `subscription.tier` (read-only from clients;
+written by brnrd on Stripe webhook events). This is what the
+daemon + brnrd-side dispatcher consult to know which tier caps
+apply, without having to call the dedicated subscription
+endpoint on every dispatch decision.
 
 ### Inbox endpoints (daemon-facing)
 
@@ -368,36 +403,90 @@ Event body dropped from brnrd after dispatch.
 | `GET` | `/v1/accounts/bindings/repo` | List the account's repo bindings. | Read-only |
 | `DELETE` | `/v1/accounts/bindings/repo/{binding_id}` | Remove. | Hard delete |
 
-### AI-credential vault endpoints
+### Credential vault endpoints
 
-For failover spawns: brnrd needs the user's AI-runner
-credentials to run Claude / Codex / Gemini in the sandbox. The
-vault supports two payload shapes — API key or credential
-directory tarball — both end up as encrypted blobs in the same
-store.
+Generalised credential vault. Two domains share the same
+encryption / audit / revoke infrastructure:
+
+1. **AI-runner credentials** (Anthropic / OpenAI / Google /
+   GitHub) — needed to run Claude / Codex / Gemini in the
+   spawn sandbox. Two payload shapes: API key or credential
+   directory tarball (preserves Claude Pro / Codex Plus /
+   Gemini OAuth subscription-auth for users who'd rather not
+   provision API keys).
+2. **Docker registry credentials** (ghcr.io / docker.io /
+   quay.io / private registries) — needed when the project's
+   `brr.toml` declares a private image. Single payload shape:
+   username + password/token. Used by the spawn bootstrap to
+   `docker login <host>` before `docker pull`.
+
+Both live in the same `credentials` table with a `kind`
+discriminator; identical encryption-at-rest (per-account
+envelope keys), identical audit-log shape, identical
+revoke flow.
 
 | Method | Path | Description | Persists |
 |--------|------|-------------|----------|
-| `POST` | `/v1/accounts/ai-credentials` | Store an encrypted AI credential. Body: `{provider: "anthropic" | "openai" | "google" | "github", shape: "api-key" | "dir-tarball", payload: "..."}`. | Encrypted blob, metadata (provider, shape, created_at) |
-| `GET` | `/v1/accounts/ai-credentials` | List stored credentials (id, provider, shape, created_at, last_used_at). Never returns secret material. | Read-only |
-| `DELETE` | `/v1/accounts/ai-credentials/{credential_id}` | Revoke. In-flight spawns complete; new spawns refuse. | Hard delete |
+| `POST` | `/v1/accounts/credentials` | Store an encrypted credential. Body: `{kind: "ai-anthropic" | "ai-openai" | "ai-google" | "ai-github" | "docker-registry", shape: "api-key" | "dir-tarball" | "registry-userpass", payload: "...", host?: "ghcr.io"}`. `host` required for `docker-registry`. | Encrypted blob, metadata (kind, shape, host, created_at) |
+| `GET` | `/v1/accounts/credentials` | List stored credentials (id, kind, shape, host, created_at, last_used_at). Never returns secret material. Filterable: `?kind=ai-*` or `?kind=docker-registry`. | Read-only |
+| `DELETE` | `/v1/accounts/credentials/{credential_id}` | Revoke. In-flight spawns complete; new spawns refuse if they would have used this credential. | Hard delete |
 
 CLI surface:
 
 ```
+# AI credentials
 brr brnrd creds add anthropic --key sk-ant-...
-brr brnrd creds add anthropic --dir ~/.claude
-brr brnrd creds add openai --key sk-...
-brr brnrd creds add github --key ghp_...
-brr brnrd creds list
+brr brnrd creds add anthropic --dir ~/.claude        # preserves subscription auth
+brr brnrd creds add openai    --key sk-...
+brr brnrd creds add google    --key AIza-...
+brr brnrd creds add github    --key ghp_...
+
+# Docker-registry credentials
+brr brnrd creds add docker-registry --registry ghcr.io \
+  --username myorg --token <ghcr-pat>
+brr brnrd creds add docker-registry --registry docker.io \
+  --username myuser --password <pat>
+
+# Common
+brr brnrd creds list                      # all
+brr brnrd creds list --kind docker-registry
 brr brnrd creds remove <id>
 ```
 
-The `--dir` path tars the directory, base64-encodes, uploads. At
-spawn time the tarball is decoded into the sandbox's
-`$HOME/.claude/` (or wherever the provider expects). This
-preserves subscription-auth flows (Claude Pro, Codex Plus, Gemini
-OAuth) for users who don't want to provision API keys.
+Storage detail (informational, not normative):
+
+- `credentials` table columns: `id`, `account_id`, `kind`,
+  `shape`, `host` (nullable), `encrypted_payload`,
+  `envelope_key_id`, `created_at`, `last_used_at`,
+  `revoked_at` (nullable).
+- Encryption: per-account envelope key wraps a per-credential
+  data key; payloads encrypted with AES-256-GCM. Envelope keys
+  rotated via a v-next admin tool (out of scope for launch).
+- `last_used_at` updated at credential read (spawn-bootstrap
+  time); used for the dashboard to show "this cred hasn't been
+  used in 90 days, consider revoking."
+
+The `--dir` path tars the directory, base64-encodes, uploads
+under shape `dir-tarball`. At spawn time the tarball is decoded
+into the sandbox's `$HOME/.claude/` (or wherever the provider
+expects). Subscription-auth flows for Claude Pro, Codex Plus,
+Gemini OAuth preserved exactly as before — the generalisation
+doesn't touch this shape.
+
+Docker-registry credentials match by `host` at spawn time:
+when the project's `brr.toml` declares `docker.image =
+"ghcr.io/myorg/foo"`, brnrd extracts the registry host
+(`ghcr.io`), looks up a `docker-registry` cred for this account
+matching that host, decrypts it, runs `docker login ghcr.io -u
+<user> --password-stdin <token>`, then `docker pull
+ghcr.io/myorg/foo`. Cred material is cleared from sandbox env
+after `docker login` (the credential lives only in the
+Docker daemon's auth.json for the duration of the spawn).
+
+Public images bypass the lookup (no `docker login` step).
+Private images with no matching cred fail with a clear gate-side
+message: "private image `<host>/...`; add registry creds with
+`brr brnrd creds add docker-registry --registry <host> ...`".
 
 ### Failover-policy endpoints
 
@@ -606,17 +695,24 @@ Endpoints introduced or extended by this flow:
      (installation_id, repo_full_name) → (account_id, project_id) → dispatch
 ```
 
-### AI-credential setup
+### Credential setup
 
 ```
 1. User: `brr brnrd creds add anthropic --key sk-ant-...`
    OR     `brr brnrd creds add anthropic --dir ~/.claude`
-   → CLI POSTs to /v1/accounts/ai-credentials with the chosen shape
+   → CLI POSTs to /v1/accounts/credentials with the chosen shape
    → brnrd encrypts and stores; returns credential_id
 
 2. User: repeats for openai / google / github as needed
 
-3. User: `brr brnrd policy set --enable --mode ask --monthly-cap 100`
+3. (Optional) User declares a private Docker image in `brr.toml`:
+   → `brr brnrd creds add docker-registry --registry ghcr.io \
+        --username myorg --token <ghcr-pat>`
+   → CLI POSTs to /v1/accounts/credentials with kind=docker-registry,
+     host=ghcr.io, shape=registry-userpass
+   → brnrd encrypts and stores
+
+4. User: `brr brnrd policy set --enable --mode ask --monthly-cap 100`
    → CLI POSTs to /v1/accounts/failover-policy
    → brnrd flips failover_enabled = true for the account, sets caps
    → Now: any event arriving while no daemon is online and the
@@ -658,8 +754,8 @@ decision tree:
      "ask"                        → prompt
      "never"                      → enqueue; done
 
-6. (Spawn path) Issue a one-shot task-key, decrypt AI creds into
-   process memory, run the **daemon-equivalent bootstrap**:
+6. (Spawn path) Issue a one-shot task-key, decrypt credentials
+   into process memory, run the **daemon-equivalent bootstrap**:
      - clone repo with the per-spawn GH App token
      - **read `brr.toml` from the cloned repo** for project-scope
        config (Docker image, runner choice, env preference, etc.
@@ -671,6 +767,17 @@ decision tree:
      - build the effective config: account < project (local
        scope is intentionally ignored — it's not in the repo,
        by design)
+     - **if `docker.image` references a private registry**:
+       extract host → look up `docker-registry` credential for
+       this `(account_id, host)` → if present, decrypt and
+       `docker login <host> -u <user> --password-stdin <token>`
+       on the build/host worker; if absent, fail the spawn with
+       a clear gate-side message ("private image
+       `<host>/<repo>`; add registry creds with `brr brnrd
+       creds add docker-registry --registry <host> ...`").
+       Public images skip this step.
+     - `docker pull <image>` (now succeeds for private images
+       with valid creds)
      - materialise AI creds into the sandbox layout the runner
        expects (env vars or `$HOME/.claude/` dir-tarball
        expansion)
@@ -683,17 +790,10 @@ decision tree:
      - the event payload + project_id
      - the task-key (Bearer scoped to this event_id, 1h TTL,
        single use for POST /v1/daemons/responses)
-   Clear AI cred material from memory after hand-off.
-
-   **Private docker image** (e.g. `image = "ghcr.io/myorg/foo"`
-   on a private registry): brnrd's `docker pull` fails. At
-   launch, the spawn fails with a clear "private image; either
-   make it public, self-host brnrd, or wait for the credential
-   vault extension" message via the gate. The generic credential
-   vault extension (registry credentials alongside AI creds) is
-   tracked as an open question in
-   [`design-config-layout.md`](design-config-layout.md) →
-   "Private docker image — open question".
+   Clear all credential material (AI + registry) from memory
+   after hand-off. Docker registry credentials live only in the
+   build/host worker's `~/.docker/config.json` for the duration
+   of the spawn; the sandbox itself doesn't receive them.
 
 7. (Sandbox runs) Sandbox:
      - clones the repo via the GH token
@@ -924,6 +1024,7 @@ simple; the first two cover the common cases.
 | Response post fails (from failover sandbox) | Sandbox retries up to 3 times; on final failure, writes the response to the user's git remote as `.brr/failover-orphans/<event-id>.md` so it isn't lost. |
 | User revokes API key mid-flight | Next long-poll returns 401; daemon logs and exits its cloud-gate thread cleanly. Other gates keep running. |
 | User revokes AI credential mid-flight | In-flight spawns complete; new spawns refuse with "missing credential" notification. |
+| User revokes docker-registry credential mid-flight | In-flight spawns complete (image already pulled). Next spawn needing the same private image fails with "missing registry credential" notification. |
 | Permission prompt expires (TTL) | Auto-queue with a "permission timed out, event queued" notification. User can run the task later by sending it again from the daemon-side. |
 | Webhook secret rotation | brnrd handles silently; the daemon side is not aware of platform secrets. |
 
@@ -952,10 +1053,13 @@ simple; the first two cover the common cases.
   a unique constraint on `(account_id, event_id)` so platform
   retries don't enqueue twice. Spawns are idempotent on
   `(account_id, event_id)` for the same reason.
-- **AI-credential encryption.** Per-account envelope keys;
-  envelope keys wrapped by a brnrd-side KMS root key.
+- **Credential encryption.** Per-account envelope keys; envelope
+  keys wrapped by a brnrd-side KMS root key. Same scheme covers
+  AI-runner credentials AND docker-registry credentials.
   Decrypted only in process memory at spawn time; cleared after
-  spawn completes.
+  spawn completes (AI creds) or after `docker login` (registry
+  creds — material lives in the build worker's auth.json for
+  the duration of the spawn).
 - **Audit log.** Every credential write, credential read at
   spawn time, failover spawn attempt (with outcome), permission
   prompt resolution, project-binding change, policy change, and
@@ -964,46 +1068,62 @@ simple; the first two cover the common cases.
   table queryable via account-scoped CLI / dashboard.
   Metadata-only, never task contents.
 
-## AI-credential security model
+## Credential security model
+
+Covers both AI-runner credentials and docker-registry
+credentials — they share the same vault, the same encryption,
+and the same trust model.
 
 The trust model:
 
 - **Scope minimisation in onboarding.** brnrd's onboarding
-  documentation walks users through generating the minimum-scope
-  AI token per provider (Anthropic API key with usage limit, GH
-  PAT with `repo` + `read:user` only, etc.). The provider's own
-  scoping is the load-bearing layer; brnrd's encryption is
-  defense-in-depth.
+  documentation walks users through generating the
+  minimum-scope token per provider:
+  - Anthropic API key with usage limit; GH PAT with `repo` +
+    `read:user` only; ghcr.io PAT with `read:packages` only
+    (no `write:packages`); docker.io access token scoped to
+    read-only pulls on the specific repo, etc.
+  The provider's own scoping is the load-bearing layer; brnrd's
+  encryption is defense-in-depth.
 - **Encryption at rest.** Per-account envelope keys; root key in
-  a KMS managed separately from the application database.
+  a KMS managed separately from the application database. Same
+  scheme for AI creds and docker-registry creds.
 - **Encryption in transit.** TLS only; HTTP redirects refuse.
-- **No logs.** Token material never enters any log line.
-  Spawn-time decryption happens in process memory; the cleartext
-  token is passed to the runner CLI / API call and immediately
-  cleared.
+- **No logs.** Token material never enters any log line. Spawn-
+  time decryption happens in process memory; AI cleartext is
+  passed to the runner CLI / API call and immediately cleared;
+  registry cleartext is passed to `docker login` via
+  `--password-stdin` and immediately cleared (lives only in the
+  build worker's `~/.docker/config.json` for the duration of
+  the spawn).
 - **Easy revoke.** `brr brnrd creds remove <id>` and
   `brr brnrd policy set --disable` both work without affecting
   in-flight tasks. In-flight tasks complete; new spawns refuse.
 - **Per-account audit log.** Every spawn surfaced in
   `brr brnrd audit` with timestamp, event_id, project_id,
-  cost estimate, exit status, AI provider used.
+  cost estimate, exit status, AI provider used, docker
+  registry used (if applicable).
 - **Blast-radius bound.** Even if brnrd's database is
   compromised, the per-provider tokens grant only what their
-  scopes permit (Anthropic API usage; GH push to specific repos;
-  etc.). Exposure shape ~ a leaked AI API key — bad, but bounded
+  scopes permit (Anthropic API usage; GH push to specific
+  repos; docker pull from the specific registry+repo; etc.).
+  Exposure shape ~ a leaked provider token — bad, but bounded
   and quickly revocable from the provider side.
 
 What we do NOT do:
 
 - Store user OAuth refresh tokens that grant broad provider
   access. Per-provider scoped tokens only.
-- Hold git-write tokens beyond the duration of one spawn (the GH
-  App install delegates this naturally; non-GitHub remotes use a
-  per-spawn deploy key the user installs once).
-- Allow credential read after write — write-only API surface for
-  the secret material itself.
+- Hold git-write tokens beyond the duration of one spawn (the
+  GH App install delegates this naturally; non-GitHub remotes
+  use a per-spawn deploy key the user installs once).
+- Allow credential read after write — write-only API surface
+  for the secret material itself.
 - Persist event/response bodies, conversation history, or repo
   contents. See "Data minimization" above.
+- Pass docker-registry credentials to the spawn sandbox itself.
+  The credential lives only on the build/host worker that runs
+  `docker pull`; the resulting image is what the sandbox sees.
 
 ## BYO compute — designed, deferred
 
@@ -1018,9 +1138,10 @@ rationale.
 The wire shape that supports BYO is small and additive when we
 come back to it:
 
-- New endpoint family `/v1/accounts/cloud-credentials`
-  (POST/GET/DELETE) parallel to the AI-credential vault, storing
-  per-platform tokens encrypted.
+- A new `kind` value on the credential vault (e.g.
+  `cloud-platform-fly`, `cloud-platform-modal`,
+  `cloud-platform-daytona`), per-platform tokens encrypted via
+  the same envelope-key infrastructure.
 - One new field in failover-policy: `compute_target:
   "brr-managed" | "fly:user" | "modal:user" | …` defaulting to
   `"brr-managed"`.
@@ -1237,9 +1358,59 @@ write the Upsun shape once, use it twice.
      before invoking the env. Project-level preferences
      (docker image, runner choice, env default) now flow from
      the repo to brnrd-side spawns automatically — no protocol
-     push, the repo is the message. Private docker images are
+     push, the repo is the message. Private docker images
      flagged as a launch-blocker for the spawn path with a
-     clear gate-side error; the generic credential-vault
-     extension (registry creds alongside AI creds) tracked as
-     an open question in
-     [`design-config-layout.md`](design-config-layout.md).
+     clear gate-side error; generic credential-vault extension
+     tracked as an open question — **resolved in the third
+     wave below**.
+- 2026-05-25 (pass 4 follow-up — third wave) — two additions
+  driven by the user's "actually want private images and
+  encrypted credential dir mounting" + "current pricing won't
+  make this project successful" feedback:
+  1. **Credential vault generalised**. The earlier
+     `/v1/accounts/ai-credentials` endpoint family renamed to
+     `/v1/accounts/credentials` with a `kind` discriminator
+     covering both AI-runner credentials (Anthropic / OpenAI /
+     Google / GitHub — preserving the `dir-tarball` shape for
+     Claude Pro / Codex Plus / Gemini OAuth) AND
+     docker-registry credentials (ghcr.io / docker.io / etc.).
+     Same encryption, same audit-log shape, same revoke
+     semantics. Failover dispatch step 6 now performs
+     `docker login` before `docker pull` when the project's
+     `brr.toml` declares a private image — resolves the
+     "private image launch-blocker" open question. AI-credential
+     security model renamed to "Credential security model" and
+     extended to cover registry credentials. CLI surface
+     extended with `brr brnrd creds add docker-registry
+     --registry <host> --username --token`. Audit-log entries
+     for docker-registry credential reads added. BYO compute
+     "designed, deferred" rewrite updated to use the same
+     credential vault for cloud-platform tokens when BYO
+     comes back (new `kind` value, not a new endpoint family).
+  2. **Subscription endpoints** added to the API surface
+     (`/v1/accounts/subscription[/checkout|cancel|resume|portal]`)
+     to back the new billing leg in
+     [`design-billing.md`](design-billing.md). Project-creation
+     endpoint now enforces tier-based project cap. "What we DO
+     hold" table gains a subscription state row (mirrored to
+     account-scope settings as `subscription.tier` for in-band
+     reads by daemon + dispatcher). Stripe webhook contract on
+     `/v1/internal/stripe/webhook` extended to handle
+     `customer.subscription.*` and `invoice.*` events
+     alongside the existing one-shot top-up events. Initial
+     third-wave shape used `tier="plus"` / `plan="plus_monthly"`
+     and a tier cap of 1 project on Free / 10 on Plus.
+- 2026-05-26 (third-wave follow-up) — **subscription state
+  values renamed** to drop the "Plus" branding (tier value
+  `"plus"` → `"subscribed"`; past-due `"plus_past_due"` →
+  `"subscribed_past_due"`; plan codes `"plus_monthly"` /
+  `"plus_annual"` → `"monthly"` / `"annual"`). **Free
+  project cap raised from 1 → 3**; subscriber cap unchanged
+  at 10; project-creation endpoint enforcement updated
+  accordingly. CLI verb at the wrapper level reshaped from
+  `brr brnrd plus [upgrade | downgrade | status]` to
+  noun-first `brr brnrd subscription [status | start | cancel
+  | resume | portal]` (with `brr brnrd subscribe` shortcut).
+  Endpoint paths themselves unchanged. Driven by the user's
+  "I don't like Plus as a name or verb; tweaked Free might
+  not need the 1-project cap" feedback.
