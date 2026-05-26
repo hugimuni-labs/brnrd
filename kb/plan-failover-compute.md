@@ -1,5 +1,10 @@
 # Plan: failover compute — brnrd-spawns-on-laptop-down
 
+**Status: accepted 2026-05-26** (locked in PR #40 MR review;
+implementation feedback may reshape — treat the slice
+breakdown + risk register as a working spine, not a
+contract).
+
 Implementation plan for the **managed-compute failover** surface
 of [managed mode](subject-managed-mode.md): when a user's daemon
 is offline and failover is enabled, brnrd spawns a per-task

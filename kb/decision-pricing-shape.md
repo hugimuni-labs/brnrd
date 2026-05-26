@@ -1,8 +1,9 @@
 # Decision: managed-mode pricing shape
 
-**Status: proposed, not yet accepted on 2026-05-22; reshaped
-multiple times (see Lineage). Current shape on 2026-05-26
-(third-wave follow-up, locked):** unnamed paid tier
+**Status: accepted 2026-05-26** (locked in PR #40 MR review,
+after locking passes I / II / III on 2026-05-26 closed all
+but one open question — see Lineage). Shape:
+unnamed paid tier
 ("Subscribed") at **$5/month for the first 200 supporters
 (grandfathered forever) → $7/month for new joiners after**,
 with 300 credits / month included and a **25-project cap that

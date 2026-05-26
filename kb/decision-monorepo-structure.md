@@ -1,10 +1,11 @@
 # Decision: monorepo structure for brr, brnrd, dashboard, envs
 
-**Status: proposed, not yet accepted on 2026-05-25.** Names the
-repo / package layout for the brr family of components, so the
-brnrd backend, dashboard, and first-party envs (including cloud
-envs) can grow alongside the daemon without fragmenting the
-shared kb or inventing a multi-repo release dance prematurely.
+**Status: accepted 2026-05-26** (locked in PR #40 MR review).
+Names the repo / package layout for the brr family of
+components, so the brnrd backend, dashboard, and first-party
+envs (including cloud envs) can grow alongside the daemon
+without fragmenting the shared kb or inventing a multi-repo
+release dance prematurely.
 
 ## Decision
 

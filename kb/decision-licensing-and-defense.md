@@ -1,9 +1,9 @@
 # Decision: licensing + competitive-defense posture
 
-**Status: proposed, not yet accepted on 2026-05-26.** Names the
-three concrete moves that protect the brnrd hosted business
-from the "anyone can clone our OSS and undercut us" failure
-mode, while keeping the OSS posture honest. Lives at the
+**Status: accepted 2026-05-26** (locked in PR #40 MR review).
+Names the three concrete moves that protect the brnrd hosted
+business from the "anyone can clone our OSS and undercut us"
+failure mode, while keeping the OSS posture honest. Lives at the
 intersection of [`decision-pricing-shape.md`](decision-pricing-shape.md)
 (subscription as the revenue surface to defend),
 [`decision-monorepo-structure.md`](decision-monorepo-structure.md)

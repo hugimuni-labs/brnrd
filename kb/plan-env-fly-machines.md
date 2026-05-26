@@ -1,5 +1,9 @@
 # Plan: cloud-runner env — Fly Machines (first BYO adapter)
 
+**Status: accepted 2026-05-26** (locked in PR #40 MR review;
+implementation feedback may reshape — treat the env-class
+implementation outline as a working spine, not a contract).
+
 First implementation of a cloud env (an `EnvBackend` that runs
 remotely). Ships as a first-party env under `src/brr/envs/fly_machines/`,
 gated by the `brr[fly]` pip extra per

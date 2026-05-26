@@ -1,7 +1,9 @@
 # Plan: `brr kb` subcommand — kb health for users and agents
 
-**Status: proposed, not yet accepted on 2026-05-25.** Adds `brr kb`
-as a top-level verb in the noun-first CLI taxonomy, exposing
+**Status: accepted 2026-05-26** (locked in PR #40 MR review;
+implementation feedback may reshape — treat the per-subcommand
+output sketches as a working spine, not a contract). Adds
+`brr kb` as a top-level verb in the noun-first CLI taxonomy, exposing
 kb-graph health + structural stats + per-page introspection to
 both the human user (who needs to know "what should I act on?")
 and to non-brr-operated agents (Cursor, Codex CLI, Claude Code —

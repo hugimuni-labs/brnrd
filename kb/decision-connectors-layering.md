@@ -1,11 +1,12 @@
 # Decision: gates vs connectors — the layering split
 
-**Status: proposed, not yet accepted on 2026-05-25.** Names two
-distinct kinds of integration that look similar at first glance
-(both speak to platforms; both carry messages) but live at
-different layers of the brr stack and serve different purposes.
-Locking the split now keeps future agentic-mode work from
-collapsing them into one undifferentiated category.
+**Status: accepted 2026-05-26** (locked in PR #40 MR review,
+"gates vs connectors" accept). Names two distinct kinds of
+integration that look similar at first glance (both speak to
+platforms; both carry messages) but live at different layers
+of the brr stack and serve different purposes. Locking the
+split now keeps future agentic-mode work from collapsing them
+into one undifferentiated category.
 
 ## Decision
 
