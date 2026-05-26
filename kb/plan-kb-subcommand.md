@@ -239,7 +239,7 @@ the kb subcommand in place, it becomes a one-line pointer:
 Health checks: run `brr kb check` (machine: --json). Surfaces
 broken cross-references, missing lifecycle markers, orphan
 pages, aspirational-drift smells. For the underlying contract
-on what each finding means, see [`subject-kb.md`](subject-kb.md).
+on what each finding means, see kb/subject-kb.md.
 ```
 
 This is the change AGENTS.md gets: replace the implicit
@@ -259,7 +259,7 @@ activity, drift warnings) in one call instead of N reads.
    subject hubs themselves) must have at least one inbound link
    from `index.md` or another non-index page. Orphans are flagged.
 2. **Cross-reference integrity.** Every Markdown link to a
-   relative `kb/*` path resolves to a file that exists.
+   relative kb page resolves to a file that exists.
 3. **Status-marker syntax.** `plan-*` / `design-*` /
    `decision-*` pages should have a top-of-page `Status: ...`
    line matching the grammar from

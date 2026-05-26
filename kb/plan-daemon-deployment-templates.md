@@ -11,24 +11,17 @@ of platform-specific templates + a "deploying brr" docs page.
 
 ## Scope and demotion rationale
 
-**Demoted to launch-nice-to-have on 2026-05-22; accepted
-2026-05-26** (locked in PR #40 MR review, locking pass IV —
-aligned with the **machine-scoped multi-project daemon**
-shape: cloud-host deployments serve one or more brr-init'd
-repos via the same `~/.config/brr/projects.toml` registry as
-laptop deployments; container volume mounts must include the
-registry path so it survives restarts). Earlier framing
-positioned the always-on-host model as the *preferred* answer
-to "my laptop is offline" — that answer is now
-[`plan-failover-compute.md`](plan-failover-compute.md) (brnrd
-spawns per-task sandboxes in the user's or its own cloud
-account, without the user operating a separate always-on
-box). These templates remain useful for the niche where the
-user genuinely wants a cloud-first daemon home (security
-policy, no laptop at all, "I want my daemon to live next to
-my prod"), but they are no longer load-bearing for the
-work-continuity pitch. Ship when convenient; do not block
-the launch on them.
+Accepted in PR #40 MR review as a launch-nice-to-have aligned
+with the **machine-scoped multi-project daemon** shape:
+cloud-host deployments serve one or more brr-init'd repos via
+the same `~/.config/brr/projects.toml` registry as laptop
+deployments; container volume mounts must include the registry
+path so it survives restarts. Lineage: demoted on 2026-05-22
+when [`plan-failover-compute.md`](plan-failover-compute.md)
+became the load-bearing answer to "my laptop is offline";
+these templates now cover the niche where the user genuinely
+wants a cloud-first daemon home. Ship when convenient; do not
+block launch on them.
 
 Fluid past the Dockerfile split — template specifics
 (secrets wiring, mount paths, platform-specific quirks) will
