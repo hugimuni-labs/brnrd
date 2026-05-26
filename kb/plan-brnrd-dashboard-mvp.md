@@ -382,9 +382,13 @@ Steps:
   websockets in v-next.
 - **Mobile app** — responsive web is enough; native app is
   post-launch if there's demand.
-- **Built-in payments UI** — manual invoicing at launch per
-  `decision-pricing-shape.md`; the audit log carries enough for
-  CSV export to email.
+- **Built-in payments UI for top-ups / subscription
+  management** — Stripe Checkout + Customer Portal handle this
+  per [`design-billing.md`](design-billing.md); the dashboard
+  just links out to Stripe for card / invoice / cancellation
+  flows. The audit log still carries enough for CSV export
+  for users who want to dig into their cost history outside
+  the dashboard.
 
 ## Risks
 

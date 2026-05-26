@@ -128,9 +128,11 @@ dive-in map) and are stable until something contradicts them.
   `brnrd` story (hosted at `brnrd.dev`): two surfaces (managed
   dispatcher + compute, with compute offering a subscriber-
   opt-in BYO sub-option) billed across two tiers (Free for up
-  to 3 projects + Subscribed at $5/mo for up to 10 + the full
-  dashboard + 300 included compute credits + BYO compute
-  opt-in) with
+  to 3 projects with a 10-credit one-time signup bonus +
+  Subscribed at $5/mo for up to 25 projects (unlimited after
+  $10 of cumulative top-ups) + the full dashboard with
+  allowance gauges + 300 included compute credits/month +
+  BYO compute opt-in) with
   metered compute on top. Data minimization ("we don't have
   your code") baked into the design; cross-gate conversation
   continuity via a metadata-only graph + on-demand gate-history
@@ -346,7 +348,9 @@ dive-in map) and are stable until something contradicts them.
   with the "cloud runners are envs" unification.
   Promoted from `notes-pondering-fleet.md` §2; refreshed 2026-05-25
   to reflect that only Fly Machines wires up server-side at
-  launch (BYO server-side deferred).
+  launch (managed Fly + BYO Fly ship together for subscribers
+  per the locking pass; other clouds parallel-ship managed +
+  BYO when added).
 - [Managed gates launch plan](plan-managed-gates-launch.md) —
   *not started*. Surface A. Three slices: GH App adapter +
   backend skeleton + auto-binding (first, largest pain relief);

@@ -223,8 +223,11 @@ backend lives at `src/brnrd/` alongside the daemon at
 - Failover spawn invocation (separated into
   [`plan-failover-compute.md`](plan-failover-compute.md); this
   plan only ships the prompt API surface).
-- BYO compute (deferred per
-  [`decision-pricing-shape.md`](decision-pricing-shape.md)).
+- BYO compute path itself (subscriber-opt-in, parallel-shipped
+  with managed Fly per
+  [`decision-pricing-shape.md`](decision-pricing-shape.md) +
+  [`plan-failover-compute.md`](plan-failover-compute.md);
+  Surface A is gates-only, BYO lives on Surface B).
 
 ## Risks
 

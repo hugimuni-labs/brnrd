@@ -412,8 +412,10 @@ app + their own credential vault.
   follow the same shape as Fly; each is a separate small plan
   once usage justifies a second managed-compute backend, and
   each lands managed + BYO together in the same release.
-- Payments integration (Stripe / Paddle / etc.); manual invoicing
-  at launch is enough until usage justifies the integration cost.
+- Payments integration mechanics themselves (Stripe Checkout +
+  Customer Portal + Webhook handling). Lives in
+  [`design-billing.md`](design-billing.md); this plan only
+  spends credits, it doesn't issue them.
 - Web dashboard for credentials / audit log / billing — CLI-first
   for this plan; dashboard is in
   [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md).

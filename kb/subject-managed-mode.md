@@ -700,8 +700,9 @@ In scope for managed-mode launch:
   BYO Fly for the subscriber-opt-in path (same env class invoked
   with the user's token), sandbox image, per-spawn task-key + GH
   App installation token, accounting +
-  CSV exporter for manual invoicing. Included credits in the
-  subscription; metered top-ups for overage.
+  CSV exporter for accounting. Included credits in the
+  subscription; metered top-ups for overage via Stripe
+  Checkout per [`design-billing.md`](design-billing.md).
 - Subscription billing leg (Stripe recurring, monthly +
   annual, Customer Portal) on top of the existing credit
   wallet, per [`design-billing.md`](design-billing.md).
