@@ -4442,3 +4442,24 @@ Updated `subject-daemon.md`, `plan-laptop-daemoning.md`, `kb/index.md`,
 and `README.md` so the current state is explicit: the Linux service
 wrapper has shipped, while the macOS LaunchAgent and the
 machine-scoped multi-project runtime remain separate follow-up slices.
+## [2026-05-26] implement | macOS LaunchAgent daemon lifecycle slice
+
+Added the macOS side of `brr daemon install | uninstall |
+status | logs`: `src/brr/daemon_install/macos.py` renders the
+machine-scoped `dev.brnrd.brr` LaunchAgent, writes it to
+`~/Library/LaunchAgents/dev.brnrd.brr.plist`, creates the
+machine registry file at `~/.config/brr/projects.toml`, manages
+`launchctl bootstrap | bootout | kickstart`, and tails
+`~/Library/Logs/brr/brr.out.log` plus `brr.err.log`. The plist
+intentionally has no `WorkingDirectory`, matching
+[`plan-laptop-daemoning.md`](plan-laptop-daemoning.md); the broader
+multi-project daemon runtime remains a later slice, so this commit
+keeps the service lifecycle faithful to the accepted unit shape
+without pinning it back to one repo.
+
+CLI wiring adds the noun-first `brr daemon ...` surface while keeping
+the existing `brr up` / `brr down` aliases. README now points macOS
+users at `brr daemon install` and notes the first-run network prompt.
+Tests cover plist generation, no-`WorkingDirectory`, launchctl command
+construction, log tailing, registry reads, and CLI dispatch; full suite
+passed with 487 tests.
