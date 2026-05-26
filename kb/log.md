@@ -4423,3 +4423,22 @@ ledger + ~30 LOC for the dispatcher gate; ~0 LOC for the
 brnrd sibling binary (it's a `[project.scripts]` line +
 the existing `brr brnrd` subcommand surface, reused).
 Everything else is policy + organisational.
+
+## [2026-05-26] implement | Linux systemd daemon install slice
+
+Implemented the Linux side of the laptop daemoning plan: `brr daemon
+install | uninstall | up | down | status | logs` now exists, with
+top-level `brr up` / `brr down` kept as compatibility aliases. The Linux
+installer writes the machine-scoped systemd user unit at
+`~/.config/systemd/user/brr.service` with no `WorkingDirectory`, creates
+the machine registry placeholder at `~/.config/brr/projects.toml`, wires
+`systemctl --user` lifecycle commands, tails logs through
+`journalctl --user -u brr -f`, and handles the `loginctl enable-linger`
+prompt flow with noninteractive flags for CI / scripts.
+
+Tests cover exact unit rendering, install / uninstall command selection,
+linger marker behaviour, and CLI dispatch without invoking real systemd.
+Updated `subject-daemon.md`, `plan-laptop-daemoning.md`, `kb/index.md`,
+and `README.md` so the current state is explicit: the Linux service
+wrapper has shipped, while the macOS LaunchAgent and the
+machine-scoped multi-project runtime remain separate follow-up slices.

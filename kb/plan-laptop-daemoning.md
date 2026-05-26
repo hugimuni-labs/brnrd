@@ -27,6 +27,12 @@ on the laptop side) and
 status`). Tracked at
 [issue #29](https://github.com/Gurio/brr/issues/29).
 
+Implementation note: the Linux systemd user-service slice shipped on
+2026-05-26 (`brr daemon install | uninstall | status | logs`, unit
+generation, linger prompt flow, and tests that avoid real systemctl).
+The macOS LaunchAgent, project registry, IPC pickup, and async
+multi-project runtime slices remain tracked by this plan.
+
 ## Why this exists separately from the cloud-host plan
 
 The deployment-templates plan addresses *cloud-first* users —
