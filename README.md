@@ -51,7 +51,7 @@ brr init                          # detect runner, create AGENTS.md + kb/
 brr run "fix the failing tests"   # run a task through the configured environment
 
 brr setup telegram                # configure a remote input
-brr up                            # start the daemon
+brr daemon up                     # start the daemon
 ```
 
 From Telegram (or Slack, or a task file):
@@ -107,8 +107,14 @@ bot a message; brr records the chat ID from each message and replies there.
 | `brr setup <gate>`     | Configure a gate in one step          |
 | `brr auth <gate>`      | Set gate credentials                  |
 | `brr bind <gate>`      | Bind a gate channel or watch          |
-| `brr up`               | Start the daemon (foreground)         |
-| `brr down`             | Stop the daemon                       |
+| `brr daemon up`        | Start the daemon                      |
+| `brr daemon down`      | Stop the daemon                       |
+| `brr daemon install`   | Install the Linux systemd user service |
+| `brr daemon status`    | Show daemon status                    |
+| `brr daemon logs`      | Tail daemon logs                      |
+
+`brr up` and `brr down` remain compatibility aliases for the foreground
+daemon supervisor.
 
 Gates: `telegram`, `slack`, `github`.
 
