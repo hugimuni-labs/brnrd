@@ -156,18 +156,26 @@ default prompt.
 
 ## Process control
 
-Process control is deliberately local:
+Process control is deliberately local and now has two operator-facing
+layers:
 
-- `brr up` starts the foreground daemon.
-- `brr down` asks that daemon to stop.
-- The operator terminal, shell, tmux, launchd, systemd, or a future
-  supervisor decides whether to start it again.
+- `brr up` and `brr daemon up --foreground` start the existing
+  foreground daemon for the current repo; `brr down` and
+  `brr daemon down` ask that daemon to drain and stop.
+- On Linux, `brr daemon install` writes one user-scoped systemd unit at
+  `~/.config/systemd/user/brr.service`, with no `WorkingDirectory`, and
+  `brr daemon up | down | status | logs | uninstall` operate that
+  service through `systemctl --user` / `journalctl --user`.
 
 That boundary avoids letting chat messages or agent code kill the
 process that is currently responsible for delivering their response.
 Agents should not run daemon lifecycle commands from inside daemon
 tasks; the generated run context and bundled internals doc both frame
-`brr up` / `brr down` as human-operator concerns.
+daemon lifecycle verbs as human-operator concerns. The Linux unit slice
+shipped on 2026-05-26 from
+[`plan-laptop-daemoning.md`](plan-laptop-daemoning.md); the broader
+machine-scoped multi-project runtime and macOS LaunchAgent slice remain
+tracked there.
 
 For brr self-development, the restart pain is real but narrower than a
 product restart feature. The shipped path is captured in
@@ -194,10 +202,12 @@ removed on 2026-05-14 once the only importers were tests and stale docs.
 
 ## Deferred directions
 
-- **External supervision.** The fleet notes sketch systemd, launchd,
-  Docker, tmux, and future `brnrd` supervision. That is the right layer
-  for "keep this running forever" and cross-repo process management, but
-  it is not needed for the local brr self-development reload loop.
+- **Machine-scoped daemon runtime.** The Linux unit is machine-scoped,
+  but the runtime still needs the project registry / poller reshape
+  tracked in [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md) to
+  serve multiple repos from one process.
+- **macOS LaunchAgent install.** The launchd counterpart is still
+  pending under the same laptop-daemoning plan.
 - **True cancellation.** The daemon has no cancellation in v1. Signals
   request drain-and-exit; they do not interrupt a running AI CLI.
 

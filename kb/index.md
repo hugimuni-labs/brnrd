@@ -463,7 +463,8 @@ dive-in map) and are stable until something contradicts them.
   template shares its read-only-container shape with the brnrd
   backend Upsun deployment.
 - [Laptop daemoning plan](plan-laptop-daemoning.md) —
-  *accepted 2026-05-26*. **Reshaped in locking pass IV from
+  *accepted 2026-05-26; Linux systemd slice shipped 2026-05-26*.
+  **Reshaped in locking pass IV from
   per-project to machine-scoped multi-project**: one `brr
   daemon` process per machine serves all brr-init'd repos
   discovered via `~/.config/brr/projects.toml` (appended by
@@ -473,15 +474,15 @@ dive-in map) and are stable until something contradicts them.
   second project skips the account-pair step on already-paired
   machines. One supervised systemd / launchd unit per machine
   (no `WorkingDirectory` pinning, no `--name` flag).
-  Cross-platform laptop-side daemoning via `brr daemon install`:
-  writes a per-user systemd unit on Linux (`~/.config/systemd/
-  user/brr.service` + optional `loginctl enable-linger`), a
-  LaunchAgent on macOS (`~/Library/LaunchAgents/dev.brnrd.brr.
-  plist`). Survives reboot without sudo. `brr daemon up | down
-  | status | logs` operate the OS service when installed, fall
-  back to the foreground supervisor when not. Tracked at
-  [issue #29](https://github.com/Gurio/brr/issues/29); Windows
-  deferred.
+  The Linux side now writes a per-user systemd unit
+  (`~/.config/systemd/user/brr.service` + optional
+  `loginctl enable-linger`) and wires `brr daemon up | down |
+  status | logs | uninstall` through the user service when
+  installed, falling back to the foreground supervisor when not.
+  The macOS LaunchAgent counterpart
+  (`~/Library/LaunchAgents/dev.brnrd.brr.plist`) remains paired
+  follow-up work; Windows is deferred. Tracked at
+  [issue #29](https://github.com/Gurio/brr/issues/29).
 - [Config layout design](design-config-layout.md) —
   *accepted 2026-05-26*. **Locking pass IV** added the
   "per-branch overrides — embraced, not avoided" framing
