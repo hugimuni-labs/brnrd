@@ -2,18 +2,27 @@
 
 **Status: proposed, not yet accepted on 2026-05-22; reshaped
 multiple times (see Lineage). Current shape on 2026-05-26
-(third-wave follow-up):** unnamed paid tier ("Subscribed") at
-$5/month with 300 credits included, Free tier at 3 projects /
-100 events / 5 credits — subscription for the platform +
-metered credits for compute. The earlier "free dispatcher +
-paid managed compute" framing turned out to be self-defeating —
-see "What changed and why" below. Companion to
+(third-wave follow-up, locked):** unnamed paid tier
+("Subscribed") at **$5/month for the first 200 supporters
+(grandfathered forever) → $7/month for new joiners after**,
+with 300 credits included. Free tier at 3 projects / 100
+events / 5 credits — subscription for the platform + metered
+credits for compute. The earlier "free dispatcher + paid
+managed compute" framing turned out to be self-defeating —
+see "What changed and why" below. The two-step pricing
+(supporter $5 → public $7) is the launch-cohort defensive
+move documented in
+[`decision-licensing-and-defense.md`](decision-licensing-and-defense.md).
+Companion to
 [`subject-managed-mode.md`](subject-managed-mode.md) (the
 surfaces being priced),
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) (the
-per-task accounting hooks the model rides on), and
+per-task accounting hooks the model rides on),
 [`design-billing.md`](design-billing.md) (the subscription +
-wallet + Stripe mechanics that implement the cost model).
+wallet + Stripe mechanics that implement the cost model), and
+[`decision-licensing-and-defense.md`](decision-licensing-and-defense.md)
+(the moat the pricing is part of: license split + early-
+adopter step + deferred trademark).
 
 ## Decision
 
@@ -22,9 +31,17 @@ wallet + Stripe mechanics that implement the cost model).
 | Tier | Price | Projects | Events / month | Compute included | Dashboard | Audit retention | Support |
 |------|-------|----------|----------------|------------------|-----------|-----------------|---------|
 | **Free** | $0 | **3** | 100 | 5 spawn-credits ($0.05) | Basic (per-project, read-only views) | 7 days | Community (Discord, GitHub issues) |
-| **Subscribed** | **$5 / month** *(or $50 / year, ~17% off)* | up to **10** | 10,000 | **300 spawn-credits ($3 of compute)** | Full (cost charts, permission-prompt customisation, cross-project view, project-binding UI) | 90 days | Email |
-| **Compute overage** (both tiers) | $0.01 / credit (metered) | — | — | top-up via existing wallet | — | — | — |
+| **Subscribed — supporter price** *(first 200 subscribers, then locked forever)* | **$5 / month** *(or $50 / year, ~17% off)* | up to **10** | 10,000 | **300 spawn-credits ($3 of compute)** | Full (cost charts, permission-prompt customisation, cross-project view, project-binding UI) | 90 days | Email |
+| **Subscribed — public price** *(joiners after supporter cohort closes)* | **$7 / month** *(or $70 / year, ~17% off)* | up to **10** | 10,000 | **300 spawn-credits ($3 of compute)** | Full | 90 days | Email |
+| **Compute overage** (all tiers) | $0.01 / credit (metered) | — | — | top-up via existing wallet | — | — | — |
 | **Self-hosted brnrd** | $0 | unlimited | unlimited | self-paid cloud bill | full (your deployment) | self-defined | self-supplied |
+
+Supporter-price cohort closes on **first 200 subscribers OR
+12 months from public launch, whichever first**. Existing
+supporters keep $5/$50 forever (Stripe-stable on their
+original `Price` ID; no auto-migration). Rationale in
+[`decision-licensing-and-defense.md`](decision-licensing-and-defense.md)
+§ "Move 2 — Early-adopter pricing".
 
 **Team / per-seat tier** is deferred to v-next; solo subscription
 + Free are the launch shapes. Per-seat ships when the first real
@@ -147,22 +164,31 @@ matching each billing stream to its cost shape:
 
 ## Sustainability math
 
-Crude back-of-envelope at $5/month base + 300 credits included
-+ ~30% of subscribers exceed the included compute (the heaviest
-users top up via the wallet at $0.01/credit):
+Crude back-of-envelope at supporter-cohort $5/mo or public-
+cohort $7/mo + 300 credits included + ~30% of subscribers
+exceed the included compute (heaviest users top up at
+$0.01/credit). Blended ARPU below assumes the first 200 are
+supporter-priced ($5), every subscriber after is public-
+priced ($7):
 
-| Scenario | MRR (subscription only) | Compute revenue (over included) | Compute cost (Fly pass-through) | Infra cost | Net |
-|----------|------------------------|--------------------------------|---------------------------------|------------|-----|
-| 50 subscribers | $250 | ~$50 | ~$120 | ~$150 | **~+$30** |
-| 200 subscribers | $1,000 | ~$200 | ~$500 | ~$300 | **~+$400** |
-| 500 subscribers | $2,500 | ~$500 | ~$1,250 | ~$500 | **~+$1,250** |
-| 1,000 subscribers | $5,000 | ~$1,000 | ~$2,500 | ~$800 | **~+$2,700** |
+| Scenario | Subscriber mix | Blended MRR (sub only) | Compute revenue (over included) | Compute cost (Fly pass-through) | Infra cost | Net |
+|----------|---------------|------------------------|--------------------------------|---------------------------------|------------|-----|
+| 50 supporters | 50 × $5 | $250 | ~$50 | ~$120 | ~$150 | **~+$30** |
+| 200 supporters (cohort full) | 200 × $5 | $1,000 | ~$200 | ~$500 | ~$300 | **~+$400** |
+| 500 subs (200 supporter + 300 public) | 200 × $5 + 300 × $7 | $1,000 + $2,100 = $3,100 | ~$500 | ~$1,250 | ~$500 | **~+$1,850** |
+| 1,000 subs (200 supporter + 800 public) | 200 × $5 + 800 × $7 | $1,000 + $5,600 = $6,600 | ~$1,000 | ~$2,500 | ~$800 | **~+$4,300** |
 
-Model crosses sustained-net-positive around ~80 subscribers — a
-credible threshold for "this project pays for itself + a small
-honorarium to its maintainer" within the first year of public
-availability. At 500+ subscribers the project is comfortably
-funding itself plus paying real maintainer time.
+Model crosses sustained-net-positive around ~80 subscribers
+(at the all-supporter price) — a credible threshold for "this
+project pays for itself + a small honorarium to its maintainer"
+within the first year of public availability. At 500+
+subscribers the project is comfortably funding itself plus
+paying real maintainer time. The $5 → $7 step adds **~$600 /
+month** of long-tail headroom at 500 subs (300 public-priced
+subs × +$2) and **~$1,600 / month** at 1,000 subs (800 public-
+priced subs × +$2) vs an all-supporter-price universe —
+meaningful maintainer-time funding from a small price
+difference.
 
 The earlier credits-only model required ~10× the user count to
 hit the same net because compute alone doesn't have enough
@@ -175,21 +201,67 @@ $9/$10 line). At equal subscriber counts the alternatives are
 revenue-similar; the bet is that $5 with 300 credits converts
 materially more users than $9 with 500.
 
+## Early-adopter price step ($5 supporter → $7 public)
+
+Launch ships **two `Price` variants** of the same Stripe
+subscription product:
+
+- **Supporter price**: $5 / month, $50 / year. Available
+  for the first 200 subscribers OR until 12 months from
+  public launch, whichever first. **Grandfathered forever
+  on Stripe** — existing supporters keep paying $5/$50 at
+  every renewal because Stripe never auto-migrates a
+  subscription off its original `Price`.
+- **Public price**: $7 / month, $70 / year. Default for
+  every new checkout session after the supporter cohort
+  closes. Same product, same features, same included
+  compute — just $2 / month more (~40% revenue uplift per
+  subscriber on the long tail).
+
+The supporter / public step is the launch-cohort loyalty
+mechanism documented in
+[`decision-licensing-and-defense.md`](decision-licensing-and-defense.md)
+§ "Move 2 — Early-adopter pricing", which also covers the
+why-200 sizing, the Stripe `Price`-ID grandfathering
+contract, the cohort-counter mechanic, and the alternatives
+considered. This page only locks the numbers and the
+visible mechanics.
+
+**What the dashboard shows during the supporter window:**
+both prices side by side ("$5 supporter price, Y / 200
+spots remaining" + "$7 standard price after the supporter
+cohort"). Live counter so the scarcity is honest.
+
+**What flips at the boundary:**
+
+- The `brr brnrd subscribe` CLI verb and the dashboard
+  checkout flow swap the emitted `Price` ID atomically on
+  the 201st subscription start (or on the launch+12-month
+  date), and announce the change publicly the same day.
+- Existing supporters see no change — same price, same
+  invoice, same renewals. The grandfathering is
+  Stripe-native.
+- Annual supporters who let their subscription lapse and
+  re-subscribe re-enter at the then-current price ($70 if
+  past the boundary). Documented in the cancel flow.
+
 ## Subscription mechanics
 
 Implementation detail lives in
 [`design-billing.md`](design-billing.md). Headline contract:
 
-- **$5/month**, billed monthly via Stripe recurring subscription
+- **$5/month (supporter) → $7/month (public, post-cohort)**,
+  billed monthly via Stripe recurring subscription
   (separate Stripe product from the credit-wallet one-shot
   top-ups). All EU compliance work from the credit-wallet leg
   (Stripe France, HugiMuni SAS, Qonto payouts, Stripe Tax,
   OSS scheme, SCA via Checkout) applies to the subscription
   product identically — Stripe handles both subscription and
   one-shot products under the same Stripe account.
-- **Annual discount** option: $50/year = ~$4.17/month effective
-  (~17% off). Saves Stripe per-charge fees (12 charges/year → 1)
-  and gives users a small win.
+- **Annual discount** option: $50/year (supporter) or
+  $70/year (public) = ~$4.17/mo or ~$5.83/mo effective
+  (~17% off either tier). Saves Stripe per-charge fees
+  (12 charges/year → 1) and gives users a small win.
 - **Cancel anytime**, takes effect at the period end. No
   proration on cancellation (it's $5/month, the math is
   trivial); no claw-back of compute credits granted that month.
@@ -387,9 +459,12 @@ billing.
   (e.g. 5) if it pushes power users to per-seat earlier, or
   higher (e.g. 25 / unlimited) for simplicity. The cap should
   be high enough that no real solo developer hits it.
-- **Annual discount level.** $50/year = ~$4.17/mo effective
-  (~17%); could go lower for early-adopter push (e.g. $48/year
-  for the first 100 subscribers).
+- **Annual discount level.** $50/year (supporter) and
+  $70/year (public) sit at ~17% off monthly. Could go more
+  aggressive on annual (e.g. $45/year supporter, $60/year
+  public = 25% off) to push annual specifically. Defer; one
+  pricing knob at a time, and the supporter step is already
+  the launch's annual-conversion lever.
 - **Included compute level.** 300 credits ($3) covers ~100
   spawns/month; could be tightened (e.g. 200) to push metered
   top-ups earlier, or loosened (e.g. 500) for a "feels free"
@@ -506,3 +581,21 @@ billing.
   Plus as a name or verb; $5 a month with the credits to
   make up for it; properly tweaked Free might not need the
   1-project cap" feedback.
+- 2026-05-26 (locking pass — $5 → $7 step + license note).
+  Pricing locked at **two `Price` variants**: $5/mo (or
+  $50/yr) for the first 200 supporters, grandfathered
+  forever on Stripe; $7/mo (or $70/yr) for new joiners after
+  the supporter cohort closes (200 subs OR 12 months from
+  public launch, whichever first). Same product, same
+  features, same included compute — only the price differs.
+  Adds ~$600/mo (at 500 subs) to ~$1,600/mo (at 1,000 subs)
+  of long-tail headroom over an all-supporter-price universe.
+  Full rationale (why-200, why-$7, Stripe `Price`-ID
+  grandfathering contract, cohort-counter mechanic, the
+  whole moat / OSS-defense story) moved to the new
+  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md);
+  this page only locks the numbers + visible mechanics +
+  blended sustainability math. Driven by the user's "$5 for
+  early adopters, $6/$7 for the afterparty — license is
+  the right thing, trademark is a post-launch priority"
+  framing.

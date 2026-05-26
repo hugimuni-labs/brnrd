@@ -129,6 +129,27 @@ Five reasons, in declining order of weight:
    one repo, runs one test suite, reads one kb. Multi-repo means
    "ok, but which repo has the bit I care about?"
 
+## License boundary aligns with the package boundary
+
+The sub-package layout is also the license layout: the
+daemon (`src/brr/`) ships under the existing permissive
+license (MIT); the brnrd backend (`src/brnrd/`) and
+dashboard (`src/brnrd_web/`) ship under **AGPLv3** as part
+of the competitive-defense posture decided in
+[`decision-licensing-and-defense.md`](decision-licensing-and-defense.md).
+Per-package `LICENSE` files at `src/brr/LICENSE`,
+`src/brnrd/LICENSE`, and `src/brnrd_web/LICENSE`; the
+repo-root `LICENSE` stays MIT and a top-level
+`LICENSE-OVERVIEW.md` documents the split. The `pyproject.toml`
+optional-dependencies metadata declares the per-extra
+license accordingly (`brr` = MIT; `brr[backend]` = AGPLv3;
+envs follow the daemon's MIT). This is intentional and is
+the reason the monorepo restructuring + the
+licensing decision land in the same implementation window —
+the package boundaries make the license split unambiguous,
+and the license split is what makes shipping the backend
+as OSS defensible against managed-service competitors.
+
 ## Why some envs eventually split out as separate repos
 
 First-party envs vendored as extras eventually split because:
@@ -293,6 +314,9 @@ Rejected because:
    `src/brr_env_fly_machines/`.
 6. [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)
    for the `deploy/` folder shape.
+7. [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md)
+   for the per-package license decisions (MIT daemon + AGPLv3
+   backend / dashboard) the package boundary enables.
 
 ## Lineage
 
@@ -320,3 +344,12 @@ Rejected because:
   monorepo) added to alternatives. First-party split-out
   criterion now describes the env-graduates-to-its-own-repo
   path more precisely.
+- 2026-05-26 (license-boundary callout) — added "License
+  boundary aligns with the package boundary" section noting
+  that `src/brr/` stays MIT and `src/brnrd/` + `src/brnrd_web/`
+  ship AGPLv3 per
+  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md).
+  The monorepo restructuring PR and the per-package LICENSE
+  files should land together so the split is unambiguous from
+  the first commit that introduces the new packages. Read-next
+  expanded with the licensing-and-defense decision page.

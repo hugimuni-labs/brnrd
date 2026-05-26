@@ -172,20 +172,24 @@ dive-in map) and are stable until something contradicts them.
   *proposed*. **Subscription for the platform + metered credits
   for compute.** Two tiers at launch: Free (3 projects, 100
   events/month, 5 spawn-credits/month, basic dashboard, 7-day
-  audit) + Subscribed ($5/month or $50/year — up to 10
-  projects, 10K events/month, 300 spawn-credits/month included,
-  full dashboard, 90-day audit, email support). Subscription
-  tier deliberately unnamed (no "Plus" / "Pro" branding).
-  Metered compute top-ups on either tier ($0.01/credit, Stripe
-  Checkout one-shot, no card-on-file except opt-in
-  auto-topup). Self-hosted brnrd stays always-free with full
-  feature parity. Per-seat team tier deferred to v-next.
-  Reshaped 2026-05-25 multiple times — adopted credits wallet
-  (pass 4), then reframed (pass-4 follow-up third wave) when
-  the credits-only shape proved self-defeating for
-  sustainability. Refined 2026-05-26 with the final pricing +
-  naming shape (no marketing tier name, $5/month, 300 included
-  credits, 3-project Free tier).
+  audit) + Subscribed (**$5/month for the first 200 supporters
+  → $7/month for the public cohort afterward**; or $50 /
+  $70 annual; up to 10 projects, 10K events/month, 300 spawn-
+  credits/month included, full dashboard, 90-day audit, email
+  support). Subscription tier deliberately unnamed (no "Plus" /
+  "Pro" branding). Metered compute top-ups on either tier
+  ($0.01/credit, Stripe Checkout one-shot, no card-on-file
+  except opt-in auto-topup). Self-hosted brnrd stays always-
+  free with full feature parity. Per-seat team tier deferred
+  to v-next. Reshaped 2026-05-25 multiple times — adopted
+  credits wallet (pass 4), then reframed (pass-4 follow-up
+  third wave) when the credits-only shape proved self-
+  defeating for sustainability. Refined 2026-05-26 with the
+  final pricing + naming shape (no marketing tier name,
+  $5/month with 300 included credits, 3-project Free tier).
+  Locked 2026-05-26 with the $5 supporter / $7 public step
+  per
+  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md).
 - [Billing design](design-billing.md) — *proposed*. **Two
   billing legs**: subscription (Stripe recurring,
   monthly/annual, Customer Portal for self-service) and credit
@@ -235,7 +239,32 @@ dive-in map) and are stable until something contradicts them.
   Third-party envs use the existing `brr.envs` entry-point
   mechanism. Envs split out to their own `brr-env-<name>` pypi
   package when their maintainer cadence diverges or their
-  install footprint grows.
+  install footprint grows. The package boundary doubles as
+  the license boundary (MIT daemon + AGPLv3 backend /
+  dashboard) per
+  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md).
+- [Licensing and competitive-defense decision](decision-licensing-and-defense.md) —
+  *proposed*. Three concrete moves that protect the brnrd
+  hosted business without crippling the OSS posture:
+  **(1) license split** — `src/brr/` stays MIT (daemon
+  maximises community goodwill); `src/brnrd/` +
+  `src/brnrd_web/` ship **AGPLv3** (closes the "Big Cloud
+  rehosts our OSS as managed service" attack while keeping
+  self-hosters fully unaffected); **(2) early-adopter
+  pricing** — first 200 subscribers at $5 / month
+  grandfathered forever on Stripe, then $7 / month for the
+  public cohort (loyalty + long-tail revenue headroom in one
+  step); **(3) trademark on `brr` + `brnrd`** — deferred for
+  budget but post-launch priority, EU registration via EUIPO
+  through HugiMuni SAS at €800-1500 total, triggered by
+  launch+12-months OR €10K cumulative revenue OR first
+  observed competitor (whichever first). Explicitly rejects
+  BUSL/ELv2/SSPL (community-goodwill cost > defense gain at
+  current scale), gating any feature behind hosted-only
+  (breaks the always-free-self-host promise), racing to the
+  bottom on price, and pre-buying defensive domains
+  (trademark + UDRP covers the actual attack pattern at
+  lower ongoing cost).
 - [Cloud envs research](research-cloud-envs.md) —
   cross-env patterns (credential / repo / result delivery,
   cold-start budgets, network policy) for envs that execute
