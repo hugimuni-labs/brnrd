@@ -75,19 +75,32 @@ wire contract that ties everything together is in
 dashboard MVP is in
 [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md).
 
-**Two surfaces at launch, one designed-deferred:**
+**Two surfaces at launch, one designed-deferred. Billed across
+two tiers (Free + Subscribed, no marketing tier name) with
+metered compute on top of either; full table in
+[`decision-pricing-shape.md`](decision-pricing-shape.md):**
 
-| Surface | What it is | Pricing | Adoption pain it removes |
-|---------|-----------|---------|--------------------------|
-| **A. Managed dispatcher** — hosted bots + multi-project routing + permission prompts + audit | Hosted GH App + Telegram bot routing events to a per-account brnrd inbox, multi-project routing on top of one bot per platform, permission prompts before failover spawns, audit log | Free tier (rate caps, 1000 events/month, 100 failover spawns/month) | Per-user GH App / BotFather setup — currently the longest friction in adoption — AND "my laptop has to be up" — together, in one flow |
-| **B. Managed compute** — failover spawn on brnrd-owned cloud | Same dispatcher; when the user's daemon is offline and the user opts in, brnrd spawns a per-task ephemeral sandbox on its own Fly Machines pool, decrypts the user's AI credentials into the sandbox, runs the task, returns the response via the gate | Usage-based, pass-through with margin (free tier covers 100 spawns/month per above) | "I want managed continuity without a credit card surprise" — paid only when failover actually fires AND the user approved |
-| **C. BYO compute** (deferred) | Same failover spawn but in the user's cloud account using a user-stored cloud-platform token | Free dispatcher tier covers it | Out of scope at launch per `decision-pricing-shape.md`; wire shape preserved in the design page for clean add-back when usage justifies |
+| Surface | What it is | What Free gets | What Subscribed ($5/mo, or $50/yr) gets | Adoption pain it removes |
+|---------|-----------|----------------|----------------------------------------|--------------------------|
+| **A. Managed dispatcher** — hosted bots + multi-project routing + permission prompts + audit | Hosted GH App + Telegram bot routing events to a per-account brnrd inbox, multi-project routing on top of one bot per platform, permission prompts before failover spawns, audit log | Up to 3 projects, 100 events/month, basic read-only dashboard, 7-day audit | Up to 10 projects, 10K events/month, full dashboard (cost charts, cross-project view, permission-prompt customisation), 90-day audit, email support | Per-user GH App / BotFather setup — currently the longest friction in adoption — AND "my laptop has to be up" — together, in one flow |
+| **B. Managed compute** — failover spawn on brnrd-owned cloud | Same dispatcher; when the user's daemon is offline and the user opts in, brnrd spawns a per-task ephemeral sandbox on its own Fly Machines pool, decrypts the user's AI credentials into the sandbox, runs the task, returns the response via the gate | 5 spawn-credits/month included ($0.05) | 300 spawn-credits/month included ($3 of compute) | "I want managed continuity without a credit card surprise" — subscribers get generous included compute; Free + over-cap is metered top-up (no surprise charges) |
+| **C. BYO compute** (deferred) | Same failover spawn but in the user's cloud account using a user-stored cloud-platform token | n/a at launch | n/a at launch | Out of scope at launch per `decision-pricing-shape.md`; wire shape preserved in the design page for clean add-back when usage justifies |
 
-Surface A is the *entry point* (free, broad reach). Surface B is
-the *paid convenience* (same dispatcher, brnrd's cloud account,
-usage-billed with margin). Surface C is deferred — the protocol
-supports it, but implementation surface area was disproportionate
-to the ~5% of users who'd value it at launch.
+Surface A is the entry point (Free tier is genuinely usable for
+hobbyists with 1-3 projects; the subscription unlocks bigger
+project headroom + the full dashboard + bigger event/compute
+caps — the natural "I'm using brr seriously" line). Surface B
+is the paid-compute leg, with the subscription including
+generous compute and metered top-ups for overage. Surface C is
+deferred — the protocol supports it, but implementation surface
+area was disproportionate to the ~5% of users who'd value it
+at launch.
+
+**Self-hosted brnrd** stays always-free with full feature
+parity. The hosted subscription pays for hosted-service
+convenience (infrastructure, multi-tenant scale, email support);
+the brr / brnrd OSS itself is unchanged whether you self-host
+or not.
 
 Daemon-side cloud envs (a laptop daemon fans out to *the user's*
 cloud via a first-party env extra like `brr[fly]` or a
@@ -150,8 +163,11 @@ the chapters. Concretely:
   preserved via a metadata-only graph (`event_id ↔
   conversation_id ↔ branch_name`, no body, 30-day TTL) that
   brnrd holds. See "Conversation context" below.
-- AI credentials encrypted at rest with per-account envelope
+- Credentials encrypted at rest with per-account envelope
   keys; root key in a KMS managed separately from the database.
+  Same scheme covers AI-runner credentials AND
+  docker-registry credentials (the vault is generalised; one
+  store, two domains).
 - Audit log is metadata-only.
 
 The promise: "brnrd doesn't have your code." This shapes user
@@ -330,45 +346,66 @@ in [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md).
 
 Per-task spawn when the user's daemon is offline (or — as a
 v-next opt-in — when it's overloaded). brnrd holds the user's
-AI credentials in the vault, holds its own pool-control token
-for the managed Fly app, and runs the spawn flow server-side
-using the **same env class** a daemon would use locally — cloud
-runners are envs (per
-[`research-cloud-envs.md`](research-cloud-envs.md) and
+credentials in the vault (AI runner + docker-registry, all
+encrypted), holds its own pool-control token for the managed
+Fly app, and runs the spawn flow server-side using the **same
+env class** a daemon would use locally — cloud runners are envs
+(per [`research-cloud-envs.md`](research-cloud-envs.md) and
 [`design-env-interface.md`](design-env-interface.md) →
 "brnrd server-side caller"), so the `src/brr/envs/fly_machines/`
 module the daemon would `pip install brr[fly]` to use is the
 same module brnrd imports. The brnrd backend just does a
 daemon-equivalent bootstrap (clone repo with the per-spawn GH
-App token, materialise AI creds, construct a `RunContext`)
-before invoking the env.
+App token, read `brr.toml` for project preferences, layer in
+account-scope settings, `docker login` if the image is private,
+materialise AI creds, construct a `RunContext`) before invoking
+the env.
 
-### AI-credential vault — two shapes, one endpoint
+### Credential vault — one store, two domains
 
-The vault stores AI-runner credentials encrypted, in two payload
-shapes on the same `POST /v1/accounts/ai-credentials` endpoint:
+The vault is generalised: it holds two kinds of credentials with
+shared encryption / audit / revoke, on the same
+`POST /v1/accounts/credentials` endpoint:
 
-- **API key**: `brr brnrd creds add anthropic --key
-  sk-ant-...`. The default for most users.
-- **Credential directory tarball**: `brr brnrd creds add
-  anthropic --dir ~/.claude`. The CLI tars the directory, base64-
-  encodes, uploads; the sandbox bootstrap script extracts it back
-  into `$HOME/.claude/` at spawn time. Preserves subscription-
-  auth flows (Claude Pro, Codex Plus, Gemini OAuth) for users
-  who'd rather not provision API keys.
+1. **AI-runner credentials** (Anthropic / OpenAI / Google /
+   GitHub), in two payload shapes:
+   - **API key**: `brr brnrd creds add anthropic --key
+     sk-ant-...`. Default for most users.
+   - **Credential directory tarball**: `brr brnrd creds add
+     anthropic --dir ~/.claude`. The CLI tars the directory,
+     base64-encodes, uploads; the sandbox bootstrap script
+     extracts it back into `$HOME/.claude/` at spawn time.
+     Preserves subscription-auth flows (Claude Pro, Codex Plus,
+     Gemini OAuth) for users who'd rather not provision API
+     keys.
+2. **Docker-registry credentials** for private images
+   (ghcr.io / docker.io / etc.):
+   - `brr brnrd creds add docker-registry --registry
+     ghcr.io --username myorg --token <ghcr-pat>`.
+   - At spawn time, brnrd extracts the registry host from the
+     project's `brr.toml` `docker.image` declaration, looks up
+     a matching credential, and runs `docker login` before
+     `docker pull`. Public images skip the lookup entirely.
 
-Both shapes flow into the same encrypted store; only the spawn
-bootstrap branches on shape. The local docker env's existing
-"either an API key or a mounted credential dir" UX is preserved
-in the cloud, which matters because subscription auth is real
-ergonomic value for users already paying for it.
+All credentials flow into the same encrypted store with a `kind`
+discriminator; only the spawn bootstrap branches on shape. The
+local docker env's existing "API key or mounted credential dir"
+UX is preserved in the cloud, and private images work the same
+in cloud as on a local daemon. AI cred material is cleared from
+sandbox memory after hand-off; registry credentials live only
+in the build worker's `~/.docker/config.json` for the spawn's
+duration (the sandbox itself never sees them).
 
 ### Shape from the user's perspective
 
 ```
 brr brnrd connect                     # pair to brnrd.dev (or self-hosted URL)
-brr brnrd topup 20                    # $20 → 2000 credits, via Stripe Checkout
+brr brnrd subscribe                   # $5/mo subscription via Stripe Checkout
+                                      # (or stay Free; metered top-ups still work)
+brr brnrd topup 20                    # $20 → 2000 compute credits (optional)
 brr brnrd creds add anthropic --key sk-ant-...
+brr brnrd creds add docker-registry --registry ghcr.io \
+  --username myorg --token <ghcr-pat>   # only if you use a private image
 brr brnrd policy set --enable \
   --mode ask \
   --monthly-cap 100 \
@@ -387,25 +424,41 @@ and the spawn flow, are in
 verb taxonomy is in
 [`decision-cli-shape.md`](decision-cli-shape.md).
 
-### Billing — credit wallet, no card on file by default
+### Billing — subscription + credit wallet
 
-brnrd uses a **credit wallet** (1 credit = $0.01) topped up via
-one-shot Stripe Checkout purchases. Spawns debit at finalize.
-Free-tier accounts get ~300 credits granted monthly (≈100
-worst-case spawns); paid credits never expire. No card-on-file
-unless the user opts into auto-topup. Refunds on unused paid
-credits within 30 days, pro-rata.
+Two billing legs, each matched to its cost shape:
 
-This shape matches the metered cost (you pay for what you fire),
-aligns with the data-minimization pitch (no recurring identity-
-mapping), and is industry-standard for usage-metered services
-(OpenAI / Anthropic / AWS / Mailgun / Twilio all use credits or
-metered billing).
+- **Subscription** ($5/month or $50/year via Stripe recurring)
+  covers the platform — bigger project headroom (10 vs 3 on
+  Free), full dashboard, 10K events/month, 300 spawn-credits/
+  month included, 90-day audit retention, email support.
+  Cancel-anytime via the Stripe Customer Portal (`brr brnrd
+  subscription portal`).
+- **Credit wallet** (1 credit = $0.01) covers compute over the
+  included subscriber grant (or the Free tier's 5 monthly
+  credits). One-shot Stripe Checkout top-ups; no card-on-file
+  unless the user opts into auto-topup. Paid credits never
+  expire; refunds on unused paid credits within 30 days,
+  pro-rata.
 
-Full wallet mechanics — top-up flow, debit-at-finalize, zero-
-balance UX (event enqueued + gate notify, not dropped), refund
-policy, auto-topup, Stripe + HugiMuni SAS + Qonto integration,
-audit-log entries — in [`design-billing.md`](design-billing.md).
+Spawns debit at finalize from the appropriate sub-bucket
+(monthly grant first, then paid credits). Free credits draw
+first for Free users; subscriber credits draw first for
+subscribers; paid credits draw only after the included grant
+is exhausted.
+
+This shape matches each leg's cost (sub for fixed platform
+cost, metered for variable compute cost), aligns with the
+data-minimization pitch (no recurring identity-mapping for
+wallet top-ups), and gives subscribers predictable monthly
+cost while preserving pay-only-for-what-you-use for casual /
+power compute users.
+
+Full mechanics — subscription flow, wallet top-up flow,
+debit-at-finalize, zero-balance UX (event enqueued + gate
+notify, not dropped), refund policy (per-leg), auto-topup,
+Stripe + HugiMuni SAS + Qonto integration, audit-log entries —
+in [`design-billing.md`](design-billing.md).
 
 ### Cost transparency
 
@@ -566,11 +619,16 @@ In scope for managed-mode launch:
 - Surface A (managed dispatcher) — the cloud-gate adapter on the
   daemon side, the brnrd inbox-as-service API, GH App + TG bot
   webhooks, multi-project routing, permission-prompt API, audit
-  log. Free tier.
-- Surface B (managed compute) — AI-credential vault, dispatcher
+  log. Free + Subscribed tier.
+- Surface B (managed compute) — generalised credential vault
+  (AI runner + docker-registry, encrypted at rest), dispatcher
   decision tree, brnrd-owned Fly Machines pool, sandbox image,
   per-spawn task-key + GH App installation token, accounting +
-  CSV exporter for manual invoicing. Paid usage-based.
+  CSV exporter for manual invoicing. Included credits in the
+  subscription; metered top-ups for overage.
+- Subscription billing leg (Stripe recurring, monthly +
+  annual, Customer Portal) on top of the existing credit
+  wallet, per [`design-billing.md`](design-billing.md).
 - Dashboard MVP — seven views, HTMX-first.
 - `deploy/` templates folder and the `brr/daemon` Docker image
   variant (demoted to launch-nice-to-have, cloud-first users
@@ -606,33 +664,34 @@ Out of scope, explicitly:
   until usage shows whether it matters.
 - **Windows daemon supervision.** Defer per
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §4.
-- **Card-on-file recurring subscriptions.** Launch uses one-shot
-  Stripe Checkout top-ups + opt-in auto-topup. Recurring
-  subscription billing (for a team tier or SLA) is v-next per
-  [`design-billing.md`](design-billing.md).
+- **Team / per-seat subscription tier.** Subscriptions are
+  per-account at launch; teams + per-seat (Linear-shape
+  ~$5/seat over the subscription base) is the v-next surface
+  per [`decision-pricing-shape.md`](decision-pricing-shape.md).
 
 ## Read next
 
 1. [`decision-pricing-shape.md`](decision-pricing-shape.md) for
-   the pricing model that ties the surfaces together (free
-   dispatcher + paid managed compute; per-seat team tier later;
-   self-hosted always free).
+   the pricing model that ties the surfaces together (Free +
+   subscription + metered compute credits; per-seat team tier
+   deferred to v-next; self-hosted always free).
 2. [`design-brnrd-protocol.md`](design-brnrd-protocol.md) for
    the wire format the daemon-side adapter and the brnrd
    service both build against. Covers gates + failover dispatch
-   + AI-credential vault + multi-project routing + permission
-   prompts + data minimization in one page.
+   + generalised credential vault (AI runner + docker-registry)
+   + subscription endpoints + multi-project routing +
+   permission prompts + data minimization in one page.
 3. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
    for the Surface A launch sequencing (GH-then-TG + routing UX
    + permission-prompt integration).
 4. [`plan-failover-compute.md`](plan-failover-compute.md) for
-   the Surface B launch sequencing (AI-credential vault,
+   the Surface B launch sequencing (credential vault,
    dispatcher decision tree, brnrd-owned Fly pool, permission
    gate API, Upsun backend deployment).
 5. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
    for the dashboard launch sequencing.
-6. [`design-billing.md`](design-billing.md) for the credit-
-   wallet mechanics behind Surface B's pricing.
+6. [`design-billing.md`](design-billing.md) for the subscription
+   mechanics + credit-wallet mechanics behind the tier shape.
 7. [`decision-cli-shape.md`](decision-cli-shape.md) for the
    `brr brnrd <subcommand>` namespace and the rest of the CLI
    verb taxonomy.
