@@ -94,9 +94,10 @@ parallel-shipped with managed".
 - Subscription-auth users (Claude Pro, Codex Plus, Gemini OAuth)
   can use failover without provisioning API keys, by uploading
   their credential directory once.
-- Free-tier user (5 spawn-credits/month) or subscriber (300
-  spawn-credits/month included) sees clear remaining-budget
-  signal in every permission prompt and via `brr brnrd audit`.
+- Free-tier user (10 spawn-credits one-time signup bonus,
+  30-day expiry) or subscriber (300 spawn-credits/month
+  included) sees clear remaining-budget signal in every
+  permission prompt and via `brr brnrd audit`.
 
 ## Done definition
 
@@ -116,11 +117,14 @@ parallel-shipped with managed".
   `provider` field on the credential matches the env class
   at dispatch time (`fly` at launch).
 - Failover-policy endpoints
-  (`POST/GET /v1/accounts/failover-policy`) live with monthly
-  spawn cap (per-tier defaults: 5 spawn-credits Free, 300
-  spawn-credits Subscribed), monthly cost cap, and the five
-  approval modes (`ask`, `auto-approve-always`, `auto-approve-
-  under-usd`, `auto-approve-under-per-day`, `never`).
+  (`POST/GET /v1/accounts/failover-policy`) live with
+  per-tier compute budget (Free: 10-credit one-time signup
+  bonus, 30-day expiry, plus any purchased top-ups;
+  Subscribed: 300 credits/month from the subscriber grant
+  plus any purchased top-ups), monthly cost cap, and the
+  five approval modes (`ask`, `auto-approve-always`,
+  `auto-approve-under-usd`, `auto-approve-under-per-day`,
+  `never`).
 - Subscription endpoints
   (`/v1/accounts/subscription[/checkout|cancel|resume|portal]`)
   live and the brnrd-side Stripe webhook receiver handles
@@ -456,9 +460,13 @@ app + their own credential vault.
   reading the cost. Mitigation: default to `ask` with a clear
   "Never ask again under $X" shortcut on the first prompt; nudge
   toward `auto-approve-under-usd` mode after first approve.
-- **Free-tier abuse.** 5 spawn-credits/month per Free account
-  is intentionally small — Free is the try-it-out path, the
-  subscription is the "use it for real" path. Abuse vector is
+- **Free-tier abuse.** 10 spawn-credits one-time per Free
+  account is intentionally bounded by signup count, not by
+  active-user retention — Free is the try-it-out path, the
+  subscription is the "use it for real" path. Plus the
+  binding-uniqueness rule (per `design-brnrd-protocol.md` §
+  "Binding uniqueness") prevents multi-account abuse from
+  the gate-routing angle. Abuse vector is
   small under this shape, but: account creation requires email
   verification; monitor for abuse patterns (high spawn rate
   against low-event-count accounts); rate-limit per-IP account
@@ -575,13 +583,31 @@ app + their own credential vault.
   subscriber-gate semantics. **Per-tier credit caps now read
   from the bucketed ledger** (per `design-billing.md` §
   "Credit buckets and expiry policy"): the per-tier
-  `monthly_spawn_cap` is sourced from
-  `free_monthly` / `subscriber_monthly` grant size + any
-  `purchased` balance the user holds; activity-gated Free
-  grants only refresh on prior-month activity. Dispatcher's
-  pre-spawn balance check now walks the bucket priority order
-  (`free_monthly` → `subscriber_monthly` → `promotional` →
-  `purchased`) before deciding to enqueue vs spawn. Driven
-  by the user's "since we charge per paying customer we can
-  allow byo everything on top of that" + "we probably also
-  gonna have to expire granted credits somehow" framing.
+  effective compute budget is sourced from
+  `free_monthly` *(later renamed `free_signup_bonus`)* /
+  `subscriber_monthly` grant size + any `purchased` balance
+  the user holds. Dispatcher's pre-spawn balance check walks
+  the bucket priority order (`free_signup_bonus` →
+  `subscriber_monthly` → `promotional` → `purchased`) before
+  deciding to enqueue vs spawn. Driven by the user's "since
+  we charge per paying customer we can allow byo everything
+  on top of that" + "we probably also gonna have to expire
+  granted credits somehow" framing.
+- 2026-05-26 (locking pass II — Free signup bonus, project
+  cap unlock). **Free compute math reframed** around the
+  10-credit one-time signup bonus (30-day expiry) replacing
+  the prior 5/month activity-gated recurring grant — bounded
+  by signup count rather than active-user retention. Done-
+  definition + Goals updated accordingly. **Subscriber
+  project cap reshaped** from flat 10 to tiered 25 / unlimited
+  (after $10 cumulative top-ups); permission-prompt + audit
+  surfaces show the unlock threshold + progress. **Multi-
+  account abuse mitigation framing** added to the Free-tier-
+  abuse risk: binding uniqueness (per `design-brnrd-protocol.md`
+  § "Binding uniqueness") closes the multi-account-creates-
+  many-bonus-windows attack at zero extra implementation cost
+  (uniqueness is needed for routing correctness anyway).
+  Driven by the user's "lets allow subscribers to have
+  unlimited as soon as they spent smth small but reasonable
+  on credits" + "the one time grant on free is probably good"
+  + "we maybe need to implement project ownership."

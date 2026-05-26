@@ -42,10 +42,11 @@ In scope:
 - Subscription mechanics (price, billing cadence, Stripe
   product, upgrade/downgrade prorating, period boundaries).
 - Wallet model + **credit bucket ledger schema and per-source
-  expiry policy** (`free_monthly` / `subscriber_monthly` /
-  `purchased` / `promotional`), debit priority, activity-gated
-  Free grants, account-dormancy bound on the
-  purchased-never-expires guarantee.
+  expiry policy** (`free_signup_bonus` / `subscriber_monthly` /
+  `purchased` / `promotional`), debit priority, Free
+  signup-bonus mechanics, account-dormancy bound on the
+  purchased-never-expires guarantee, deferred-revenue
+  accounting framing.
 - Debit mechanics (when does a spawn debit; what happens on
   partial / failed spawns; BYO-compute spawns that bypass the
   wallet entirely).
@@ -105,8 +106,8 @@ The compute-coverage billing leg. Headline contract:
 | Credit unit | **1 credit = $0.01** (10,000 credits = $100). Simple math, no exchange-rate weirdness on internal accounting |
 | Top-up amounts (UI presets) | $5, $20, $50, $100, custom (min $5, max $500/single transaction at launch) |
 | Currency at launch | USD on the wallet ledger; EUR / GBP / etc. accepted via Stripe at purchase time (Stripe converts; we hold credit-USD on the ledger) |
-| Account balance UI | Always shows split: "200 purchased + 230 subscriber this month = 430 available" or "4 Free this month = 4 available" |
-| Bucket model | **Four sub-buckets at launch, with per-source expiry**: `free_monthly`, `subscriber_monthly`, `purchased`, plus `promotional` reserved for future use. Full table + debit priority + expiry policy in the next section. |
+| Account balance UI | Always shows split: "200 purchased + 230 subscriber this month = 430 available" or "7 signup bonus (expires May 15) = 7 available" |
+| Bucket model | **Four sub-buckets at launch, with per-source expiry**: `free_signup_bonus` (one-time on Free account creation, 30-day expiry), `subscriber_monthly` (recurring with subscription, billing-cycle expiry), `purchased` (never expires, account-dormancy bounded), plus `promotional` reserved for future use. Full table + debit priority + expiry policy in the next section. |
 | Debit order | Grants first (soonest-expiring within grants); `purchased` last, FIFO. Preserves the user's purchased balance. |
 
 ## Top-up flow
@@ -279,7 +280,7 @@ Documented on the pricing page. Two billing legs, two policies:
   brnrd-side bug): credit auto-refunded; user notified.
 - **Spawn failures attributable to the user's task** (agent
   errored, code didn't compile): not refunded; the spawn ran.
-- **`free_monthly` / `subscriber_monthly` / `promotional`
+- **`free_signup_bonus` / `subscriber_monthly` / `promotional`
   grant credits** are not refundable (they were never paid for
   in cash; they were granted on the house or bundled with a
   subscription / promotion).
@@ -327,16 +328,16 @@ policy, rollover policy, and refund policy:
 
 | Bucket | Granted on | Expires | Rolls over | Refundable | Audit op |
 |--------|-----------|---------|-----------|------------|----------|
-| `free_monthly` | Account creation (prorated) + every cycle for Free accounts (activity-gated) | End of current cycle | **No** | No (was never charged for) | `grant_free_monthly` / `expire_free_monthly` |
+| `free_signup_bonus` | One-time on Free account creation (10 credits) | 30 days from creation OR on full consumption, whichever first | No | No (was never charged for) | `grant_free_signup_bonus` / `expire_free_signup_bonus` |
 | `subscriber_monthly` | Subscription start (prorated) + every renewal | End of current billing cycle | **No** | No (included in the sub) | `grant_subscriber_monthly` / `expire_subscriber_monthly` |
 | `purchased` | Stripe Checkout top-up confirmed | **Never** (account-dormancy bounded; see "Account dormancy" below) | Yes | Pro-rata within 30 days (see Refund policy) | `topup` / `refund_purchased` |
-| `promotional` *(future-proofing; not used at launch)* | Signup bonus / referral / support-issued goodwill | Per-grant `expires_at` (typically 30-90 days) | No | No | `grant_promotional` / `expire_promotional` |
+| `promotional` *(future-proofing; not used at launch)* | Referral / support-issued goodwill / campaign | Per-grant `expires_at` (typically 30-90 days) | No | No | `grant_promotional` / `expire_promotional` |
 
 ### Debit priority (FIFO within bucket, expiry-aware across buckets)
 
 ```
 On debit(amount):
-  1. Drain free_monthly until empty or amount satisfied
+  1. Drain free_signup_bonus until empty or amount satisfied
   2. Drain subscriber_monthly until empty or amount satisfied
   3. Drain promotional grants in soonest-expiring-first order
   4. Drain purchased grants FIFO (oldest top-up first)
@@ -346,47 +347,63 @@ On debit(amount):
 ```
 
 This means a user's `purchased` balance is **always preserved
-last**. The monthly allowance gets consumed first, exactly
-matching the user's intuition ("my grant runs out, then I dip
-into what I paid for"). Promotional credits with near-term
-expiry drain ahead of long-lived purchases. The implementation
-is one priority-ordered loop over bucket records, ~30 lines.
+last**. The grants get consumed first, exactly matching the
+user's intuition ("my grant runs out, then I dip into what I
+paid for"). Promotional credits with near-term expiry drain
+ahead of long-lived purchases. The implementation is one
+priority-ordered loop over bucket records, ~30 lines.
+
+A Free account that has both a `free_signup_bonus` AND
+purchased credits (because the user topped up at $0.01/credit
+without subscribing) drains the bonus first, then the
+purchased — preserves the "your $5 top-up is still there
+after the bonus runs out" expectation.
 
 ### Per-bucket expiry mechanics
 
-**`free_monthly` and `subscriber_monthly` — use-it-or-lose-it
-at cycle boundary.**
+**`free_signup_bonus` — one-time on Free signup, 30-day expiry.**
 
 ```
-On the 1st of each UTC month (Free accounts):
-  for each Free account:
-    if account had any activity in the prior month:
-      expire any unused free_monthly balance
-      grant 5 free_monthly credits
-    else:
-      account is "dormant Free"; no new grant issued;
-      existing free_monthly balance also expires
-      (activity-gated; resumes on next active month)
+On Free account creation:
+  grant 10 free_signup_bonus credits, expires_at = now + 30 days
 
-On subscription renewal (subscribed accounts, per Stripe's renewal):
+On daily expiry sweep:
+  expire any free_signup_bonus rows where expires_at <= now
+
+On full consumption:
+  bucket row removed (zero balance; no separate expiry needed)
+```
+
+The signup-bonus shape replaces the earlier "5 credits / month
+activity-gated" recurring grant on 2026-05-26 (locking pass
+II). Bounded by signup count (not by active-user retention) —
+100K Free signups total caps cost at $10K total (one-time, not
+per year). Removes the activity-gating logic that the
+recurring grant required. See
+[`decision-pricing-shape.md`](decision-pricing-shape.md)
+§ "Free compute grant — one-time signup bonus, not recurring"
+for the rationale + math + optics in full.
+
+**`subscriber_monthly` — use-it-or-lose-it at billing cycle.**
+
+```
+On subscription start (Stripe webhook customer.subscription.created):
+  grant 300 subscriber_monthly credits, prorated to days
+  remaining in the current billing cycle
+
+On subscription renewal (Stripe webhook invoice.paid):
   expire any unused subscriber_monthly balance
   grant 300 subscriber_monthly credits
 
 On subscription cancel-at-period-end (period boundary):
   expire any unused subscriber_monthly balance
-  flip tier=free; next month grants free_monthly under
-  activity-gating
+  flip tier=free; no free_signup_bonus is granted (bonus is
+  one-time on Free account creation, not on tier transition)
 ```
 
-The **activity gate on Free** is the small but important lever:
-5 credits / month × 100,000 long-tail one-time-signup accounts
-would be $5,000 / month of pointless compute cost on the
-liability side without it. Activity = any event processed in the
-prior month OR any dashboard login OR any CLI command that hit
-the backend. Active Free users never notice the gate; dormant
-ones simply don't accumulate a grant they're not using.
-Subscriber grants refresh unconditionally — the subscription
-itself is the activity signal.
+The subscriber grant refreshes unconditionally on every
+billing cycle — the subscription itself is the activity
+signal.
 
 **`purchased` — no expiry, bounded by account dormancy.**
 
@@ -449,11 +466,26 @@ breakdown on hover / expand:
     200  purchased (no expiry)
 ```
 
-For Free users:
+For Free users on the signup bonus:
 
 ```
-4 credits available
-    4  this month (Free, refreshes Jun 1)
+7 credits available
+    7  signup bonus (expires May 15, 23 days left)
+```
+
+For Free users whose signup bonus expired / consumed (no
+purchased balance):
+
+```
+0 credits available — signup bonus consumed.
+    Top up at $0.01/credit or subscribe for 300 credits/month.
+```
+
+For Free users who topped up after the signup bonus expired:
+
+```
+1,000 credits available
+    1,000  purchased (no expiry)
 ```
 
 For subscribers who BYO and don't spend the grant:
@@ -469,6 +501,55 @@ makes the use-it-or-lose-it mechanic feel like an allowance,
 not a deadline. Empirically this is how every monthly-allowance
 product is communicated (mobile data, cloud quotas, gym
 classes).
+
+### Cumulative purchase tracking and the subscriber project cap unlock
+
+Two account-level derived counters drive the
+[subscriber project cap unlock policy](decision-pricing-shape.md)
+(25 default → unlimited after $10 of cumulative top-ups):
+
+| Field | Source | Update | Decrement on refund? |
+|-------|--------|--------|---------------------|
+| `cumulative_purchased_credits_lifetime` | Sum of all `topup` audit ops for this account, ever | On every successful `topup` (Stripe webhook) | **No** |
+| `cumulative_purchased_usd_lifetime` | `cumulative_purchased_credits_lifetime / 100` (credits → USD at $0.01) | Derived; not separately stored | **No** |
+| `project_cap_unlocked` | Derived: `cumulative_purchased_usd_lifetime >= 10` | Set on the topup that crosses the threshold; never cleared | **No** |
+
+Mechanics:
+
+- Both counters are **monotonic, never-decreasing**. Refunds
+  don't decrement (the spend happened, even if the cash later
+  came back). This is the right shape: the unlock is a trust
+  signal about cumulative usage, not a "credit you can claw
+  back."
+- `project_cap_unlocked` is computed once when crossing the
+  threshold and stored as a flag (not re-evaluated on every
+  read) — keeps the cap check fast and decoupled from the
+  ledger query path.
+- The flag is **permanent on the account**. Subscription
+  cancel → re-Free → re-subscribe later does NOT reset the
+  flag. While Free, the user is capped at 3 projects per
+  Free's cap (not the unlocked cap); the flag only matters
+  while subscribed.
+- New audit op `project_cap_unlocked_at` logs the timestamp +
+  the topup that triggered the unlock, for the dashboard's
+  "you unlocked unlimited projects on <date>" line.
+
+Effective project cap at any point in time:
+
+```
+def effective_project_cap(account):
+    if account.tier == "subscribed":
+        if account.project_cap_unlocked:
+            return None  # unlimited
+        return 25
+    elif account.tier == "free":
+        return 3
+```
+
+Project-creation endpoint enforces this on each attempt;
+returns a `subscription_hint` field in the 403 response that
+the CLI / dashboard surface as the nudge ("subscribe for 25
+projects, unlimited after $10 cumulative top-ups").
 
 ### Account dormancy and the "purchased never expires" tail
 
@@ -503,12 +584,12 @@ per the data-minimization principle:
 | `subscription_plan_switched` | account_id, ts, from_plan, to_plan, prorated_amount |
 | `grant_subscriber_monthly` | account_id, ts, amount_credits, month, prorated_from? |
 | `expire_subscriber_monthly` | account_id, ts, amount_credits, month |
-| `grant_free_monthly` | account_id, ts, amount_credits, month, activity_gate_state (`gated` / `passed`) |
-| `expire_free_monthly` | account_id, ts, amount_credits, month |
+| `grant_free_signup_bonus` | account_id, ts, amount_credits, expires_at |
+| `expire_free_signup_bonus` | account_id, ts, amount_credits, reason (`time` / `consumed`) |
 | `grant_promotional` | account_id, ts, amount_credits, expires_at, campaign_id |
 | `expire_promotional` | account_id, ts, amount_credits, campaign_id |
 | `topup` | account_id, ts, amount_credits, stripe_payment_intent_id, source (manual / auto), bucket=`purchased` |
-| `debit_spawn` | account_id, ts, amount_credits, spawn_id, project_id, sub_bucket (`free_monthly` / `subscriber_monthly` / `promotional` / `purchased`), est_vs_actual_delta |
+| `debit_spawn` | account_id, ts, amount_credits, spawn_id, project_id, sub_bucket (`free_signup_bonus` / `subscriber_monthly` / `promotional` / `purchased`), est_vs_actual_delta |
 | `spawn_byo` *(BYO subscribers; no wallet debit)* | account_id, ts, spawn_id, project_id, provider (`fly` / future), scheduled_machine_id, estimated_cost_usd |
 | `refund_purchased` | account_id, ts, amount_credits, reason (user_request / brnrd_failure / dormancy_deletion), stripe_refund_id |
 | `refund_grant_brnrd_failure` | account_id, ts, amount_credits, spawn_id, sub_bucket |
@@ -516,6 +597,7 @@ per the data-minimization principle:
 | `payment_method_added` / `removed` | account_id, ts, stripe_payment_method_id |
 | `account_marked_dormant` | account_id, ts, last_activity_at, dormant_state (`dormant` / `dormant_long`) |
 | `account_reactivated` | account_id, ts, prior_dormant_state |
+| `project_cap_unlocked` | account_id, ts, triggering_topup_id, cumulative_purchased_usd_at_unlock |
 
 User-visible via `brr brnrd balance` (current totals + sub
 status) and the dashboard's Cost / Audit view (full ledger).
@@ -536,7 +618,7 @@ status) and the dashboard's Cost / Audit view (full ledger).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/accounts/wallet` | Current balance with sub-bucket split (`paid + subscriber_monthly + free_monthly`), per-month spend stats |
+| `GET` | `/v1/accounts/wallet` | Current balance with sub-bucket split (`purchased + subscriber_monthly + free_signup_bonus + promotional`), per-month spend stats, `cumulative_purchased_usd_lifetime`, `project_cap_unlocked` flag |
 | `POST` | `/v1/accounts/wallet/checkout` | Create Stripe Checkout session for one-shot top-up; returns checkout_url |
 | `POST` | `/v1/accounts/wallet/autotopup` | Enable/configure auto-topup (requires saved payment method) |
 | `DELETE` | `/v1/accounts/wallet/autotopup` | Disable auto-topup |
@@ -696,6 +778,123 @@ headline 30-50% margin over wholesale Fly cost lands closer to
   SCA-triggering test cards cover the launch test matrix for
   both billing legs.
 
+### Deferred-revenue accounting (for the implementer + accountant)
+
+Purchased credits and subscription fees are **deferred
+revenue** under French GAAP / IFRS — recognised as revenue
+when the service is delivered, not when the cash arrives.
+Standard double-entry accounting shape; Stripe's **Revenue
+Recognition** add-on (included in Stripe Billing, free at
+launch volumes, ~$0.50 per $1K of recognised revenue at
+scale) automates the journal entries.
+
+**Purchased credits — the cash-in-vs-service-out gap:**
+
+```
+On Stripe webhook payment_intent.succeeded (user paid €10):
+  Bank (asset)              +€10
+  Deferred revenue (liab)   +€10
+  (no revenue recognised yet — service not delivered)
+
+On debit_spawn from the purchased bucket (user used 100 credits = €1):
+  Deferred revenue (liab)   −€1
+  Revenue (income)          +€1
+  (service delivered; revenue recognised)
+
+On refund_purchased within 30-day window (€5 refunded):
+  Deferred revenue (liab)   −€5
+  Bank (asset)              −€5
+  (cash returned; no revenue ever recognised on this portion)
+```
+
+**Subscription fees — recognised over the period:**
+
+```
+On Stripe webhook invoice.paid (€5 sub paid for the month of June):
+  Bank (asset)              +€5
+  Deferred revenue (liab)   +€5
+
+Every day of June:
+  Deferred revenue (liab)   −€0.17
+  Revenue (income)          +€0.17
+  (subscription service "delivered" daily)
+
+By end of June: liability fully cleared; €5 of revenue recognised.
+```
+
+Stripe Revenue Recognition handles this **daily proration
+automatically** when the subscription product is configured.
+No code on brnrd's side; the accountant pulls the monthly
+report and posts the journal entries (or uses a Stripe-to-
+accounting bridge like Stripe Accounting Reports → Pennylane
+/ Quickbooks / etc.).
+
+**Grants are NOT deferred revenue:**
+
+`free_signup_bonus` / `subscriber_monthly` / `promotional`
+credits never enter the deferred-revenue account at all. No
+cash was ever received against them; they're an **operational
+cost of goods** when consumed (you pay Fly for the compute),
+recorded directly on the income statement as expense, not on
+the balance sheet as a liability:
+
+```
+On debit_spawn from a grant bucket (subscriber used 100 credits):
+  Compute cost (expense)    +€0.30   # actual wholesale Fly cost
+  (no liability cleared; no revenue recognised on this spawn —
+   the subscription revenue already covers this via the daily
+   subscription proration above)
+```
+
+The subscriber-monthly grant is effectively "bundled compute
+COGS paid out of the subscription revenue" — the income side
+is the daily subscription recognition; the COGS side is the
+compute spend when the user consumes it. The net margin on a
+subscriber who consumes their full 300-credit grant is
+(€5/mo recognised revenue) − (€3/mo of Fly compute) = €2/mo
+of platform-recovered margin, before Stripe fees.
+
+**Practical setup at HugiMuni SAS scale:**
+
+- One Stripe account + one Qonto IBAN at launch. No separate
+  bank account needed for the deferred-revenue liability —
+  the liability is tracked in the books, not in a separate
+  cash account.
+- French accountant sets up the chart of accounts:
+  - `Bank` (asset)
+  - `Produits constatés d'avance` / `Deferred revenue` (liability) — the line that holds the unconsumed `purchased` balance + unrecognised subscription portion.
+  - `Revenue — subscriptions` (income)
+  - `Revenue — compute credits` (income)
+  - `Compute cost — Fly` (expense, COGS)
+  - `Compute cost — promotional / signup-bonus` (expense, marketing or COGS depending on policy)
+- Monthly bookkeeping reconciles Stripe payouts against the
+  recognised revenue + cleared deferred revenue. Stripe's
+  Revenue Recognition exports feed directly into this.
+- **Bank-account separation (operating vs reserve)** is a
+  treasury-hygiene practice for once MRR is meaningful (rule
+  of thumb: ≥€10K MRR OR deferred-revenue liability
+  persistently exceeds 3 months of operating costs). At launch
+  scale, one Qonto operating account is sufficient. When it
+  becomes warranted: split into operating (day-to-day spend)
+  + reserve (held against deferred revenue + 1× monthly burn
+  buffer). This is self-imposed discipline, not a legal
+  requirement.
+- **No legal segregation** required in France for SaaS prepaid
+  balances. Gift cards (in some US states), escrow funds, and
+  banking-as-a-service custodial funds are the products that
+  require segregation; SaaS credit balances explicitly aren't.
+
+**"What if Free signup bonuses eat through our cash?"** —
+NOT a deferred-revenue problem (no cash was paid against
+them). It's a COGS line on the income statement. The
+signup-bonus shape bounds it at total signup count × 10
+credits = $0.10 per signup, paid as you go from operating
+cash. At 100K signups total: $10K of compute COGS, spread
+over however long it takes to acquire those signups. Handled
+by cash-runway management, not by escrow-shaped accounting.
+The activity-gating logic that the recurring grant required
+is no longer relevant.
+
 ## What we do NOT do at launch
 
 - **Card-on-file for wallet by default**. Only opt-in via
@@ -833,8 +1032,9 @@ headline 30-50% margin over wholesale Fly cost lands closer to
   **Explicit credit-bucket / per-source expiry policy locked
   in.** Replaced "Monthly credit grants" section with a fuller
   "Credit buckets and expiry policy" section that defines the
-  four sub-buckets (`free_monthly`, `subscriber_monthly`,
-  `purchased`, `promotional`), per-bucket expiry mechanics,
+  four sub-buckets (`free_monthly` *(later renamed
+  `free_signup_bonus`)*, `subscriber_monthly`, `purchased`,
+  `promotional`), per-bucket expiry mechanics,
   debit priority (grants first, purchased last, FIFO),
   activity-gated Free monthly grants (only refresh if the
   prior month had any activity — bounds dormant-account
@@ -860,3 +1060,39 @@ headline 30-50% margin over wholesale Fly cost lands closer to
   the user's "credit expiry shape + holistic credit-issuing
   optics" + "BYO everything for paying customers, no BYO for
   Free" framing.
+- 2026-05-26 (locking pass II — Free signup bonus, project
+  cap unlock, deferred-revenue accounting framing).
+  **`free_monthly` bucket renamed to `free_signup_bonus`**
+  with one-time grant on Free account creation (10 credits)
+  + 30-day expiry (OR on full consumption). Activity-gating
+  logic removed entirely (no longer needed). Audit ops
+  renamed `grant_free_monthly` / `expire_free_monthly` →
+  `grant_free_signup_bonus` / `expire_free_signup_bonus`
+  (new `reason` field on the expiry op: `time` / `consumed`).
+  Bucket table + debit priority + balance UI examples
+  updated. New "Cumulative purchase tracking and the
+  subscriber project cap unlock" section: two new monotonic
+  account-state counters (`cumulative_purchased_credits_lifetime`
+  + `cumulative_purchased_usd_lifetime`) + derived flag
+  `project_cap_unlocked` (set on the topup that crosses $10
+  threshold; permanent; survives cancel + re-subscribe).
+  Effective project-cap function returns 3 (Free) / 25
+  (Subscribed unlocked=false) / unlimited (Subscribed
+  unlocked=true). New audit op `project_cap_unlocked`. New
+  "Deferred-revenue accounting" section (for the implementer
+  + accountant): purchased credits + subscription fees are
+  deferred revenue under French GAAP / IFRS; grants are NOT
+  deferred revenue (they're operational COGS); standard
+  double-entry shape with worked examples; Stripe Revenue
+  Recognition automates the daily proration on subscriptions
+  + the per-debit recognition on purchased credits; HugiMuni
+  SAS chart-of-accounts sketch (Bank / Deferred revenue /
+  Revenue subscriptions / Revenue compute / Compute cost
+  Fly / Compute cost promotional); bank-account separation
+  (operating vs reserve) called out as treasury hygiene for
+  ≥€10K MRR, not a legal requirement at launch; no legal
+  segregation needed for SaaS prepaid balances in France.
+  Driven by the user's "we maybe need to implement project
+  ownership" + "could we have a separate bank account for
+  the promise" + "start a bit stingier and relax as we go"
+  + "throttling is a good idea, like it" framing.

@@ -140,6 +140,7 @@ sense, and listed in the audit log:
 | Account email + password hash | Per account | Lifetime of account | Auth + billing contact |
 | Credentials (encrypted at rest) | Per account | Until user revokes | Two domains in one vault: (a) AI-runner credentials (Anthropic / OpenAI / Google / GitHub — API key OR `~/.claude`-style dir tarball for subscription-auth users); (b) Docker-registry credentials for private images. Both required for managed-compute spawns that use them. See "Credential vault endpoints" below. |
 | Subscription state (tier, plan, period_end, Stripe customer/subscription IDs) | Per account | Lifetime of account | Subscription leg of billing; see [`design-billing.md`](design-billing.md). Mirrored to account-scope settings as `subscription.tier` for in-band reads. |
+| Cumulative-purchase counters (`cumulative_purchased_credits_lifetime`, `cumulative_purchased_usd_lifetime`, `project_cap_unlocked`) | Per account | Lifetime of account; monotonic | Drives the subscriber project-cap unlock (25 → unlimited at $10 cumulative top-ups). Mirrored to account-scope settings as `subscription.project_cap` (3 / 25 / unlimited) and `subscription.project_cap_unlocked` (bool) for in-band reads by the dashboard + daemon. |
 | Project bindings (chat ↔ project, repo ↔ project) | Per account | Until unbind / delete | Multi-project routing |
 | Event metadata (event_id, gate, source_channel, project_id, conversation_id, branch_name, received_at) | Per account | 30 days live, count-only aggregates after | Cross-gate conversation graph for failover continuity. **No body, no preview, no participant names.** See "Conversation context for failover and dashboard" below |
 | Telegram per-chat ring buffer (50 msgs × 72h) | Per chat | 72h | One concession: TG bot API lacks a retroactive `getChatHistory` for our use; the ring buffer makes failover spawns and dashboard rendering work on TG without needing to push history into the user's own infra. Slack / Discord don't need this — their APIs expose history natively |
@@ -348,7 +349,7 @@ at-a-glance triage.
 | `POST` | `/v1/accounts/sessions` | Login; returns a session JWT for web / CLI use. | Session row (TTL) |
 | `POST` | `/v1/accounts/api-keys` | Issue an additional API key. | API-key hash + metadata |
 | `DELETE` | `/v1/accounts/api-keys/{key_id}` | Revoke. | Mark revoked |
-| `POST` | `/v1/accounts/projects` | Create a project. Body: `{name}`. Returns `project_id`. **Enforced against the account's tier project cap** (`max_projects` per [`design-billing.md`](design-billing.md): 3 on Free, 10 on Subscribed); 409 with upgrade-prompt body when at cap. | Project row (name, account_id) |
+| `POST` | `/v1/accounts/projects` | Create a project. Body: `{name}`. Returns `project_id`. **Enforced against the account's effective project cap** (3 on Free; 25 on Subscribed without unlock; unlimited on Subscribed with unlock per `cumulative_purchased_usd_lifetime >= 10`, per [`design-billing.md`](design-billing.md) § "Cumulative purchase tracking and the subscriber project cap unlock"); 409 with `subscription_hint` body when at cap, populated by tier: Free → "subscribe for 25"; Subscribed-not-unlocked → "top up $X.XX more to unlock unlimited". | Project row (name, account_id) |
 | `GET` | `/v1/accounts/projects` | List the account's projects (id, name, daemon count, last activity). | Read-only |
 | `DELETE` | `/v1/accounts/projects/{project_id}` | Delete project. Cascades to bindings; in-flight events drain. | Hard delete |
 | `POST` | `/v1/accounts/pair/telegram` | Initiate a Telegram pairing — returns a one-time pairing code valid for 10 min. | Pairing row (TTL) |
@@ -407,12 +408,69 @@ Event body dropped from brnrd after dispatch.
 
 | Method | Path | Description | Persists |
 |--------|------|-------------|----------|
-| `POST` | `/v1/accounts/bindings/chat` | Bind a TG/Slack/Discord chat to a project. Body: `{platform, chat_id, project_id}`. Replaces any previous binding for that chat. | chat_project_bindings row |
+| `POST` | `/v1/accounts/bindings/chat` | Bind a TG/Slack/Discord chat to a project. Body: `{platform, chat_id, project_id}`. **Unique per `(platform, chat_id)` across ALL accounts**: if the chat is already bound to a different account, returns 409 with `bound_to_account: <obfuscated_id>` (no PII leaked) and a message telling the user to have the existing owner unbind first. Within the same account, replaces any previous binding for that chat. | chat_project_bindings row |
 | `GET` | `/v1/accounts/bindings/chat` | List the account's chat bindings. | Read-only |
 | `DELETE` | `/v1/accounts/bindings/chat/{binding_id}` | Remove. | Hard delete |
-| `POST` | `/v1/accounts/bindings/repo` | Bind a GH installation+repo to a project. Body: `{installation_id, repo_full_name, project_id}`. Auto-created on GH App install per default policy; this endpoint exists for re-binding / re-routing. | repo_project_bindings row |
+| `POST` | `/v1/accounts/bindings/repo` | Bind a GH installation+repo to a project. Body: `{installation_id, repo_full_name, project_id}`. **Unique per `repo_full_name` across ALL accounts**: if the repo is already bound to a different account, returns 409 with `bound_to_account: <obfuscated_id>`. Within the same account, auto-created on GH App install per default policy; this endpoint exists for re-binding / re-routing. | repo_project_bindings row |
 | `GET` | `/v1/accounts/bindings/repo` | List the account's repo bindings. | Read-only |
 | `DELETE` | `/v1/accounts/bindings/repo/{binding_id}` | Remove. | Hard delete |
+
+### Binding uniqueness — correctness + abuse-mitigation
+
+Both binding endpoint families enforce **global uniqueness on
+the resource side** (the chat / repo identity), not just per-
+account. This is enforced at the database layer with a UNIQUE
+constraint on `(platform, chat_id)` for chat bindings and on
+`repo_full_name` for repo bindings (or `(installation_id,
+repo_full_name)` if we keep installation as a routing key —
+either way the resource identity must be unique).
+
+Two reasons it's the right shape:
+
+1. **Routing correctness.** A single chat can't dispatch to
+   two different (account, project) pairs without colliding
+   responses. A single GH repo can't have two different
+   accounts receiving its events. The uniqueness constraint
+   is needed for the dispatcher to work correctly.
+2. **Multi-account abuse mitigation.** Without binding
+   uniqueness, a user could create N Free accounts, each
+   binding the same repo / chat, and effectively get N × the
+   Free tier's caps (events, signup bonuses, project slots).
+   Uniqueness reduces this to "you can have N accounts but only
+   ONE of them at a time receives events from your
+   repo/chat." The marginal abuse value of additional accounts
+   drops to near-zero — the extra accounts can only create
+   "projects" with no incoming gate routing, which has
+   approximately no value.
+
+Conflict response shape (409):
+
+```json
+{
+  "error": "binding_conflict",
+  "message": "this <chat | repo> is already bound to another account.
+              have the existing owner unbind first, OR contact support
+              if you believe this is incorrect.",
+  "bound_to_account": "acc_obfuscated_xyz",
+  "bound_at": "2026-03-12T..."
+}
+```
+
+The `bound_to_account` is an obfuscated ID, not a real
+account_id (no email / no name / no PII leak). Support can
+match it on the backend.
+
+What we **don't** do at launch:
+
+- No fingerprinting (browser / device).
+- No IP-based velocity limits beyond standard DDoS protection.
+- No email-domain blacklist / "suspicious signup" flagging.
+- No ML anti-abuse.
+
+All overengineering at our scale. The leverage from a
+duplicate Free account is ≤ $0.10 of compute (the signup
+bonus) + zero managed-gate routing (uniqueness blocks it).
+Revisit only if real abuse signal appears in production data.
 
 ### Credential vault endpoints
 
@@ -1557,3 +1615,31 @@ write the Upsun shape once, use it twice.
   actually allow byo everything on top of that" framing,
   combined with the credit-bucket / per-source-expiry lock-in
   in [`design-billing.md`](design-billing.md).
+- 2026-05-26 (locking pass II — project cap unlock, binding
+  uniqueness, Free signup bonus reflection). **Project-
+  creation endpoint enforcement updated** for the new
+  tiered cap (3 Free / 25 Subscribed-not-unlocked / unlimited
+  Subscribed-unlocked); 409 response body carries a
+  `subscription_hint` populated per-tier ("subscribe for 25"
+  vs "top up $X.XX more to unlock unlimited"). **New "Binding
+  uniqueness — correctness + abuse-mitigation" section** below
+  the bindings endpoint table: global uniqueness on
+  `(platform, chat_id)` for chat bindings and on
+  `repo_full_name` for repo bindings, enforced at the DB
+  layer with UNIQUE constraints; 409 response with
+  obfuscated `bound_to_account` (no PII leak). Same
+  enforcement serves routing correctness AND multi-account
+  abuse mitigation — without it, a Free user could create N
+  accounts and bind the same repo / chat to all of them. We
+  don't add fingerprinting / IP velocity / "suspicious
+  account" flagging at launch (overengineering at our
+  scale). **"What we DO hold" table grew a row** for the
+  cumulative-purchase counters (`cumulative_purchased_credits_lifetime`,
+  `cumulative_purchased_usd_lifetime`, `project_cap_unlocked`)
+  + their mirror keys (`subscription.project_cap`,
+  `subscription.project_cap_unlocked`) in account-scope
+  settings. Driven by the user's "capped at smth high like 25,
+  unlimited as soon as they spent smth small but reasonable on
+  credits" + "we maybe need to implement project ownership, so
+  a user wouldn't go creating multiple accounts to get more
+  credits on the same project."

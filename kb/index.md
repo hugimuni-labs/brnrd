@@ -180,10 +180,12 @@ dive-in map) and are stable until something contradicts them.
 - [Pricing shape decision](decision-pricing-shape.md) —
   *proposed*. **Subscription for the platform + metered credits
   for compute.** Two tiers at launch: Free (3 projects, 100
-  events/month, 5 spawn-credits/month, basic dashboard, 7-day
-  audit, managed-compute-only) + Subscribed (**$5/month for the
-  first 200 supporters → $7/month for the public cohort
-  afterward**; or $50 / $70 annual; up to 10 projects, 10K
+  events/month, **10 spawn-credit one-time signup bonus
+  (30-day expiry)**, basic dashboard with allowance gauges,
+  7-day audit, managed-compute-only) + Subscribed (**$5/month
+  for the first 200 supporters → $7/month for the public
+  cohort afterward**; or $50 / $70 annual; **25 projects
+  (unlimited after $10 of cumulative top-ups)**, 10K
   events/month, 300 spawn-credits/month included, full
   dashboard, 90-day audit, email support, **BYO compute
   opt-in for cloud envs we ship managed**). Subscription tier
@@ -191,50 +193,75 @@ dive-in map) and are stable until something contradicts them.
   compute top-ups on either tier ($0.01/credit, Stripe
   Checkout one-shot, no card-on-file except opt-in auto-topup).
   **Credit buckets formalised** with per-source expiry:
-  `free_monthly` / `subscriber_monthly` use-it-or-lose-it
-  end-of-cycle, `purchased` never expires (account-dormancy-
-  bounded at 24mo pause / 36mo prompt; deletion only on
-  explicit request or GDPR), `promotional` future-proofed.
-  Activity-gated Free grants. Self-hosted brnrd stays always-
-  free with full feature parity. Per-seat team tier deferred
-  to v-next. Reshaped 2026-05-25 multiple times — adopted
-  credits wallet (pass 4), then reframed (pass-4 follow-up
-  third wave) when the credits-only shape proved self-
-  defeating for sustainability. Refined 2026-05-26 with the
-  final pricing + naming shape (no marketing tier name,
-  $5/month with 300 included credits, 3-project Free tier).
-  Locked 2026-05-26 with the $5 supporter / $7 public step
-  per
+  `free_signup_bonus` one-time on Free signup with 30-day
+  expiry, `subscriber_monthly` use-it-or-lose-it end-of-cycle,
+  `purchased` never expires (account-dormancy-bounded at
+  24mo pause / 36mo prompt; deletion only on explicit request
+  or GDPR), `promotional` future-proofed. **Multi-account
+  abuse mitigation via binding uniqueness** (one repo / chat
+  bindable to one account at a time — needed for routing
+  correctness anyway). **Dashboard nudges + transparency**
+  policy: honest banners on threshold-crossing, never modal,
+  always-signposted throttling, gate-side one-line subscribe
+  footer on throttle / cap / out-of-credit events. Self-
+  hosted brnrd stays always-free with full feature parity.
+  Per-seat team tier deferred to v-next. Reshaped 2026-05-25
+  multiple times — adopted credits wallet (pass 4), then
+  reframed (pass-4 follow-up third wave) when the credits-
+  only shape proved self-defeating for sustainability.
+  Refined 2026-05-26 with the final pricing + naming shape
+  (no marketing tier name, $5/month with 300 included
+  credits, 3-project Free tier). Locked 2026-05-26 with the
+  $5 supporter / $7 public step per
   [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md);
   re-locked the same day with **BYO-for-subscribers**
   (subscriber-only cloud-platform credentials in the vault;
   BYO Fly Machines at launch; one-for-one BYO-with-managed
   rule for subsequent clouds) and the **credit-bucket /
-  per-source expiry policy** lock-in.
+  per-source expiry policy** lock-in; locking pass II on
+  2026-05-26 reshaped the Free monthly recurring grant into
+  a **10-credit one-time signup bonus** ("start stingy, relax
+  later" principle), reshaped the subscriber project cap
+  from flat 10 to **25 default / unlimited after $10
+  cumulative top-ups**, added binding-uniqueness multi-
+  account abuse mitigation, and codified the dashboard +
+  gate honest-nudge UX with explicit anti-patterns.
 - [Billing design](design-billing.md) — *proposed*. **Two
   billing legs**: subscription (Stripe recurring,
   monthly/annual, Customer Portal for self-service) and credit
   wallet (one-shot Stripe Checkout top-ups). Subscription
   mechanics: $5/month, prorated start, cancel-at-period-end,
-  subscriber credit grant (300/month vs Free's 5/month).
-  Wallet mechanics: top-up flow, debit-at-finalize, zero-balance
-  UX with enqueue + gate notify, opt-in auto-topup, pro-rata
-  refund policy. **Credit bucket ledger** with per-source
-  expiry: `free_monthly` / `subscriber_monthly` use-it-or-lose-
-  it end-of-cycle (Free activity-gated), `purchased` never
-  expires (account-dormancy bounded), `promotional` future-
-  proofed. Debit priority is grants first, purchased last
-  (FIFO within bucket). **BYO compute bypasses the wallet**
-  for subscribers (subscribers who BYO contribute pure
-  subscription revenue; `spawn_byo` audit op replaces
-  `debit_spawn`). **Account dormancy policy** bounds the
-  "purchased never expires" tail (24mo pause / 36mo prompt;
-  deletion only on explicit user request or GDPR). Audit log
+  subscriber credit grant (300/month) vs Free's **10-credit
+  one-time signup bonus (30-day expiry)**. Wallet mechanics:
+  top-up flow, debit-at-finalize, zero-balance UX with
+  enqueue + gate notify, opt-in auto-topup, pro-rata refund
+  policy. **Credit bucket ledger** with per-source expiry:
+  `free_signup_bonus` one-time on Free signup (30-day expiry
+  OR full consumption), `subscriber_monthly` use-it-or-lose-it
+  end-of-cycle, `purchased` never expires (account-dormancy
+  bounded), `promotional` future-proofed. Debit priority is
+  grants first, purchased last (FIFO within bucket). **BYO
+  compute bypasses the wallet** for subscribers (subscribers
+  who BYO contribute pure subscription revenue; `spawn_byo`
+  audit op replaces `debit_spawn`). **Cumulative purchase
+  tracking** drives the subscriber project cap unlock
+  (`cumulative_purchased_usd_lifetime >= 10` → `project_cap_unlocked
+  = true`, permanent on the account). **Account dormancy
+  policy** bounds the "purchased never expires" tail (24mo
+  pause / 36mo prompt; deletion only on explicit user
+  request or GDPR). **Deferred-revenue accounting** framing
+  for the implementer + accountant: purchased credits +
+  subscription fees are deferred revenue under French GAAP /
+  IFRS (Stripe Revenue Recognition automates the daily
+  proration); grants are NOT deferred revenue (they're
+  operational COGS); HugiMuni SAS chart-of-accounts sketch
+  included; bank-account separation called out as treasury
+  hygiene at ≥€10K MRR, not a legal requirement. Audit log
   entries cover every billing operation including the new
-  promotional + dormancy ops. Stripe integration shape
-  (HugiMuni SAS + Stripe France + Qonto payouts + Stripe Tax
-  for EU VAT + OSS scheme + SCA via Checkout) applies to both
-  legs under one Stripe account.
+  promotional / dormancy / project-cap-unlock ops. Stripe
+  integration shape (HugiMuni SAS + Stripe France + Qonto
+  payouts + Stripe Tax for EU VAT + OSS scheme + SCA via
+  Checkout) applies to both legs under one Stripe account.
 - [CLI shape decision](decision-cli-shape.md) — *proposed*.
   Seven top-level verbs (`init` / `run` / `daemon` / `gate` /
   `brnrd` / `config` / `kb`) with subcommands. Collapses today's
@@ -347,11 +374,16 @@ dive-in map) and are stable until something contradicts them.
   cross-gate continuity for failover can actually work without
   brnrd holding conversation contents. ~80 LOC daemon-side.
 - [Dashboard MVP plan](plan-brnrd-dashboard-mvp.md) — *not
-  started*. Seven views (accounts/projects, project detail, task
-  detail, conversation proxy, credentials vault (AI + docker
-  registry), failover policy + cost chart, audit log). HTMX-first
-  to keep build/maintenance cost down; SPA later if interactivity
-  demands it.
+  started*. Eight views (accounts/projects, project detail,
+  task detail, conversation proxy, credentials vault (AI +
+  docker registry), failover policy + cost chart, audit log,
+  **allowance + usage** with bucket-breakdown + nudge
+  banners). HTMX-first to keep build/maintenance cost down;
+  SPA later if interactivity demands it. **Honest-nudge UX**
+  policy: dismissible inline banners on threshold-crossing,
+  no modals, no cancellation friction, always-signposted
+  throttling, single-line gate-side subscribe footer on
+  throttle / cap / out-of-credit events.
 - [Fly Machines env plan](plan-env-fly-machines.md) — *not
   started*. First cloud env; lives at `src/brr/envs/fly_machines/`
   gated by the `brr[fly]` extra. Used by the laptop daemon

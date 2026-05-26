@@ -49,12 +49,16 @@ see your projects exist," already useful for self-hosters.
 
 ## Done definition
 
-Seven views, each one renderable end-to-end against real backend
+Eight views, each one renderable end-to-end against real backend
 endpoints:
 
 1. **Accounts / projects view** — list projects, create new
    project, delete project, per-project daemon-status badge,
-   per-project last-activity timestamp.
+   per-project last-activity timestamp. Includes the
+   tier-aware **project-cap gauge** (`8 / 25 projects
+   (unlocked unlimited at $10 of cumulative top-ups — $X.XX
+   to go)` for subscribers pre-unlock; `8 projects
+   (unlimited)` post-unlock; `2 / 3 projects` for Free).
 2. **Project detail view** — chat bindings, repo bindings,
    per-daemon online status + last-seen + daemon name, recent
    events table (last 50).
@@ -80,6 +84,18 @@ endpoints:
    platform / outcome / spend window. Each row: timestamp, kind
    (event-dispatched, spawn-started, spawn-finished,
    credential-added, etc.), metadata, cost (if any).
+8. **Allowance + usage view (NEW)** — first-class read of the
+   account's standing against tier limits: events bar
+   (consumed / cap, this month), credits bar with bucket
+   breakdown (signup bonus / subscriber monthly grant /
+   purchased / promotional, each with its own expiry note),
+   projects bar (used / effective cap, with the "to-unlock"
+   delta if applicable), throttle-state banner when active,
+   spend chart (per-day credits consumed for the last 6 months
+   on Subscribed, current month only on Free). This is the
+   anchor surface for the nudge UX (see "Allowance gauges +
+   honest-nudge UX" section below). Linked from the top nav
+   directly, not buried under a settings page.
 
 Plus:
 
@@ -122,6 +138,88 @@ If the cost / spawn chart or the conversation view grows real
 interactivity demands (live tail, drag-to-reorder, etc.), we add
 a small SPA carve-out for that view only. The MVP doesn't need
 it.
+
+## Allowance gauges + honest-nudge UX
+
+The dashboard surfaces allowance consumption as a first-class
+view AND inline gauges across every other view where they're
+relevant. Nudges toward subscribe / top-up appear when the
+user crosses an allowance threshold. **Honest nudges, not dark
+patterns** — see
+[`decision-pricing-shape.md`](decision-pricing-shape.md) §
+"Dashboard nudges + transparency" for the full policy +
+anti-pattern list.
+
+### Inline gauges (always visible, never blocking)
+
+- **Top nav**: a compact `usage` button shows a single-letter
+  status: green dot (under 75% of all caps), yellow (≥75% of
+  any cap), orange (≥90%), red (≥100%, throttle active).
+  Click → allowance view.
+- **Project list view**: project-count gauge in the header
+  (`8 / 25 projects`).
+- **Failover view**: monthly events + monthly credits gauges
+  alongside the existing usage line.
+- **Allowance view**: full gauges for events, credits (with
+  bucket breakdown), and projects (with unlock progress for
+  subscribers).
+
+### Banner nudges (per session, dismissible)
+
+Banners appear at the top of the page content area (not the
+nav). One banner max at a time; if multiple thresholds are
+crossed, prioritise the most severe (throttling active → near-
+cap → expiry-soon → upgrade-prompt). Dismissed banners stay
+hidden for the session; next session they reappear if the
+condition still holds.
+
+| Trigger | Banner copy | CTA(s) |
+|---------|-------------|--------|
+| Free user ≥80 events this month | "You're at 80% of your free event allowance this month." | "Subscribe for 10K/mo →" |
+| Free user at 100 events this month (throttling) | "Events throttled — you've hit the Free cap. Throttle clears \<next month boundary\>." | "Subscribe to lift now →" / "Self-host instead" |
+| Free user's signup bonus consumed | "Free signup bonus consumed. Top up or subscribe for ongoing failover compute." | "Top up at $0.01/credit" / "Subscribe →" |
+| Free user's signup bonus expires within 5 days unused | "Your signup bonus expires \<date\> — \<N\> credits unused." | "Try failover now" / "Subscribe for ongoing credits →" |
+| Subscriber ≥80% of credit grant this month | "You've used 80% of this month's 300 included credits." | "Top up at $0.01/credit (~33 spawns per $1)" |
+| Subscriber at 25-project cap, not unlocked | (form-side error on 26th project creation) "Subscriber accounts support up to 25 projects by default — unlock unlimited after $10 of cumulative top-ups (\$X.XX to go)." | "Top up now →" |
+| Subscriber ≥80% of event cap | "You're at 80% of your monthly event cap." | "Email us — we'll raise it" |
+| Throttling active for ANY user | (red banner, not dismissible until cleared) "Your events are being throttled. \<reason + clear-time\>." | (contextual: subscribe / wait / contact) |
+
+### Gate-side nudge footer
+
+Beyond the dashboard, gate replies (TG / GH / Slack) include a
+one-line subscribe footer **only** when the user just hit a
+throttle / cap / out-of-credit event. Never on successful
+responses. Format:
+
+```
+[ this task was queued — Free event cap reached.
+  subscribe at brnrd.dev/subscribe → ]
+```
+
+Single line, plain text (rendered as such on each platform's
+formatting layer).
+
+### Anti-patterns (explicitly avoided)
+
+- **No modal blockers.** Banners are inline; the user is never
+  forced to click anything to continue.
+- **No cancellation friction.** Cancel button on the
+  subscription settings goes straight to Stripe Customer
+  Portal — no "are you sure?" + "what could we do better?"
+  + retention offers.
+- **No dismissal asymmetry.** The "dismiss" affordance is the
+  same visual weight as the "subscribe" affordance.
+- **No countdown timers / "limited-time" pressure.** The
+  early-supporter $5 price is mentioned matter-of-factly on
+  the subscribe page, not as a pressure tactic on the
+  dashboard.
+- **No silent throttling.** Every throttle is signposted; the
+  user always knows why a request was slowed / queued. This
+  is the load-bearing version of "honest" — the user is in
+  control of the situation because they understand it.
+- **No nudge spam.** At most one banner per page-load; at most
+  one gate footer per throttle event (not per queued event);
+  dismissed banners stay dismissed for the session.
 
 ## Slices
 
@@ -181,10 +279,11 @@ Steps:
 **Estimate.** ~900-1200 LOC templates + ~600 LOC routes + ~400
 LOC tests.
 
-### Slice 3 — Audit log + cost chart + event detail + conversation view
+### Slice 3 — Audit log + cost chart + event detail + conversation view + allowance view
 
 The observability surfaces. After this slice, a user can see
-what happened and what it cost.
+what happened, what it cost, and where they stand against
+their tier limits.
 
 Steps:
 
@@ -204,9 +303,33 @@ Steps:
    hover.
 5. CSV export on the audit view ("Download as CSV") for users
    who want to dig into their cost history offline.
+6. **View 8: `GET /usage` → allowance view** (NEW). Renders
+   against `GET /v1/accounts/wallet` (credit buckets +
+   `cumulative_purchased_usd_lifetime` + `project_cap_unlocked`),
+   `GET /v1/accounts/usage/events` (current-month event count
+   + cap), and the projects-list endpoint (count + effective
+   cap). Three gauges + bucket breakdown table + spend chart
+   (reuse the inline SVG helper from step 4). Empty-state
+   sub-views for "no credits yet — your signup bonus expires
+   in N days" etc.
+7. **Inline gauge component**: small Jinja partial that
+   renders an `events / cap` or `credits / grant` or
+   `projects / cap` bar. Used in the top nav (status dot),
+   projects view header, failover view, and the allowance
+   view. One component, four placements.
+8. **Banner-nudge component**: dismissible banner template
+   driven by a server-computed nudge-priority list per page-
+   render. Dismissal state stored in the session cookie
+   (per-page-key, not per-banner; one cookie kv pair per
+   threshold-crossing event). Banner triggers + copy match
+   the policy table in "Allowance gauges + honest-nudge UX"
+   above; the table also lives in
+   [`decision-pricing-shape.md`](decision-pricing-shape.md)
+   so backend + dashboard can stay in sync.
 
-**Estimate.** ~1000-1400 LOC templates + ~700 LOC routes +
-inline SVG chart helper (~200 LOC) + ~500 LOC tests.
+**Estimate.** ~1200-1600 LOC templates + ~900 LOC routes +
+inline SVG chart helper (~200 LOC) + gauge + banner partials
+(~300 LOC) + ~700 LOC tests.
 
 ### Slice 4 — Polish
 
@@ -310,3 +433,30 @@ Steps:
   collapsed brnrd as a separate name into brnrd. The
   dashboard absorbs what would have been `plan-brnrd-mvp.md`
   in an earlier draft of the reshape.
+- 2026-05-26 (locking pass II — allowance view + honest-nudge
+  UX). **Allowance + usage view added as the 8th first-class
+  view** (linked from top nav, not buried under settings):
+  events bar, credits bar with bucket breakdown
+  (`free_signup_bonus` / `subscriber_monthly` / `purchased` /
+  `promotional`), projects bar (with unlock-progress delta
+  for subscribers), throttle banner when active, spend chart
+  (6 months for Subscribed; current month for Free). **New
+  "Allowance gauges + honest-nudge UX" section** captures
+  the inline-gauge placements (top nav status dot, project
+  list header, failover view) + the banner-nudge trigger /
+  copy / CTA table + the explicit anti-patterns list (no
+  modals, no cancellation friction, no countdown timers, no
+  silent throttling, no nudge spam) + the gate-side one-line
+  subscribe footer triggered ONLY on throttle / cap / out-of-
+  credit events. Slice 3 extended to deliver the allowance
+  view + inline gauge component + banner-nudge component; LOC
+  estimate raised accordingly. Projects-view item-1 grew the
+  tier-aware project-cap gauge for the new 3 / 25 / unlimited
+  tiering. Driven by the user's "a dashboard to show the
+  allowance consumption in events and credits, and a nudge to
+  go subscribe if anything got above the allowance — that's
+  not too mean, right?" + "throttling is a good idea, like
+  it." Cross-references
+  [`decision-pricing-shape.md`](decision-pricing-shape.md) §
+  "Dashboard nudges + transparency" as the canonical policy
+  source.

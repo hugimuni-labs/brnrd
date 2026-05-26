@@ -184,6 +184,9 @@ The schema declares scope per key. Headline assignments:
 | `autotopup.*` | `account` | Billing prefs, server-side. |
 | `subscription.tier` | `account` (read-only) | Current tier: `subscribed` / `subscribed_past_due` / `free`. Written by brnrd on Stripe webhook events; read by the daemon + brnrd-side dispatcher to apply tier-based caps (project count, event ceiling, audit retention). Clients can read via `brr config get subscription.tier` but cannot write — use `brr brnrd subscribe` / `brr brnrd subscription cancel` instead. |
 | `subscription.plan` | `account` (read-only) | `monthly` / `annual` / `none`. Same write rules as `subscription.tier`. |
+| `subscription.project_cap` | `account` (read-only, derived) | Effective project cap: `3` (Free), `25` (Subscribed not unlocked), `unlimited` (Subscribed unlocked). Derived from `subscription.tier` + `subscription.project_cap_unlocked`; daemon + dashboard read this for cap display + 409 handling. |
+| `subscription.project_cap_unlocked` | `account` (read-only, derived) | Boolean: `true` once `cumulative_purchased_usd_lifetime >= 10`; once true, **permanent** (survives subscription cancel + re-subscribe). Drives the `subscription.project_cap` value when tier is `subscribed`. |
+| `cumulative_purchased_usd_lifetime` | `account` (read-only, derived) | Monotonic counter of total Stripe top-ups in USD across the account's lifetime; never decremented on refund. Used by the dashboard to show "$X.XX to go to unlock unlimited projects" when subscribed and not yet unlocked. |
 
 Concrete merge: if `brr.toml` says `runner.default = "claude"`,
 the account-scope `runner.preferred` is `"codex"`, and the local
@@ -431,3 +434,18 @@ degrades to "empty" when brnrd isn't connected).
   [`decision-pricing-shape.md`](decision-pricing-shape.md) and
   the credential-vault extension in
   [`design-brnrd-protocol.md`](design-brnrd-protocol.md).
+- 2026-05-26 (locking pass II — project cap unlock keys).
+  **Three new account-scope read-only keys added** for the
+  subscriber project cap unlock policy:
+  `subscription.project_cap` (derived: `3` / `25` /
+  `unlimited`); `subscription.project_cap_unlocked` (boolean,
+  permanent once true); `cumulative_purchased_usd_lifetime`
+  (monotonic counter, never decremented on refund). All
+  three are derived / mirrored from the brnrd-side ledger
+  state per
+  [`design-billing.md`](design-billing.md) § "Cumulative
+  purchase tracking and the subscriber project cap unlock";
+  daemon + dashboard read them to show cap status + the
+  "$X.XX to go to unlock unlimited" nudge. Driven by the
+  user's "capped at smth high like 25, unlimited as soon as
+  they spent smth small but reasonable on credits."

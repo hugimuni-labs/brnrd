@@ -5,9 +5,12 @@ multiple times (see Lineage). Current shape on 2026-05-26
 (third-wave follow-up, locked):** unnamed paid tier
 ("Subscribed") at **$5/month for the first 200 supporters
 (grandfathered forever) → $7/month for new joiners after**,
-with 300 credits included. Free tier at 3 projects / 100
-events / 5 credits — subscription for the platform + metered
-credits for compute. The earlier "free dispatcher + paid
+with 300 credits / month included and a **25-project cap that
+unlocks to unlimited after $10 of cumulative credit
+purchases**. Free tier at 3 projects / 100 events / **10-credit
+one-time signup bonus** (no recurring grant) — subscription
+for the platform + metered credits for compute. The earlier
+"free dispatcher + paid
 managed compute" framing turned out to be self-defeating —
 see "What changed and why" below. The two-step pricing
 (supporter $5 → public $7) is the launch-cohort defensive
@@ -30,9 +33,9 @@ adopter step + deferred trademark).
 
 | Tier | Price | Projects | Events / month | Compute included | Dashboard | Audit retention | Support |
 |------|-------|----------|----------------|------------------|-----------|-----------------|---------|
-| **Free** | $0 | **3** | 100 | 5 spawn-credits ($0.05) | Basic (per-project, read-only views) | 7 days | Community (Discord, GitHub issues) |
-| **Subscribed — supporter price** *(first 200 subscribers, then locked forever)* | **$5 / month** *(or $50 / year, ~17% off)* | up to **10** | 10,000 | **300 spawn-credits ($3 of compute)** | Full (cost charts, permission-prompt customisation, cross-project view, project-binding UI) | 90 days | Email |
-| **Subscribed — public price** *(joiners after supporter cohort closes)* | **$7 / month** *(or $70 / year, ~17% off)* | up to **10** | 10,000 | **300 spawn-credits ($3 of compute)** | Full | 90 days | Email |
+| **Free** | $0 | **3** | 100 | **10-credit one-time signup bonus ($0.10)**, no recurring grant | Basic (per-project, read-only views + allowance gauges) | 7 days | Community (Discord, GitHub issues) |
+| **Subscribed — supporter price** *(first 200 subscribers, then locked forever)* | **$5 / month** *(or $50 / year, ~17% off)* | **25** (unlimited after $10 cumulative top-ups) | 10,000 | **300 spawn-credits ($3 of compute) / month** | Full (cost charts, permission-prompt customisation, cross-project view, project-binding UI, allowance gauges) | 90 days | Email |
+| **Subscribed — public price** *(joiners after supporter cohort closes)* | **$7 / month** *(or $70 / year, ~17% off)* | **25** (unlimited after $10 cumulative top-ups) | 10,000 | **300 spawn-credits ($3 of compute) / month** | Full | 90 days | Email |
 | **Compute overage** (all tiers) | $0.01 / credit (metered) | — | — | top-up via existing wallet | — | — | — |
 | **Self-hosted brnrd** | $0 | unlimited | unlimited | self-paid cloud bill | full (your deployment) | self-defined | self-supplied |
 
@@ -64,7 +67,7 @@ cost and real user value:
 
 | Subscriber-only feature | Why it has cost / value |
 |------------------------|------------------------|
-| **Bigger project headroom** (10 projects, vs 3 on Free) | The dispatcher's multi-project resolution path (chat-binding + prefix override on TG/Slack/Discord, per-installation routing on GH App) is genuinely more code, more state, more support burden the more projects an account fans out across. Free's 3-project cap handles the "side project + day-job + scratchpad" case; the jump to 10 covers serious adopters. |
+| **Bigger project headroom** (25 projects default, unlimited after $10 of cumulative top-ups; vs 3 on Free) | The dispatcher's multi-project resolution path (chat-binding + prefix override on TG/Slack/Discord, per-installation routing on GH App) is genuinely more code, more state, more support burden the more projects an account fans out across. Free's 3-project cap handles the "side project + day-job + scratchpad" case; the jump to 25 covers serious adopters; the spend-gated unlock to unlimited rewards demonstrated real usage without putting a hard cap on heavy users. |
 | **Full dashboard** (cost charts, cross-project view, permission-prompt config, project-binding UI) | More views = more build + maintenance cost. Free gets the read-only essentials; subscribers get the operational surface. |
 | **300 credits / month of managed compute included** | Bundled grant covers ~100 spawns/month at typical task size. The $5 platform fee buys the platform AND a $3 grant of managed compute on the house. Light subscribers effectively never think about credits; heavy users top up at $0.01/credit. |
 | **BYO cloud compute** (subscribers can bring their own Fly / Modal / etc. token instead of using managed compute) | "If we ship it managed, you can BYO it." Subscribers who prefer to keep their cloud spend on accounts they already own (or who want to skip the managed-compute margin) bring a credential to the vault; dispatcher routes spawns to the user's cloud account. The sub is the gate; cloud envs available depend on which envs we've shipped managed. See "Compute: managed vs BYO" below. |
@@ -220,7 +223,254 @@ Hitting the event cap on either tier triggers a **soft throttle
 Events should *feel* free / unlimited in normal use; the caps
 exist for abuse / runaway-integration protection, not as a
 revenue surface. The revenue surface is the subscription
-itself.
+itself. **Throttling is always surfaced to the user** —
+silent throttling is the actually-mean version; explicit
+"you're being throttled, here's why, here's how to lift it"
+is honest and fixes itself when the user understands the
+situation. See "Dashboard nudges + transparency" below for
+where throttle states surface to the user.
+
+## Free compute grant — one-time signup bonus, not recurring
+
+Free's compute allowance reshaped from "5 spawn-credits per
+month (activity-gated)" to **"10-credit one-time signup
+bonus" on 2026-05-26 (locking pass II)**. Rationale: the
+"start stingy, relax later" principle is structurally better
+than the reverse for both unit economics AND community
+perception. Tightening reads as betrayal; loosening reads as
+"we're winning, here's more on the house."
+
+### Mechanics
+
+- New Free account gets **10 credits** in a `free_signup_bonus`
+  ledger sub-bucket on account creation.
+- Bonus **expires 30 days from account creation** OR upon full
+  consumption, whichever first. Activation grant, not a
+  savings account.
+- After the bonus, Free users top up at $0.01/credit if they
+  want failover compute, OR subscribe for the recurring
+  300-credit subscriber grant.
+- **No monthly grant on Free**. The activity-gating logic from
+  the previous shape is removed entirely; there's no dormant-
+  account cost line to worry about.
+
+### Math at scale
+
+| Free accounts | One-time bonus cost (total, not per year) |
+|---------------|------------------------------------------|
+| 1,000 | $100 |
+| 10,000 | $1,000 |
+| 100,000 | $10,000 |
+| 1,000,000 | $100,000 |
+
+Bounded by signup count, not by retention. Viral-growth
+scenarios don't bleed compute indefinitely. Compare to the
+previous 5/month recurring shape: 10K Free × 5 × 12 =
+$6K/year; 100K Free × 5 × 12 = $60K/year — same magnitude as
+the one-time cost at 6× the user count, with no upper bound.
+
+### Optics
+
+The narrative shifts from "you get $0.05 of free compute
+every month" to "you get the managed dispatcher genuinely
+free, plus a starter pack to try failover compute." The
+dispatcher (gates + multi-project routing + permission
+prompts + 7-day audit) is the load-bearing free thing; it's
+free regardless of any compute grant. Selling Free as
+"$0.05/mo of free compute" was muddling the value prop;
+selling Free as "the managed dispatcher, free" is honest.
+
+The failover path is opt-in and rare-path (laptop online =
+no failover needed). Free users who never enable failover
+never notice the absence of a monthly grant. Free users who
+do enable failover get 3 tries to validate the path before
+the credit moment ("top up at $0.01/credit or subscribe").
+
+### What this gives up
+
+The "Free user can live on the platform forever paying
+nothing" narrative becomes sharper: with recurring 5/mo, a
+hobbyist could process gates + 1-2 failover spawns/month
+indefinitely; with the signup-bonus shape, the same user can
+still process unlimited gates indefinitely (the load-bearing
+common path), but failover beyond the bonus requires a
+top-up or sub. Acceptable trade because failover is the rare
+path, not the common one.
+
+## Subscriber project cap — 25 default, unlimited after $10 of cumulative top-ups
+
+The flat "10 projects on Subscribed" cap reshaped on 2026-05-26
+(locking pass II) into a **tiered cap**:
+
+- **Subscribed (default)**: up to **25 projects**.
+- **Subscribed + ≥$10 cumulative top-ups (ever)**: **unlimited
+  projects**.
+
+### Mechanics
+
+- The account tracks `cumulative_purchased_usd_lifetime` — a
+  never-decreasing counter incremented on every successful
+  Stripe top-up. Refunds don't decrement (the spend happened;
+  refunds are tracked separately).
+- The derived flag `project_cap_unlocked` is set when
+  `cumulative_purchased_usd_lifetime >= 10`. **Once set,
+  permanent on the account** (survives subscription cancel +
+  re-subscribe; if the user re-Frees, they're capped at 3
+  projects per Free's cap, but the unlock flag persists for
+  any future re-subscription).
+- Project-creation endpoint enforces the effective cap on each
+  attempt: `effective_cap = unlimited if (subscribed AND
+  unlocked) else 25 if subscribed else 3`.
+- $10 threshold = two typical top-ups (most common Stripe
+  Checkout amount is $5; second is $20). Signals "real
+  user with sustained usage" without being punitive.
+
+### Rationale
+
+- **25 is high enough that almost no real solo developer hits
+  it.** Most solo devs work across 3-10 projects actively;
+  serious indie hackers maybe 15-20. 25 covers the long tail.
+- **The unlock is a trust signal, not a paywall escape.** "You've
+  shown sustained usage by purchasing compute; the cap is no
+  longer relevant." Removes a friction point for power users
+  who'd otherwise feel the 25-cap as artificial.
+- **Spend-gated, not status-gated.** "Subscriber level X" tiers
+  are the rent-seeking pattern; a spend-gated unlock is
+  matter-of-fact: you've contributed enough revenue that the
+  marginal multi-project routing cost is paid for.
+- **Doesn't bind the team-tier discussion.** v-next per-seat
+  pricing is its own thing; this unlock is per-account.
+
+### What this gives up
+
+A small possibility of abuse: a subscriber tops up $10 in
+credits, gets the unlock, then cancels the subscription but
+spawns 100 projects on a re-subscribe later. Mitigated by:
+the binding-uniqueness rule (a GitHub repo / TG chat can only
+be bound to one account at a time — so the "100 projects" are
+mostly toy projects without managed-gate routing), and by the
+fact that the unlock only matters while subscribed (the $5
+sub is the per-paying-customer gate).
+
+## Multi-account abuse mitigation: binding uniqueness, not fingerprinting
+
+Naive concern: "what stops a Free user from making 10 accounts
+to chain together 100 signup bonuses + 30 projects?"
+
+Mitigation at launch is **resource-binding uniqueness**, NOT
+identity fingerprinting or IP-based velocity controls:
+
+- **GitHub repo binding is unique per repo.** If `myorg/foo`
+  is already bound to account A, account B trying to bind the
+  same repo gets "this repo is already bound to another
+  account; have the original owner unbind first."
+- **Telegram chat binding is unique per chat.** Same shape:
+  one chat → one (account, project) pair, enforced server-
+  side at bind time.
+- **Slack / Discord / future-platform chat bindings** follow
+  the same rule.
+
+This is enforced anyway for **routing correctness** — you
+can't dispatch two projects to the same chat without
+collision — so framing it as abuse-mitigation gives us 95%
+of the value at zero incremental cost.
+
+**What about projects with no bindings?** A Free user could
+create 3 projects per account × 10 accounts = 30 unbound
+"projects" in our database. These have **zero managed-gate
+routing value** (no chat, no repo to receive events from).
+They can only be used via the local daemon's gates, which
+the user could have set up without brnrd at all. Abuse
+leverage = approximately zero.
+
+**What about the 10 × 10-credit signup bonuses (= 100
+credits = $1 of compute)?** Bounded by signup velocity per
+email / OAuth identity (Stripe and email verification on
+account creation handle the common case); the cost of 10
+duplicate accounts is at most $1 of compute, which is below
+the cost of investigating abuse cases. Accept as immaterial.
+
+What we **don't** add at launch: device fingerprinting, IP
+velocity limits beyond standard DDoS protection,
+"suspicious account" flagging, ML anti-abuse. All
+overengineering at our scale; revisit if abuse signal
+appears in real data (which it won't, because the leverage
+is too small).
+
+## Dashboard nudges + transparency
+
+The dashboard surfaces **usage relative to allowance** as a
+first-class read view, and nudges toward subscribe / top-up
+when the user approaches or crosses an allowance line. Honest
+nudges, not dark patterns.
+
+### What the dashboard shows (per account)
+
+- **Events bar**: `87 / 100 events this month` (Free) or
+  `2,341 / 10,000 events this month` (Subscribed). Resets at
+  the month boundary; bar colour grades from green → yellow
+  (≥75%) → orange (≥90%) → red (≥100%, throttling active).
+- **Credits bar** with bucket breakdown on hover:
+  - Free: `3 / 10 signup bonus credits remaining, expires
+    May 15` (red when 0 remaining); below: `0 purchased
+    credits — top up at $0.01/credit`.
+  - Subscribed: `145 / 300 monthly grant + 200 purchased
+    credits available`.
+- **Projects bar**: `2 / 3 projects` (Free) or `8 / 25
+  projects (unlimited after $10 of cumulative top-ups —
+  $4.50 to go)` (Subscribed, pre-unlock) or `8 projects
+  (unlimited)` (Subscribed, post-unlock).
+- **Spend chart**: month-by-month credits consumed (last 6
+  months) for subscribers; current-month-only for Free.
+  Already in the dashboard MVP.
+
+### Nudge triggers + content
+
+Banners appear at the top of the dashboard, dismissible per
+session, never modal:
+
+| Trigger | Banner | Action |
+|---------|--------|--------|
+| Free user crosses 80 events / month | "You're at 80% of your free event allowance this month." | Link: "Subscribe for 10,000 events / month →" |
+| Free user hits event cap (events being throttled) | "Events are being throttled — you've hit the 100 / month Free cap. Throttle clears <next month boundary>." | Link: "Subscribe to lift the throttle now →" |
+| Free user's signup bonus fully consumed | "Free signup bonus consumed. Top up or subscribe for ongoing failover compute." | Two links: "Top up at $0.01/credit" / "Subscribe for 300 credits / month →" |
+| Free user's signup bonus expires unused at day 30 | "Your signup bonus expired. Top up or subscribe to use failover compute." | Same two links. |
+| Free user tries to create a 4th project | (form-side error) "Free supports up to 3 projects. Subscribe for 25 (unlimited after $10 of credit spending)." | CLI / dashboard returns the same message with a subscribe URL. |
+| Subscriber crosses 80% of credit grant | "You've used 80% of this month's 300 included credits." | Link: "Top up at $0.01/credit (covers ~33 spawns per $1)." |
+| Subscriber at 25-project cap, not unlocked | (form-side error on 26th project creation) "Subscriber accounts support up to 25 projects by default — unlock unlimited after $10 of cumulative top-ups ($X.XX to go)." | Link: "Top up now →" |
+| Subscriber crosses 80% of event cap (≥8K events) | "You're at 80% of your monthly event cap." | Link: "Email us — we'll raise the cap." |
+
+### What we don't do (anti-patterns avoided)
+
+- **No modals that block work.** Banners are inline at the top
+  of the dashboard, never overlay.
+- **No "are you sure you want to cancel?" friction** — cancel
+  flow goes straight to Stripe Customer Portal.
+- **No tiny "no thanks" buttons / huge "subscribe" buttons** —
+  dismissal is equal-weight with the action.
+- **No countdown timers** or "limited-time discount" pressure
+  on the nudge.
+- **No hidden hard caps** — every throttle is signposted; the
+  user always knows why a request was slowed / queued.
+- **No nudge spam** — at most one event-cap banner per
+  threshold crossing per session; gate notifications about
+  throttling fire at most once per throttle event, not on
+  every queued event.
+
+### Gate-side nudge (one-liner footer)
+
+When a gate (TG / GH / Slack) replies to the user with a
+throttle / out-of-credit / cap-hit message, the reply includes
+a single-line footer:
+
+```
+[ this task was queued — Free event cap reached.
+  subscribe at brnrd.dev/subscribe → ]
+```
+
+Never more than one line. Never adds the footer to a
+successful response. The user sees the nudge only when it's
+relevant to the action that just happened.
 
 ## Why this shape
 
@@ -315,14 +565,15 @@ priority, and Stripe wiring live in
 
 | Bucket | Granted on | Expires | Rolls over | Refundable |
 |--------|-----------|---------|-----------|------------|
-| `free_monthly` | Free account creation + every cycle (activity-gated, see below) | End of current cycle | **No** | No |
+| `free_signup_bonus` | One-time on Free account creation | 30 days from creation OR on full consumption | No | No |
 | `subscriber_monthly` | Subscription start + every renewal | End of current billing cycle | **No** | No |
 | `purchased` | Stripe Checkout top-up confirmed | **Never** (dormancy-bounded) | Yes | Pro-rata within 30 days |
-| `promotional` *(future)* | Signup bonus / referral / support goodwill | Specified at grant time (30-90 days typical) | No | No |
+| `promotional` *(future)* | Referral / support goodwill / campaign | Specified at grant time (30-90 days typical) | No | No |
 
-Debit priority on spend: `free_monthly` → `subscriber_monthly`
-→ `promotional` (soonest-expiring first) → `purchased`
-(oldest-first FIFO). Users' purchased balance is always
+Debit priority on spend: `free_signup_bonus` →
+`subscriber_monthly` → `promotional` (soonest-expiring first)
+→ `purchased` (oldest-first FIFO). Users' purchased balance
+is always
 preserved last — the grant gets consumed first.
 
 **Why monthly grants expire end-of-cycle:** mobile-plan /
@@ -348,22 +599,20 @@ to 1 year). Dormant-account liability is bounded by an
 36+ months → dashboard prompt for reactivation; deletion
 only on explicit user request or GDPR right-to-erasure.
 
-**Activity-gated Free monthly grants:** Free's 5 credits/mo
-only refresh if the account had any event-processing or
-dashboard-login activity in the prior month. Active Free
-users see the refresh exactly as today; dormant Free
-accounts (no activity for a full cycle) don't accumulate
-grant cost. This is invisible to active users and only costs
-inactive accounts $0; lets us run a generous "5 free spawns
-a month" Free tier without bleeding compute on the long tail
-of one-time-signup accounts. Subscriber grants refresh
-unconditionally — the subscription itself is the activity
-signal.
+**Free signup bonus (no recurring grant on Free):** the
+earlier "5 credits/mo activity-gated" shape was revisited
+2026-05-26 (locking pass II) and replaced with a **10-credit
+one-time signup bonus** that expires 30 days from account
+creation OR on full consumption. Bounded by signup count
+rather than active-user count — see "Free compute grant —
+one-time signup bonus, not recurring" above for math + optics.
+Subscriber grants refresh unconditionally on every monthly
+billing cycle — the subscription itself is the activity signal.
 
 **Dashboard language:** the dashboard never says "your
 credits expired"; it says "your monthly allowance refreshes
 on <date>" / "your monthly allowance reset on <date>, new
-balance: 5 credits." Same mechanic, opposite emotional
+balance: 300 credits." Same mechanic, opposite emotional
 valence. The bucket UI labels the user's balance as a single
 number with "X credits this month + Y purchased" breakdown
 only on hover / details.
@@ -634,10 +883,13 @@ billing.
   more-conservative-commercial alternative is 2 (still avoids
   the "trial mode" reading, slightly more pressure to
   subscribe). Revisit post-launch with actual conversion data.
-- **Subscription project cap.** 10 is sketched; could be lower
-  (e.g. 5) if it pushes power users to per-seat earlier, or
-  higher (e.g. 25 / unlimited) for simplicity. The cap should
-  be high enough that no real solo developer hits it.
+- **Subscription project cap unlock threshold.** $10 of
+  cumulative top-ups is the proposed default. Could be lower
+  ($5 = one typical top-up; faster unlock; weaker spend
+  signal) or higher ($25 / $50; slower unlock; stronger
+  spend signal). Default $10 covers two top-ups, signals real
+  usage, doesn't gate too aggressively. Revisit if early
+  subscriber data shows it's binding too often.
 - **Annual discount level.** $50/year (supporter) and
   $70/year (public) sit at ~17% off monthly. Could go more
   aggressive on annual (e.g. $45/year supporter, $60/year
@@ -650,16 +902,19 @@ billing.
   experience at the cost of platform margin. Pre-launch
   decision; current 300-credit shape leaves $2/month
   platform-fee headroom over the included compute.
-- **Free monthly grant size at scale.** 5 credits/mo ×
-  10,000 Free accounts = $500/mo of compute (manageable);
-  × 100,000 Free accounts = $5,000/mo (no longer
-  ignorable). Activity-gating helps but doesn't eliminate
-  the tail. Revisit at the 1,000 / 10,000 / 100,000 Free-
-  account thresholds; knobs we have are tightening the
-  grant (5 → 3), converting to one-time onboarding (5
-  credits at signup, then top-up), or accepting the cost
-  as CAC investment. Default is to accept the cost until
-  it becomes operationally painful.
+- **Free signup bonus size.** 10 credits one-time is the
+  current proposal — bounded by signup count (not by
+  retention), so the math is clean: 100K Free signups
+  total = $10K of compute total (not / year). Could go
+  lower (5 credits, $5K at 100K signups) for tighter cost
+  bounds, or higher (20 credits, $20K at 100K signups) for
+  more generous activation. 10 covers ~3 failover spawns
+  at typical task size — enough to validate the path. The
+  earlier "5 credits/month recurring + activity-gated"
+  shape was revisited 2026-05-26 (locking pass II) per
+  "start stingy, relax later" — the one-time-bonus shape
+  is both simpler to reason about AND structurally bounded
+  by signup count rather than active-user count.
 - **Account-dormancy timing.** 24 months pause / 36 months
   prompt is the proposed default; could be longer (36/48,
   more user-friendly, higher dormancy tail) or shorter
@@ -806,7 +1061,8 @@ billing.
   subscribers principle applies to future agentic-secretary
   connectors. New "Compute: managed vs BYO" section codifies
   the two-flow shape. **Credit buckets formalised** with
-  per-source expiry policy: `free_monthly` /
+  per-source expiry policy: `free_monthly` *(later renamed
+  `free_signup_bonus` in locking pass II)* /
   `subscriber_monthly` (use-it-or-lose-it end-of-cycle),
   `purchased` (never expires, dormancy-bounded), `promotional`
   (future, expires per grant). Debit priority is grants
@@ -826,3 +1082,42 @@ billing.
   somehow, unless you think it would be perceived
   negatively, what's the right shape?" + "agree on no BYO
   for Free + per-paying-customer language."
+- 2026-05-26 (locking pass II — Free signup bonus, subscriber
+  cap unlock, dashboard nudges). **Free monthly compute grant
+  reshaped from "5 credits/month activity-gated" to "10-credit
+  one-time signup bonus, 30-day expiry."** Bounded by signup
+  count rather than active-user count — math caps at $10K of
+  compute at 100K signups total, vs $60K/year at 100K active
+  Free users on the previous shape. Removes the activity-
+  gating logic entirely (no longer needed). New "Free compute
+  grant — one-time signup bonus, not recurring" section
+  codifies mechanics + math + optics. Driven by the user's
+  "start a bit stingier and relax as we go" principle.
+  **Subscriber project cap reshaped from flat 10 to tiered
+  25 (default) / unlimited (after $10 cumulative top-ups).**
+  New `cumulative_purchased_usd_lifetime` account state +
+  derived `project_cap_unlocked` flag (permanent once set,
+  survives subscription cancel + re-subscribe). New
+  "Subscriber project cap — 25 default, unlimited after $10
+  spent" section. Driven by the user's "capped at smth high
+  like 25, unlimited as soon as they spent smth small but
+  reasonable on credits." **Multi-account abuse mitigation
+  via binding uniqueness** (GitHub repo + TG/Slack/Discord
+  chat bindings unique per resource) framed as both routing-
+  correctness AND abuse-mitigation; no fingerprinting / IP
+  velocity / "suspicious account" flagging at launch
+  (overengineering at our scale). New "Multi-account abuse
+  mitigation: binding uniqueness, not fingerprinting"
+  section. Driven by the user's "we maybe need to implement
+  project ownership, so a user wouldn't go creating multiple
+  accounts." **Dashboard nudges + transparency section**
+  codifies the honest-nudge UX: dismissible inline banners,
+  no modals, every throttle is signposted, gate-side replies
+  include a single-line subscribe footer when (and only
+  when) the user just hit a throttle / cap / out-of-credit.
+  Anti-patterns named explicitly (no dark-pattern friction
+  on cancel, no countdown timers, no nudge spam). Driven by
+  the user's "a dashboard to show the allowance consumption
+  in events and credits, and a nudge to go subscribe if
+  anything got above the allowance — that's not too mean,
+  right?" + "throttling is a good idea, like it."

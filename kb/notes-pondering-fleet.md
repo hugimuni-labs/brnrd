@@ -687,6 +687,125 @@ the current state. §6 is the re-promotion guide.
 > the bucket-rename / activity-gate work is mostly already-
 > designed.
 
+> **2026-05-26 — locking pass II: Free signup bonus +
+> subscriber project cap unlock + honest-nudge UX +
+> deferred-revenue accounting.** User asked: "lets allow
+> subscribers to have unlimited as soon as they spent smth
+> small but reasonable on credits, otherwise capped at smth
+> high like 25" + "the one time grant on free is probably
+> good" + "a dashboard to show the allowance consumption in
+> events and credits, and a nudge to go subscribe if anything
+> got above the allowance — that's not too mean, right?" +
+> "throttling is a good idea, like it." Driven by the
+> realisation that the "5/month activity-gated recurring"
+> Free grant from locking pass I had unbounded long-tail cost
+> shape (cost grows linearly with active Free user count, not
+> total signup count) and the flat "10 projects on
+> Subscribed" cap was both too low for power users AND
+> insufficient as a value-signal for sustained payers.
+>
+> **Free signup bonus replaces recurring grant.** 10 credits
+> one-time on Free account creation, expires 30 days from
+> creation OR on full consumption. Bounded by signup count
+> rather than active-user retention — 100K signups total =
+> $10K of compute total (one-time, not per year). The
+> activity-gating logic is removed entirely. "Start stingy,
+> relax later" — tightening reads as betrayal, loosening
+> reads as winning. Selling Free as "the managed dispatcher,
+> free" is honest; selling Free as "$0.05/mo of free
+> compute" muddled the value prop.
+>
+> **Subscriber project cap reshaped from flat 10 to tiered
+> 25 / unlimited.** Default 25 projects; unlocks to unlimited
+> after $10 of cumulative top-ups
+> (`cumulative_purchased_usd_lifetime >= 10`). The unlock is a
+> permanent flag (`project_cap_unlocked`) on the account —
+> survives subscription cancel + re-subscribe. 25 covers
+> almost every solo developer; the spend-gated unlock rewards
+> sustained-usage power users with no rent-seeking tier
+> ladder. $10 = two typical top-ups → signals real usage
+> without being punitive.
+>
+> **Multi-account abuse mitigation via binding uniqueness,
+> not fingerprinting.** Database UNIQUE constraints on
+> `(platform, chat_id)` + `repo_full_name` enforce that one
+> resource binds to one account at a time. Needed anyway for
+> routing correctness; framing it as abuse-mitigation gives
+> ~95% of the value at zero incremental cost. Without it, a
+> user could create N Free accounts × N signup bonuses + N ×
+> 3 projects bound to the same chats / repos. With it: extra
+> accounts can only host unbound "projects" with zero managed-
+> gate routing value. Explicitly no fingerprinting / IP
+> velocity / "suspicious account" flagging at launch —
+> overengineering at our scale.
+>
+> **Dashboard nudges + transparency UX codified.** Eighth
+> view (Allowance + usage) added as a first-class anchor for
+> the nudge UX — events bar / credits bar with bucket
+> breakdown / projects bar (with unlock-progress delta) /
+> throttle banner / spend chart. Inline gauges across other
+> views (top-nav status dot, project list header, failover
+> view). Banner-nudge triggers + copy table covers Free 80%
+> / 100% events, bonus-consumed, bonus-expiring, subscriber
+> 80% credits, 25-project cap, 80% event cap. Anti-patterns
+> explicitly named: no modals, no cancellation friction, no
+> countdown timers, **no silent throttling**, no nudge spam.
+> Gate-side single-line subscribe footer ONLY on throttle /
+> cap / out-of-credit events — never on successful
+> responses. "Throttling is always surfaced" is the load-
+> bearing honest pattern — silent throttling is the actually-
+> mean version.
+>
+> **Deferred-revenue accounting framing locked in.**
+> Purchased credits + subscription fees are deferred revenue
+> under French GAAP / IFRS (Stripe Revenue Recognition
+> automates daily proration on subscriptions + per-debit
+> recognition on purchased credits); grants are NOT deferred
+> revenue (they're operational COGS); HugiMuni SAS chart-of-
+> accounts sketch included for the launch-stage accountant;
+> bank-account separation (operating vs reserve) called out
+> as treasury hygiene at ≥€10K MRR, NOT a legal requirement
+> at launch. No legal segregation needed for SaaS prepaid
+> balances in France.
+>
+> **Why this matters.** Locking pass II answers two questions
+> that pass I left implicit: "how do we charge sustainably
+> for Free at scale without the recurring grant becoming a
+> liability tail?" (answer: bound by signup count, not active
+> users) and "how do we nudge users to subscribe without
+> being mean?" (answer: every throttle is signposted, no
+> modals, dismissal equal-weight to subscribe action). The
+> deferred-revenue framing tells the accountant + implementer
+> how the purchased-credits-never-expire promise is held
+> safely on the books at launch, and at what scale operating-
+> vs-reserve bank separation becomes warranted.
+>
+> Pages updated: `decision-pricing-shape.md` (tier table +
+> two new sections + bucket table rename + binding-uniqueness
+> section + dashboard-nudges section); `design-billing.md`
+> (bucket rename `free_monthly` → `free_signup_bonus` with
+> new mechanics + audit ops + cumulative-purchase tracking
+> section + deferred-revenue accounting section); `design-
+> brnrd-protocol.md` (project-creation cap enforcement +
+> binding-uniqueness section + "What we DO hold" row);
+> `design-config-layout.md` (three new read-only derived
+> keys: `subscription.project_cap`,
+> `subscription.project_cap_unlocked`,
+> `cumulative_purchased_usd_lifetime`); `plan-failover-
+> compute.md` (Free compute math reframed); `plan-brnrd-
+> dashboard-mvp.md` (eight views + allowance gauges section +
+> slice 3 extended); `subject-managed-mode.md` (Surface A +
+> Surface B captions + Dashboard section updated to eight
+> views); `index.md` + `log.md` + this breadcrumb.
+> Implementation cost over already-planned work: bucket
+> rename + activity-gate removal + 30-day expiry is ~50 LOC;
+> cumulative-purchase counter + cap-unlock flag is a few
+> columns + ~30 LOC; binding uniqueness is two DB UNIQUE
+> constraints + ~20 LOC; allowance view + gauge + banner
+> components are ~800 LOC. Total ~1K LOC across the slice-3
+> dashboard work + the already-planned billing + protocol
+> slices.
+
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.
 `brnrd` is one product axis; managed-brr is a different one.
