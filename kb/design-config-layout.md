@@ -1,9 +1,17 @@
 # Design: config layout — three scopes, two files, one account store
 
-**Status: proposed, not yet accepted on 2026-05-25; reshaped
-2026-05-25 (pass-4 follow-up, third wave) — private-image open
-question resolved via the generic credential vault;
-`subscription.tier` added as an account-scope read-only key.**
+**Status: accepted 2026-05-26** (locked in PR #40 MR review,
+locking pass IV — added "Per-branch overrides — embraced,
+not avoided" section answering "which branch's `brr.toml`
+wins?"; clarified that brnrd has no "active branch" concept
+at all, and the daemon's "last-spawned branch per project"
+is the natural default base when an event doesn't name a
+branch; **account binding promoted to machine scope** at
+`~/.local/state/brr/account/` so `brnrd connect` from a
+second project skips the account-pair step on already-paired
+machines). Fluid past the schema specifics — implementation
+will surface keys we haven't enumerated; the three-scope
+model + precedence rule are the contract.
 Defines the three-scope config model that replaces today's
 single gitignored `.brr/config`. The model has two on-disk files
 (project-scope `brr.toml` committed to the repo; local-scope
@@ -65,6 +73,70 @@ Local has highest precedence because per-machine overrides
 fundamentally need to win — if your laptop binds the daemon to a
 specific port that's free locally, no project- or account-level
 preference should override it.
+
+## Per-branch overrides — embraced, not avoided
+
+The project-scope file `brr.toml` is git-tracked, so it
+naturally varies per branch. **This is a feature, not a bug.**
+Switching branches changes the policy your daemon and any
+spawned sandbox apply on that branch's tasks. Useful for:
+
+- A feature branch that overrides `runner.timeout_seconds =
+  1200` for a heavy refactor without polluting `main`'s
+  config.
+- An experiment branch that flips `env.default` from `host`
+  to `docker` for a one-week reproducibility test.
+- A long-lived release branch that pins `docker.image` to an
+  older tag for stability while `main` rolls forward.
+
+Concretely: when the daemon dispatches a task that lands on
+branch `X`, the `brr.toml` it reads is **the one in
+branch `X`**, not the one in whatever branch happened to be
+checked out when the daemon started. When brnrd fails over
+to a managed-compute spawn, the spawn clones the repo at
+the event's `branch_target` and reads THAT branch's
+`brr.toml` — same per-branch shape applies on the cloud side.
+
+**brnrd does not track an "active branch" of its own.** It
+has no need to — brnrd's responsibilities (routing events,
+dispatching, failover policy) are all per-project, not
+per-branch. Events name a branch via `branch_target`; brnrd
+forwards that name unchanged. Account-scope settings
+(subscription, brnrd URL, account binding) are
+branch-independent by construction (they live on brnrd's
+side, not in the repo).
+
+### Picking the working branch when an event doesn't name one
+
+Some events name a target branch (GitHub PR events specify
+the PR's head branch; the daemon honours that). Many don't
+(a Telegram message, a generic GitHub issue comment, a
+manual `brr run`). For those, the daemon picks the working
+branch using this rule, in order:
+
+1. **`event.branch_target`** if provided.
+2. **`daemon.last_spawned_branch[project_id]`** — the most
+   recent branch the daemon successfully ran a task on, for
+   this project, on this machine. Captures the "work
+   continuity" intent: if you've been iterating on
+   `feature/foo`, the next event arrives on `feature/foo`
+   too, not on `main` out of the blue.
+3. **The repo's default branch** (whatever `git symbolic-ref
+   refs/remotes/origin/HEAD` returns; typically `main` or
+   `master`).
+
+The last-spawned-branch state lives in the daemon's
+process memory + a small persisted hint file at
+`.brr/state/last_spawned_branch` per project (gitignored,
+machine-local). It's NOT account-scope — different machines
+working the same project can be on different branches,
+and that's correct. Resets to None when the project is
+forgotten from the registry.
+
+This rule fits the per-branch-`brr.toml` shape: continuing
+work on the same branch means the daemon keeps reading the
+same `brr.toml`, so behaviour is stable across consecutive
+tasks in a session.
 
 **Schema declares per-key scope.** Each known config key has a
 schema entry with `name`, `type`, `default`, `scope`, `doc`,
@@ -249,7 +321,42 @@ it lives on the build/host worker for the duration of the
 pull and is then cleared from memory (the resulting image is
 what the sandbox sees, not the cred).
 
-## Account-scope endpoints
+## Account scope — machine-scoped binding + cached settings
+
+Account scope lives on brnrd's side (one row per account in
+the settings table), but the daemon caches the most recent
+read at **machine scope** on the laptop / cloud host:
+
+```
+~/.local/state/brr/account/
+  ├── binding.toml      # brnrd URL, account_id, auth token
+  ├── subscription.toml # tier, period_end, project_cap state
+  └── settings.toml     # cached account-scope settings
+```
+
+Path follows XDG-base-dir convention (respects
+`$XDG_STATE_HOME`); on macOS it lives at
+`~/Library/Application Support/brr/account/` instead (per
+platform convention).
+
+The binding file is **machine-scoped, not per-project**.
+That's the load-bearing UX win of the locking-pass-IV
+daemon shape: when a user runs `brnrd connect` (or
+`brr brnrd connect`) from a second project's directory on
+the same machine, the binding is already there and connect
+goes straight to project-create + gate-pair. The first
+project pays the auth cost; every subsequent project on
+the same machine is one tap.
+
+See
+[`plan-laptop-daemoning.md`](plan-laptop-daemoning.md) §
+"Account binding lives at machine scope" for the user-flow
+shape, and
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md) §
+"The protocol shape, at a glance" for where this file fits
+in the daemon's startup.
+
+### Account-scope endpoints (brnrd-side)
 
 New endpoint family on brnrd parallel to the existing
 credential vault / failover-policy / subscription endpoints.
@@ -267,6 +374,10 @@ The daemon fetches account settings at startup and on a periodic
 refresh (every 5 min while connected); brnrd-side spawns fetch at
 bootstrap. Push-style invalidation (brnrd notifies daemons of
 settings changes via the inbox long-poll) is a v-next refinement.
+The local mirror at `~/.local/state/brr/account/settings.toml`
+is the read source so the daemon doesn't have to hit brnrd on
+every per-task lookup; staleness is bounded by the 5-min
+refresh.
 
 ## CLI surface
 
@@ -299,16 +410,11 @@ out in the same pass).
 
 ## Open questions
 
-- **Should `brr.toml` live at repo root or under `.brr/`?**
-  Sketched as repo-root because the convention is strong
-  (`pyproject.toml`, `Cargo.toml`, `wrangler.toml` — all
-  repo-root). Putting it under `.brr/project.toml` would require
-  partially un-gitignoring `.brr/`, which is awkward. Repo-root
-  unless a strong reason emerges.
 - **Should `brr config set --scope project` auto-`git add
   brr.toml`?** Probably not — would surprise users. Print a
   hint instead ("modified brr.toml; git add it to share with
-  teammates").
+  teammates"). Resolve when the CLI implementation slice
+  lands.
 - **Schema versioning.** When the schema changes (key removed,
   type changed), `brr config validate` should give clear
   guidance. Versioning the schema and shipping migration logic
@@ -449,3 +555,42 @@ degrades to "empty" when brnrd isn't connected).
   "$X.XX to go to unlock unlimited" nudge. Driven by the
   user's "capped at smth high like 25, unlimited as soon as
   they spent smth small but reasonable on credits."
+- 2026-05-26 (locking pass IV — per-branch overrides +
+  machine-scoped account binding + last-spawned-branch
+  default). Three additions:
+  1. **New "Per-branch overrides — embraced, not avoided"
+     section** answering the user's "which branch's `brr.toml`
+     wins?" question. `brr.toml` is git-tracked → per-branch
+     by construction; that's a feature. Brnrd has no
+     "active branch" concept at all (its responsibilities
+     are per-project, not per-branch). When brnrd fails over
+     to a managed-compute spawn, the spawn clones the repo
+     at the event's `branch_target` and reads THAT branch's
+     `brr.toml` — same per-branch shape on the cloud side.
+     Use cases enumerated (feature-branch `runner.timeout`,
+     experiment-branch `env.default`, release-branch
+     `docker.image` pinning).
+  2. **New "Picking the working branch when an event
+     doesn't name one" subsection** codifies the daemon's
+     three-step rule: `event.branch_target` → `daemon.
+     last_spawned_branch[project_id]` → repo default. The
+     last-spawned-branch state lives in `.brr/state/
+     last_spawned_branch` per project (machine-local,
+     gitignored), captures the "work continuity" intent so
+     consecutive tasks land on the same branch and read the
+     same `brr.toml`.
+  3. **New "Account scope — machine-scoped binding +
+     cached settings" section** codifies the file layout
+     at `~/.local/state/brr/account/` (binding.toml,
+     subscription.toml, settings.toml). Binding is
+     machine-scoped — the load-bearing UX win of the
+     locking-pass-IV daemon shape: `brnrd connect` from a
+     second project on the same machine skips the
+     account-pair step. The local settings.toml is the read
+     source for per-task lookups; staleness bounded by the
+     5-min brnrd refresh. Driven by the user's "the local
+     branch that brr daemon last spawned task at is used as
+     a base? ... the work continuity idea hints it should
+     be based on the local runs" + "we should pickup at
+     least the account binding, subscription status, brnrd
+     url" (from the daemon-shape reshape).

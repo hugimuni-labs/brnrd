@@ -4149,3 +4149,277 @@ biggest drift surfaces the MR introduced.
 Implementation cost over already-planned work is ~0 LOC — the
 locking pass is all policy + organisational work, no new
 code paths.
+
+## [2026-05-26] plan | brnrd locking pass IV — accepts + daemon shape + overdraft + websites
+
+Fourth locking pass, driven by the user's MR-review continuing
+into substantive architectural choices. **Four big accepts +
+six substantive reshapes + one new decision page**.
+
+### Accepts (with "fluid" framing per the user's caveat)
+
+**Earlier in the same pass (status flips only, no shape
+change)**: `decision-connectors-layering.md`,
+`decision-licensing-and-defense.md`,
+`decision-monorepo-structure.md`, `decision-pricing-shape.md`.
+
+**Plus six accepts on the plan / hub side**:
+`kb/subject-managed-mode.md`, `kb/plan-managed-gates-launch.md`,
+`kb/plan-brnrd-dashboard-mvp.md` (explicitly fluid — the user
+plans to adjust a lot during implementation),
+`kb/plan-failover-compute.md`, `kb/plan-env-fly-machines.md`,
+`kb/plan-kb-subcommand.md`. All marked accepted with explicit
+"implementation feedback may reshape — treat as a working
+spine, not a contract" language.
+
+### Substantive reshapes
+
+**1. Daemon shape: per-project → machine-scoped multi-project
+multiplexer.**
+
+The biggest architectural shift of the pass. The pre-pass-IV
+shape had one systemd / launchd unit per brr-init'd project
+(`brr daemon install --name <project>`), each with a daemon
+pinned to a single repo via `WorkingDirectory`. The new
+shape is **one daemon per machine**, serving all brr-init'd
+repos discovered via `~/.config/brr/projects.toml` (appended
+by `brr init`; manipulable via new
+`brr daemon list | adopt | forget` verbs). One supervised
+unit per machine, no `--name`, no `WorkingDirectory` pinning.
+Internal multiplexing: one asyncio inbox-poller task per
+project, all sharing one `httpx.AsyncClient` (HTTP/2-pooled)
+to brnrd.
+
+**Account binding lives at machine scope** at
+`~/.local/state/brr/account/` (`binding.toml`,
+`subscription.toml`, `settings.toml`). When the user runs
+`brnrd connect` from a second project on the same machine,
+the binding is already there; only project-create +
+gate-pair phases run. The load-bearing UX win.
+
+Touches: `kb/design-brnrd-protocol.md` (new protocol-shape
+diagram + new "Runtime profile: async, httpx, ASGI"
+section), `kb/plan-laptop-daemoning.md` (reshaped from
+per-project to machine-scoped; new project-registry +
+account-binding sections; verbs added),
+`kb/plan-daemon-deployment-templates.md` (cloud-host
+templates aligned with the machine-scoped multi-project
+shape), `kb/design-config-layout.md` (new "Account scope —
+machine-scoped binding + cached settings" section).
+
+User intent: "probably the local daemon should serve all
+local projects and connect to the brnrd... if a user has
+configured brnrd once for a project already, we should
+pickup at least the account binding, subscription status,
+brnrd url, etc."
+
+**2. `brnrd` as a sibling top-level binary (same package).**
+
+`brr` owns per-project operations (init, run, daemon, gate,
+config, kb). `brnrd` owns per-account operations
+(subscription, credits, vault, projects-across-the-account).
+Same wheel, two `[project.scripts]` entries:
+`brr = "brr.cli:main"`, `brnrd = "brnrd_cli.main:main"`. The
+existing `brr brnrd <subcmd>` shape stays as a convenience
+alias.
+
+Touches: `kb/decision-cli-shape.md` (new "`brnrd` as a
+sibling top-level binary" section).
+
+User intent: "i am thinking to make brnrd a separate
+command, installed in the same package, unless you would
+oppose."
+
+**3. Permission-prompt scope clarified: compute-only.**
+
+The six-mode permission-prompt model (`ask` /
+`auto-approve-*` / `never`) applies to **managed-compute
+spawns only**. Future credit-eating features (realtime
+voice, vector / semantic stores, visual graphs) that will
+land later use a **one-time enablement consent** model
+(`brnrd features enable <name>`) plus ongoing visibility
+in the credit bucket breakdown — not per-call prompts.
+Per-call prompts only make sense where the user has a
+meaningful local-vs-cloud choice (which is compute);
+cloud-only features have no local fallback to compare
+against.
+
+Touches: `kb/decision-cli-shape.md` (new "Permission
+prompts apply to compute only" section).
+
+User intent: "the bot-gating 'do you wanna run in the
+cloud?' concept harder to implement or support I think...
+we also shouldn't design to accommodate for all the future
+ideas."
+
+**4. Config — per-branch overrides embraced + implicit
+"active branch" concept on the daemon.**
+
+`brr.toml` is git-tracked → varies per branch. Embraced as
+a feature: feature-branch `runner.timeout` overrides,
+experiment-branch `env.default` flips, release-branch
+`docker.image` pinning. Brnrd has no "active branch"
+concept at all (its responsibilities are per-project, not
+per-branch). When brnrd fails over to a managed-compute
+spawn, the spawn clones the repo at the event's
+`branch_target` and reads THAT branch's `brr.toml`.
+
+The daemon picks the working branch when the event doesn't
+name one via a three-step rule:
+1. `event.branch_target` if provided.
+2. `daemon.last_spawned_branch[project_id]` — captures the
+   work-continuity intent.
+3. Repo default branch.
+
+Last-spawned-branch state lives in
+`.brr/state/last_spawned_branch` per project, machine-local,
+gitignored.
+
+Touches: `kb/design-config-layout.md` (new "Per-branch
+overrides — embraced, not avoided" section + "Picking the
+working branch when an event doesn't name one" subsection).
+
+User intent: "the local branch that brr daemon last spawned
+task at is used as a base? I mean or main. the work
+continuity idea hints it should be based on the local runs
+i think."
+
+**5. Billing — overdraft envelope.**
+
+New per-account setting `max_overdraft_credits` (signed
+integer; default 0; Subscribed can raise within
+`BRNRD_SUBSCRIBER_MAX_OVERDRAFT_CREDITS` = 500 credits = $5
+default cap). Spawn-start gate reframed from
+"balance ≥ estimated cost" to two conditions:
+`current_balance >= 0` AND
+`estimated_spawn_cost <= current_balance + max_overdraft_credits`.
+The last spawn of the cycle can dip the balance negative
+within the envelope; next spawn waits for a top-up to clear
+back to ≥ 0. No interest, no penalty fees; top-up first
+clears the negative then adds headroom. Three new audit
+ops: `overdraft_settings_changed`, `overdraft_consumed`,
+`overdraft_cleared`. Dashboard surfaces signed balance +
+envelope-used gauge when negative; gate footer on the
+spawn that crossed zero.
+
+Touches: `kb/design-billing.md` ("Zero-balance UX (and the
+overdraft envelope)" section rewritten; tunable-knobs table
+extended; three new audit ops; new lineage entry).
+
+User intent: "we'll need to allow people to go below
+credits... default would be set to 0, and if you balance
+is 0 and above - you can run a cloud runner, but it will
+make your balance negative for that last runner's price."
+The user's `>= 1` → `>= 0` correction folded in.
+
+**6. Conversation-id-propagation — ID-vs-context
+clarification, `conversation_key` adoption.**
+
+Two clarifications, no contract change to brnrd:
+
+1. The plan is about **identity propagation only**. The
+   daemon already injects rich context (kb/log tail + Task
+   Context Bundle + 8 recent conversation records); this
+   plan adds none of that.
+2. `conversation_id` = the existing `conversation_key`
+   string (e.g. `telegram:-1001234567890:`), not a new
+   ULID. The implementation audit showed there's no
+   bridge between the two today; adopting the existing key
+   closes the gap at zero migration cost. The trailer is
+   self-documenting in git logs.
+
+Token-budget discipline (per-source byte/token budgets +
+assembler enforcing total + per-source minimums) flagged
+as a discipline to carry forward into future context-rich
+features, **not** as a separate plan page. The user's
+"i wouldn't add a new plan for prompt budgeting, it is
+just something we need to be mindful I guess."
+
+Touches: `kb/plan-conversation-id-propagation.md` (new
+"What this plan is + isn't (clarified pass IV)" section;
+slice descriptions updated; risks section updated to
+reflect the conversation_key-is-deterministic shape).
+
+### New decision page
+
+**`kb/decision-websites.md`** — two distinct web properties
+at two distinct URLs: **brr.dev** (OSS landing, no auth,
+no payments) + **brnrd.dev** (hosted product, signup,
+pricing, dashboard, billing portal). Cross-linking is the
+trust signal: each acknowledges the other as a real
+alternative, which makes the "we charge for ops, not for
+crippled OSS" trust pitch *visible* rather than something
+the user has to take on faith. brr.dev MVP is a static
+landing page; brnrd.dev hosts the eight-view dashboard +
+marketing pages.
+
+User intent: "do we make two websites or one... I am
+leaning towards the two."
+
+### Files touched (15)
+
+- **Locked accepts (Status flips)**:
+  `kb/decision-connectors-layering.md`,
+  `kb/decision-licensing-and-defense.md`,
+  `kb/decision-monorepo-structure.md`,
+  `kb/decision-pricing-shape.md` (already committed earlier
+  in the pass via `e152b6a`); `kb/subject-managed-mode.md`,
+  `kb/plan-managed-gates-launch.md`,
+  `kb/plan-brnrd-dashboard-mvp.md` (extra-fluid framing),
+  `kb/plan-failover-compute.md`,
+  `kb/plan-env-fly-machines.md`,
+  `kb/plan-kb-subcommand.md` (also `e152b6a`).
+- **Substantive reshapes**:
+  `kb/decision-cli-shape.md` (brnrd sibling binary +
+  permission-prompt scope clarification),
+  `kb/design-brnrd-protocol.md` (protocol-shape diagram +
+  runtime profile),
+  `kb/plan-laptop-daemoning.md` (reshaped for
+  machine-scoped daemon + project registry),
+  `kb/plan-daemon-deployment-templates.md` (aligned with
+  machine-scoped daemon),
+  `kb/design-config-layout.md` (per-branch overrides +
+  last-spawned-branch + machine-scoped account scope),
+  `kb/design-billing.md` (overdraft envelope),
+  `kb/plan-conversation-id-propagation.md` (ID-vs-context
+  + conversation_key + token-budget mindfulness).
+- **New**: `kb/decision-websites.md`.
+- **Breadcrumbs**: `kb/index.md`, `kb/log.md` (this
+  entry), `kb/notes-pondering-fleet.md`.
+
+### Why this lock-in matters
+
+Locking pass IV is the pass where the **architecture
+solidifies** — the per-project-vs-machine-scoped daemon
+question was the load-bearing-but-hadn't-been-stated
+ambiguity in everything from the protocol diagram to the
+laptop install story to the config layout. Naming it +
+locking the machine-scoped shape lets all of those
+artifacts stop hedging.
+
+The `brnrd`-as-sibling-binary and permission-prompt-
+scoping clarifications are smaller but real wins on UX
+coherence — the future cloud-only-features story now has
+a place to land (one-time enablement consent), and the
+per-account CLI doesn't have to live behind a prefix.
+
+The overdraft envelope is the smallest spec change but
+arguably the friendliest UX touch — it means subscribers
+don't get a rejection at credit 301 when working through
+a 300-credit grant, just a "you dipped into your envelope"
+nudge.
+
+The two-websites decision settles a question that was
+going to come up no matter what; locking it now lets us
+sketch the brr.dev MVP independently of the brnrd.dev
+implementation slices.
+
+Implementation cost over already-planned work: ~250 LOC
+for the project registry + `daemon list|adopt|forget`
+verbs in the laptop daemoning slice (already absorbed by
+the async-runtime migration which is now in the same
+slice); ~50 LOC for the overdraft envelope in the
+ledger + ~30 LOC for the dispatcher gate; ~0 LOC for the
+brnrd sibling binary (it's a `[project.scripts]` line +
+the existing `brr brnrd` subcommand surface, reused).
+Everything else is policy + organisational.

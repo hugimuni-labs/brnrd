@@ -896,6 +896,121 @@ the current state. §6 is the re-promotion guide.
 > new code paths beyond the `nudges.py` module which was
 > already implied by the pass-II shape.
 
+> **2026-05-26 — locking pass IV: accepts + daemon shape +
+> overdraft + websites + ID-vs-context.** Fourth locking
+> pass, continuing the MR-review. **Four big architectural
+> decisions land**:
+>
+> **Daemon shape: per-project → machine-scoped multi-project
+> multiplexer.** The biggest shift of the pass. The pre-IV
+> shape had one supervised unit per brr-init'd project, each
+> daemon pinned to a single repo. The new shape is one
+> daemon per machine, serving all brr-init'd repos
+> discovered via `~/.config/brr/projects.toml` (appended by
+> `brr init`; new `brr daemon list | adopt | forget` verbs
+> manage it). One asyncio inbox-poller per project, all
+> sharing one `httpx.AsyncClient` (HTTP/2-pooled) to brnrd.
+> **Account binding lives at machine scope** at
+> `~/.local/state/brr/account/` — so `brnrd connect` from a
+> second project on the same machine skips the account-pair
+> step. Async migration lands as one slice alongside the
+> machine-scoped reshape (avoids a transitional shape that's
+> neither one nor the other).
+>
+> **`brnrd` as a sibling top-level binary.** Same package
+> (two `[project.scripts]` entries). `brr` for per-project
+> ops, `brnrd` for per-account ops (subscription, credits,
+> vault, projects-across-account). `brr brnrd <subcmd>`
+> retained as a convenience alias. Mirrors the daemon-shape
+> split: `brr` deals with one repo at a time, `brnrd` deals
+> with the account that owns all of them.
+>
+> **Permission-prompt scope = compute only.** The six-mode
+> permission-prompt model (`ask` / `auto-approve-*` /
+> `never`) applies to managed-compute spawns only. Future
+> credit-eating features (voice, vector / semantic stores,
+> visual graphs — see `subject-managed-mode.md`) use a
+> **one-time enablement consent** model
+> (`brnrd features enable <name>`) instead of per-call
+> prompts. The per-call prompt only makes sense where the
+> user has a local-vs-cloud choice (compute does; voice /
+> vector / graphs are cloud-native by construction). The
+> dashboard surfaces both in the same per-bucket credit
+> breakdown.
+>
+> **Overdraft envelope.** New per-account setting
+> `max_overdraft_credits` (signed integer; default 0;
+> Subscribed can raise within
+> `BRNRD_SUBSCRIBER_MAX_OVERDRAFT_CREDITS` = 500 credits =
+> $5 default cap). Spawn-start gate: `current_balance >= 0`
+> AND `estimated_spawn_cost <= current_balance +
+> max_overdraft_credits`. The last spawn of the cycle can
+> dip the balance negative within the envelope; next spawn
+> waits for a top-up to clear back to ≥ 0. No interest, no
+> penalty fees. Three new audit ops. Friendlier than a hard
+> rejection at credit 301 when the subscriber's working
+> through their 300-credit grant.
+>
+> **Config: per-branch overrides embraced.** `brr.toml` is
+> git-tracked → per-branch by construction; feature-branch
+> overrides are a feature, not a bug. Brnrd has no "active
+> branch" concept. The daemon picks the working branch via
+> `event.branch_target` → `daemon.last_spawned_branch[project_id]`
+> → repo default; last-spawned-branch state lives in
+> `.brr/state/last_spawned_branch` per project (gitignored,
+> machine-local). Captures the work-continuity intent so
+> consecutive tasks land on the same branch.
+>
+> **Conversation-id-propagation reframed: ID propagation,
+> not context expansion.** The daemon already injects rich
+> context (kb/log tail + Task Context Bundle + 8 recent
+> conversation records); the plan adds none of that.
+> `conversation_id` = the existing `conversation_key`
+> string already implemented in
+> `src/brr/conversations.py`, not a separate ULID — closes
+> the naming gap surfaced by the implementation audit at
+> zero migration cost. Token-budget discipline flagged
+> inline as a discipline for future context-rich features
+> (not a separate plan).
+>
+> **Two websites locked**: brr.dev (OSS landing, static
+> site, no auth, no payments) + brnrd.dev (hosted product,
+> live web app, Stripe-integrated auth + payments).
+> Cross-linking is the trust signal: each acknowledges the
+> other as a real alternative, makes the "we charge for ops,
+> not for crippled OSS" pitch *visible*. New
+> `decision-websites.md` codifies the shape.
+>
+> **6 accepts on top** (Status flips to `accepted 2026-05-26`):
+> `subject-managed-mode.md`, `plan-managed-gates-launch.md`,
+> `plan-brnrd-dashboard-mvp.md` (extra-fluid framing per the
+> user's flag), `plan-failover-compute.md`,
+> `plan-env-fly-machines.md`, `plan-kb-subcommand.md`. All
+> marked with "implementation feedback may reshape" caveat
+> per the user's "all of them may be fluid to an extent."
+>
+> Pages updated: `decision-cli-shape.md` (sibling binary +
+> permission-prompt scope), `design-brnrd-protocol.md`
+> (protocol-shape diagram + runtime profile),
+> `plan-laptop-daemoning.md` (machine-scoped reshape +
+> project registry + verbs), `plan-daemon-deployment-templates.md`
+> (cloud-host alignment), `design-config-layout.md`
+> (per-branch + last-spawned-branch + account-scope file
+> layout), `design-billing.md` (overdraft envelope +
+> three new audit ops), `plan-conversation-id-propagation.md`
+> (ID-vs-context + key adoption + token-budget framing);
+> **new `decision-websites.md`**; `index.md` + `log.md` +
+> this breadcrumb.
+>
+> Implementation cost over already-planned work: ~250 LOC
+> for the project registry + adopt / forget verbs (absorbed
+> by the async migration in one slice); ~50 LOC for the
+> overdraft envelope in the ledger + ~30 LOC for the
+> dispatcher gate; ~0 LOC for the brnrd sibling binary
+> (it's a `[project.scripts]` line + the existing
+> `brr brnrd` subcommand surface reused). Everything else
+> is policy + organisational.
+
 `brnrd` is not the right framing for "managed brr" — it's an operator
 agent (a Cursor-Agents-window-shaped product) that *uses* brrs.
 `brnrd` is one product axis; managed-brr is a different one.

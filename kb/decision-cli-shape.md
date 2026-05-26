@@ -1,17 +1,17 @@
 # Decision: brr CLI shape
 
-**Status: proposed, not yet accepted on 2026-05-25; reshaped
-2026-05-25 (pass-4 follow-up, third wave) — subscription
-sub-verb family added for the new subscription billing leg.
-Reshaped again 2026-05-26 (third-wave follow-up) — renamed
-from `brr brnrd plus [...]` to noun-first `brr brnrd
-subscription [...]` (with `brr brnrd subscribe` as a
-shortcut for `subscription start`).** Names the top-level
-command shape for brr after the managed-mode reshape (always-
-online managed gates, brnrd-managed compute, multi-project
-routing, platform subscription + credit wallet, three-scope
-config). The current CLI grew incrementally; this page resets
-it before any user surface adopts it. Companion to
+**Status: accepted 2026-05-26** (locked in PR #40 MR review,
+locking pass IV — `brnrd` promoted to a **sibling top-level
+binary** alongside `brr`, shipped from the same package;
+`brr brnrd <subcmd>` retained as an alias for
+back-discoverability; permission-prompt scope clarified as
+"compute only — other credit-eating features use enablement
+consent, not per-call prompts"). Names the top-level command
+shape for the brr-family CLIs after the managed-mode reshape
+(always-online managed gates, brnrd-managed compute,
+multi-project routing, platform subscription + credit wallet,
+three-scope config). The current CLI grew incrementally;
+this page resets it before any user surface adopts it. Companion to
 [`subject-managed-mode.md`](subject-managed-mode.md) (the
 surfaces these verbs configure),
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) (the
@@ -121,6 +121,115 @@ typing `brr config kb …` every time, friction the agent audience
 hits often. Top-level noun is the right home — see
 [`plan-kb-subcommand.md`](plan-kb-subcommand.md) for the full
 rationale.
+
+## `brnrd` as a sibling top-level binary (same package)
+
+The `brr` binary owns **per-project** operations (init, run,
+daemon control, gate setup, kb, config). The `brnrd` binary
+owns **per-account** operations (subscription, credits,
+vault, cross-project dashboard auth). Both binaries ship
+from the same wheel via two `[project.scripts]` entries:
+
+```toml
+[project.scripts]
+brr   = "brr.cli:main"
+brnrd = "brnrd_cli.main:main"
+```
+
+So `pip install brr` (or `uv tool install brr` /
+`pipx install brr`) lands both commands on the user's
+`$PATH`. The split mirrors the **machine-scoped daemon
+shape** (one daemon serves all local projects, account
+binding lives at machine scope — see
+[`plan-laptop-daemoning.md`](plan-laptop-daemoning.md)):
+`brr` deals with one repo at a time, `brnrd` deals with the
+account that owns all of them.
+
+| Binary | Scope | Reads / writes |
+|--------|-------|----------------|
+| **`brr`** | Per-project (run from inside a brr-init'd repo); per-machine (daemon control) | `brr.toml`, `.brr/config`, talks to local daemon via Unix socket / pidfile |
+| **`brnrd`** | Per-account (machine-scoped account binding) | `~/.local/state/brr/account/` (or platform-equivalent), talks to brnrd HTTP API; signals local daemon over Unix socket when an account-scope setting changes that the daemon should pick up |
+
+`brr brnrd <subcmd>` stays at launch as a **convenience
+alias** — internally it dispatches to the same code path
+as `brnrd <subcmd>`. Reason to keep the alias: discoverability
+("I know `brr`, where do I find managed-service stuff?" →
+`brr brnrd …` works). Reason to also have the sibling
+binary: people who only interact with the account layer
+(e.g. a billing pass, or running `brnrd subscription portal`
+from anywhere) shouldn't need to be inside a brr repo or
+type a prefix that's not on their muscle-memory.
+
+```
+brnrd …                          # all the verbs under `brr brnrd …`,
+                                 # invoked directly without the brr prefix
+  brnrd connect [<url>]          # ... same surface as brr brnrd connect
+  brnrd subscription start
+  brnrd subscribe                # shortcut as before
+  brnrd balance
+  brnrd topup [<amount>]
+  brnrd policy get|set
+  brnrd creds add|list|remove
+  brnrd projects list
+  brnrd audit [--since <date>]
+  # ... all the others
+```
+
+No new verbs are introduced by the sibling binary — same
+surface, two entry points. Help text differs slightly:
+`brnrd -h` prints the brnrd-scoped verbs only (no `init` /
+`run` / `daemon` / `gate` / `kb` clutter from `brr -h`),
+which makes it the natural "I just need to manage my
+subscription / credits" entry point.
+
+### Why same package (not separate `pip install brnrd`)
+
+- The `brnrd` CLI talks to the local daemon over the same
+  Unix socket / pidfile protocol the `brr` CLI does (for the
+  account-scope settings that the daemon caches). Sharing a
+  package keeps that protocol authoritative in one place —
+  no version-skew possibility between the two binaries.
+- Distribution simplicity: one install, two commands. Users
+  who care about either get both at no extra cost.
+- The brnrd backend (server side) is a separate component
+  (`src/brnrd/` per
+  [`decision-monorepo-structure.md`](decision-monorepo-structure.md))
+  with no required pip-install footprint for end users; it
+  runs at brnrd.dev. The `brnrd_cli/` package this section
+  describes is the **client** to that backend.
+
+## Permission prompts apply to compute only
+
+The permission-prompt mode set (`ask` /
+`auto-approve-always` / `auto-approve-under-usd` /
+`auto-approve-under-per-day` /
+`auto-approve-below-monthly-limit` / `never` — see
+[`plan-failover-compute.md`](plan-failover-compute.md))
+applies to **managed-compute spawns specifically**. Other
+credit-eating features that will land later (realtime
+voice APIs, vector / semantic stores, visual graph
+rendering, etc., all conceived as pass-through costs that
+debit credits — see
+[`subject-managed-mode.md`](subject-managed-mode.md))
+do **not** use per-call permission prompts. They use a
+**one-time enablement consent** model instead:
+
+| Feature kind | Permission UX | Rationale |
+|--------------|---------------|-----------|
+| **Managed compute** (failover spawn) | Per-call prompt (`ask`-family modes) with the existing six-mode policy | Each spawn is a discrete, comparable-to-local choice — the user has a meaningful "run locally vs run remotely" decision to make per task |
+| **Cloud-only credit-eating features** (voice, vector, graphs, …) | One-time enablement consent (`brnrd features enable <name>`) + ongoing visibility in the credit bucket breakdown | These features have no local fallback to compare against — they're inherently cloud. A per-call prompt would be noise; the user already opted in once at enablement |
+
+The dashboard shows both kinds in the same per-bucket
+credit breakdown (so the user always knows where credits
+went), but the consent UX differs by feature shape. This
+keeps the per-call prompt UX honest (it means "do you want
+me to run this remotely?", not "do you want to spend
+credits?") and avoids dilution.
+
+A `brnrd features enable | disable | list` sub-verb family
+is reserved for when these features land; no surface area
+is added today since the features themselves are out of
+scope for the launch.
 
 ## Differences from today's CLI
 
@@ -346,18 +455,6 @@ telegram setup`, etc. Bundled docs (`src/brr/docs/`) and the
 README get rewritten against the new shape in the same PR that
 lands the implementation.
 
-## Open questions
-
-- **Alias support** for the verb-collapsed forms? E.g.
-  `brr up` → alias of `brr daemon up`. Probably not at launch
-  (no users to keep happy; aliases add surface to document and
-  test). Revisit if the noun-first form turns out to be
-  annoying in real use.
-- **Shell completions** (bash / zsh / fish) at launch? Probably
-  yes; the noun-first shape benefits a lot from completions
-  ("brr gate <TAB>" → list of gate names you have configured).
-  Small slice; goes in the CLI implementation plan.
-
 ## Implementation slice (when this gets built)
 
 Not part of this decision page, but for context: implementation
@@ -469,3 +566,46 @@ Estimate: ~2-3 days for the CLI itself + docs; integration with
   verb" feedback alongside the price + project-cap
   refinements documented in
   [`decision-pricing-shape.md`](decision-pricing-shape.md).
+- 2026-05-26 (locking pass IV — sibling `brnrd` binary +
+  permission-prompt scoping). Two additions:
+  1. **`brnrd` promoted to a sibling top-level binary**
+     shipped from the same wheel (`[project.scripts]`
+     entries: `brr = "brr.cli:main"`, `brnrd =
+     "brnrd_cli.main:main"`). `brr` owns per-project
+     operations; `brnrd` owns per-account operations
+     (subscription, credits, vault, projects-across-the-
+     account). Same surface as `brr brnrd <subcmd>` (which
+     stays as a convenience alias) but no `brr` prefix —
+     natural entry point for "I just want to manage my
+     subscription / credits from anywhere." Mirrors the
+     **machine-scoped daemon shape** (one daemon, all
+     local projects, account binding at machine scope) —
+     `brr` deals with one repo at a time, `brnrd` deals
+     with the account that owns all of them.
+  2. **Permission-prompt scope clarified.** The six-mode
+     permission-prompt model (`ask` /
+     `auto-approve-*-various` / `never`) applies to
+     **managed-compute spawns only**. Other credit-eating
+     features (realtime voice, vector / semantic stores,
+     visual graph rendering) that will land later use a
+     **one-time enablement consent** model
+     (`brnrd features enable <name>`) plus ongoing
+     visibility in the credit bucket breakdown — not
+     per-call prompts. Per-call prompts only make sense
+     where the user has a meaningful local-vs-cloud
+     choice (which is compute, where the daemon can run
+     it locally); cloud-only features have no local
+     fallback to compare against. A `brnrd features
+     enable | disable | list` sub-verb family is reserved
+     for when these features land; no surface area is
+     added today. Open-questions section dropped (both
+     prior questions, on aliases and shell completions,
+     answered: aliases retained for `brr brnrd <subcmd>`
+     as discoverability convenience; shell completions
+     ship with the CLI implementation slice). Driven by
+     the user's "i am thinking to make brnrd a separate
+     command, installed in the same package, unless you
+     would oppose" + "the bot-gating 'do you wanna run
+     in the cloud?' concept harder to implement or
+     support I think... we also shouldn't design to
+     accommodate for all the future ideas."

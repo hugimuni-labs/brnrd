@@ -160,7 +160,7 @@ dive-in map) and are stable until something contradicts them.
   support 1:1 per cloud; same BYO-for-subscribers principle
   pre-applies to future agentic-secretary connectors).
 - [brnrd protocol design](design-brnrd-protocol.md) —
-  *proposed*. The wire format between brr daemons and `brnrd`.
+  *accepted 2026-05-26*. The wire format between brr daemons and `brnrd`.
   Covers gates (managed-gates path), failover dispatch (decision
   tree with `docker login` step for private images AND a BYO
   branch on `cloud-platform` credential presence), generalised
@@ -180,7 +180,7 @@ dive-in map) and are stable until something contradicts them.
   `design-brnrd-protocol.md` on 2026-05-25 with the
   brnrd-naming-keep decision.
 - [Pricing shape decision](decision-pricing-shape.md) —
-  *proposed*. **Subscription for the platform + metered credits
+  *accepted 2026-05-26*. **Subscription for the platform + metered credits
   for compute.** Two tiers at launch: Free (3 projects, 100
   events/month, **10 spawn-credit one-time signup bonus
   (30-day expiry)**, basic dashboard with allowance gauges,
@@ -243,7 +243,7 @@ dive-in map) and are stable until something contradicts them.
   situation (not as a paywall), added a Stripe-integrated-
   billing callout, and groomed the dashboard / subject-hub
   duplications.
-- [Billing design](design-billing.md) — *proposed*. **Two
+- [Billing design](design-billing.md) — *accepted 2026-05-26*. **Two
   billing legs**: subscription (Stripe recurring,
   monthly/annual, Customer Portal for self-service) and credit
   wallet (one-shot Stripe Checkout top-ups). Subscription
@@ -279,7 +279,18 @@ dive-in map) and are stable until something contradicts them.
   integration shape (HugiMuni SAS + Stripe France + Qonto
   payouts + Stripe Tax for EU VAT + OSS scheme + SCA via
   Checkout) applies to both legs under one Stripe account.
-- [CLI shape decision](decision-cli-shape.md) — *proposed*.
+  **Locking pass IV (2026-05-26)** added the **overdraft
+  envelope**: spawn-start gate is `current_balance >= 0` AND
+  `estimated_spawn_cost <= current_balance + max_overdraft_credits`;
+  per-account `max_overdraft_credits` setting (default 0;
+  Subscribed can raise within
+  `BRNRD_SUBSCRIBER_MAX_OVERDRAFT_CREDITS` = 500 credits = $5
+  default cap). The last spawn of the cycle can dip the
+  balance negative within the envelope; next spawn waits for
+  a top-up to clear back to ≥ 0. Three new audit ops
+  (`overdraft_settings_changed`, `overdraft_consumed`,
+  `overdraft_cleared`).
+- [CLI shape decision](decision-cli-shape.md) — *accepted 2026-05-26*.
   Seven top-level verbs (`init` / `run` / `daemon` / `gate` /
   `brnrd` / `config` / `kb`) with subcommands. Collapses today's
   `up` / `down` into `brr daemon up|down|status|install|
@@ -299,9 +310,16 @@ dive-in map) and are stable until something contradicts them.
   sub-verb supports `--json`. Rejects the earlier `brr accounts`
   placeholder. `brr brnrd connect [url]` is a three-layer smart
   bootstrap defaulting to `https://brnrd.dev` and accepting any
-  URL for first-class self-hosting.
+  URL for first-class self-hosting. **Locking pass IV
+  (2026-05-26)**: **`brnrd` promoted to a sibling top-level
+  binary** (same package, two `[project.scripts]` entries);
+  `brr brnrd <subcmd>` retained as a convenience alias.
+  Permission-prompt scope clarified — applies to **managed
+  compute only**; other credit-eating features (voice,
+  vector / semantic stores, visual graphs, …) use one-time
+  enablement consent instead of per-call prompts.
 - [Connectors layering decision](decision-connectors-layering.md) —
-  *proposed*. Names the gates vs connectors split: gates are
+  *accepted 2026-05-26*. Names the gates vs connectors split: gates are
   per-project / inbound (existing shape); connectors are
   per-account / outbound / proactive (for the future
   agentic-secretary layer). No connectors ship at launch; the
@@ -311,7 +329,7 @@ dive-in map) and are stable until something contradicts them.
   table, new `kind` value, same subscriber gate; one pattern
   for cloud envs + connectors + any future subscriber-only
   credential surface.
-- [Monorepo structure decision](decision-monorepo-structure.md) —
+- [Monorepo structure decision (accepted 2026-05-26)](decision-monorepo-structure.md) —
   *proposed*. Single `brr` pip package + optional extras.
   `src/brr/` (daemon) + `src/brnrd/` (backend) + `src/brnrd_web/`
   (dashboard) + `src/brr/envs/<name>/` for first-party cloud
@@ -324,7 +342,7 @@ dive-in map) and are stable until something contradicts them.
   dashboard) per
   [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md).
 - [Licensing and competitive-defense decision](decision-licensing-and-defense.md) —
-  *proposed*. Three concrete moves that protect the brnrd
+  *accepted 2026-05-26*. Three concrete moves that protect the brnrd
   hosted business without crippling the OSS posture:
   **(1) license split** — `src/brr/` stays MIT (daemon
   maximises community goodwill); `src/brnrd/` +
@@ -351,6 +369,24 @@ dive-in map) and are stable until something contradicts them.
   cloud. The BYO posture doubles as a moat amplifier: a
   competing fork can't out-open us on credentials without
   giving up revenue their model can't afford.**
+- [Two-website decision](decision-websites.md) — *accepted
+  2026-05-26*. Two distinct web properties at two distinct
+  URLs: **brr.dev** (OSS landing — what brr is, docs,
+  contributor info, self-hosted-brnrd guide; static-site
+  simplicity, no auth, no payments) + **brnrd.dev** (hosted
+  product — signup, pricing, dashboard, billing portal;
+  live web app, Stripe auth + payments). Cross-linking is
+  the trust signal: brr.dev points at brnrd.dev as the
+  hosted option ("Don't want to host yourself? brnrd.dev,
+  same software, hosted"); brnrd.dev points at brr.dev as
+  the OSS truth ("Powered by the open-source brr, full
+  feature parity on self-hosted"). Two URLs, each
+  acknowledging the other as a real alternative, make the
+  "we charge for ops, not for crippled OSS" trust pitch
+  visible rather than something the user has to take on
+  faith. brr.dev MVP is a static landing page; brnrd.dev
+  hosts the eight-view dashboard from the dashboard-MVP
+  plan + the marketing pages.
 - [Cloud envs research](research-cloud-envs.md) —
   cross-env patterns (credential / repo / result delivery,
   cold-start budgets, network policy) for envs that execute
@@ -386,7 +422,17 @@ dive-in map) and are stable until something contradicts them.
   shipped with managed Fly; subsequent clouds get BYO when they
   get managed.
 - [Conversation_id propagation plan](plan-conversation-id-propagation.md) —
-  *not started*. Small daemon-side enabler: `Brnrd-Conversation-Id`
+  *accepted 2026-05-26, not yet started*. Locking-pass-IV
+  clarifications: scope is **identity propagation only**
+  (the daemon already injects rich context — kb/log tail +
+  Task Context Bundle + recent conversation records — this
+  plan adds none of that); **`conversation_id` =
+  `conversation_key`** (the existing human-readable
+  gate-fingerprint string already implemented in
+  `src/brr/conversations.py`), not a new ULID; token-budget
+  discipline flagged inline for future context-rich features
+  (not a separate plan). Small daemon-side enabler:
+  `Brnrd-Conversation-Id`
   git commit trailer + `conversation_id` field on the
   `/v1/daemons/responses` POST. Gates brnrd's metadata-only
   conversation graph from being meaningful in practice so
@@ -416,7 +462,17 @@ dive-in map) and are stable until something contradicts them.
   remain useful for the niche cloud-first audience. The Upsun
   template shares its read-only-container shape with the brnrd
   backend Upsun deployment.
-- [Laptop daemoning plan](plan-laptop-daemoning.md) — *proposed*.
+- [Laptop daemoning plan](plan-laptop-daemoning.md) —
+  *accepted 2026-05-26*. **Reshaped in locking pass IV from
+  per-project to machine-scoped multi-project**: one `brr
+  daemon` process per machine serves all brr-init'd repos
+  discovered via `~/.config/brr/projects.toml` (appended by
+  `brr init`; manipulable via `brr daemon list|adopt|forget`).
+  Account binding lives at machine scope at
+  `~/.local/state/brr/account/`, so `brnrd connect` from a
+  second project skips the account-pair step on already-paired
+  machines. One supervised systemd / launchd unit per machine
+  (no `WorkingDirectory` pinning, no `--name` flag).
   Cross-platform laptop-side daemoning via `brr daemon install`:
   writes a per-user systemd unit on Linux (`~/.config/systemd/
   user/brr.service` + optional `loginctl enable-linger`), a
@@ -426,8 +482,16 @@ dive-in map) and are stable until something contradicts them.
   back to the foreground supervisor when not. Tracked at
   [issue #29](https://github.com/Gurio/brr/issues/29); Windows
   deferred.
-- [Config layout design](design-config-layout.md) — *proposed*.
-  Three-scope config model: `project` (`brr.toml` at repo root,
+- [Config layout design](design-config-layout.md) —
+  *accepted 2026-05-26*. **Locking pass IV** added the
+  "per-branch overrides — embraced, not avoided" framing
+  (`brr.toml` is git-tracked → per-branch by construction;
+  feature-branch policy overrides are useful), the daemon's
+  three-step working-branch rule (`event.branch_target` →
+  `daemon.last_spawned_branch[project_id]` → repo default),
+  and the machine-scoped account-binding layout at
+  `~/.local/state/brr/account/` (binding / subscription /
+  cached settings). Three-scope config model: `project` (`brr.toml` at repo root,
   committed — teammates + brnrd-side spawns see it), `local`
   (`.brr/config`, gitignored, this machine only), `account`
   (brnrd-side store via `/v1/accounts/settings`, all the user's

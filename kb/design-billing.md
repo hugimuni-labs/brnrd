@@ -1,16 +1,16 @@
 # Design: billing — subscription + credit wallet on brnrd
 
-**Status: proposed, not yet accepted; reshaped 2026-05-26
-(third-wave follow-up) — added the platform subscription as a
-second billing leg alongside the existing credit wallet, after
-the credits-only shape proved self-defeating for sustainability.
-Subscription tier deliberately has no marketing name; CLI verb
-is `brr brnrd subscription`. Refined 2026-05-26 (locking pass)
-with the explicit credit-bucket / per-source expiry policy,
-account-dormancy bound on purchased credits, and the
-subscriber-only BYO-compute billing implication (subscribers
-who BYO contribute pure subscription revenue with zero compute
-margin).** Two billing legs that back the pricing model in
+**Status: accepted 2026-05-26** (locked in PR #40 MR review,
+locking pass IV — added the **overdraft envelope feature**:
+spawn-start gate is `current_balance >= 0` AND
+`estimated_spawn_cost <= current_balance + max_overdraft_credits`;
+per-account `max_overdraft_credits` setting (default 0;
+Subscribed can raise within `BRNRD_SUBSCRIBER_MAX_OVERDRAFT_CREDITS`
+= 500 credits = $5 default cap)). Fluid past the contracts.
+Two billing legs, both Stripe-integrated from day one (no
+manual-invoicing fallback at launch). The subscription tier
+deliberately has no marketing name; CLI verb is
+`brr brnrd subscription` / sibling `brnrd subscription`. Two billing legs that back the pricing model in
 [`decision-pricing-shape.md`](decision-pricing-shape.md):
 
 1. **Subscription** — $5/month recurring Stripe subscription
@@ -229,14 +229,46 @@ no-expiry policy) and can be spent on managed envs the user
 adds later (managed Modal once shipped, etc.) or refunded if
 unused within 30 days of purchase.
 
-## Zero-balance UX
+## Zero-balance UX (and the overdraft envelope)
 
-When a spawn would be dispatched but the wallet is at or near zero:
+The spawn-start gate is **`current_balance >= 0`**, not
+`>= estimated_spawn_cost`. The reason: estimating a spawn's
+cost ahead of dispatch is approximate (token consumption is
+agent-driven, runtime depends on the task), so requiring
+the full estimate up-front would either reject legitimate
+spawns whose actual cost ends up smaller OR over-charge
+users for the gap. Instead, the gate is "do you have
+non-negative balance?" — and the spawn that pushes you
+below zero is allowed within a configurable **overdraft
+envelope**.
+
+### The overdraft envelope
+
+Each account has a `max_overdraft_credits` setting (signed
+integer; default 0; positive = "the last spawn is allowed
+to leave my balance this many credits negative"). Per-tier
+ceilings on what the user can set:
+
+| Tier | Default | User-configurable up to |
+|------|---------|-------------------------|
+| **Free** | 0 (locked) | 0 — can't be raised |
+| **Subscribed** | 0 (opt-in) | `BRNRD_SUBSCRIBER_MAX_OVERDRAFT_CREDITS` (default 500 credits = $5) |
+| Higher tiers (future) | TBD | TBD higher ceiling within "ok-for-us limits" |
+
+The ceiling env knob lets ops re-tune the cap without a
+code release; the per-account knob lets each subscriber pick
+their own comfort level within that cap (some prefer 0 / no
+overdraft; some prefer the full envelope so the very last
+spawn of the month doesn't get rejected mid-flow).
+
+### Spawn-start check
 
 ```
 Event arrives.
-Dispatcher checks wallet.estimated_balance_after_spawn():
-  if balance ≥ est_cost + safety_margin:
+Dispatcher checks the wallet against the spawn's estimated cost:
+
+  if current_balance >= 0
+     AND estimated_spawn_cost <= current_balance + max_overdraft_credits:
     proceed (normal permission prompt or auto, per policy)
   else:
     a) if user has auto-topup enabled and a saved payment method:
@@ -251,7 +283,83 @@ Dispatcher checks wallet.estimated_balance_after_spawn():
           gate notification)
 ```
 
-Auto-topup design:
+Two conditions in one gate:
+
+1. **`current_balance >= 0`** — must be non-negative at
+   spawn start. If a prior spawn already pushed you
+   negative, the next spawn waits until a top-up brings
+   you back to zero (or positive).
+2. **`estimated_spawn_cost <= current_balance + max_overdraft_credits`**
+   — the estimate must fit inside the headroom (balance +
+   overdraft envelope). If estimated cost is bigger than
+   the headroom, reject up-front (don't quietly start a
+   spawn we know we can't afford to land).
+
+### What happens during + after the spawn
+
+The spawn runs to completion even if actual cost exceeds
+the estimate by some margin. Debit at completion is the
+**actual** measured cost. Possible outcomes:
+
+| Outcome | Where balance lands |
+|---------|---------------------|
+| Actual cost ≤ estimate | Balance stays in the planned range; may stay positive |
+| Estimate accurate, balance was small | Balance lands as far negative as the estimate predicted (within the overdraft envelope) |
+| Actual cost > estimate by small margin | Balance lands slightly more negative than expected; still bounded by reasonable runtime + the per-spawn safety multiplier the dispatcher applies |
+| Actual cost wildly exceeds estimate | Caught by the per-spawn timeout / cost-cap kill in [`plan-failover-compute.md`](plan-failover-compute.md) — spawn is terminated before it can drive balance arbitrarily negative |
+
+The dashboard surfaces both the current balance (signed)
+AND the overdraft envelope when balance is negative:
+
+```
+Credit balance: -120 credits  ($−1.20)
+Overdraft used: 120 / 500 credits  (24% of envelope)
+
+Top up to keep failover compute running →
+```
+
+Banner nudge when balance crosses 0 (per
+[`decision-pricing-shape.md`](decision-pricing-shape.md) §
+"Dashboard nudges + transparency"):
+
+```
+You're $1.20 in the red — top up to keep failover compute
+running. Your last few spawns dipped into your overdraft
+envelope (500 credits = $5).
+```
+
+Gate-side nudge footer on the response from the spawn that
+crossed zero:
+
+```
+[ this spawn used your overdraft envelope. balance: -$1.20.
+  top up at brnrd.dev/topup to keep failover running → ]
+```
+
+### Why this shape
+
+- **Friendly to the very-last spawn of the month.** A
+  subscriber working through their 300-credit monthly grant
+  shouldn't get a rejection at credit 301 just because the
+  estimator was conservative. The overdraft envelope lets
+  the spawn land, the resulting negative balance is the
+  signal to top up.
+- **Bounded.** The envelope is configurable but capped at
+  the tier ceiling — there's no path to runaway debt.
+  Per-spawn timeout + cost-cap kill (existing) bound a
+  single spawn's blast radius.
+- **Self-correcting.** Top-ups credit normally; if a top-up
+  lands with a negative balance, the credit first clears
+  the negative (no interest, no penalty fee), then the
+  remainder goes into the `purchased` bucket. The user is
+  whole as soon as they top up.
+- **Honest in the UX.** Negative balance is always
+  surfaced (dashboard, gate footer, the next-spawn
+  rejection message). Silent overdraft would be the
+  actually-mean version; explicit overdraft with a
+  configurable cap is the friendly version.
+
+Auto-topup design (unchanged from the pre-overdraft shape):
 
 - Off by default; user opts in.
 - User picks: trigger threshold (default: when balance < 100
@@ -262,6 +370,10 @@ Auto-topup design:
 - Per-day auto-topup cap (default $50, configurable) to prevent
   runaway.
 - Every auto-topup hits the audit log + gate notify.
+- Plays well with the overdraft envelope: if both are on,
+  auto-topup fires at the threshold and the overdraft is
+  effectively never used; if auto-topup is off, overdraft
+  is the soft-landing for the rare end-of-cycle spawn.
 
 ## Refund policy
 
@@ -601,9 +713,13 @@ per the data-minimization principle:
 | `account_marked_dormant` | account_id, ts, last_activity_at, dormant_state (`dormant` / `dormant_long`) |
 | `account_reactivated` | account_id, ts, prior_dormant_state |
 | `project_cap_unlocked` | account_id, ts, triggering_topup_id, cumulative_purchased_usd_at_unlock |
+| `overdraft_settings_changed` | account_id, ts, old_max_overdraft_credits, new_max_overdraft_credits, actor (`user` / `admin`) |
+| `overdraft_consumed` | account_id, ts, spawn_id, post_balance_credits (negative), overdraft_used_credits |
+| `overdraft_cleared` | account_id, ts, by_topup_id, prior_negative_balance_credits |
 
 User-visible via `brr brnrd balance` (current totals + sub
-status) and the dashboard's Cost / Audit view (full ledger).
+status + signed balance + overdraft envelope used) and the
+dashboard's Cost / Audit view (full ledger).
 
 ## API surface (brnrd-side)
 
@@ -919,6 +1035,7 @@ re-tune without a code release:
 | Annual discount %      | (derived; both prices map to ~17% off via fixed `$50` / `$70` annual `Price` IDs) | ~17% | |
 | Account-dormancy pause | `BRNRD_DORMANCY_PAUSE_MONTHS` | `24` | months inactive → pause services, preserve `purchased` |
 | Account-dormancy prompt | `BRNRD_DORMANCY_PROMPT_MONTHS` | `36` | months inactive → dashboard reactivation prompt persists |
+| Subscriber overdraft envelope cap | `BRNRD_SUBSCRIBER_MAX_OVERDRAFT_CREDITS` | `500` (= $5) | ceiling on the per-account `max_overdraft_credits` setting for Subscribed; Free is locked at 0 |
 
 The billing service reads these via the standard env-config
 loader on startup; values are immutable for the lifetime of
@@ -1144,3 +1261,35 @@ price they signed up at).
   locked tiered shape "25 (unlimited after $10 of cumulative
   top-ups)". Driven by the user's "lock these as defaults +
   config knobs" MR-review feedback.
+- 2026-05-26 (locking pass IV — overdraft envelope). New
+  account setting `max_overdraft_credits` (signed integer;
+  default 0; per-tier ceiling enforced server-side). New
+  env knob `BRNRD_SUBSCRIBER_MAX_OVERDRAFT_CREDITS`
+  (default 500 credits = $5) caps the per-account setting
+  for Subscribed; Free is locked at 0 (no overdraft).
+  Spawn-start gate reframed from "balance ≥ estimated
+  cost + safety margin" to **TWO conditions**:
+  `current_balance >= 0` AND
+  `estimated_spawn_cost <= current_balance + max_overdraft_credits`.
+  The first condition gates by the user's "I would change
+  this" call on the prior `>= 1` framing — strictly
+  non-negative is enough; the second condition bounds
+  the spawn's worst-case landing inside the overdraft
+  envelope. Once started, the spawn runs to completion;
+  actual cost may push balance as far negative as the
+  envelope allows; per-spawn timeout + cost-cap kill
+  (existing) bound the blast radius of any single spawn.
+  Next spawn requires `current_balance >= 0` again →
+  top-up clears the negative + restores headroom; no
+  interest, no penalty fees. Three new audit ops:
+  `overdraft_settings_changed`, `overdraft_consumed`,
+  `overdraft_cleared`. Dashboard shows signed balance +
+  envelope-used gauge when negative; gate footer on the
+  spawn that crossed zero. Driven by the user's "we'll
+  need to allow people to go below credits ... default
+  would be set to 0, and if you balance is 0 and above -
+  you can run a cloud runner, but it will make your
+  balance negative for that last runner's price ... for
+  like higher tier paying cusotomer's we'd allow to
+  configure it within ok-for-us limits." Status promoted
+  from "proposed" to "accepted."

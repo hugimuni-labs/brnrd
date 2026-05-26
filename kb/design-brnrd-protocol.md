@@ -1,7 +1,15 @@
 # Design: brnrd protocol — wire format between brr daemons and brnrd
 
-**Status: proposed, not yet accepted.** Scope and contracts for the
-protocol that ties brr daemons to brnrd. Covers the
+**Status: accepted 2026-05-26** (locked in PR #40 MR review,
+locking pass IV — protocol-shape diagram reshaped for the
+**machine-scoped multi-project daemon**, runtime profile
+section added codifying async / httpx on the daemon side and
+ASGI / FastAPI / asyncpg on the brnrd side; everything else
+unchanged from the locking-pass-II shape). Fluid past the
+contracts — the diagram + runtime-profile sections may
+re-tune as implementation surfaces details, but the wire
+contracts and endpoint shapes are stable. Scope and contracts
+for the protocol that ties brr daemons to brnrd. Covers the
 **managed-gates** path (events flow in via hosted bots, drain
 through a daemon long-poll), the **failover-compute** path (when a
 user's daemon is offline, brnrd spawns a per-task sandbox in
@@ -159,36 +167,95 @@ Things we explicitly do **not** hold:
 ## The protocol shape, at a glance
 
 ```
-┌──────────────────────┐                ┌─────────────────────────┐
-│   User's TG chat /   │                │   User's brr daemon     │
-│   GH PR / GH issue   │                │   (laptop / cloud-app)  │
-└──────┬──────────┬────┘                └────────┬────────────────┘
-       │ user msg │                              │
-       ▼          │                              │ long-poll
-┌─────────────┐   │                              │ /v1/daemons/inbox
-│ @brr_bot /  │   │                              │
-│ brnrd app │───┴────►  brnrd dispatch ◄─────┤
-└─────────────┘   webhook        │      response │
-                                 │      forward  │
-                                 ▼               ▼
-                  ┌─────────────────────┐  POST /v1/daemons/
-                  │ resolve project_id  │  responses
-                  │ daemon online?      │
-                  │   yes → enqueue ────┘
-                  │   no  → policy check
-                  │         ask?  → permission-prompt via gate
-                  │         spawn? → managed-compute Fly Machine
-                  └────────────────────┐
-                                       ▼
-                  ┌─────────────────────────────┐
-                  │ per-task ephemeral sandbox  │
-                  │ (brnrd's Fly account)     │
-                  │ AI creds from vault         │
-                  │ git access via GH App       │
-                  │ runs runner; pushes branch; │
-                  │ POSTs response; tears down  │
-                  └─────────────────────────────┘
+                       User's local machine
+┌─────────────────────────────────────────────────────────────────┐
+│  ~/.config/brr/projects.toml      (registry of brr-init'd repos)│
+│  ~/.local/state/brr/account/      (brnrd binding, sub status,   │
+│                                    cached account-scope config) │
+│                                                                 │
+│  ┌────────────┐    ┌────────────┐    ┌────────────┐             │
+│  │ Project A  │    │ Project B  │    │ Project C  │   …         │
+│  │ .brr/inbox │    │ .brr/inbox │    │ .brr/inbox │             │
+│  │ brr.toml   │    │ brr.toml   │    │ brr.toml   │             │
+│  └─────┬──────┘    └─────┬──────┘    └─────┬──────┘             │
+│        │                 │                 │                    │
+│        │ inbox / response files            │                    │
+│        ▼                 ▼                 ▼                    │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │     brr daemon  (1 process per machine; multi-project)    │  │
+│  │  - per-project inbox poller (asyncio task each)           │  │
+│  │  - shared httpx.AsyncClient → brnrd (one HTTP/2 conn)     │  │
+│  │  - per-project runner subprocess (env-backend dispatch)   │  │
+│  │  - supervised by systemd (Linux) / launchd (macOS)        │  │
+│  └────────────────────┬──────────────────────────────────────┘  │
+└───────────────────────┼─────────────────────────────────────────┘
+                        │ HTTPS, single connection, fans out for
+                        │ all projects under this account
+                        │   GET  /v1/daemons/inbox?since=<cursor>
+                        │   POST /v1/daemons/responses
+                        ▼
+            ┌──────────────────────────────────┐         ┌─────────────┐
+            │  brnrd dispatch (ASGI worker)    │◄────────┤ Telegram /  │
+            │  - per-project_id event routing  │ webhook │ GitHub bot  │
+            │  - failover-policy decision      │         │ (managed    │
+            │  - forward response → gate       │         │  gate)      │
+            └──────────────┬───────────────────┘         └──────┬──────┘
+                           │                                    ▲
+                           │ on daemon offline:                 │
+                           │   ask?  → permission prompt via gate
+                           │   spawn? → managed-compute Fly Machine
+                           ▼
+            ┌─────────────────────────────────┐
+            │ per-task ephemeral sandbox      │
+            │ (brnrd's Fly account, OR        │
+            │  subscriber's BYO Fly account   │
+            │  via cloud-platform creds)      │
+            │ AI creds from vault             │
+            │ git access via GH App           │
+            │ runs runner; pushes branch;     │
+            │ POSTs response; tears down      │
+            └─────────────────────────────────┘
 ```
+
+**Five things to note** about this shape (changes vs the
+pre-pass-IV per-project-daemon framing):
+
+1. **One daemon per machine, not per project.** The daemon
+   process is a multi-project multiplexer; it discovers
+   brr-init'd repos via `~/.config/brr/projects.toml`
+   (appended by `brr init`) and runs one asyncio inbox-poller
+   task per project. A single supervised systemd / launchd
+   unit covers all of them. See
+   [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md)
+   for the install / discovery / supervisor shape.
+2. **One HTTP connection to brnrd, fans out for all projects.**
+   A single `httpx.AsyncClient` instance owns the connection
+   pool; HTTP/2 multiplexing lets all per-project pollers
+   share the connection. Outbound POSTs (responses) ride the
+   same client. Means brnrd sees one TCP/TLS connection per
+   daemon, not one per project.
+3. **Account binding is machine-scoped.** The brnrd account
+   binding (auth token, subscription status, brnrd URL,
+   cached account-scope config) lives at
+   `~/.local/state/brr/account/` — not per repo. When the
+   user runs `brnrd connect` from a second project, the
+   binding is already there; only the per-project project_id
+   binding gets added. See
+   [`design-config-layout.md`](design-config-layout.md) §
+   "Account scope" for the file layout.
+4. **The daemon's task pipeline is unchanged.** The only new
+   thing is the transport layer (cloud-gate inbox poller +
+   response POSTs). Existing BYO gates write to `.brr/inbox/`
+   and read from `.brr/responses/` exactly as before; the
+   cloud-gate adapter is a peer, not a replacement.
+5. **Failover-spawn reuses the env class.** Cloud envs are
+   envs — see
+   [`research-cloud-envs.md`](research-cloud-envs.md) →
+   "Caller axis." The same Fly-Machines env class that the
+   daemon would invoke if BYO is configured gets invoked
+   from brnrd's caller axis with brnrd's account credentials
+   (managed) OR the subscriber's cloud-platform credentials
+   from the vault (BYO subscriber).
 
 Four flows, all stateless from the daemon's perspective:
 
@@ -196,11 +263,14 @@ Four flows, all stateless from the daemon's perspective:
    brnrd translates the event to brr's wire format, **resolves
    the project_id** (per-platform rules below), and proceeds to
    dispatch.
-2. **Dispatch — daemon online.** Enqueue to the user's daemon
-   inbox queue; the daemon long-polls
-   `GET /v1/daemons/inbox?since=<cursor>` and drains it, writing
-   each event to `.brr/inbox/<event-id>.json` the same way a BYO
-   gate would.
+2. **Dispatch — daemon online.** Enqueue to the per-project
+   inbox queue keyed by project_id; the daemon's long-poll
+   on `GET /v1/daemons/inbox?since=<cursor>` returns events
+   for **all** the daemon's projects in a single batch,
+   tagged with their project_id. The daemon dispatches each
+   to the right per-project asyncio task, which writes
+   `.brr/inbox/<event-id>.json` in the right repo the same
+   way a BYO gate would.
 3. **Dispatch — daemon offline.** Walk the failover-policy
    decision tree (see "Failover dispatch" below). Outcome is one
    of: auto-spawn now; post permission prompt via the gate and
@@ -209,16 +279,83 @@ Four flows, all stateless from the daemon's perspective:
    to `POST /v1/daemons/responses`. brnrd forwards it to the
    originating channel, logs metadata, drops the body.
 
-The daemon's task pipeline is **unchanged** — only the transport
-layer for events and responses is new. The existing BYO gates write
-to `.brr/inbox/` and read from `.brr/responses/`; the cloud-gate
-adapter is a peer, not a replacement. The failover-spawn path
-reuses the same env class the daemon would use if it were
-running (cloud envs are envs — see
-[`research-cloud-envs.md`](research-cloud-envs.md)), called from
-brnrd server-side against brnrd's own cloud account — same env
-code, different caller, different
-token.
+## Runtime profile: async, httpx, ASGI
+
+The protocol shape implies a specific runtime profile on
+both sides, captured here so the implementation slices know
+what they're building against.
+
+### Daemon side (brr — must run on user laptops)
+
+- **`httpx.AsyncClient` for outbound HTTP** to brnrd: one
+  client instance per daemon process, connection pool size
+  ~2-4 (HTTP/2 multiplexing means more pooled connections
+  rarely help). Long-poll uses `client.stream("GET", …)`
+  with a long timeout; response POSTs use `client.post(…)`.
+- **`asyncio` event loop** owns the daemon's main thread.
+  Per-project inbox pollers are asyncio tasks; runner
+  subprocesses are spawned via `asyncio.subprocess` so
+  stdout / stderr piping doesn't block the loop.
+- **`uvloop`** as a soft dep on Linux / macOS (drops in via
+  `asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())`
+  if importable; falls back to stdlib loop otherwise) for
+  the 2-3× speedup on socket-heavy work. No-op on Windows.
+- **No web framework on the daemon side.** The daemon doesn't
+  serve HTTP itself; it only consumes. Local IPC (CLI ↔
+  daemon) is a small asyncio server on a unix socket /
+  loopback port, written directly against
+  `asyncio.start_unix_server` / `asyncio.start_server`. Keeps
+  the dep surface minimal.
+- **Constraint: easily pip-installable on stock Python.**
+  Any cpython 3.11+ on macOS / Linux / WSL must be enough.
+  No native compilation, no big transitive footprint.
+  `httpx`, `aiofiles` (optional), `uvloop` (optional),
+  `pydantic` for schemas — that's roughly the whole new
+  dep set on top of what's already there.
+
+The current daemon is sync (`requests` + thread workers).
+The async migration lands as a single slice alongside the
+machine-scoped multi-project reshape — both changes touch
+the same code paths, doing them together avoids a transitional
+shape that's neither one nor the other.
+
+### Brnrd side (must be efficient, can use packages)
+
+- **ASGI via FastAPI (or starlette directly).** brnrd is a
+  multi-tenant web service; FastAPI's pydantic
+  request/response validation + dependency injection +
+  OpenAPI generation are worth their weight. starlette
+  directly is the fallback if we ever want zero-FastAPI
+  for some reason.
+- **`asyncpg` for postgres** (not SQLAlchemy's sync driver).
+  Postgres holds the ledger, accounts table, project
+  bindings, audit log, conversation metadata graph. All
+  hot paths are async.
+- **`redis-py` (async client) for the inbox queue + rate
+  limiter state.** Daemons long-poll an in-memory + redis-
+  backed per-project queue; redis also holds the soft-throttle
+  state and the per-IP / per-account rate-limit counters.
+- **`httpx` for outbound** (Stripe, GitHub App calls,
+  Telegram Bot API, etc.).
+- **`structlog` + `sentry-sdk`** for observability;
+  **`stripe` SDK** for billing.
+- **Read-only-rootfs friendly.** All state in postgres + redis
+  + S3-compatible blob storage (for the audit-log archive +
+  vault encrypted blobs). No writes to disk except `/tmp`.
+  Means brnrd runs cleanly on **Fly Machines, Modal, upsun,
+  Render, Railway** — anything that serves a Python ASGI
+  worker behind a load balancer.
+- **Single process per worker container; horizontal scale
+  via container replicas, not threads.** A typical
+  deployment is N replicas of the same ASGI image behind
+  Fly's anycast proxy or upsun's router; each replica
+  handles its share of the long-poll connections and
+  webhook ingress. Postgres + redis are the shared state.
+
+The asymmetry — brr lightweight, brnrd richer — is
+deliberate. brr is software users install; brnrd is
+software we operate. The two deps lists don't need to
+match; they just need to talk the same HTTP protocol.
 
 ## Multi-project routing
 
@@ -1643,3 +1780,47 @@ write the Upsun shape once, use it twice.
   credits" + "we maybe need to implement project ownership, so
   a user wouldn't go creating multiple accounts to get more
   credits on the same project."
+- 2026-05-26 (locking pass IV — machine-scoped daemon
+  reshape + runtime profile). Two changes, both diagram /
+  framing rather than protocol-contract:
+  1. **"The protocol shape, at a glance" diagram redrawn**
+     to show the machine-scoped multi-project daemon shape:
+     one `brr daemon` process per machine serves N
+     brr-init'd repos (each with its own `.brr/inbox/` +
+     `brr.toml`), discovered via `~/.config/brr/projects.toml`;
+     one `httpx.AsyncClient` (HTTP/2-pooled) carries traffic
+     for all projects to brnrd; account binding lives at
+     `~/.local/state/brr/account/`, not per repo. Inbox
+     long-poll returns events for ALL the daemon's projects
+     in one batch, tagged with project_id; the daemon
+     dispatches each to the right per-project asyncio task.
+     A new "Five things to note" callout under the diagram
+     names the differences from the pre-pass-IV per-project-
+     daemon framing.
+  2. **New "Runtime profile: async, httpx, ASGI" section**
+     codifies the runtime profile both sides ship against.
+     Daemon side: `httpx.AsyncClient`, `asyncio` event loop,
+     `uvloop` soft-dep, no web framework (local IPC is
+     `asyncio.start_unix_server`), constraint of
+     easy-pip-installability on stock Python 3.11+.
+     Brnrd side: FastAPI / starlette ASGI, `asyncpg`,
+     `redis-py` async client, `httpx` outbound, `structlog`
+     + `sentry-sdk` + `stripe` SDK, read-only-rootfs friendly
+     (state in postgres + redis + S3-blob; deploys cleanly
+     on Fly / Modal / upsun / Render / Railway), horizontal
+     scale via container replicas not threads. The
+     asymmetry is deliberate — brr lightweight, brnrd
+     richer. Current daemon is sync; the async migration
+     lands as one slice alongside the multi-project reshape
+     to avoid a transitional shape. Driven by the user's
+     "the local daemon should serve all local projects and
+     connect to the brnrd... if a user has configured brnrd
+     once for a project already, we should pickup at least
+     the account binding, subscription status, brnrd url"
+     + "do you think we need to add async/httpx to the local
+     daemon to let it talk to brnrd effectively (the brnrd
+     itself likely has to be reactive, and efficient, and
+     may use packages, it is not as important to be easily
+     installed as brr, but smart enough to be able to run
+     on read only app container services like upsun." Status
+     promoted from "proposed" to "accepted."

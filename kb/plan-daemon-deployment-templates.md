@@ -8,17 +8,28 @@ of platform-specific templates + a "deploying brr" docs page.
 
 ## Status
 
-**Demoted to launch-nice-to-have on 2026-05-22.** Earlier framing
-positioned the always-on-host model as the *preferred* answer to
-"my laptop is offline" — that answer is now
+**Demoted to launch-nice-to-have on 2026-05-22; accepted
+2026-05-26** (locked in PR #40 MR review, locking pass IV —
+aligned with the **machine-scoped multi-project daemon**
+shape: cloud-host deployments serve one or more brr-init'd
+repos via the same `~/.config/brr/projects.toml` registry as
+laptop deployments; container volume mounts must include the
+registry path so it survives restarts). Earlier framing
+positioned the always-on-host model as the *preferred* answer
+to "my laptop is offline" — that answer is now
 [`plan-failover-compute.md`](plan-failover-compute.md) (brnrd
-spawns per-task sandboxes in the user's or its own cloud account,
-without the user operating a separate always-on box). These
-templates remain useful for the niche where the user genuinely
-wants a cloud-first daemon home (security policy, no laptop at all,
-"I want my daemon to live next to my prod"), but they are no longer
-load-bearing for the work-continuity pitch. Ship when convenient;
-do not block the launch on them.
+spawns per-task sandboxes in the user's or its own cloud
+account, without the user operating a separate always-on
+box). These templates remain useful for the niche where the
+user genuinely wants a cloud-first daemon home (security
+policy, no laptop at all, "I want my daemon to live next to
+my prod"), but they are no longer load-bearing for the
+work-continuity pitch. Ship when convenient; do not block
+the launch on them.
+
+Fluid past the Dockerfile split — template specifics
+(secrets wiring, mount paths, platform-specific quirks) will
+re-tune as we deploy them for real.
 
 Lightly coupled to
 [`plan-env-fly-machines.md`](plan-env-fly-machines.md) on the
@@ -30,10 +41,14 @@ land first.
 at [issue #29](https://github.com/Gurio/brr/issues/29). Linux
 gets a per-user systemd unit, macOS gets a launchd
 LaunchAgent, Windows is deferred. Both via `brr daemon
-install`. Managed mode reduces the urgency (failover compute
-covers gaps when the daemon isn't running), so the laptop-side
-daemoning work and the cloud-host deployment-templates work
-here proceed independently.
+install`. **The same machine-scoped multi-project shape**
+applies on the cloud-host side: one container runs one daemon
+that can serve multiple brr-init'd repos, mounted at
+container-stable paths and registered in the per-deployment
+`projects.toml`. Managed mode reduces the urgency (failover
+compute covers gaps when the daemon isn't running), so the
+laptop-side daemoning work and the cloud-host deployment-
+templates work here proceed independently.
 
 ## Goals
 
@@ -102,10 +117,18 @@ here proceed independently.
 4. **Heroku button.** `app.json` declaring the buildpack-less
    container deploy + the required env vars.
 5. **Upsun template.** `.upsun/config.yaml` with the
-   writable-mount declaration for `.brr/` and `/data/repos/` —
+   writable-mount declarations for `~/.config/brr/` (project
+   registry), `~/.local/state/brr/account/` (brnrd binding),
+   each per-project `.brr/` directory, and `/data/repos/` —
    the daemon clones repos into `/data/repos/` instead of the
-   read-only `/app`. Workers section for the long-running daemon
-   process.
+   read-only `/app`, and the registry points at those paths.
+   Workers section for the long-running daemon process.
+
+   Multi-project on cloud hosts: the same daemon serves all
+   the repos mounted under `/data/repos/`, with the registry
+   listing each one. Setup pattern: clone or mount repo →
+   `brr init` inside it (appends to registry) → daemon
+   picks up within ~30s.
 6. **Railway template.** Railway's GitHub-coupled template format
    pointing at the same image.
 7. **VPS template.** `docker-compose.yml` + a `brr-daemon.service`
@@ -178,3 +201,18 @@ work, very little Python.
   changes here; this plan stays focused on cloud-host
   deployment templates, the laptop-side concerns are
   formalised in their own plan.
+- 2026-05-26 (locking pass IV — aligned with the machine-
+  scoped multi-project daemon shape). Status promoted from
+  "demoted to launch-nice-to-have" to "accepted + fluid past
+  the Dockerfile split." Upsun template step rewritten to
+  spell out the writable-mount paths for the new
+  machine-scoped registry (`~/.config/brr/projects.toml`),
+  the account binding (`~/.local/state/brr/account/`),
+  per-project `.brr/` dirs, and `/data/repos/` for clones.
+  Multi-project pattern documented inline: one container =
+  one daemon = multiple repos via the registry, same shape
+  as laptop hosts. Driven by the locking-pass-IV daemon
+  shape reshape (see
+  [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md)
+  lineage) — cloud-host deployments stay first-class under
+  the new shape; only the template specifics had to align.
