@@ -101,8 +101,8 @@ def test_status_and_logs_use_systemd_user_commands(monkeypatch):
     monkeypatch.setattr(linux, "_run", fake_run)
 
     assert linux.status() == 7
-    assert linux.logs() == 7
+    assert linux.logs(lines=50, follow=False) == 7
     assert calls == [
         (["systemctl", "--user", "status", linux.SERVICE_UNIT, "--no-pager"], False),
-        (["journalctl", "--user", "-u", "brr", "-f"], False),
+        (["journalctl", "--user", "-u", "brr", "-n", "50"], False),
     ]
