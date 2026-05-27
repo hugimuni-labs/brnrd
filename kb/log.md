@@ -4477,3 +4477,19 @@ provenance map, compressed the daemon deployment template lineage to
 current state, marked the `brr kb` plan as accepted-but-not-started,
 and added a peer link to the two-websites decision from the
 managed-mode hub.
+
+## [2026-05-27] decision | Stewardship lodestar — user friendliness + operational simplicity
+
+Added a "lodestar" paragraph to `AGENTS.md` → Stewardship naming the
+two values that orient every trade-off: **user friendliness** (how the
+change lands on someone encountering the result for the first time) and
+**operational simplicity** (what it costs to run the result and keep it
+healthy). Positioned them as the source the other instincts in the file
+derive from — slash old shape, prefer better abstractions, don't paper
+over weak ones — and as the fall-back when a decision feels finely
+balanced. Codifies what was a recurring per-prompt reminder.
+
+Kept the wording universal in shape rather than brr-specific, since
+Stewardship ships to adopters via `brr init` and the two values
+generalise to nearly any project; bumped the playbook `Revision:` date
+to flag the structural change for cached workspace-rule injections.
