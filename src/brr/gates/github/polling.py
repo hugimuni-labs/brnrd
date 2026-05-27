@@ -27,6 +27,7 @@ from . import cache, client, parse
 from .constants import _SEEN_CAP
 from .paths import (
     pull as _pull_path,
+    pull_review as _pull_review_path,
     repo_issue_comments,
     repo_issues,
     repo_pulls_comments,
@@ -54,6 +55,7 @@ def _poll_label_trigger(
 ) -> None:
     since = cursor.get("issues_since") or cache._initial_since()
     seen = set(cursor.get("seen_issue_numbers") or [])
+    etags = cursor.setdefault("etags", {})
     issues = client._api_get(
         token, repo_issues(repo),
         params={
@@ -64,6 +66,7 @@ def _poll_label_trigger(
             "sort": "updated",
             "direction": "asc",
         },
+        etag_store=etags,
     ) or []
 
     latest_seen = since
@@ -120,6 +123,7 @@ def _poll_mention_trigger(
 ) -> None:
     since = cursor.get("comments_since") or cache._initial_since()
     seen = set(cursor.get("seen_comment_ids") or [])
+    etags = cursor.setdefault("etags", {})
     comments = client._api_get(
         token, repo_issue_comments(repo),
         params={
@@ -128,6 +132,7 @@ def _poll_mention_trigger(
             "sort": "updated",
             "direction": "asc",
         },
+        etag_store=etags,
     ) or []
 
     pr_branch_cache: dict[int, str] = {}
@@ -205,6 +210,7 @@ def _poll_mention_review_comments(
     """Poll inline PR review comments (diff line threads) for *mention*."""
     since = cursor.get("review_comments_since") or cache._initial_since()
     seen = set(cursor.get("seen_review_comment_ids") or [])
+    etags = cursor.setdefault("etags", {})
     comments = client._api_get(
         token, repo_pulls_comments(repo),
         params={
@@ -213,6 +219,7 @@ def _poll_mention_review_comments(
             "sort": "updated",
             "direction": "asc",
         },
+        etag_store=etags,
     ) or []
 
     latest_seen = since
@@ -275,6 +282,116 @@ def _poll_mention_review_comments(
     cursor["review_comments_since"] = latest_seen
     cursor["seen_review_comment_ids"] = sorted(seen)[-_SEEN_CAP:]
 
+    # Now check the parent reviews of freshly-seen line comments for
+    # mentions in the review *summary body*. A review can carry a
+    # summary plus zero or more line comments; we only see the summary
+    # when /pulls/comments tells us a review exists. Standalone summary
+    # reviews (no line comments) are not discoverable this cheaply and
+    # fall through to the managed brnrd webhook path — see
+    # kb/design-github-gate-vs-brnrd-app.md.
+    _poll_mention_review_summaries(
+        token, repo, mention, token_login, cursor, inbox_dir,
+        comments, pr_branch_cache,
+    )
+
+
+def _poll_mention_review_summaries(
+    token: str,
+    repo: str,
+    mention: str,
+    token_login: str,
+    cursor: dict,
+    inbox_dir: Path,
+    line_comments: list,
+    pr_branch_cache: dict[int, str],
+) -> None:
+    """Fetch parent reviews of seen line comments; emit pr-review events.
+
+    Reviews are deduplicated across polls via ``cursor["seen_review_ids"]``,
+    so each review is fetched at most once across the gate's lifetime.
+    """
+    candidates: dict[int, int] = {}  # review_id -> pr_number
+    for comment in line_comments:
+        if not isinstance(comment, dict):
+            continue
+        review_id = comment.get("pull_request_review_id")
+        if not isinstance(review_id, int):
+            continue
+        pr_number = parse._extract_pr_number(comment.get("pull_request_url") or "")
+        if pr_number is None:
+            continue
+        candidates.setdefault(review_id, pr_number)
+
+    seen = set(cursor.get("seen_review_ids") or [])
+    for review_id, pr_number in candidates.items():
+        if review_id in seen:
+            continue
+        _emit_review_event_if_mentioned(
+            token, repo, pr_number, review_id, mention, token_login,
+            inbox_dir, pr_branch_cache, trigger="mention",
+        )
+        seen.add(review_id)
+
+    cursor["seen_review_ids"] = sorted(seen)[-_SEEN_CAP:]
+
+
+def _emit_review_event_if_mentioned(
+    token: str,
+    repo: str,
+    pr_number: int,
+    review_id: int,
+    mention: str,
+    token_login: str,
+    inbox_dir: Path,
+    pr_branch_cache: dict[int, str],
+    *,
+    trigger: str,
+) -> None:
+    """Fetch one PR review; emit a pr-review event when its summary mentions us.
+
+    Note on the reply path: GitHub has no dedicated "reply to a review
+    summary" endpoint, so pr-review responses are posted as top-level
+    PR comments via ``/issues/{n}/comments`` (handled in delivery), with
+    the standard quote pointer linking back to the review.
+    """
+    review = client._api_get(
+        token, _pull_review_path(repo, pr_number, review_id),
+    )
+    if not isinstance(review, dict):
+        return
+    body = str(review.get("body") or "")
+    if not body or mention not in body:
+        return
+    author = (review.get("user") or {}).get("login") or ""
+    if parse._skip_mention_comment_author(author, mention, token_login):
+        return
+
+    meta: dict[str, Any] = {
+        "github_repo": repo,
+        "github_kind": "pr-review",
+        "github_issue_number": pr_number,
+        "github_pr_number": pr_number,
+        "github_review_id": review_id,
+        "github_review_state": str(review.get("state") or ""),
+        "github_author": author,
+        "github_html_url": str(review.get("html_url") or ""),
+        "github_trigger": trigger,
+        "github_mention": mention,
+    }
+    branch = pr_branch_cache.get(pr_number) or _fetch_pr_head_branch(
+        token, repo, pr_number,
+    )
+    if branch:
+        pr_branch_cache[pr_number] = branch
+        meta["branch_target"] = branch
+
+    protocol.create_event(
+        inbox_dir,
+        source="github",
+        body=parse._format_event_body("", body),
+        **meta,
+    )
+
 
 # ── any trigger ───────────────────────────────────────────────────
 
@@ -293,6 +410,7 @@ def _poll_any_activity(
     pre-task fetch+ff refreshes the PR head branch. Bot's own comments
     are filtered to prevent self-triggering loops.
     """
+    etags = cursor.setdefault("etags", {})
     # --- Issues and PRs -----------------------------------------------
     since = cursor.get("any_issues_since") or cache._initial_since()
     seen = set(cursor.get("any_seen_issue_numbers") or [])
@@ -305,6 +423,7 @@ def _poll_any_activity(
             "sort": "updated",
             "direction": "asc",
         },
+        etag_store=etags,
     ) or []
 
     latest_seen = since
@@ -362,6 +481,7 @@ def _poll_any_activity(
             "sort": "updated",
             "direction": "asc",
         },
+        etag_store=etags,
     ) or []
 
     pr_branch_cache: dict[int, str] = {}
@@ -429,6 +549,7 @@ def _poll_any_review_comments(
 ) -> None:
     since = cursor.get("any_review_comments_since") or cache._initial_since()
     seen = set(cursor.get("any_seen_review_comment_ids") or [])
+    etags = cursor.setdefault("etags", {})
     comments = client._api_get(
         token, repo_pulls_comments(repo),
         params={
@@ -437,6 +558,7 @@ def _poll_any_review_comments(
             "sort": "updated",
             "direction": "asc",
         },
+        etag_store=etags,
     ) or []
 
     latest_seen = since
