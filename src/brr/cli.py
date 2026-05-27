@@ -46,42 +46,46 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("down", help="stop the daemon")
     p.set_defaults(func=cmd_down)
 
-    p = sub.add_parser("daemon", help="manage the daemon")
-    daemon_sub = p.add_subparsers(dest="daemon_command", required=True)
+    daemon_p = sub.add_parser("daemon", help="daemon lifecycle")
+    daemon_sub = daemon_p.add_subparsers(dest="daemon_command", required=True)
 
-    p_up = daemon_sub.add_parser("up", help="start the daemon")
-    p_up.add_argument("--foreground", action="store_true",
-                      help="run the daemon in this process")
-    p_up.add_argument("--dev-reload", action="store_true", default=None,
-                      help="developer: re-exec daemon when brr package files change")
-    p_up.set_defaults(func=cmd_daemon_up)
+    p = daemon_sub.add_parser("up", help="start the daemon")
+    p.add_argument("--foreground", action="store_true",
+                   help="run the foreground daemon instead of the installed service")
+    p.add_argument("--dev-reload", action="store_true", default=None,
+                   help="developer: re-exec daemon when brr package files change")
+    p.set_defaults(func=cmd_daemon_up)
 
-    p_down = daemon_sub.add_parser("down", help="stop the daemon")
-    p_down.set_defaults(func=cmd_daemon_down)
+    p = daemon_sub.add_parser("down", help="stop the daemon")
+    p.set_defaults(func=cmd_daemon_down)
 
-    p_install = daemon_sub.add_parser("install", help="install the user service")
-    p_install.add_argument("--no-start", action="store_true",
-                           help="install and enable the service without starting it")
-    linger = p_install.add_mutually_exclusive_group()
+    p = daemon_sub.add_parser("status", help="show daemon status")
+    p.set_defaults(func=cmd_daemon_status)
+
+    p = daemon_sub.add_parser("install", help="install the native user service")
+    p.add_argument("--no-start", action="store_true",
+                   help="write the service file without starting it now")
+    linger = p.add_mutually_exclusive_group()
     linger.add_argument("--yes-linger", action="store_true",
-                        help="enable systemd linger without prompting")
+                        help="linux: enable systemd linger without prompting")
     linger.add_argument("--no-linger", action="store_true",
-                        help="skip the linger prompt")
-    p_install.set_defaults(func=cmd_daemon_install)
+                        help="linux: skip the linger prompt")
+    p.set_defaults(func=cmd_daemon_install)
 
-    p_uninstall = daemon_sub.add_parser("uninstall", help="uninstall the user service")
-    disable_linger = p_uninstall.add_mutually_exclusive_group()
+    p = daemon_sub.add_parser("uninstall", help="remove the native user service")
+    disable_linger = p.add_mutually_exclusive_group()
     disable_linger.add_argument("--yes-disable-linger", action="store_true",
-                                help="disable linger if brr enabled it earlier")
+                                help="linux: disable linger if brr enabled it earlier")
     disable_linger.add_argument("--no-disable-linger", action="store_true",
-                                help="leave linger enabled without prompting")
-    p_uninstall.set_defaults(func=cmd_daemon_uninstall)
+                                help="linux: leave linger enabled without prompting")
+    p.set_defaults(func=cmd_daemon_uninstall)
 
-    p_status = daemon_sub.add_parser("status", help="show daemon status")
-    p_status.set_defaults(func=cmd_daemon_status)
-
-    p_logs = daemon_sub.add_parser("logs", help="tail daemon logs")
-    p_logs.set_defaults(func=cmd_daemon_logs)
+    p = daemon_sub.add_parser("logs", help="tail daemon service logs")
+    p.add_argument("-n", "--lines", type=int, default=80,
+                   help="number of existing log lines to show first")
+    p.add_argument("--no-follow", action="store_true",
+                   help="print existing log lines and exit")
+    p.set_defaults(func=cmd_daemon_logs)
 
     args = parser.parse_args(argv)
     return args.func(args)
@@ -96,6 +100,13 @@ def _brr_dir() -> Path:
     from . import gitops
 
     return gitops.shared_brr_dir(_repo_root())
+
+
+def _maybe_brr_dir() -> Path | None:
+    try:
+        return _brr_dir()
+    except (RuntimeError, SystemExit):
+        return None
 
 
 def cmd_init(args):
@@ -151,36 +162,30 @@ def cmd_down(args):
 
 
 def cmd_daemon_up(args):
-    if args.foreground:
-        return cmd_up(args)
-
-    from .daemon_install import linux as systemd_linux
-
-    if systemd_linux.supported() and systemd_linux.service_installed():
-        code = systemd_linux.start_service()
-        if code == 0:
-            print("[brr] daemon service started")
-        return code
-
+    if not args.foreground:
+        from . import daemon_install
+        code = daemon_install.start_service()
+        if code is not None:
+            return code
     return cmd_up(args)
 
 
 def cmd_daemon_down(args):
-    from .daemon_install import linux as systemd_linux
-
-    if systemd_linux.supported() and systemd_linux.service_installed():
-        code = systemd_linux.stop_service()
-        if code == 0:
-            print("[brr] daemon service stopped")
+    from . import daemon_install
+    code = daemon_install.stop_service()
+    if code is not None:
         return code
-
     return cmd_down(args)
 
 
-def cmd_daemon_install(args):
-    from .daemon_install import linux as systemd_linux
+def cmd_daemon_status(args):
+    from . import daemon_install
+    return daemon_install.status(direct_brr_dir=_maybe_brr_dir())
 
-    return systemd_linux.install(
+
+def cmd_daemon_install(args):
+    from . import daemon_install
+    return daemon_install.install(
         no_start=args.no_start,
         prompt_linger=not args.no_linger,
         assume_yes_linger=args.yes_linger,
@@ -188,41 +193,16 @@ def cmd_daemon_install(args):
 
 
 def cmd_daemon_uninstall(args):
-    from .daemon_install import linux as systemd_linux
-
-    return systemd_linux.uninstall(
+    from . import daemon_install
+    return daemon_install.uninstall(
         prompt_linger=not args.no_disable_linger,
         assume_yes_disable_linger=args.yes_disable_linger,
     )
 
 
-def cmd_daemon_status(args):
-    from .daemon_install import linux as systemd_linux
-
-    if systemd_linux.supported() and systemd_linux.service_installed():
-        return systemd_linux.status()
-
-    try:
-        brr = _brr_dir()
-    except SystemExit:
-        print("[brr] daemon service not installed")
-        return 1
-
-    from . import daemon as daemon_mod
-    pid = daemon_mod.read_pid(brr)
-    if pid:
-        print(f"[brr] daemon running directly under PID {pid}")
-        return 0
-    print("[brr] daemon not running")
-    return 3
-
-
 def cmd_daemon_logs(args):
-    from .daemon_install import linux as systemd_linux
-
-    if not systemd_linux.supported():
-        raise SystemExit("[brr] daemon logs on this platform is not implemented yet")
-    return systemd_linux.logs()
+    from . import daemon_install
+    return daemon_install.logs(follow=not args.no_follow, lines=args.lines)
 
 
 def _load_gate(name: str):
