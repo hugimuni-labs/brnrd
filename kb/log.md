@@ -4493,3 +4493,72 @@ Kept the wording universal in shape rather than brr-specific, since
 Stewardship ships to adopters via `brr init` and the two values
 generalise to nearly any project; bumped the playbook `Revision:` date
 to flag the structural change for cached workspace-rule injections.
+
+Refined the same day (see next `decision` entry) — the "derive from
+those two" framing turned out to overclaim across categories.
+
+## [2026-05-27] decision | Refine Stewardship lodestar — drop "everything derives from these"
+
+Followup to the lodestar addition (commit e00a469). Dropped the "Most
+of the other instincts in this file derive from those two" framing and
+scoped the sentence to "what we build" rather than "every trade-off".
+The two foundational values stand cleanly without a primacy claim; the
+rest of the Stewardship section is mostly *process discipline* (engage
+with the request, surface contradictions, read callers, slash dead
+shape) — a sibling category, not derivative. Naming a third lodestar
+("honest assessment") would have conflated product values with process
+virtues and diluted the punch. Final wording:
+
+> Two values orient what we build: **user friendliness** — how the
+> change lands on someone encountering the result for the first time —
+> and **operational simplicity** — what it costs to run the result and
+> keep it healthy. When a decision feels finely balanced, fall back to
+> them.
+
+Landed in commit 5ab92b3 alongside the adopter-lens cleanup below
+(autocommit grouped both AGENTS.md edits under a single generic
+message; this entry captures the rationale the commit message omits).
+
+## [2026-05-27] fix | AGENTS.md adopter-lens cleanup — strip brr-internal leaks from universal sections
+
+Re-read `AGENTS.md` and `prompts/setup.md` with adopter eyes (they
+receive this verbatim via `brr init`), found five brr-specific leaks
+in sections that are supposed to be universal:
+
+1. **Lineage-breadcrumb example** used brr-internal `_push_if_needed` +
+   `brr/*` namespace — replaced with a generic HTTP-retry example that
+   illustrates the same shape.
+2. **Subject-page area examples** listed brr's own subjects ("envs,
+   gates, daemon loop, conversations, kb itself, runners") — replaced
+   with category-level examples ("a subsystem, a cross-cutting concern,
+   an external integration, the runtime entrypoints, the build system").
+3. **Cross-link discipline** mentioned "brr's preflight" — generalised
+   to just "orphan pages should not exist for long".
+4. **`brr kb` blockquote** at the end of Knowledge base → Health checks
+   advertised brr's own future tooling with a hard link to
+   `Gurio/brr/issues/41` — deleted; the forward-tracking lives in
+   [`plan-kb-subcommand.md`](plan-kb-subcommand.md) and adopters have
+   no reason to see it.
+5. **`prompts/setup.md` universal-section list** was stale: included
+   "Work re-review" (folded into Workflow → Orientation per the
+   2026-05-16 restructure) and omitted "How to read this playbook"
+   (clearly universal, named in AGENTS.md → Constraints). Synced.
+
+Items 1-4 landed in commit 5ab92b3 (autocommit alongside the lodestar
+refinement); item 5 committed in the wrap.
+
+Defensible-but-heavy items noted and left in place — both arguably
+adopter-irrelevant, but both already justified by current policy
+recorded in [`decision-kb-shape.md`](decision-kb-shape.md):
+
+- "How to read this playbook" carries 40+ lines of stage-distinguishing
+  prose mostly about brr's orchestrator stages; an adopter who doesn't
+  run `brr up` reads heavy conditional framing for marginal benefit.
+- "When the brr daemon runs you" (48-line subsection) is explicitly
+  brr-internal but justified per current Constraints policy ("adopters
+  keep it because their playbook may be read by a brr daemon").
+
+Worth revisiting if adopter ergonomics ever become a priority concern.
+
+Full test suite (493 tests) passes; the two tests that pin "Stewardship"
+in the bundled prompts are unaffected.
