@@ -261,6 +261,9 @@ def status() -> int:
     return result.returncode
 
 
-def logs() -> int:
-    result = _run(["journalctl", "--user", "-u", "brr", "-f"], check=False)
+def logs(*, follow: bool = True, lines: int = 80) -> int:
+    command = ["journalctl", "--user", "-u", "brr", "-n", str(lines)]
+    if follow:
+        command.append("-f")
+    result = _run(command, check=False)
     return result.returncode
