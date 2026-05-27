@@ -54,8 +54,9 @@ _RENDERABLE_PACKETS = {
 }
 
 # Event kinds that originate from a comment (issue/PR timeline or
-# inline review-line). Replies to these include a quote pointer back
-# at the source; replies to label-triggered issues do not.
+# inline review-line) or a PR review summary body. Replies to these
+# include a quote pointer back at the source; replies to label-triggered
+# issues do not (the issue itself is the source).
 _COMMENT_KINDS = frozenset({
-    "issue-comment", "pr-comment", "pr-review-comment",
+    "issue-comment", "pr-comment", "pr-review-comment", "pr-review",
 })
