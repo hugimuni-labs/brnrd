@@ -1,15 +1,42 @@
-"""Tests for the GitHub gate."""
+"""Tests for the GitHub gate.
+
+The gate ships as a Python package (``brr.gates.github``) split into
+focused submodules. Tests patch on the submodule where each helper
+lives so monkeypatch replaces the symbol every caller resolves at
+runtime (Python looks up module globals at call time):
+
+- ``client``     — HTTP transport, ``_request`` / ``_api_get`` / ``_api_post`` / ``_api_patch``
+- ``state``      — JSON state, token resolution, ``_validate_token``
+- ``setup``      — interactive ``auth`` / ``bind`` / ``setup``, ``autodetect_repo``
+- ``parse``      — pure parsers (URL, JSON, mention filtering, body formatters)
+- ``polling``    — the per-trigger pollers
+- ``delivery``   — response-post + branch-footer + thread-reply
+- ``progress``   — live progress card (``render_update``)
+- ``loop``       — ``_loop_once`` / ``_handle_api_error`` / ``run_loop``
+"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from brr import protocol
-from brr.gates import github
 from brr import run_progress
+from brr.gates import github
+from brr.gates.github import (
+    cache,
+    client,
+    constants,
+    delivery,
+    loop,
+    parse,
+    paths,
+    polling,
+    progress,
+    state,
+    wizard,
+)
 from brr.task import Task
 
 
@@ -31,18 +58,36 @@ def test_parse_origin_url(url, expected):
     assert github.parse_origin_url(url) == expected
 
 
+# ── paths ─────────────────────────────────────────────────────────────
+
+
+def test_path_builders_match_documented_endpoints():
+    """Path builders are the wire contract reused by brnrd; lock them down."""
+    assert paths.user() == "/user"
+    assert paths.repo_issues("o/r") == "/repos/o/r/issues"
+    assert paths.repo_issue_comments("o/r") == "/repos/o/r/issues/comments"
+    assert paths.repo_pulls_comments("o/r") == "/repos/o/r/pulls/comments"
+    assert paths.pull("o/r", 62) == "/repos/o/r/pulls/62"
+    assert paths.issue_comments("o/r", 7) == "/repos/o/r/issues/7/comments"
+    assert paths.issue_comment("o/r", 555) == "/repos/o/r/issues/comments/555"
+    assert (
+        paths.pull_comment_replies("o/r", 62, 999)
+        == "/repos/o/r/pulls/62/comments/999/replies"
+    )
+
+
 # ── token resolution ────────────────────────────────────────────────
 
 
 def test_resolve_token_prefers_stored(monkeypatch):
-    monkeypatch.setattr(github, "_gh_cli_token", lambda: "from-gh")
+    monkeypatch.setattr(state, "_gh_cli_token", lambda: "from-gh")
     monkeypatch.setenv("GITHUB_TOKEN", "from-env")
 
     assert github.resolve_token({"token": "stored-token"}) == "stored-token"
 
 
 def test_resolve_token_falls_back_to_gh_cli(monkeypatch):
-    monkeypatch.setattr(github, "_gh_cli_token", lambda: "gh-cli-token")
+    monkeypatch.setattr(state, "_gh_cli_token", lambda: "gh-cli-token")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
 
@@ -50,7 +95,7 @@ def test_resolve_token_falls_back_to_gh_cli(monkeypatch):
 
 
 def test_resolve_token_falls_back_to_env(monkeypatch):
-    monkeypatch.setattr(github, "_gh_cli_token", lambda: None)
+    monkeypatch.setattr(state, "_gh_cli_token", lambda: None)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setenv("GITHUB_TOKEN", "env-token")
 
@@ -58,7 +103,7 @@ def test_resolve_token_falls_back_to_env(monkeypatch):
 
 
 def test_resolve_token_returns_none_when_nothing(monkeypatch):
-    monkeypatch.setattr(github, "_gh_cli_token", lambda: None)
+    monkeypatch.setattr(state, "_gh_cli_token", lambda: None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
 
@@ -66,34 +111,34 @@ def test_resolve_token_returns_none_when_nothing(monkeypatch):
 
 
 def test_auth_prompts_when_no_token_source(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(github, "_gh_cli_token", lambda: None)
+    monkeypatch.setattr(state, "_gh_cli_token", lambda: None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.setattr("builtins.input", lambda _prompt: "pasted-token")
-    monkeypatch.setattr(github, "_validate_token", lambda _t: "octocat")
+    monkeypatch.setattr(state, "_validate_token", lambda _t: "octocat")
     brr_dir = tmp_path / ".brr"
 
     github.auth(brr_dir)
 
-    state = github._load_state(brr_dir)
-    assert state["token"] == "pasted-token"
-    assert state["bot_login"] == "octocat"
-    assert state["token_source"] == "stored"
+    saved = state._load_state(brr_dir)
+    assert saved["token"] == "pasted-token"
+    assert saved["bot_login"] == "octocat"
+    assert saved["token_source"] == "stored"
 
 
 def test_auth_uses_gh_cli_token_without_storing(tmp_path, monkeypatch):
-    monkeypatch.setattr(github, "_gh_cli_token", lambda: "gh-cli-token")
+    monkeypatch.setattr(state, "_gh_cli_token", lambda: "gh-cli-token")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
-    monkeypatch.setattr(github, "_validate_token", lambda _t: "octocat")
+    monkeypatch.setattr(state, "_validate_token", lambda _t: "octocat")
     brr_dir = tmp_path / ".brr"
 
     github.auth(brr_dir)
 
-    state = github._load_state(brr_dir)
-    assert "token" not in state, "gh CLI tokens must not be persisted"
-    assert state["bot_login"] == "octocat"
-    assert state["token_source"] == "gh-cli"
+    saved = state._load_state(brr_dir)
+    assert "token" not in saved, "gh CLI tokens must not be persisted"
+    assert saved["bot_login"] == "octocat"
+    assert saved["token_source"] == "gh-cli"
 
 
 # ── HTTP helper ─────────────────────────────────────────────────────
@@ -129,9 +174,9 @@ def test_request_uses_requests_params_json_and_headers(monkeypatch):
         calls.append((method, url, kwargs))
         return _FakeGitHubResponse(200, {"ok": True}, headers={"X-RateLimit-Remaining": "1"})
 
-    monkeypatch.setattr(github.requests, "request", fake_request)
+    monkeypatch.setattr(client.requests, "request", fake_request)
 
-    payload, headers = github._request(
+    payload, headers = client._request(
         "secret",
         "POST",
         "/repos/o/r/issues",
@@ -149,7 +194,7 @@ def test_request_uses_requests_params_json_and_headers(monkeypatch):
     assert kwargs["json"] == {"title": "hello"}
     assert kwargs["headers"]["Authorization"] == "Bearer secret"
     assert kwargs["headers"]["Accept"] == "application/vnd.github+json"
-    assert kwargs["timeout"] == github._HTTP_TIMEOUT
+    assert kwargs["timeout"] == constants._HTTP_TIMEOUT
 
 
 def test_request_error_uses_github_json_message(monkeypatch):
@@ -161,10 +206,10 @@ def test_request_error_uses_github_json_message(monkeypatch):
             text='{"message":"API rate limit exceeded"}',
         )
 
-    monkeypatch.setattr(github.requests, "request", fake_request)
+    monkeypatch.setattr(client.requests, "request", fake_request)
 
     with pytest.raises(github.GitHubAPIError) as caught:
-        github._request("secret", "GET", "/rate_limit")
+        client._request("secret", "GET", "/rate_limit")
 
     assert caught.value.status == 403
     assert caught.value.message == "API rate limit exceeded"
@@ -175,18 +220,18 @@ def test_request_error_uses_github_json_message(monkeypatch):
 
 
 def test_autodetect_repo_from_origin_https(tmp_path, monkeypatch):
-    monkeypatch.setattr(github.gitops, "default_remote", lambda _r: "origin")
+    monkeypatch.setattr(wizard.gitops, "default_remote", lambda _r: "origin")
     monkeypatch.setattr(
-        github.gitops, "remote_url",
+        wizard.gitops, "remote_url",
         lambda _r, _name: "https://github.com/Gurio/brr.git",
     )
     assert github.autodetect_repo(tmp_path) == "Gurio/brr"
 
 
 def test_autodetect_repo_from_origin_ssh(tmp_path, monkeypatch):
-    monkeypatch.setattr(github.gitops, "default_remote", lambda _r: "origin")
+    monkeypatch.setattr(wizard.gitops, "default_remote", lambda _r: "origin")
     monkeypatch.setattr(
-        github.gitops, "remote_url",
+        wizard.gitops, "remote_url",
         lambda _r, _name: "git@github.com:Gurio/brr.git",
     )
     assert github.autodetect_repo(tmp_path) == "Gurio/brr"
@@ -200,15 +245,15 @@ def test_autodetect_repo_from_origin_ssh(tmp_path, monkeypatch):
 ])
 def test_extract_issue_and_pr_numbers(url, expected):
     if "/issues/" in url:
-        assert github._extract_issue_number(url) == expected
+        assert parse._extract_issue_number(url) == expected
     else:
-        assert github._extract_pr_number(url) == expected
+        assert parse._extract_pr_number(url) == expected
 
 
 def test_autodetect_repo_returns_none_for_non_github(tmp_path, monkeypatch):
-    monkeypatch.setattr(github.gitops, "default_remote", lambda _r: "origin")
+    monkeypatch.setattr(wizard.gitops, "default_remote", lambda _r: "origin")
     monkeypatch.setattr(
-        github.gitops, "remote_url",
+        wizard.gitops, "remote_url",
         lambda _r, _name: "git@gitlab.com:owner/repo.git",
     )
     assert github.autodetect_repo(tmp_path) is None
@@ -218,7 +263,7 @@ def test_autodetect_repo_returns_none_for_non_github(tmp_path, monkeypatch):
 
 
 def test_is_configured_requires_repo_triggers_and_token(tmp_path, monkeypatch):
-    monkeypatch.setattr(github, "_gh_cli_token", lambda: None)
+    monkeypatch.setattr(state, "_gh_cli_token", lambda: None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     brr_dir = tmp_path / ".brr"
@@ -227,15 +272,15 @@ def test_is_configured_requires_repo_triggers_and_token(tmp_path, monkeypatch):
     assert github.is_configured(brr_dir) is False
 
     # Token only — still not configured.
-    github._save_state(brr_dir, {"token": "x"})
+    state._save_state(brr_dir, {"token": "x"})
     assert github.is_configured(brr_dir) is False
 
     # Token + repo, no triggers — still not configured.
-    github._save_state(brr_dir, {"token": "x", "repo": "o/r"})
+    state._save_state(brr_dir, {"token": "x", "repo": "o/r"})
     assert github.is_configured(brr_dir) is False
 
     # Token + repo + at least one trigger — configured.
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "x", "repo": "o/r", "triggers": {"label": "brr"},
     })
     assert github.is_configured(brr_dir) is True
@@ -248,7 +293,7 @@ def test_label_trigger_creates_event_for_new_labelled_issue(tmp_path, monkeypatc
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "owner/name",
@@ -272,9 +317,9 @@ def test_label_trigger_creates_event_for_new_labelled_issue(tmp_path, monkeypatc
             ]
         return []
 
-    monkeypatch.setattr(github, "_api_get", fake_api_get)
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
@@ -288,7 +333,7 @@ def test_label_trigger_creates_event_for_new_labelled_issue(tmp_path, monkeypatc
     assert "fix the auth tests" in ev["body"]
 
     # Cursor advanced; second poll on the same issue does not re-create.
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
     assert len(protocol.list_pending(inbox)) == 1
 
 
@@ -296,14 +341,14 @@ def test_label_trigger_skips_pull_requests(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
         "triggers": {"label": "brr"},
     })
 
-    monkeypatch.setattr(github, "_api_get", lambda token, path, params=None: [
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None: [
         {
             "number": 7,
             "title": "PR title",
@@ -313,7 +358,7 @@ def test_label_trigger_skips_pull_requests(tmp_path, monkeypatch):
         },
     ])
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
     assert protocol.list_pending(inbox) == []
 
 
@@ -326,7 +371,7 @@ def test_mention_trigger_creates_event_for_pr_comment_with_branch_target(
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "owner/name",
@@ -349,9 +394,9 @@ def test_mention_trigger_creates_event_for_pr_comment_with_branch_target(
             return {"head": {"ref": "feature-x"}}
         return []
 
-    monkeypatch.setattr(github, "_api_get", fake_api_get)
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
@@ -372,14 +417,14 @@ def test_mention_trigger_handles_issue_comment_without_branch_target(
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
         "triggers": {"mention": "@brr-bot"},
     })
 
-    monkeypatch.setattr(github, "_api_get", lambda token, path, params=None: [
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None: [
         {
             "id": 1,
             "body": "@brr-bot triage this please",
@@ -390,7 +435,7 @@ def test_mention_trigger_handles_issue_comment_without_branch_target(
         },
     ])
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
@@ -404,14 +449,14 @@ def test_mention_trigger_ignores_bot_own_comments(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
         "triggers": {"mention": "@brr-bot"},
     })
 
-    monkeypatch.setattr(github, "_api_get", lambda token, path, params=None: [
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None: [
         {
             "id": 2,
             "body": "@brr-bot <- echoed in the bot's own reply",
@@ -422,7 +467,7 @@ def test_mention_trigger_ignores_bot_own_comments(tmp_path, monkeypatch):
         },
     ])
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
     assert protocol.list_pending(inbox) == []
 
 
@@ -433,7 +478,7 @@ def test_mention_trigger_pat_holder_can_mention_automation_account(
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "Gurio",
         "repo": "owner/name",
@@ -456,9 +501,9 @@ def test_mention_trigger_pat_holder_can_mention_automation_account(
             return {"head": {"ref": "brr/runner-ergonomics-review"}}
         return []
 
-    monkeypatch.setattr(github, "_api_get", fake_api_get)
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
@@ -471,7 +516,7 @@ def test_mention_trigger_creates_event_for_pr_review_comment(tmp_path, monkeypat
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "owner/name",
@@ -498,9 +543,9 @@ def test_mention_trigger_creates_event_for_pr_review_comment(tmp_path, monkeypat
             return {"head": {"ref": "feature-review"}}
         return []
 
-    monkeypatch.setattr(github, "_api_get", fake_api_get)
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
@@ -520,14 +565,14 @@ def test_mention_trigger_skips_comments_without_mention(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
         "triggers": {"mention": "@brr-bot"},
     })
 
-    monkeypatch.setattr(github, "_api_get", lambda token, path, params=None: [
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None: [
         {
             "id": 3,
             "body": "ordinary comment, no mention",
@@ -538,7 +583,7 @@ def test_mention_trigger_skips_comments_without_mention(tmp_path, monkeypatch):
         },
     ])
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
     assert protocol.list_pending(inbox) == []
 
 
@@ -549,7 +594,7 @@ def test_polling_cursor_advances_across_iterations(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
@@ -575,14 +620,14 @@ def test_polling_cursor_advances_across_iterations(tmp_path, monkeypatch):
             ]
         return []
 
-    monkeypatch.setattr(github, "_api_get", fake_api_get)
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
 
-    github._loop_once(brr_dir, inbox, responses)
-    state = github._load_state(brr_dir)
-    assert state["cursor"]["issues_since"] == "2026-05-15T09:00:00Z"
-    assert 1 in state["cursor"]["seen_issue_numbers"]
+    loop._loop_once(brr_dir, inbox, responses)
+    saved = state._load_state(brr_dir)
+    assert saved["cursor"]["issues_since"] == "2026-05-15T09:00:00Z"
+    assert 1 in saved["cursor"]["seen_issue_numbers"]
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
     # Second call uses the advanced cursor.
     assert captured_since[-1] == "2026-05-15T09:00:00Z"
 
@@ -594,7 +639,7 @@ def test_response_posts_comment_to_originating_thread(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "owner/name",
@@ -618,9 +663,9 @@ def test_response_posts_comment_to_originating_thread(tmp_path, monkeypatch):
     def fake_api_post(token, path, body):
         posts.append((path, body))
 
-    monkeypatch.setattr(github, "_api_post", fake_api_post)
+    monkeypatch.setattr(client, "_api_post", fake_api_post)
 
-    github._deliver_responses(brr_dir, inbox, responses, "secret")
+    delivery._deliver_responses(brr_dir, inbox, responses, "secret")
 
     # Label-trigger events: the issue itself is the source, so the
     # response body lands verbatim — no quote preface needed (and one
@@ -630,17 +675,11 @@ def test_response_posts_comment_to_originating_thread(tmp_path, monkeypatch):
 
 
 def test_response_to_mention_quotes_source_comment(tmp_path, monkeypatch):
-    """Mention-triggered replies prepend a quote pointer at the source.
-
-    GitHub's issue/PR comments API has no first-class reply primitive,
-    so the closest visible thread anchor is a blockquote linking to the
-    triggering comment. Matches what the GitHub UI's "Quote reply"
-    button generates.
-    """
+    """Mention-triggered replies prepend a quote pointer at the source."""
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "owner/name",
@@ -666,11 +705,11 @@ def test_response_to_mention_quotes_source_comment(tmp_path, monkeypatch):
 
     posts: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        github, "_api_post",
+        client, "_api_post",
         lambda token, path, body: posts.append((path, body)),
     )
 
-    github._deliver_responses(brr_dir, inbox, responses, "secret")
+    delivery._deliver_responses(brr_dir, inbox, responses, "secret")
 
     assert len(posts) == 1
     path, body = posts[0]
@@ -687,7 +726,7 @@ def test_response_to_pr_review_comment_replies_in_thread(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "owner/name",
@@ -713,11 +752,11 @@ def test_response_to_pr_review_comment_replies_in_thread(tmp_path, monkeypatch):
 
     posts: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        github, "_api_post",
+        client, "_api_post",
         lambda token, path, body: posts.append((path, body)),
     )
 
-    github._deliver_responses(brr_dir, inbox, responses, "secret")
+    delivery._deliver_responses(brr_dir, inbox, responses, "secret")
 
     assert len(posts) == 1
     path, payload = posts[0]
@@ -732,7 +771,7 @@ def test_response_to_mention_falls_back_when_author_missing(tmp_path, monkeypatc
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
@@ -754,11 +793,11 @@ def test_response_to_mention_falls_back_when_author_missing(tmp_path, monkeypatc
 
     posts: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        github, "_api_post",
+        client, "_api_post",
         lambda token, path, body: posts.append((path, body)),
     )
 
-    github._deliver_responses(brr_dir, inbox, responses, "secret")
+    delivery._deliver_responses(brr_dir, inbox, responses, "secret")
 
     text = posts[0][1]["body"]
     assert text.startswith(
@@ -773,10 +812,10 @@ def test_response_to_mention_falls_back_when_author_missing(tmp_path, monkeypatc
 def test_4xx_marks_backoff_long(monkeypatch):
     err = github.GitHubAPIError(404, "Not Found", headers={})
 
-    sleep_seconds = github._handle_api_error(err)
+    sleep_seconds = loop._handle_api_error(err)
 
     # 4xx is non-transient; we sleep at least the floor.
-    assert sleep_seconds == github._BACKOFF_MAX
+    assert sleep_seconds == constants._BACKOFF_MAX
 
 
 def test_rate_limit_response_sleeps_until_reset(monkeypatch):
@@ -791,7 +830,7 @@ def test_rate_limit_response_sleeps_until_reset(monkeypatch):
         },
     )
 
-    sleep_seconds = github._handle_api_error(err)
+    sleep_seconds = loop._handle_api_error(err)
 
     assert sleep_seconds == 120
 
@@ -806,7 +845,7 @@ def test_retry_after_header_overrides_other_signals(monkeypatch):
         },
     )
 
-    sleep_seconds = github._handle_api_error(err)
+    sleep_seconds = loop._handle_api_error(err)
 
     assert sleep_seconds == 45
 
@@ -816,24 +855,24 @@ def test_loop_once_noop_when_unconfigured(tmp_path):
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
     # No state at all.
-    sleep_for = github._loop_once(brr_dir, inbox, responses)
-    assert sleep_for == github._POLL_INTERVAL
+    sleep_for = loop._loop_once(brr_dir, inbox, responses)
+    assert sleep_for == constants._POLL_INTERVAL
     assert protocol.list_pending(inbox) == []
 
 
 def test_extract_issue_number():
-    assert github._extract_issue_number(
+    assert parse._extract_issue_number(
         "https://api.github.com/repos/o/r/issues/42",
     ) == 42
-    assert github._extract_issue_number("") is None
-    assert github._extract_issue_number("not a url") is None
+    assert parse._extract_issue_number("") is None
+    assert parse._extract_issue_number("not a url") is None
 
 
 def test_format_event_body_combines_title_and_body():
-    out = github._format_event_body("Fix bug", "Steps to reproduce…")
+    out = parse._format_event_body("Fix bug", "Steps to reproduce…")
     assert out.startswith("# Fix bug\n\nSteps to reproduce")
-    assert github._format_event_body("title only", "") == "# title only\n"
-    assert github._format_event_body("", "body only") == "body only\n"
+    assert parse._format_event_body("title only", "") == "# title only\n"
+    assert parse._format_event_body("", "body only") == "body only\n"
 
 
 # ── bind() UX: _prompt_trigger and default handling ────────────────
@@ -848,58 +887,58 @@ def _make_inputs(*values):
 def test_bind_enter_accepts_label_and_mention_defaults(tmp_path, monkeypatch):
     """Pressing Enter at each trigger prompt accepts the bracketed default."""
     brr_dir = tmp_path / ".brr"
-    github._save_state(brr_dir, {"token": "t", "bot_login": "brr-bot"})
-    monkeypatch.setattr(github, "autodetect_repo", lambda _: None)
+    state._save_state(brr_dir, {"token": "t", "bot_login": "brr-bot"})
+    monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
     # Inputs: repo, any-prompt (Enter=skip), label (Enter=brr), mention (Enter=@brr-bot)
     monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", ""))
 
     github.bind(brr_dir)
 
-    state = github._load_state(brr_dir)
-    assert state["triggers"] == {"label": "brr", "mention": "@brr-bot"}
+    saved = state._load_state(brr_dir)
+    assert saved["triggers"] == {"label": "brr", "mention": "@brr-bot"}
 
 
 def test_bind_off_disables_label(tmp_path, monkeypatch):
     """Typing 'off' at the label prompt removes the label trigger."""
     brr_dir = tmp_path / ".brr"
-    github._save_state(brr_dir, {"token": "t", "bot_login": "b", "triggers": {"label": "brr"}})
-    monkeypatch.setattr(github, "autodetect_repo", lambda _: None)
+    state._save_state(brr_dir, {"token": "t", "bot_login": "b", "triggers": {"label": "brr"}})
+    monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
     # repo, any-skip, label=off, mention=Enter
     monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "off", ""))
 
     github.bind(brr_dir)
 
-    state = github._load_state(brr_dir)
-    assert "label" not in state["triggers"]
-    assert state["triggers"]["mention"] == "@brr-bot"
+    saved = state._load_state(brr_dir)
+    assert "label" not in saved["triggers"]
+    assert saved["triggers"]["mention"] == "@brr-bot"
 
 
 def test_bind_typed_value_overrides_default(tmp_path, monkeypatch):
     """Typing a custom label string uses that string, not the default."""
     brr_dir = tmp_path / ".brr"
-    github._save_state(brr_dir, {"token": "t", "bot_login": "b"})
-    monkeypatch.setattr(github, "autodetect_repo", lambda _: None)
+    state._save_state(brr_dir, {"token": "t", "bot_login": "b"})
+    monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
     monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "my-label", "off"))
 
     github.bind(brr_dir)
 
-    state = github._load_state(brr_dir)
-    assert state["triggers"] == {"label": "my-label"}
+    saved = state._load_state(brr_dir)
+    assert saved["triggers"] == {"label": "my-label"}
 
 
 def test_bind_any_trigger_saves_and_skips_label_mention_prompts(tmp_path, monkeypatch, capsys):
     """Enabling 'any' saves triggers={'any': True} and skips subsequent prompts."""
     brr_dir = tmp_path / ".brr"
-    github._save_state(brr_dir, {"token": "t", "bot_login": "b"})
-    monkeypatch.setattr(github, "autodetect_repo", lambda _: None)
+    state._save_state(brr_dir, {"token": "t", "bot_login": "b"})
+    monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
     # repo, any=on — no further prompts expected
     inputs = _make_inputs("owner/repo", "on")
     monkeypatch.setattr("builtins.input", inputs)
 
     github.bind(brr_dir)
 
-    state = github._load_state(brr_dir)
-    assert state["triggers"] == {"any": True}
+    saved = state._load_state(brr_dir)
+    assert saved["triggers"] == {"any": True}
     assert "['any']" in capsys.readouterr().out
 
 
@@ -910,7 +949,7 @@ def test_any_trigger_emits_issue_event(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "owner/name",
@@ -932,9 +971,9 @@ def test_any_trigger_emits_issue_event(tmp_path, monkeypatch):
             ]
         return []
 
-    monkeypatch.setattr(github, "_api_get", fake_api_get)
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
@@ -949,7 +988,7 @@ def test_any_trigger_emits_pr_event_with_branch_target(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "owner/name",
@@ -974,9 +1013,9 @@ def test_any_trigger_emits_pr_event_with_branch_target(tmp_path, monkeypatch):
             return {"head": {"ref": "feature-y"}}
         return []
 
-    monkeypatch.setattr(github, "_api_get", fake_api_get)
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
@@ -991,7 +1030,7 @@ def test_any_trigger_emits_comment_events_skipping_bot(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
@@ -1021,9 +1060,9 @@ def test_any_trigger_emits_comment_events_skipping_bot(tmp_path, monkeypatch):
             ]
         return []
 
-    monkeypatch.setattr(github, "_api_get", fake_api_get)
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     events = protocol.list_pending(inbox)
     assert len(events) == 1
@@ -1037,7 +1076,7 @@ def test_any_trigger_overrides_label_and_mention_in_loop(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {
+    state._save_state(brr_dir, {
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
@@ -1049,20 +1088,20 @@ def test_any_trigger_overrides_label_and_mention_in_loop(tmp_path, monkeypatch):
     poll_mention_calls: list[str] = []
 
     monkeypatch.setattr(
-        github, "_poll_any_activity",
+        polling, "_poll_any_activity",
         lambda *a, **kw: poll_any_calls.append("any"),
     )
     monkeypatch.setattr(
-        github, "_poll_label_trigger",
+        polling, "_poll_label_trigger",
         lambda *a, **kw: poll_label_calls.append("label"),
     )
     monkeypatch.setattr(
-        github, "_poll_mention_trigger",
+        polling, "_poll_mention_trigger",
         lambda *a, **kw: poll_mention_calls.append("mention"),
     )
-    monkeypatch.setattr(github, "_deliver_responses", lambda *a, **kw: None)
+    monkeypatch.setattr(delivery, "_deliver_responses", lambda *a, **kw: None)
 
-    github._loop_once(brr_dir, inbox, responses)
+    loop._loop_once(brr_dir, inbox, responses)
 
     assert poll_any_calls == ["any"]
     assert poll_label_calls == []
@@ -1094,13 +1133,16 @@ def _write_task(brr_dir: Path, task_id: str, *, repo: str, issue_number: int) ->
 
 def test_render_update_creates_comment_on_task_created(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
-    github._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
+    state._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
     _write_task(brr_dir, "task-001", repo="o/r", issue_number=42)
-    monkeypatch.setattr(github, "_build_card_text", lambda *a: "**task received**")
+    monkeypatch.setattr(progress, "_build_card_text", lambda *a: "**task received**")
 
     posts: list[tuple[str, dict]] = []
-    monkeypatch.setattr(github, "_api_post", lambda token, path, body: posts.append((path, body)) or {"id": 999})
-    monkeypatch.setattr(github, "_api_patch", lambda token, path, body: None)
+    monkeypatch.setattr(
+        client, "_api_post",
+        lambda token, path, body: posts.append((path, body)) or {"id": 999},
+    )
+    monkeypatch.setattr(client, "_api_patch", lambda token, path, body: None)
 
     pkt = _make_packet("task_created", "github:default", "task-001")
     github.render_update(brr_dir, pkt)
@@ -1109,21 +1151,21 @@ def test_render_update_creates_comment_on_task_created(tmp_path, monkeypatch):
     assert posts[0][0] == "/repos/o/r/issues/42/comments"
     assert posts[0][1]["body"] == "**task received**"
 
-    entry = github._load_progress_for_task(brr_dir, "task-001")
+    entry = progress._load_progress_for_task(brr_dir, "task-001")
     assert entry["comment_id"] == 999
 
 
 def test_render_update_patches_existing_comment(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
-    github._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
+    state._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
     _write_task(brr_dir, "task-002", repo="o/r", issue_number=7)
-    github._save_progress_for_task(brr_dir, "task-002", {"comment_id": 555, "last_text": "old"})
-    monkeypatch.setattr(github, "_build_card_text", lambda *a: "**running...**")
+    progress._save_progress_for_task(brr_dir, "task-002", {"comment_id": 555, "last_text": "old"})
+    monkeypatch.setattr(progress, "_build_card_text", lambda *a: "**running...**")
 
     patches: list[tuple[str, dict]] = []
-    monkeypatch.setattr(github, "_api_patch", lambda token, path, body: patches.append((path, body)))
+    monkeypatch.setattr(client, "_api_patch", lambda token, path, body: patches.append((path, body)))
     posts: list = []
-    monkeypatch.setattr(github, "_api_post", lambda *a, **kw: posts.append(a))
+    monkeypatch.setattr(client, "_api_post", lambda *a, **kw: posts.append(a))
 
     pkt = _make_packet("heartbeat", "github:default", "task-002")
     github.render_update(brr_dir, pkt)
@@ -1134,17 +1176,17 @@ def test_render_update_patches_existing_comment(tmp_path, monkeypatch):
 
 def test_render_update_skips_duplicate_text(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
-    github._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
+    state._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
     _write_task(brr_dir, "task-003", repo="o/r", issue_number=1)
-    github._save_progress_for_task(
+    progress._save_progress_for_task(
         brr_dir, "task-003", {"comment_id": 11, "last_text": "same text"},
     )
-    monkeypatch.setattr(github, "_build_card_text", lambda *a: "same text")
+    monkeypatch.setattr(progress, "_build_card_text", lambda *a: "same text")
 
     patches: list = []
-    monkeypatch.setattr(github, "_api_patch", lambda *a, **kw: patches.append(a))
+    monkeypatch.setattr(client, "_api_patch", lambda *a, **kw: patches.append(a))
     posts: list = []
-    monkeypatch.setattr(github, "_api_post", lambda *a, **kw: posts.append(a))
+    monkeypatch.setattr(client, "_api_post", lambda *a, **kw: posts.append(a))
 
     pkt = _make_packet("heartbeat", "github:default", "task-003")
     github.render_update(brr_dir, pkt)
@@ -1156,7 +1198,7 @@ def test_render_update_skips_duplicate_text(tmp_path, monkeypatch):
 def test_render_update_noop_for_non_github_source(tmp_path, monkeypatch):
     """render_update must ignore tasks not sourced from GitHub."""
     brr_dir = tmp_path / ".brr"
-    github._save_state(brr_dir, {"token": "tok"})
+    state._save_state(brr_dir, {"token": "tok"})
     # Write a task with source="telegram"
     task = Task(
         id="task-tg",
@@ -1169,7 +1211,7 @@ def test_render_update_noop_for_non_github_source(tmp_path, monkeypatch):
     (brr_dir / "tasks" / "task-tg.md").write_text(task.to_frontmatter(), encoding="utf-8")
 
     posts: list = []
-    monkeypatch.setattr(github, "_api_post", lambda *a, **kw: posts.append(a))
+    monkeypatch.setattr(client, "_api_post", lambda *a, **kw: posts.append(a))
 
     pkt = _make_packet("task_created", "telegram:123:", "task-tg")
     github.render_update(brr_dir, pkt)
@@ -1179,12 +1221,12 @@ def test_render_update_noop_for_non_github_source(tmp_path, monkeypatch):
 
 def test_render_update_noop_when_no_token(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
-    monkeypatch.setattr(github, "_gh_cli_token", lambda: None)
+    monkeypatch.setattr(state, "_gh_cli_token", lambda: None)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     # No state file at all — no token.
     posts: list = []
-    monkeypatch.setattr(github, "_api_post", lambda *a, **kw: posts.append(a))
+    monkeypatch.setattr(client, "_api_post", lambda *a, **kw: posts.append(a))
 
     pkt = _make_packet("task_created", "github:default", "task-x")
     github.render_update(brr_dir, pkt)
@@ -1197,7 +1239,7 @@ def test_render_update_noop_when_no_token(tmp_path, monkeypatch):
 
 def test_branch_footer_returns_empty_when_no_branch():
     task = Task(id="t", event_id="e", body="b", source="github", meta={})
-    assert github._branch_footer("o/r", task) == ""
+    assert delivery._branch_footer("o/r", task) == ""
 
 
 def test_branch_footer_ignores_branch_name_before_finalize():
@@ -1205,7 +1247,7 @@ def test_branch_footer_ignores_branch_name_before_finalize():
         id="t", event_id="e", body="b", source="github",
         meta={"branch_name": "brr/task-abc"},
     )
-    assert github._branch_footer("o/r", task) == ""
+    assert delivery._branch_footer("o/r", task) == ""
 
 
 def test_branch_footer_includes_tree_and_compare_links():
@@ -1213,7 +1255,7 @@ def test_branch_footer_includes_tree_and_compare_links():
         id="t", event_id="e", body="b", source="github",
         meta={"publish_branch": "brr/task-abc"},
     )
-    footer = github._branch_footer("owner/repo", task)
+    footer = delivery._branch_footer("owner/repo", task)
     assert "brr/task-abc" in footer
     assert "https://github.com/owner/repo/tree/brr/task-abc" in footer
     assert "compare/brr/task-abc?expand=1" in footer
@@ -1229,18 +1271,18 @@ def test_find_task_for_event(tmp_path):
     text = text.replace("event_id: evt-001", "event_id: evt-target")
     task_path.write_text(text)
 
-    found = github._find_task_for_event(brr_dir, "evt-target")
+    found = delivery._find_task_for_event(brr_dir, "evt-target")
     assert found is not None
     assert found.id == "task-find-me"
 
-    assert github._find_task_for_event(brr_dir, "evt-unknown") is None
+    assert delivery._find_task_for_event(brr_dir, "evt-unknown") is None
 
 
 def test_deliver_responses_appends_branch_footer(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
-    github._save_state(brr_dir, {"token": "tok", "repo": "owner/repo"})
+    state._save_state(brr_dir, {"token": "tok", "repo": "owner/repo"})
 
     # Create a task file with a pushed branch.
     task = Task(
@@ -1271,9 +1313,9 @@ def test_deliver_responses_appends_branch_footer(tmp_path, monkeypatch):
     protocol.write_response(responses, "evt-deliver", "The work is done.")
 
     posts: list[tuple[str, dict]] = []
-    monkeypatch.setattr(github, "_api_post", lambda token, path, body: posts.append((path, body)))
+    monkeypatch.setattr(client, "_api_post", lambda token, path, body: posts.append((path, body)))
 
-    github._deliver_responses(brr_dir, inbox, responses, "tok")
+    delivery._deliver_responses(brr_dir, inbox, responses, "tok")
 
     assert len(posts) == 1
     body_text = posts[0][1]["body"]
