@@ -65,9 +65,13 @@ meaningfully better (`brnrd.dev` ~$15/yr vs `brr.run` ~$120/yr
 premium domain — material for a non-VC-funded project over the
 long term). The dashboard is "the brnrd dashboard." Canonical
 domain is **`brnrd.dev`** (HTTPS-enforced, signals the
-developer audience, dev/AI-tooling registry). If a future
-agentic-secretary layer earns its own brand, it can be named
-then; pre-naming buys nothing.
+developer audience, dev/AI-tooling registry). The web surface is
+split deliberately: brr.dev stays the OSS landing / docs property,
+while brnrd.dev is the hosted-product signup, dashboard, and billing
+property; [`decision-websites.md`](decision-websites.md) is the
+current receipt for that two-site shape. If a future agentic-secretary
+layer earns its own brand, it can be named then; pre-naming buys
+nothing.
 
 ## Current state
 

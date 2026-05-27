@@ -1,13 +1,15 @@
 # Plan: `brr kb` subcommand — kb health for users and agents
 
-**Status: accepted 2026-05-26** (locked in PR #40 MR review;
-implementation feedback may reshape — treat the per-subcommand
-output sketches as a working spine, not a contract). Adds
-`brr kb` as a top-level verb in the noun-first CLI taxonomy, exposing
-kb-graph health + structural stats + per-page introspection to
-both the human user (who needs to know "what should I act on?")
-and to non-brr-operated agents (Cursor, Codex CLI, Claude Code —
-the agents working on the project outside a `brr run` session).
+Status: accepted on 2026-05-26; not started.
+
+Locked in PR #40 MR review; implementation feedback may reshape the
+per-subcommand output sketches below, so treat them as a working
+spine, not a contract. The accepted target adds `brr kb` as a
+top-level verb in the noun-first CLI taxonomy, exposing kb-graph
+health + structural stats + per-page introspection to both the human
+user (who needs to know "what should I act on?") and to
+non-brr-operated agents (Cursor, Codex CLI, Claude Code — the agents
+working on the project outside a `brr run` session).
 Addresses [issue #41](https://github.com/Gurio/brr/issues/41) and
 the long-standing wart that the kb is half the project's value
 prop but has no first-class read surface from the CLI. Companion
@@ -16,7 +18,7 @@ kb` is added as the 7th top-level verb), to
 [`subject-kb.md`](subject-kb.md) (the canonical kb hub that this
 plan's verbs surface state from), and to
 [`AGENTS.md`](../AGENTS.md) → "Knowledge base" (the maintenance
-contract `brr kb check` and `brr kb status` mechanise).
+contract `brr kb check` and `brr kb status` will mechanise).
 
 ## Why this exists
 
@@ -239,7 +241,7 @@ the kb subcommand in place, it becomes a one-line pointer:
 Health checks: run `brr kb check` (machine: --json). Surfaces
 broken cross-references, missing lifecycle markers, orphan
 pages, aspirational-drift smells. For the underlying contract
-on what each finding means, see [`subject-kb.md`](subject-kb.md).
+on what each finding means, see kb/subject-kb.md.
 ```
 
 This is the change AGENTS.md gets: replace the implicit
@@ -259,7 +261,7 @@ activity, drift warnings) in one call instead of N reads.
    subject hubs themselves) must have at least one inbound link
    from `index.md` or another non-index page. Orphans are flagged.
 2. **Cross-reference integrity.** Every Markdown link to a
-   relative `kb/*` path resolves to a file that exists.
+   relative kb page resolves to a file that exists.
 3. **Status-marker syntax.** `plan-*` / `design-*` /
    `decision-*` pages should have a top-of-page `Status: ...`
    line matching the grammar from
@@ -311,7 +313,11 @@ sub-parser pattern the other verbs use. No daemon dependency.
 
 - All six sub-verbs implemented with stable `--json` schemas.
 - AGENTS.md → "Health checks" updated to point at `brr kb
-  check`.
+  check`. Scope the reference to brr-internal context (e.g. the
+  "When the brr daemon runs you" subsection); the universal
+  kb-maintenance prose stays brr-command-free so the section ships
+  cleanly via `brr init`. See [`log.md`](log.md) 2026-05-27
+  adopter-lens cleanup for the why.
 - Brr daemon-side context-injection updated to include
   `brr kb status --json` output in the Task Context Bundle
   (so brr-operated agents share the same surface non-brr

@@ -166,16 +166,19 @@ layers:
   `~/.config/systemd/user/brr.service`, with no `WorkingDirectory`, and
   `brr daemon up | down | status | logs | uninstall` operate that
   service through `systemctl --user` / `journalctl --user`.
+- On macOS, `brr daemon install` writes one LaunchAgent at
+  `~/Library/LaunchAgents/dev.brnrd.brr.plist`, with no
+  `WorkingDirectory`, and the same daemon verbs operate that service
+  through `launchctl` while logs land in `~/Library/Logs/brr/`.
 
 That boundary avoids letting chat messages or agent code kill the
 process that is currently responsible for delivering their response.
 Agents should not run daemon lifecycle commands from inside daemon
 tasks; the generated run context and bundled internals doc both frame
-daemon lifecycle verbs as human-operator concerns. The Linux unit slice
-shipped on 2026-05-26 from
-[`plan-laptop-daemoning.md`](plan-laptop-daemoning.md); the broader
-machine-scoped multi-project runtime and macOS LaunchAgent slice remain
-tracked there.
+daemon lifecycle verbs as human-operator concerns. The Linux systemd
+and macOS LaunchAgent service-lifecycle slices shipped on 2026-05-26
+from [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md); the
+broader machine-scoped multi-project runtime remains tracked there.
 
 For brr self-development, the restart pain is real but narrower than a
 product restart feature. The shipped path is captured in
@@ -203,11 +206,13 @@ removed on 2026-05-14 once the only importers were tests and stale docs.
 ## Deferred directions
 
 - **Machine-scoped daemon runtime.** The Linux unit is machine-scoped,
-  but the runtime still needs the project registry / poller reshape
-  tracked in [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md) to
-  serve multiple repos from one process.
-- **macOS LaunchAgent install.** The launchd counterpart is still
-  pending under the same laptop-daemoning plan.
+  and the macOS LaunchAgent follows the same no-`WorkingDirectory`
+  service shape, but the runtime still needs the project registry /
+  poller reshape tracked in
+  [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md) to serve
+  multiple repos from one process.
+- **Windows native service install.** Deferred until there is real user
+  demand and the daemon model can support Windows honestly.
 - **True cancellation.** The daemon has no cancellation in v1. Signals
   request drain-and-exit; they do not interrupt a running AI CLI.
 

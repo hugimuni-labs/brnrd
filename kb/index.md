@@ -425,21 +425,23 @@ dive-in map) and are stable until something contradicts them.
   template shares its read-only-container shape with the brnrd
   backend Upsun deployment.
 - [Laptop daemoning plan](plan-laptop-daemoning.md) —
-  *accepted 2026-05-26; Linux systemd slice shipped 2026-05-26*.
+  *accepted 2026-05-26; Linux systemd and macOS LaunchAgent service
+  slices shipped 2026-05-26*.
   Accepted target shape is machine-scoped multi-project: one
   `brr daemon` process per machine serves all brr-init'd repos
   from `~/.config/brr/projects.toml`; account binding lives at
   machine scope; one supervised systemd / launchd unit per
   machine (no `WorkingDirectory` pinning, no `--name` flag).
-  The shipped Linux side writes a per-user systemd unit
+  The shipped service-lifecycle surface writes a per-user systemd unit
   (`~/.config/systemd/user/brr.service` + optional
-  `loginctl enable-linger`) and wires `brr daemon up | down |
-  status | logs | uninstall` through the user service when
-  installed, falling back to the foreground supervisor when not.
+  `loginctl enable-linger`) on Linux and a LaunchAgent
+  (`~/Library/LaunchAgents/dev.brnrd.brr.plist`) on macOS,
+  then wires `brr daemon up | down | status | logs | uninstall`
+  through the native service manager when installed, falling back
+  to the foreground supervisor when not.
   Registry-aware runtime, `brr init` registry writes,
-  `brr daemon list|adopt|forget`, machine account binding, and
-  the macOS LaunchAgent counterpart remain follow-up work;
-  Windows is deferred. Tracked at
+  `brr daemon list|adopt|forget`, and machine account binding
+  remain follow-up work; Windows is deferred. Tracked at
   [issue #29](https://github.com/Gurio/brr/issues/29).
 - [Config layout design](design-config-layout.md) —
   *accepted 2026-05-26*. **Locking pass IV** added the

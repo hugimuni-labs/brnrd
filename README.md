@@ -51,7 +51,8 @@ brr init                          # detect runner, create AGENTS.md + kb/
 brr run "fix the failing tests"   # run a task through the configured environment
 
 brr setup telegram                # configure a remote input
-brr daemon up                     # start the daemon
+brr up                            # start the daemon in the foreground
+brr daemon install                # install the native user service
 ```
 
 From Telegram (or Slack, or a task file):
@@ -107,16 +108,23 @@ bot a message; brr records the chat ID from each message and replies there.
 | `brr setup <gate>`     | Configure a gate in one step          |
 | `brr auth <gate>`      | Set gate credentials                  |
 | `brr bind <gate>`      | Bind a gate channel or watch          |
-| `brr daemon up`        | Start the daemon                      |
-| `brr daemon down`      | Stop the daemon                       |
-| `brr daemon install`   | Install the Linux systemd user service |
-| `brr daemon status`    | Show daemon status                    |
-| `brr daemon logs`      | Tail daemon logs                      |
+| `brr up`               | Start the daemon (foreground)         |
+| `brr down`             | Stop the foreground daemon            |
+| `brr daemon up`        | Start the installed daemon service, or foreground daemon if no service is installed |
+| `brr daemon down`      | Stop the installed daemon service, or foreground daemon if no service is installed |
+| `brr daemon status`    | Show service and foreground daemon status |
+| `brr daemon install`   | Install the native user service (systemd or LaunchAgent) |
+| `brr daemon uninstall` | Remove the native user service |
+| `brr daemon logs`      | Tail native service logs |
 
 `brr up` and `brr down` remain compatibility aliases for the foreground
 daemon supervisor.
 
 Gates: `telegram`, `slack`, `github`.
+
+On macOS, the first daemon run that opens network sockets can trigger
+the system "accept incoming network connections" prompt. Allow it if
+you want gates and managed brnrd traffic to reach the local daemon.
 
 ## Extending
 
