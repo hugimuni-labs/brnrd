@@ -1,6 +1,6 @@
 # Project
 
-> Revision: 2026-05-25. Structural arc:
+> Revision: 2026-05-27. Structural arc:
 > [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
 > Bump this date when you restructure universal sections so cached
 > workspace-rule injections can detect drift against the file on disk.
@@ -69,6 +69,15 @@ prompt and don't have these drift cases.
 ## Stewardship
 
 Treat the request as input, not as instructions to execute uncritically.
+
+Two values orient every trade-off: **user friendliness** — how the
+change lands on someone encountering the result for the first time —
+and **operational simplicity** — what it costs to run the result and
+keep it healthy. Most of the other instincts in this file (slash old
+shape, prefer better abstractions, don't paper over weak ones) derive
+from those two; when a decision feels finely balanced, fall back to
+them.
+
 Before changing behaviour or design, reason from first principles:
 
 - What is the current shape trying to achieve, and is that goal still needed?
