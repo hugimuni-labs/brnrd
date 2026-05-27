@@ -25,6 +25,19 @@ class GitHubAPIError(RuntimeError):
         self.headers = headers or {}
 
 
+def _etag_cache_key(method: str, path: str) -> str:
+    """Cache key for a conditional request.
+
+    Only ``(method, path)`` is included; the ``since`` cursor in
+    polling params changes on every cursor advance, but we still want
+    to send the most recent ETag for that path so GitHub can answer
+    304 when its underlying response is unchanged. GitHub's ETag is a
+    function of the response body, so a stale-keyed conditional just
+    means one wasted 200 before the new ETag is cached — self-healing.
+    """
+    return f"{method} {path}"
+
+
 def _request(
     token: str,
     method: str,
@@ -32,12 +45,21 @@ def _request(
     *,
     params: dict[str, Any] | None = None,
     body: dict[str, Any] | None = None,
+    etag_store: dict[str, str] | None = None,
 ) -> tuple[Any, dict[str, str]]:
     """Issue a GitHub API call. Returns ``(parsed_body, response_headers)``.
 
     Raises ``GitHubAPIError`` on non-2xx responses; the ``Retry-After`` /
     ``X-RateLimit-*`` headers are surfaced on the exception so the caller
     can sleep until reset.
+
+    When ``etag_store`` is provided, an ``If-None-Match`` header is sent
+    using any previously-cached ETag for ``(method, path)``. On HTTP 304
+    the helper returns ``(None, headers)`` without raising. On a 2xx
+    response with an ``ETag`` header the store is updated in place so
+    the next call against the same endpoint can be conditional.
+    Conditional GETs are free against GitHub's REST rate limit when they
+    return 304, which on quiet repos is the steady state.
     """
     url = _API_ROOT + path
     clean_params = None
@@ -53,6 +75,12 @@ def _request(
         "User-Agent": _USER_AGENT,
         "X-GitHub-Api-Version": _API_VERSION,
     }
+    cache_key: str | None = None
+    if etag_store is not None:
+        cache_key = _etag_cache_key(method, path)
+        cached_etag = etag_store.get(cache_key)
+        if cached_etag:
+            headers["If-None-Match"] = cached_etag
     response = requests.request(
         method,
         url,
@@ -62,12 +90,21 @@ def _request(
         timeout=_HTTP_TIMEOUT,
     )
     response_headers = {k: v for k, v in response.headers.items()}
+    if response.status_code == 304:
+        # Resource unchanged since the cached ETag was issued. GitHub
+        # doesn't count conditional 304s against the REST rate limit;
+        # this is the whole point of threading the ETag store.
+        return None, response_headers
     if not 200 <= response.status_code < 300:
         raise GitHubAPIError(
             response.status_code,
             _github_error_message(response),
             headers=response_headers,
         )
+    if cache_key is not None:
+        new_etag = response.headers.get("ETag")
+        if new_etag:
+            etag_store[cache_key] = new_etag
     if not response.content:
         return None, response_headers
     return response.json(), response_headers
@@ -87,8 +124,16 @@ def _github_error_message(response: requests.Response) -> str:
     return response.reason or ""
 
 
-def _api_get(token: str, path: str, params: dict[str, Any] | None = None) -> Any:
-    payload, _ = _request(token, "GET", path, params=params)
+def _api_get(
+    token: str,
+    path: str,
+    params: dict[str, Any] | None = None,
+    *,
+    etag_store: dict[str, str] | None = None,
+) -> Any:
+    payload, _ = _request(
+        token, "GET", path, params=params, etag_store=etag_store,
+    )
     return payload
 
 
