@@ -1,6 +1,6 @@
 # Project
 
-> Revision: 2026-05-25. Structural arc:
+> Revision: 2026-05-27. Structural arc:
 > [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
 > Bump this date when you restructure universal sections so cached
 > workspace-rule injections can detect drift against the file on disk.
@@ -69,6 +69,13 @@ prompt and don't have these drift cases.
 ## Stewardship
 
 Treat the request as input, not as instructions to execute uncritically.
+
+Two values orient what we build: **user friendliness** — how the
+change lands on someone encountering the result for the first time —
+and **operational simplicity** — what it costs to run the result and
+keep it healthy. When a decision feels finely balanced, fall back to
+them.
+
 Before changing behaviour or design, reason from first principles:
 
 - What is the current shape trying to achieve, and is that goal still needed?
@@ -265,9 +272,13 @@ successor or the commit. The full prior text doesn't need to stay.
 Concretely:
 
 - Bad (changelog-style):  
-  `_push_if_needed previously checked the brr/* namespace and refused to push outside it; we removed the check on 2026-05-11 because…`
+  `The HTTP client previously retried 5xx with exponential backoff; we
+  removed it on 2026-05-11 because…`
 - Good (state + breadcrumb):  
-  `_push_if_needed always pushes with -u when the branch has no upstream, mirroring how a user would publish a new branch. (Earlier versions restricted pushes to the brr/* namespace; removed 2026-05-11, see commit abc1234, when agent-named branches became routine.)`
+  `The HTTP client surfaces 5xx responses to the caller without retrying,
+  letting the caller decide whether the request is idempotent. (Earlier
+  versions retried with backoff; removed 2026-05-11, see commit abc1234,
+  when blind retries started masking caller bugs.)`
 
 If a breadcrumb wouldn't load-bear for anyone reading the page today, just
 delete the old paragraph. Git keeps it.
@@ -307,10 +318,11 @@ The kb is a graph, not a stack of memos:
 ### Subject pages
 
 A `kb/subject-<name>.md` page is the canonical synthesis for a major repo
-area (e.g. envs, gates, daemon loop, conversations, kb itself, runners).
-It absorbs "what we currently know about X" and links to the relevant
-decisions, plans, research, reviews. Subject pages don't pre-seed by
-ontology.
+area — a subsystem, a cross-cutting concern, an external integration, the
+runtime entrypoints, the build system, whatever the repo's natural seams
+are. It absorbs "what we currently know about X" and links to the
+relevant decisions, plans, research, reviews. Subject pages don't
+pre-seed by ontology — let the work surface what deserves a hub.
 
 **When to create one.** When work touches an area that doesn't yet have a
 subject page, *and* the current work plus the existing related material is
@@ -340,9 +352,8 @@ history of why beliefs evolved is itself knowledge.
 
 Every committed kb page (except `index.md`, `log.md`, and subject hubs
 themselves) should link from at least one subject hub or peer page, and
-should link out to at least one neighbour. Pages added without inbound
-links surface as orphans in brr's preflight; they should not exist for
-long.
+should link out to at least one neighbour. Orphan pages (no inbound links
+from any hub or peer) should not exist for long.
 
 ### Log format
 
@@ -434,17 +445,6 @@ absorbed by a successor, a review whose findings are addressed and never
 will be revisited — delete it; record the deletion in `kb/log.md` if it's
 worth a sentence. Lifecycle markers preserve history when the history
 matters; deletion is for noise.
-
-> **Once `brr kb` ships** (per
-> [`kb/plan-kb-subcommand.md`](kb/plan-kb-subcommand.md), addressing
-> [#41](https://github.com/Gurio/brr/issues/41)) this scan collapses to
-> two commands: `brr kb status` for the orientation-time summary
-> (counts, proposed-pending, log activity, warnings) and `brr kb check`
-> for the post-edit validation (broken cross-references, missing
-> lifecycle markers, orphans, aspirational-drift smells). Both support
-> `--json` for agent consumption. Until then, the manual scan above is
-> what every brr-operated, Cursor, Codex CLI, or Claude Code session
-> runs.
 
 ## Artifacts
 
