@@ -192,6 +192,19 @@ def test_autodetect_repo_from_origin_ssh(tmp_path, monkeypatch):
     assert github.autodetect_repo(tmp_path) == "Gurio/brr"
 
 
+@pytest.mark.parametrize("url, expected", [
+    ("https://api.github.com/repos/o/r/issues/42", 42),
+    ("https://api.github.com/repos/o/r/pulls/62", 62),
+    ("https://api.github.com/repos/o/r/pulls/62/comments", 62),
+    ("", None),
+])
+def test_extract_issue_and_pr_numbers(url, expected):
+    if "/issues/" in url:
+        assert github._extract_issue_number(url) == expected
+    else:
+        assert github._extract_pr_number(url) == expected
+
+
 def test_autodetect_repo_returns_none_for_non_github(tmp_path, monkeypatch):
     monkeypatch.setattr(github.gitops, "default_remote", lambda _r: "origin")
     monkeypatch.setattr(
@@ -453,6 +466,56 @@ def test_mention_trigger_pat_holder_can_mention_automation_account(
     assert events[0]["branch_target"] == "brr/runner-ergonomics-review"
 
 
+def test_mention_trigger_creates_event_for_pr_review_comment(tmp_path, monkeypatch):
+    """Inline PR review comments live on /pulls/comments, not /issues/comments."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    def fake_api_get(token, path, params=None):
+        if path == "/repos/owner/name/issues/comments":
+            return []
+        if path == "/repos/owner/name/pulls/comments":
+            return [
+                {
+                    "id": 3309624726,
+                    "body": "@brr-bot is this link wrong?",
+                    "user": {"login": "alice"},
+                    "pull_request_url": "https://api.github.com/repos/owner/name/pulls/62",
+                    "html_url": "https://github.com/owner/name/pull/62#discussion_r3309624726",
+                    "path": "kb/plan.md",
+                    "line": 42,
+                    "updated_at": "2026-05-27T12:20:00Z",
+                },
+            ]
+        if path == "/repos/owner/name/pulls/62":
+            return {"head": {"ref": "feature-review"}}
+        return []
+
+    monkeypatch.setattr(github, "_api_get", fake_api_get)
+
+    github._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["github_kind"] == "pr-review-comment"
+    assert ev["github_issue_number"] == 62
+    assert ev["github_pr_number"] == 62
+    assert ev["github_comment_id"] == 3309624726
+    assert ev["github_path"] == "kb/plan.md"
+    assert ev["github_line"] == 42
+    assert ev["branch_target"] == "feature-review"
+    assert "On `kb/plan.md` line 42:" in ev["body"]
+    assert "@brr-bot is this link wrong?" in ev["body"]
+
+
 def test_mention_trigger_skips_comments_without_mention(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
@@ -618,6 +681,49 @@ def test_response_to_mention_quotes_source_comment(tmp_path, monkeypatch):
         "(https://github.com/owner/name/pull/7#issuecomment-12345)"
     )
     assert text.endswith("Done — pushed to feature-x.")
+
+
+def test_response_to_pr_review_comment_replies_in_thread(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    github._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    protocol.create_event(
+        inbox,
+        source="github",
+        body="@brr-bot check this hunk",
+        github_repo="owner/name",
+        github_kind="pr-review-comment",
+        github_issue_number=62,
+        github_pr_number=62,
+        github_comment_id=3309624726,
+        github_author="alice",
+        github_html_url="https://github.com/owner/name/pull/62#discussion_r3309624726",
+        github_trigger="mention",
+    )
+    event = protocol.list_pending(inbox)[0]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses, event["id"], "Looks correct to me.")
+
+    posts: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        github, "_api_post",
+        lambda token, path, body: posts.append((path, body)),
+    )
+
+    github._deliver_responses(brr_dir, inbox, responses, "secret")
+
+    assert len(posts) == 1
+    path, payload = posts[0]
+    assert path == "/repos/owner/name/pulls/62/comments/3309624726/replies"
+    assert "Looks correct to me." in payload["body"]
+    assert "discussion_r3309624726" in payload["body"]
 
 
 def test_response_to_mention_falls_back_when_author_missing(tmp_path, monkeypatch):

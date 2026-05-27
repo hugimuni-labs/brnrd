@@ -5,12 +5,14 @@ The gate polls the GitHub REST API for three configurable triggers:
 - ``label-on-issue``: a new (or updated) open issue carrying the
   configured label becomes one inbox event.
 - ``mention-in-comment``: a new comment containing the configured
-  mention string becomes one event. PR comments carry the PR head
-  branch as ``branch_target`` so the daemon's pre-task fetch+ff
-  refreshes that branch before the worker runs. For ``@handle``-style
-  triggers, comments authored by ``handle`` are filtered so the named
-  account cannot self-loop; the PAT holder can still @-mention that
-  account from their own comments.
+  mention string becomes one event. Covers issue/PR timeline comments
+  (``/issues/comments``) and inline PR review comments on diffs
+  (``/pulls/comments``). PR-anchored comments carry the PR head branch
+  as ``branch_target`` so the daemon's pre-task fetch+ff refreshes that
+  branch before the worker runs. For ``@handle``-style triggers,
+  comments authored by ``handle`` are filtered so the named account
+  cannot self-loop; the PAT holder can still @-mention that account
+  from their own comments.
 - ``any``: every new issue, PR, and comment fires an event. Overrides
   label and mention when set. Token-expensive on busy repos; off by
   default. PR events include ``branch_target``; bot's own comments are
@@ -596,6 +598,93 @@ def _poll_mention_trigger(
     cursor["comments_since"] = latest_seen
     cursor["seen_comment_ids"] = sorted(seen)[-_SEEN_CAP:]
 
+    _poll_mention_review_comments(
+        token, repo, mention, token_login, cursor, inbox_dir, pr_branch_cache,
+    )
+
+
+def _poll_mention_review_comments(
+    token: str,
+    repo: str,
+    mention: str,
+    token_login: str,
+    cursor: dict,
+    inbox_dir: Path,
+    pr_branch_cache: dict[int, str],
+) -> None:
+    """Poll inline PR review comments (diff line threads) for *mention*."""
+    since = cursor.get("review_comments_since") or _initial_since()
+    seen = set(cursor.get("seen_review_comment_ids") or [])
+    comments = _api_get(
+        token, f"/repos/{repo}/pulls/comments",
+        params={
+            "since": since,
+            "per_page": 100,
+            "sort": "updated",
+            "direction": "asc",
+        },
+    ) or []
+
+    latest_seen = since
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        cid = comment.get("id")
+        if not isinstance(cid, int):
+            continue
+        if cid in seen:
+            continue
+        body = str(comment.get("body") or "")
+        if mention not in body:
+            continue
+        author = (comment.get("user") or {}).get("login") or ""
+        if _skip_mention_comment_author(author, mention, token_login):
+            continue
+
+        pr_number = _extract_pr_number(comment.get("pull_request_url") or "")
+        if pr_number is None:
+            continue
+
+        html_url = str(comment.get("html_url") or "")
+        path = str(comment.get("path") or "").strip()
+        line = comment.get("line")
+        meta: dict[str, Any] = {
+            "github_repo": repo,
+            "github_kind": "pr-review-comment",
+            "github_issue_number": pr_number,
+            "github_pr_number": pr_number,
+            "github_comment_id": cid,
+            "github_author": author,
+            "github_html_url": html_url,
+            "github_trigger": "mention",
+            "github_mention": mention,
+        }
+        if path:
+            meta["github_path"] = path
+        if isinstance(line, int):
+            meta["github_line"] = line
+
+        branch = pr_branch_cache.get(pr_number) or _fetch_pr_head_branch(
+            token, repo, pr_number,
+        )
+        if branch:
+            pr_branch_cache[pr_number] = branch
+            meta["branch_target"] = branch
+
+        protocol.create_event(
+            inbox_dir,
+            source="github",
+            body=_format_review_comment_body(path, line, body),
+            **meta,
+        )
+        seen.add(cid)
+        ts = comment.get("updated_at") or comment.get("created_at")
+        if isinstance(ts, str) and ts > latest_seen:
+            latest_seen = ts
+
+    cursor["review_comments_since"] = latest_seen
+    cursor["seen_review_comment_ids"] = sorted(seen)[-_SEEN_CAP:]
+
 
 def _poll_any_activity(
     token: str,
@@ -732,8 +821,91 @@ def _poll_any_activity(
     cursor["any_comments_since"] = latest_seen_c
     cursor["any_seen_comment_ids"] = sorted(seen_c)[-_SEEN_CAP:]
 
+    _poll_any_review_comments(
+        token, repo, bot_login, cursor, inbox_dir, pr_branch_cache,
+    )
+
+
+def _poll_any_review_comments(
+    token: str,
+    repo: str,
+    bot_login: str,
+    cursor: dict,
+    inbox_dir: Path,
+    pr_branch_cache: dict[int, str],
+) -> None:
+    since = cursor.get("any_review_comments_since") or _initial_since()
+    seen = set(cursor.get("any_seen_review_comment_ids") or [])
+    comments = _api_get(
+        token, f"/repos/{repo}/pulls/comments",
+        params={
+            "since": since,
+            "per_page": 100,
+            "sort": "updated",
+            "direction": "asc",
+        },
+    ) or []
+
+    latest_seen = since
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        cid = comment.get("id")
+        if not isinstance(cid, int):
+            continue
+        if cid in seen:
+            continue
+        author = (comment.get("user") or {}).get("login") or ""
+        if author and bot_login and author == bot_login:
+            continue
+
+        pr_number = _extract_pr_number(comment.get("pull_request_url") or "")
+        if pr_number is None:
+            continue
+
+        html_url = str(comment.get("html_url") or "")
+        path = str(comment.get("path") or "").strip()
+        line = comment.get("line")
+        body_text = str(comment.get("body") or "")
+        meta: dict[str, Any] = {
+            "github_repo": repo,
+            "github_kind": "pr-review-comment",
+            "github_issue_number": pr_number,
+            "github_pr_number": pr_number,
+            "github_comment_id": cid,
+            "github_author": author,
+            "github_html_url": html_url,
+            "github_trigger": "any",
+        }
+        if path:
+            meta["github_path"] = path
+        if isinstance(line, int):
+            meta["github_line"] = line
+
+        branch = pr_branch_cache.get(pr_number) or _fetch_pr_head_branch(
+            token, repo, pr_number,
+        )
+        if branch:
+            pr_branch_cache[pr_number] = branch
+            meta["branch_target"] = branch
+
+        protocol.create_event(
+            inbox_dir,
+            source="github",
+            body=_format_review_comment_body(path, line, body_text),
+            **meta,
+        )
+        seen.add(cid)
+        ts = comment.get("updated_at") or comment.get("created_at")
+        if isinstance(ts, str) and ts > latest_seen:
+            latest_seen = ts
+
+    cursor["any_review_comments_since"] = latest_seen
+    cursor["any_seen_review_comment_ids"] = sorted(seen)[-_SEEN_CAP:]
+
 
 _ISSUE_URL_RE = re.compile(r"/issues/(\d+)$")
+_PR_URL_RE = re.compile(r"/pulls/(\d+)(?:/|$)")
 
 
 def _login_to_skip_for_mention_trigger(mention: str, token_login: str) -> str | None:
@@ -780,6 +952,30 @@ def _extract_issue_number(issue_url: str) -> int | None:
         return int(m.group(1))
     except ValueError:
         return None
+
+
+def _extract_pr_number(pull_request_url: str) -> int | None:
+    if not pull_request_url:
+        return None
+    m = _PR_URL_RE.search(pull_request_url)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _format_review_comment_body(path: str, line: object, body: str) -> str:
+    """Prefix inline review context so the worker knows which hunk was tagged."""
+    text = body.strip()
+    if path:
+        loc = f"`{path}`"
+        if isinstance(line, int):
+            loc += f" line {line}"
+        header = f"On {loc}:\n\n"
+        return (header + text + "\n") if text else header
+    return _format_event_body("", body)
 
 
 def _fetch_pr_head_branch(token: str, repo: str, pr_number: int) -> str | None:
@@ -858,9 +1054,20 @@ def _deliver_responses(
             if footer:
                 body = body.rstrip() + footer + "\n"
         threaded_body = _thread_reply_body(event, body)
+        kind = str(event.get("github_kind") or "")
+        review_cid = _coerce_int(event.get("github_comment_id"))
+        pr_number = _coerce_int(
+            event.get("github_pr_number") or event.get("github_issue_number"),
+        )
+        if kind == "pr-review-comment" and review_cid is not None and pr_number is not None:
+            post_path = (
+                f"/repos/{repo}/pulls/{pr_number}/comments/{review_cid}/replies"
+            )
+        else:
+            post_path = f"/repos/{repo}/issues/{number}/comments"
         try:
             _api_post(
-                token, f"/repos/{repo}/issues/{number}/comments",
+                token, post_path,
                 body={"body": threaded_body},
             )
         except GitHubAPIError as exc:
@@ -870,7 +1077,9 @@ def _deliver_responses(
         protocol.cleanup(event["_path"], resp_path)
 
 
-_COMMENT_KINDS = frozenset({"issue-comment", "pr-comment"})
+_COMMENT_KINDS = frozenset({
+    "issue-comment", "pr-comment", "pr-review-comment",
+})
 
 
 def _thread_reply_body(event: dict, body: str) -> str:
