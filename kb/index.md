@@ -124,41 +124,22 @@ dive-in map) and are stable until something contradicts them.
   name for the whole hosted product), and environments as the
   active axis now handled by the env hub. The fleet axis itself
   collapsed into the managed-mode hub on 2026-05-25.
-- **Hub: [managed mode](subject-managed-mode.md)** — *active*. The
-  `brnrd` story (hosted at `brnrd.dev`): two surfaces (managed
-  dispatcher + compute, with compute offering a subscriber-
-  opt-in BYO sub-option) billed across two tiers (Free for up
-  to 3 projects with a 10-credit one-time signup bonus +
-  Subscribed at $5/mo for up to 25 projects (unlimited after
-  $10 of cumulative top-ups) + the full dashboard with
-  allowance gauges + 300 included compute credits/month +
-  BYO compute opt-in) with
-  metered compute on top. Data minimization ("we don't have
-  your code") baked into the design; cross-gate conversation
-  continuity via a metadata-only graph + on-demand gate-history
-  fetch. Generalised credential vault holds both AI-runner
-  credentials and docker-registry credentials in one encrypted
-  store. Promoted on 2026-05-22 out of pondering; reshaped
-  2026-05-22 around the work-continuity frame after recognising
-  the always-on-host model was a shape mismatch with the
-  pitch; reshaped 2026-05-25 to drop BYO compute from launch,
-  add the dashboard MVP, and adopt the monorepo layout;
-  reshaped again the same day (pass 3) to settle on `brnrd`
-  as the canonical hosted-product name (was briefly `brr.run`
-  after collapsing the two), `brnrd.dev` as the domain, and
-  to land the cross-gate conversation context machinery;
-  reshaped again (pass-4 follow-up third wave) when the
-  credits-only model proved self-defeating — adopted platform
-  subscription + metered credits for compute, generalised the
-  credential vault to support private docker images at launch;
-  refined 2026-05-26 with the final pricing + naming shape
-  (no "Plus" branding, $5/month with 300 included credits,
-  3-project Free tier); locked 2026-05-26 with the $5
-  supporter / $7 public early-adopter step and the BYO-
-  everything-for-subscribers posture (subscribers can BYO
-  Fly Machines at launch; BYO availability follows managed
-  support 1:1 per cloud; same BYO-for-subscribers principle
-  pre-applies to future agentic-secretary connectors).
+- **Hub: [managed mode](subject-managed-mode.md)** — *active*.
+  The `brnrd` hosted product at `brnrd.dev`: managed dispatcher,
+  managed compute, and subscriber-only BYO compute for the cloud
+  envs brnrd also offers as managed. Launch pricing is Free
+  (3 projects, 100 events/month, 10-credit one-time signup
+  bonus) plus Subscribed ($5 supporter / $7 public, 25 projects
+  until the $10 top-up unlock, 300 included compute credits,
+  full dashboard, BYO compute opt-in). Data minimization stays
+  explicit: brnrd does not need users' code; cross-gate
+  continuity is metadata graph + on-demand gate-history fetch;
+  the encrypted credential vault covers AI-runner, docker-
+  registry, and subscriber-gated cloud-platform credentials.
+  Lineage: promoted from
+  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) on
+  2026-05-22, then locked on 2026-05-26 after pricing, BYO,
+  naming, monorepo, and dashboard decisions converged.
 - [brnrd protocol design](design-brnrd-protocol.md) —
   *accepted 2026-05-26*. The wire format between brr daemons and `brnrd`.
   Covers gates (managed-gates path), failover dispatch (decision
@@ -206,43 +187,13 @@ dive-in map) and are stable until something contradicts them.
   policy: honest banners on threshold-crossing, never modal,
   always-signposted throttling, gate-side one-line subscribe
   footer on throttle / cap / out-of-credit events. Self-
-  hosted brnrd stays always-free with full feature parity.
-  Per-seat team tier deferred to v-next. Reshaped 2026-05-25
-  multiple times — adopted credits wallet (pass 4), then
-  reframed (pass-4 follow-up third wave) when the credits-
-  only shape proved self-defeating for sustainability.
-  Refined 2026-05-26 with the final pricing + naming shape
-  (no marketing tier name, $5/month with 300 included
-  credits, 3-project Free tier). Locked 2026-05-26 with the
-  $5 supporter / $7 public step per
-  [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md);
-  re-locked the same day with **BYO-for-subscribers**
-  (subscriber-only cloud-platform credentials in the vault;
-  BYO Fly Machines at launch; one-for-one BYO-with-managed
-  rule for subsequent clouds) and the **credit-bucket /
-  per-source expiry policy** lock-in; locking pass II on
-  2026-05-26 reshaped the Free monthly recurring grant into
-  a **10-credit one-time signup bonus** ("start stingy, relax
-  later" principle), reshaped the subscriber project cap
-  from flat 10 to **25 default / unlimited after $10
-  cumulative top-ups**, added binding-uniqueness multi-
-  account abuse mitigation, and codified the dashboard +
-  gate honest-nudge UX with explicit anti-patterns. Locking
-  pass III on 2026-05-26 (the same day's MR-review pass)
-  closed 7 of 8 open questions by locking launch-default
-  values + adding `BRNRD_*` env knobs for post-launch
-  tuning (Free signup bonus = 10, project-cap unlock =
-  $10, included compute = 300, supporter cohort = 200,
-  dormancy = 24/36, Free project cap = 3), added the
-  **`auto-approve-below-monthly-limit`** permission mode
-  (default for Subscribed; uses the monthly grant +
-  purchased balance as the natural auto-approve envelope),
-  **reframed event-cap overage from hard-queue to
-  soft-throttle that keeps events flowing** at a slow rate
-  with the nudge as the resolution to the throttled-flow
-  situation (not as a paywall), added a Stripe-integrated-
-  billing callout, and groomed the dashboard / subject-hub
-  duplications.
+  hosted brnrd stays always-free with full feature parity;
+  per-seat team tier is deferred to v-next. Lineage:
+  2026-05-25 replaced the credits-only model because it could
+  not sustainably carry the platform; 2026-05-26 locked the
+  supporter/public price step, BYO-for-subscribers rule,
+  per-source credit expiry, one-time Free signup bonus, and
+  soft-throttle event overage defaults.
 - [Billing design](design-billing.md) — *accepted 2026-05-26*. **Two
   billing legs**: subscription (Stripe recurring,
   monthly/annual, Customer Portal for self-service) and credit
@@ -329,8 +280,8 @@ dive-in map) and are stable until something contradicts them.
   table, new `kind` value, same subscriber gate; one pattern
   for cloud envs + connectors + any future subscriber-only
   credential surface.
-- [Monorepo structure decision (accepted 2026-05-26)](decision-monorepo-structure.md) —
-  *proposed*. Single `brr` pip package + optional extras.
+- [Monorepo structure decision](decision-monorepo-structure.md) —
+  *accepted 2026-05-26*. Single `brr` pip package + optional extras.
   `src/brr/` (daemon) + `src/brnrd/` (backend) + `src/brnrd_web/`
   (dashboard) + `src/brr/envs/<name>/` for first-party cloud
   envs gated by extras (`pip install brr[fly,modal,...]`).
@@ -403,13 +354,13 @@ dive-in map) and are stable until something contradicts them.
   per the locking pass; other clouds parallel-ship managed +
   BYO when added).
 - [Managed gates launch plan](plan-managed-gates-launch.md) —
-  *not started*. Surface A. Three slices: GH App adapter +
+  *accepted 2026-05-26; not started*. Surface A. Three slices: GH App adapter +
   backend skeleton + auto-binding (first, largest pain relief);
   TG bot adapter + multi-project routing UX (fast-follow);
   permission-prompt API + gate-side integration (third). Backend
   lives at `src/brnrd/` in the monorepo.
-- [Failover compute plan](plan-failover-compute.md) — *not
-  started*. Compute spawn (managed + BYO) for subscribers, on
+- [Failover compute plan](plan-failover-compute.md) —
+  *accepted 2026-05-26; not started*. Compute spawn (managed + BYO) for subscribers, on
   brnrd-owned Fly pool for the managed path and on the
   subscriber's own Fly account for the BYO path: generalised
   credential vault (AI runner + docker-registry + cloud-platform
@@ -438,8 +389,8 @@ dive-in map) and are stable until something contradicts them.
   conversation graph from being meaningful in practice so
   cross-gate continuity for failover can actually work without
   brnrd holding conversation contents. ~80 LOC daemon-side.
-- [Dashboard MVP plan](plan-brnrd-dashboard-mvp.md) — *not
-  started*. Eight views (accounts/projects, project detail,
+- [Dashboard MVP plan](plan-brnrd-dashboard-mvp.md) —
+  *accepted 2026-05-26; not started*. Eight views (accounts/projects, project detail,
   task detail, conversation proxy, credentials vault (AI +
   docker registry), failover policy + cost chart, audit log,
   **allowance + usage** with bucket-breakdown + nudge
@@ -449,8 +400,8 @@ dive-in map) and are stable until something contradicts them.
   no modals, no cancellation friction, always-signposted
   throttling, single-line gate-side subscribe footer on
   throttle / cap / out-of-credit events.
-- [Fly Machines env plan](plan-env-fly-machines.md) — *not
-  started*. First cloud env; lives at `src/brr/envs/fly_machines/`
+- [Fly Machines env plan](plan-env-fly-machines.md) —
+  *accepted 2026-05-26; not started*. First cloud env; lives at `src/brr/envs/fly_machines/`
   gated by the `brr[fly]` extra. Used by the laptop daemon
   (user's Fly account, BYO via `FLY_API_TOKEN`) and by brnrd
   server-side (brnrd's Fly account, managed compute) — same env
@@ -464,25 +415,20 @@ dive-in map) and are stable until something contradicts them.
   backend Upsun deployment.
 - [Laptop daemoning plan](plan-laptop-daemoning.md) —
   *accepted 2026-05-26; Linux systemd slice shipped 2026-05-26*.
-  **Reshaped in locking pass IV from
-  per-project to machine-scoped multi-project**: one `brr
-  daemon` process per machine serves all brr-init'd repos
-  discovered via `~/.config/brr/projects.toml` (appended by
-  `brr init`; manipulable via `brr daemon list|adopt|forget`).
-  Account binding lives at machine scope at
-  `~/.local/state/brr/account/`, so `brnrd connect` from a
-  second project skips the account-pair step on already-paired
-  machines. One supervised systemd / launchd unit per machine
-  (no `WorkingDirectory` pinning, no `--name` flag).
-  The Linux side now writes a per-user systemd unit
+  Accepted target shape is machine-scoped multi-project: one
+  `brr daemon` process per machine serves all brr-init'd repos
+  from `~/.config/brr/projects.toml`; account binding lives at
+  machine scope; one supervised systemd / launchd unit per
+  machine (no `WorkingDirectory` pinning, no `--name` flag).
+  The shipped Linux side writes a per-user systemd unit
   (`~/.config/systemd/user/brr.service` + optional
   `loginctl enable-linger`) and wires `brr daemon up | down |
   status | logs | uninstall` through the user service when
   installed, falling back to the foreground supervisor when not.
-  The macOS LaunchAgent counterpart
-  (`~/Library/LaunchAgents/dev.brnrd.brr.plist`), registry-aware
-  multi-project runtime, and daemon project-management verbs remain
-  follow-up work; Windows is deferred. Tracked at
+  Registry-aware runtime, `brr init` registry writes,
+  `brr daemon list|adopt|forget`, machine account binding, and
+  the macOS LaunchAgent counterpart remain follow-up work;
+  Windows is deferred. Tracked at
   [issue #29](https://github.com/Gurio/brr/issues/29).
 - [Config layout design](design-config-layout.md) —
   *accepted 2026-05-26*. **Locking pass IV** added the
@@ -507,7 +453,7 @@ dive-in map) and are stable until something contradicts them.
   kinds (AI runner + docker-registry + cloud-platform);
   `cloud-platform` writes / reads are subscriber-gated at
   the brnrd endpoint level.
-- [KB subcommand plan](plan-kb-subcommand.md) — *proposed*.
+- [KB subcommand plan](plan-kb-subcommand.md) — *accepted 2026-05-26; not started*.
   `brr kb` as the seventh top-level verb, addressing
   [issue #41](https://github.com/Gurio/brr/issues/41). Six
   sub-verbs (`status` / `pages [filters]` / `proposed` / `log`

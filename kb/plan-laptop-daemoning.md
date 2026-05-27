@@ -1,19 +1,17 @@
 # Plan: laptop-side daemoning — macOS + Linux native install
 
-**Status: accepted 2026-05-26** (locked in PR #40 MR review,
-locking pass IV — **reshaped from per-project to machine-scoped
-multi-project**: one `brr daemon` process per machine serves
-all brr-init'd repos discovered via
+**Status: accepted 2026-05-26; Linux systemd slice shipped
+2026-05-26.** Locked in PR #40 MR review as a machine-scoped
+multi-project target: one `brr daemon` process per machine
+serves all brr-init'd repos discovered via
 `~/.config/brr/projects.toml`; one supervised systemd /
 launchd unit per machine; brnrd account binding lives at
 machine scope so `brnrd connect` from a second repo is a one-
-tap on already-known credentials). Fluid past the unit shapes
-— implementation feedback may reshape the registry format or
-discovery cadence. Lifts the "go add it to your startup
-scripts" friction by giving `brr daemon install` first-class
-behaviour on macOS and Linux: write the OS's native service
-unit, register it, hand the user back a daemon that survives
-reboots without sudo. Companion to
+tap on already-known credentials. The shipped Linux slice
+covers the systemd unit and service verbs; the registry-aware
+runtime, account binding, macOS LaunchAgent, and project-
+management verbs remain accepted target design, not shipped
+CLI surface. Companion to
 [`subject-managed-mode.md`](subject-managed-mode.md) → "Daemon
 hosting" (the strategic frame), to
 [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)
@@ -27,11 +25,13 @@ on the laptop side) and
 status`). Tracked at
 [issue #29](https://github.com/Gurio/brr/issues/29).
 
-Implementation note: the Linux systemd user-service slice shipped on
-2026-05-26 (`brr daemon install | uninstall | status | logs`, unit
-generation, linger prompt flow, and tests that avoid real systemctl).
-The macOS LaunchAgent, project registry, IPC pickup, and async
-multi-project runtime slices remain tracked by this plan.
+Implementation state: Linux writes the user unit, ensures an empty
+`~/.config/brr/projects.toml` placeholder, wires `brr daemon
+install | uninstall | up | down | status | logs`, and tests those
+paths without invoking real systemd. `brr init`, `brr daemon
+adopt | forget | list`, IPC pickup, async multi-project polling,
+machine-scope account binding, and macOS LaunchAgent installation
+remain tracked by this plan.
 
 ## Why this exists separately from the cloud-host plan
 
@@ -50,7 +50,7 @@ to be production-friendly. Managed mode lowers the urgency
 having brr "just be running" on the laptop is the baseline good
 experience.
 
-## Decision
+## Accepted target shape
 
 `brr daemon install` writes and registers **one per-user
 service unit per machine** — that single daemon process serves
@@ -73,15 +73,18 @@ verb falls back to today's direct foreground/PID-file supervisor.
 Users who prefer `tmux` / manual control aren't forced into
 service registration.
 
-`brr daemon status` reports both modes uniformly: service +
-"managed by systemd, last started: …" line OR foreground +
-"running directly under PID …" line. Either mode lists the
-brr-init'd projects the daemon is currently serving (read
-from the registry).
+Target UX: `brr daemon status` reports both modes uniformly:
+service + "managed by systemd, last started: …" line OR
+foreground + "running directly under PID …" line. Either mode
+lists the brr-init'd projects the daemon is currently serving
+(read from the registry). The shipped Linux slice currently
+delegates service status to `systemctl --user status brr.service`
+and uses the direct PID-file fallback outside service mode; the
+registry project list waits for the registry-aware runtime.
 
 `brr daemon uninstall` stops the service, removes the unit file,
-and (on Linux) prompts about `loginctl disable-linger` if no
-other systemd user units exist.
+and (on Linux) prompts conservatively about `loginctl
+disable-linger` only when brr previously enabled linger.
 
 ## Project registry — `~/.config/brr/projects.toml`
 
@@ -111,7 +114,8 @@ enabled = false   # temporarily disabled without removing
 ```
 
 The registry is the **machine source of truth** for which
-projects the daemon serves. Operations on it:
+projects the daemon serves. The shipped Linux installer creates
+the placeholder file only; the planned operations on it are:
 
 - **`brr init`** in a directory that's not yet in the registry
   appends an entry (`enabled = true`) after running the
