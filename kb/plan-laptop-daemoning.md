@@ -1,17 +1,20 @@
 # Plan: laptop-side daemoning — macOS + Linux native install
 
-**Status: accepted 2026-05-26; Linux systemd slice shipped
-2026-05-26.** Locked in PR #40 MR review as a machine-scoped
-multi-project target: one `brr daemon` process per machine
-serves all brr-init'd repos discovered via
-`~/.config/brr/projects.toml`; one supervised systemd /
-launchd unit per machine; brnrd account binding lives at
-machine scope so `brnrd connect` from a second repo is a one-
-tap on already-known credentials. The shipped Linux slice
-covers the systemd unit and service verbs; the registry-aware
-runtime, account binding, macOS LaunchAgent, and project-
-management verbs remain accepted target design, not shipped
-CLI surface. Companion to
+Status: accepted on 2026-05-26; Linux systemd and macOS
+LaunchAgent service-lifecycle slices shipped on 2026-05-26.
+
+Locked in PR #40 MR review as a machine-scoped multi-project
+target: one `brr daemon` process per machine serves all brr-init'd
+repos discovered via `~/.config/brr/projects.toml`; one supervised
+systemd / launchd unit per machine; brnrd account binding lives at
+machine scope so `brnrd connect` from a second repo is a one-tap on
+already-known credentials. The shipped slices cover native service
+install / uninstall / up / down / status / logs on Linux and macOS,
+create the registry placeholder, and keep unit files unpinned from
+any one repo. The registry-aware runtime, `brr init` registry append,
+`brr daemon list | adopt | forget`, IPC pickup, async multi-project
+polling, and machine-scope account binding remain accepted target
+design, not shipped CLI surface. Companion to
 [`subject-managed-mode.md`](subject-managed-mode.md) → "Daemon
 hosting" (the strategic frame), to
 [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)
@@ -25,13 +28,16 @@ on the laptop side) and
 status`). Tracked at
 [issue #29](https://github.com/Gurio/brr/issues/29).
 
-Implementation state: Linux writes the user unit, ensures an empty
-`~/.config/brr/projects.toml` placeholder, wires `brr daemon
-install | uninstall | up | down | status | logs`, and tests those
-paths without invoking real systemd. `brr init`, `brr daemon
-adopt | forget | list`, IPC pickup, async multi-project polling,
-machine-scope account binding, and macOS LaunchAgent installation
-remain tracked by this plan.
+Implementation state: Linux writes the user systemd unit at
+`~/.config/systemd/user/brr.service`; macOS writes the
+LaunchAgent at `~/Library/LaunchAgents/dev.brnrd.brr.plist`.
+Both slices ensure an empty `~/.config/brr/projects.toml`
+placeholder, wire `brr daemon install | uninstall | up | down |
+status | logs`, and test service-manager command construction
+without invoking real `systemctl` / `launchctl` in CI. `brr
+init`, `brr daemon adopt | forget | list`, IPC pickup, async
+multi-project polling, and machine-scope account binding remain
+tracked by this plan.
 
 ## Why this exists separately from the cloud-host plan
 
@@ -74,13 +80,14 @@ Users who prefer `tmux` / manual control aren't forced into
 service registration.
 
 Target UX: `brr daemon status` reports both modes uniformly:
-service + "managed by systemd, last started: …" line OR
-foreground + "running directly under PID …" line. Either mode
-lists the brr-init'd projects the daemon is currently serving
-(read from the registry). The shipped Linux slice currently
-delegates service status to `systemctl --user status brr.service`
-and uses the direct PID-file fallback outside service mode; the
-registry project list waits for the registry-aware runtime.
+service + service-manager state OR foreground + "running directly
+under PID …" line. Either mode should list the brr-init'd projects
+the daemon is currently serving once the registry-aware runtime
+ships. The shipped Linux slice currently delegates service status to
+`systemctl --user status brr.service`; the shipped macOS slice
+reports LaunchAgent loaded state, log location, and enabled registry
+entries. The cross-platform project-serving view waits for the
+registry-aware runtime.
 
 `brr daemon uninstall` stops the service, removes the unit file,
 and (on Linux) prompts conservatively about `loginctl
@@ -328,33 +335,38 @@ brr daemon uninstall
   7. Print confirmation.
 ```
 
-## Done definition
+## Shipped and remaining done definition
 
-- `brr daemon install` works on macOS 12+ and any systemd-based
-  Linux distro (Ubuntu 22.04+, Fedora 36+, Debian 12+, Arch).
-- `brr daemon uninstall` cleanly tears down what `install`
-  created; safe to re-run.
-- `brr daemon status` reports OS-service-managed vs.
-  foreground-supervisor modes uniformly, and lists the
-  enabled projects from the registry.
-- `brr daemon logs` tails the service's stdout/stderr — uses
-  `journalctl --user -u brr -f` on Linux, `tail -F
-  ~/Library/Logs/brr/brr.*.log` on macOS.
-- `brr daemon list | adopt | forget` operate the project
-  registry as described above.
-- `brr init` appends to the registry; daemon picks up new
-  entries within ~30s or immediately via IPC signal.
-- The daemon runs per-project asyncio inbox-pollers off a
-  single `httpx.AsyncClient` (per
+Shipped service-lifecycle surface:
+
+- `brr daemon install` / `uninstall` work on macOS LaunchAgent
+  and systemd-based Linux hosts, writing one per-user service file
+  per machine.
+- `brr daemon up | down | status | logs` operate the installed
+  service when present and keep the foreground daemon fallback for
+  non-service mode.
+- Linux logs use `journalctl --user -u brr`; macOS logs use
+  `tail -F` over `~/Library/Logs/brr/brr.out.log` and
+  `~/Library/Logs/brr/brr.err.log`.
+- Both installers create the `~/.config/brr/projects.toml`
+  placeholder and tests cover unit / plist rendering, service-manager
+  command construction, no `WorkingDirectory`, log tailing, and CLI
+  dispatch without real service-manager calls in CI.
+- README "Quickstart" mentions `brr daemon install` for persistent
+  setup.
+
+Remaining runtime surface:
+
+- `brr init` appends to the registry.
+- `brr daemon list | adopt | forget` operate the project registry.
+- The daemon picks up new registry entries within ~30s or immediately
+  via IPC signal.
+- The daemon runs per-project asyncio inbox-pollers off a single
+  `httpx.AsyncClient` (per
   [`design-brnrd-protocol.md`](design-brnrd-protocol.md) §
   "Runtime profile: async, httpx, ASGI").
-- Tests cover unit-file generation (no real `systemctl` /
-  `launchctl` calls in CI — those go in a manual install
-  matrix), registry round-trip (add / remove / list), and
-  IPC-signal pick-up.
-- README "Quickstart" updated to mention `brr daemon install`
-  for the persistent setup AND `brr init` for per-project
-  adoption.
+- `brr daemon status` reports the cross-platform project-serving view
+  once the registry-aware runtime exists.
 
 ## Out of scope
 
@@ -414,22 +426,17 @@ launchd.
   pick-up. Defer until the 30s-or-IPC shape ships and we see
   whether it's perceptibly slow in practice.
 
-## Estimate
+## Remaining estimate
 
-~200-300 LOC for the install / uninstall / status surface
-(`src/brr/daemon_install/{__init__,linux.py,macos.py,detect.py}`),
-~100 LOC for the unit-file templates, ~150 LOC for tests, ~80
-LOC of CLI wiring under `brr daemon install | uninstall`,
-plus ~150 LOC for the project registry + `brr daemon list |
-adopt | forget` verbs and ~100 LOC for the IPC-signal
-pick-up. Estimate adjusted for the machine-scoped reshape
-(extra ~250 LOC for registry + adopt/forget); landed
-alongside the async-runtime migration described in
-[`design-brnrd-protocol.md`](design-brnrd-protocol.md) §
-"Runtime profile: async, httpx, ASGI" (one coherent slice
-rather than two transitional ones). Roughly a focused week
-total; can land before or after the CLI reshape per
-[`decision-cli-shape.md`](decision-cli-shape.md).
+The native service lifecycle has landed. The remaining slice is the
+machine-scoped registry runtime: `brr init` registry append, `brr
+daemon list | adopt | forget`, registry round-trip tests, IPC or
+polling pickup, and per-project async pollers sharing one HTTP
+client. Estimate remains roughly a focused week and should land as
+one coherent slice with the async-runtime migration described in
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md) § "Runtime
+profile: async, httpx, ASGI", rather than as a transitional
+per-project daemon shape.
 
 ## Read next
 
@@ -451,51 +458,10 @@ total; can land before or after the CLI reshape per
 
 ## Lineage
 
-- 2026-05-25 — drafted alongside the broader pass-4 follow-up
-  reshape after the user reiterated "we need them for mac and
-  linux, ideally natively installable" while reviewing the
-  managed-mode launch shape. Replaces the placeholder reference
-  to `plan-install-service.md` in
-  [`subject-managed-mode.md`](subject-managed-mode.md) and
-  [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md).
-  Pondering provenance in
-  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1
-  (pass-4 follow-up — second wave).
-- 2026-05-26 (locking pass IV — reshaped from per-project to
-  machine-scoped multi-project daemon). The original shape
-  had one systemd / launchd unit per brr-init'd project
-  (`brr daemon install --name <project>` produced
-  `brr-<project>.service` etc.), with each unit running a
-  daemon pinned to a single repo via `WorkingDirectory`.
-  Reshape:
-  - **One unit per machine**, no per-project naming, no
-    `--name` flag, no `WorkingDirectory` pinning. The daemon
-    process serves all brr-init'd repos on the machine.
-  - **New project registry** at `~/.config/brr/projects.toml`
-    is the machine source of truth for what the daemon
-    serves; the registry stays in place across daemon
-    uninstall / reinstall.
-  - **Account binding lives at `~/.local/state/brr/account/`**
-    (machine-scoped, per
-    [`design-config-layout.md`](design-config-layout.md) §
-    "Account scope"). The `brnrd connect` flow on a second
-    project skips the account-pair step on already-paired
-    machines and goes straight to project-create +
-    gate-pair.
-  - **New verbs** `brr daemon list | adopt | forget` operate
-    the registry; `brr init` appends to it automatically.
-  - **Daemon picks up registry changes** within ~30s OR
-    immediately via IPC signal from the CLI on add / remove.
-  - Estimate revised up by ~250 LOC (registry + verbs +
-    IPC); landed alongside the async-runtime migration in
-    one coherent slice per
-    [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
-    § "Runtime profile: async, httpx, ASGI".
-  Driven by the user's "probably the local daemon should
-  serve all local projects and connect to the brnrd... if a
-  user has configured brnrd once for a project already, we
-  should pickup at least the account binding, subscription
-  status, brnrd url, etc." The per-project shape would have
-  duplicated account binding across projects and forced
-  N supervisor units per developer with N repos — both
-  user-friction wins move in the machine-scoped direction.
+Lineage: drafted on 2026-05-25 from the managed-mode launch review;
+reshaped on 2026-05-26 from per-project units to one machine-scoped
+daemon after the account-binding and multi-repo UX contradicted the
+earlier `WorkingDirectory`-pinned design; Linux and macOS native
+service-lifecycle slices shipped on 2026-05-26, leaving the
+registry-aware runtime and project-management verbs as the remaining
+work.

@@ -35,16 +35,15 @@ land first.
 **Cross-platform daemoning (laptop side)** has its own plan at
 [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md), tracked
 at [issue #29](https://github.com/Gurio/brr/issues/29). Linux
-gets a per-user systemd unit, macOS gets a launchd
-LaunchAgent, Windows is deferred. Both via `brr daemon
-install`. **The same machine-scoped multi-project shape**
-applies on the cloud-host side: one container runs one daemon
-that can serve multiple brr-init'd repos, mounted at
-container-stable paths and registered in the per-deployment
-`projects.toml`. Managed mode reduces the urgency (failover
-compute covers gaps when the daemon isn't running), so the
-laptop-side daemoning work and the cloud-host deployment-
-templates work here proceed independently.
+and macOS service lifecycle now ship via `brr daemon install`;
+the registry-aware multi-project runtime remains in that plan, and
+Windows is deferred. **The same machine-scoped multi-project shape**
+applies on the cloud-host side: one container runs one daemon that can
+serve multiple brr-init'd repos, mounted at container-stable paths and
+registered in the per-deployment `projects.toml`. Managed mode reduces
+the urgency (failover compute covers gaps when the daemon isn't
+running), so the laptop-side daemoning work and the cloud-host
+deployment-templates work here proceed independently.
 
 ## Goals
 
@@ -170,45 +169,16 @@ work, very little Python.
    for where `deploy/` lives in the monorepo (shared across the
    daemon and the brnrd backend templates).
 5. [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §4 for
-   the original deployment-targets table that drove the first
-   draft of this plan, plus the 2026-05-22 reframe breadcrumb in
-   §1 that explains the demotion.
+   the provenance map that separates laptop native supervision from
+   cloud-host daemon templates.
 
 ## Lineage
 
-- 2026-05-22 — drafted as part of the managed-mode KB shape
-  rollout.
-- 2026-05-22 — demoted to launch-nice-to-have when the work-
-  continuity reframe made
-  [`plan-failover-compute.md`](plan-failover-compute.md) the
-  load-bearing answer to laptop-down dispatch. Scope and goals
-  retained but recontextualised to the cloud-first audience.
-- 2026-05-25 — Upsun template entry cross-linked to the brnrd
-  backend's Upsun deployment work (shared read-only-container
-  shape; should be authored together). Added monorepo-structure
-  decision to "Read next" so the `deploy/` location is
-  unambiguous. Third reframe breadcrumb in
-  [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §1.
-- 2026-05-25 (pass-4 follow-up — second wave) —
-  cross-reference to the laptop-side daemoning work renamed
-  from "placeholder #29 reference" to the new concrete plan
-  at [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md).
-  "Out of scope" entry rewritten accordingly. No structural
-  changes here; this plan stays focused on cloud-host
-  deployment templates, the laptop-side concerns are
-  formalised in their own plan.
-- 2026-05-26 (locking pass IV — aligned with the machine-
-  scoped multi-project daemon shape). Status promoted from
-  "demoted to launch-nice-to-have" to "accepted + fluid past
-  the Dockerfile split." Upsun template step rewritten to
-  spell out the writable-mount paths for the new
-  machine-scoped registry (`~/.config/brr/projects.toml`),
-  the account binding (`~/.local/state/brr/account/`),
-  per-project `.brr/` dirs, and `/data/repos/` for clones.
-  Multi-project pattern documented inline: one container =
-  one daemon = multiple repos via the registry, same shape
-  as laptop hosts. Driven by the locking-pass-IV daemon
-  shape reshape (see
-  [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md)
-  lineage) — cloud-host deployments stay first-class under
-  the new shape; only the template specifics had to align.
+Lineage: drafted on 2026-05-22 during the managed-mode rollout, then
+demoted the same day when
+[`plan-failover-compute.md`](plan-failover-compute.md) became the
+load-bearing laptop-down answer. Accepted on 2026-05-26 as a
+launch-nice-to-have and aligned to the machine-scoped daemon shape:
+cloud-host templates still matter for cloud-first users, but the
+template specifics wait on the daemon Dockerfile split and real
+deployment work.
