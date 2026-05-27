@@ -5,14 +5,14 @@ model — both brr's playbook and the template adopters receive. Use it
 as follows:
 
 1. If `AGENTS.md` does not exist in this repo, create it. Copy the
-   universal sections (**Stewardship**, **Workflow**, **Knowledge base**,
-   **Artifacts**, **Operating rules**, **Self-review**, **Work re-review**,
-   **Guardrails**) verbatim. Rewrite the project-specific sections
-   (**Project**, **Build and run**, **Code guidelines**, **Constraints**)
-   based on this repo's actual contents — read the build config, tests,
-   dependencies, README, and any existing agent config files (`CLAUDE.md`,
-   `.cursorrules`, etc.). Drop the bit about `src/brr/AGENTS.md` being the
-   template — that is brr-specific.
+   universal sections (**How to read this playbook**, **Stewardship**,
+   **Workflow**, **Knowledge base**, **Artifacts**, **Operating rules**,
+   **Self-review**, **Guardrails**) verbatim. Rewrite the
+   project-specific sections (**Project**, **Build and run**, **Code
+   guidelines**, **Constraints**) based on this repo's actual contents —
+   read the build config, tests, dependencies, README, and any existing
+   agent config files (`CLAUDE.md`, `.cursorrules`, etc.). Drop the bit
+   about `src/brr/AGENTS.md` being the template — that is brr-specific.
 
 2. If `AGENTS.md` already exists, merge in the universal sections from the
    model (replace stale ones, add missing ones), preserving the repo's own

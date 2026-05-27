@@ -56,11 +56,11 @@ def test_daemon_up_foreground_uses_existing_daemon_start(monkeypatch, tmp_path):
     assert calls == [(tmp_path, True)]
 
 
-def test_daemon_install_dispatches_to_linux_installer(monkeypatch):
+def test_daemon_install_dispatches_to_native_installer(monkeypatch):
     calls = []
 
     monkeypatch.setattr(
-        "brr.daemon_install.linux.install",
+        "brr.daemon_install.install",
         lambda **kwargs: calls.append(kwargs),
     )
 
@@ -75,17 +75,30 @@ def test_daemon_install_dispatches_to_linux_installer(monkeypatch):
     ]
 
 
-def test_daemon_logs_dispatches_to_journalctl(monkeypatch):
+def test_daemon_logs_dispatches_to_native_helper(monkeypatch):
     calls = []
 
-    monkeypatch.setattr("brr.daemon_install.linux.supported", lambda: True)
     monkeypatch.setattr(
-        "brr.daemon_install.linux.logs",
-        lambda: calls.append("logs") or 0,
+        "brr.daemon_install.logs",
+        lambda **kwargs: calls.append(kwargs) or 0,
     )
 
-    assert main(["daemon", "logs"]) == 0
-    assert calls == ["logs"]
+    assert main(["daemon", "logs", "-n", "25", "--no-follow"]) == 0
+    assert calls == [{"follow": False, "lines": 25}]
+
+
+def test_daemon_status_does_not_require_repo(monkeypatch, tmp_path):
+    calls = []
+
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: tmp_path / ".brr")
+    monkeypatch.setattr(
+        "brr.daemon_install.status",
+        lambda *, direct_brr_dir=None: calls.append(direct_brr_dir),
+    )
+
+    main(["daemon", "status"])
+
+    assert calls == [tmp_path / ".brr"]
 
 
 def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):
