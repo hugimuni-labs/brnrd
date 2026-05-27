@@ -197,6 +197,113 @@ def test_request_uses_requests_params_json_and_headers(monkeypatch):
     assert kwargs["timeout"] == constants._HTTP_TIMEOUT
 
 
+def test_request_sends_if_none_match_when_etag_cached(monkeypatch):
+    """Conditional GET: a previously-cached ETag is sent as If-None-Match."""
+    seen_headers: list[dict[str, str]] = []
+
+    def fake_request(method, url, **kwargs):
+        seen_headers.append(dict(kwargs["headers"]))
+        return _FakeGitHubResponse(
+            200, [{"ok": True}], headers={"ETag": "W/\"new-etag\""},
+        )
+
+    monkeypatch.setattr(client.requests, "request", fake_request)
+
+    store: dict[str, str] = {"GET /repos/o/r/issues/comments": "W/\"old-etag\""}
+    payload, headers = client._request(
+        "tok", "GET", "/repos/o/r/issues/comments",
+        params={"since": "T0"}, etag_store=store,
+    )
+
+    assert payload == [{"ok": True}]
+    assert seen_headers[0].get("If-None-Match") == "W/\"old-etag\""
+    # ETag from the response replaces the cached one in place.
+    assert store["GET /repos/o/r/issues/comments"] == "W/\"new-etag\""
+
+
+def test_request_304_returns_none_and_preserves_cached_etag(monkeypatch):
+    """A 304 means the resource is unchanged; the body is None and we don't
+    overwrite the cached ETag with whatever the 304 response carries."""
+    def fake_request(method, url, **kwargs):
+        return _FakeGitHubResponse(304, None, headers={"ETag": "W/\"old-etag\""})
+
+    monkeypatch.setattr(client.requests, "request", fake_request)
+
+    store = {"GET /repos/o/r/issues/comments": "W/\"old-etag\""}
+    payload, headers = client._request(
+        "tok", "GET", "/repos/o/r/issues/comments", etag_store=store,
+    )
+
+    assert payload is None
+    assert store["GET /repos/o/r/issues/comments"] == "W/\"old-etag\""
+
+
+def test_request_without_etag_store_does_not_send_if_none_match(monkeypatch):
+    seen_headers: list[dict[str, str]] = []
+
+    def fake_request(method, url, **kwargs):
+        seen_headers.append(dict(kwargs["headers"]))
+        return _FakeGitHubResponse(200, [], headers={"ETag": "W/\"x\""})
+
+    monkeypatch.setattr(client.requests, "request", fake_request)
+
+    client._request("tok", "GET", "/repos/o/r/issues/comments")
+
+    assert "If-None-Match" not in seen_headers[0]
+
+
+def test_polling_threads_etag_through_cursor(tmp_path, monkeypatch):
+    """The mention poller persists ETags across loop iterations so quiet
+    repos stop spending rate-limit budget on identical responses."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "o/r",
+        "triggers": {"mention": "@brr-bot"},
+        "cursor": {
+            "comments_since": "2026-01-01T00:00:00Z",
+            "review_comments_since": "2026-01-01T00:00:00Z",
+        },
+    })
+
+    seen_if_none_match: list[str | None] = []
+    call_count = {"n": 0}
+
+    def fake_request(method, url, **kwargs):
+        seen_if_none_match.append(kwargs["headers"].get("If-None-Match"))
+        call_count["n"] += 1
+        # First call returns 200 with an ETag, sets the cache.
+        if call_count["n"] == 1:
+            return _FakeGitHubResponse(
+                200, [], headers={"ETag": "W/\"e-comments\""},
+            )
+        # Second call returns 304 — nothing changed since the cached ETag.
+        return _FakeGitHubResponse(304, None, headers={"ETag": "W/\"e-comments\""})
+
+    monkeypatch.setattr(client.requests, "request", fake_request)
+
+    loop._loop_once(brr_dir, inbox, responses)
+    saved = state._load_state(brr_dir)
+    assert "etags" in saved["cursor"]
+    assert saved["cursor"]["etags"].get("GET /repos/o/r/issues/comments") == "W/\"e-comments\""
+
+    # Second pass: the previously-stored ETag is sent as If-None-Match.
+    loop._loop_once(brr_dir, inbox, responses)
+    issue_comments_calls = [
+        h for h, url in zip(seen_if_none_match, range(call_count["n"]))
+        if h is not None
+    ]
+    assert "W/\"e-comments\"" in issue_comments_calls, (
+        f"expected the cached ETag in subsequent If-None-Match headers, "
+        f"got {seen_if_none_match!r}"
+    )
+    # 304 means no new events.
+    assert protocol.list_pending(inbox) == []
+
+
 def test_request_error_uses_github_json_message(monkeypatch):
     def fake_request(method, url, **kwargs):
         return _FakeGitHubResponse(
@@ -302,7 +409,7 @@ def test_label_trigger_creates_event_for_new_labelled_issue(tmp_path, monkeypatc
 
     api_calls = []
 
-    def fake_api_get(token, path, params=None):
+    def fake_api_get(token, path, params=None, **kwargs):
         api_calls.append((path, params))
         if path == "/repos/owner/name/issues":
             return [
@@ -348,7 +455,7 @@ def test_label_trigger_skips_pull_requests(tmp_path, monkeypatch):
         "triggers": {"label": "brr"},
     })
 
-    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None: [
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
         {
             "number": 7,
             "title": "PR title",
@@ -378,7 +485,7 @@ def test_mention_trigger_creates_event_for_pr_comment_with_branch_target(
         "triggers": {"mention": "@brr-bot"},
     })
 
-    def fake_api_get(token, path, params=None):
+    def fake_api_get(token, path, params=None, **kwargs):
         if path == "/repos/owner/name/issues/comments":
             return [
                 {
@@ -424,7 +531,7 @@ def test_mention_trigger_handles_issue_comment_without_branch_target(
         "triggers": {"mention": "@brr-bot"},
     })
 
-    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None: [
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
         {
             "id": 1,
             "body": "@brr-bot triage this please",
@@ -456,7 +563,7 @@ def test_mention_trigger_ignores_bot_own_comments(tmp_path, monkeypatch):
         "triggers": {"mention": "@brr-bot"},
     })
 
-    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None: [
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
         {
             "id": 2,
             "body": "@brr-bot <- echoed in the bot's own reply",
@@ -485,7 +592,7 @@ def test_mention_trigger_pat_holder_can_mention_automation_account(
         "triggers": {"mention": "@brr-bot"},
     })
 
-    def fake_api_get(token, path, params=None):
+    def fake_api_get(token, path, params=None, **kwargs):
         if path == "/repos/owner/name/issues/comments":
             return [
                 {
@@ -511,6 +618,223 @@ def test_mention_trigger_pat_holder_can_mention_automation_account(
     assert events[0]["branch_target"] == "brr/runner-ergonomics-review"
 
 
+def test_mention_trigger_emits_pr_review_when_summary_mentions(tmp_path, monkeypatch):
+    """A PR review with a body that @-mentions us produces a pr-review event,
+    discovered via line-comment polling (each line comment carries the
+    parent ``pull_request_review_id``)."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/owner/name/issues/comments":
+            return []
+        if path == "/repos/owner/name/pulls/comments":
+            return [
+                {
+                    "id": 9001,
+                    "body": "nit: rename variable",  # no mention here
+                    "user": {"login": "alice"},
+                    "pull_request_review_id": 555,
+                    "pull_request_url": "https://api.github.com/repos/owner/name/pulls/62",
+                    "html_url": "https://github.com/owner/name/pull/62#discussion_r9001",
+                    "path": "src/x.py",
+                    "line": 10,
+                    "updated_at": "2026-05-27T12:20:00Z",
+                },
+            ]
+        if path == "/repos/owner/name/pulls/62/reviews/555":
+            return {
+                "id": 555,
+                "state": "CHANGES_REQUESTED",
+                "body": "@brr-bot please address these comments",
+                "user": {"login": "alice"},
+                "html_url": "https://github.com/owner/name/pull/62#pullrequestreview-555",
+            }
+        if path == "/repos/owner/name/pulls/62":
+            return {"head": {"ref": "feature-review-summary"}}
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    # Two events: one for the line comment (no mention so skipped),
+    # plus one for the review summary (which does mention).
+    # Actually only the review event because the line comment lacks the mention.
+    review_events = [e for e in events if e.get("github_kind") == "pr-review"]
+    assert len(review_events) == 1
+    ev = review_events[0]
+    assert ev["github_pr_number"] == 62
+    assert ev["github_review_id"] == 555
+    assert ev["github_review_state"] == "CHANGES_REQUESTED"
+    assert ev["branch_target"] == "feature-review-summary"
+    assert "@brr-bot please address" in ev["body"]
+
+
+def test_mention_trigger_skips_pr_review_without_mention(tmp_path, monkeypatch):
+    """A review whose body doesn't @-mention us is fetched but discarded;
+    no event is emitted for it."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/owner/name/issues/comments":
+            return []
+        if path == "/repos/owner/name/pulls/comments":
+            return [
+                {
+                    "id": 9100,
+                    "body": "regular line note",
+                    "user": {"login": "alice"},
+                    "pull_request_review_id": 700,
+                    "pull_request_url": "https://api.github.com/repos/owner/name/pulls/63",
+                    "html_url": "https://github.com/owner/name/pull/63#discussion_r9100",
+                    "updated_at": "2026-05-27T12:25:00Z",
+                },
+            ]
+        if path == "/repos/owner/name/pulls/63/reviews/700":
+            return {
+                "id": 700,
+                "state": "COMMENTED",
+                "body": "Looks fine overall, some nits inline.",
+                "user": {"login": "alice"},
+                "html_url": "https://github.com/owner/name/pull/63#pullrequestreview-700",
+            }
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert [e for e in events if e.get("github_kind") == "pr-review"] == []
+
+
+def test_mention_trigger_dedupes_reviews_across_polls(tmp_path, monkeypatch):
+    """A review surfaced by multiple line comments is fetched once;
+    persisted ``seen_review_ids`` prevents refetching across loop passes."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    review_fetches: list[str] = []
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/owner/name/issues/comments":
+            return []
+        if path == "/repos/owner/name/pulls/comments":
+            return [
+                # Two line comments both belonging to the same review.
+                {
+                    "id": 1, "body": "x", "user": {"login": "alice"},
+                    "pull_request_review_id": 42,
+                    "pull_request_url": "https://api.github.com/repos/owner/name/pulls/64",
+                    "html_url": "https://github.com/owner/name/pull/64#discussion_r1",
+                    "updated_at": "2026-05-27T12:30:00Z",
+                },
+                {
+                    "id": 2, "body": "y", "user": {"login": "alice"},
+                    "pull_request_review_id": 42,
+                    "pull_request_url": "https://api.github.com/repos/owner/name/pulls/64",
+                    "html_url": "https://github.com/owner/name/pull/64#discussion_r2",
+                    "updated_at": "2026-05-27T12:31:00Z",
+                },
+            ]
+        if path == "/repos/owner/name/pulls/64/reviews/42":
+            review_fetches.append(path)
+            return {
+                "id": 42, "state": "APPROVED",
+                "body": "@brr-bot looks good",
+                "user": {"login": "alice"},
+                "html_url": "https://github.com/owner/name/pull/64#pullrequestreview-42",
+            }
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+    assert len(review_fetches) == 1, "review must be fetched once within a single poll"
+
+    # Second loop pass — same line comments still in the API response,
+    # but the cursor has advanced and seen_review_ids dedupes the fetch.
+    loop._loop_once(brr_dir, inbox, responses)
+    assert len(review_fetches) == 1, "review must not be refetched across polls"
+
+
+def test_deliver_pr_review_response_posts_to_pr_thread_with_quote(
+    tmp_path, monkeypatch,
+):
+    """pr-review replies go to the PR's top-level comment endpoint with a
+    quote pointer back at the review (no dedicated review-reply endpoint
+    exists for the summary body)."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"mention": "@brr-bot"},
+    })
+
+    protocol.create_event(
+        inbox,
+        source="github",
+        body="@brr-bot please address these comments",
+        github_repo="owner/name",
+        github_kind="pr-review",
+        github_issue_number=62,
+        github_pr_number=62,
+        github_review_id=555,
+        github_review_state="CHANGES_REQUESTED",
+        github_author="alice",
+        github_html_url="https://github.com/owner/name/pull/62#pullrequestreview-555",
+        github_trigger="mention",
+    )
+    event = protocol.list_pending(inbox)[0]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses, event["id"], "On it — will push fixes shortly.")
+
+    posts: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        client, "_api_post",
+        lambda token, path, body: posts.append((path, body)),
+    )
+
+    delivery._deliver_responses(brr_dir, inbox, responses, "secret")
+
+    assert len(posts) == 1
+    path, payload = posts[0]
+    assert path == "/repos/owner/name/issues/62/comments"
+    text = payload["body"]
+    assert text.startswith(
+        "> Replying to [@alice's comment]"
+        "(https://github.com/owner/name/pull/62#pullrequestreview-555)"
+    )
+    assert text.endswith("On it — will push fixes shortly.")
+
+
 def test_mention_trigger_creates_event_for_pr_review_comment(tmp_path, monkeypatch):
     """Inline PR review comments live on /pulls/comments, not /issues/comments."""
     brr_dir = tmp_path / ".brr"
@@ -523,7 +847,7 @@ def test_mention_trigger_creates_event_for_pr_review_comment(tmp_path, monkeypat
         "triggers": {"mention": "@brr-bot"},
     })
 
-    def fake_api_get(token, path, params=None):
+    def fake_api_get(token, path, params=None, **kwargs):
         if path == "/repos/owner/name/issues/comments":
             return []
         if path == "/repos/owner/name/pulls/comments":
@@ -572,7 +896,7 @@ def test_mention_trigger_skips_comments_without_mention(tmp_path, monkeypatch):
         "triggers": {"mention": "@brr-bot"},
     })
 
-    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None: [
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
         {
             "id": 3,
             "body": "ordinary comment, no mention",
@@ -606,7 +930,7 @@ def test_polling_cursor_advances_across_iterations(tmp_path, monkeypatch):
 
     captured_since: list[str | None] = []
 
-    def fake_api_get(token, path, params=None):
+    def fake_api_get(token, path, params=None, **kwargs):
         captured_since.append((params or {}).get("since"))
         if path == "/repos/o/r/issues":
             return [
@@ -957,7 +1281,7 @@ def test_any_trigger_emits_issue_event(tmp_path, monkeypatch):
         "cursor": {"any_issues_since": "2026-01-01T00:00:00Z"},
     })
 
-    def fake_api_get(token, path, params=None):
+    def fake_api_get(token, path, params=None, **kwargs):
         if path == "/repos/owner/name/issues":
             return [
                 {
@@ -996,7 +1320,7 @@ def test_any_trigger_emits_pr_event_with_branch_target(tmp_path, monkeypatch):
         "cursor": {"any_issues_since": "2026-01-01T00:00:00Z"},
     })
 
-    def fake_api_get(token, path, params=None):
+    def fake_api_get(token, path, params=None, **kwargs):
         if path == "/repos/owner/name/issues":
             return [
                 {
@@ -1038,7 +1362,7 @@ def test_any_trigger_emits_comment_events_skipping_bot(tmp_path, monkeypatch):
         "cursor": {"any_comments_since": "2026-01-01T00:00:00Z"},
     })
 
-    def fake_api_get(token, path, params=None):
+    def fake_api_get(token, path, params=None, **kwargs):
         if path == "/repos/o/r/issues/comments":
             return [
                 {

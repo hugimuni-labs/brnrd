@@ -39,6 +39,14 @@ def pull(repo: str, number: int) -> str:
     return f"/repos/{repo}/pulls/{number}"
 
 
+def pull_review(repo: str, number: int, review_id: int) -> str:
+    """``GET /repos/{repo}/pulls/{n}/reviews/{review_id}`` — fetch one
+    PR review (summary body + state). Used to check whether the review
+    that owns a freshly-seen line comment mentions us in its summary
+    body even when no individual line comment did."""
+    return f"/repos/{repo}/pulls/{number}/reviews/{review_id}"
+
+
 def issue_comments(repo: str, number: int) -> str:
     """``POST /repos/{repo}/issues/{n}/comments`` — post a top-level
     comment on issue or PR ``#n``."""

@@ -21,6 +21,14 @@ The gate polls the GitHub REST API for three configurable triggers:
 Replies are posted as comments on the originating issue or PR; inline
 PR review-comment events reply in-thread via the review-replies API.
 
+Polling uses **conditional requests**: each high-volume endpoint
+(``/issues``, ``/issues/comments``, ``/pulls/comments``) tracks the
+last ``ETag`` it received and sends ``If-None-Match`` on every poll.
+GitHub answers HTTP 304 when nothing has changed, and conditional
+304s are free against the REST rate limit — so the steady-state cost
+on a quiet repo is roughly zero. The ETag cache lives in gate state
+(``cursor.etags``) and self-heals if it ever drifts.
+
 State lives at ``.brr/gates/github.json``. Auth resolution at setup
 time, in order:
 
