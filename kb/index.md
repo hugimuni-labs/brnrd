@@ -359,6 +359,17 @@ dive-in map) and are stable until something contradicts them.
   TG bot adapter + multi-project routing UX (fast-follow);
   permission-prompt API + gate-side integration (third). Backend
   lives at `src/brnrd/` in the monorepo.
+- [GitHub gate vs brnrd GitHub App design](design-github-gate-vs-brnrd-app.md) —
+  *accepted 2026-05-27*. Boundary doc for the GitHub side: what the
+  OSS polling gate owns and keeps owning (PAT auth, three-trigger
+  polling, single-repo binding, response posting, live progress
+  card), what brnrd owns exclusively (GH App JWT minting, webhook
+  receipt + signature verification, multi-project routing,
+  permission-prompt UX, hosted bot identity), and what both share
+  via the package split (`paths` / `cache` / `parse` reused behind
+  brnrd's async httpx). Closes the "does managed obsolete OSS"
+  question with a definite no — different identity, setup, latency,
+  blast radius.
 - [Failover compute plan](plan-failover-compute.md) —
   *accepted 2026-05-26; not started*. Compute spawn (managed + BYO) for subscribers, on
   brnrd-owned Fly pool for the managed path and on the

@@ -271,19 +271,24 @@ backend lives at `src/brnrd/` alongside the daemon at
 1. [`design-brnrd-protocol.md`](design-brnrd-protocol.md) —
    the contract this plan implements (Gates + Multi-project
    routing + Permission-prompt endpoints sections).
-2. [`plan-failover-compute.md`](plan-failover-compute.md) — the
+2. [`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md)
+   — the OSS-vs-managed split for the GitHub side specifically:
+   what code lives on which side, what's structurally reused
+   (`paths`/`cache`/`parse` in `brr.gates.github`), and why both
+   integrations survive launch instead of one obsoleting the other.
+3. [`plan-failover-compute.md`](plan-failover-compute.md) — the
    sister plan covering managed compute on top of the same
    backend skeleton this plan stands up.
-3. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
+4. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
    — the sister plan for the dashboard view of all of this.
-4. [`subject-managed-mode.md`](subject-managed-mode.md) — the
+5. [`subject-managed-mode.md`](subject-managed-mode.md) — the
    strategic context (managed dispatcher + managed compute
    surfaces, Free + Subscribed tier shape, work-continuity frame).
-5. [`decision-pricing-shape.md`](decision-pricing-shape.md) —
+6. [`decision-pricing-shape.md`](decision-pricing-shape.md) —
    the pricing model (platform subscription + metered credits
    for compute) that drives the per-tier caps the prompt API
    references.
-6. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+7. [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
    — where `src/brnrd/` lives.
 
 ## Lineage

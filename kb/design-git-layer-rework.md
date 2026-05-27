@@ -130,8 +130,12 @@ must not block the task).
 
 Status: shipped on 2026-05-15.
 
-[`gates/github.py`](../src/brr/gates/github.py) is a built-in gate that
-talks to `https://api.github.com` through `requests`. Mirrors
+[`gates/github/`](../src/brr/gates/github/) is a built-in gate that
+talks to `https://api.github.com` through `requests`. Split across
+focused submodules (`client`/`paths`/`cache`/`parse`/`state`/`wizard`
+/`polling`/`delivery`/`progress`/`loop`) so the managed brnrd App
+can reuse the transport-agnostic core — see
+[`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md). Mirrors
 slack/telegram in shape: `is_configured`, `run_loop`, `setup`, `auth`,
 `bind`. State at `.brr/gates/github.json`: token (when stored),
 `bot_login`, `repo`, `triggers`, polling cursors.

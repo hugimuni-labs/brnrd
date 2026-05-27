@@ -30,7 +30,7 @@ The previous shape carried three concerns through three layers:
 The metadata triple `preserved_branch` / `landed_branch` /
 `changed_branch` mirrored the same split out to every renderer
 (`run_progress.py`, `run_context.py`, `prompts.py`, `conversations.py`,
-`gates/github.py`, the daemon's `done` packet). Six readers had to
+`gates/github/`, the daemon's `done` packet). Six readers had to
 agree on which field meant "the branch to talk about" for each
 outcome.
 
@@ -130,7 +130,7 @@ collapses to one pair:
   `conflict`.
 
 All six readers (`run_progress.py`, `run_context.py`, `prompts.py`,
-`conversations.py`, `gates/github.py`, `daemon.py`) consume only those
+`conversations.py`, `gates/github/`, `daemon.py`) consume only those
 keys.
 
 ## Why drop local-land
