@@ -313,7 +313,11 @@ sub-parser pattern the other verbs use. No daemon dependency.
 
 - All six sub-verbs implemented with stable `--json` schemas.
 - AGENTS.md → "Health checks" updated to point at `brr kb
-  check`.
+  check`. Scope the reference to brr-internal context (e.g. the
+  "When the brr daemon runs you" subsection); the universal
+  kb-maintenance prose stays brr-command-free so the section ships
+  cleanly via `brr init`. See [`log.md`](log.md) 2026-05-27
+  adopter-lens cleanup for the why.
 - Brr daemon-side context-injection updated to include
   `brr kb status --json` output in the Task Context Bundle
   (so brr-operated agents share the same surface non-brr
