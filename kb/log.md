@@ -4442,6 +4442,7 @@ Updated `subject-daemon.md`, `plan-laptop-daemoning.md`, `kb/index.md`,
 and `README.md` so the current state is explicit: the Linux service
 wrapper has shipped, while the macOS LaunchAgent and the
 machine-scoped multi-project runtime remain separate follow-up slices.
+
 ## [2026-05-26] implement | macOS LaunchAgent daemon lifecycle slice
 
 Added the macOS side of `brr daemon install | uninstall |
@@ -4463,3 +4464,16 @@ users at `brr daemon install` and notes the first-run network prompt.
 Tests cover plist generation, no-`WorkingDirectory`, launchctl command
 construction, log tailing, registry reads, and CLI dispatch; full suite
 passed with 487 tests.
+
+## [2026-05-27] fix | kb daemon lifecycle cleanup after macOS slice
+
+Reconciled the kb after the macOS LaunchAgent implementation: the
+daemon hub, laptop-daemoning plan, index, and fleet pondering notes now
+state that Linux systemd and macOS LaunchAgent service lifecycle both
+ship, while the registry-aware multi-project runtime and
+`brr daemon list|adopt|forget` remain future work. Also compressed
+`notes-pondering-fleet.md` from a running reframe chronicle into a
+provenance map, compressed the daemon deployment template lineage to
+current state, marked the `brr kb` plan as accepted-but-not-started,
+and added a peer link to the two-websites decision from the
+managed-mode hub.
