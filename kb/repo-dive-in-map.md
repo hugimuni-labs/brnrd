@@ -245,7 +245,8 @@ Read:
 - [`src/brr/gates/__init__.py`](../src/brr/gates/__init__.py)
 - [`src/brr/gates/telegram.py`](../src/brr/gates/telegram.py)
 - [`src/brr/gates/slack.py`](../src/brr/gates/slack.py)
-- [`src/brr/gates/github.py`](../src/brr/gates/github.py)
+- [`src/brr/gates/github/`](../src/brr/gates/github/) — package
+  (`client`/`paths`/`cache`/`parse`/`state`/`wizard`/`polling`/`delivery`/`progress`/`loop`)
 - [`src/brr/gates/README.md`](../src/brr/gates/README.md)
 - [`src/brr/docs/`](../src/brr/docs/)
 

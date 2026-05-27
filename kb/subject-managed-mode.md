@@ -7,7 +7,10 @@ linked design / plan pages evolve during implementation).
 Hub for brr's "managed" tier: the work that lets adopters skip the
 per-user bot setup, keeps their tasks moving when their laptop is
 offline, and offers a coherent paid path without contradicting the
-"everything is OSS self-hostable" stance. Companion to
+"everything is OSS self-hostable" stance. For the GitHub-specific
+OSS-vs-managed boundary (which code each side owns, what's reused via
+`paths`/`cache`/`parse`), see
+[`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md). Companion to
 [`subject-envs.md`](subject-envs.md) (the env protocol that the
 managed-compute sandbox image is built around) and
 [`subject-fleet-overlays.md`](subject-fleet-overlays.md) (the

@@ -4442,3 +4442,73 @@ Updated `subject-daemon.md`, `plan-laptop-daemoning.md`, `kb/index.md`,
 and `README.md` so the current state is explicit: the Linux service
 wrapper has shipped, while the macOS LaunchAgent and the
 machine-scoped multi-project runtime remain separate follow-up slices.
+
+## [2026-05-27] implement | GitHub gate design pass — package split, ETag polling, review summaries
+
+Three changes on the OSS GitHub gate that ship together as one design
+pass; OSS/managed boundary documented at the same time so the
+managed slice in [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
+has a structural seam to lean on instead of re-implementing.
+
+1. **Package split.** `src/brr/gates/github.py` (1.2k LOC monolith) →
+   `src/brr/gates/github/` package with focused submodules:
+   `client` / `paths` / `cache` / `parse` / `state` / `wizard` /
+   `polling` / `delivery` / `progress` / `loop` / `constants`. Public
+   API (`is_configured`, `run_loop`, `render_update`, `setup`, `auth`,
+   `bind`, `parse_origin_url`, `autodetect_repo`, `resolve_token`,
+   `GitHubAPIError`) re-exported from `__init__.py`. Daemon dispatch
+   via `importlib.import_module` is unchanged. The interactive
+   submodule is named `wizard` rather than `setup` because Python
+   would shadow the submodule with the re-exported `setup` function.
+2. **Conditional polling.** Every high-volume GET (`/issues`,
+   `/issues/comments`, `/pulls/comments`) sends `If-None-Match` with
+   the last ETag GitHub returned. 304 responses don't count against
+   the REST rate limit, so quiet repos stop spending budget on
+   polling. ETag store lives in gate state under `cursor.etags`
+   (keyed by `method + path`) and self-heals when stale — a wrong
+   cached ETag just trades one 200 for a fresh one. Cuts steady-state
+   rate-limit consumption by roughly an order of magnitude on quiet
+   repos.
+3. **PR review summary events.** When a line comment surfaces a new
+   `pull_request_review_id`, fetch the parent review once and emit a
+   `pr-review` event if its summary body @-mentions us. New
+   `github_kind: pr-review` carries `github_review_id` and
+   `github_review_state` (APPROVED / CHANGES_REQUESTED / COMMENTED).
+   Replies post via `/issues/{n}/comments` with a quote pointer at
+   the review's HTML URL (GitHub has no dedicated review-summary
+   reply endpoint; the plan's wording mentioned
+   `/pulls/{n}/reviews/{id}/comments` but that's a GET-only list).
+   Reviews are deduped via `cursor.seen_review_ids`. Standalone
+   summary-only reviews (no line comments) remain undiscoverable by
+   polling and fall through to the managed brnrd webhook path.
+
+Reasoning for keeping the OSS gate sync `requests` rather than
+swapping to `httpx` or a GH library: the 2026-05-22 decision to take
+`requests` over stdlib urllib stands; reversing it for fewer deps is
+aesthetic, not real risk reduction. `httpx`'s payoff (sync + async one
+client) only matters for brnrd. GH App auth (`pyjwt[crypto]`,
+`cryptography`) would bring native compile chains — disqualifies the
+OSS gate from the "zero red flags for casual `pip install brr` users"
+goal. App-auth and webhooks stay brnrd-side.
+
+Boundary captured in
+[`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md):
+what OSS owns (PAT auth, three-trigger polling, single-repo binding,
+response posting, live progress card), what brnrd owns exclusively
+(GH App JWT minting, webhook receipt + signature verification,
+multi-project routing, permission-prompt UX, hosted bot identity),
+and the three modules both sides share (`paths`, `cache`, `parse`).
+Brnrd's first commit will import these from `brr.gates.github`; if it
+can't, the modules get refactored at that point — closes the
+"reusable-core illusion" failure mode.
+
+Deferred follow-ups (not in this slice): reactions-as-signal for the
+permission-prompt UX (brnrd-side first; webhook delivery handles
+reactions for free), webhooks for the OSS gate (require public URL
+infra exactly the managed path is designed to remove), GH App auth
+in OSS (native crypto deps disqualify it). Filed in the design page's
+"Deferred follow-ups" section.
+
+497 → 501 tests after adding ETag tests (4) and review-summary tests
+(4). PR #62 fix branch (`fix/github-pr-review-comment-mentions`) is
+the prerequisite this branch stacks on.

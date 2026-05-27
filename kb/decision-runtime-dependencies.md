@@ -45,5 +45,5 @@ opinionated dependencies.
   when they pay for themselves.
 - [`src/brr/gates/telegram.py`](../src/brr/gates/telegram.py),
   [`src/brr/gates/slack.py`](../src/brr/gates/slack.py), and
-  [`src/brr/gates/github.py`](../src/brr/gates/github.py) use
+  [`src/brr/gates/github/`](../src/brr/gates/github/) use
   `requests`.
