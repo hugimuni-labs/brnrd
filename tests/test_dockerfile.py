@@ -54,8 +54,11 @@ def test_bundled_runner_image_installs_github_cli():
     """``gh`` is part of the runner toolbox so agents can open PRs when
     a task lacks an auto-land target. We pull from GitHub's upstream APT
     repo rather than Debian's to track current ``gh`` features (Debian
-    sometimes lags by years). Authentication comes from the host's
-    ``~/.config/gh`` mount, mirroring how we ship Codex/Claude tokens.
+    sometimes lags by years). Authentication is wired by the docker env
+    via an injected ``GITHUB_TOKEN`` env var (resolved from gate state,
+    daemon env, or ``gh auth token`` on the host); ``~/.config/gh`` is
+    deliberately not bind-mounted because the gh keyring backend isn't
+    reachable from inside the container.
     """
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "cli.github.com/packages" in text
@@ -76,3 +79,18 @@ def test_bundled_runner_image_supports_arbitrary_uid():
     assert "mkdir -p /brr-home" in text
     assert "chmod 1777 /brr-home" in text
     assert "ENV HOME=/brr-home" in text
+
+
+def test_bundled_runner_image_exposes_user_local_bin_on_path():
+    """User-mode ``pip install`` scripts must be on ``PATH``.
+
+    The container runs as the host UID, which has no write access to
+    the system Python site-packages. Any ``pip install`` an agent runs
+    inside the container therefore lands in ``$HOME/.local/bin``. The
+    image prepends that directory to ``PATH`` so freshly-installed
+    console scripts (``pytest``, the project's own ``brr`` entry point,
+    ruff, etc.) are reachable by name, rather than forcing agents into
+    ``python -m <module>`` workarounds.
+    """
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "ENV PATH=/brr-home/.local/bin:$PATH" in text
