@@ -374,16 +374,26 @@ _DOCKER_DEFAULT_PASSTHROUGH_ENV: tuple[str, ...] = (
 # Per-runner credential paths under HOME, relative to ``~``. Each is
 # mounted into the container's HOME at ``/brr-home/<rel>`` when present
 # on the host, so the in-container CLI finds tokens at ``$HOME/.codex``,
-# ``$HOME/.config/gh``, etc. The container runs as the host UID, so
-# bind-mounted host paths keep their host ownership and the in-container
-# user can read/write them.
+# etc. The container runs as the host UID, so bind-mounted host paths
+# keep their host ownership and the in-container user can read/write
+# them.
+#
+# ``~/.config/gh`` is intentionally absent: on Linux the gh CLI stores
+# its OAuth token in the system keyring (libsecret/gnome-keyring) and
+# the on-disk ``hosts.yml`` only carries the account name. Bind-mounting
+# that file into the container leaves gh with an account it can't
+# authenticate (the keyring socket isn't reachable across the container
+# boundary), which makes ``gh auth status`` exit non-zero and produces
+# confusing reports even when the GitHub token brr injects as
+# ``GITHUB_TOKEN`` works fine for real operations. The token-injection
+# path below covers gh CLI auth uniformly across keyring and file
+# backends, so the mount adds nothing but a footgun.
 _DOCKER_DEFAULT_CRED_PATHS: tuple[str, ...] = (
     ".claude",
     ".claude.json",
     ".codex",
     ".gemini",
     ".gitconfig",
-    ".config/gh",
     ".ssh",
 )
 
@@ -610,10 +620,21 @@ class DockerEnv(WorktreeEnv):
         })
         task.meta["docker_image"] = image
 
-        if task.source == "github":
-            token = _resolve_github_gate_token(repo_root / ".brr")
-            if token:
-                ctx.env_state["github_token"] = token
+        # Resolve a GitHub token for every docker task, not only the
+        # github-source ones. The container has no path to the host's
+        # keyring or to the user's gh stored accounts, so without an
+        # injected ``GITHUB_TOKEN`` the agent's ``gh`` CLI is dead and
+        # ``git push`` over HTTPS to github.com falls back to anonymous
+        # — which silently breaks any task that needs to look up sibling
+        # PRs, read upstream issues, or open a fresh PR from a worktree
+        # branch even when the task wasn't strictly triggered by the
+        # github gate. Resolution prefers stored gate state, then
+        # daemon-side env vars, then ``gh auth token``; absent all
+        # three the field stays unset and the container runs with no
+        # GitHub auth, same as before.
+        token = _resolve_github_gate_token(repo_root / ".brr")
+        if token:
+            ctx.env_state["github_token"] = token
 
         return ctx
 
