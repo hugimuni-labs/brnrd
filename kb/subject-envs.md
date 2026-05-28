@@ -26,13 +26,21 @@ envs in `.brr/envs/<name>/` / `~/.config/brr/envs/<name>/` are accepted
 design surface, not wired runtime backends; `get_env()` rejects them
 until that registry work lands.
 
-Docker wires runner credentials from the host at invocation time. For
-GitHub-originated tasks, brr can inject the GitHub gate token (stored,
-environment-provided, or resolved through `gh auth token`) and configures
-in-container git to rewrite common GitHub SSH remote forms to HTTPS with
-a token-backed credential helper. That gives runner agents a working
-`git push` path for PR/rebase work even when no SSH agent is available
-inside the container.
+Docker wires runner credentials from the host at invocation time. On
+every docker task — not only those triggered by the GitHub gate — brr
+resolves a GitHub token (stored gate state → `GITHUB_TOKEN`/`GH_TOKEN`
+on the daemon's environment → `gh auth token` on the host) and injects
+it into the container as `GITHUB_TOKEN`, plus the in-container git
+config that rewrites common GitHub SSH remote forms to HTTPS with a
+token-backed credential helper. That gives runner agents a working
+`gh` CLI and a `git push` path for PR/rebase work even when no SSH
+agent is reachable inside the container. `~/.config/gh` is deliberately
+**not** bind-mounted: the gh keyring backend on Linux isn't reachable
+from inside the container, and mounting the file-side config without it
+left agents staring at confused `gh auth status` output. (Mount-based
+path removed 2026-05-27; resolver promoted to universal-scope in the
+same change. See the log entry on that date for the agent-report
+review that prompted the rework.)
 
 ## Durability contract
 

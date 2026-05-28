@@ -4631,3 +4631,89 @@ Worth revisiting if adopter ergonomics ever become a priority concern.
 
 Full test suite (493 tests) passes; the two tests that pin "Stewardship"
 in the bundled prompts are unaffected.
+
+## [2026-05-27] fix | docker runner ergonomics from three agent reviews
+
+Three recurring complaints from recent runner ergonomics reviews
+distilled into two real issues plus a design question:
+
+1. **`pytest` "missing" on cold tasks.** Two reviews ran
+   `pip install -e ".[dev]"` before testing. The Dockerfile *does*
+   pin pytest (commit `cdb9ccd`), but the user's local
+   `brr-runner:dev` was built 9 days before that commit landed —
+   stale image, image-mtime never compared to Dockerfile-mtime.
+   Documented behaviour; no code fix beyond reminding users to
+   rebuild. The orientation pass would benefit from a
+   pre-task image-mtime check, but that's a separate slice.
+
+2. **Even after install, agents had to call `python -m pytest`**
+   because pip's user-mode install (forced by the container
+   running as host UID with no write access to system site-
+   packages) lands scripts in `/brr-home/.local/bin`, which
+   wasn't on `PATH`. Fix: `ENV PATH=/brr-home/.local/bin:$PATH`
+   in the Dockerfile. One line, makes every freshly-installed
+   console script (`pytest`, the project's own `brr` entry
+   point, ruff, etc.) reachable by name. Test added
+   (`test_bundled_runner_image_exposes_user_local_bin_on_path`).
+
+3. **`gh auth status` exits non-zero inside the container even
+   when `GITHUB_TOKEN` is injected.** Root cause: on Linux gh
+   stores its OAuth token in the system keyring; `~/.config/gh/
+   hosts.yml` only carries the account name. brr was bind-
+   mounting `~/.config/gh` into the runner, but the keyring
+   isn't reachable across the container boundary — so gh sees
+   a stale account it can't authenticate. `gh pr`, `gh api`,
+   etc. all worked via the injected `GITHUB_TOKEN`, but the
+   broken stored account in `gh auth status` output kept
+   confusing agents into thinking auth was broken. **Fix:**
+   dropped `.config/gh` from `_DOCKER_DEFAULT_CRED_PATHS` and
+   made the GitHub-token resolver run on **every** docker task
+   (not just `source == "github"`), so any cross-source task
+   that wants to touch GitHub has a working `gh` and HTTPS
+   `git push`. With the mount gone, the resolver is the sole
+   path, hence the universal scope. Verified end-to-end:
+   `gh auth status` now exits 0 inside the runner, reports
+   `Logged in to github.com account Gurio (GITHUB_TOKEN)` as
+   the single active account.
+
+Lessons:
+
+- **Cosmetic ≠ ignorable** when agents are reading the output
+  and reasoning about next steps. Wasted reasoning costs tokens
+  and clouds context. The original "don't fix it" framing got
+  pushed back on appropriately.
+- **The bind-mount fallback was load-bearing in the wrong
+  direction.** It was added as the "easy" path for gh auth but
+  silently broke for the majority Linux setup (keyring backend).
+  Explicit token injection is both cleaner and more reliable.
+- **Scope creep is OK when the previous scope was a fiction.**
+  The pre-fix code only resolved a token for `source ==
+  "github"`, but the mount-based fallback already gave non-
+  github tasks access to the same credentials in a broken form.
+  Moving to universal injection isn't expanding scope; it's
+  making the existing access actually work.
+
+Companion question for the interactive-init story (issue #24):
+the playbook should walk users through GitHub credential
+setup explicitly — probe `gh auth token`, offer to install/auth
+gh, walk PAT creation with sensible scope defaults, validate
+the result — because relying on `gh auth token` to silently
+just work has the keyring sharp edge documented above. Comment
+posted on #24 with the proposed playbook steps.
+
+Open question for the runner-image story (separate from this
+fix): the bundled image carries Python-specific tooling
+(`python3-pip`, `python3-venv`, baseline pytest pin) primarily
+to support brr's own dogfooding. That's a smell for a
+"generic" runner image meant to host Rust, Go, TS, etc.
+projects. Two plausible shapes — strict-minimal base + per-
+project layered images, or a tiered family
+(`brr-runner` / `brr-runner-python` / …) — discussed in the
+chat thread; not settled, no kb design page yet because the
+question is still in the "do we even want to pay the
+maintenance cost" stage.
+
+Files touched: `src/brr/Dockerfile`, `src/brr/envs/__init__.py`,
+`src/brr/docs/envs.md`, `tests/test_dockerfile.py`,
+`tests/test_envs.py`. No new kb pages; this entry is the
+synthesis.
