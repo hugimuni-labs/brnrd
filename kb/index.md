@@ -45,6 +45,20 @@ dive-in map) and are stable until something contradicts them.
   *shipped*. Opt-in brr self-development reload mode: editable install
   plus quiescent re-exec between tasks when brr package files change;
   kept explicit via `--dev-reload` / `dev_reload=true`, not a default.
+- [Agent ergonomics observability design](design-agent-ergonomics.md) —
+  *proposed 2026-05-27*. Replaces the user-visible `runner.self_review`
+  footer with a three-layer back-channel: deterministic probes (image
+  staleness, tool presence, auth resolvability), runtime telemetry
+  (retry/exit/phase data piggybacking on `run_progress`), and sampled
+  agent reflection wrapped in HTML comment markers and stripped from
+  the user-facing response — all emitting one canonical record shape
+  to a pluggable **ergo proxy** (`NullErgoProxy` / `LocalErgoProxy` /
+  `BrnrdErgoProxy`). Tenancy decides which proxy: self-hosted defaults
+  to `NullErgoProxy`, can opt-in to `LocalErgoProxy` (+ a
+  `brr ergonomics` CLI) or to brnrd's improvement pool; managed mode
+  routes to `BrnrdErgoProxy` unconditionally, the user never sees
+  ergonomics output in chat, and the brnrd dashboard adds project +
+  fleet ergonomics views for users and platform operators respectively.
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native

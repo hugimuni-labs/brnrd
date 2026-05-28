@@ -1512,6 +1512,11 @@ write the Upsun shape once, use it twice.
 - The brnrd dashboard (covered in
   [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
   — uses these REST endpoints as a client).
+- The **ergonomics ingestion endpoint** (the brnrd-side sink for
+  back-channel observability records from daemons) — specced in
+  [`design-agent-ergonomics.md`](design-agent-ergonomics.md);
+  joins this protocol as `POST /v1/daemons/ergonomics` when that
+  design's brnrd-sink slice lands.
 - The `fanout` multi-daemon policy (deferred per above).
 - Server-side spawn for *online* daemons as a convenience layer
   (i.e. "brnrd takes the task even though my daemon is up,

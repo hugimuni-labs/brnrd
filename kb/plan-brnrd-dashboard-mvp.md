@@ -123,6 +123,10 @@ Out of scope for MVP:
 - Notification preferences UI (defaults are baked into the
   backend; v-next).
 - Themes / customisation.
+- **Ergonomics views** (per-project + fleet) — specced in
+  [`design-agent-ergonomics.md`](design-agent-ergonomics.md) as a
+  follow-up slice that lands after the back-channel sink + brnrd
+  endpoint do; not in the MVP eight.
 
 ## Why HTMX-first
 

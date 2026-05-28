@@ -4717,3 +4717,83 @@ Files touched: `src/brr/Dockerfile`, `src/brr/envs/__init__.py`,
 `src/brr/docs/envs.md`, `tests/test_dockerfile.py`,
 `tests/test_envs.py`. No new kb pages; this entry is the
 synthesis.
+
+## [2026-05-27] design | Agent ergonomics observability — back-channel design
+
+Triggered by the user's "what should we *generally* do about
+agent ergonomics issues" question following the docker-runner
+fix above. The current shape (`runner.self_review` config that
+injects `prompts/self-review.md` to make agents append a free-
+text **Ergonomics review:** footer to their stdout response)
+worked as a stop-gap but is structurally wrong for what brr is
+becoming:
+
+- Signal rides in user-visible chat output → pollution for
+  users, useless for managed-mode (brnrd) where the operator,
+  not the user, needs the data.
+- No structured form, no storage, no aggregation. Three agents
+  in a row reporting the same `gh auth status` confusion is a
+  pattern the system never noticed.
+- All-or-nothing toggle; no sampling.
+- Agent-only signal; lots of friction the daemon could detect
+  deterministically (image staleness, missing tools, auth
+  resolvability) just isn't checked.
+
+New page: [`kb/design-agent-ergonomics.md`](design-agent-ergonomics.md).
+Proposes a back-channel observability surface with three
+producer layers (deterministic **probe**, deterministic
+**telemetry** piggybacking on `run_progress`, sampled
+agent **reflection**), one canonical `Record` shape, and a
+pluggable **ergo proxy** abstraction (`ErgoProxy` Protocol with
+three concrete impls: `NullErgoProxy` / `LocalErgoProxy` writing
+JSONL / `BrnrdErgoProxy` posting batched HTTPS). The name is a
+nod to the 2006 anime; the role — proxying ergonomic observations
+from producers to operators, opaque to both sides — fits cleanly
+enough that the pun pays for itself. Tenancy decides which
+proxy: self-hosted defaults to `NullErgoProxy` with opt-in to
+`LocalErgoProxy` (+ a `brr ergonomics` CLI) or to brnrd's
+improve pool; managed-mode routes to `BrnrdErgoProxy`
+unconditionally, suppresses the reflection footer from user
+output entirely, and surfaces project + fleet ergonomics views
+in the dashboard (user-scoped vs operator-scoped).
+
+Reflection capture nailed down: the existing `self-review.md`
+free-text footer becomes a marker-delimited block
+(`<!-- BRR_ERGONOMICS_START --> … <!-- BRR_ERGONOMICS_END -->`)
+the daemon parses out and strips before the response reaches the
+gate. HTML comments fail invisibly in markdown renderers, so the
+failure modes are deliberately asymmetric: missed-parse skips the
+record but leaves the response intact; leaked-marker shows the
+user a stray invisible comment but never strips real response
+content. Sampling stays daemon-side (the agent always gets the
+nudge when injected); the daemon decides per-task whether to
+inject based on `ergonomics.reflection_sample_rate` plus forced
+overrides on retry / probe-error.
+
+Why design this now (vs after brnrd ships): the brnrd protocol
+needs to know about the ergonomics endpoint slot, the dashboard
+MVP plan needs to know an ergonomics view is a follow-up slice,
+and the wire format needs the same record shape for both
+tenancies so the producer code is proxy-agnostic from day one.
+Locking the shape ahead of implementation avoids retrofit cost.
+
+Implementation footprint sketched (~600 LOC for daemon-side
+ergo proxy + probes + CLI; ~600 LOC for telemetry + reflection
++ `BrnrdErgoProxy` + endpoint; ~600 LOC for the dashboard views).
+Sliced so probe layer alone (the highest-leverage piece) is
+shippable independently.
+
+Index updated under "Architecture & orientation" with a
+substantive blurb. Cross-links added from
+[`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)
+("Out of scope for MVP" → ergonomics views deferred to a
+follow-up slice) and [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+("Out of scope" → ergonomics ingestion endpoint joins as
+`POST /v1/daemons/ergonomics` when the `BrnrdErgoProxy` slice
+lands).
+
+Open questions left explicit on the design page: default
+`reflection_sample_rate` for self-hosted vs managed, the
+minimal safe redaction surface for the brnrd pool, interaction
+with `.brr/traces/`, subject-hub timing (premature today;
+revisit once probe + ergo proxy slices land).
