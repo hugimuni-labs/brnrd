@@ -105,24 +105,41 @@ Two paths cover both API-key and subscription-only auth:
 
 1. **Env-var pass-through.** When set on the daemon's environment, brr
    forwards `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-   and `GOOGLE_API_KEY` into the container. Add more with
-   `docker.env=KEY1,KEY2`.
+   `GOOGLE_API_KEY`, `GITHUB_TOKEN`, and `GH_TOKEN` into the container.
+   Add more with `docker.env=KEY1,KEY2`.
 2. **Login-dir bind mounts.** When `~/.claude/`, `~/.claude.json`,
-   `~/.codex/`, `~/.gemini/`, `~/.gitconfig`, or `~/.config/gh/` exists
-   on the host, it's bind-mounted read-write into the matching path
-   under `$HOME` inside the container (i.e. `/brr-home/.codex`,
-   `/brr-home/.config/gh`). This is what makes Claude Pro/Max,
-   ChatGPT Plus/Pro, and Gemini OAuth users work without an API key,
-   what gives `git commit` your real author identity, and what lets
-   `gh pr create` open PRs as your GitHub user from inside a task.
+   `~/.codex/`, `~/.gemini/`, or `~/.gitconfig` exists on the host,
+   it's bind-mounted read-write into the matching path under `$HOME`
+   inside the container (i.e. `/brr-home/.codex`,
+   `/brr-home/.gitconfig`). This is what makes Claude Pro/Max,
+   ChatGPT Plus/Pro, and Gemini OAuth users work without an API key
+   and gives `git commit` your real author identity.
 
-For tasks that came from the GitHub gate, brr also injects the gate's
-token when it can resolve one from stored state, the daemon environment,
-or `gh auth token`. The Docker command configures git to rewrite common
-GitHub SSH remote forms (`git@github.com:...`, `ssh://git@github.com/...`)
-to HTTPS and supplies the token through an in-container credential
-helper, so `git push` works for PR branches even when no SSH agent is
-mounted.
+**GitHub auth is handled separately** because `~/.config/gh/` on Linux
+typically only stores the account name on disk — the OAuth token lives
+in the system keyring (libsecret / gnome-keyring), which isn't reachable
+inside a container. Bind-mounting the config dir with no keyring access
+leaves `gh` with an account it can't authenticate, which makes
+`gh auth status` exit non-zero and confuses agents even when other
+operations would have worked.
+
+Instead, brr resolves a token explicitly on every Docker task — checking
+stored gate state, daemon env vars (`GITHUB_TOKEN` / `GH_TOKEN`), then
+`gh auth token` on the host — and injects it as `GITHUB_TOKEN` inside
+the container. The Docker command also configures git to rewrite common
+GitHub SSH remote forms (`git@github.com:...`,
+`ssh://git@github.com/...`) to HTTPS and supplies the token through an
+in-container credential helper, so `git push` works for PR branches
+even when no SSH agent is mounted. The net effect: `gh pr create`,
+`gh api`, `gh issue view`, and HTTPS `git push` all work cleanly inside
+the container, and `gh auth status` reports the injected token as the
+single active account.
+
+If `gh auth token` can't return a token on the host (no PAT stored, no
+keyring, etc.), set `GITHUB_TOKEN` in the daemon's environment or run
+the GitHub gate's `setup` flow to store one explicitly — both feed the
+same in-container injection path. A Personal Access Token with `repo`
+and `read:org` is sufficient for most workflows.
 
 You can opt out of the credential-dir mounts with
 `docker.mount_credentials=false`. The mounts are read-write so refresh

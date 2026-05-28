@@ -187,9 +187,18 @@ Local docker uses bind-mounts of host credential dirs
 ```python
 _DOCKER_DEFAULT_CRED_PATHS = (
     ".claude", ".claude.json", ".codex", ".gemini",
-    ".gitconfig", ".config/gh", ".ssh",
+    ".gitconfig", ".ssh",
 )
 ```
+
+`~/.config/gh` is intentionally absent: on Linux the gh CLI keeps the
+OAuth token in the system keyring (libsecret/gnome-keyring), which
+isn't reachable from inside a container, so the mount would deliver a
+broken account state. The Docker env injects `GITHUB_TOKEN` instead
+(resolved from stored gate state → daemon env → `gh auth token` on
+the host, see `_resolve_github_gate_token`). Remote sandboxes inherit
+the same shape: GitHub auth always rides as `GITHUB_TOKEN`, never as a
+config-dir upload.
 
 Remote sandboxes cannot bind-mount the host's home directory. The
 credentials need to get into the sandbox by other means. Three

@@ -11,8 +11,10 @@
 # The image is designed to run as the *host* user's UID (passed via
 # ``docker run -u``) so files written into the bind-mounted repo are owned
 # by the host user, not by root. /brr-home is a writable HOME any UID can
-# use; the daemon mounts ~/.codex, ~/.claude, ~/.gemini, ~/.gitconfig, and
-# ~/.config/gh into it at runtime.
+# use; the daemon mounts ~/.codex, ~/.claude, ~/.gemini, and ~/.gitconfig
+# into it at runtime. GitHub auth is wired separately via an injected
+# ``GITHUB_TOKEN`` env var rather than a bind mount, because gh's keyring
+# backend isn't reachable from inside the container.
 
 FROM node:22-slim
 
@@ -46,7 +48,8 @@ RUN apt-get update \
 # package is sometimes years out of date (e.g. 2.46.x), and ``gh pr
 # create`` adds flags often. Keeping the upstream feed gets us the
 # current release without pinning. Authentication is supplied at run
-# time by mounting ~/.config/gh from the host.
+# time by an injected ``GITHUB_TOKEN`` env var (see DockerEnv.prepare
+# in src/brr/envs/__init__.py for resolution order).
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -79,6 +82,15 @@ RUN npm install -g \
 RUN mkdir -p /brr-home \
     && chmod 1777 /brr-home
 ENV HOME=/brr-home
+
+# Make user-mode pip installs reachable. Inside the container the daemon
+# runs as the host's UID, which has no write access to the system Python
+# site-packages, so any ``pip install`` an agent runs falls back to a
+# ``--user`` install that lands scripts in ``$HOME/.local/bin``. Without
+# this PATH prepend the freshly-installed entry points (``pytest``,
+# ``brr``, ``ruff``, project console scripts, etc.) are invisible and
+# agents have to fall back to ``python -m <module>`` invocations.
+ENV PATH=/brr-home/.local/bin:$PATH
 
 WORKDIR /work
 

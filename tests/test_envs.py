@@ -87,12 +87,26 @@ def _isolate_docker_creds(monkeypatch, tmp_path):
     Points HOME at an empty directory and clears all known runner env
     vars so credential mounts and -e passthroughs only appear when a
     test explicitly opts in.
+
+    Also stubs ``subprocess.run`` so the GitHub-token resolver's
+    ``gh auth token`` fallback (which now runs on every docker task,
+    not just github-source ones — see ``DockerEnv.prepare``) reports
+    failure by default. Tests that *want* the CLI fallback to succeed
+    override ``subprocess.run`` themselves after calling this helper.
+    Without this stub, CI on a host where the developer is logged in
+    with ``gh`` would inject a real token into every test's docker
+    argv and trip every "no github wiring expected" assertion below.
     """
     fake_home = tmp_path / "home"
     fake_home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(fake_home))
     for name in envs._DOCKER_DEFAULT_PASSTHROUGH_ENV:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        envs.subprocess,
+        "run",
+        lambda command, **_kwargs: envs.subprocess.CompletedProcess(command, 1, "", "no auth"),
+    )
     return fake_home
 
 
@@ -680,10 +694,14 @@ def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch
     assert f"{fake_home}/.claude.json:/brr-home/.claude.json" in mounts
     assert f"{fake_home}/.codex:/brr-home/.codex" in mounts
     assert f"{fake_home}/.gitconfig:/brr-home/.gitconfig" in mounts
-    # gh auth state lands under $HOME/.config/gh so the in-container gh
-    # finds hosts.yml at the path it expects.
-    assert f"{fake_home}/.config/gh:/brr-home/.config/gh" in mounts
     assert all(":/brr-home/.gemini" not in m for m in mounts)
+    # ``.config/gh`` is intentionally NOT mounted — see the comment on
+    # ``_DOCKER_DEFAULT_CRED_PATHS``. gh auth lives in the keyring on
+    # Linux; mounting the file-side config without keyring access leaves
+    # gh with a stale account it can't authenticate, which makes
+    # ``gh auth status`` exit non-zero even when ``GITHUB_TOKEN`` is set.
+    # The token-injection path covers gh CLI auth instead.
+    assert all(":/brr-home/.config/gh" not in m for m in mounts)
     # Repo bind mount is the last -v so its assertion is stable.
     assert mounts[-1] == f"{tmp_path}:{tmp_path}"
 
@@ -939,9 +957,23 @@ def test_docker_github_token_can_come_from_gh_cli(tmp_path, monkeypatch):
     assert "GITHUB_TOKEN=ghs_cli_token" in kv_env
 
 
-def test_docker_no_github_token_for_non_github_task(tmp_path, monkeypatch):
-    """Tasks from other sources must not receive a GITHUB_TOKEN even when
-    the gate state file exists on disk."""
+def test_docker_inject_github_token_for_non_github_task(tmp_path, monkeypatch):
+    """Tasks from any source must receive a resolved GitHub token.
+
+    The container has no path to the host keyring or to the user's
+    stored gh accounts (``~/.config/gh`` is intentionally not mounted,
+    see the comment on ``_DOCKER_DEFAULT_CRED_PATHS``). Without an
+    injected ``GITHUB_TOKEN`` the agent's ``gh`` CLI dies and HTTPS
+    ``git push`` falls back to anonymous — which silently breaks any
+    cross-source task that needs to look up GitHub issues, sibling PRs,
+    or push a branch, even when the trigger came from Telegram, an
+    ad-hoc CLI invocation, or a non-github gate.
+
+    Earlier the resolver was scoped to ``task.source == "github"``,
+    which paired with the now-deleted ``.config/gh`` mount as a
+    half-working fallback for other sources. With the mount gone, the
+    resolver becomes the only path, so it has to run uniformly.
+    """
     fake_home = _isolate_docker_creds(monkeypatch, tmp_path)  # noqa: F841
     _stub_worktree(monkeypatch, tmp_path)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -954,6 +986,41 @@ def test_docker_no_github_token_for_non_github_task(tmp_path, monkeypatch):
     )
 
     task = Task(id="task-tg", event_id="evt-tg", body="telegram task", source="telegram")
+    command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
+
+    kv_env = [
+        command[i + 1]
+        for i, arg in enumerate(command)
+        if arg == "-e" and "=" in command[i + 1]
+    ]
+    assert "GITHUB_TOKEN=ghs_stored_token" in kv_env
+
+
+def test_docker_no_github_token_when_unresolvable(tmp_path, monkeypatch):
+    """The resolver stays silent when no token source matches.
+
+    With no gate state, no daemon env vars, and ``gh auth token``
+    returning non-zero (or ``gh`` not installed), nothing is injected.
+    The container then runs without GitHub auth — the agent's ``gh``
+    CLI will fail cleanly with "not authenticated" rather than blowing
+    up with a half-mounted broken account.
+    """
+    fake_home = _isolate_docker_creds(monkeypatch, tmp_path)  # noqa: F841
+    _stub_worktree(monkeypatch, tmp_path)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    # ``_build_docker_invoke_with_task`` stubs ``shutil.which`` to always
+    # return a docker path, so we can't use that to hide ``gh``. Stub
+    # ``subprocess.run`` before ``prepare`` runs so the resolver's
+    # ``gh auth token`` shell-out reports failure regardless of whether
+    # gh is installed on the test host.
+    monkeypatch.setattr(
+        envs.subprocess,
+        "run",
+        lambda command, **_kwargs: envs.subprocess.CompletedProcess(command, 1, "", "no auth"),
+    )
+
+    task = Task(id="task-noauth", event_id="evt-noauth", body="adhoc", source="cli")
     command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
 
     kv_env = [
