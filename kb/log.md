@@ -4971,3 +4971,55 @@ a real PR early), just not the ceiling.
 
 Next concrete move unchanged: hand-author a pack for one real recent brr
 PR to pressure-test the schema, then the web-renderer spike.
+
+## [2026-05-29] implement | diffense prototype pack for PR #64 (schema pressure-test)
+
+Hand-authored the first diffense review pack against a real PR to
+pressure-test the [`design-diffense.md`](design-diffense.md) card schema
+before it locks. Artifacts:
+[`diffense-prototype-pr64-pack.json`](diffense-prototype-pr64-pack.json)
+(the contract instance) +
+[`diffense-prototype-pr64.md`](diffense-prototype-pr64.md) (cards
+rendered as ascii, plus the findings).
+
+Chose [PR #64](https://github.com/Gurio/brr/pull/64) (`fix: poll GitHub
+PR review comments`, 2642+/1221−, 23 files) because it braids three
+stories — the fix, a 1052-line-monolith→12-module-package refactor, and
+a conditional-polling+review-events feature — plus a new kb design page.
+That braid is the stress; it's also the exact `pr-review-comment` gate
+code diffense's own feedback loop rides. Ten curated cards stand in for
+23 files: 3 uncertainty subkinds (concern/out-of-scope/follow-up), a
+walkthrough (the round-trip fix), and item cards across code-fn-new,
+code-fn-edit, the new code-module-split kind, kb-page-new, and test-add.
+Grounded every card in the real repo (read polling/cache/parse/delivery/
+client/constants/__init__ + the test names + the new kb page).
+
+Validated the pack with a throwaway `python3` script standing in for the
+designed `brr review --check`: JSON well-formed, reading_order maps,
+every locator's file exists and line is in range, card-id edges resolve.
+All passed.
+
+What the schema got right: curation held on a big PR (ten cards, not a
+1:1 hunk dump); leaves-by-reference kept the pack ~430 lines of JSON for
+a 3863-line diff; two-axis lore and uncertainty-first reading order
+earned their place; the `kb-page-new` "inbound-links 0 → 6" stat is the
+concrete kb-aware advantage.
+
+Findings that fed back into the design (folded into "Open questions →
+Pack JSON schema" + the item-kinds list): (1) **a `code-module-split` /
+`code-move` kind is missing** — a 1052→12 split has no honest home among
+per-function kinds; added it. (2) **`--check` resolving locators is
+load-bearing** — the same check would have rejected the design's mock
+`cache.get_with_etag` (the real ETag logic is `client._request
+(etag_store=…)`; the mock invented a symbol). (3) **edges need
+`{card|locator}` targets**, not free-text, so non-carded peers stay
+resolvable. (4) **uncertainty cards need an `honest_nuance` slot** —
+grounding forced the seen-cap concern (`sorted(seen)[-_SEEN_CAP:]`, 7
+sites, cap 500) down from the design mock's overstated "could re-surface
+any handled comment" to its true narrow bound (only an *edited* old
+comment past the cap on a busy PR, since the `since` cursor is
+belt-and-suspenders). (5) provenance's `conversation_msg` is the one
+field a hand-authored pack can't exercise — next prototype should run on
+a brr-*produced* PR. Net: the schema survived contact with a real,
+messy, braided PR and is sharper for it; none of the findings block the
+design.

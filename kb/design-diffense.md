@@ -293,9 +293,14 @@ properties fall out and matter:
 ### Three first-class card kinds
 
 - **Item cards** — a typed unit of change: `code-fn-edit`,
-  `code-fn-new`, `code-fn-delete`, `kb-page-edit`, `kb-page-new`,
+  `code-fn-new`, `code-fn-delete`, `code-module-split` /
+  `code-restructure`, `code-move`, `kb-page-edit`, `kb-page-new`,
   `kb-page-split`, `lifecycle-flip`, `test-add`, `dep-add`, and so on.
-  The kind is a discriminator; the schema differs per kind.
+  The kind is a discriminator; the schema differs per kind. (The
+  `code-module-split` / `code-move` kinds were added after the
+  [PR #64 prototype](diffense-prototype-pr64.md) showed a 1052-line
+  file → 12-module split had no honest home among the per-function
+  kinds — a delete-plus-twelve-new would lie about what happened.)
 - **Walkthrough cards** — a **composite card**: its gloss is a
   `setup → action → outcome` story; zooming reveals its *ordered member
   cards*. This is "a card containing a group of cards" — the zoom axis
@@ -984,8 +989,16 @@ publish.* No code in this commit.
 
 - **Pack JSON schema.** A discriminated union over item kinds +
   walkthroughs + uncertainty subkinds, each with its zoom-tree and
-  locator shape; finalized in the implementation plan after a
-  hand-authored prototype against one real recent brr PR.
+  locator shape. A first hand-authored instance now exists — the
+  [PR #64 prototype](diffense-prototype-pr64.md) — and its findings
+  sharpen the schema before it locks: add `code-module-split` /
+  `code-move` kinds; make `edge.target` a `{card}` or `{locator}` (not
+  free text) so `--check` can resolve it; give uncertainty cards an
+  `honest_nuance` slot (grounding forced the seen-cap concern to its
+  true, narrower bound); derive mechanical stats rather than authoring
+  them; and re-run the prototype on a brr-*produced* PR to exercise
+  `provenance.conversation_msg`, the one field a hand-authored pack
+  can't. Finalized in the implementation plan.
 - **Graph / inter-card navigation + code rendering at a locator.** The
   vertical zoom (nested heading-bar stacks) is settled; the *lateral*
   graph navigation (moving between same-level cards / along edges) and
@@ -1018,16 +1031,19 @@ publish.* No code in this commit.
 
 ## Read next
 
-1. [`plan-kb-subcommand.md`](plan-kb-subcommand.md) — the kb read surface
+1. [`diffense-prototype-pr64.md`](diffense-prototype-pr64.md) — the first
+   hand-authored pack (against PR #64), rendered, with the pressure-test
+   findings that sharpen the schema; the most concrete thing to look at.
+2. [`plan-kb-subcommand.md`](plan-kb-subcommand.md) — the kb read surface
    the renderers compose against.
-2. [`design-publish-kernel.md`](design-publish-kernel.md) — where pack
+3. [`design-publish-kernel.md`](design-publish-kernel.md) — where pack
    emission, `--check`, and body projection wire into publish.
-3. [`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md)
+4. [`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md)
    — the gate-side review-event handling the feedback loop rides.
-4. [`subject-kb.md`](subject-kb.md) — the kb graph the pack renders.
-5. [`design-agent-ergonomics.md`](design-agent-ergonomics.md) — the
+5. [`subject-kb.md`](subject-kb.md) — the kb graph the pack renders.
+6. [`design-agent-ergonomics.md`](design-agent-ergonomics.md) — the
    shared-source / split-audience sibling channel.
-6. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md) — the
+7. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md) — the
    home for the hosted web renderer.
 
 ## Lineage

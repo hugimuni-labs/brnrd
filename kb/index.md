@@ -556,6 +556,15 @@ dive-in map) and are stable until something contradicts them.
   gamification. Folds with the [ergo proxy](design-agent-ergonomics.md)
   as shared-source / split-audience. Open: pack schema, lateral/graph
   navigation + code-leaf rendering, pack transport.
+- [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
+  — *2026-05-29*. The first concrete pack
+  ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that
+  pressure-tests the schema against a real braided PR (fix + refactor +
+  feature). Ten cards stand in for 23 files. Findings that sharpen the
+  schema before it locks: a missing `code-module-split` kind, `--check`
+  must resolve locators (it would have caught the design's invented
+  `cache.get_with_etag`), edges need `{card|locator}` targets,
+  uncertainty needs an `honest_nuance` slot.
 
 ## Research
 
