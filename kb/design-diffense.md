@@ -1,6 +1,6 @@
 # Design: diffense — kb-first PR review experience
 
-Status: proposed, not yet accepted (drafted 2026-05-28)
+Status: proposed, not yet accepted (drafted 2026-05-28; reshaped 2026-05-29, pass 6)
 
 diffense (a working name: *diff* + *sense*, the surface that helps a
 reviewer make sense of a diff; and *diff* + *defense*, what guards the
@@ -12,10 +12,10 @@ that read poorly as raw diff and well as rendered, cross-linked Markdown.
 
 This page is a design with research-flavoured sections inside. The
 cornerstones below are settled enough to design against; the genuinely
-open dimensions (pack schema, substrate validation, aesthetic locking,
-project boundary) are marked as such and deferred to an implementation
-plan after a hand-authored prototype validates the shape against a real
-PR.
+open dimensions (pack schema, the web/TUI renderer split, pack
+transport, the start-with sequencing, aesthetic locking) are marked as
+such and deferred to an implementation plan after a hand-authored
+prototype validates the shape against a real PR.
 
 Companion to:
 
@@ -23,18 +23,22 @@ Companion to:
   the lifecycle markers, subject hubs, and decision/design/plan
   separation are diffense's richest structured input.
 - [`plan-kb-subcommand.md`](plan-kb-subcommand.md) — the `brr kb` read
-  surface (`pages`, `doc`, `log`) that diffense's local viewer composes
+  surface (`pages`, `doc`, `log`) that diffense's renderers compose
   against rather than re-implementing.
 - [`design-publish-kernel.md`](design-publish-kernel.md) — the publish
   step diffense's pack generation hangs off: the runner emits the pack
   before publish; the daemon writes the body projection on publish.
+- [`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md)
+  — the gate-side review-event boundary; diffense's feedback loop rides
+  the `pr-review-comment` handling described there.
 - [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md) — the
-  natural home for diffense's future hosted-web rendering target.
+  home for diffense's hosted web renderer (and the answer to mobile
+  review).
 - [`design-agent-ergonomics.md`](design-agent-ergonomics.md) — the
-  *back* channel (how friction signal leaves the agent for the
-  operator). diffense is a *forward* product channel (how the agent's
-  understanding of its own change reaches the human reviewer); the two
-  share the instinct that an agent should report its own state honestly.
+  *back* channel (agent friction → operator). diffense is the *forward*
+  product channel (the agent's understanding of its own change → the
+  human reviewer). Shared source, split audience — see "Relationship to
+  the ergo proxy."
 
 ## Problem
 
@@ -87,192 +91,186 @@ open it.
 
 The research dimension of this design: shapes weighed and set aside.
 
-- **Plain PR body only, no inspect mode.** A well-structured PR body is
-  the v0 surface (see below) and genuinely useful, but stopping there
-  leaves the touched-graph and lateral exploration — the part that turns
-  reading into navigating — on the table.
+- **Plain PR body only, no inspect mode.** A structured PR body is a
+  genuinely useful *lossy fallback* (see "PR body as a lossy
+  projection"), but anchoring the *whole design* on a text-first surface
+  under-shapes the product — it leaves the zoomable graph, the locators,
+  and the feedback loop on the table and risks the full shape never
+  forming. The PR body is a projection of the pack, not the thing we
+  design around.
 - **Forge-hosted artifact (a generated PR comment or gist).** Hosting a
   generated artifact on the forge means PR-comment-shaped UX: no
-  interactivity, no rendered-Markdown-with-diff-overlay, drift the moment
-  it is written, and a hard coupling to one forge's comment semantics. It
-  becomes another wall of text on the PR page — the failure mode we are
-  trying to escape.
-- **TUI-only viewer.** Power-user-friendly and the natural fit for the
-  substrate, but it locks out peers who do not have brr installed.
-- **Hosted-web-only viewer.** Requires brnrd and a network round-trip,
-  and breaks the dogfooding-on-a-laptop loop that motivates the whole
-  thing.
+  interactivity, no zoom, drift the moment it is written, and a hard
+  coupling to one forge's comment semantics.
+- **TUI-only viewer.** Power-user-friendly, but it locks out peers
+  without brr installed and is the wrong surface for phone review (see
+  "Surfaces and what to build first").
+- **Hosted-web-only viewer.** Requires brnrd / network; breaks
+  dogfooding on a laptop with no connection.
 - **A per-team review tool integrated with brr (the Reviewable /
   Graphite shape).** These optimize for a different reviewer profile —
   skim-approval, threaded comment management, stacked-PR mechanics.
   diffense's depth-first, kb-aware shape *complements* those tools rather
-  than replacing them; trying to be both produces a worse version of
-  each. A team can use Graphite for stack mechanics and diffense for
-  understanding the change.
+  than replacing them; a team can use Graphite for stack mechanics and
+  diffense for understanding the change. Trying to be both produces a
+  worse version of each.
 
 ## Reframings the discussion converged on
 
-The design moved through a sequence of reframings, each sharpening the
-one before:
+Each reframing moves a noun from a heavyweight thing-to-build into a
+projection over state brr already has, or sharpens the interaction model:
 
-- **"Review document" → "review surface."** Not a generated, stored,
-  drifting artifact, but a projection over structured state that already
-  exists durably in the repo.
-- **"Hosted on the forge" → "forge as data source."** The forge hosts
-  the PR and its body; the review surface runs locally and reads from it.
+- **"Review document" → "review surface."** A projection over structured
+  state, not a separately-authored, drifting document.
+- **"Hosted on the forge" → "forge as data source."** The forge hosts the
+  PR; the review surface reads from it.
 - **"Spiraling story" → "progressive disclosure with pre-loaded
-  mental-model slots."** The reviewer's mental model has predictable
-  slots (what the area does today, what changed, why, what invariants
-  were promised, what touches what). A good surface pre-loads them in
-  reading order rather than narrating a story.
-- **"Linear PR scroll" → "navigable graph of inspection cards."** Every
-  change is an item with a stat block, lore, situational comparisons, and
-  lateral links to adjacent items.
+  mental-model slots."** The reviewer's model has predictable slots; a
+  good surface pre-loads them in reading order.
+- **"Linear PR scroll" → "a *zoomable* graph of inspection cards."** Two
+  navigation axes — lateral (peers) and zoom (summary → detail → ground
+  truth). This is the structural centerpiece (see "The card model").
 - **"Tests as spec validation" → "tests as grounding evidence for honest
-  user-perspective demos."** Tests stay mechanical for their primary job;
-  the agent mines them for the real values that keep a usage demo honest.
-- **"One renderer per surface" → "one substrate, multiple rendering
-  targets."** The information architecture is defined once; TUI, local
-  web, hosted web, and the PR-body projection are all renderings of it.
+  user-perspective demos."**
+- **"One renderer per surface" → "one pack, multiple renderers."** The
+  *pack* is the contract; renderers are cheap relative to it. (Note: the
+  earlier "one Textual substrate for TUI + web" hope weakens once mobile
+  web is a hard requirement — see "Renderers.")
 - **"Agent always confident" → "agent uncertainty as first-class output,
-  prominently surfaced."** What the agent was unsure about is among the
-  most valuable things a reviewer can read first.
+  prominently surfaced."**
+- **"Static read-only surface" → "a read surface wired into the existing
+  feedback loop."** A reviewer who spots something flags a card; that
+  becomes a forge comment; the existing gate turns it into a task. See
+  "The feedback loop."
 
 ## brr-specific inputs nobody else has
 
 diffense is buildable as a good product *because brr already produces the
-structured state a generic tool lacks*. Spec-grade list of inputs and
-where each comes from:
+structured state a generic tool lacks*:
 
-- **The diff and PR metadata** — `gh pr view --json` (title, body, base,
-  linked issues) and `gh pr diff`.
+- **The diff and PR metadata** — `gh pr view --json` + `gh pr diff`.
 - **The commit graph between base and head** — the "what" already broken
   into atomic, message-annotated chunks.
 - **The conversation that drove the work** — `.brr/conversations/`
   (per-gate-thread logs, covered by
-  [`src/brr/conversations.py`](../src/brr/conversations.py)); the source of
-  intent and of the agent's in-run reasoning.
+  [`src/brr/conversations.py`](../src/brr/conversations.py)); the source
+  of intent and of the agent's in-run reasoning.
 - **The kb graph** — `kb/` with lifecycle markers, subject hubs, and the
-  decision/design/plan separation; the structure that makes kb changes
-  reviewable in context rather than as raw text.
+  decision/design/plan separation.
 - **The kb read surface** — `brr kb pages` and `brr kb doc <page>` from
-  [`plan-kb-subcommand.md`](plan-kb-subcommand.md); diffense composes
-  against these rather than rolling its own kb walker.
-- **The curated narrative** — [`kb/log.md`](log.md), the episodic record
-  of what was done and learned.
-- **Commit messages** — the conventional-style "why" that brr's own
-  commit contract already enforces.
-- **The test suite** — grounding evidence for usage demos, and the
-  source for test-add cards' stories.
+  [`plan-kb-subcommand.md`](plan-kb-subcommand.md).
+- **The curated narrative** — [`kb/log.md`](log.md).
+- **Commit messages** — the conventional-style "why" brr's commit
+  contract enforces.
+- **The test suite** — grounding evidence for usage demos.
 - **The runner's own state during the run** — the basis for uncertainty
   cards. No other tool has this: only the agent that did the work knows
   where it guessed, assumed, or disagreed.
 
-## Architecture: pack as data, substrate-with-multiple-targets as renderers
+## Architecture: pack as data, renderers as targets
 
-Two layers, cleanly separated, so one generation step feeds every
-surface and nothing drifts.
+Two layers, cleanly separated, so the data outlives any one renderer and
+one generation step feeds every surface.
 
 ```mermaid
 flowchart TD
-    Conversation["conversation transcript<br/>(.brr/conversations/)"] --> Runner
-    KbGraph["kb graph<br/>(brr kb pages | doc)"] --> Runner
-    Diff["diff<br/>(gh pr diff / view)"] --> Runner
-    Commits["commit graph"] --> Runner
-    Tests["test suite<br/>(grounding evidence)"] --> Runner
-    RunState["runner's own run state<br/>(uncertainty source)"] --> Runner
-    Runner["runner agent<br/>(at publish time)"] --> Pack
-    Pack["review pack (JSON)<br/>nodes: item / walkthrough / uncertainty cards<br/>edges: calls / implements / referenced-by / ...<br/>metadata: pr id, conversation id, branch, base"]
-    Pack --> Body["forge PR body<br/>(humanized projection)"]
-    Pack --> TUI["local TUI<br/>(brr review)"]
-    Pack --> LocalWeb["local web<br/>(textual serve)"]
-    Pack --> Hosted["hosted web<br/>(brnrd dashboard, HTMX)"]
-    Pack --> LiveAgent["live agent<br/>(in-context Q and A)"]
-    Body --> Forge["GitHub PR page"]
+    Inputs["brr inputs:<br/>conversations · kb graph · diff + PR meta<br/>commits · tests · runner run-state"] --> Runner["runner agent<br/>(publish time)"]
+    Runner --> Validate["brr review --check<br/>(schema + clamp + render lint)"]
+    Validate --> Pack["review pack (JSON)<br/>a zoomable graph of cards:<br/>nodes + lateral edges + zoom tree + locators"]
+    Pack --> Web["responsive web<br/>(mobile-first; brnrd-hosted or local 'brr review')"]
+    Pack --> TUI["Textual TUI (local)"]
+    Pack --> Body["PR-body projection<br/>(lossy universal fallback)"]
+    Pack --> Live["live agent (Q and A)"]
+    Web --> Reviewer
+    TUI --> Reviewer
+    Body --> Forge["forge PR page"]
+    Forge --> Reviewer
+    Reviewer -->|"flag a card becomes an anchored comment"| Forge
+    Forge -->|"existing GH gate: mention becomes a task"| Runner
 ```
 
 - **Pack (data layer).** A structured JSON artifact, language-agnostic.
-  Nodes are review cards (item / walkthrough / uncertainty); edges are
-  the relations between them; metadata carries PR id, conversation id,
-  branch, base, and generation time. Generated by the runner at publish
-  time. The pack is the contract — everything else is a renderer.
-- **Substrate (component layer).** A single Python component model that
-  defines the information architecture: cards, navigation, search,
-  per-card reviewer state. Proposed implementation: Textual (see below).
-- **Targets (renderers over the substrate / pack).**
-  - **TUI (default).** `brr review <pr-url>` runs the substrate as a
-    terminal app.
-  - **Local web.** `textual serve` exposes the same component model over
-    HTTP — same UI, browser-rendered, no second implementation.
-  - **Hosted web (future, brnrd).** An HTMX-rendered view in the brnrd
-    dashboard ([`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)).
-    A different renderer over the same pack, for peers without a brr
-    checkout.
-  - **Forge-rendered PR body.** A humanized Markdown projection of the
-    pack (see "PR body as the v0 surface"). Useful with zero additional
-    UI; works wherever the PR is viewed.
-  - **Optional live agent (future).** Reads the pack as grounding context
-    to answer follow-up questions about the change.
+  Nodes are cards (item / walkthrough / uncertainty); each node carries a
+  **zoom tree** (gloss → detail → ground-truth leaf) and **locators**
+  (resolvable references into code / kb / diff); edges are lateral
+  relations; metadata carries PR id, conversation id, branch, base, and
+  generation time. Generated by the runner at publish time. The pack is
+  the contract — everything else is a renderer.
+- **Renderers (targets over the pack).**
+
+| Renderer | Surface | Tenancy | Status |
+| --- | --- | --- | --- |
+| Responsive web | mobile-first HTML; `brr review` serves it locally, or brnrd hosts it | self-hosted (local/tunnel) + hosted | leading candidate to build first |
+| Textual TUI | `brr review` in the terminal | self-hosted | follow-on, same pack |
+| PR-body projection | humanized Markdown in the PR body | any forge reader | lossy fallback, always emitted |
+| Live agent | in-context Q&A over the pack | both | future |
 
 The payoff of the split: the hardest, most valuable work (assembling the
 pack from brr's structured inputs) happens once; adding or improving a
-surface never re-touches generation.
+renderer never re-touches generation.
 
-## Rendering substrate: Textual proposed, validation pending
+## Renderers: the web/TUI split, and why the single-substrate hope weakened
 
-**Proposed: [Textual](https://textual.textualize.io/).** brr is already
-Python; Textual runs a single component model as a terminal app by
-default and exposes the *same* app over the web via `textual serve`. One
-codebase, two rendering targets, no drift — which is exactly the
-"same-functioning interface in a CLI app and a web app" the design wants.
+The earlier draft proposed one Textual substrate serving both a TUI and a
+web target via `textual serve`. The **mobile requirement breaks that**:
+`textual serve` is a terminal emulator in the browser — monospace,
+keyboard-driven, no touch affordances — which is the wrong surface on a
+phone, and phone review is a first-class use case (the same pain,
+amplified). So:
 
-- **What it gives us.** Keyboard-driven navigation by default; a
-  CSS-flavoured styling layer; reactive components; the same widget
-  rendering identically in terminal and browser; a small, pure-Python
-  runtime footprint consistent with brr's dependency stance
-  ([`decision-runtime-dependencies.md`](decision-runtime-dependencies.md)).
-- **What it does not give us cleanly.** Rich animated transitions are
-  limited by terminal capability; some interactive-graph affordances
-  (the touched-graph as a pannable node diagram, slick card-to-card
-  transitions) will only be fully realizable in the web target and need
-  web-specific work there.
-- **Validation gate.** Before locking the substrate choice, a small spike
-  renders one *hand-authored* pack as a Textual app and runs it both as a
-  TUI and via `textual serve`, to confirm the single-component-model
-  promise holds for diffense's card layouts specifically. The spike is a
-  future commit, named here, not done now.
-- **Fallbacks if Textual does not pan out.** Parallel implementations (a
-  Python TUI plus a separate web tool consuming the same pack) or
-  HTMX-only (web-first, no TUI). Both increase drift risk and are kept
-  only as fallbacks.
+- **Web renderer = responsive HTML** (the HTMX-flavoured stack the brnrd
+  dashboard already uses, per
+  [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)). Touch,
+  responsive layout, real links, works on a phone, no app to install
+  (a PWA at most — explicitly *not* a native app).
+- **TUI renderer = Textual** for local terminal review.
+
+These are **two renderers over the shared pack**, not one substrate with
+two outputs. The pack-as-contract split is exactly what makes carrying
+two renderers affordable; what would have been the "fallback if Textual
+doesn't pan out" is now the expected shape. A small spike still validates
+the card/zoom/navigation model in *each* renderer against one
+hand-authored pack before either is locked.
 
 ## Aesthetic stance: hacker-terminal-text-games leaning, held against the substrate-honest clamp
 
-Leaning, not locked. The substrate *is* a terminal, so the aesthetic
-that fits without fighting the medium is dense monospace, keyboard-driven
-navigation, a low-key palette, and a terminal-text-game personality. The
-web target inherits this rather than reinventing a separate visual
-language.
+A leaning, not a lock. Dense, information-first layout; keyboard-driven
+where the surface is a terminal; a low-key, terminal-text-game
+personality. The web renderer inherits the *spirit* (density, glanceable
+stat blocks, lateral exploration) while honouring its own medium (touch,
+responsive reflow) rather than cosplaying a terminal on a phone.
 
-The discipline that keeps this from sliding into cosplay is the
-**substrate-honest clamp** (see Discipline): every aesthetic choice must
-make the surface more readable, more navigable, or more useful.
-Monospace because the substrate is monospace: yes. An ASCII frame around
-a card only if it parses the layout faster than whitespace alone would.
-Scanlines, terminal-only colour gimmicks, decorative ASCII art: only if
-they earn their space. The reference points (the inspection screens in
-Souls-likes, Devil May Cry's ability menus) are captivating because every
-screen is information-dense and the visual choices serve readability —
-not because they pile on effects. The aesthetic is validated alongside
-the substrate spike, not locked in this commit.
+The **substrate-honest clamp** (see Discipline) keeps this from sliding
+into cosplay: every aesthetic choice earns its space by improving
+readability, navigation, or usefulness. The reference points (the
+inspection screens in Souls-likes, Devil May Cry's ability menus) are
+captivating because every screen is information-dense and the visual
+choices serve readability — not because they pile on effects. Validated
+alongside the renderer spike, not locked here.
 
-## Inspect mode: the diffense card model
+## The card model: a zoomable graph
 
-The core of the product. The review surface is a navigable graph of
-*cards*, each an inspectable unit a reviewer can skim in seconds and then
-choose to dive into — modelled on a game's item-inspection screen, where
-a tightly-bounded card carries a stat block, a short blurb, and lateral
-links to related items.
+The core of the product. The review surface is a **graph of cards with
+two navigation axes**:
+
+- **Lateral** — typed edges to related peer cards (`calls`, `implements`,
+  `referenced-by`, `shares-invariant`, `part-of-same-decision`, …).
+- **Zoom** — each card descends from a one-line **gloss** through
+  progressively more detailed **summary levels** to a **ground-truth
+  leaf**: the actual rendered kb page, the raw diff hunk, or the code at
+  a locator. Summary levels are LLM-authored and clamp-gated; **the leaf
+  is mechanical** — the real artifact, pulled deterministically.
+
+This is the spiral made concrete: you skim the gloss, and you can descend
+toward ground truth exactly as far as you need, on any card. Two
+properties fall out and matter:
+
+- **Honesty is structural.** Because every card bottoms out at the real
+  diff / file / rendered page, no summary can hide the truth — you can
+  always zoom past it. The summary earns trust by being checkable.
+- **Token cost is bounded.** Summaries are small and LLM-authored; leaves
+  are not generated (they are the existing diff/file). The pack carries
+  summaries + locators, not regenerated copies of the code.
 
 ### Three first-class card kinds
 
@@ -280,57 +278,81 @@ links to related items.
   `code-fn-new`, `code-fn-delete`, `kb-page-edit`, `kb-page-new`,
   `kb-page-split`, `lifecycle-flip`, `test-add`, `dep-add`, and so on.
   The kind is a discriminator; the schema differs per kind.
-- **Walkthrough cards** — reference an ordered list of item-card ids and
-  tell a `setup → action → outcome` story spanning them. A multi-item
-  user flow (the BYO-dispatch example below) gets one; a single-item MR
-  sometimes gets one too, when the story benefits from framing the item
-  card alone cannot carry. Per-item demos and walkthroughs coexist on the
-  same MR — emit-iff-honest applies to each independently.
+- **Walkthrough cards** — a **composite card**: its gloss is a
+  `setup → action → outcome` story; zooming reveals its *ordered member
+  cards*. This is "a card containing a group of cards" — the zoom axis
+  applied to a story. It renders as a plain story at gloss level and as
+  an expandable group when zoomed, so it serves both the quick read and
+  the deep dive. A multi-item flow gets one; a single-item change
+  sometimes does too, when the story needs framing the item card alone
+  cannot carry.
 - **Uncertainty cards** — the agent's honest expression of an assumption,
-  concern, dilemma, or out-of-scope flag formed during the run. A
-  first-class kind, not a footnote (see "Failure modes" below).
+  concern, dilemma, out-of-scope flag, or follow-up formed during the
+  run. A first-class kind (see "Failure modes").
 
 ### Always-present axes (every card carries these)
 
-- **Identity** — file + symbol + line range, or kb page + section, or
-  walkthrough id, or the trigger an uncertainty attaches to.
+- **Identity + locator** — what this is (file + symbol + line range, kb
+  page + section, walkthrough id, or an uncertainty trigger) *and* a
+  resolvable locator: a commit-pinned forge permalink
+  (`…/blob/<sha>/<path>#L…`) plus a local `path:line`. Rich renderers
+  open the locator inline (the zoom leaf); the PR-body and minimal
+  renderers link out to it. **Any card that mentions a code item carries
+  a locator to it** — no dead references.
 - **Kind** — the discriminator.
-- **Descriptive lore** — what this is, factually (1–2 sentences). For
-  `test-add` and walkthrough cards the descriptive lore *is* the story;
-  for uncertainty cards it is "what was unclear."
+- **Gloss (descriptive lore)** — what this is, factually (1–2 sentences).
+  For `test-add` and walkthrough cards the gloss *is* the story; for
+  uncertainty cards it is "what was unclear."
+- **Zoom tree** — the ordered summary levels down to the ground-truth
+  leaf (the levels themselves vary by kind; see "Zoom levels").
 - **Stat block** — the kind-specific load-bearing numbers.
 - **Provenance** — which conversation message, which commit, which
   run-state moment produced this.
 
 ### Conditional axes (emitted iff honest and load-bearing)
 
-- **Possibility lore** — what becomes possible, what constraint is lifted
-  (property-flavoured, never narrative-flavoured).
-- **Before/after content** — kind-dependent (a deletion is before-only; a
-  new file is after-only).
-- **Lateral edges** — `calls` / `called-by` / `implements` (kb design
-  page → code) / `referenced-by` (kb cross-link) / `shares-invariant` /
-  `part-of-same-decision`; for walkthroughs, the ordered referenced-item
-  ids; for uncertainty cards, the related cards.
+- **Possibility lore** — what becomes possible / what constraint is
+  lifted (property-flavoured, never narrative-flavoured).
+- **Before/after content** — kind-dependent (a deletion is before-only).
+- **Lateral edges** — peer relations; for walkthroughs, the ordered
+  member-card ids; for uncertainty cards, the related cards.
 - **Usage-perspective demo** — when there is a tangible surface change
   worth showing. Textual at v0 (fenced transcripts, before/after caller
-  snippets, kb-navigation walks, benchmark output). GIFs are deferred.
+  snippets, kb-navigation walks, benchmark output). GIFs deferred.
 - **Exercising-tests link** — which tests anchor the demo / exercise this
   item.
+- **Tension references** (uncertainty-specific) — pointers to the
+  conflicting parts: most often the input prompt span, but also a code
+  locator, a kb claim, or another card. See "Failure modes."
 - **Severity** (uncertainty-specific) — `low` / `med` /
   `blocking-for-merge`.
-- **Proposed resolution** (uncertainty-specific) — the agent's suggested
-  next step, if it has one.
-- **Locked-abilities axis** — deferred future direction (the
-  grayed-out-but-visible "what this could enable next" register, modelled
-  on a game showing locked moves; postponed until the baseline is
-  validated).
+- **Proposed resolution** (uncertainty-specific).
+- **Locked-abilities axis** — deferred future direction.
+
+### Zoom levels (progressive disclosure, per kind)
+
+The zoom tree is what turns the kb summary-tree idea into a general
+mechanic. Concretely, by kind:
+
+- **`kb-page-edit`** — L0 gloss ("what changed + lifecycle delta") → L1
+  per-section summaries of what moved → L2 rendered before/after of each
+  changed section → leaf: the full rendered page (and the raw diff as a
+  sibling leaf). This is the "tree of summarized info" descending into
+  the actual file change.
+- **`code-fn-edit`** — L0 gloss + signature delta → L1 behaviour summary
+  + stat block → leaf: the diff hunk, and the function at its locator
+  (opened inline in rich renderers).
+- **walkthrough** — L0 story → L1 the ordered member glosses → descend
+  into each member card's own zoom tree.
+
+Leaves are always the real artifact. The agent authors L0..Ln; the leaf
+is resolved mechanically from the diff / repo / locator.
 
 ### Two-axis lore
 
-Borrowed directly from the game-menu reference. Every card answers two
+Borrowed from the Souls / DMC menu framing: every card answers two
 questions, and the second is what makes the surface captivating rather
-than merely informative:
+than merely informative.
 
 - **Descriptive lore** — what the change literally is. *"Hashes payload +
   idempotency key; returns the prior result on collision."*
@@ -340,31 +362,32 @@ than merely informative:
 
 The possibility axis lets the reviewer project forward ("with this, I
 could…") the way a weapon's stat screen lets a player imagine the next
-boss fight. The discipline clamps keep it honest: it states true
-properties, it does not narrate how to feel about them.
+fight — an honest *perceived gain*, not a recommendation.
 
 ### Tests as grounding evidence for usage demos
 
 A good integration test is a user story compressed into code. The agent
 reads `setup → action → assertion`, extracts the user-flavoured shape,
 and writes the usage demo with *real values pulled from the test* rather
-than invented ones — which is what keeps the demo honest. Test-add cards
-are the special case where the descriptive lore simply *is* the story the
-test encodes; walkthrough cards lean hardest on integration tests,
-because a cross-cutting flow is precisely what a good integration test
-already exercises end to end.
+than invented ones — which keeps the demo honest. Test-add cards are the
+special case where the gloss *is* the story the test encodes; walkthrough
+cards lean hardest on integration tests, because a cross-cutting flow is
+precisely what a good integration test already exercises end to end.
 
 ### Worked-example cards
 
-Illustrative mocks (Markdown stand-ins for what the substrate renders).
-The shapes, not a schema.
+Illustrative mocks (Markdown stand-ins for what a renderer paints; the
+shapes, not a schema). Each emits only the conditional axes that are
+honest and load-bearing for it.
 
-**1. `code-fn-edit` — conditional polling in the GitHub gate.**
+**1. `code-fn-edit` — conditional polling in the GitHub gate (with locator + zoom).**
 
 ```
 ┌ code-fn-edit ─────────────────────────────────────────────┐
 │ id        item:cache.get_with_etag                         │
 │ where     src/brr/gates/github/cache.py :: get_with_etag   │
+│ locator   github …/blob/a1b2c3d/src/brr/gates/github/      │
+│           cache.py#L40-L78   ·   local cache.py:40         │
 │                                                            │
 │ what      Sends If-None-Match with the last stored ETag    │
 │           on high-volume GETs; returns the cached body     │
@@ -378,6 +401,7 @@ The shapes, not a schema.
 │           error paths +0 (304 is a success branch)         │
 │           coverage    +2 tests (was 0 direct)              │
 │                                                            │
+│ zoom  ▸L1 behaviour summary  ▸leaf diff hunk  ▸leaf code   │
 │ demo      # before: every poll spends budget               │
 │           GET /issues/comments      -> 200 (rate -1)       │
 │           # after: unchanged repo, no spend                │
@@ -390,26 +414,24 @@ The shapes, not a schema.
 └────────────────────────────────────────────────────────────┘
 ```
 
-**2. `lifecycle-flip` (a kb-page-edit subkind) — a plan slice ships.**
+**2. `kb-page-edit` + `lifecycle-flip` — a plan slice ships (zoom tree; no demo).**
 
 ```
-┌ lifecycle-flip ───────────────────────────────────────────┐
+┌ kb-page-edit · lifecycle-flip ────────────────────────────┐
 │ id        item:plan-laptop-daemoning.linux-slice           │
 │ where     kb/plan-laptop-daemoning.md :: Status            │
+│ locator   github …/blob/d4e5f6a/kb/plan-laptop-daemoning.md│
 │                                                            │
-│ what      Marks the Linux systemd slice shipped; the       │
-│           macOS LaunchAgent + multi-project runtime stay   │
-│           open follow-ups.                                 │
+│ what      Marks the Linux systemd slice shipped; macOS +   │
+│           multi-project runtime stay open follow-ups.      │
 │                                                            │
-│ stats     marker      active  =>  partly shipped 2026-05-26│
-│           inbound     5 -> 6 (subject-daemon now links it) │
-│           siblings    subject-daemon.md  in sync ✓         │
-│           successor   n/a (not superseded)                 │
+│ stats     marker     active => partly shipped 2026-05-26   │
+│           inbound    5 -> 6 (subject-daemon now links it)  │
+│           siblings   subject-daemon.md  in sync ✓          │
+│           successor  n/a (not superseded)                  │
 │                                                            │
-│ before    Status: accepted 2026-05-26; not started         │
-│ after     Status: accepted; Linux systemd slice shipped    │
-│                   2026-05-26                                │
-│                                                            │
+│ zoom  ▸L1 per-section summary  ▸L2 rendered before/after   │
+│       ▸leaf full rendered page  ▸leaf raw diff             │
 │ (no usage demo — kb-internal change, nothing to run)       │
 │ edges     referenced-by subject-daemon.md                  │
 │           part-of-same-decision design-config-layout.md    │
@@ -420,30 +442,26 @@ The shapes, not a schema.
 The *absence* of a usage demo is deliberate signal: a kb-internal change
 has nothing to run, and the card says so rather than faking a demo.
 
-**3. `test-add` — descriptive lore is the story.**
+**3. `test-add` — gloss is the story.**
 
 ```
 ┌ test-add ─────────────────────────────────────────────────┐
 │ id        item:test.pr_review_summary_event               │
 │ where     tests/test_github_gate.py ::                     │
 │             test_pr_review_summary_emits_event             │
-│                                                            │
 │ story     A maintainer leaves a PR review whose summary    │
 │           @-mentions the bot. The gate fetches the parent  │
 │           review once, sees the mention, and emits a       │
-│           pr-review event carrying review id + state       │
-│           (APPROVED / CHANGES_REQUESTED / COMMENTED).      │
-│                                                            │
+│           pr-review event carrying review id + state.      │
 │ stats     exercises   polling.poll_once -> pr-review path  │
 │           assertion   event shape + dedup via seen ids     │
 │           fixtures    shares _gh_stub with 6 gate tests    │
-│                                                            │
 │ edges     exercises item:polling.detect_pr_review          │
 │ from      commit a1b2c3d · conversation msg #19            │
 └────────────────────────────────────────────────────────────┘
 ```
 
-**4. `walkthrough` — a cross-cutting BYO-dispatch flow.**
+**4. `walkthrough` — a composite card (gloss = story; zoom = member cards).**
 
 ```
 ┌ walkthrough ──────────────────────────────────────────────┐
@@ -458,9 +476,10 @@ has nothing to run, and the card says so rather than faking a demo.
 │           the subscriber's own Fly account; audit records  │
 │           spawn_byo (not debit_spawn); wallet untouched    │
 │                                                            │
-│ steps     1 → item:dispatch.route          (branch on creds)│
-│           2 → item:pool.health_check        (unhealthy gate)│
-│           3 → item:audit.record_spawn_byo   (wallet bypass) │
+│ zoom ▸ members (ordered) — each opens its own card:        │
+│   1 → item:dispatch.route          (branch on creds)       │
+│   2 → item:pool.health_check        (unhealthy gate)       │
+│   3 → item:audit.record_spawn_byo   (wallet bypass)        │
 │                                                            │
 │ grounded  tests/test_dispatch.py::                         │
 │             test_byo_when_creds_present_and_pool_unhealthy │
@@ -469,30 +488,50 @@ has nothing to run, and the card says so rather than faking a demo.
 └────────────────────────────────────────────────────────────┘
 ```
 
-**5. `uncertainty` (concern subkind) — the agent flags something upstream.**
+**5. `uncertainty` (concern) — references the tension explicitly.**
 
 ```
 ┌ uncertainty · concern ────────────────────────────────────┐
 │ id        unc:audit-op-naming-mismatch                     │
-│ where     trigger: src/brnrd/audit.py :: OP_SPAWN_BYO       │
 │ severity  med  (not blocking, but you may want to fix here)│
+│ tension   design-billing.md  ⟂  src/brnrd/audit.py         │
+│           (design page says spawn_byo; the code's existing │
+│            ops use a debit_/credit_ verb prefix)           │
 │                                                            │
-│ unclear   The task asked me to add the BYO wallet-bypass   │
-│           audit op. I named it spawn_byo to match          │
-│           design-billing.md. But the existing ops in       │
-│           audit.py use a debit_/credit_ verb prefix        │
-│           (debit_spawn, credit_topup). spawn_byo breaks    │
-│           that pattern. I followed the design page over    │
-│           the code convention; flagging because you didn't │
-│           ask me to reconcile the two.                     │
-│                                                            │
-│ proposed  Either rename to bypass_spawn_byo for prefix     │
-│           consistency, or note in design-billing.md that   │
-│           audit-op naming is intentionally domain-led.     │
-│                                                            │
+│ unclear   I added the BYO wallet-bypass audit op and named │
+│           it spawn_byo to match design-billing.md, which   │
+│           breaks the debit_/credit_ prefix the other ops   │
+│           use. I followed the design page over the code    │
+│           convention; flagging because you didn't ask me   │
+│           to reconcile the two.                            │
+│ proposed  Rename to bypass_spawn_byo for prefix consistency│
+│           OR note in design-billing.md that audit-op naming│
+│           is intentionally domain-led.                     │
 │ edges     related item:audit.record_spawn_byo              │
 │           related walk:byo-failover-dispatch               │
 │ from      conversation msg #27 (where I made the call)     │
+└────────────────────────────────────────────────────────────┘
+```
+
+**6. `uncertainty` (follow-up) — near-future work for max value, held out of scope.**
+
+```
+┌ uncertainty · follow-up ──────────────────────────────────┐
+│ id        unc:byo-needs-cred-rotation                      │
+│ severity  low  (this change is complete; this is next)     │
+│ tension   task scope  ⟂  full user value                   │
+│           (the task asked only for the dispatch branch)    │
+│                                                            │
+│ unclear   BYO dispatch works, but a subscriber whose cloud │
+│           token expires gets a hard spawn failure with no  │
+│           rotation path. To make BYO actually dependable   │
+│           the near-future work is a cred-health probe +    │
+│           a re-auth nudge on the dashboard. Out of scope   │
+│           here; flagging so it doesn't get lost.           │
+│ proposed  File as a follow-up; it's ~a day and it's what   │
+│           turns BYO from "works" into "trustworthy."       │
+│ edges     related walk:byo-failover-dispatch               │
+│ from      conversation msg #33                             │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -501,15 +540,14 @@ has nothing to run, and the card says so rather than faking a demo.
 Every stat answers a question a reviewer actually asks; a stat that does
 not is cosmetic and fails the honest clamp. Per-kind starting sets:
 
-- **`code-fn-edit`** — type-signature delta; callers in repo / callers
-  updated / callers unchanged; complexity delta; new error paths; test
-  coverage delta.
+- **`code-fn-edit`** — type-signature delta; callers in repo / updated /
+  unchanged; complexity delta; new error paths; test-coverage delta.
 - **`kb-page-edit`** — lifecycle-marker delta; inbound-link-count delta;
   sibling-page sync check; successor-link validity.
 - **`test-add`** — production code path exercised; assertion shape;
   fixture sharing.
-- **`new-file`** — location justification; inbound-link wiring (does it
-  have one yet?); sibling-file pattern adherence.
+- **`new-file`** — location justification; inbound-link wiring;
+  sibling-file pattern adherence.
 - **`deletion`** — what replaced it; broken-reference flagging.
 - **`uncertainty`** — severity; blast radius (which other cards it
   touches).
@@ -520,39 +558,61 @@ the work already has these values in context.
 
 ## Reading order: uncertainty cards first
 
-Concrete rule for every renderer and for the PR-body projection:
+A concrete rule for every renderer and the PR-body projection:
 **uncertainty cards land at the top of the reading order**, before item
-cards and walkthroughs. They short-circuit the reviewer's first
-question — "what should I scrutinize hardest?" — and are therefore the
+cards and walkthroughs. They short-circuit the reviewer's first question
+— "what should I scrutinize hardest?" — and are therefore the
 highest-value first read.
 
 When there are no uncertainty cards, renderers may collapse the section
 entirely. This preserves absence-as-signal: "the agent flagged no
-confusions" is itself meaningful information, distinct from a surface
-that simply has no place to put them.
+confusions" is itself meaningful, distinct from a surface that has no
+place to put them.
 
 ## Failure modes: agent uncertainty as first-class output
 
-**Why this exists.** Everything above implicitly assumes the agent
-executed a well-scoped task and produced a clean change. Real life is
-messier: tasks arrive half-defined, sometimes barely scoped, sometimes
-not fully understood by the agent; the agent forms opinions, hits
-forks, and makes assumptions mid-run. Suppressing all of that to present
-a tidy "everything is fine" surface produces a *dishonest* and brittle
-review — the reviewer most needs to know exactly the things a confident
-summary hides. So the agent is not only allowed but expected to express
-confusion and clarify its WTFs, as first-class cards.
+**Why this exists.** The rest of the card model implicitly assumes the
+agent executed a well-scoped task successfully. Real life is messier:
+tasks arrive half-defined, sometimes barely scoped, sometimes not fully
+understood; the agent forms opinions, hits forks, and makes assumptions
+mid-run. Suppressing all of that to present a tidy "everything is fine"
+surface produces a *dishonest* and brittle review. So the agent is not
+only allowed but expected to express confusion and clarify its WTFs, as
+first-class cards.
 
-**Four uncertainty subkinds:**
+**Uncertainty cards reference the tension.** Every uncertainty card
+points at the *conflicting parts* via tension references — the surface
+should show *what is in tension with what*, not just that the agent felt
+unsure. The most common reference is **the input prompt**: the task was
+too shallow, it carried an implication that wasn't true, or the actual
+code contradicted the mental model the prompt assumed. Other references:
+a code locator, a kb claim, or another card. Uncertainty can also attach
+to **the agent's own choice** that raised tension during execution — not
+only external confusion.
+
+**Subkinds:**
 
 - **assumption** — "your prompt didn't specify X; I assumed Y; here's
-  why; flag if wrong."
-- **concern** — "Y seems wrong upstream but you didn't ask about it; I
-  left it alone; flagging in case you want to fix it here."
-- **dilemma** — "I had to choose between A and B; I chose A because of
-  constraint Z; here's the path not taken."
+  why; flag if wrong." (tension: prompt ⟂ reality)
+- **concern** — "Y seems wrong upstream but you didn't ask; I left it;
+  flagging in case you want to fix it here." (Card 5 above.)
+- **dilemma** — "I had to choose between A and B; chose A because of
+  constraint Z; here's the path not taken." (tension: the agent's own
+  choice ⟂ a viable alternative)
 - **out-of-scope-flag** — "the task implied Z but I didn't do it because
-  I read it as out of scope; you may want it."
+  it reads as out of scope; you may want it."
+- **follow-up** — "this change is complete, but the near-future work that
+  would make it *maximally* valuable, from my perspective, is W; it was
+  out of scope." (Card 6 above.)
+
+**`follow-up` vs the non-prescriptive clamp.** The clamp forbids
+prescribing *how to interpret the change under review*. It does **not**
+forbid honest foresight about *what work would come next* — that is
+information the reviewer wants. A follow-up card states the next work as
+the agent's perspective ("from where I stood, W unlocks the value"),
+references the tension (task scope ⟂ full user value), and never dresses
+it as a verdict on the current change. That keeps foresight honest
+without smuggling prescription back in.
 
 **Honesty applies to the agent's own state.** The honest clamp, for
 uncertainty cards, means the agent reports its actual run-time state —
@@ -561,208 +621,368 @@ A pack that *always* reads "everything is clean" cannot be telling the
 truth, and a reviewer learns to distrust it. Surfacing uncertainty is
 what makes the rest of the surface credible.
 
-**Runner-prompt implication.** The prompt step that produces the pack
-instructs the agent to surface uncertainty cards explicitly when
-assumptions, concerns, dilemmas, or out-of-scope flags arose, with
-examples and severity guidance. No code in this commit; the integration
-shape is named in "Where the runner / publish kernel wire in."
+## The feedback loop: read → flag → gate → iterate
+
+diffense is a read surface, but review is not read-only: a reviewer who
+spots something wants to act on it. Rather than invent a feedback
+mechanism, diffense **composes the gate brr already shipped**.
+
+```mermaid
+flowchart LR
+    Read["reviewer reads a card"] --> Decide{decision}
+    Decide -->|"approve / note"| Local["local reviewer state (.brr)"]
+    Decide -->|"ask"| Live["live agent: ephemeral Q and A"]
+    Decide -->|"request change"| Comment["anchored forge review comment<br/>(at the card's locator)"]
+    Comment --> Gate["existing GH gate:<br/>pr-review-comment becomes a task"]
+    Gate --> Iterate["agent iterates, commits"]
+    Iterate --> Repack["re-emit pack"]
+    Repack --> Read
+```
+
+- **Approve / note** — local reviewer state, kept in `.brr/` (see "Where
+  packs live"); optionally roundtripped to forge review state.
+- **Ask** — the live agent answers in-context from the pack, without
+  spawning a task. Ephemeral; good for "why this approach?" It does *not*
+  change code.
+- **Request change** — diffense authors a forge review comment
+  **anchored to the card's locator** (file:line for code, section for
+  kb). The existing `pr-review-comment` handling
+  ([`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md))
+  turns the @mention into a task; the agent iterates, commits, and
+  re-emits the pack; diffense re-renders.
+
+The live agent is only *half* useful if it can answer but not act; the
+durable half is this loop, where a flagged card becomes real follow-up
+work through machinery that already exists. **Open:** pack versioning
+across iterations (a PR accrues successive packs) and a "what changed
+since I last reviewed" pack-diff view — named in Open questions.
+
+## The pack validation / render tool
+
+The agent that emits the pack needs to confirm it actually renders before
+publishing it — the pack is an artifact with a contract, and a malformed
+or clamp-violating pack is a silent quality regression. So diffense ships
+a checker the agent calls as the last step of pack generation:
+
+`brr review --check <pack>` (exact verb shape decided in the impl plan):
+
+- **schema-validates** the pack (discriminated union of card kinds;
+  required always-axes present; locators resolve);
+- **clamp-lints** heuristically (cards over a size budget fail *sharp*;
+  empty conditional axes that were emitted anyway fail *emit-iff-honest*;
+  prescriptive-phrase smells flagged for *non-prescriptive*);
+- **render-checks** by dry-rendering each renderer's view of the pack and
+  confirming no card fails to paint.
+
+This is to diffense what a compile step is to code, and it folds into the
+runner's self-review (see "Where the runner / publish kernel wire in").
+Non-zero exit blocks publish of a broken pack.
 
 ## Discipline: the six clamps
 
 The cards must be Occam's-razor sharp, not a place to get lost. Six
-clamps gate what the agent emits. A card passes review only if it clears
-all six:
+clamps gate what the agent emits; a card passes only if it clears all
+six:
 
-1. **Sharp.** Skimmable in 5–10 seconds; every element earns its space
-   (a *form* constraint).
+1. **Sharp.** Skimmable in 5–10 seconds at gloss level; every element
+   earns its space (a *form* constraint). Zoom carries the depth, so the
+   gloss stays sharp.
 2. **Helpful.** Every element load-bears for a reviewer decision (a
    *function* constraint). Distinct from sharp: a card can be small *and*
-   useless — that passes sharp but fails helpful; a card can be thorough
-   yet every piece earns its weight — that passes helpful. Both are
-   required because they fail independently.
+   useless. Both required; they fail independently.
 3. **Honest.** Every stat answers a real question; possibility lore
-   states properties actually true of the change; usage demos use real
-   values from real tests or runs; uncertainty cards report the agent's
+   states properties actually true; usage demos use real values; zoom
+   leaves are the real artifact; uncertainty cards report the agent's
    actual state.
-4. **Non-prescriptive.** Cards describe properties and capabilities; they
-   do not prescribe interpretation. *"This dedupes by hashing payload +
-   idempotency key"* passes; *"this is the cornerstone of our retry
-   strategy"* fails. The reviewer composes meaning from cards; the agent
-   that writes them does not. This also guards against the wall-of-text
-   relapse — it forbids exactly the "let me explain why this is great"
-   prose that bloats reviews.
-5. **Emit-iff-honest.** Conditional axes are emitted only when there is
-   real material to put there. Possibility lore that would have to be
-   aspirational is omitted; a usage demo that would have to be invented
-   is omitted; an adjacency that does not exist is omitted. Absence is
-   signal — a card admitting "this is internal-only" by emitting no demo
-   is more useful than a faked one.
+4. **Non-prescriptive.** Cards describe; the reviewer composes the
+   verdict. No "this is the cornerstone of strategy X." (Follow-up cards
+   are honest foresight about *next work*, not prescription about the
+   *current change* — see Failure modes.)
+5. **Emit-iff-honest.** Conditional axes appear only when there is real
+   material; absence is signal.
 6. **Substrate-honest, not cosplay.** Aesthetic choices earn their space
-   by improving readability, navigation, or usefulness — the same
-   standard the honest clamp applies to stats.
+   by improving readability / navigation / usefulness.
 
 **The Occam's-razor reading-order test.** A reviewer should reach
-"approve / dive deeper / question" within seconds of landing on a card.
-If they cannot, the card is doing too much, or the wrong thing.
+"approve / dive deeper / ask" within seconds of landing on a card. If
+they cannot, the card is doing too much, or the wrong thing.
 
-## PR body as the v0 surface
+## Experience principles: glance, dive, or wander (the Marathon test)
 
-Before any TUI or web target ships, a well-structured PR body — written
-by the runner using a stable template, projected from the pack — is
-already a meaningful improvement over today's state, and works wherever
-the PR is viewed. v0 surface, not the destination; the inspect-mode UI is
-v1.
+The felt experience, stated as a north star so renderers can be judged
+against it. A good game menu lets you read an item's description, the
+description of its class, the slots it fits, and compare it against
+siblings — *or* just glance and go try it. You don't hang out for ten
+hours before playing; you skim, try, die, loot, read a little more, go
+again.
 
-Template (sections labelled by who fills them — *LLM* for agent-authored
-narrative, *mechanical* for deterministic post-processing):
+diffense should feel the same:
+
+- **Glance** — the gloss + stat block answer "approve / dive / ask" in
+  seconds (sharp + helpful). The default path is fast.
+- **Dive** — the zoom axis descends to ground truth on any card, with
+  escape hatches to the real diff / file / rendered page always one step
+  away.
+- **Wander** — lateral edges let curiosity roam to peers and context
+  without losing your place.
+
+Depth and exploration are **opt-in, never forced**. The surface saves
+time by default (the clamps) and rewards curiosity on demand (the zoom +
+lateral axes). It is not a place to get lost; it is a place you *can*
+explore when a change earns it.
+
+## PR body as a lossy projection (not the design anchor)
+
+A stable Markdown template, projected from the pack, written into the PR
+body so *any* forge reader gets a real improvement with zero tooling —
+including the phone reader who never opens a richer surface. It is a
+**lossy fallback**, deliberately not the surface the design is anchored
+on (anchoring on text-first would under-shape the product). Sections
+labelled by producer (`LLM` = generated prose, `mechanical` = derived):
 
 ```markdown
-## Uncertainties        (LLM; omitted entirely when none)
-- [med] audit-op naming breaks the debit_/credit_ prefix pattern …
+## ⚠ Uncertainty   <!-- only present when uncertainty cards exist -->
+- **[concern · med]** audit-op naming breaks the debit_/credit_ prefix
+  pattern — left as out of scope.   (LLM)
 
-## Intent               (LLM, grounded in PR body + linked issue)
-What this change is for, in the requester's terms.
+## Intent          one-paragraph statement of what this PR is for   (LLM)
 
-## Narrative            (LLM)
-The spiral: what the area did before, what changed, why, in reading
-order. Sharp, non-prescriptive.
+## Narrative       the setup → action → outcome arc of the change   (LLM)
 
-## Touched              (mechanical)
-- code:  gates/github/cache.py (get_with_etag), polling.py …
-- kb:    plan-laptop-daemoning.md (lifecycle flip) …
-- tests: test_github_gate.py (+2) …
+## Touched         (mechanical)
+- src/brr/gates/github/cache.py — get_with_etag gains conditional GET
+- kb/plan-laptop-daemoning.md — Linux slice flipped to shipped
+- tests/test_github_gate.py — +2 cases
 
-## Reading order        (mechanical + LLM)
-1. Uncertainties  2. <highest-signal cards first>  …
+## Reading order   1. Uncertainty  2. highest-signal cards …   (mechanical)
 
-## Deferred / open      (LLM)
-What this change deliberately did not do.
+## Deferred / open what this change deliberately did not do   (LLM)
 ```
 
-The Uncertainties section sitting at the very top mirrors the
-reading-order rule, so even the forge-only reader who never opens the
-inspect UI gets the agent's flagged doubts first.
+The full pack rides alongside this body (see "Where packs live") so a
+reader with `brr review` or the hosted view gets the zoomable surface,
+while the forge-only reader still gets the agent's flagged doubts first.
+
+## Where packs live
+
+The pack is a run artifact with a contract; it needs to be (a) cached
+where the producing machine can re-render it and (b) reachable by any
+reviewer's surface.
+
+- **Local cache** — `.brr/diffense/<pr>/pack.json` (the gitignored
+  runtime dir, matching brr's "artifacts in `.brr/`, not the worktree"
+  convention). The local `brr review` reads from here.
+- **Travels with the PR via the forge** — so `brr review <pr-url>` and
+  the hosted view work for anyone with forge access, without the
+  producer's `.brr/`. Leading shape: embed the pack in the PR body inside
+  an HTML-comment marker block (reusing the ergo proxy's
+  `<!-- … -->` marker technique, which renders invisibly), with a
+  **git-note / `refs/diffense/*` fallback** when a pack exceeds the
+  forge's body size limit. The transport choice (body-embed vs note vs
+  ref, and the size threshold) is an Open question.
+- **Hosted (brnrd)** — stored server-side keyed by PR / conversation id,
+  served by the hosted renderer.
+
+This keeps generation in one place and lets every renderer fetch the same
+bytes.
 
 ## Where the live agent fits
 
-Future. Once the pack exists, an in-context follow-up agent can answer
-"why this approach?" or "what would break if I removed this check?" with
-the pack, the diff, and the kb in context — the "there's a silicon mind
-out there we can just ask" loop, attached directly to the review surface.
-Out of scope here; named so it is not reinvented later, and constrained
-by the same six clamps as the cards.
+An in-context Q&A surface over the cards, reading the pack as grounding
+context so answers stay anchored to the actual change — the "there's a
+silicon mind out there we can just ask" loop, attached to the surface.
+It handles the **ask** branch of the feedback loop (ephemeral, no code
+change); durable change-requests route through the **request-change**
+branch (forge comment → gate → task). Constrained by the same six clamps.
+Future; named so it is not reinvented.
+
+## Relationship to the ergo proxy
+
+diffense and the ergo proxy
+([`design-agent-ergonomics.md`](design-agent-ergonomics.md)) are both
+agent-emitted side channels at the task boundary, about meta-information
+beyond the code change. They are **not** the same channel, and should not
+be merged — but they share a source and a transport, and folding them at
+those seams avoids duplicate machinery.
+
+| | diffense | ergo proxy |
+| --- | --- | --- |
+| Audience | always the **user / reviewer** | the **operator** (self-hoster, or platform operator in managed mode) |
+| Subject | the **result** — the change + the agent's understanding/uncertainty about it | the agent's **ability to execute** — environment friction + task clarity |
+| Surface | the review pack / cards | the ergonomics record, routed by tenancy |
+
+The **overlap is task clarity.** A shallow or self-contradictory task
+produces *both* a diffense uncertainty card (an `assumption`/`concern`
+referencing the prompt — the user reviewing *this change* should know it
+rests on a guess) *and* an ergo signal (the operator should know this
+source's tasks tend to be underspecified). The fold:
+
+- **Share the reflection-elicitation step.** One prompt step asks the
+  agent for its honest run-time reflection (confusions, assumptions,
+  task-clarity friction). diffense renders the change-relevant slice as
+  uncertainty cards for the user; the ergo proxy routes the
+  capability-relevant slice to the operator.
+- **Share the marker transport.** Both ride HTML-comment marker blocks on
+  the response / PR body, stripped before the user-facing text.
+- **Keep the split.** Route by audience: never show the operator-facing
+  ergonomics slice to the reviewer, and never burden the reviewer's
+  uncertainty cards with environment-friction noise that isn't about
+  this change.
 
 ## Project boundary
 
 The pack format is the contract; renderers can live anywhere. Current
 leanings (decided in the implementation plan, not locked here):
 
-- **Pack generation** lives in brr — it is part of the runner's
-  publish-time work.
-- **The substrate** (the Textual app) lives in brr, with the local viewer
-  shipping as part of the package via a `brr review` verb. Open whether
-  the code sits in-tree at `src/brr/diffense/` or in its own
-  `brr-diffense` extras-installed package; leans in-tree until install
-  footprint or maintainer cadence argues otherwise (the same test
+- **Pack generation + the validation tool** live in brr — part of the
+  runner's publish-time work.
+- **The renderers** live in brr: the Textual TUI and the responsive web
+  renderer, both via a `brr review` verb. Open whether the code sits
+  in-tree at `src/brr/diffense/` or in its own `brr-diffense`
+  extras-installed package; leans in-tree until install footprint argues
+  otherwise (the same test
   [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
   applies to envs).
-- **The hosted view** is a brnrd dashboard renderer over the same pack
-  via HTMX, added when subscriber-side dashboard work picks up.
+- **The hosted view** is a brnrd-dashboard renderer over the same pack,
+  and is the clean answer to mobile review for users who don't run a
+  local tunnel.
+
+## Surfaces and what to build first
+
+The honest hard question, and a recommendation rather than a lock (the
+sequencing is an Open question pending the spike).
+
+The constraints — phone review is first-class, no native app, low
+friction, and it has to serve both self-hosted and brnrd-hosted users —
+point away from both "text-first" and "TUI-first" and toward
+**web-first**:
+
+1. **Build the pack + the validation tool first.** Everything renders
+   from the pack; nothing is real until the pack is.
+2. **Then the responsive web renderer**, served two ways: `brr review`
+   spins an ephemeral local server (self-hosted, laptop), and brnrd hosts
+   the same renderer (the mobile + no-checkout path). This is the surface
+   that proves the rich model the design is built on.
+3. **The PR-body projection falls out for free** as the lossy fallback,
+   shipped from day one for forge-only and phone-without-brnrd readers.
+4. **The Textual TUI follows** as a same-pack convenience for terminal
+   reviewers.
+
+The honest tradeoff: a self-hoster with *no* brnrd and *no* tunnel gets
+the full experience on a laptop (local web + TUI) and the degraded
+PR-body on a phone. Good mobile review for that user genuinely needs
+either brnrd's hosted renderer or a tunnel — stated plainly rather than
+hand-waved. This reverses the earlier "PR-body v0 → TUI v1" ordering; the
+mobile requirement and the friction of a branch-argument TUI launch are
+what moved it.
 
 ## Where the runner / publish kernel wire in
 
 Deferred to implementation; the shape is named so future slices have an
-anchor. diffense hangs off the publish step described in
-[`design-publish-kernel.md`](design-publish-kernel.md): the runner emits
-the pack as the last step before publish, and the daemon writes the
-body projection on publish (via `gh pr edit --body` or the equivalent
-forge call). The runner prompt in `src/brr/prompts/` gains a step:
-*produce the diffense pack using this schema, under the six clamps;
-surface uncertainty cards explicitly when assumptions / concerns /
-dilemmas / out-of-scope flags arose; use existing and new tests as
-grounding evidence for usage demos and walkthroughs.* No code in this
-commit.
+anchor. diffense hangs off the publish step
+([`design-publish-kernel.md`](design-publish-kernel.md)): the runner
+emits the pack as the last step before publish, runs `brr review --check`
+on it, and the daemon writes the PR-body projection (and embeds/attaches
+the pack) on publish. The runner prompt in `src/brr/prompts/` gains a
+step: *produce the diffense pack under the six clamps; give each card its
+gloss → zoom tree → ground-truth leaf and a resolvable locator; surface
+uncertainty cards (assumption / concern / dilemma / out-of-scope /
+follow-up) with their tension references when they arose; use existing
+and new tests as grounding evidence; then `--check` the pack before
+publish.* No code in this commit.
 
 ## Adjacencies that ship-or-shipped already
 
-- **The `pr-review` event handling** in
-  [`src/brr/gates/github/`](../src/brr/gates/github) (shipped 2026-05-27) is
-  the gate-side of the review loop: brr *reacts* to a human's review.
-  diffense is the human-side counterpart: brr *produces* a surface humans
-  can review well. The two close the loop from opposite ends.
+- **The `pr-review` / `pr-review-comment` event handling** in
+  [`src/brr/gates/github/`](../src/brr/gates/github) (shipped 2026-05-27)
+  is the gate-side of the review loop: brr *reacts* to a human's review.
+  diffense is the human-side counterpart (brr *produces* a surface humans
+  review well) **and** the consumer of that handling for its feedback
+  loop. Boundary doc:
+  [`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md).
 - **The `brr kb` plan** ([`plan-kb-subcommand.md`](plan-kb-subcommand.md))
-  is composable infrastructure for the local viewer — `kb pages`,
-  `kb doc`, and `kb log` are exactly the kb reads diffense needs.
+  is composable infrastructure for the renderers — `kb doc <page>` feeds
+  kb-page cards' zoom levels.
 - **The brnrd dashboard plan**
   ([`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)) is the
-  natural home for the hosted-web target.
+  home for the hosted web renderer.
+- **The ergo proxy** ([`design-agent-ergonomics.md`](design-agent-ergonomics.md))
+  shares the reflection-elicitation step and marker transport.
 
 ## Open questions
 
 - **Pack JSON schema.** A discriminated union over item kinds +
-  walkthroughs + uncertainty subkinds; finalized in the implementation
-  plan after a hand-authored prototype against one real recent brr PR.
-- **Substrate technology.** Textual proposed; validated via the spike
-  before locking.
-- **Aesthetic locking.** Validated alongside the substrate spike.
-- **GIFs as a future demo axis.** Textual transcripts cover the v0 case
-  at a fraction of the cost (no render pipeline, no drift, diffable);
-  revisit GIFs only if transcripts prove insufficient.
-- **Locked-abilities axis.** Deferred future direction; postponed until
-  the always-vs-conditional baseline is validated.
+  walkthroughs + uncertainty subkinds, each with its zoom-tree and
+  locator shape; finalized in the implementation plan after a
+  hand-authored prototype against one real recent brr PR.
+- **Web vs TUI renderer split.** Two renderers over the shared pack
+  (responsive HTML + Textual); validated via a spike against one pack
+  before either locks. Confirm the card/zoom/lateral model survives both.
+- **Pack transport.** Body-embedded marker block vs git note vs
+  `refs/diffense/*`, and the size threshold that switches between them.
+- **What to build first.** Web-first is the recommendation; confirmed or
+  revised after the spike.
+- **Pack versioning across iterations.** A PR accrues successive packs as
+  the feedback loop iterates; how to store them and render a "what
+  changed since I last reviewed" pack-diff.
 - **Card-level reviewer state.** Local-only in `.brr/`, or roundtripped
-  to forge review comments? Likely local-first, forge-roundtrip optional.
-- **Per-item demo vs walkthrough balance.** Both kinds can carry usage
-  demos; the heuristic for when a flow earns a walkthrough vs decomposing
-  into per-item demos-with-edges is settled empirically during the
-  prototype slice.
+  to forge review state? Likely local-first, forge-roundtrip optional.
+- **Aesthetic locking.** Validated alongside the renderer spike.
+- **GIFs as a future demo axis.** Textual transcripts at v0; revisit if
+  insufficient.
+- **Locked-abilities axis.** Deferred future direction.
 - **LLM token budget for pack generation.** Bounded by the
-  always-vs-conditional split and the six clamps (which push toward small
-  cards); revisit on real runs.
-- **Live agent on cards.** Cost/value tradeoff addressed when that slice
-  is opened; same clamps.
-- **Naming.** `diffense` adopted as the working name; the pop-culture
-  alternatives `pensieve` (the Harry Potter memory basin — fits "step
-  through what happened") and `holocron` (the Star Wars interactive lore
-  artifact — fits "inspectable card with lore") were considered and set
-  aside as cosplay-leaning next to the mechanical-portmanteau house style
-  of `brr` / `brnrd`. The `brr review` verb stays regardless, for
-  discoverability. Locking the name is deferred until the spike confirms
-  the brand fits the surface.
+  always-vs-conditional split, the gloss-not-leaf rule (leaves are
+  mechanical), and the six clamps; revisit on real runs.
+- **Live agent on cards.** Cost/value addressed when that slice opens;
+  same clamps.
+- **Naming.** `diffense` adopted as the working name; `pensieve` /
+  `holocron` considered and set aside as cosplay-leaning next to the
+  `brr` / `brnrd` house style. The `brr review` verb stays regardless.
+  Locking deferred until the spike confirms the brand fits the surface.
 
 ## Read next
 
 1. [`plan-kb-subcommand.md`](plan-kb-subcommand.md) — the kb read surface
-   the local viewer composes against.
-2. [`design-publish-kernel.md`](design-publish-kernel.md) — the publish
-   step pack generation hangs off.
-3. [`subject-kb.md`](subject-kb.md) — the kb pattern diffense's richest
-   input comes from.
-4. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md) — the home
-   for the hosted-web target.
-5. [`kb/log.md`](log.md) — the 2026-05-27 GitHub-gate design-pass entry
-   for the `pr-review` event work diffense complements.
+   the renderers compose against.
+2. [`design-publish-kernel.md`](design-publish-kernel.md) — where pack
+   emission, `--check`, and body projection wire into publish.
+3. [`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md)
+   — the gate-side review-event handling the feedback loop rides.
+4. [`subject-kb.md`](subject-kb.md) — the kb graph the pack renders.
+5. [`design-agent-ergonomics.md`](design-agent-ergonomics.md) — the
+   shared-source / split-audience sibling channel.
+6. [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md) — the
+   home for the hosted web renderer.
 
 ## Lineage
 
-Drafted 2026-05-28, out of a conversation across 2026-05-27 / 2026-05-28
-that converged the shape over five refinement passes:
+Drafted 2026-05-28, reshaped 2026-05-29, out of a conversation across
+2026-05-27 – 2026-05-29 that converged the shape over six refinement
+passes:
 
-1. **Audience + generation.** Generic power-user persona (a project owner
-   who plans and implements); LLM-driven generation by the agent that did
-   the work, since it already holds the full task context.
+1. **Audience + generation.** Generic power-user persona; LLM-driven
+   generation by the agent that did the work.
 2. **Inspect-mode + the Souls-menu-hangout hypothesis.** Reviews as a
-   navigable graph of inspection cards rather than a linear scroll;
-   curiosity-driven, explicitly not gamification.
+   navigable graph of inspection cards; curiosity-driven, not
+   gamification.
 3. **Perceived gain + the sharp/honest/non-prescriptive clamps.** The
-   two-axis lore (the possibility axis is the "what this enables"
-   projection); the discipline that keeps it from becoming a wall of
-   text.
+   two-axis lore; discipline against the wall-of-text relapse.
 4. **Tests-as-grounding + walkthrough kind + parallel CLI/web rendering +
-   promotion to design.** Tests as honest evidence for usage demos;
-   walkthroughs for cross-cutting flows; one substrate, multiple targets
-   (Textual); research promoted to design once the cornerstones held.
+   promotion to design.**
 5. **Small-team audience + the helpful clamp + the `diffense` name +
-   uncertainty cards as first-class.** Audience widened from solo to
-   teams; the helpful clamp split from sharp; the project named; agent
-   uncertainty made a first-class, top-of-reading-order card kind.
+   uncertainty cards as first-class.**
+6. **The zoomable graph + locators + feedback loop + web-first reversal.**
+   Cards gain a zoom axis (gloss → detail → ground-truth leaf), unifying
+   the kb summary-tree and walkthrough-as-card-group ideas; identity
+   gains a resolvable locator; the feedback loop closes through the
+   shipped `pr-review-comment` gate; the `follow-up` uncertainty subkind
+   and explicit tension references land; a pack validation/render tool
+   (`brr review --check`) and a packs-live-in-`.brr`-and-travel-with-the-PR
+   transport are specified; mobile + no-app + low-friction reverse the
+   surface ordering to web-first (responsive HTML renderer distinct from
+   the Textual TUI), demoting the PR body to a lossy fallback; and the
+   ergo proxy folds in as a shared-source / split-audience sibling.
+
+Proposed, not accepted — a renderer spike and a hand-authored prototype
+pack against a real PR are the gates before the `Status` line flips.
