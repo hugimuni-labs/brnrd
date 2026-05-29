@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>diffense · review</title>
+<style>
+  :root {
+    --bg: #0a0e0d;
+    --surface: #0f1513;
+    --surface-2: #131b17;
+    --border: #213029;
+    --border-bright: #33493d;
+    --fg: #cdd9d2;
+    --fg-dim: #7e8d84;
+    --fg-faint: #56635a;
+    --green: #74e08c;
+    --cyan: #5fd0d8;
+    --amber: #e8c06a;
+    --red: #f07a72;
+    --violet: #b98ce0;
+    --teal: #61c9b0;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+            "Liberation Mono", "Roboto Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); }
+  body {
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+  }
+  #app {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 16px 16px 96px;
+  }
+  a { color: var(--cyan); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* window chrome */
+  .chrome {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; margin-bottom: 14px;
+    border: 1px solid var(--border); border-radius: 7px;
+    background: linear-gradient(var(--surface-2), var(--surface));
+    color: var(--fg-dim); font-size: 12.5px; position: sticky; top: 8px;
+    z-index: 5; backdrop-filter: blur(6px);
+  }
+  .chrome .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .chrome .title { color: var(--fg); letter-spacing: .3px; }
+  .chrome .title b { color: var(--green); font-weight: 600; }
+  .chrome .blink { color: var(--green); animation: blink 1.1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .chrome .spacer { flex: 1; }
+  .chrome .hint { color: var(--fg-faint); font-size: 11.5px; }
+
+  /* breadcrumb heading-bar stack */
+  .bar {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    text-align: left; cursor: pointer;
+    padding: 7px 11px; margin-bottom: 5px;
+    background: var(--surface); color: var(--fg-dim);
+    border: 1px solid var(--border); border-left-width: 3px;
+    border-radius: 5px; font-family: var(--mono); font-size: 13px;
+  }
+  .bar:hover { color: var(--fg); border-color: var(--border-bright); }
+  .bar .chev { color: var(--fg-faint); }
+  .bar .k { color: var(--fg-faint); text-transform: uppercase; font-size: 10.5px;
+            letter-spacing: .6px; }
+  .bar .lbl { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; flex: 1; min-width: 0; }
+
+  /* card */
+  .card {
+    border: 1px solid var(--border-bright); border-radius: 8px;
+    background: var(--surface);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.3), 0 10px 30px -18px rgba(0,0,0,.9);
+    overflow: hidden; margin-bottom: 10px;
+  }
+  .card > .head {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 9px 13px; border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .card > .head .kind {
+    text-transform: uppercase; font-size: 10.5px; letter-spacing: .7px;
+    color: var(--bg); padding: 2px 7px; border-radius: 4px; font-weight: 700;
+    background: var(--fg-dim);
+  }
+  .card > .head .name { color: var(--fg); font-size: 13.5px; }
+  .card > .head .spacer { flex: 1; }
+  .card > .body { padding: 13px; }
+
+  .k-summary    .kind, .k-summary    { --accent: var(--cyan); }
+  .k-uncertainty .kind, .k-uncertainty { --accent: var(--amber); }
+  .k-code .kind, .k-code { --accent: var(--green); }
+  .k-kb .kind, .k-kb { --accent: var(--violet); }
+  .k-test .kind, .k-test { --accent: var(--teal); }
+  .k-walk .kind, .k-walk { --accent: var(--violet); }
+  .k-other .kind, .k-other { --accent: var(--fg-dim); }
+  .card { border-left: 3px solid var(--accent, var(--border-bright)); }
+  .card > .head .kind { background: var(--accent, var(--fg-dim)); }
+
+  .headline {
+    font-size: 15.5px; line-height: 1.45; color: var(--fg);
+    margin: 2px 0 12px; padding-left: 14px; position: relative;
+  }
+  .headline::before { content: "▸"; position: absolute; left: 0; color: var(--accent, var(--amber)); }
+
+  .what { margin: 0 0 10px; color: var(--fg); }
+  .enables {
+    margin: 0 0 12px; padding: 8px 11px; border-radius: 6px;
+    background: rgba(116,224,140,.06); border: 1px solid rgba(116,224,140,.18);
+    color: var(--green);
+  }
+  .enables .lab { color: var(--green); font-size: 10.5px; text-transform: uppercase;
+                  letter-spacing: .6px; opacity: .8; margin-right: 6px; }
+
+  .sec { margin: 14px 0 6px; color: var(--fg-faint); font-size: 10.5px;
+         text-transform: uppercase; letter-spacing: .8px; }
+  .row { display: flex; gap: 10px; padding: 2px 0; align-items: baseline; }
+  .row .key { color: var(--fg-dim); min-width: 132px; flex-shrink: 0; }
+  .row .val { color: var(--fg); }
+  .row .val .add { color: var(--green); }
+  .row .val .del { color: var(--red); }
+
+  pre.demo {
+    margin: 8px 0; padding: 11px 12px; overflow-x: auto;
+    background: #07100c; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--teal); font-size: 12.5px; line-height: 1.55;
+    white-space: pre;
+  }
+
+  /* zoom ladder */
+  .zoom { margin: 6px 0; border-left: 2px solid var(--border); padding-left: 0; }
+  .zoom .lvl {
+    display: flex; gap: 9px; align-items: baseline; padding: 5px 0 5px 12px;
+    margin-left: -2px; border-left: 2px solid transparent;
+  }
+  .zoom .lvl .tag { color: var(--fg-faint); font-size: 10.5px; min-width: 30px; }
+  .zoom .lvl.leaf .tag { color: var(--accent, var(--green)); }
+  .zoom .lvl .txt { color: var(--fg-dim); }
+  .zoom .lvl.leaf .txt { color: var(--fg); }
+
+  /* chips / edges / members */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .chip {
+    display: inline-block; vertical-align: top; line-height: 1.5;
+    padding: 4px 11px; border-radius: 13px; font-size: 12px;
+    border: 1px solid var(--border-bright); background: var(--surface-2);
+    color: var(--fg-dim); cursor: pointer; text-align: left;
+    max-width: 100%; min-width: 0; overflow-wrap: anywhere;
+  }
+  .chip:hover { color: var(--fg); border-color: var(--accent, var(--border-bright)); }
+  .chip .rel { color: var(--fg-faint); font-size: 10px; text-transform: uppercase;
+               letter-spacing: .4px; margin-right: 6px; }
+  .chip.static { cursor: default; }
+  .chip.static:hover { color: var(--fg-dim); border-color: var(--border-bright); }
+  .chip.out::after { content: "↗"; color: var(--cyan); }
+
+  .member {
+    display: flex; gap: 11px; align-items: baseline; width: 100%; text-align: left;
+    cursor: pointer; padding: 9px 11px; margin: 5px 0;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+    color: var(--fg);
+  }
+  .member:hover { border-color: var(--violet); }
+  .member .num { color: var(--violet); font-weight: 700; }
+  .member .mnote { color: var(--fg-dim); }
+  .member .mid { color: var(--fg-faint); font-size: 11.5px; }
+
+  .badge { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
+           padding: 2px 7px; border-radius: 4px; font-weight: 700; }
+  .sev-med { background: rgba(232,192,106,.16); color: var(--amber); }
+  .sev-low { background: rgba(116,224,140,.12); color: var(--green); }
+  .sev-blocking-for-merge { background: rgba(240,122,114,.18); color: var(--red); }
+
+  .tension { margin: 4px 0 8px; padding: 8px 11px; border-radius: 6px;
+             background: rgba(232,192,106,.05); border: 1px dashed rgba(232,192,106,.3); }
+  .tension .lab { color: var(--amber); font-size: 10.5px; text-transform: uppercase;
+                  letter-spacing: .6px; }
+  .tension .pair { color: var(--fg); margin-top: 3px; }
+  .tension .perp { color: var(--amber); padding: 0 6px; }
+
+  .locator { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 14px;
+             color: var(--fg-faint); font-size: 12px; align-items: center; }
+  .locator .open { color: var(--cyan); border: 1px solid var(--border-bright);
+                   border-radius: 5px; padding: 3px 9px; cursor: pointer; background: var(--surface-2); }
+  .locator .open:hover { border-color: var(--cyan); }
+  .prov { margin-top: 10px; color: var(--fg-faint); font-size: 11.5px; }
+
+  /* index list */
+  .idx-group { margin: 16px 0 4px; color: var(--fg-faint); font-size: 11px;
+               text-transform: uppercase; letter-spacing: .8px; }
+  .idx-row {
+    display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left;
+    cursor: pointer; padding: 9px 11px; margin: 5px 0;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+    border-left: 3px solid var(--accent, var(--border)); color: var(--fg);
+  }
+  .idx-row:hover { background: var(--surface-2); border-color: var(--border-bright); }
+  .idx-row .ikind { color: var(--fg-faint); text-transform: uppercase; font-size: 10px;
+                    letter-spacing: .5px; min-width: 116px; flex-shrink: 0; }
+  .idx-row .igloss { color: var(--fg-dim); }
+  .idx-row:hover .igloss { color: var(--fg); }
+
+  .empty { color: var(--fg-faint); padding: 30px 0; text-align: center; }
+
+  /* never let a long label/value punch through the card on narrow viewports */
+  .what, .enables, .headline, .tension .pair, .member .mnote,
+  .card > .head .name { overflow-wrap: anywhere; }
+  .row .val, .card > .head .name { min-width: 0; overflow-wrap: anywhere; }
+  .member .mnote, .idx-row .igloss { min-width: 0; overflow-wrap: anywhere; }
+
+  @media (max-width: 560px) {
+    body { font-size: 13.5px; }
+    #app { padding: 10px 10px 80px; }
+    .row { flex-direction: column; gap: 0; }
+    .row .key { min-width: 0; color: var(--fg-faint); }
+    .idx-row { flex-direction: column; gap: 2px; }
+    .idx-row .ikind { min-width: 0; }
+    .chrome .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+  <script id="diffense-pack" type="application/json">__DIFFENSE_PACK__</script>
+  <script>
+  "use strict";
+  // ---- load the pack ----------------------------------------------------
+  function loadPack() {
+    const tag = document.getElementById("diffense-pack");
+    const raw = tag ? tag.textContent.trim() : "";
+    if (raw && raw[0] === "{") { try { return Promise.resolve(JSON.parse(raw)); } catch (e) {} }
+    const u = new URLSearchParams(location.search).get("pack");
+    if (u) return fetch(u).then(r => r.json());
+    return Promise.resolve(null);
+  }
+
+  // ---- tiny dom helper --------------------------------------------------
+  function el(tag, props, kids) {
+    const n = document.createElement(tag);
+    if (props) for (const k in props) {
+      if (k === "class") n.className = props[k];
+      else if (k === "html") n.innerHTML = props[k];
+      else if (k === "on") for (const ev in props.on) n.addEventListener(ev, props.on[ev]);
+      else if (props[k] != null) n.setAttribute(k, props[k]);
+    }
+    if (kids != null) (Array.isArray(kids) ? kids : [kids]).forEach(c => {
+      if (c == null) return;
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+  const T = s => document.createTextNode(s == null ? "" : String(s));
+
+  // ---- kind families (colour + label) -----------------------------------
+  function family(kind) {
+    if (kind === "summary") return "summary";
+    if (kind === "uncertainty") return "uncertainty";
+    if (kind === "walkthrough") return "walk";
+    if (kind && kind.startsWith("code")) return "code";
+    if (kind && kind.startsWith("kb")) return "kb";
+    if (kind && kind.startsWith("test")) return "test";
+    return "other";
+  }
+  function cardGloss(c) {
+    if (c.headline) return c.headline;
+    if (c.lore && c.lore.descriptive) return c.lore.descriptive;
+    if (c.story) return c.identity ? c.identity.label : c.id;
+    if (c.identity && c.identity.label) return c.identity.label;
+    return c.id;
+  }
+
+  let PACK = null, BYID = {};
+  let stack = [{ type: "index" }];
+
+  function go(entry) { stack.push(entry); render(); window.scrollTo(0, 0); }
+  function truncate(i) { stack = stack.slice(0, i + 1); render(); window.scrollTo(0, 0); }
+
+  // ---- shared bits ------------------------------------------------------
+  function headBar(c) {
+    const fam = family(c.kind);
+    const head = el("div", { class: "head" }, [
+      el("span", { class: "kind" }, T(c.subkind ? c.kind + " · " + c.subkind : c.kind)),
+      el("span", { class: "name" }, T(c.identity && c.identity.label ? c.identity.label : "")),
+      el("span", { class: "spacer" }),
+    ]);
+    if (c.severity) head.appendChild(el("span", { class: "badge sev-" + c.severity }, T(c.severity)));
+    return head;
+  }
+  function rows(obj, order) {
+    const box = el("div");
+    (order || Object.keys(obj)).forEach(k => {
+      if (!(k in obj)) return;
+      let v = obj[k];
+      if (Array.isArray(v)) v = v.join(", ");
+      else if (v && typeof v === "object") v = JSON.stringify(v);
+      box.appendChild(el("div", { class: "row" }, [
+        el("span", { class: "key" }, T(k.replace(/_/g, " "))),
+        el("span", { class: "val", html: String(v)
+          .replace(/(\+\d[\d,]*\+?)/g, '<span class="add">$1</span>')
+          .replace(/(-\d[\d,]*−?|−)/g, '<span class="del">$1</span>') }),
+      ]));
+    });
+    return box;
+  }
+  function edgeChips(c) {
+    if (!c.lateral_edges || !c.lateral_edges.length) return null;
+    const box = el("div", { class: "chips" });
+    c.lateral_edges.forEach(e => {
+      const target = BYID[e.target];
+      if (target) {
+        box.appendChild(el("button", { class: "chip", on: { click: () => go({ type: "card", id: e.target }) } }, [
+          el("span", { class: "rel" }, T(e.type)), T(cardGloss(target).slice(0, 52)),
+        ]));
+      } else {
+        box.appendChild(el("span", { class: "chip static" }, [
+          el("span", { class: "rel" }, T(e.type)), T(e.target),
+        ]));
+      }
+    });
+    return box;
+  }
+  function openBtn(loc, label) {
+    if (!loc) return null;
+    const wrap = el("div", { class: "locator" });
+    if (loc.forge) wrap.appendChild(el("a", { class: "open", href: loc.forge, target: "_blank", rel: "noopener" }, T((label || "open") + " ↗")));
+    if (loc.local) wrap.appendChild(el("span", {}, T(loc.local)));
+    return wrap;
+  }
+  function zoomLadder(c) {
+    if (!c.zoom || !c.zoom.length) return null;
+    const box = el("div");
+    box.appendChild(el("div", { class: "sec" }, T("zoom")));
+    const lad = el("div", { class: "zoom" });
+    c.zoom.forEach(z => {
+      if ("leaf" in z) {
+        const leaf = el("div", { class: "lvl leaf" }, [
+          el("span", { class: "tag" }, T("leaf")),
+          el("span", { class: "txt" }, T(z.leaf + (z.note ? " — " + z.note : ""))),
+        ]);
+        const forge = (z.locator_ref === "self" && c.locator) ? c.locator.forge : null;
+        if (forge) { leaf.style.cursor = "pointer"; leaf.addEventListener("click", () => window.open(forge, "_blank")); leaf.querySelector(".txt").appendChild(T("  ↗")); }
+        lad.appendChild(leaf);
+      } else {
+        lad.appendChild(el("div", { class: "lvl" }, [
+          el("span", { class: "tag" }, T("L" + z.level)),
+          el("span", { class: "txt" }, T(z.summary)),
+        ]));
+      }
+    });
+    box.appendChild(lad);
+    return box;
+  }
+  function provLine(c) {
+    if (!c.provenance) return null;
+    const p = c.provenance;
+    const bits = [];
+    if (p.commit) bits.push("commit " + p.commit);
+    if (p.commits) bits.push("commits " + p.commits.join(".."));
+    bits.push("conv msg " + (p.conversation_msg == null ? "— (none: hand-authored)" : "#" + p.conversation_msg));
+    return el("div", { class: "prov" }, T("from " + bits.join(" · ")));
+  }
+
+  // ---- per-kind body builders -------------------------------------------
+  function bodyUncertainty(c) {
+    const b = el("div", { class: "body" });
+    b.appendChild(el("div", { class: "headline" }, T(c.headline || (c.lore && c.lore.descriptive) || "")));
+    if (c.honest_nuance) { b.appendChild(el("div", { class: "sec" }, T("nuance"))); b.appendChild(el("div", { class: "what" }, T(c.honest_nuance))); }
+    else if (c.lore && c.lore.descriptive && c.headline) { b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive))); }
+    if (c.proposed_resolution) { b.appendChild(el("div", { class: "sec" }, T("proposed"))); b.appendChild(el("div", { class: "what" }, T(c.proposed_resolution))); }
+    if (c.tension) {
+      const t = el("div", { class: "tension" }, [ el("div", { class: "lab" }, T("tension")) ]);
+      if (c.tension.between) t.appendChild(el("div", { class: "pair" }, [ T(c.tension.between[0]), el("span", { class: "perp" }, T("⟂")), T(c.tension.between[1]) ]));
+      if (c.tension.refs && c.tension.refs.length) {
+        const chips = el("div", { class: "chips" });
+        c.tension.refs.forEach(r => {
+          const txt = (r.kind ? r.kind + ": " : "") + (r.what || r.ref || r.locator || "");
+          chips.appendChild(el("span", { class: "chip static" }, T(txt)));
+        });
+        t.appendChild(chips);
+      }
+      b.appendChild(t);
+    }
+    const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("related"))); b.appendChild(ec); }
+    const ob = openBtn(c.locator); if (ob) b.appendChild(ob);
+    const pl = provLine(c); if (pl) b.appendChild(pl);
+    return b;
+  }
+  function bodySummary(c) {
+    const b = el("div", { class: "body" });
+    if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
+    if (c.shape) {
+      const s = c.shape;
+      b.appendChild(el("div", { class: "sec" }, T((s.card_count ? s.card_count + " cards · " : "") + ((s.arcs && s.arcs.length) ? s.arcs.length + " braided arcs" : "shape"))));
+      (s.arcs || []).forEach(a => b.appendChild(el("div", { class: "row" }, [ el("span", { class: "key" }, T(a.theme)), el("span", { class: "val" }, T(a.what)) ])));
+      if (s.surface_area) { b.appendChild(el("div", { class: "sec" }, T("touches"))); b.appendChild(el("div", { class: "what" }, T(s.surface_area.join(" · ")))); }
+      if (s.risk_pointer) b.appendChild(el("div", { class: "enables" }, [ el("span", { class: "lab" }, T("⚠ risk")), T(s.risk_pointer) ]));
+    }
+    if (c.secondary_stats) { b.appendChild(el("div", { class: "sec" }, T("detail (numbers in service of the shape)"))); b.appendChild(rows(c.secondary_stats)); }
+    const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("jump to"))); b.appendChild(ec); }
+    return b;
+  }
+  function bodyWalkthrough(c) {
+    const b = el("div", { class: "body" });
+    if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
+    if (c.story) { ["setup", "action", "outcome"].forEach(k => { if (c.story[k]) b.appendChild(el("div", { class: "row" }, [ el("span", { class: "key" }, T(k)), el("span", { class: "val" }, T(c.story[k])) ])); }); }
+    if (c.members && c.members.length) {
+      b.appendChild(el("div", { class: "sec" }, T("members — open each (descends a level)")));
+      c.members.forEach(m => {
+        const tgt = BYID[m.card];
+        b.appendChild(el("button", { class: "member", on: { click: () => tgt && go({ type: "card", id: m.card }) } }, [
+          el("span", { class: "num" }, T((m.order != null ? m.order : "→") + "")),
+          el("span", { class: "mnote" }, T(m.note || (tgt ? cardGloss(tgt) : m.card))),
+          el("span", { class: "spacer", style: "flex:1" }), el("span", { class: "mid" }, T(m.card)),
+        ]));
+      });
+    }
+    if (c.grounded_by) { b.appendChild(el("div", { class: "sec" }, T("grounded by"))); b.appendChild(el("div", { class: "what" }, T(c.grounded_by.join("\n")))); }
+    const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("related"))); b.appendChild(ec); }
+    const pl = provLine(c); if (pl) b.appendChild(pl);
+    return b;
+  }
+  function bodyItem(c) {
+    const b = el("div", { class: "body" });
+    if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
+    if (c.lore && c.lore.possibility) b.appendChild(el("div", { class: "enables" }, [ el("span", { class: "lab" }, T("enables")), T(c.lore.possibility) ]));
+    if (c.stats) { b.appendChild(el("div", { class: "sec" }, T("stats"))); b.appendChild(rows(c.stats)); }
+    if (c.demo && c.demo.content) { b.appendChild(el("div", { class: "sec" }, T("demo — " + (c.demo.kind || "")))); b.appendChild(el("pre", { class: "demo" }, T(c.demo.content))); }
+    const zl = zoomLadder(c); if (zl) b.appendChild(zl);
+    if (c.exercising_tests) { b.appendChild(el("div", { class: "sec" }, T("exercised by"))); b.appendChild(el("div", { class: "what" }, T(c.exercising_tests.join("\n")))); }
+    const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("edges"))); b.appendChild(ec); }
+    const ob = openBtn(c.locator, "open at locator"); if (ob) b.appendChild(ob);
+    const pl = provLine(c); if (pl) b.appendChild(pl);
+    return b;
+  }
+
+  function renderCard(c) {
+    const fam = family(c.kind);
+    const card = el("div", { class: "card k-" + fam });
+    card.appendChild(headBar(c));
+    let body;
+    if (c.kind === "uncertainty") body = bodyUncertainty(c);
+    else if (c.kind === "summary") body = bodySummary(c);
+    else if (c.kind === "walkthrough") body = bodyWalkthrough(c);
+    else body = bodyItem(c); // item kinds + any custom/unknown kind (graceful)
+    card.appendChild(body);
+    return card;
+  }
+
+  // ---- index view -------------------------------------------------------
+  function renderIndex() {
+    const out = el("div");
+    const order = PACK.reading_order || Object.keys(BYID);
+    const summaryId = order.find(id => BYID[id] && BYID[id].kind === "summary");
+    if (summaryId) out.appendChild(renderCard(BYID[summaryId]));
+    const conc = [], change = [];
+    order.forEach(id => {
+      const c = BYID[id]; if (!c || id === summaryId) return;
+      (c.kind === "uncertainty" ? conc : change).push(c);
+    });
+    const group = (title, list) => {
+      if (!list.length) return;
+      out.appendChild(el("div", { class: "idx-group" }, T(title)));
+      list.forEach(c => {
+        out.appendChild(el("button", { class: "idx-row k-" + family(c.kind), on: { click: () => go({ type: "card", id: c.id }) } }, [
+          el("span", { class: "ikind" }, T(c.subkind ? c.kind + "·" + c.subkind : c.kind)),
+          el("span", { class: "igloss" }, T(cardGloss(c))),
+        ]));
+      });
+    };
+    group("⚠ concerns — read next", conc);
+    group("the change", change);
+    return out;
+  }
+
+  // ---- main render ------------------------------------------------------
+  function render() {
+    const app = document.getElementById("app");
+    app.textContent = "";
+    const meta = (PACK && PACK.metadata && PACK.metadata.pr) || {};
+    const chrome = el("div", { class: "chrome" }, [
+      el("span", { class: "dot", style: "background:var(--red)" }),
+      el("span", { class: "dot", style: "background:var(--amber)" }),
+      el("span", { class: "dot", style: "background:var(--green)" }),
+      el("span", { class: "title", html: "diffense <span class=blink>▮</span> " + (meta.repo || "") + (meta.number ? " <b>#" + meta.number + "</b>" : "") }),
+      el("span", { class: "spacer" }),
+      el("span", { class: "hint" }, T("click to dive · bars to climb back · Esc up")),
+    ]);
+    app.appendChild(chrome);
+
+    // breadcrumb heading-bar stack: every entry except the focused one
+    for (let i = 0; i < stack.length - 1; i++) {
+      const e = stack[i];
+      let kind = "overview", lbl = (meta.repo || "") + (meta.number ? " #" + meta.number : "") + " · overview";
+      if (e.type === "card") { const c = BYID[e.id]; kind = c.kind; lbl = cardGloss(c); }
+      app.appendChild(el("button", { class: "bar", on: { click: ((idx) => () => truncate(idx))(i) } }, [
+        el("span", { class: "chev" }, T("‹")), el("span", { class: "k" }, T(kind)),
+        el("span", { class: "lbl" }, T(lbl)),
+      ]));
+    }
+
+    const top = stack[stack.length - 1];
+    if (top.type === "index") app.appendChild(renderIndex());
+    else if (BYID[top.id]) app.appendChild(renderCard(BYID[top.id]));
+    else app.appendChild(el("div", { class: "empty" }, T("card not found: " + top.id)));
+  }
+
+  document.addEventListener("keydown", e => {
+    if ((e.key === "Escape" || e.key === "Backspace") && stack.length > 1 && e.target === document.body) { truncate(stack.length - 2); }
+  });
+
+  function initialStack() {
+    const h = decodeURIComponent((location.hash || "").replace(/^#\/?/, ""));
+    return (h && BYID[h]) ? [{ type: "index" }, { type: "card", id: h }] : [{ type: "index" }];
+  }
+  loadPack().then(p => {
+    const app = document.getElementById("app");
+    if (!p) { app.appendChild(el("div", { class: "empty" }, T("No pack. Generate with render.py, or open with ?pack=<url>."))); return; }
+    PACK = p; (p.cards || []).forEach(c => BYID[c.id] = c);
+    stack = initialStack(); render();
+    window.addEventListener("hashchange", () => { stack = initialStack(); render(); });
+  });
+  </script>
+</body>
+</html>
