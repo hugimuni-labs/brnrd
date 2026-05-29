@@ -4847,3 +4847,73 @@ to [`plan-kb-subcommand.md`](plan-kb-subcommand.md),
 [`design-publish-kernel.md`](design-publish-kernel.md), and
 [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md); the
 human-side counterpart to the 2026-05-27 `pr-review` gate event work.
+
+## [2026-05-29] design | diffense pass 6 — zoomable graph, feedback loop, web-first
+
+Reshaped [`design-diffense.md`](design-diffense.md) after a deep review
+pass (the user read two parallel drafts and brought ~12 discussion
+points). Most collapsed into one structural upgrade plus three additions
+and one reversal; folded all in. Status stays `proposed`.
+
+**The structural unlock: cards become a *zoomable* graph, not just a
+graph.** Two navigation axes now — lateral (peer edges, as before) and
+**zoom** (each card descends gloss → summary levels → a ground-truth
+leaf: the real diff / rendered kb page / code at a locator). This single
+model absorbs four separate asks: the kb "tree of summarized info"
+(zoom levels on `kb-page-edit`), walkthrough-as-a-group-of-cards
+(walkthrough is now a *composite card* whose zoom reveals ordered member
+cards), "cards-as-graph needs structure," and the Marathon
+glance/dive/wander experience. Two properties make it load-bear: honesty
+is structural (you can always zoom past a summary to ground truth) and
+token cost is bounded (summaries are LLM-authored and small; leaves are
+mechanical, not generated).
+
+**Three concrete additions.** (1) **Code locators** — every card that
+mentions a code item carries a resolvable locator (commit-pinned forge
+permalink + local `path:line`); rich renderers open it inline as the
+zoom leaf, minimal renderers link out. (2) **A pack validation/render
+tool** — `brr review --check` schema-validates, clamp-lints, and
+dry-renders the pack before publish (a compile step for the review
+artifact), folded into the runner's self-review. (3) **The feedback
+loop** — diffense composes the *already-shipped* `pr-review-comment`
+gate: flag a card → diffense authors a forge comment anchored at the
+card's locator → gate turns the mention into a task → agent iterates,
+commits, re-emits the pack → surface re-renders. The live agent is the
+ephemeral *ask* shortcut; durable change-requests ride the real loop.
+Uncertainty cards gained **tension references** (point at the conflicting
+parts — most often the input prompt: shallow task, false implication,
+code contradicts the assumed model) and a new **`follow-up` subkind**
+(near-future work that would maximize the change's value, held out of
+scope), reconciled against the non-prescriptive clamp (foresight about
+*next work* is allowed; prescribing interpretation of *this change* is
+not).
+
+**The reversal: web-first, not text-first or TUI-first.** The mobile
+requirement (the user reviews from a phone a lot; no native app; use
+existing tech) breaks the earlier "one Textual substrate serves TUI +
+`textual serve` web" hope — terminal-in-browser is wrong on a phone. So
+the web renderer is now **responsive HTML** (the brnrd-dashboard stack),
+a *distinct* renderer from the Textual TUI, both over the shared pack;
+pack-as-contract is what makes two renderers affordable. The PR body
+demotes from "v0 we build first" to a **lossy fallback projection**. The
+recommended build order is pack + `--check` → responsive web (served
+locally by `brr review` or hosted by brnrd) → PR-body falls out → TUI
+follows. Honest hard case stated plainly: good mobile review for a
+self-hoster without brnrd needs a tunnel or the degraded PR-body path;
+brnrd's hosted renderer is the clean mobile answer.
+
+**Packs live** in `.brr/diffense/<pr>/` locally and travel with the PR
+via the forge (HTML-comment marker block reusing the ergo proxy's
+technique, git-note/ref fallback for size); brnrd stores server-side.
+**Ergo proxy fold:** shared source (one agent run-time reflection),
+split audience — diffense renders the change-relevant slice for the user
+(uncertainty cards), ergo routes the capability-relevant slice to the
+operator; they overlap exactly on task clarity; share the
+reflection-elicitation prompt step + marker transport, but don't merge
+(audience and subject differ).
+
+Process note: the working-tree copy of `design-diffense.md` (and earlier
+`index.md`) keeps getting mangled by an editor format-on-save extension
+that wraps `[text](url)` links in backticks and strips list-continuation
+indentation — not a git hook; committed copies are clean. Worth chasing
+the editor extension down separately.
