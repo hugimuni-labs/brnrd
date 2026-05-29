@@ -5023,3 +5023,63 @@ field a hand-authored pack can't exercise — next prototype should run on
 a brr-*produced* PR. Net: the schema survived contact with a real,
 messy, braided PR and is sharper for it; none of the findings block the
 design.
+
+## [2026-05-29] design | diffense pass 8 — open taxonomy, summary card, gloss-first ease-in
+
+Folded a round of review on the PR #64 prototype render back into
+[`design-diffense.md`](design-diffense.md) and reshaped the prototype
+([`diffense-prototype-pr64.md`](diffense-prototype-pr64.md) +
+[`pack.json`](diffense-prototype-pr64-pack.json)) to match. Five changes,
+all from the user reviewing the rendered cards:
+
+**Open card-kind taxonomy.** The kind set is now an *open core, not a
+closed enum*: the agent may declare a `custom` kind inline (named, with a
+one-line "why," degrading to a generic card) and is expected to **raise
+the gap as a meta uncertainty card** — a new framing where uncertainty
+points *inward* at the representation (`the change ⟂ the representation`),
+not just at the code. Recurring custom kinds get promoted;
+`code-module-split` is the first to make that round trip (provisional in
+pass 7 → promoted to core here). The taxonomy self-improves from use, the
+way the kb does.
+
+**Summary card + reading-order ease-in.** A reviewer dropped straight
+onto the sharpest, most specific concern (`sorted(seen)[-_SEEN_CAP:]`,
+×7) is jarring even when the concern is right. Added a **summary card**
+that opens every pack (the on-ramp), and reframed "uncertainty first" as
+**orient → surface-concerns → explore**: the summary is tiny, names the
+concern count + severity (so nothing's buried), and points at the
+concerns. This also absorbed the "there should be a header / PR stats but
+they're contextless" instinct — the summary is numbers in service of a
+shape (arcs, surface area, risk pointer), never raw +/−.
+
+**Gloss-first, esp. uncertainty cards.** Made explicit that *the gloss
+leads* — every card's first human-readable line is the plain-language
+gloss; id / locator / tension descend. The prototype's own first
+uncertainty render had violated this (led with
+`id` / `tension` / `where:polling.py:283` before stating the worry in
+words); fixed it, and used the slip as the worked cautionary example in
+the design. Uncertainty cards gained a `headline` field.
+
+**`--check` reword.** "Resolution is a hard gate, not a nicety" confused
+the user; reworded to plain terms — an unresolvable locator is a
+*blocking* failure (non-zero exit, publish refused), because a card
+pointing at a non-existent symbol is lying. Same teeth, clearer words.
+
+**Productization noted, not chased.** Added a short design aside: strip
+the kb-specific parts and the code-change-card format generalizes to any
+PR review on any repo; the code cards alone carry most of the value, and
+brr's kb-awareness is the unfair advantage, not a prerequisite. Deferred
+explicitly so it doesn't pull focus from dogfooding.
+
+**Code gap filed (not a design change).** Surfaced that brr currently
+publishes a *branch*, not a PR, and doesn't thread the originating issue /
+Telegram message onto it — so even brr-authored PRs (#36 from a ticket,
+#17 from Telegram) may carry no origin context, which is exactly what the
+prototype's `provenance.conversation_msg` finding needs. Filed as
+[#68](https://github.com/Gurio/brr/issues/68) (sub-issue of release
+readiness #23); adjacent to #61 (conversation_id propagation).
+
+Reshaped pack re-validated with the same `brr review --check` stand-in
+(11 cards now incl. the summary; reading_order maps, locators + edges
+resolve). Status stays `proposed`; the remaining gate before it flips is
+the web-renderer spike.

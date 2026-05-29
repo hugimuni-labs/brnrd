@@ -1,6 +1,6 @@
 # Design: diffense — kb-first PR review experience
 
-Status: proposed, not yet accepted (drafted 2026-05-28; reshaped 2026-05-29, passes 6–7)
+Status: proposed, not yet accepted (drafted 2026-05-28; reshaped 2026-05-29, passes 6–8)
 
 diffense (a working name: *diff* + *sense*, the surface that helps a
 reviewer make sense of a diff; and *diff* + *defense*, what guards the
@@ -313,6 +313,26 @@ properties fall out and matter:
   concern, dilemma, out-of-scope flag, or follow-up formed during the
   run. A first-class kind (see "Failure modes").
 
+Plus a **summary card** — one per pack, the orienting header. It is not
+a change card; it is the pack's on-ramp, and it always renders first (see
+"Reading order").
+
+#### The kind set is an open core, not a closed enum
+
+A small set of well-known change-card kinds (above) is special-cased by
+renderers and `--check`; beyond them the agent may **declare a `custom`
+kind** inline — a card that names its own kind, carries a one-line "why
+this needed its own shape," and degrades to a generic card in any
+renderer. Two things keep this honest rather than chaotic: a custom card
+still obeys the always-present axes and the six clamps, and the agent is
+expected to **raise the gap as a meta uncertainty card** ("I emitted a
+custom `X` because the core lacked it — consider promoting it"; see
+"Failure modes → Meta uncertainty"). Recurring custom kinds get promoted
+into the core. `code-module-split` is the first worked example: it began
+as a provisional kind in the [PR #64 prototype](diffense-prototype-pr64.md)
+and was promoted here. The taxonomy improves from real use — the way the
+kb does — not from an up-front enum nobody can extend.
+
 ### Always-present axes (every card carries these)
 
 - **Identity + locator** — what this is (file + symbol + line range, kb
@@ -323,9 +343,18 @@ properties fall out and matter:
   renderers link out to it. **Any card that mentions a code item carries
   a locator to it** — no dead references.
 - **Kind** — the discriminator.
-- **Gloss (descriptive lore)** — what this is, factually (1–2 sentences).
-  For `test-add` and walkthrough cards the gloss *is* the story; for
-  uncertainty cards it is "what was unclear."
+- **Gloss (descriptive lore)** — what this is, in plain language (1–2
+  sentences). For `test-add` and walkthrough cards the gloss *is* the
+  story; for uncertainty cards it is the worry stated in one plain
+  sentence. **The gloss leads.** Whatever the kind, the first
+  human-readable line a renderer paints is the gloss; the identity, the
+  exact locator, and any formal tension notation descend *below* it. (The
+  PR #64 prototype's first uncertainty render violated this — it opened on
+  `id` / `tension: bounded cursor state ⟂ exactly-once delivery` /
+  `where: polling.py:283` before saying in words what the worry actually
+  was. The fix is to ease the reader in with the plain sentence first,
+  then drop to the specifics. It is easy to get backwards precisely
+  because the agent already has the specifics in hand.)
 - **Zoom tree** — the ordered summary levels down to the ground-truth
   leaf (the levels themselves vary by kind; see "Zoom levels").
 - **Stat block** — the kind-specific load-bearing numbers.
@@ -603,18 +632,53 @@ The "+/- against equipped item" pattern from the game reference becomes
 "delta against the codebase as it currently stands" — the agent that did
 the work already has these values in context.
 
-## Reading order: uncertainty cards first
+## Reading order: orient, surface concerns, then explore
 
-A concrete rule for every renderer and the PR-body projection:
-**uncertainty cards land at the top of the reading order**, before item
-cards and walkthroughs. They short-circuit the reviewer's first question
-— "what should I scrutinize hardest?" — and are therefore the
-highest-value first read.
+Earlier drafts said bluntly "uncertainty cards first." Pressure-testing
+the prototype refined that: a reviewer dropped *straight* into the
+sharpest, most specific concern (`sorted(seen)[-_SEEN_CAP:]`, ×7) with no
+frame is jarring, even when the concern is exactly right. The surface
+needs a beat of orientation before the scrutiny — but concerns must still
+be surfaced early, not buried. The order that satisfies both:
 
-When there are no uncertainty cards, renderers may collapse the section
-entirely. This preserves absence-as-signal: "the agent flagged no
-confusions" is itself meaningful, distinct from a surface that has no
-place to put them.
+1. **A single summary card opens the pack** — the on-ramp / header (see
+   below). Five seconds; it names what the change *is* and points at the
+   concerns.
+2. **Uncertainty cards come next** — still the first *substantive* read,
+   still answering "what should I scrutinize hardest?", and pointed at by
+   the summary so nothing is hidden behind the orientation.
+3. **Walkthroughs and item cards follow** — the change itself, explored
+   at whatever depth the reviewer chooses.
+
+Why orient before scrutinize: you cannot judge *what to scrutinize
+hardest* without a five-second *what is this even*. The summary is the
+frame that makes the first concern legible; it is deliberately tiny, and
+it carries the concern count and severity, so surfacing-early is
+preserved — the concern is one glance away, just not the literal first
+pixels with no context.
+
+### The summary card (the header — context, not just counts)
+
+One per pack, always first. It answers "what is this PR, in shape?" The
+"there should be a header here" instinct and the "PR stats, but they're
+too detailed and contextless" instinct resolve to the same card: numbers
+in service of a shape, never raw numbers alone.
+
+- **What it's for** — one paragraph of plain intent.
+- **The shape** — how many cards; the story arcs the change splits into
+  (e.g. *fix · refactor · feature*); the surface area (which subsystems,
+  which kb pages).
+- **The risk pointer** — "N concerns (M blocking / med) — read next," so
+  the reviewer knows up front whether this is a rubber-stamp or a
+  scrutinize.
+
+Raw `+/−` and file counts stay available (a zoom level, or a secondary
+line) but are never the headline: "23 files, 2642+/1221−" is precise and
+tells a reviewer nothing about what to *do*. The summary turns that into
+"three braided arcs across the GitHub gate plus one new kb design page;
+two concerns, one med." When there are no uncertainty cards, the summary
+says so — absence-as-signal preserved, and the uncertainty section
+collapses.
 
 ## Failure modes: agent uncertainty as first-class output
 
@@ -660,6 +724,17 @@ the agent's perspective ("from where I stood, W unlocks the value"),
 references the tension (task scope ⟂ full user value), and never dresses
 it as a verdict on the current change. That keeps foresight honest
 without smuggling prescription back in.
+
+**Meta uncertainty (about the pack, not the change).** Uncertainty can
+also point *inward* — at the review artifact itself. The clearest case:
+the change didn't fit the card taxonomy, so the agent emitted a `custom`
+kind (see "The kind set is an open core") and flags it — "I represented
+this as `custom:X` because no core kind fit; consider promoting it." This
+is how a missing kind surfaces *to the reviewer* and feeds taxonomy
+promotion rather than being silently forced into an ill-fitting kind.
+Meta uncertainty is rare and reads like any other concern, but its
+tension is `the change ⟂ the representation` rather than anything about
+the code.
 
 **Honesty applies to the agent's own state.** The honest clamp, for
 uncertainty cards, means the agent reports its actual run-time state —
@@ -811,27 +886,30 @@ on (anchoring on text-first would under-shape the product). Sections
 labelled by producer (`LLM` = generated prose, `mechanical` = derived):
 
 ```markdown
-## ⚠ Uncertainty   <!-- only present when uncertainty cards exist -->
+## Summary         what this PR is, in shape: the arcs it splits into,
+                   the surface area, and "N concerns (M med) below."
+                   Numbers in service of a shape.   (LLM + mechanical)
+
+## ⚠ Concerns      <!-- only present when uncertainty cards exist -->
 - **[concern · med]** audit-op naming breaks the debit_/credit_ prefix
   pattern — left as out of scope.   (LLM)
-
-## Intent          one-paragraph statement of what this PR is for   (LLM)
 
 ## Narrative       the setup → action → outcome arc of the change   (LLM)
 
 ## Touched         (mechanical)
-- src/brr/gates/github/cache.py — get_with_etag gains conditional GET
+- src/brr/gates/github/client.py — _request gains conditional-GET etag_store
 - kb/plan-laptop-daemoning.md — Linux slice flipped to shipped
 - tests/test_github_gate.py — +2 cases
 
-## Reading order   1. Uncertainty  2. highest-signal cards …   (mechanical)
+## Reading order   1. Summary  2. Concerns  3. highest-signal cards …   (mechanical)
 
 ## Deferred / open what this change deliberately did not do   (LLM)
 ```
 
 The full pack rides alongside this body (see "Where packs live") so a
 reader with `brr review` or the hosted view gets the zoomable surface,
-while the forge-only reader still gets the agent's flagged doubts first.
+while the forge-only reader still gets the orientation up top and the
+agent's flagged doubts one section down.
 
 ## Where packs live
 
@@ -985,6 +1063,24 @@ publish.* No code in this commit.
 - **The ergo proxy** ([`design-agent-ergonomics.md`](design-agent-ergonomics.md))
   shares the reflection-elicitation step and marker transport.
 
+## Productization potential (noted, not chased)
+
+A deliberate aside, because the shape keeps gesturing at it: **strip the
+kb-specific parts and the code-change-card format generalizes to any PR
+review, on any project.** The zoomable card, the locator anchoring, the
+two-axis lore, the uncertainty-first orientation, the tests-as-grounding
+demos — none of that depends on brr's kb. A reviewer on a plain Python or
+TypeScript repo would get most of the value from the code cards alone.
+brr's kb-awareness is the *unfair advantage* (a generic tool cannot read
+a `kb/` graph it doesn't have), not a prerequisite for the rest.
+
+This is worth writing down and worth *not* chasing yet. The near-term job
+is dogfooding diffense on brr's own PRs and proving the rich shape; a
+general-purpose "review cards for any repo" product is a fork in the road
+for later, once the pack format and the web renderer have earned their
+keep here. Noted so the option isn't forgotten, explicitly deferred so it
+doesn't pull focus.
+
 ## Open questions
 
 - **Pack JSON schema.** A discriminated union over item kinds +
@@ -1086,6 +1182,22 @@ passes:
    "make review entertaining" goal is framed as removing *accidental*
    burden (not gamification), gated on trust and with the aesthetic as a
    multiplier. `diffuse` considered and rejected on meaning.
+8. **First prototype + ease-in reshaping.** A pack was hand-authored
+   against [PR #64](diffense-prototype-pr64.md), validating the schema and
+   surfacing fixes folded back here: an **open card-kind taxonomy** (the
+   agent declares a `custom` kind and raises the gap as a *meta*
+   uncertainty card; recurring kinds get promoted — `code-module-split`
+   was the first); a **summary card** opening every pack, reconciling the
+   "uncertainty-first" rule into orient → surface-concerns → explore (and
+   absorbing the "header / PR-stats-with-context" want); a **gloss-first**
+   convention (uncertainty cards lead with the worry in one plain
+   sentence, specifics descend); `--check` rejecting unresolvable locators
+   as a *blocking* failure (it would have caught the design's own invented
+   `cache.get_with_etag`); and a noted-not-chased **productization** path
+   (the code-change cards generalize beyond brr's kb). A code gap also
+   surfaced (brr publishes a branch, not a PR, so origin context isn't
+   threaded — issue #68); no design change.
 
-Proposed, not accepted — a renderer spike and a hand-authored prototype
-pack against a real PR are the gates before the `Status` line flips.
+Proposed, not accepted — the renderer spike is the remaining gate before
+the `Status` line flips; the hand-authored prototype gate is now met
+([`diffense-prototype-pr64.md`](diffense-prototype-pr64.md)).

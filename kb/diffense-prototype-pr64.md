@@ -31,26 +31,54 @@ finding 1). It is also thematically apt: the gate code here is the exact
 Ten curated cards stand in for 23 files. That ratio is the point — the
 pack is a *story*, not a diff.
 
-## The pack, rendered (reading order — uncertainty first)
+## The pack, rendered (reading order — summary, then concerns, then the change)
+
+This render reflects the pass-8 refinements: a **summary card opens the
+pack** (orientation before scrutiny), and every **uncertainty card leads
+with the worry in one plain sentence** — the tension, the locator, the
+`[-_SEEN_CAP:]` mechanics all descend *below* it, instead of greeting the
+reviewer cold with `id` / `tension` / `where:polling.py:283`.
+
+### 0. `summary` — the on-ramp (renders first)
+
+```
+╔ summary · PR #64 ═══════════════════════════════════════════╗
+║ what   Inline PR review-comment @-mentions now actually      ║
+║        reach the gate (they were invisible — those live on   ║
+║        /pulls/comments, not /issues/comments); replies land  ║
+║        in-thread; and steady-state polling gets cheaper.     ║
+║                                                              ║
+║ shape  10 cards · 3 braided arcs                             ║
+║        fix      review-comment round-trip (poll → reply)     ║
+║        refactor github.py 1052 lines → 12-module package     ║
+║        feature  conditional polling (304-free) + reviews     ║
+║        touches  the GitHub gate · 1 new kb design page · its ║
+║                 tests                                        ║
+║                                                              ║
+║ ⚠ risk 2 concerns (1 med: the seen-id cap) + 1 follow-up     ║
+║        → read next                                           ║
+║ detail 23 files · 2642+/1221− · 4 commits  (numbers, in      ║
+║        service of the shape — not the headline)              ║
+╚══════════════════════════════════════════════════════════════╝
+```
 
 ### 1. `uncertainty · concern` — the seen-id cap
 
 ```
 ┌ uncertainty · concern ─────────────────────────────── med ─┐
-│ id        unc:seen-cap-dedup                                │
-│ tension   bounded cursor state  ⟂  exactly-once delivery    │
-│ where     polling.py:283  (sorted(seen)[-_SEEN_CAP:], ×7)   │
-│           _SEEN_CAP = 500  (constants.py:26)                │
+│ ▸ On a very busy PR, a rare edit to an already-handled      │
+│   review comment could re-trigger it: each cursor keeps     │
+│   only the newest 500 seen ids and forgets the oldest.      │
 │                                                             │
-│ unclear   Each poller keeps only the 500 highest (newest)   │
-│           seen ids and evicts the oldest. On a very busy PR │
-│           an evicted id could re-fire.                      │
-│ nuance    Narrower than it looks: `since` advances to       │
+│ nuance    Narrower than it sounds — `since` advances to     │
 │           latest_seen, so an evicted id only re-fires if    │
 │           that old comment is *edited* after eviction. The  │
 │           since-cursor + seen-set is belt-and-suspenders.   │
 │ proposed  Raise the cap for review cursors, switch to a     │
 │           timestamp-window dedup, or scope seen per-PR.     │
+│ tension   bounded cursor state  ⟂  exactly-once delivery    │
+│ where     polling.py:283 (sorted(seen)[-_SEEN_CAP:], ×7);   │
+│           _SEEN_CAP = 500 (constants.py:26)                 │
 │ edges     related item:polling.review-comments              │
 │ from      commit 297bfaaca                                  │
 └─────────────────────────────────────────────────────────────┘
@@ -60,16 +88,18 @@ pack is a *story*, not a diff.
 
 ```
 ┌ uncertainty · out-of-scope-flag ───────────────────── low ─┐
-│ id        unc:summary-only-reviews                          │
-│ tension   poll-based discovery within budget  ⟂  full       │
-│           review coverage                                   │
-│ unclear   A reviewer who Approves with a summary and no     │
-│           line comments makes a pull_request_review that    │
+│ ▸ A reviewer who Approves with a written summary but no     │
+│   inline comments is invisible to this OSS gate — by        │
+│   design; the managed brnrd webhook is what catches it.     │
+│                                                             │
+│ why       such a review is a pull_request_review that       │
 │           neither /issues/comments nor /pulls/comments      │
-│           surfaces. OSS can't see it without per-PR         │
-│           /reviews scans (API budget). Left to brnrd.       │
+│           surfaces; OSS can't see it without per-PR         │
+│           /reviews scans that blow the API budget.          │
 │ proposed  No OSS action; brnrd's webhook closes it at zero  │
 │           polling cost. Documented in the new design page.  │
+│ tension   poll-based discovery within budget  ⟂  full       │
+│           review coverage                                   │
 │ edges     related item:kb.gate-vs-brnrd-design              │
 │ from      commit 6922cd3fc · kb-grounded, not code-guessed  │
 └─────────────────────────────────────────────────────────────┘
@@ -79,11 +109,14 @@ pack is a *story*, not a diff.
 
 ```
 ┌ uncertainty · follow-up ───────────────────────────── low ─┐
-│ id        unc:reactions-followup                            │
+│ ▸ The near-future step that would make this feel native: a  │
+│   +1 reaction as a one-tap approve, so a user needn't type  │
+│   @brr-bot approve.                                         │
+│                                                             │
+│ detail    for the coming permission-prompt UX; build        │
+│           brnrd-side first (its webhook gets reactions      │
+│           for free).                                        │
 │ tension   this PR's scope  ⟂  full reviewer ergonomics      │
-│ next      A +1 reaction as a one-tap "approve" for the      │
-│           coming permission-prompt UX, so users needn't     │
-│           type @brr-bot approve. Filed, brnrd-side first.   │
 │ edges     related item:kb.gate-vs-brnrd-design              │
 │ from      commit 6922cd3fc                                  │
 └─────────────────────────────────────────────────────────────┘
@@ -244,6 +277,23 @@ pack is a *story*, not a diff.
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Reshaped this pass (pass 8, from review of the render)
+
+The cards above already incorporate a round of feedback on the *shape*,
+folded back into [`design-diffense.md`](design-diffense.md):
+
+- **A summary card opens the pack** — the "there should be a header here"
+  and "PR stats, but contextless" instincts resolved to one on-ramp card:
+  numbers in service of a shape, pointing at the concerns.
+- **Reading order eased in** — summary → concerns → change, rather than
+  dropping the reviewer straight onto the sharpest, most specific worry.
+- **Uncertainty cards lead with the worry in one plain sentence**
+  (gloss-first); the tension and the `polling.py:283` locator descend.
+- **`code-module-split` was promoted to a core kind**, and the general
+  lesson — an **open taxonomy** where the agent can declare a `custom`
+  kind and **raise the gap as a meta uncertainty card** — was added, so
+  the next missing kind surfaces itself.
+
 ## What the schema handled well
 
 - **Curation held on a big PR.** 23 files / 3863 diff lines compressed to
@@ -281,16 +331,26 @@ JSON schema."
    before/after file count, a *surface-preserved* invariant (the
    `__all__` list), and the split rationale. It generalizes the existing
    `kb-page-split`. A sibling `code-move` (a symbol relocated unchanged)
-   is implied by the same PR.
+   is implied by    the same PR. **Update (pass 8):** promoted to a core kind in the
+   design. The lesson is bigger than one kind — the taxonomy should be an
+   **open core**: the agent can declare a `custom` kind and is expected to
+   **raise the gap as a meta uncertainty card** ("I used `custom:X`
+   because no core kind fit — consider promoting it"), so the *next*
+   missing kind surfaces itself instead of being silently forced into an
+   ill-fitting one. `code-module-split` is just the first to make the
+   round trip.
 
-2. **`--check` must resolve locators — and that is load-bearing.** The
-   validator stand-in (`python3`, below) passed only because the cards
-   are grounded in the repo. The same check would have *rejected* the
-   design doc's mock `cache.get_with_etag` (no such symbol; the real ETag
-   logic is `client._request(etag_store=…)`). Confirms two design rules
-   with teeth: locators are commit-pinned (I used the PR **head** SHA, not
-   the merge commit — a merged-PR reviewer wants head), and resolution is
-   a hard gate, not a nicety.
+2. **`--check` must resolve locators — and an unresolvable one blocks
+   publish.** The validator stand-in (`python3`, below) passed only
+   because the cards are grounded in the repo. The same check would have
+   *rejected* the design doc's mock `cache.get_with_etag` (no such symbol;
+   the real ETag logic is `client._request(etag_store=…)`). The rule with
+   teeth: a card pointing at a symbol that doesn't exist is *lying*, so
+   `--check` treats an unresolvable locator as a **blocking failure**
+   (non-zero exit, publish refused) rather than a skippable warning — that
+   is what "a compile step for the review artifact" buys. (Also settled:
+   locators are commit-pinned to the PR **head** SHA, not the merge
+   commit — a merged-PR reviewer wants head.)
 
 3. **Edges target either a card or a bare repo symbol — the schema must
    say which.** Some edges point at card ids (`item:` / `unc:` /
@@ -324,7 +384,15 @@ JSON schema."
    card to the message where the agent decided it — the richest, most
    diffense-specific provenance. **Next prototype should run on a
    brr-*produced* PR** to pressure-test that field and the uncertainty
-   cards' honesty under real run-state.
+   cards' honesty under real run-state. **Caveat surfaced this round:**
+   brr currently publishes a *branch*, not a PR, and doesn't yet thread
+   the originating issue / Telegram message through — so even a
+   brr-authored PR (e.g. [#36](https://github.com/Gurio/brr/pull/36) from
+   a ticket, [#17](https://github.com/Gurio/brr/pull/17) from a Telegram
+   request) may carry no origin context until that gap is closed. It is a
+   code fix, not a design change — tracked in
+   [#68](https://github.com/Gurio/brr/issues/68), a sub-issue of release
+   readiness [#23](https://github.com/Gurio/brr/issues/23).
 
 7. **Derive mechanical stats, don't hand-author them.** The
    `inbound-links 0 → 6` count and the callers-updated counts are
