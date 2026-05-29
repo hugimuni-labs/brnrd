@@ -20,6 +20,7 @@
     "locator_base": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/"
   },
   "reading_order": [
+    "summary:pr64",
     "unc:seen-cap-dedup",
     "unc:summary-only-reviews",
     "unc:reactions-followup",
@@ -33,10 +34,36 @@
   ],
   "cards": [
     {
+      "id": "summary:pr64",
+      "kind": "summary",
+      "identity": {"label": "PR #64 — review-comment fix, gate refactor, cheaper polling"},
+      "lore": {
+        "descriptive": "Inline PR review-comment @-mentions now actually reach the gate (they were invisible — those comments live on /pulls/comments, not /issues/comments), replies land in-thread, and steady-state polling gets cheaper via conditional requests. Three arcs braided into one PR."
+      },
+      "shape": {
+        "card_count": 10,
+        "arcs": [
+          {"theme": "fix", "what": "inline review-comment round-trip: poll -> task -> in-thread reply"},
+          {"theme": "refactor", "what": "monolithic github.py (1052 lines) -> 12-module package, brnrd-reusable core split out"},
+          {"theme": "feature", "what": "conditional polling (ETag/304) + review-summary events"}
+        ],
+        "surface_area": ["src/brr/gates/github/ (the GitHub gate)", "kb/ (1 new design page + cross-links)", "tests/test_github_gate.py"],
+        "risk_pointer": "2 concerns (1 med: the seen-id cap) + 1 follow-up — read next"
+      },
+      "secondary_stats": {"changed_files": 23, "additions": 2642, "deletions": 1221, "commits": 4},
+      "lateral_edges": [
+        {"type": "points-at", "target": "unc:seen-cap-dedup"},
+        {"type": "points-at", "target": "unc:summary-only-reviews"},
+        {"type": "contains-arc", "target": "walk:review-comment-round-trip"}
+      ],
+      "provenance": {"pr": 64, "conversation_msg": null}
+    },
+    {
       "id": "unc:seen-cap-dedup",
       "kind": "uncertainty",
       "subkind": "concern",
       "severity": "med",
+      "headline": "On a very busy PR, a rare edit to an already-handled review comment could re-trigger it — each cursor keeps only the newest 500 ids and forgets the oldest.",
       "identity": {
         "label": "trigger: sorted(seen)[-_SEEN_CAP:] (7 sites)",
         "file": "src/brr/gates/github/polling.py",
@@ -71,6 +98,7 @@
       "kind": "uncertainty",
       "subkind": "out-of-scope-flag",
       "severity": "low",
+      "headline": "A reviewer who Approves with a written summary but no inline comments is invisible to this OSS gate — by design; the managed brnrd webhook is what catches it.",
       "identity": {
         "label": "gap: summary-only reviews (Approve with body, no line comments)",
         "file": "src/brr/gates/github/polling.py",
@@ -104,6 +132,7 @@
       "kind": "uncertainty",
       "subkind": "follow-up",
       "severity": "low",
+      "headline": "The near-future step that would make this feel native: a +1 reaction as a one-tap approve, so a user needn't type '@brr-bot approve'.",
       "identity": {
         "label": "near-future: reactions-as-signal for lightweight approve",
         "file": "kb/design-github-gate-vs-brnrd-app.md",
@@ -282,7 +311,7 @@
     {
       "id": "item:gate.package-split",
       "kind": "code-module-split",
-      "_kind_status": "PROVISIONAL — this kind is not in the design's enumerated item kinds; see findings.",
+      "_kind_status": "PROMOTED — surfaced as a gap by this prototype; now a core kind in design-diffense.md. The open-taxonomy path (declare a custom kind -> raise a meta concern -> promote on recurrence) is exactly how it got here.",
       "identity": {
         "label": "github.py (monolith) -> github/ package (12 modules)",
         "file": "src/brr/gates/github/",

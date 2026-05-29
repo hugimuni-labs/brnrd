@@ -564,7 +564,10 @@ dive-in map) and are stable until something contradicts them.
   schema before it locks: a missing `code-module-split` kind, `--check`
   must resolve locators (it would have caught the design's invented
   `cache.get_with_etag`), edges need `{card|locator}` targets,
-  uncertainty needs an `honest_nuance` slot.
+  uncertainty needs an `honest_nuance` slot. A second pass folded the
+  *shape* back into the design: a **summary / on-ramp card**, an **open
+  card-kind taxonomy** (agent declares `custom` + raises a meta concern;
+  `code-module-split` promoted), and **gloss-first** uncertainty cards.
 
 ## Research
 
