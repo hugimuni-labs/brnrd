@@ -534,7 +534,7 @@ dive-in map) and are stable until something contradicts them.
 ## Reviews
 
 - [diffense — kb-first PR review experience](design-diffense.md) —
-  *proposed 2026-05-28; reshaped 2026-05-29 (pass 6)*. The review
+  *proposed 2026-05-28; reshaped 2026-05-29 (passes 6–7)*. The review
   surface for brr-generated PRs, built around the half-of-a-brr-PR-is-kb
   pain. Inspect-mode model: reviews are a **zoomable graph of cards**
   (item / walkthrough / uncertainty kinds) with two navigation axes —
@@ -543,15 +543,19 @@ dive-in map) and are stable until something contradicts them.
   clamp-gated). Two-axis lore (what-it-is + what-it-enables), per-kind
   stat blocks, code **locators**, and tests-grounded demos. A JSON
   **review pack** (generated at publish time, `brr review --check`'d) is
-  the contract; **multiple renderers** consume it — responsive web
-  (mobile-first, web-first build order), a Textual TUI, and a lossy
-  PR-body projection. The **feedback loop** closes through the shipped
+  the contract. Build is **web-first**: one light, brnrd-independent
+  responsive-web renderer with a terminal aesthetic (ascii-looking cards;
+  opening a nested card collapses its parent to a heading bar, nesting
+  into a breadcrumb stack), built before brnrd for the self-hosting
+  story; CLI/TUI and hosted brnrd are follow-ups, the PR-body a lossy
+  fallback. The **feedback loop** closes through the shipped
   `pr-review-comment` gate (flag a card → anchored comment → task →
   re-pack). Six discipline clamps keep cards sharp; agent **uncertainty
-  cards** (now incl. `follow-up` + tension references) read first. Folds
-  with the [ergo proxy](design-agent-ergonomics.md) as shared-source /
-  split-audience. Open: pack schema, web/TUI renderer split, pack
-  transport, what-to-build-first.
+  cards** (incl. `follow-up` + tension references) read first; the
+  "entertaining" goal is framed as removing *accidental* burden, not
+  gamification. Folds with the [ergo proxy](design-agent-ergonomics.md)
+  as shared-source / split-audience. Open: pack schema, lateral/graph
+  navigation + code-leaf rendering, pack transport.
 
 ## Research
 

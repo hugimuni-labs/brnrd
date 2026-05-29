@@ -4917,3 +4917,57 @@ Process note: the working-tree copy of `design-diffense.md` (and earlier
 that wraps `[text](url)` links in backticks and strips list-continuation
 indentation — not a git hook; committed copies are clean. Worth chasing
 the editor extension down separately.
+
+## [2026-05-29] design | diffense pass 7 — drop the near-term TUI, lock web-first
+
+Refined [`design-diffense.md`](design-diffense.md) after a review of the
+pass-6 shape. Three decisions and two thinking-questions, all folded in;
+Status stays `proposed`.
+
+**Drop the near-term Textual TUI.** Pass 6 carried two renderers (Textual
+TUI + responsive web) over the shared pack, flagged as a "weakened but
+affordable" split. Pass 7 drops the TUI from the first cut entirely,
+which *resolves* the substrate tension rather than carrying it: build
+**one** light, brnrd-independent responsive-web renderer; a CLI/TUI is a
+clean follow-up over the same pack. The terminal aesthetic survives —
+expressed in the web medium as ascii/terminal-*looking* cards, not an
+actual terminal. Accepted tradeoff: a local web tool is slightly more
+friction than a TUI for a terminal-native self-hoster, closed later by
+the CLI follow-up.
+
+**Build before brnrd, keep it light.** diffense ships first, for the
+self-hosting story, and must not depend on brnrd or absorb its
+complexity — a small minimal-dependency web app over the pack; brnrd
+later renders the same pack without diffense knowing it exists. The
+hosted brnrd renderer is the eventual clean mobile-without-a-tunnel path;
+near term, phone review of a self-hoster is LAN/tunnel to the local
+server or the PR-body fallback. Updated the architecture diagram,
+renderers table, "Renderers", "Project boundary", and "Surfaces and what
+to build first" to match; "what to build first" moved from an open
+question to a settled decision (web-first).
+
+**Concrete zoom interaction.** The web rendering of the zoom axis:
+ascii-looking cards where **opening a nested card collapses its parent to
+a full-width heading bar, nesting indefinitely** so the path from root
+reads as a breadcrumb stack of heading bars. Two interaction parts left
+explicitly open (resolved by the spike): lateral / inter-card (graph)
+navigation, and what a code leaf looks like when opened at its locator
+(inline highlight vs side-by-side diff vs jump-to-forge).
+
+**Thinking-questions answered, captured as design intent.** On "making
+review entertaining": framed in "Experience principles" as removing
+*accidental* burden (scattered context, wall-of-text, no signal, no
+agency) so the *irreducible core* — the judgment call, which carries the
+stakes that make a thing engaging — is what's left; gated on two honesty
+constraints (enjoyment is downstream of trust; the aesthetic is a
+multiplier, not the substance). On naming: `diffuse` (a frequent typo)
+rejected on meaning — it means *scatter/dilute*, the opposite of a tool
+that concentrates context; and the typed verb is `brr review`, so
+codename ergonomics don't load-bear. On "would've been easier as a PR
+description": agreed text-first is the wrong *anchor*, with the
+refinement that the PR-body projection ships anyway as a near-free
+fallback and a forcing function (it makes us generate a real pack against
+a real PR early), just not the ceiling.
+
+Next concrete move unchanged: hand-author a pack for one real recent brr
+PR to pressure-test the schema, then the web-renderer spike.

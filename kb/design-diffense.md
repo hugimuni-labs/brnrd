@@ -1,6 +1,6 @@
 # Design: diffense — kb-first PR review experience
 
-Status: proposed, not yet accepted (drafted 2026-05-28; reshaped 2026-05-29, pass 6)
+Status: proposed, not yet accepted (drafted 2026-05-28; reshaped 2026-05-29, passes 6–7)
 
 diffense (a working name: *diff* + *sense*, the surface that helps a
 reviewer make sense of a diff; and *diff* + *defense*, what guards the
@@ -12,10 +12,10 @@ that read poorly as raw diff and well as rendered, cross-linked Markdown.
 
 This page is a design with research-flavoured sections inside. The
 cornerstones below are settled enough to design against; the genuinely
-open dimensions (pack schema, the web/TUI renderer split, pack
-transport, the start-with sequencing, aesthetic locking) are marked as
-such and deferred to an implementation plan after a hand-authored
-prototype validates the shape against a real PR.
+open dimensions (pack schema, the graph / inter-card navigation and the
+code-rendering-at-a-locator UI, pack transport, aesthetic locking) are
+marked as such and deferred to an implementation plan after a
+hand-authored prototype validates the shape against a real PR.
 
 Companion to:
 
@@ -133,9 +133,10 @@ projection over state brr already has, or sharpens the interaction model:
 - **"Tests as spec validation" → "tests as grounding evidence for honest
   user-perspective demos."**
 - **"One renderer per surface" → "one pack, multiple renderers."** The
-  *pack* is the contract; renderers are cheap relative to it. (Note: the
-  earlier "one Textual substrate for TUI + web" hope weakens once mobile
-  web is a hard requirement — see "Renderers.")
+  *pack* is the contract; renderers are cheap relative to it. (The
+  earlier "one Textual substrate for TUI + web" idea is dropped: the
+  near-term surface is a single responsive web renderer; a CLI/TUI is a
+  follow-up over the same pack — see "Renderers.")
 - **"Agent always confident" → "agent uncertainty as first-class output,
   prominently surfaced."**
 - **"Static read-only surface" → "a read surface wired into the existing
@@ -177,12 +178,10 @@ flowchart TD
     Inputs["brr inputs:<br/>conversations · kb graph · diff + PR meta<br/>commits · tests · runner run-state"] --> Runner["runner agent<br/>(publish time)"]
     Runner --> Validate["brr review --check<br/>(schema + clamp + render lint)"]
     Validate --> Pack["review pack (JSON)<br/>a zoomable graph of cards:<br/>nodes + lateral edges + zoom tree + locators"]
-    Pack --> Web["responsive web<br/>(mobile-first; brnrd-hosted or local 'brr review')"]
-    Pack --> TUI["Textual TUI (local)"]
-    Pack --> Body["PR-body projection<br/>(lossy universal fallback)"]
-    Pack --> Live["live agent (Q and A)"]
+    Pack --> Web["responsive web — the surface we build now<br/>(terminal aesthetic; local 'brr review', hosted later)"]
+    Pack --> Body["PR-body projection<br/>(lossy fallback, ships alongside)"]
+    Pack -. follow-on .-> Later["CLI/TUI · hosted brnrd · live agent<br/>(same pack, later)"]
     Web --> Reviewer
-    TUI --> Reviewer
     Body --> Forge["forge PR page"]
     Forge --> Reviewer
     Reviewer -->|"flag a card becomes an anchored comment"| Forge
@@ -200,45 +199,64 @@ flowchart TD
 
 | Renderer | Surface | Tenancy | Status |
 | --- | --- | --- | --- |
-| Responsive web | mobile-first HTML; `brr review` serves it locally, or brnrd hosts it | self-hosted (local/tunnel) + hosted | leading candidate to build first |
-| Textual TUI | `brr review` in the terminal | self-hosted | follow-on, same pack |
-| PR-body projection | humanized Markdown in the PR body | any forge reader | lossy fallback, always emitted |
+| Responsive web | terminal-aesthetic HTML; `brr review` serves it locally | self-hosted (local; LAN/tunnel for phone) | **the surface we build now** |
+| PR-body projection | humanized Markdown in the PR body | any forge reader | lossy fallback, ships alongside |
+| CLI / TUI | `brr review` in the terminal | self-hosted | follow-up, same pack |
+| Hosted web | brnrd-dashboard renderer | hosted | future (after brnrd exists) |
 | Live agent | in-context Q&A over the pack | both | future |
 
 The payoff of the split: the hardest, most valuable work (assembling the
 pack from brr's structured inputs) happens once; adding or improving a
-renderer never re-touches generation.
+renderer never re-touches generation. Near term that work feeds exactly
+one real renderer (web) plus the free PR-body fallback — everything else
+is a later consumer of the same pack.
 
-## Renderers: the web/TUI split, and why the single-substrate hope weakened
+## Renderers: one web surface now, CLI/TUI and hosted later
 
-The earlier draft proposed one Textual substrate serving both a TUI and a
-web target via `textual serve`. The **mobile requirement breaks that**:
-`textual serve` is a terminal emulator in the browser — monospace,
-keyboard-driven, no touch affordances — which is the wrong surface on a
-phone, and phone review is a first-class use case (the same pain,
-amplified). So:
+The plan went through a Textual-substrate phase (one component model
+serving a TUI and a `textual serve` web target). The mobile requirement
+already weakened it — `textual serve` is a terminal emulator in the
+browser, the wrong surface on a phone — and the decision is now cleaner:
+**drop the near-term TUI entirely and build a single responsive web
+renderer.** A CLI/TUI is a follow-up over the same pack once the web
+shape is proven.
 
-- **Web renderer = responsive HTML** (the HTMX-flavoured stack the brnrd
-  dashboard already uses, per
-  [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md)). Touch,
-  responsive layout, real links, works on a phone, no app to install
-  (a PWA at most — explicitly *not* a native app).
-- **TUI renderer = Textual** for local terminal review.
+This *resolves* the substrate-split tension rather than carrying it.
+Consequences:
 
-These are **two renderers over the shared pack**, not one substrate with
-two outputs. The pack-as-contract split is exactly what makes carrying
-two renderers affordable; what would have been the "fallback if Textual
-doesn't pan out" is now the expected shape. A small spike still validates
-the card/zoom/navigation model in *each* renderer against one
-hand-authored pack before either is locked.
+- **One renderer to build:** responsive HTML, mobile-friendly, no app
+  to install (a PWA at most — explicitly *not* a native app). Served
+  locally by `brr review` (an ephemeral local server); reachable from a
+  phone over LAN or a tunnel until the hosted brnrd renderer exists.
+- **The terminal aesthetic lives in the web renderer**, not in an actual
+  terminal: ascii/terminal-*looking* cards (see "Aesthetic" and
+  "Rendering the zoom"). We keep the hacker-terminal feel without paying
+  for a second rendering stack.
+- **Self-hosting tradeoff, accepted.** A local web tool is slightly more
+  friction than a TUI would have been for a terminal-native self-hoster
+  (start a server, open a browser, vs. a pane in the terminal). It is
+  doable, it serves phone review and the future hosted path with the
+  same code, and the CLI/TUI follow-up closes the terminal-native gap
+  later. Worth the trade.
+- **Keep it light.** diffense is being built *before* brnrd exists and
+  must not depend on it or get buried under another project's
+  complexity. The web renderer is a small, self-contained app over the
+  pack with minimal dependencies; brnrd later renders the same pack
+  without diffense having to know brnrd is there.
+
+A small spike still validates the card / zoom / navigation model against
+one hand-authored pack before the renderer is locked.
 
 ## Aesthetic stance: hacker-terminal-text-games leaning, held against the substrate-honest clamp
 
-A leaning, not a lock. Dense, information-first layout; keyboard-driven
-where the surface is a terminal; a low-key, terminal-text-game
-personality. The web renderer inherits the *spirit* (density, glanceable
-stat blocks, lateral exploration) while honouring its own medium (touch,
-responsive reflow) rather than cosplaying a terminal on a phone.
+A leaning, not a lock — and now expressed entirely in the web renderer,
+since there is no near-term terminal target. The direction still feels
+right: dense, information-first layout; ascii/terminal-*looking* cards
+(monospace, line-drawn frames, low-key palette); a terminal-text-game
+personality. The web medium carries the *look and spirit* (density,
+glanceable stat blocks, lateral exploration) while honouring touch and
+responsive reflow — terminal-flavoured, not a literal terminal cosplayed
+on a phone.
 
 The **substrate-honest clamp** (see Discipline) keeps this from sliding
 into cosplay: every aesthetic choice earns its space by improving
@@ -317,8 +335,8 @@ properties fall out and matter:
 - **Lateral edges** — peer relations; for walkthroughs, the ordered
   member-card ids; for uncertainty cards, the related cards.
 - **Usage-perspective demo** — when there is a tangible surface change
-  worth showing. Textual at v0 (fenced transcripts, before/after caller
-  snippets, kb-navigation walks, benchmark output). GIFs deferred.
+  worth showing. Text-based at v0 (fenced transcripts, before/after
+  caller snippets, kb-navigation walks, benchmark output). GIFs deferred.
 - **Exercising-tests link** — which tests anchor the demo / exercise this
   item.
 - **Tension references** (uncertainty-specific) — pointers to the
@@ -347,6 +365,30 @@ mechanic. Concretely, by kind:
 
 Leaves are always the real artifact. The agent authors L0..Ln; the leaf
 is resolved mechanically from the diff / repo / locator.
+
+### Rendering the zoom: nested heading-bar stacks (web)
+
+The concrete interaction the web renderer is built around. Cards are
+loosely rendered, terminal/ascii-*looking* blocks. **Opening a nested
+card collapses its parent to just its full-width heading bar**, and this
+**nests indefinitely**: as you descend, the screen becomes a stack of
+parent heading bars (the path from root to where you are) above the card
+you are currently inspecting. The stack *is* the breadcrumb — each bar is
+a click back up a level, so depth never loses your place. This keeps the
+glance/dive rhythm physical: one bar = one level of context held, the
+focused card gets the room.
+
+Two parts of the interaction model are **genuinely open** (flagged so the
+spike resolves them rather than guessing now):
+
+- **Inter-card / graph navigation** — moving *laterally* between
+  same-level cards and along edges (the graph view, "jump to a peer")
+  versus the vertical zoom stack. How the lateral axis is presented
+  alongside the heading-bar stack is unresolved.
+- **Code rendering at a locator** — what a code leaf actually looks like
+  when opened (inline syntax-highlighted block, side-by-side diff, a jump
+  out to the forge permalink). The locator data is settled; its rendering
+  is not.
 
 ### Two-axis lore
 
@@ -731,6 +773,29 @@ time by default (the clamps) and rewards curiosity on demand (the zoom +
 lateral axes). It is not a place to get lost; it is a place you *can*
 explore when a change earns it.
 
+### On "making review entertaining"
+
+The goal is not gamification bolted on top. Review burden splits in two:
+**accidental burden** (context scattered across tabs, wall-of-text, no
+signal about where to look, no agency to act from where you are) and the
+**irreducible core** (you must make a judgment call). diffense's entire
+job is to strip the accidental burden until what is left is the
+genuinely interesting part — exploring what a change *enables*, hunting
+the agent's flagged WTFs, and deciding. That residue has *stakes*, and
+stakes are what make a thing engaging rather than tedious; the design
+keeps the decision, it just clears everything around it.
+
+Two honesty constraints on this goal, so it doesn't curdle:
+
+- **Enjoyment is downstream of trust.** A fluffy or wrong card flips from
+  delightful to insulting instantly. The honest clamp and structural
+  honesty (you can always zoom to ground truth) are what *protect* the
+  experience, not just correctness features.
+- **The aesthetic is a multiplier, not the substance.** The
+  terminal-game look makes a burden-free surface delightful; it cannot
+  rescue one that fails to reduce burden. Substance first (the clamps,
+  the zoom, the feedback loop), spice second (the look).
+
 ## PR body as a lossy projection (not the design anchor)
 
 A stable Markdown template, projected from the pack, written into the PR
@@ -836,45 +901,51 @@ leanings (decided in the implementation plan, not locked here):
 
 - **Pack generation + the validation tool** live in brr — part of the
   runner's publish-time work.
-- **The renderers** live in brr: the Textual TUI and the responsive web
-  renderer, both via a `brr review` verb. Open whether the code sits
-  in-tree at `src/brr/diffense/` or in its own `brr-diffense`
-  extras-installed package; leans in-tree until install footprint argues
-  otherwise (the same test
-  [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
+- **The web renderer** lives in brr, served via a `brr review` verb (the
+  CLI/TUI follow-up shares it). Open whether the code sits in-tree at
+  `src/brr/diffense/` or in its own `brr-diffense` extras-installed
+  package; leans in-tree until install footprint argues otherwise (the
+  same test [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
   applies to envs).
-- **The hosted view** is a brnrd-dashboard renderer over the same pack,
-  and is the clean answer to mobile review for users who don't run a
-  local tunnel.
+- **Built before brnrd, and decoupled from it.** diffense ships first,
+  for the self-hosting story, and must stay light: a small,
+  minimal-dependency web app over the pack that does **not** depend on
+  brnrd or absorb its complexity. The hosted view is a *future*
+  brnrd-dashboard renderer over the same pack — it becomes the clean
+  mobile answer once brnrd exists, but diffense neither waits for it nor
+  knows about it.
 
 ## Surfaces and what to build first
 
-The honest hard question, and a recommendation rather than a lock (the
-sequencing is an Open question pending the spike).
-
-The constraints — phone review is first-class, no native app, low
-friction, and it has to serve both self-hosted and brnrd-hosted users —
-point away from both "text-first" and "TUI-first" and toward
-**web-first**:
+Settled this pass: **web-first, no TUI in the first cut, built before
+brnrd.** The constraints — phone review is first-class, no native app,
+low friction, must work for the self-hosting story today — point away
+from both "text-first" and "TUI-first."
 
 1. **Build the pack + the validation tool first.** Everything renders
    from the pack; nothing is real until the pack is.
-2. **Then the responsive web renderer**, served two ways: `brr review`
-   spins an ephemeral local server (self-hosted, laptop), and brnrd hosts
-   the same renderer (the mobile + no-checkout path). This is the surface
-   that proves the rich model the design is built on.
+2. **Then the responsive web renderer**, served locally: `brr review`
+   spins an ephemeral local server (self-hosted, laptop), reachable from
+   a phone over LAN or a tunnel. This is the surface that proves the rich
+   model the design is built on. Keep it light and brnrd-independent (see
+   "Project boundary").
 3. **The PR-body projection falls out for free** as the lossy fallback,
-   shipped from day one for forge-only and phone-without-brnrd readers.
-4. **The Textual TUI follows** as a same-pack convenience for terminal
-   reviewers.
+   shipped from day one for forge-only and phone readers — and it doubles
+   as a forcing function (it makes us generate a real pack against a real
+   PR early). Useful, deliberately not the anchor.
+4. **CLI/TUI and the hosted brnrd renderer are follow-ups**, same pack,
+   when the web shape is proven (TUI closes the terminal-native gap;
+   brnrd becomes the clean mobile-without-a-tunnel path once it exists).
 
-The honest tradeoff: a self-hoster with *no* brnrd and *no* tunnel gets
-the full experience on a laptop (local web + TUI) and the degraded
-PR-body on a phone. Good mobile review for that user genuinely needs
-either brnrd's hosted renderer or a tunnel — stated plainly rather than
-hand-waved. This reverses the earlier "PR-body v0 → TUI v1" ordering; the
-mobile requirement and the friction of a branch-argument TUI launch are
-what moved it.
+The honest tradeoffs, stated plainly rather than hand-waved: a local web
+tool is a touch more friction than a TUI for a terminal-native
+self-hoster (start a server + open a browser vs. a terminal pane) — the
+CLI/TUI follow-up closes that. And good *phone* review for a self-hoster
+before brnrd exists means LAN/tunnel access to the local server, or the
+degraded PR-body; brnrd is the eventual clean answer. Building before
+brnrd is not ideal in the abstract, but it lets diffense define a strong
+self-hosting shape on its own terms — provided it stays light enough not
+to get buried under brnrd's complexity later.
 
 ## Where the runner / publish kernel wire in
 
@@ -915,20 +986,20 @@ publish.* No code in this commit.
   walkthroughs + uncertainty subkinds, each with its zoom-tree and
   locator shape; finalized in the implementation plan after a
   hand-authored prototype against one real recent brr PR.
-- **Web vs TUI renderer split.** Two renderers over the shared pack
-  (responsive HTML + Textual); validated via a spike against one pack
-  before either locks. Confirm the card/zoom/lateral model survives both.
+- **Graph / inter-card navigation + code rendering at a locator.** The
+  vertical zoom (nested heading-bar stacks) is settled; the *lateral*
+  graph navigation (moving between same-level cards / along edges) and
+  what a code leaf actually looks like when opened (inline highlight vs
+  side-by-side diff vs jump-to-forge) are open, resolved by the spike.
 - **Pack transport.** Body-embedded marker block vs git note vs
   `refs/diffense/*`, and the size threshold that switches between them.
-- **What to build first.** Web-first is the recommendation; confirmed or
-  revised after the spike.
 - **Pack versioning across iterations.** A PR accrues successive packs as
   the feedback loop iterates; how to store them and render a "what
   changed since I last reviewed" pack-diff.
 - **Card-level reviewer state.** Local-only in `.brr/`, or roundtripped
   to forge review state? Likely local-first, forge-roundtrip optional.
 - **Aesthetic locking.** Validated alongside the renderer spike.
-- **GIFs as a future demo axis.** Textual transcripts at v0; revisit if
+- **GIFs as a future demo axis.** Text transcripts at v0; revisit if
   insufficient.
 - **Locked-abilities axis.** Deferred future direction.
 - **LLM token budget for pack generation.** Bounded by the
@@ -937,8 +1008,12 @@ publish.* No code in this commit.
 - **Live agent on cards.** Cost/value addressed when that slice opens;
   same clamps.
 - **Naming.** `diffense` adopted as the working name; `pensieve` /
-  `holocron` considered and set aside as cosplay-leaning next to the
-  `brr` / `brnrd` house style. The `brr review` verb stays regardless.
+  `holocron` set aside as cosplay-leaning next to the `brr` / `brnrd`
+  house style. `diffuse` was tempting on typing ergonomics (a frequent
+  fingers-typo) but rejected on meaning: "diffuse" = *scatter / dilute*,
+  the opposite of a tool that *concentrates* scattered context into
+  focus — and the typed verb is `brr review`, so codename ergonomics
+  don't load-bear anyway. The `brr review` verb stays regardless.
   Locking deferred until the spike confirms the brand fits the surface.
 
 ## Read next
@@ -958,7 +1033,7 @@ publish.* No code in this commit.
 ## Lineage
 
 Drafted 2026-05-28, reshaped 2026-05-29, out of a conversation across
-2026-05-27 – 2026-05-29 that converged the shape over six refinement
+2026-05-27 – 2026-05-29 that converged the shape over seven refinement
 passes:
 
 1. **Audience + generation.** Generic power-user persona; LLM-driven
@@ -983,6 +1058,18 @@ passes:
    surface ordering to web-first (responsive HTML renderer distinct from
    the Textual TUI), demoting the PR body to a lossy fallback; and the
    ergo proxy folds in as a shared-source / split-audience sibling.
+7. **TUI dropped near-term + web renderer locked in.** The Textual TUI
+   leaves the first cut (a CLI/TUI is a follow-up), which *resolves* the
+   substrate-split tension rather than carrying it: one light,
+   brnrd-independent responsive-web renderer, built before brnrd for the
+   self-hosting story, with the terminal aesthetic expressed in the web
+   medium. The concrete zoom interaction lands — ascii-looking cards
+   where opening a nested card collapses its parent to a full-width
+   heading bar, nesting indefinitely into a breadcrumb stack (lateral
+   graph navigation and code-leaf rendering left explicitly open). The
+   "make review entertaining" goal is framed as removing *accidental*
+   burden (not gamification), gated on trust and with the aesthetic as a
+   multiplier. `diffuse` considered and rejected on meaning.
 
 Proposed, not accepted — a renderer spike and a hand-authored prototype
 pack against a real PR are the gates before the `Status` line flips.
