@@ -5083,3 +5083,48 @@ Reshaped pack re-validated with the same `brr review --check` stand-in
 (11 cards now incl. the summary; reading_order maps, locators + edges
 resolve). Status stays `proposed`; the remaining gate before it flips is
 the web-renderer spike.
+
+## [2026-05-29] implement | diffense renderer spike — read model validated, two open questions closed
+
+Built the web-renderer spike the design named as its last gate, in
+[`src/brr/diffense/`](../src/brr/diffense): a generic, dependency-free
+renderer (`template.html` — HTML + CSS + vanilla JS) plus `render.py`, a
+stdlib-only inliner that embeds a pack into the template to produce a
+self-contained HTML page (the seed of `brr review`'s render step).
+Generated `review-pr64.html` from the hand-authored
+[PR #64 pack](diffense-prototype-pr64-pack.json) and verified it end to
+end with headless Chrome — index view, a focused uncertainty card, the
+walkthrough (with members), a code card, and a 390px phone width.
+
+**Resolved the two interaction questions pass 7 left open.**
+
+- *Inter-card / graph navigation:* lateral edges and zoom-drills (a
+  walkthrough's members) both **push onto one breadcrumb heading-bar
+  stack**; within-card zoom (gloss → L1 → leaf) is in-place disclosure,
+  not a push. One stack for both axes beat a separate graph view — the
+  simplest model that never loses your place.
+- *Code rendering at a locator:* **jump-to-forge at v0** — the leaf opens
+  the commit-pinned permalink ("open ↗") with `path:line` inline;
+  inline-diff deferred (upgrading it never touches the pack).
+
+**Terminal aesthetic carries to the web and reflows.** The look is CSS
+(monospace, line-drawn borders, low-key palette, per-kind accent stripe),
+not literal box-drawing, so cards reflow on a phone — stats stack
+key-over-value, chips wrap, the demo block scrolls. Summary card renders
+first, then concerns (headline-first), then the change, matching the
+orient → surface-concerns → explore order.
+
+**Two render-only bugs found and fixed** (in the renderer, not the model):
+a breadcrumb label and edge chips forced horizontal overflow on narrow
+viewports (flex items with default `min-width:auto` won't shrink) — fixed
+with `min-width:0` + `overflow-wrap`. A measurement detour confirmed the
+remaining clip was a `--headless=new --screenshot` artifact (it lays out
+at ~485px but captures the narrower `--window-size`), not a CSS defect;
+switched to driving Chrome over CDP (Node's global `WebSocket`) for
+faithful device metrics + full-page captures.
+
+Render-only by design: the flag-a-card action, the local `brr review`
+server, and runner/publish wiring are not in it. With the read model
+validated, [`design-diffense.md`](design-diffense.md) flips to
+**accepted** (both gates — prototype pack + renderer — now met) and the
+in-tree `src/brr/diffense/` boundary is settled (zero runtime deps).
