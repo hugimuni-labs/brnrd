@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>diffense · review</title>
+<style>
+  :root {
+    --bg: #0a0e0d;
+    --surface: #0f1513;
+    --surface-2: #131b17;
+    --border: #213029;
+    --border-bright: #33493d;
+    --fg: #cdd9d2;
+    --fg-dim: #7e8d84;
+    --fg-faint: #56635a;
+    --green: #74e08c;
+    --cyan: #5fd0d8;
+    --amber: #e8c06a;
+    --red: #f07a72;
+    --violet: #b98ce0;
+    --teal: #61c9b0;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+            "Liberation Mono", "Roboto Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); }
+  body {
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+  }
+  #app {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 16px 16px 96px;
+  }
+  a { color: var(--cyan); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* window chrome */
+  .chrome {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; margin-bottom: 14px;
+    border: 1px solid var(--border); border-radius: 7px;
+    background: linear-gradient(var(--surface-2), var(--surface));
+    color: var(--fg-dim); font-size: 12.5px; position: sticky; top: 8px;
+    z-index: 5; backdrop-filter: blur(6px);
+  }
+  .chrome .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .chrome .title { color: var(--fg); letter-spacing: .3px; }
+  .chrome .title b { color: var(--green); font-weight: 600; }
+  .chrome .blink { color: var(--green); animation: blink 1.1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .chrome .spacer { flex: 1; }
+  .chrome .hint { color: var(--fg-faint); font-size: 11.5px; }
+
+  /* breadcrumb heading-bar stack */
+  .bar {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    text-align: left; cursor: pointer;
+    padding: 7px 11px; margin-bottom: 5px;
+    background: var(--surface); color: var(--fg-dim);
+    border: 1px solid var(--border); border-left-width: 3px;
+    border-radius: 5px; font-family: var(--mono); font-size: 13px;
+  }
+  .bar:hover { color: var(--fg); border-color: var(--border-bright); }
+  .bar .chev { color: var(--fg-faint); }
+  .bar .k { color: var(--fg-faint); text-transform: uppercase; font-size: 10.5px;
+            letter-spacing: .6px; }
+  .bar .lbl { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; flex: 1; min-width: 0; }
+
+  /* card */
+  .card {
+    border: 1px solid var(--border-bright); border-radius: 8px;
+    background: var(--surface);
+    box-shadow: 0 0 0 1px rgba(0,0,0,.3), 0 10px 30px -18px rgba(0,0,0,.9);
+    overflow: hidden; margin-bottom: 10px;
+  }
+  .card > .head {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    padding: 9px 13px; border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .card > .head .kind {
+    text-transform: uppercase; font-size: 10.5px; letter-spacing: .7px;
+    color: var(--bg); padding: 2px 7px; border-radius: 4px; font-weight: 700;
+    background: var(--fg-dim);
+  }
+  .card > .head .name { color: var(--fg); font-size: 13.5px; }
+  .card > .head .spacer { flex: 1; }
+  .card > .body { padding: 13px; }
+
+  .k-summary    .kind, .k-summary    { --accent: var(--cyan); }
+  .k-uncertainty .kind, .k-uncertainty { --accent: var(--amber); }
+  .k-code .kind, .k-code { --accent: var(--green); }
+  .k-kb .kind, .k-kb { --accent: var(--violet); }
+  .k-test .kind, .k-test { --accent: var(--teal); }
+  .k-walk .kind, .k-walk { --accent: var(--violet); }
+  .k-other .kind, .k-other { --accent: var(--fg-dim); }
+  .card { border-left: 3px solid var(--accent, var(--border-bright)); }
+  .card > .head .kind { background: var(--accent, var(--fg-dim)); }
+
+  .headline {
+    font-size: 15.5px; line-height: 1.45; color: var(--fg);
+    margin: 2px 0 12px; padding-left: 14px; position: relative;
+  }
+  .headline::before { content: "▸"; position: absolute; left: 0; color: var(--accent, var(--amber)); }
+
+  .what { margin: 0 0 10px; color: var(--fg); }
+  .enables {
+    margin: 0 0 12px; padding: 8px 11px; border-radius: 6px;
+    background: rgba(116,224,140,.06); border: 1px solid rgba(116,224,140,.18);
+    color: var(--green);
+  }
+  .enables .lab { color: var(--green); font-size: 10.5px; text-transform: uppercase;
+                  letter-spacing: .6px; opacity: .8; margin-right: 6px; }
+
+  .sec { margin: 14px 0 6px; color: var(--fg-faint); font-size: 10.5px;
+         text-transform: uppercase; letter-spacing: .8px; }
+  .row { display: flex; gap: 10px; padding: 2px 0; align-items: baseline; }
+  .row .key { color: var(--fg-dim); min-width: 132px; flex-shrink: 0; }
+  .row .val { color: var(--fg); }
+  .row .val .add { color: var(--green); }
+  .row .val .del { color: var(--red); }
+
+  pre.demo {
+    margin: 8px 0; padding: 11px 12px; overflow-x: auto;
+    background: #07100c; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--teal); font-size: 12.5px; line-height: 1.55;
+    white-space: pre;
+  }
+
+  /* zoom ladder */
+  .zoom { margin: 6px 0; border-left: 2px solid var(--border); padding-left: 0; }
+  .zoom .lvl {
+    display: flex; gap: 9px; align-items: baseline; padding: 5px 0 5px 12px;
+    margin-left: -2px; border-left: 2px solid transparent;
+  }
+  .zoom .lvl .tag { color: var(--fg-faint); font-size: 10.5px; min-width: 30px; }
+  .zoom .lvl.leaf .tag { color: var(--accent, var(--green)); }
+  .zoom .lvl .txt { color: var(--fg-dim); }
+  .zoom .lvl.leaf .txt { color: var(--fg); }
+
+  /* chips / edges / members */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .chip {
+    display: inline-block; vertical-align: top; line-height: 1.5;
+    padding: 4px 11px; border-radius: 13px; font-size: 12px;
+    border: 1px solid var(--border-bright); background: var(--surface-2);
+    color: var(--fg-dim); cursor: pointer; text-align: left;
+    max-width: 100%; min-width: 0; overflow-wrap: anywhere;
+  }
+  .chip:hover { color: var(--fg); border-color: var(--accent, var(--border-bright)); }
+  .chip .rel { color: var(--fg-faint); font-size: 10px; text-transform: uppercase;
+               letter-spacing: .4px; margin-right: 6px; }
+  .chip.static { cursor: default; }
+  .chip.static:hover { color: var(--fg-dim); border-color: var(--border-bright); }
+  .chip.out::after { content: "↗"; color: var(--cyan); }
+
+  .member {
+    display: flex; gap: 11px; align-items: baseline; width: 100%; text-align: left;
+    cursor: pointer; padding: 9px 11px; margin: 5px 0;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+    color: var(--fg);
+  }
+  .member:hover { border-color: var(--violet); }
+  .member .num { color: var(--violet); font-weight: 700; }
+  .member .mnote { color: var(--fg-dim); }
+  .member .mid { color: var(--fg-faint); font-size: 11.5px; }
+
+  .badge { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
+           padding: 2px 7px; border-radius: 4px; font-weight: 700; }
+  .sev-med { background: rgba(232,192,106,.16); color: var(--amber); }
+  .sev-low { background: rgba(116,224,140,.12); color: var(--green); }
+  .sev-blocking-for-merge { background: rgba(240,122,114,.18); color: var(--red); }
+
+  .tension { margin: 4px 0 8px; padding: 8px 11px; border-radius: 6px;
+             background: rgba(232,192,106,.05); border: 1px dashed rgba(232,192,106,.3); }
+  .tension .lab { color: var(--amber); font-size: 10.5px; text-transform: uppercase;
+                  letter-spacing: .6px; }
+  .tension .pair { color: var(--fg); margin-top: 3px; }
+  .tension .perp { color: var(--amber); padding: 0 6px; }
+
+  .locator { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 14px;
+             color: var(--fg-faint); font-size: 12px; align-items: center; }
+  .locator .open { color: var(--cyan); border: 1px solid var(--border-bright);
+                   border-radius: 5px; padding: 3px 9px; cursor: pointer; background: var(--surface-2); }
+  .locator .open:hover { border-color: var(--cyan); }
+  .prov { margin-top: 10px; color: var(--fg-faint); font-size: 11.5px; }
+
+  /* index list */
+  .idx-group { margin: 16px 0 4px; color: var(--fg-faint); font-size: 11px;
+               text-transform: uppercase; letter-spacing: .8px; }
+  .idx-row {
+    display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left;
+    cursor: pointer; padding: 9px 11px; margin: 5px 0;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+    border-left: 3px solid var(--accent, var(--border)); color: var(--fg);
+  }
+  .idx-row:hover { background: var(--surface-2); border-color: var(--border-bright); }
+  .idx-row .ikind { color: var(--fg-faint); text-transform: uppercase; font-size: 10px;
+                    letter-spacing: .5px; min-width: 116px; flex-shrink: 0; }
+  .idx-row .igloss { color: var(--fg-dim); }
+  .idx-row:hover .igloss { color: var(--fg); }
+
+  .empty { color: var(--fg-faint); padding: 30px 0; text-align: center; }
+
+  /* never let a long label/value punch through the card on narrow viewports */
+  .what, .enables, .headline, .tension .pair, .member .mnote,
+  .card > .head .name { overflow-wrap: anywhere; }
+  .row .val, .card > .head .name { min-width: 0; overflow-wrap: anywhere; }
+  .member .mnote, .idx-row .igloss { min-width: 0; overflow-wrap: anywhere; }
+
+  @media (max-width: 560px) {
+    body { font-size: 13.5px; }
+    #app { padding: 10px 10px 80px; }
+    .row { flex-direction: column; gap: 0; }
+    .row .key { min-width: 0; color: var(--fg-faint); }
+    .idx-row { flex-direction: column; gap: 2px; }
+    .idx-row .ikind { min-width: 0; }
+    .chrome .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+  <script id="diffense-pack" type="application/json">{"schema_version": "0.1-prototype", "_note": "Hand-authored diffense review pack for Gurio/brr PR #64. NOT a runner emission. Authored 2026-05-29 to pressure-test the card schema before it is locked. Companion render + findings: kb/diffense-prototype-pr64.md. Runtime home would be .brr/diffense/64/pack.json.", "metadata": {"pr": {"repo": "Gurio/brr", "number": 64, "title": "fix: poll GitHub PR review comments for @-mention triggers", "url": "https://github.com/Gurio/brr/pull/64", "base": "main", "head_ref": "fix/github-pr-review-comment-mentions", "head_sha": "2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1", "merge_commit": "bd14644b3ab8bf36bf7d0d9ba2139b6aea5ceffc", "merged_at": "2026-05-27T21:14:45Z", "totals": {"additions": 2642, "deletions": 1221, "changed_files": 23}}, "conversation_id": null, "generated_at": "2026-05-29", "generator": "hand-authored prototype (not a runner emission)", "locator_base": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/"}, "reading_order": ["summary:pr64", "unc:seen-cap-dedup", "unc:summary-only-reviews", "unc:reactions-followup", "walk:review-comment-round-trip", "item:polling.review-comments", "item:client.conditional-get", "item:delivery.in-thread-reply", "item:gate.package-split", "item:kb.gate-vs-brnrd-design", "item:test.etag-304"], "cards": [{"id": "summary:pr64", "kind": "summary", "identity": {"label": "PR #64 — review-comment fix, gate refactor, cheaper polling"}, "lore": {"descriptive": "Inline PR review-comment @-mentions now actually reach the gate (they were invisible — those comments live on /pulls/comments, not /issues/comments), replies land in-thread, and steady-state polling gets cheaper via conditional requests. Three arcs braided into one PR."}, "shape": {"card_count": 10, "arcs": [{"theme": "fix", "what": "inline review-comment round-trip: poll -> task -> in-thread reply"}, {"theme": "refactor", "what": "monolithic github.py (1052 lines) -> 12-module package, brnrd-reusable core split out"}, {"theme": "feature", "what": "conditional polling (ETag/304) + review-summary events"}], "surface_area": ["src/brr/gates/github/ (the GitHub gate)", "kb/ (1 new design page + cross-links)", "tests/test_github_gate.py"], "risk_pointer": "2 concerns (1 med: the seen-id cap) + 1 follow-up — read next"}, "secondary_stats": {"changed_files": 23, "additions": 2642, "deletions": 1221, "commits": 4}, "lateral_edges": [{"type": "points-at", "target": "unc:seen-cap-dedup"}, {"type": "points-at", "target": "unc:summary-only-reviews"}, {"type": "contains-arc", "target": "walk:review-comment-round-trip"}], "provenance": {"pr": 64, "conversation_msg": null}}, {"id": "unc:seen-cap-dedup", "kind": "uncertainty", "subkind": "concern", "severity": "med", "headline": "On a very busy PR, a rare edit to an already-handled review comment could re-trigger it — each cursor keeps only the newest 500 ids and forgets the oldest.", "identity": {"label": "trigger: sorted(seen)[-_SEEN_CAP:] (7 sites)", "file": "src/brr/gates/github/polling.py", "symbol": "seen_review_comment_ids dedup", "lines": [283, 283]}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/polling.py#L283", "local": "src/brr/gates/github/polling.py:283"}, "lore": {"descriptive": "Every poller bounds its seen-id set with sorted(seen)[-_SEEN_CAP:] (_SEEN_CAP=500), keeping the 500 highest (newest) ids and evicting the lowest (oldest). It appears at 7 sites across the file, one per cursor."}, "tension": {"between": ["bounded cursor state (a cap on the seen set)", "exactly-once event delivery"], "refs": [{"kind": "code", "what": "the cap", "locator": "src/brr/gates/github/polling.py:283"}, {"kind": "code", "what": "_SEEN_CAP value", "locator": "src/brr/gates/github/constants.py:26"}]}, "honest_nuance": "The risk is narrower than 'any handled comment re-fires': the `since` cursor advances to latest_seen, so an evicted id only re-fires if that old comment is *edited* after eviction (bumping its updated_at back into the window) on a PR busy enough to have pushed >500 ids past it. The since-cursor + seen-set is belt-and-suspenders for the common case.", "proposed_resolution": "Either raise the cap for the review-comment cursors specifically, or switch from a bounded id-set to a timestamp-window dedup keyed on updated_at, or scope the seen-set per PR. Flagging so you can decide whether it is worth touching here or filing.", "stats": {"severity": "med", "blast_radius": "review-comment + review dedup on very busy PRs; no other card depends on it"}, "lateral_edges": [{"type": "related", "target": "item:polling.review-comments"}, {"type": "related", "target": "item:test.etag-304"}], "provenance": {"commit": "297bfaaca", "commit_headline": "fix: poll GitHub PR review comments for @-mention triggers", "conversation_msg": null}}, {"id": "unc:summary-only-reviews", "kind": "uncertainty", "subkind": "out-of-scope-flag", "severity": "low", "headline": "A reviewer who Approves with a written summary but no inline comments is invisible to this OSS gate — by design; the managed brnrd webhook is what catches it.", "identity": {"label": "gap: summary-only reviews (Approve with body, no line comments)", "file": "src/brr/gates/github/polling.py", "symbol": "_poll_mention_review_summaries", "lines": [285, 295]}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/polling.py#L285-L335", "local": "src/brr/gates/github/polling.py:285"}, "lore": {"descriptive": "Review *summary* bodies are discovered only via the parent of a freshly-seen line comment. A reviewer who Approves with a written summary and zero inline comments produces a pull_request_review that neither /issues/comments nor /pulls/comments surfaces, so this OSS gate cannot see it without per-PR /reviews scans that would blow the REST budget on busy repos. Left to the brnrd webhook path."}, "tension": {"between": ["poll-based discovery within the REST budget", "full review-event coverage"], "refs": [{"kind": "code", "what": "summary discovery is line-comment-gated", "locator": "src/brr/gates/github/polling.py:285"}, {"kind": "kb", "what": "documented gap", "ref": "kb/design-github-gate-vs-brnrd-app.md#deferred-follow-ups"}]}, "proposed_resolution": "No action in OSS; the managed brnrd App receives pull_request_review webhooks directly and closes the gap with zero polling cost. Surfaced so the asymmetry is not a surprise to a reviewer of this PR.", "stats": {"severity": "low", "blast_radius": "OSS gate review-summary coverage only; documented as intended"}, "lateral_edges": [{"type": "related", "target": "item:kb.gate-vs-brnrd-design"}, {"type": "related", "target": "item:polling.review-comments"}], "provenance": {"commit": "6922cd3fc", "commit_headline": "docs(kb): file the GitHub gate vs brnrd App design + cross-links", "conversation_msg": null}}, {"id": "unc:reactions-followup", "kind": "uncertainty", "subkind": "follow-up", "severity": "low", "headline": "The near-future step that would make this feel native: a +1 reaction as a one-tap approve, so a user needn't type '@brr-bot approve'.", "identity": {"label": "near-future: reactions-as-signal for lightweight approve", "file": "kb/design-github-gate-vs-brnrd-app.md", "symbol": "Deferred follow-ups -> Reactions as signal", "lines": [190, 196]}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/kb/design-github-gate-vs-brnrd-app.md#L188-L209", "local": "kb/design-github-gate-vs-brnrd-app.md:188"}, "lore": {"descriptive": "This PR makes @-mention review comments actionable. The near-future work that would make the loop feel native is reactions-as-signal: a +1 reaction as a lightweight approve gesture for the coming permission-prompt UX, so a user need not type '@brr-bot approve'."}, "tension": {"between": ["this PR's scope (make review comments trigger)", "the full reviewer-ergonomics value (one-tap approve)"], "refs": [{"kind": "kb", "what": "filed follow-up", "ref": "kb/design-github-gate-vs-brnrd-app.md#deferred-follow-ups"}]}, "proposed_resolution": "Implement brnrd-side first (its webhook path gets issue_comment reactions for free; the cost asymmetry favours it). Filed, not done here.", "stats": {"severity": "low", "blast_radius": "future permission-prompt UX; nothing in this PR depends on it"}, "lateral_edges": [{"type": "related", "target": "item:kb.gate-vs-brnrd-design"}], "provenance": {"commit": "6922cd3fc", "commit_headline": "docs(kb): file the GitHub gate vs brnrd App design + cross-links", "conversation_msg": null}}, {"id": "walk:review-comment-round-trip", "kind": "walkthrough", "identity": {"label": "An @-mention on an inline diff comment becomes a task and an in-thread reply"}, "lore": {"descriptive": "The headline fix, end to end: inline review comments live on /pulls/comments, not /issues/comments, so before this PR a mention on a diff line was invisible to the gate. Now it is polled, normalised, turned into a task, and answered in the same review thread."}, "story": {"setup": "A reviewer leaves an inline comment on a diff line of an open PR, mentioning the configured trigger (e.g. @brr).", "action": "The mention poller's review-comment pass reads /pulls/comments, filters for the mention, extracts pr_number/path/line, and emits a pr-review-comment event carrying github_path + github_line + branch_target.", "outcome": "The daemon builds a task scoped to that hunk; on delivery the response is posted in-thread via /pulls/{n}/comments/{cid}/replies with a quote-pointer preface, not as an orphaned top-level comment."}, "members": [{"order": 1, "card": "item:polling.review-comments", "note": "poll /pulls/comments for the mention"}, {"order": 2, "card": "item:delivery.in-thread-reply", "note": "reply in the review thread"}], "zoom": [{"level": 0, "summary": "reviewer mentions @brr on a diff line -> brr replies in that thread"}, {"level": 1, "summary": "poll -> normalise (parse._format_review_comment_body) -> construct (github_kind=pr-review-comment) -> deliver (pull_comment_replies)"}, {"leaf": "members", "ref": "ordered member cards above"}], "grounded_by": ["tests/test_github_gate.py::test_mention_trigger_creates_event_for_pr_review_comment", "tests/test_github_gate.py::test_response_to_pr_review_comment_replies_in_thread"], "diffense_note": "This is literally diffense's own feedback-loop path (flag a card -> anchored comment -> task -> reply). The prototype validating the schema on the very gate code diffense will ride is a happy accident worth keeping in mind.", "provenance": {"commits": ["297bfaaca"], "commit_headline": "fix: poll GitHub PR review comments for @-mention triggers", "conversation_msg": null}}, {"id": "item:polling.review-comments", "kind": "code-fn-new", "identity": {"label": "polling._poll_mention_review_comments", "file": "src/brr/gates/github/polling.py", "symbol": "_poll_mention_review_comments", "lines": [201, 295]}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/polling.py#L201-L295", "local": "src/brr/gates/github/polling.py:201"}, "lore": {"descriptive": "New poller pass that reads inline PR review-line comments from /pulls/comments, filters for the mention, and emits pr-review-comment events carrying github_path, github_line, and branch_target. Called at the tail of _poll_mention_trigger.", "possibility": "Inline diff-thread @-mentions now reach the gate at all; before this they were silently dropped because the gate only read /issues/comments."}, "stats": {"new_function": true, "emits_event_kind": "pr-review-comment", "new_endpoint_polled": "/repos/{repo}/pulls/comments", "calls": ["parse._format_review_comment_body", "parse._extract_pr_number", "parse._skip_mention_comment_author", "_fetch_pr_head_branch", "_poll_mention_review_summaries"], "new_cursor_keys": ["review_comments_since", "seen_review_comment_ids"], "test_coverage": "+1 integration test (direct)"}, "zoom": [{"level": 0, "summary": "polls /pulls/comments for the mention; emits pr-review-comment events with path+line"}, {"level": 1, "summary": "per comment: skip if seen / no mention / self-author; extract pr_number from pull_request_url; attach branch_target via _fetch_pr_head_branch; then check parent reviews for summary mentions"}, {"leaf": "code", "locator_ref": "self"}, {"leaf": "diff-hunk", "locator_ref": "self", "note": "this whole function is +new (file github.py deleted; package is new)"}], "demo": {"kind": "text-transcript", "content": "# reviewer comments on a diff line, mentioning @brr\nPOST /repos/Gurio/brr/pulls/comments  (reviewer)\n# gate poll, next cycle:\nGET  /repos/Gurio/brr/pulls/comments?since=... -> 200\n  -> event: {github_kind: pr-review-comment, github_path: 'src/x.py',\n             github_line: 42, github_pr_number: 64, branch_target: 'feature/x'}"}, "exercising_tests": ["tests/test_github_gate.py::test_mention_trigger_creates_event_for_pr_review_comment"], "lateral_edges": [{"type": "called-by", "target": "polling._poll_mention_trigger"}, {"type": "calls", "target": "polling._poll_mention_review_summaries"}, {"type": "shares-invariant", "target": "unc:seen-cap-dedup"}, {"type": "part-of", "target": "walk:review-comment-round-trip"}], "provenance": {"commit": "297bfaaca", "commit_headline": "fix: poll GitHub PR review comments for @-mention triggers", "conversation_msg": null}}, {"id": "item:client.conditional-get", "kind": "code-fn-edit", "identity": {"label": "client._request (etag_store) / client._api_get", "file": "src/brr/gates/github/client.py", "symbol": "_request", "lines": [41, 110]}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/client.py#L41-L137", "local": "src/brr/gates/github/client.py:41"}, "lore": {"descriptive": "The transport gains an optional etag_store: when present it sends If-None-Match using the cached ETag for (method, path), returns (None, headers) on 304 without raising, and refreshes the store on a 2xx. Pollers thread cursor['etags'] through it.", "possibility": "Steady-state polling on a quiet repo costs roughly zero REST budget: GitHub does not count conditional 304s against the rate limit. A stale ETag self-heals at the cost of one 200."}, "stats": {"signature_delta": "+ keyword-only etag_store: dict[str,str] | None on _request and _api_get", "behaviour": "304 -> (None, headers), no raise; 2xx with ETag -> store updated in place", "endpoints_made_conditional": ["/issues", "/issues/comments", "/pulls/comments"], "self_healing": true, "test_coverage": "+3 transport tests + 1 cursor-threading test"}, "zoom": [{"level": 0, "summary": "If-None-Match per (method,path); 304 is free; self-heals"}, {"level": 1, "summary": "cache_key = '{method} {path}'; since-cursor deliberately excluded from the key so the latest ETag still rides every poll"}, {"leaf": "code", "locator_ref": "self"}], "demo": {"kind": "text-transcript", "content": "# first poll caches the ETag\nGET /issues/comments            -> 200  ETag: \"abc\"   (rate -1)\n# next poll, nothing changed\nGET /issues/comments  If-None-Match: \"abc\"  -> 304   (rate  0)"}, "exercising_tests": ["tests/test_github_gate.py::test_request_sends_if_none_match_when_etag_cached", "tests/test_github_gate.py::test_request_304_returns_none_and_preserves_cached_etag", "tests/test_github_gate.py::test_polling_threads_etag_through_cursor"], "lateral_edges": [{"type": "called-by", "target": "item:polling.review-comments"}, {"type": "shares-invariant", "target": "cursor.etags store"}], "provenance": {"commit": "7c3d3d8ae", "commit_headline": "feat(gates/github): conditional polling + review-summary events", "conversation_msg": null}, "_authoring_note": "The design doc's worked-example card #1 attributed this to a 'cache.get_with_etag' symbol that does not exist; the real logic is here in client._request. Caught by grounding against the repo."}, {"id": "item:delivery.in-thread-reply", "kind": "code-fn-edit", "identity": {"label": "delivery._deliver_responses / _thread_reply_body", "file": "src/brr/gates/github/delivery.py", "symbol": "_deliver_responses", "lines": [98, 135]}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/delivery.py#L69-L135", "local": "src/brr/gates/github/delivery.py:98"}, "lore": {"descriptive": "Delivery routes a pr-review-comment response to /pulls/{n}/comments/{cid}/replies (in-thread) instead of /issues/{n}/comments (top-level), and prepends a quote-pointer preface for all comment-origin kinds.", "possibility": "A reply to an inline review comment lands in the diff thread where the reviewer asked, keeping the review conversation legible rather than scattering answers as orphaned top-level comments."}, "stats": {"routing": "kind == pr-review-comment + comment_id + pr_number -> pull_comment_replies; else issue_comments", "quote_pointer": "all kinds in _COMMENT_KINDS get a blockquote preface", "test_coverage": "+1 in-thread reply test"}, "zoom": [{"level": 0, "summary": "pr-review-comment -> in-thread reply; others -> top-level comment; all quote-prefaced"}, {"leaf": "code", "locator_ref": "self"}], "exercising_tests": ["tests/test_github_gate.py::test_response_to_pr_review_comment_replies_in_thread", "tests/test_github_gate.py::test_response_to_mention_quotes_source_comment"], "lateral_edges": [{"type": "part-of", "target": "walk:review-comment-round-trip"}, {"type": "shares-invariant", "target": "constants._COMMENT_KINDS"}], "provenance": {"commit": "297bfaaca", "commit_headline": "fix: poll GitHub PR review comments for @-mention triggers", "conversation_msg": null}}, {"id": "item:gate.package-split", "kind": "code-module-split", "_kind_status": "PROMOTED — surfaced as a gap by this prototype; now a core kind in design-diffense.md. The open-taxonomy path (declare a custom kind -> raise a meta concern -> promote on recurrence) is exactly how it got here.", "identity": {"label": "github.py (monolith) -> github/ package (12 modules)", "file": "src/brr/gates/github/", "symbol": "package split", "lines": null}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/__init__.py#L56-L79", "local": "src/brr/gates/github/__init__.py:56"}, "lore": {"descriptive": "A single 1052-line github.py is deleted and split into a 12-module package (paths, cache, parse, client, state, wizard, polling, delivery, progress, loop, constants, __init__). The public surface is preserved verbatim in __init__.__all__.", "possibility": "Separates a transport-agnostic, brnrd-reusable pure core (paths, cache, parse) from OSS-only transport (client, state, wizard, polling, delivery, progress, loop), so the managed brnrd backend can import the core without the sync requests stack — the seam codified in design-github-gate-vs-brnrd-app.md."}, "stats": {"before": "1 file, 1052 lines", "after": "12 files", "public_surface_preserved": ["GitHubAPIError", "auth", "autodetect_repo", "bind", "is_configured", "parse_origin_url", "render_update", "resolve_token", "run_loop", "setup"], "brnrd_reusable_modules": ["paths", "cache", "parse"], "oss_only_modules": ["client", "state", "wizard", "polling", "delivery", "progress", "loop"]}, "zoom": [{"level": 0, "summary": "monolith github.py -> github/ package; public surface unchanged"}, {"level": 1, "summary": "split axis is reuse: pure core (paths/cache/parse) vs OSS-only transport; __all__ pins the surface so internal refactors stay private"}, {"leaf": "tree", "ref": "the 12 module files at their locators"}, {"leaf": "diff", "ref": "github.py -100% ; 12 new files +N each"}], "lateral_edges": [{"type": "implements", "target": "item:kb.gate-vs-brnrd-design"}, {"type": "part-of-same-decision", "target": "item:kb.gate-vs-brnrd-design"}], "provenance": {"commit": "5c3e589b9", "commit_headline": "refactor(gates/github): split monolithic gate into a package", "conversation_msg": null}}, {"id": "item:kb.gate-vs-brnrd-design", "kind": "kb-page-new", "identity": {"label": "design-github-gate-vs-brnrd-app.md", "file": "kb/design-github-gate-vs-brnrd-app.md", "symbol": "whole page", "lines": [1, 227]}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/kb/design-github-gate-vs-brnrd-app.md", "local": "kb/design-github-gate-vs-brnrd-app.md:1"}, "lore": {"descriptive": "New boundary doc (227 lines, Status: accepted 2026-05-27) codifying the OSS gate vs managed brnrd GitHub App split: what each side owns, and which modules (paths/cache/parse) ship in brr.gates.github because brnrd imports them.", "possibility": "The code seam between OSS and managed is now a citable contract rather than tribal knowledge; the managed-gates plan can lean on the package structure instead of re-implementing it."}, "stats": {"new_page": true, "lifecycle": "accepted 2026-05-27", "inbound_links_delta": "0 -> 6 (index, plan-managed-gates-launch, subject-managed-mode, decision-runtime-dependencies, repo-dive-in-map, design-publish-kernel)", "sibling_sync": "design-git-layer-rework + plan-managed-gates-launch updated to point here", "successor_link_validity": "n/a (not superseding)"}, "zoom": [{"level": 0, "summary": "new accepted boundary doc: OSS gate vs brnrd App, and the shared pure core"}, {"level": 1, "summary": "sections: what OSS owns / what brnrd owns / what both share (paths,cache,parse) / why both survive / deferred follow-ups"}, {"leaf": "rendered-page", "locator_ref": "self"}, {"leaf": "diff", "locator_ref": "self", "note": "+227 / -0"}], "lateral_edges": [{"type": "implemented-by", "target": "item:gate.package-split"}, {"type": "referenced-by", "target": "subject-managed-mode.md"}, {"type": "referenced-by", "target": "plan-managed-gates-launch.md"}], "provenance": {"commit": "6922cd3fc", "commit_headline": "docs(kb): file the GitHub gate vs brnrd App design + cross-links", "conversation_msg": null}}, {"id": "item:test.etag-304", "kind": "test-add", "identity": {"label": "test_request_304_returns_none_and_preserves_cached_etag", "file": "tests/test_github_gate.py", "symbol": "test_request_304_returns_none_and_preserves_cached_etag", "lines": [224, 240]}, "locator": {"forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/tests/test_github_gate.py#L224-L240", "local": "tests/test_github_gate.py:224"}, "lore": {"descriptive": "When the server answers 304 Not Modified to a conditional GET, _request returns (None, headers) without raising and leaves the cached ETag in place — so the next poll stays conditional and the 304 stays free."}, "stats": {"exercises": "client._request (304 branch + etag store preservation)", "assertion_shape": "payload is None; etag_store still holds the prior ETag", "fixtures": "shares _FakeGitHubResponse with the request/etag test cluster"}, "zoom": [{"level": 0, "summary": "304 -> (None, headers), cached ETag preserved"}, {"leaf": "code", "locator_ref": "self"}], "lateral_edges": [{"type": "exercises", "target": "item:client.conditional-get"}], "provenance": {"commit": "7c3d3d8ae", "commit_headline": "feat(gates/github): conditional polling + review-summary events", "conversation_msg": null}}]}</script>
+  <script>
+  "use strict";
+  // ---- load the pack ----------------------------------------------------
+  function loadPack() {
+    const tag = document.getElementById("diffense-pack");
+    const raw = tag ? tag.textContent.trim() : "";
+    if (raw && raw[0] === "{") { try { return Promise.resolve(JSON.parse(raw)); } catch (e) {} }
+    const u = new URLSearchParams(location.search).get("pack");
+    if (u) return fetch(u).then(r => r.json());
+    return Promise.resolve(null);
+  }
+
+  // ---- tiny dom helper --------------------------------------------------
+  function el(tag, props, kids) {
+    const n = document.createElement(tag);
+    if (props) for (const k in props) {
+      if (k === "class") n.className = props[k];
+      else if (k === "html") n.innerHTML = props[k];
+      else if (k === "on") for (const ev in props.on) n.addEventListener(ev, props.on[ev]);
+      else if (props[k] != null) n.setAttribute(k, props[k]);
+    }
+    if (kids != null) (Array.isArray(kids) ? kids : [kids]).forEach(c => {
+      if (c == null) return;
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+  const T = s => document.createTextNode(s == null ? "" : String(s));
+
+  // ---- kind families (colour + label) -----------------------------------
+  function family(kind) {
+    if (kind === "summary") return "summary";
+    if (kind === "uncertainty") return "uncertainty";
+    if (kind === "walkthrough") return "walk";
+    if (kind && kind.startsWith("code")) return "code";
+    if (kind && kind.startsWith("kb")) return "kb";
+    if (kind && kind.startsWith("test")) return "test";
+    return "other";
+  }
+  function cardGloss(c) {
+    if (c.headline) return c.headline;
+    if (c.lore && c.lore.descriptive) return c.lore.descriptive;
+    if (c.story) return c.identity ? c.identity.label : c.id;
+    if (c.identity && c.identity.label) return c.identity.label;
+    return c.id;
+  }
+
+  let PACK = null, BYID = {};
+  let stack = [{ type: "index" }];
+
+  function go(entry) { stack.push(entry); render(); window.scrollTo(0, 0); }
+  function truncate(i) { stack = stack.slice(0, i + 1); render(); window.scrollTo(0, 0); }
+
+  // ---- shared bits ------------------------------------------------------
+  function headBar(c) {
+    const fam = family(c.kind);
+    const head = el("div", { class: "head" }, [
+      el("span", { class: "kind" }, T(c.subkind ? c.kind + " · " + c.subkind : c.kind)),
+      el("span", { class: "name" }, T(c.identity && c.identity.label ? c.identity.label : "")),
+      el("span", { class: "spacer" }),
+    ]);
+    if (c.severity) head.appendChild(el("span", { class: "badge sev-" + c.severity }, T(c.severity)));
+    return head;
+  }
+  function rows(obj, order) {
+    const box = el("div");
+    (order || Object.keys(obj)).forEach(k => {
+      if (!(k in obj)) return;
+      let v = obj[k];
+      if (Array.isArray(v)) v = v.join(", ");
+      else if (v && typeof v === "object") v = JSON.stringify(v);
+      box.appendChild(el("div", { class: "row" }, [
+        el("span", { class: "key" }, T(k.replace(/_/g, " "))),
+        el("span", { class: "val", html: String(v)
+          .replace(/(\+\d[\d,]*\+?)/g, '<span class="add">$1</span>')
+          .replace(/(-\d[\d,]*−?|−)/g, '<span class="del">$1</span>') }),
+      ]));
+    });
+    return box;
+  }
+  function edgeChips(c) {
+    if (!c.lateral_edges || !c.lateral_edges.length) return null;
+    const box = el("div", { class: "chips" });
+    c.lateral_edges.forEach(e => {
+      const target = BYID[e.target];
+      if (target) {
+        box.appendChild(el("button", { class: "chip", on: { click: () => go({ type: "card", id: e.target }) } }, [
+          el("span", { class: "rel" }, T(e.type)), T(cardGloss(target).slice(0, 52)),
+        ]));
+      } else {
+        box.appendChild(el("span", { class: "chip static" }, [
+          el("span", { class: "rel" }, T(e.type)), T(e.target),
+        ]));
+      }
+    });
+    return box;
+  }
+  function openBtn(loc, label) {
+    if (!loc) return null;
+    const wrap = el("div", { class: "locator" });
+    if (loc.forge) wrap.appendChild(el("a", { class: "open", href: loc.forge, target: "_blank", rel: "noopener" }, T((label || "open") + " ↗")));
+    if (loc.local) wrap.appendChild(el("span", {}, T(loc.local)));
+    return wrap;
+  }
+  function zoomLadder(c) {
+    if (!c.zoom || !c.zoom.length) return null;
+    const box = el("div");
+    box.appendChild(el("div", { class: "sec" }, T("zoom")));
+    const lad = el("div", { class: "zoom" });
+    c.zoom.forEach(z => {
+      if ("leaf" in z) {
+        const leaf = el("div", { class: "lvl leaf" }, [
+          el("span", { class: "tag" }, T("leaf")),
+          el("span", { class: "txt" }, T(z.leaf + (z.note ? " — " + z.note : ""))),
+        ]);
+        const forge = (z.locator_ref === "self" && c.locator) ? c.locator.forge : null;
+        if (forge) { leaf.style.cursor = "pointer"; leaf.addEventListener("click", () => window.open(forge, "_blank")); leaf.querySelector(".txt").appendChild(T("  ↗")); }
+        lad.appendChild(leaf);
+      } else {
+        lad.appendChild(el("div", { class: "lvl" }, [
+          el("span", { class: "tag" }, T("L" + z.level)),
+          el("span", { class: "txt" }, T(z.summary)),
+        ]));
+      }
+    });
+    box.appendChild(lad);
+    return box;
+  }
+  function provLine(c) {
+    if (!c.provenance) return null;
+    const p = c.provenance;
+    const bits = [];
+    if (p.commit) bits.push("commit " + p.commit);
+    if (p.commits) bits.push("commits " + p.commits.join(".."));
+    bits.push("conv msg " + (p.conversation_msg == null ? "— (none: hand-authored)" : "#" + p.conversation_msg));
+    return el("div", { class: "prov" }, T("from " + bits.join(" · ")));
+  }
+
+  // ---- per-kind body builders -------------------------------------------
+  function bodyUncertainty(c) {
+    const b = el("div", { class: "body" });
+    b.appendChild(el("div", { class: "headline" }, T(c.headline || (c.lore && c.lore.descriptive) || "")));
+    if (c.honest_nuance) { b.appendChild(el("div", { class: "sec" }, T("nuance"))); b.appendChild(el("div", { class: "what" }, T(c.honest_nuance))); }
+    else if (c.lore && c.lore.descriptive && c.headline) { b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive))); }
+    if (c.proposed_resolution) { b.appendChild(el("div", { class: "sec" }, T("proposed"))); b.appendChild(el("div", { class: "what" }, T(c.proposed_resolution))); }
+    if (c.tension) {
+      const t = el("div", { class: "tension" }, [ el("div", { class: "lab" }, T("tension")) ]);
+      if (c.tension.between) t.appendChild(el("div", { class: "pair" }, [ T(c.tension.between[0]), el("span", { class: "perp" }, T("⟂")), T(c.tension.between[1]) ]));
+      if (c.tension.refs && c.tension.refs.length) {
+        const chips = el("div", { class: "chips" });
+        c.tension.refs.forEach(r => {
+          const txt = (r.kind ? r.kind + ": " : "") + (r.what || r.ref || r.locator || "");
+          chips.appendChild(el("span", { class: "chip static" }, T(txt)));
+        });
+        t.appendChild(chips);
+      }
+      b.appendChild(t);
+    }
+    const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("related"))); b.appendChild(ec); }
+    const ob = openBtn(c.locator); if (ob) b.appendChild(ob);
+    const pl = provLine(c); if (pl) b.appendChild(pl);
+    return b;
+  }
+  function bodySummary(c) {
+    const b = el("div", { class: "body" });
+    if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
+    if (c.shape) {
+      const s = c.shape;
+      b.appendChild(el("div", { class: "sec" }, T((s.card_count ? s.card_count + " cards · " : "") + ((s.arcs && s.arcs.length) ? s.arcs.length + " braided arcs" : "shape"))));
+      (s.arcs || []).forEach(a => b.appendChild(el("div", { class: "row" }, [ el("span", { class: "key" }, T(a.theme)), el("span", { class: "val" }, T(a.what)) ])));
+      if (s.surface_area) { b.appendChild(el("div", { class: "sec" }, T("touches"))); b.appendChild(el("div", { class: "what" }, T(s.surface_area.join(" · ")))); }
+      if (s.risk_pointer) b.appendChild(el("div", { class: "enables" }, [ el("span", { class: "lab" }, T("⚠ risk")), T(s.risk_pointer) ]));
+    }
+    if (c.secondary_stats) { b.appendChild(el("div", { class: "sec" }, T("detail (numbers in service of the shape)"))); b.appendChild(rows(c.secondary_stats)); }
+    const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("jump to"))); b.appendChild(ec); }
+    return b;
+  }
+  function bodyWalkthrough(c) {
+    const b = el("div", { class: "body" });
+    if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
+    if (c.story) { ["setup", "action", "outcome"].forEach(k => { if (c.story[k]) b.appendChild(el("div", { class: "row" }, [ el("span", { class: "key" }, T(k)), el("span", { class: "val" }, T(c.story[k])) ])); }); }
+    if (c.members && c.members.length) {
+      b.appendChild(el("div", { class: "sec" }, T("members — open each (descends a level)")));
+      c.members.forEach(m => {
+        const tgt = BYID[m.card];
+        b.appendChild(el("button", { class: "member", on: { click: () => tgt && go({ type: "card", id: m.card }) } }, [
+          el("span", { class: "num" }, T((m.order != null ? m.order : "→") + "")),
+          el("span", { class: "mnote" }, T(m.note || (tgt ? cardGloss(tgt) : m.card))),
+          el("span", { class: "spacer", style: "flex:1" }), el("span", { class: "mid" }, T(m.card)),
+        ]));
+      });
+    }
+    if (c.grounded_by) { b.appendChild(el("div", { class: "sec" }, T("grounded by"))); b.appendChild(el("div", { class: "what" }, T(c.grounded_by.join("\n")))); }
+    const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("related"))); b.appendChild(ec); }
+    const pl = provLine(c); if (pl) b.appendChild(pl);
+    return b;
+  }
+  function bodyItem(c) {
+    const b = el("div", { class: "body" });
+    if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
+    if (c.lore && c.lore.possibility) b.appendChild(el("div", { class: "enables" }, [ el("span", { class: "lab" }, T("enables")), T(c.lore.possibility) ]));
+    if (c.stats) { b.appendChild(el("div", { class: "sec" }, T("stats"))); b.appendChild(rows(c.stats)); }
+    if (c.demo && c.demo.content) { b.appendChild(el("div", { class: "sec" }, T("demo — " + (c.demo.kind || "")))); b.appendChild(el("pre", { class: "demo" }, T(c.demo.content))); }
+    const zl = zoomLadder(c); if (zl) b.appendChild(zl);
+    if (c.exercising_tests) { b.appendChild(el("div", { class: "sec" }, T("exercised by"))); b.appendChild(el("div", { class: "what" }, T(c.exercising_tests.join("\n")))); }
+    const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("edges"))); b.appendChild(ec); }
+    const ob = openBtn(c.locator, "open at locator"); if (ob) b.appendChild(ob);
+    const pl = provLine(c); if (pl) b.appendChild(pl);
+    return b;
+  }
+
+  function renderCard(c) {
+    const fam = family(c.kind);
+    const card = el("div", { class: "card k-" + fam });
+    card.appendChild(headBar(c));
+    let body;
+    if (c.kind === "uncertainty") body = bodyUncertainty(c);
+    else if (c.kind === "summary") body = bodySummary(c);
+    else if (c.kind === "walkthrough") body = bodyWalkthrough(c);
+    else body = bodyItem(c); // item kinds + any custom/unknown kind (graceful)
+    card.appendChild(body);
+    return card;
+  }
+
+  // ---- index view -------------------------------------------------------
+  function renderIndex() {
+    const out = el("div");
+    const order = PACK.reading_order || Object.keys(BYID);
+    const summaryId = order.find(id => BYID[id] && BYID[id].kind === "summary");
+    if (summaryId) out.appendChild(renderCard(BYID[summaryId]));
+    const conc = [], change = [];
+    order.forEach(id => {
+      const c = BYID[id]; if (!c || id === summaryId) return;
+      (c.kind === "uncertainty" ? conc : change).push(c);
+    });
+    const group = (title, list) => {
+      if (!list.length) return;
+      out.appendChild(el("div", { class: "idx-group" }, T(title)));
+      list.forEach(c => {
+        out.appendChild(el("button", { class: "idx-row k-" + family(c.kind), on: { click: () => go({ type: "card", id: c.id }) } }, [
+          el("span", { class: "ikind" }, T(c.subkind ? c.kind + "·" + c.subkind : c.kind)),
+          el("span", { class: "igloss" }, T(cardGloss(c))),
+        ]));
+      });
+    };
+    group("⚠ concerns — read next", conc);
+    group("the change", change);
+    return out;
+  }
+
+  // ---- main render ------------------------------------------------------
+  function render() {
+    const app = document.getElementById("app");
+    app.textContent = "";
+    const meta = (PACK && PACK.metadata && PACK.metadata.pr) || {};
+    const chrome = el("div", { class: "chrome" }, [
+      el("span", { class: "dot", style: "background:var(--red)" }),
+      el("span", { class: "dot", style: "background:var(--amber)" }),
+      el("span", { class: "dot", style: "background:var(--green)" }),
+      el("span", { class: "title", html: "diffense <span class=blink>▮</span> " + (meta.repo || "") + (meta.number ? " <b>#" + meta.number + "</b>" : "") }),
+      el("span", { class: "spacer" }),
+      el("span", { class: "hint" }, T("click to dive · bars to climb back · Esc up")),
+    ]);
+    app.appendChild(chrome);
+
+    // breadcrumb heading-bar stack: every entry except the focused one
+    for (let i = 0; i < stack.length - 1; i++) {
+      const e = stack[i];
+      let kind = "overview", lbl = (meta.repo || "") + (meta.number ? " #" + meta.number : "") + " · overview";
+      if (e.type === "card") { const c = BYID[e.id]; kind = c.kind; lbl = cardGloss(c); }
+      app.appendChild(el("button", { class: "bar", on: { click: ((idx) => () => truncate(idx))(i) } }, [
+        el("span", { class: "chev" }, T("‹")), el("span", { class: "k" }, T(kind)),
+        el("span", { class: "lbl" }, T(lbl)),
+      ]));
+    }
+
+    const top = stack[stack.length - 1];
+    if (top.type === "index") app.appendChild(renderIndex());
+    else if (BYID[top.id]) app.appendChild(renderCard(BYID[top.id]));
+    else app.appendChild(el("div", { class: "empty" }, T("card not found: " + top.id)));
+  }
+
+  document.addEventListener("keydown", e => {
+    if ((e.key === "Escape" || e.key === "Backspace") && stack.length > 1 && e.target === document.body) { truncate(stack.length - 2); }
+  });
+
+  function initialStack() {
+    const h = decodeURIComponent((location.hash || "").replace(/^#\/?/, ""));
+    return (h && BYID[h]) ? [{ type: "index" }, { type: "card", id: h }] : [{ type: "index" }];
+  }
+  loadPack().then(p => {
+    const app = document.getElementById("app");
+    if (!p) { app.appendChild(el("div", { class: "empty" }, T("No pack. Generate with render.py, or open with ?pack=<url>."))); return; }
+    PACK = p; (p.cards || []).forEach(c => BYID[c.id] = c);
+    stack = initialStack(); render();
+    window.addEventListener("hashchange", () => { stack = initialStack(); render(); });
+  });
+  </script>
+</body>
+</html>
