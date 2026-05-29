@@ -534,7 +534,7 @@ dive-in map) and are stable until something contradicts them.
 ## Reviews
 
 - [diffense — kb-first PR review experience](design-diffense.md) —
-  *proposed 2026-05-28; reshaped 2026-05-29 (passes 6–7)*. The review
+  *accepted 2026-05-29 (passes 6–9)*. The review
   surface for brr-generated PRs, built around the half-of-a-brr-PR-is-kb
   pain. Inspect-mode model: reviews are a **zoomable graph of cards**
   (item / walkthrough / uncertainty kinds) with two navigation axes —
@@ -554,8 +554,11 @@ dive-in map) and are stable until something contradicts them.
   cards** (incl. `follow-up` + tension references) read first; the
   "entertaining" goal is framed as removing *accidental* burden, not
   gamification. Folds with the [ergo proxy](design-agent-ergonomics.md)
-  as shared-source / split-audience. Open: pack schema, lateral/graph
-  navigation + code-leaf rendering, pack transport.
+  as shared-source / split-audience. A **renderer spike**
+  ([src/brr/diffense/](../src/brr/diffense)) validated the read model and
+  resolved the two interaction questions — lateral nav and zoom-drills
+  share one breadcrumb stack; a code leaf is jump-to-forge. Open: pack
+  schema lock, transport, runner wiring.
 - [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
   — *2026-05-29*. The first concrete pack
   ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that
@@ -568,6 +571,8 @@ dive-in map) and are stable until something contradicts them.
   *shape* back into the design: a **summary / on-ramp card**, an **open
   card-kind taxonomy** (agent declares `custom` + raises a meta concern;
   `code-module-split` promoted), and **gloss-first** uncertainty cards.
+  Now rendered live by the [renderer spike](../src/brr/diffense)
+  (`render.py` inlines this pack into a self-contained HTML page).
 
 ## Research
 

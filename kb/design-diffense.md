@@ -1,6 +1,11 @@
 # Design: diffense — kb-first PR review experience
 
-Status: proposed, not yet accepted (drafted 2026-05-28; reshaped 2026-05-29, passes 6–8)
+Status: accepted on 2026-05-29 — the card / zoom / navigation model is
+validated by a working renderer spike
+([`src/brr/diffense/`](../src/brr/diffense), rendered against the
+[PR #64 pack](diffense-prototype-pr64.md)). Remaining work (pack schema
+lock, transport, runner wiring) is implementation-plan detail, not
+design-blocking. (Drafted 2026-05-28; reshaped 2026-05-29, passes 6–9.)
 
 diffense (a working name: *diff* + *sense*, the surface that helps a
 reviewer make sense of a diff; and *diff* + *defense*, what guards the
@@ -11,11 +16,13 @@ because roughly half of a typical brr PR's value lives in `kb/` changes
 that read poorly as raw diff and well as rendered, cross-linked Markdown.
 
 This page is a design with research-flavoured sections inside. The
-cornerstones below are settled enough to design against; the genuinely
-open dimensions (pack schema, the graph / inter-card navigation and the
-code-rendering-at-a-locator UI, pack transport, aesthetic locking) are
-marked as such and deferred to an implementation plan after a
-hand-authored prototype validates the shape against a real PR.
+cornerstones below are settled enough to design against. A hand-authored
+prototype (the [PR #64 pack](diffense-prototype-pr64.md)) and a working
+renderer spike ([`src/brr/diffense/`](../src/brr/diffense)) have since
+validated the shape and closed two formerly-open dimensions —
+inter-card navigation and code-rendering-at-a-locator (see "Rendering the
+zoom"). What remains open (pack schema lock, transport, aesthetic
+locking) is marked as such and deferred to an implementation plan.
 
 Companion to:
 
@@ -199,7 +206,7 @@ flowchart TD
 
 | Renderer | Surface | Tenancy | Status |
 | --- | --- | --- | --- |
-| Responsive web | terminal-aesthetic HTML; `brr review` serves it locally | self-hosted (local; LAN/tunnel for phone) | **the surface we build now** |
+| Responsive web | terminal-aesthetic HTML; `brr review` serves it locally | self-hosted (local; LAN/tunnel for phone) | **render model spiked** ([`src/brr/diffense/`](../src/brr/diffense)); local server + runner wiring next |
 | PR-body projection | humanized Markdown in the PR body | any forge reader | lossy fallback, ships alongside |
 | CLI / TUI | `brr review` in the terminal | self-hosted | follow-up, same pack |
 | Hosted web | brnrd-dashboard renderer | hosted | future (after brnrd exists) |
@@ -244,8 +251,13 @@ Consequences:
   pack with minimal dependencies; brnrd later renders the same pack
   without diffense having to know brnrd is there.
 
-A small spike still validates the card / zoom / navigation model against
-one hand-authored pack before the renderer is locked.
+The card / zoom / navigation model is now validated by a small renderer
+spike ([`src/brr/diffense/`](../src/brr/diffense)) against the
+hand-authored [PR #64 pack](diffense-prototype-pr64.md): a generic,
+dependency-free HTML renderer (`template.html`) plus an inliner
+(`render.py`, the seed of `brr review`'s render step). It confirmed the
+terminal aesthetic carries to the web and reflows to a phone (see
+"Rendering the zoom").
 
 ## Aesthetic stance: hacker-terminal-text-games leaning, held against the substrate-honest clamp
 
@@ -412,17 +424,30 @@ a click back up a level, so depth never loses your place. This keeps the
 glance/dive rhythm physical: one bar = one level of context held, the
 focused card gets the room.
 
-Two parts of the interaction model are **genuinely open** (flagged so the
-spike resolves them rather than guessing now):
+The renderer spike ([`src/brr/diffense/`](../src/brr/diffense)) resolved
+the two interaction questions that were left open here:
 
-- **Inter-card / graph navigation** — moving *laterally* between
-  same-level cards and along edges (the graph view, "jump to a peer")
-  versus the vertical zoom stack. How the lateral axis is presented
-  alongside the heading-bar stack is unresolved.
-- **Code rendering at a locator** — what a code leaf actually looks like
-  when opened (inline syntax-highlighted block, side-by-side diff, a jump
-  out to the forge permalink). The locator data is settled; its rendering
-  is not.
+- **Inter-card / graph navigation — resolved: one breadcrumb stack for
+  both axes.** Lateral moves (clicking an edge chip, or opening a
+  walkthrough's member) and zoom-drills both *push onto the same
+  heading-bar stack*, so a single breadcrumb records the whole path
+  however you got there; within-card zoom (the gloss → L1 → leaf ladder)
+  is in-place progressive disclosure, not a push. Unifying both axes on
+  one stack beat a separate "graph view" — it is the simplest model that
+  never loses your place. A dedicated overview/graph view stays a possible
+  later enhancement, not a v0 need.
+- **Code rendering at a locator — resolved: jump-to-forge at v0.** A code
+  leaf renders the commit-pinned forge permalink as an "open ↗" action,
+  with the `path:line` shown inline; the zoom ladder's leaf rows do the
+  same. Inline syntax-highlighted blocks and side-by-side diffs are a
+  later enhancement — the locator already resolves deterministically, so
+  upgrading leaf rendering never touches the pack.
+
+The spike is **render-only**: it proves the read model (cards, zoom, the
+two navigation axes, the responsive terminal aesthetic) against the PR #64
+pack. The *flag-a-card* action, the local `brr review` server, and runner
+wiring are not in it — they are named in "The feedback loop" and "Where
+the runner / publish kernel wire in" and remain to build.
 
 ### Two-axis lore
 
@@ -985,11 +1010,13 @@ leanings (decided in the implementation plan, not locked here):
 - **Pack generation + the validation tool** live in brr — part of the
   runner's publish-time work.
 - **The web renderer** lives in brr, served via a `brr review` verb (the
-  CLI/TUI follow-up shares it). Open whether the code sits in-tree at
-  `src/brr/diffense/` or in its own `brr-diffense` extras-installed
-  package; leans in-tree until install footprint argues otherwise (the
-  same test [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
-  applies to envs).
+  CLI/TUI follow-up shares it). Settled in-tree at
+  [`src/brr/diffense/`](../src/brr/diffense) — the renderer spike lives
+  there now, and its install footprint is nil (a stdlib-only inliner plus
+  a static HTML template, zero runtime deps), so the "own
+  extras-installed package" alternative
+  ([`decision-monorepo-structure.md`](decision-monorepo-structure.md))
+  isn't warranted.
 - **Built before brnrd, and decoupled from it.** diffense ships first,
   for the self-hosting story, and must stay light: a small,
   minimal-dependency web app over the pack that does **not** depend on
@@ -1095,11 +1122,10 @@ doesn't pull focus.
   them; and re-run the prototype on a brr-*produced* PR to exercise
   `provenance.conversation_msg`, the one field a hand-authored pack
   can't. Finalized in the implementation plan.
-- **Graph / inter-card navigation + code rendering at a locator.** The
-  vertical zoom (nested heading-bar stacks) is settled; the *lateral*
-  graph navigation (moving between same-level cards / along edges) and
-  what a code leaf actually looks like when opened (inline highlight vs
-  side-by-side diff vs jump-to-forge) are open, resolved by the spike.
+- **Graph / inter-card navigation + code rendering at a locator —
+  resolved by the spike.** Lateral edges and zoom-drills share one
+  breadcrumb heading-bar stack; a code leaf is jump-to-forge at v0
+  (`path:line` inline, inline-diff deferred). See "Rendering the zoom."
 - **Pack transport.** Body-embedded marker block vs git note vs
   `refs/diffense/*`, and the size threshold that switches between them.
 - **Pack versioning across iterations.** A PR accrues successive packs as
@@ -1107,7 +1133,10 @@ doesn't pull focus.
   changed since I last reviewed" pack-diff.
 - **Card-level reviewer state.** Local-only in `.brr/`, or roundtripped
   to forge review state? Likely local-first, forge-roundtrip optional.
-- **Aesthetic locking.** Validated alongside the renderer spike.
+- **Aesthetic locking.** The terminal-via-CSS look is validated by the
+  spike (dense on desktop, reflows on a phone without literal
+  box-drawing). The exact palette/typography lock is still open; the
+  direction holds.
 - **GIFs as a future demo axis.** Text transcripts at v0; revisit if
   insufficient.
 - **Locked-abilities axis.** Deferred future direction.
@@ -1145,7 +1174,7 @@ doesn't pull focus.
 ## Lineage
 
 Drafted 2026-05-28, reshaped 2026-05-29, out of a conversation across
-2026-05-27 – 2026-05-29 that converged the shape over seven refinement
+2026-05-27 – 2026-05-29 that converged the shape over nine refinement
 passes:
 
 1. **Audience + generation.** Generic power-user persona; LLM-driven
@@ -1197,7 +1226,21 @@ passes:
    (the code-change cards generalize beyond brr's kb). A code gap also
    surfaced (brr publishes a branch, not a PR, so origin context isn't
    threaded — issue #68); no design change.
+9. **Renderer spike + two open questions closed.** A generic,
+   dependency-free web renderer ([`src/brr/diffense/`](../src/brr/diffense):
+   `template.html` + `render.py`) was built and run against the PR #64
+   pack, validating the card / zoom / navigation model end to end and
+   resolving the two interaction questions pass 7 left open: lateral edges
+   and zoom-drills **share one breadcrumb heading-bar stack** (no separate
+   graph view at v0), and a **code leaf is jump-to-forge** (the
+   commit-pinned permalink, `path:line` inline; inline-diff deferred). The
+   terminal aesthetic was confirmed to carry to the web and reflow to a
+   phone. Render-only — the flag-a-card action, the local server, and
+   runner wiring remain to build.
 
-Proposed, not accepted — the renderer spike is the remaining gate before
-the `Status` line flips; the hand-authored prototype gate is now met
-([`diffense-prototype-pr64.md`](diffense-prototype-pr64.md)).
+Accepted 2026-05-29: both gates are met — the hand-authored prototype
+([`diffense-prototype-pr64.md`](diffense-prototype-pr64.md)) and the
+renderer spike ([`src/brr/diffense/`](../src/brr/diffense)) validated the
+pack shape and the read model. Implementation (pack generation in the
+runner, the `brr review` local server, schema lock, transport) follows in
+an implementation plan.
