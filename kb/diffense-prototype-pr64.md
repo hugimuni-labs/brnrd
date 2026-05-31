@@ -1,17 +1,28 @@
 # diffense prototype: a hand-authored review pack for PR #64
 
-Status: prototype artifact (2026-05-29) — validates the
-[`design-diffense.md`](design-diffense.md) card schema against a real PR
-before that schema is locked. Not a runner emission; hand-authored from
+Status: prototype artifact (2026-05-29, extended 2026-05-31) — validates
+the [`design-diffense.md`](design-diffense.md) card schema against a real
+PR before that schema is locked. Not a runner emission; hand-authored from
 the repo and [PR #64](https://github.com/Gurio/brr/pull/64).
 
 The pack itself is [`diffense-prototype-pr64-pack.json`](diffense-prototype-pr64-pack.json)
-(the contract instance the future web renderer / spike consumes; runtime
-home would be `.brr/diffense/64/pack.json`). This page is the
-human-readable companion: the cards **rendered** (so you can look at the
-shape without a renderer), then the **pressure-test findings** — what the
-schema expressed well, what it could not, and the concrete schema changes
-this exercise surfaced.
+(the contract instance the web renderer consumes; runtime home would be
+`.brr/diffense/<task-id>/pack.json` — keyed by task, not PR, since brr
+publishes a branch). This page is the human-readable companion: the cards
+**rendered** (so you can look at the shape without a renderer), then the
+**pressure-test findings** — what the schema expressed well, what it could
+not, and the concrete schema changes this exercise surfaced.
+
+> **Pass 10 (2026-05-31) extended the pack** with the conceptual axes
+> folded into the design after the renderer spike: the summary card's
+> **entry stats became rolled-up visual distributions** (bars / meters /
+> heat, raw size demoted), code cards gained an **invariant** axis
+> (held / threatened, the threatened one linking the concern), the
+> walkthrough became an explicit **data-trace** (the datum's shape at each
+> hop), and the kb card gained **kb-native axes** (claim / graph-position /
+> lifecycle). The canonical look at these is now the **live renderer**
+> ([`src/brr/diffense/`](../src/brr/diffense)), not the static markdown
+> renders below — those predate pass 10 and show the earlier shape.
 
 ## Why PR #64
 

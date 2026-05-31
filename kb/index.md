@@ -534,7 +534,7 @@ dive-in map) and are stable until something contradicts them.
 ## Reviews
 
 - [diffense — kb-first PR review experience](design-diffense.md) —
-  *accepted 2026-05-29 (passes 6–9)*. The review
+  *accepted 2026-05-29, format refined 2026-05-31 (passes 6–10)*. The review
   surface for brr-generated PRs, built around the half-of-a-brr-PR-is-kb
   pain. Inspect-mode model: reviews are a **zoomable graph of cards**
   (item / walkthrough / uncertainty kinds) with two navigation axes —
@@ -557,8 +557,16 @@ dive-in map) and are stable until something contradicts them.
   as shared-source / split-audience. A **renderer spike**
   ([src/brr/diffense/](../src/brr/diffense)) validated the read model and
   resolved the two interaction questions — lateral nav and zoom-drills
-  share one breadcrumb stack; a code leaf is jump-to-forge. Open: pack
-  schema lock, transport, runner wiring.
+  share one breadcrumb stack; a code leaf is jump-to-forge. A later pass
+  added the **state / data / invariant** triad: an **invariant** axis (the
+  conserved frame; a *threatened* invariant is what a tension points at), a
+  **data-shape delta** distinct from the signature, **entry stats as
+  visual rolled-up distributions** (bars / meters / heat, size demoted),
+  **data-trace** walkthroughs (follow the datum, steppable so animation is
+  a renderer-only upgrade), and **kb-native axes**. Transport corrected:
+  brnrd is a *transient relay*, never a pack store (matches its
+  data-ownership stance). Open: pack schema lock, body-embed size
+  threshold, runner wiring.
 - [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
   — *2026-05-29*. The first concrete pack
   ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that
@@ -572,7 +580,9 @@ dive-in map) and are stable until something contradicts them.
   card-kind taxonomy** (agent declares `custom` + raises a meta concern;
   `code-module-split` promoted), and **gloss-first** uncertainty cards.
   Now rendered live by the [renderer spike](../src/brr/diffense)
-  (`render.py` inlines this pack into a self-contained HTML page).
+  (`render.py` inlines this pack into a self-contained HTML page); pass 10
+  extended the pack to demonstrate the visual entry-stat distributions,
+  the invariant axis, the data-trace walkthrough, and kb-native axes.
 
 ## Research
 

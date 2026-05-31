@@ -275,8 +275,15 @@ into cosplay: every aesthetic choice earns its space by improving
 readability, navigation, or usefulness. The reference points (the
 inspection screens in Souls-likes, Devil May Cry's ability menus) are
 captivating because every screen is information-dense and the visual
-choices serve readability — not because they pile on effects. Validated
-alongside the renderer spike, not locked here.
+choices serve readability — not because they pile on effects. The
+Zachtronics games (SpaceChem, Opus Magnum, Exapunks) are the companion
+reference: they make an invisible process *visible in motion* — the layout
+is the program, the animation is the data flow — and they frame quality as
+*position on cost axes against a distribution*, never a verdict. Both
+transfer directly: the data-trace walkthrough and the animated-flow
+direction take the first; the visual, distribution-shaped stat panel and
+the non-prescriptive clamp take the second. Validated alongside the
+renderer spike, not locked here.
 
 ## The card model: a zoomable graph
 
@@ -370,6 +377,12 @@ kb does — not from an up-front enum nobody can extend.
 - **Zoom tree** — the ordered summary levels down to the ground-truth
   leaf (the levels themselves vary by kind; see "Zoom levels").
 - **Stat block** — the kind-specific load-bearing numbers.
+- **Invariant frame** — what the change holds *constant* (the contract or
+  property it preserves), because a shape delta is only legible against
+  what didn't move: "public surface preserved", "exactly-once delivery",
+  "the seen-set stays bounded". A *threatened* invariant is precisely what
+  an uncertainty card's tension points at (see "Failure modes"). Nearly
+  every change has a nameable one; omitted only when none exists.
 - **Provenance** — which conversation message, which commit, which
   run-state moment produced this.
 
@@ -382,7 +395,10 @@ kb does — not from an up-front enum nobody can extend.
   member-card ids; for uncertainty cards, the related cards.
 - **Usage-perspective demo** — when there is a tangible surface change
   worth showing. Text-based at v0 (fenced transcripts, before/after
-  caller snippets, kb-navigation walks, benchmark output). GIFs deferred.
+  caller snippets, kb-navigation walks, benchmark output); a data-trace
+  demo carries the datum's shape per stage. Structured **steppable** so an
+  animated renderer is a drop-in (see "Animated data flow is a native
+  direction").
 - **Exercising-tests link** — which tests anchor the demo / exercise this
   item.
 - **Tension references** (uncertainty-specific) — pointers to the
@@ -411,6 +427,65 @@ mechanic. Concretely, by kind:
 
 Leaves are always the real artifact. The agent authors L0..Ln; the leaf
 is resolved mechanically from the diff / repo / locator.
+
+### kb changes get kb-native axes (not flattened code cards)
+
+A kb change has no state/data/invariant the way code does, and flattening
+it into a code-shaped card is why a kb card can read thin. Its shape is a
+**graph** change, and its native axes are:
+
+- **Claim delta** — what the page now *asserts* that it didn't (or
+  reverses): the actual prose change, rendered, not a raw diff.
+- **Graph position** — the link-graph delta: inbound / outbound edges
+  added or removed, which subject hub it lands under, an orphan check.
+  This is the kb analogue of "surface / contract delta", and it renders as
+  a small graph-delta indicator in the same pre-attentive spirit as the
+  code meters.
+- **Lifecycle** — marker flips (`active → accepted`, `superseded by …`)
+  and successor-link validity.
+
+kb also has its own **data-trace**: *walking the link graph* — following a
+concept across pages — is the kb counterpart of following a datum through
+code, and the renderer can make it navigable (it already renders kb to a
+zoomable leaf). So kb changes do fit the model; they just need their own
+axes instead of borrowed code ones. A genuinely small kb change (a new
+boundary doc, a one-line lifecycle flip) is legitimately lighter — that is
+the emit-iff-honest clamp working, not a gap.
+
+### Walkthroughs trace control *or* data (follow the datum)
+
+A walkthrough can follow either of two axes, and the default has been the
+weaker one:
+
+- **Control-trace** — the *execution* path: "the code runs setup → action
+  → outcome." This is what walkthroughs have been.
+- **Data-trace** — **follow the datum**: a single piece of data through
+  its transformations ("the @-mention becomes a `pr-review-comment` event
+  becomes a task becomes an in-thread reply"), showing the value's *shape
+  at each hop*. This is the data flow — and it is exactly the property a
+  normal diff view cannot show, so it is the higher-value trace for
+  review.
+
+A data-trace therefore carries, per stage, the datum's shape at that point
+(not just a prose step). Two consequences:
+
+- **Zooming a stage opens the datum's shape there** — the cheap,
+  no-animation form of "watch it move", reusing the zoom mechanic.
+- **The trace is structured as ordered, self-contained stages from day
+  one**, so *animating* it later is a renderer-only upgrade, never a
+  re-authoring (see below).
+
+### Animated data flow is a native direction, not a someday-GIF
+
+Motion is pre-attentive: an animated text flow conveys *transformation and
+causality* in a way printed before/after does not — you see the datum
+change rather than diffing two snapshots in your head. v0 renders the
+data-trace statically (the datum's shape at each stage, zoomable), but the
+animated / steppable trace is a **named, kept-in-view direction**, not a
+deferred maybe: the pack structures the trace as ordered stages with
+per-stage shapes precisely so the animated renderer is a drop-in over the
+same data. (This supersedes the earlier "GIFs deferred, revisit if
+insufficient" framing — that under-sold the demo axis.)
 
 ### Rendering the zoom: nested heading-bar stacks (web)
 
@@ -641,8 +716,10 @@ has nothing to run, and the card says so rather than faking a demo.
 Every stat answers a question a reviewer actually asks; a stat that does
 not is cosmetic and fails the honest clamp. Per-kind starting sets:
 
-- **`code-fn-edit`** — type-signature delta; callers in repo / updated /
-  unchanged; complexity delta; new error paths; test-coverage delta.
+- **`code-fn-edit`** — signature delta (state/behaviour) **and a separate
+  data-shape delta** (new/changed types, event kinds, schema); callers in
+  repo / updated / unchanged; complexity delta; new error paths;
+  test-coverage delta.
 - **`kb-page-edit`** — lifecycle-marker delta; inbound-link-count delta;
   sibling-page sync check; successor-link validity.
 - **`test-add`** — production code path exercised; assertion shape;
@@ -656,6 +733,27 @@ not is cosmetic and fails the honest clamp. Per-kind starting sets:
 The "+/- against equipped item" pattern from the game reference becomes
 "delta against the codebase as it currently stands" — the agent that did
 the work already has these values in context.
+
+**What the stats measure: state shape, data shape, invariant.** A change
+has three shapes worth a reviewer's attention, and good stats name all
+three rather than collapsing them to size:
+
+- **State shape** — control / behaviour: the branches, the routing, the
+  state machine. Owned by the code.
+- **Data shape** — the types and schema the values carry, distinct from
+  the signature: a new event kind, a cursor field, a migrated record. A
+  code card surfaces a **data-shape delta** separately from its
+  signature/behaviour delta; they answer different questions.
+- **Invariant** — what is held constant across the change, the reference
+  frame the other two are read against (see "Invariant frame").
+
+A caveat on the tempting split "code = state, tests = data": in typed code
+much of the data *shape* is already in the code (the types), so the
+cleaner cut is **possible vs actual** — the code is the *grammar* (which
+state/data shapes are reachable at all), the tests are the *sentences*
+(the ones that actually occur). That is exactly why "tests as grounding
+evidence with real values" works: a demo lifts an actual sentence up to
+make the grammar legible (see "Tests as grounding evidence").
 
 ## Reading order: orient, surface concerns, then explore
 
@@ -690,20 +788,47 @@ too detailed and contextless" instinct resolve to the same card: numbers
 in service of a shape, never raw numbers alone.
 
 - **What it's for** — one paragraph of plain intent.
-- **The shape** — how many cards; the story arcs the change splits into
-  (e.g. *fix · refactor · feature*); the surface area (which subsystems,
-  which kb pages).
+- **The shape** — the story arcs the change splits into (e.g. *fix ·
+  refactor · feature*); the surface area (which subsystems, which kb
+  pages).
 - **The risk pointer** — "N concerns (M blocking / med) — read next," so
   the reviewer knows up front whether this is a rubber-stamp or a
   scrutinize.
+- **The entry-stat panel** — its own region (below).
 
-Raw `+/−` and file counts stay available (a zoom level, or a secondary
-line) but are never the headline: "23 files, 2642+/1221−" is precise and
-tells a reviewer nothing about what to *do*. The summary turns that into
-"three braided arcs across the GitHub gate plus one new kb design page;
-two concerns, one med." When there are no uncertainty cards, the summary
-says so — absence-as-signal preserved, and the uncertainty section
-collapses.
+**Entry stats are a rollup of the card axes into distributions.** This is
+the principle that keeps the panel honest rather than ad-hoc: the summary
+does not author new numbers, it *aggregates* the per-card axes. Size is
+the one stat that is **not** a rollup — which is exactly why it is the
+least useful, and why it is demoted. What the panel rolls up:
+
+- **change-kind mix** — the distribution of card kinds (fix / refactor /
+  feature; code / kb / test), as a proportion, not a count.
+- **surface / contract delta** — the rollup of per-card signatures and
+  public surface: *how far does this ripple?* Often the single most
+  decision-relevant number ("12-module split, public surface preserved"
+  reads low-risk despite a huge line count).
+- **invariants** — established vs threatened (threatened ones link the
+  concerns).
+- **data-shape delta** — new/changed event kinds, schemas, cursor fields.
+- **cost axes, before→after** — coverage, new error paths, an effect
+  budget (e.g. steady-state REST cost). The Zachtronics "where do you land
+  on the cost axes" view, not a scalar.
+
+**The panel is visual, and pre-attentive by design.** Bars / meters /
+heat-indicators, not a table of numbers — the point is that the shape
+*imprints* on a glance rather than being read to be understood (a stale
+ETag bar at zero, a "surface preserved" meter pinned full, two amber heat
+dots for the concerns). Restrained, not fancy, and held to the
+substrate-honest clamp: a meter earns its pixels by being faster to absorb
+than its number, or it does not appear.
+
+Raw `+/−` and file counts survive as a demoted secondary line (or a zoom
+level), never the headline: "23 files, 2642+/1221−" is precise and tells a
+reviewer nothing about what to *do*. The summary turns that into "three
+braided arcs across the GitHub gate plus one new kb design page; two
+concerns, one med." When there are no uncertainty cards, the summary says
+so — absence-as-signal preserved, and the uncertainty section collapses.
 
 ## Failure modes: agent uncertainty as first-class output
 
@@ -942,22 +1067,37 @@ The pack is a run artifact with a contract; it needs to be (a) cached
 where the producing machine can re-render it and (b) reachable by any
 reviewer's surface.
 
-- **Local cache** — `.brr/diffense/<pr>/pack.json` (the gitignored
+- **Local cache** — `.brr/diffense/<task>/pack.json` (the gitignored
   runtime dir, matching brr's "artifacts in `.brr/`, not the worktree"
-  convention). The local `brr review` reads from here.
-- **Travels with the PR via the forge** — so `brr review <pr-url>` and
-  the hosted view work for anyone with forge access, without the
-  producer's `.brr/`. Leading shape: embed the pack in the PR body inside
-  an HTML-comment marker block (reusing the ergo proxy's
-  `<!-- … -->` marker technique, which renders invisibly), with a
-  **git-note / `refs/diffense/*` fallback** when a pack exceeds the
-  forge's body size limit. The transport choice (body-embed vs note vs
-  ref, and the size threshold) is an Open question.
-- **Hosted (brnrd)** — stored server-side keyed by PR / conversation id,
-  served by the hosted renderer.
+  convention). Keyed by **task id, not PR number**: a run always has a
+  task id but not always a PR (brr publishes a branch — see issue #68). The
+  local `brr review` reads from here.
+- **Travels with the PR the user publishes** — the static, humanized
+  PR-body projection (see "PR body as a lossy projection") always rides
+  the forge, so a reviewer with only forge access gets the orientation and
+  the flagged concerns for free. The *full* interactive pack can ride
+  alongside it, embedded in the body inside an HTML-comment marker block
+  (reusing the ergo proxy's invisible `<!-- … -->` technique), size
+  permitting. This is the user publishing their own data to their own PR —
+  not a third party storing it.
+- **brnrd is a transient relay, never a pack store** (opt-in,
+  config-gated). When a remote reviewer wants the rich surface and the
+  pack is too large to embed, brnrd *renders* it sourced live from the
+  producer's local daemon and does **not** persist it — mirroring brnrd's
+  existing event-content-transient, "data ownership stays at the
+  metadata-graph level" stance
+  ([`design-brnrd-protocol.md`](design-brnrd-protocol.md)). Persisting the
+  pack server-side would break that stance, since the pack is derived from
+  the conversation and the diff. (Earlier drafts of this page said brnrd
+  *stored* the pack keyed by PR / conversation id; corrected 2026-05-31 —
+  it contradicted the protocol's data-ownership stance.)
+- **Self-served** — `brr review` over LAN / a tunnel from the producer's
+  machine closes the remote case with no brnrd at all.
 
-This keeps generation in one place and lets every renderer fetch the same
-bytes.
+This keeps generation in one place; every renderer reads the same bytes
+from the producer — locally, embedded in the user's own PR body, or
+transiently relayed — and nothing about the pack is persisted off the
+producer's machine.
 
 ## Where the live agent fits
 
@@ -1126,8 +1266,11 @@ doesn't pull focus.
   resolved by the spike.** Lateral edges and zoom-drills share one
   breadcrumb heading-bar stack; a code leaf is jump-to-forge at v0
   (`path:line` inline, inline-diff deferred). See "Rendering the zoom."
-- **Pack transport.** Body-embedded marker block vs git note vs
-  `refs/diffense/*`, and the size threshold that switches between them.
+- **Pack transport.** Resolved on storage (the pack stays the producer's;
+  brnrd is a transient relay, never a store — see "Where packs live").
+  Still open: the PR-body embed size threshold above which a remote
+  reviewer falls back to the transient relay rather than an embedded
+  marker block.
 - **Pack versioning across iterations.** A PR accrues successive packs as
   the feedback loop iterates; how to store them and render a "what
   changed since I last reviewed" pack-diff.
@@ -1137,8 +1280,12 @@ doesn't pull focus.
   spike (dense on desktop, reflows on a phone without literal
   box-drawing). The exact palette/typography lock is still open; the
   direction holds.
-- **GIFs as a future demo axis.** Text transcripts at v0; revisit if
-  insufficient.
+- **Animated data-flow trace (the live demo axis).** Promoted from a
+  deferred "GIF" to a native direction (see "Animated data flow is a
+  native direction"): v0 renders the trace static + zoomable, but the pack
+  keeps it steppable so animation is a renderer-only upgrade. Open: the
+  animation substrate (CSS/JS step-player vs recorded GIF) and when it
+  lands.
 - **Locked-abilities axis.** Deferred future direction.
 - **LLM token budget for pack generation.** Bounded by the
   always-vs-conditional split, the gloss-not-leaf rule (leaves are
@@ -1174,7 +1321,7 @@ doesn't pull focus.
 ## Lineage
 
 Drafted 2026-05-28, reshaped 2026-05-29, out of a conversation across
-2026-05-27 – 2026-05-29 that converged the shape over nine refinement
+2026-05-27 – 2026-05-31 that converged the shape over ten refinement
 passes:
 
 1. **Audience + generation.** Generic power-user persona; LLM-driven
@@ -1237,8 +1384,27 @@ passes:
    terminal aesthetic was confirmed to carry to the web and reflow to a
    phone. Render-only — the flag-a-card action, the local server, and
    runner wiring remain to build.
+10. **Conceptual axes + transport correction (post-acceptance refinement,
+    2026-05-31).** Added the **invariant** axis (the conserved frame a
+    delta is read against; a *threatened* invariant is what an uncertainty
+    tension points at) and a **data-shape delta** distinct from the
+    signature; reframed the summary card's **entry stats as a rollup of
+    the card axes into visual, pre-attentive distributions** (bars / meters
+    / heat) with raw size demoted; split walkthroughs into **control-trace
+    vs data-trace** ("follow the datum", shape-per-stage) and promoted
+    **animated data flow to a native direction** (the trace stays steppable
+    so animation is a renderer-only upgrade); gave **kb changes kb-native
+    axes** (claim / graph-position / lifecycle; the link-graph walk as kb's
+    data-trace) so they stop reading as flattened code cards; and
+    **corrected the pack transport** — brnrd is a *transient relay*, never
+    a pack store, matching its "data ownership stays at the metadata-graph
+    level" stance, with the producer's local `.brr/diffense/<task>/` the
+    home and the user-published PR body the durable forge artifact.
+    Zachtronics (cost-axis distributions, visible data-in-motion) joins
+    Souls / DMC as a stated inspiration. The PR #64 prototype + renderer
+    were updated to demonstrate the new axes.
 
-Accepted 2026-05-29: both gates are met — the hand-authored prototype
+Accepted 2026-05-29 (format refined 2026-05-31): both gates are met — the hand-authored prototype
 ([`diffense-prototype-pr64.md`](diffense-prototype-pr64.md)) and the
 renderer spike ([`src/brr/diffense/`](../src/brr/diffense)) validated the
 pack shape and the read model. Implementation (pack generation in the
