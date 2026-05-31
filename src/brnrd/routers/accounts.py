@@ -18,6 +18,36 @@ router = APIRouter(prefix="/v1/accounts", tags=["accounts"])
 _SESSION_TTL = timedelta(days=30)
 
 
+def authenticate(db: Session, email: str, password: str) -> Account | None:
+    """Return the account if the email/password match, else None.
+
+    Shared by the API login endpoint and the web dashboard login.
+    """
+    account = db.execute(
+        select(Account).where(Account.email == email.strip().lower())
+    ).scalar_one_or_none()
+    if account is None or not verify_password(password, account.password_hash):
+        return None
+    return account
+
+
+def issue_session_token(db: Session, account: Account) -> str:
+    """Mint + persist a session token, returning the plaintext once."""
+    raw = ids.session_token()
+    db.add(
+        Token(
+            id=ids.token_id(),
+            account_id=account.id,
+            kind=Token.KIND_SESSION,
+            token_hash=hash_token(raw),
+            label="session",
+            expires_at=datetime.now(timezone.utc) + _SESSION_TTL,
+        )
+    )
+    db.commit()
+    return raw
+
+
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=schemas.AccountCreated)
 def create_account(payload: schemas.AccountCreate, db: Session = Depends(get_db)):
     email = payload.email.strip().lower()
@@ -49,25 +79,10 @@ def create_account(payload: schemas.AccountCreate, db: Session = Depends(get_db)
 
 @router.post("/sessions", response_model=schemas.SessionCreated)
 def login(payload: schemas.SessionCreate, db: Session = Depends(get_db)):
-    email = payload.email.strip().lower()
-    account = db.execute(
-        select(Account).where(Account.email == email)
-    ).scalar_one_or_none()
-    if account is None or not verify_password(payload.password, account.password_hash):
+    account = authenticate(db, payload.email, payload.password)
+    if account is None:
         raise HTTPException(status_code=401, detail="invalid credentials")
-
-    raw = ids.session_token()
-    db.add(
-        Token(
-            id=ids.token_id(),
-            account_id=account.id,
-            kind=Token.KIND_SESSION,
-            token_hash=hash_token(raw),
-            label="session",
-            expires_at=datetime.now(timezone.utc) + _SESSION_TTL,
-        )
-    )
-    db.commit()
+    raw = issue_session_token(db, account)
     return schemas.SessionCreated(account_id=account.id, session_token=raw)
 
 
