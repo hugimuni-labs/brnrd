@@ -1,0 +1,54 @@
+# Upsun config for the brnrd backend (the managed inbox service).
+# The brr daemon runs on your own machine and dials out to this — only
+# brnrd is deployed here. Reference:
+# https://docs.upsun.com/create-apps/app-reference/single-runtime-image.html
+applications:
+  brnrd:
+    # The whole repo is the build context; brnrd lives under src/.
+    source:
+      root: "/"
+
+    type: "python:3.12"
+
+    # Expose the PostgreSQL service to the app. Upsun publishes its
+    # credentials as POSTGRESQL_* env vars (consumed in .environment).
+    relationships:
+      postgresql: "postgresql:postgresql"
+
+    web:
+      commands:
+        # ASGI factory; reads its config (incl. BRNRD_DATABASE_URL) from
+        # the environment. Listens on the TCP port Upsun provides.
+        start: "uvicorn brnrd:create_app --factory --host 0.0.0.0 --port $PORT"
+      upstream:
+        socket_family: tcp
+      locations:
+        "/":
+          passthru: true
+
+    variables:
+      env:
+        # Disable the dev enqueue stand-in in production; the real
+        # producer is POST /v1/webhooks/telegram. Secrets (bot token,
+        # webhook secret) are set out-of-band via `upsun variable:create`.
+        BRNRD_ENABLE_DEV: "0"
+
+    hooks:
+      build: |
+        set -eux
+        pip install --upgrade pip
+        pip install ".[backend,postgres]"
+
+    # No mounts: all state lives in PostgreSQL; nothing writes to disk.
+
+services:
+  postgresql:
+    type: postgresql:15
+
+routes:
+  "https://{default}/":
+    type: upstream
+    upstream: "brnrd:http"
+  "https://www.{default}/":
+    type: redirect
+    to: "https://{default}/"
