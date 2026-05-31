@@ -1,0 +1,16 @@
+# Sourced by Upsun in the build + runtime environment.
+# Derives brnrd's settings from the platform-provided variables so no
+# secrets or per-environment URLs are hard-coded here.
+
+# PostgreSQL connection (Upsun exposes POSTGRESQL_* from the
+# `postgresql` relationship). SQLAlchemy + psycopg3 dialect.
+if [ -n "$POSTGRESQL_HOST" ]; then
+  export BRNRD_DATABASE_URL="postgresql+psycopg://${POSTGRESQL_USERNAME}:${POSTGRESQL_PASSWORD}@${POSTGRESQL_HOST}:${POSTGRESQL_PORT}/${POSTGRESQL_PATH}"
+fi
+
+# Public base URL — used to build the device-flow approve link the CLI
+# prints. Picks the primary route (falls back to the first) from the
+# platform's route table; absent during build, present at runtime.
+if [ -n "$PLATFORM_ROUTES" ]; then
+  export BRNRD_PUBLIC_BASE_URL="$(printf '%s' "$PLATFORM_ROUTES" | base64 -d | python3 -c 'import json,sys; r=json.load(sys.stdin); print((([u for u,c in r.items() if c.get("primary")] or list(r)))[0].rstrip("/"))' 2>/dev/null)"
+fi
