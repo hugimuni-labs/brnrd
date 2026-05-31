@@ -1,0 +1,177 @@
+"""Tests for the daemon-side ``cloud`` gate against a live brnrd app."""
+
+from __future__ import annotations
+
+import pytest
+
+pytest.importorskip("fastapi")
+pytest.importorskip("sqlalchemy")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from brnrd import create_app  # noqa: E402
+from brnrd.config import Settings  # noqa: E402
+from brnrd.inbox import CapturingForwarder  # noqa: E402
+from brr import protocol  # noqa: E402
+from brr.gates import cloud  # noqa: E402
+
+
+def _make_brnrd():
+    forwarder = CapturingForwarder()
+    app = create_app(
+        Settings(
+            database_url="sqlite:///:memory:",
+            inbox_long_poll_max_s=0.1,
+            inbox_poll_interval_s=0.02,
+        ),
+        forwarder=forwarder,
+    )
+    return TestClient(app), forwarder
+
+
+def _route_to(client):
+    """A ``cloud._request`` replacement that talks to the TestClient."""
+
+    def fake_request(base_url, method, path, *, token=None, json=None,
+                     params=None, timeout=60):
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        resp = client.request(method, path, json=json, params=params, headers=headers)
+        if not 200 <= resp.status_code < 300:
+            raise RuntimeError(f"{resp.status_code}: {resp.text}")
+        return resp.json() if resp.content else {}
+
+    return fake_request
+
+
+def _account_and_project(client):
+    key = client.post(
+        "/v1/accounts", json={"email": "a@b.com", "password": "supersecret"}
+    ).json()["api_key"]
+    headers = {"Authorization": f"Bearer {key}"}
+    pid = client.post(
+        "/v1/accounts/projects", json={"name": "demo"}, headers=headers
+    ).json()["project_id"]
+    return headers, pid
+
+
+def _handshake(client, acc_headers, pid):
+    pair = client.post("/v1/accounts/pair").json()
+    client.post(
+        f"/v1/accounts/pair/{pair['pair_code']}/approve",
+        json={"project_id": pid},
+        headers=acc_headers,
+    )
+    paired = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    return paired["daemon_token"]
+
+
+def test_connect_persists_token(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    scripted = iter(
+        [
+            {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
+            {"status": "pending"},
+            {"status": "paired", "project_id": "proj_x", "daemon_token": "bd_tok"},
+        ]
+    )
+    seen = []
+
+    def fake_request(base_url, method, path, **kwargs):
+        seen.append((method, path))
+        return next(scripted)
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    state = cloud.connect(
+        brr_dir,
+        brnrd_url="http://brnrd.example",
+        daemon_name="laptop",
+        poll_interval_s=0,
+        timeout_s=5,
+        out=lambda *_: None,
+    )
+    assert state["token"] == "bd_tok"
+    assert state["project_id"] == "proj_x"
+    assert state["daemon_name"] == "laptop"
+    # Persisted to .brr/gates/cloud.json and reports configured.
+    assert cloud._load_state(brr_dir)["token"] == "bd_tok"
+    assert cloud.is_configured(brr_dir)
+    assert ("POST", "/v1/accounts/pair") in seen
+
+
+def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    # Two events queued on the brnrd side.
+    e1 = client.post(
+        "/v1/_dev/enqueue",
+        json={"project_id": pid, "body": "first", "reply_to": {"chat": 1}},
+        headers=acc,
+    ).json()["event_id"]
+    e2 = client.post(
+        "/v1/_dev/enqueue", json={"project_id": pid, "body": "second"}, headers=acc
+    ).json()["event_id"]
+
+    # Drain: events land as local .brr/inbox files carrying the cloud id.
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    pending = sorted(protocol.list_pending(inbox_dir), key=lambda ev: ev["body"])
+    assert [ev["body"] for ev in pending] == ["first", "second"]
+    assert [ev["source"] for ev in pending] == ["cloud", "cloud"]
+    assert {ev["cloud_event_id"] for ev in pending} == {e1, e2}
+    # Cursor advanced and persisted.
+    assert cloud._load_state(brr_dir)["since"] == 2
+
+    # Simulate the runner finishing both tasks.
+    for ev in pending:
+        protocol.set_status(ev, "done")
+        protocol.write_response(responses_dir, ev["id"], f"answer to {ev['body']}")
+
+    # Next loop: nothing new to drain, deliver the two responses back.
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    delivered = {item.event_id: item.body for item in forwarder.items}
+    assert delivered == {e1: "answer to first", e2: "answer to second"}
+    # Delivered events + their response files are cleaned up locally.
+    assert protocol.list_done(inbox_dir, "cloud") == []
+
+    # Restart resume: a fresh load still has the advanced cursor, so a
+    # new loop doesn't re-drain the already-handled events.
+    assert cloud._load_state(brr_dir)["since"] == 2
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    assert protocol.list_pending(inbox_dir) == []
+
+
+def test_loop_skips_delivery_without_cloud_event_id(tmp_path, monkeypatch):
+    # A foreign event (no cloud_event_id) must not be posted to brnrd;
+    # it is logged + skipped, leaving its files in place for triage.
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 99},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    ev = protocol.create_event(inbox_dir, source="cloud", body="orphan")
+    event = protocol.list_pending(inbox_dir)[0]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses_dir, event["id"], "x")
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    assert forwarder.items == []
+    assert ev.exists()
