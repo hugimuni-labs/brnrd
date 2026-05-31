@@ -87,6 +87,17 @@ def main(argv: list[str] | None = None) -> None:
                    help="print existing log lines and exit")
     p.set_defaults(func=cmd_daemon_logs)
 
+    brnrd_p = sub.add_parser("brnrd", help="brnrd managed backend")
+    brnrd_sub = brnrd_p.add_subparsers(dest="brnrd_command", required=True)
+
+    p = brnrd_sub.add_parser(
+        "connect", help="link this daemon to a brnrd project (device-flow)")
+    p.add_argument("--url", default=None,
+                   help="brnrd base URL (default: $BRNRD_URL or https://brnrd.dev)")
+    p.add_argument("--daemon-name", default=None,
+                   help="name to register this daemon under (default: hostname)")
+    p.set_defaults(func=cmd_brnrd_connect)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -205,8 +216,26 @@ def cmd_daemon_logs(args):
     return daemon_install.logs(follow=not args.no_follow, lines=args.lines)
 
 
+def cmd_brnrd_connect(args):
+    import os
+    import socket
+
+    from .gates import cloud
+
+    brr_dir = _brr_dir()
+    url = args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
+    daemon_name = args.daemon_name or socket.gethostname()
+    cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
+    print("[brr] Start the daemon with `brr up` to begin draining the brnrd inbox.")
+
+
 def _load_gate(name: str):
-    gate_map = {"telegram": "telegram", "slack": "slack", "github": "github"}
+    gate_map = {
+        "telegram": "telegram",
+        "slack": "slack",
+        "github": "github",
+        "cloud": "cloud",
+    }
     mod_name = gate_map.get(name)
     if not mod_name:
         raise SystemExit(f"[brr] unknown gate: {name} (available: {', '.join(gate_map)})")
