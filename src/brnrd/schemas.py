@@ -64,6 +64,15 @@ class PairApprove(BaseModel):
     project_id: str
 
 
+class TelegramPairStart(BaseModel):
+    project_id: str
+
+
+class TelegramPairStarted(BaseModel):
+    pair_code: str
+    instructions: str
+
+
 class PairStatus(BaseModel):
     status: str
     project_id: str | None = None
