@@ -43,6 +43,14 @@ def pair_request_id() -> str:
     return _rid("pair")
 
 
+def chat_binding_id() -> str:
+    return _rid("chat")
+
+
+def tg_pair_code_id() -> str:
+    return _rid("tgpair")
+
+
 def api_key() -> str:
     return "bk_" + secrets.token_urlsafe(32)
 
@@ -61,3 +69,9 @@ def poll_secret() -> str:
 
 def pair_code() -> str:
     return "BR-" + "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(4))
+
+
+def tg_pair_code() -> str:
+    # Distinct prefix from the daemon pair code so a `/start TG-…`
+    # never collides with a device-flow `BR-…`.
+    return "TG-" + "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(4))

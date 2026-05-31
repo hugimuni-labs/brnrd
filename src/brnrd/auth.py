@@ -57,8 +57,15 @@ def _resolve(db: Session, raw: str) -> Token:
     ).scalar_one_or_none()
     if token is None or token.revoked:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
-    if token.expires_at is not None and token.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="expired token")
+    expires_at = token.expires_at
+    if expires_at is not None:
+        # SQLite hands back naive datetimes; treat stored times as UTC.
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="expired token"
+            )
     return token
 
 

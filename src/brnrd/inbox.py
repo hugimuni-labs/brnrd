@@ -49,9 +49,32 @@ Forwarder = Callable[[ForwardItem], None]
 
 
 def default_forwarder(item: ForwardItem) -> None:
-    """Production seam. The prototype has no real platform wired, so
-    this is a no-op; ``_dev/enqueue`` flows are observed via a
-    capturing forwarder installed on ``app.state``."""
+    """Fallback seam when no platform is configured — a no-op.
+    ``_dev/enqueue`` flows are observed via a capturing forwarder."""
+
+
+def make_default_forwarder(settings) -> Forwarder:
+    """Build the production forwarder for the configured platforms.
+
+    Dispatches by ``reply_to['platform']``. Today only Telegram is
+    wired; an unknown / unconfigured platform falls back to a no-op so
+    a response is never lost in a crash (it's just not delivered).
+    """
+
+    def forward(item: ForwardItem) -> None:
+        reply_to = item.reply_to or {}
+        if reply_to.get("platform") == "telegram" and settings.telegram_bot_token:
+            from .platforms import telegram
+
+            telegram.send_message(
+                settings.telegram_bot_token,
+                reply_to["chat_id"],
+                item.body,
+                topic_id=reply_to.get("topic_id") or None,
+                reply_to_message_id=reply_to.get("message_id") or None,
+            )
+
+    return forward
 
 
 def _loads(blob: str) -> dict[str, Any]:

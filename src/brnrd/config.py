@@ -44,6 +44,13 @@ class Settings:
     # The dev enqueue ingress stands in for real platform webhooks.
     # Off in production; on by default for the prototype.
     enable_dev_endpoints: bool = os.environ.get("BRNRD_ENABLE_DEV", "1") != "0"
+    # Telegram: a single managed bot, multiplexed by chat_id. The
+    # webhook is authenticated by the secret-token header Telegram
+    # echoes back from setWebhook (not a bearer).
+    telegram_bot_token: str = os.environ.get("BRNRD_TELEGRAM_BOT_TOKEN", "")
+    telegram_webhook_secret: str = os.environ.get("BRNRD_TELEGRAM_WEBHOOK_SECRET", "")
+    # Web dashboard session cookie name.
+    session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
 
 
 def get_settings() -> Settings:
