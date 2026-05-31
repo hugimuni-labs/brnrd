@@ -226,6 +226,26 @@ not forced here.
   unauthenticated; the page lists the account's projects; approving
   makes the CLI poll return the minted daemon token.
 
+## Deployment (Upsun)
+
+brnrd deploys to Upsun; the brr daemon stays local and dials out, so
+only brnrd is hosted. `.upsun/config.yaml` + `.environment` configure a
+`python:3.12` app with a PostgreSQL relationship: build
+`pip install .[backend,postgres]` (psycopg3, wheels-only), start
+`uvicorn brnrd:create_app --factory --host 0.0.0.0 --port $PORT`
+(tcp/`$PORT`). `BRNRD_DATABASE_URL` (`postgresql+psycopg://`) and
+`BRNRD_PUBLIC_BASE_URL` (the primary route) are derived in
+`.environment` from the platform's relationship/route vars; secrets
+(bot token, webhook secret) ride `upsun variable:create` and are never
+committed. Postgres is a clean drop-in: `db.make_engine` gates its
+SQLite-only `connect_args` and `Event.seq` is an autoincrement PK
+(→ `SERIAL`), so `create_all` on startup suffices (no Alembic yet).
+
+Gotcha: a Telegram bot takes exactly one consumer — `getUpdates` (the
+local `telegram` gate) and `setWebhook` (brnrd) are mutually exclusive
+on the same token. Run brnrd on its own bot, or migrate the bot off
+the local gate; you can't do both at once.
+
 ## Read next
 
 1. [`design-brnrd-protocol.md`](design-brnrd-protocol.md) — the

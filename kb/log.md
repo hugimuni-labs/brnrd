@@ -5260,3 +5260,33 @@ cookie, bad-login 401, connect-needs-login redirect, project listing,
 approve → poll returns token). Full suite 535 green. Open follow-ups
 unchanged minus the two now shipped: GitHub webhook ingress, fuller
 dashboard, caps/tiers/billing, drop-queued-body-after-ack.
+
+## [2026-05-31] implement | brnrd Upsun deploy config + Postgres portability check
+
+Made brnrd deployable on Upsun (Platform.sh engine); the brr daemon
+stays local and dials out, so only brnrd is hosted.
+
+- `.upsun/config.yaml`: rewrote the `project:init` scaffold, which had
+  mis-detected `.local/brr-logo` (the logo-gif project) as the app root
+  and wired its `requirements.txt` + npm into the build. Now
+  `source.root: /`, `python:3.12`, a `postgresql` relationship, build
+  `pip install ".[backend,postgres]"`, start `uvicorn
+  brnrd:create_app --factory --host 0.0.0.0 --port $PORT` (tcp/`$PORT`
+  per Upsun docs), dev enqueue off in prod, no mounts (state in PG).
+- `.environment`: derives `BRNRD_DATABASE_URL`
+  (`postgresql+psycopg://` from the `POSTGRESQL_*` relationship vars)
+  and `BRNRD_PUBLIC_BASE_URL` (primary route decoded from
+  `PLATFORM_ROUTES`) so nothing per-environment is hard-coded.
+- `pyproject.toml`: `postgres` extra (`psycopg[binary]`, wheels-only,
+  no native build). SQLite stays the local default.
+- Verified Postgres is a no-code-change drop-in: `db.make_engine`
+  already gates its SQLite-only `connect_args`, and `Event.seq` is an
+  autoincrement PK → `SERIAL` on PG, so `create_all` on startup is
+  enough (no Alembic yet).
+
+Discovery worth keeping: a Telegram bot allows exactly one consumer —
+`getUpdates` (the local `telegram` gate) and `setWebhook` (brnrd) are
+mutually exclusive on the same token. Reusing a bot for brnrd retires
+the local gate for that bot; running both in parallel needs a second
+bot (the path chosen for this deploy). Secrets ride `upsun
+variable:create` (`env:` prefix), never committed.
