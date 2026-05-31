@@ -374,17 +374,20 @@ dive-in map) and are stable until something contradicts them.
   permission-prompt API + gate-side integration (third). Backend
   lives at `src/brnrd/` in the monorepo.
 - [brnrd inbox-as-service prototype](plan-brnrd-inbox-prototype.md) —
-  *in flight (started 2026-05-27)*. The first executable slice of
-  `src/brnrd/`, unblocking the managed-gates launch. FastAPI +
-  SQLAlchemy (SQLite) backend: accounts / projects / device-flow
-  connect + the daemon-facing register / long-poll / respond /
-  deregister loop, with a `cloud` gate (`src/brr/gates/cloud.py`)
-  built on a shared gate runtime (`src/brr/gates/runtime.py`)
-  extracted from the Slack + Telegram gates. A `_dev/enqueue`
-  ingress stands in for real webhooks; response bodies are
-  forwarded out and never persisted (data-min). AGPLv3 per the
-  license split. Deferred: real webhooks, caps/billing, the
-  `src/brnrd_web/` dashboard, failover.
+  *in flight (started 2026-05-27)*. The executable `src/brnrd/`
+  prototype unblocking the managed-gates launch. FastAPI +
+  SQLAlchemy (SQLite) backend. **Slice 1:** accounts / projects /
+  device-flow connect + the daemon-facing register / long-poll /
+  respond / deregister loop, with a `cloud` gate
+  (`src/brr/gates/cloud.py`) built on a shared gate runtime
+  (`src/brr/gates/runtime.py`) extracted from the Slack + Telegram
+  gates; response bodies are forwarded out and never persisted
+  (data-min). **Slice 2 (2026-05-31):** real `POST
+  /v1/webhooks/telegram` ingress (secret-header auth, chat→project
+  pairing, platform-dispatching forwarder) + a thin `src/brnrd_web/`
+  dashboard (login + the device-flow approve page) so connect is
+  human-completable. AGPLv3 per the license split. Deferred: GitHub
+  webhook, fuller dashboard, caps/billing, failover.
 - [GitHub gate vs brnrd GitHub App design](design-github-gate-vs-brnrd-app.md) —
   *accepted 2026-05-27*. Boundary doc for the GitHub side: what the
   OSS polling gate owns and keeps owning (PAT auth, three-trigger

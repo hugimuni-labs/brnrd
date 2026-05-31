@@ -1,6 +1,22 @@
-# Plan: brnrd inbox-as-service spine (first slice)
+# Plan: brnrd inbox-as-service spine
 
 Status: in flight (started 2026-05-27)
+
+Shipped so far:
+
+- **Slice 1 — spine + connect (2026-05-27).** Inbox queue, accounts /
+  projects / device-flow pairing, daemon register / long-poll /
+  respond / deregister, dev enqueue stand-in, the shared gate runtime,
+  and the `cloud` gate. See "Wire-format subset" below.
+- **Slice 2 — Telegram ingress + approve page (2026-05-31).** Real
+  `POST /v1/webhooks/telegram`, Telegram chat-pairing, a
+  platform-dispatching forwarder, and a thin `src/brnrd_web` dashboard
+  (login + the device-flow approve page) so connect is human-
+  completable. See "Second slice" below.
+
+Still ahead (tracked in [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)):
+GitHub webhook ingress, the fuller dashboard (projects / tasks /
+vault), subscription tiers + billing, multi-daemon routing/failover.
 
 The first executable slice of the brnrd backend. It exists to
 unblock [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md),
@@ -41,11 +57,12 @@ slice's done-signal.
 - **Storage:** SQLite via SQLAlchemy, URL-swappable to Postgres
   later (`BRNRD_DATABASE_URL`). No Alembic yet — `create_all` on
   startup; migrations land with Postgres.
-- **Out (deferred, tracked in the launch plan):** real
-  Telegram / GitHub webhook ingress + signature verification,
-  project caps + subscription tiers, billing, failover compute,
-  the `src/brnrd_web/` dashboard, multi-daemon routing/failover
-  policy, credential vault.
+- **Out (deferred, tracked in the launch plan):** GitHub webhook
+  ingress + signature verification, project caps + subscription
+  tiers, billing, failover compute, the *fuller* `src/brnrd_web/`
+  dashboard (projects / tasks beyond login + approve), multi-daemon
+  routing/failover policy, credential vault. (Telegram webhook
+  ingress and the thin approve page shipped in slice 2.)
 
 ## Wire-format subset implemented
 
@@ -91,6 +108,48 @@ response body. Event bodies are retained only while queued for
 their own daemon to drain (the user's own task text, for the
 user's own daemon); dropping queued bodies after ack is a noted
 follow-up, not part of the spine.
+
+## Second slice — Telegram ingress + approve page
+
+A single managed bot serves every account, multiplexed by `chat_id`.
+The webhook is authenticated by the secret-token header Telegram
+echoes from `setWebhook` (`X-Telegram-Bot-Api-Secret-Token`,
+constant-time compared) — not a bearer, since Telegram can't carry
+one.
+
+| Method | Path | Auth | Role |
+|--------|------|------|------|
+| POST | `/v1/accounts/pair/telegram` | account | issue a one-time `TG-…` code bound to a project |
+| POST | `/v1/webhooks/telegram` | secret header | `/start <code>` binds the chat; a bound chat's message enqueues; an unbound chat is ignored |
+| GET/POST | `/login` | — | web session login (sets the `brnrd_session` cookie) |
+| GET/POST | `/connect/{code}` | session cookie | the device-flow approve page (lists projects, calls `approve_core`) |
+
+Routing home: a bound chat's message enqueues with an opaque
+`reply_to = {platform, chat_id, topic_id, message_id}`. When the
+runner's response comes back through `POST /v1/daemons/responses`, the
+**platform-dispatching forwarder** (`inbox.make_default_forwarder`)
+reads `reply_to['platform']` and posts the body via the Telegram Bot
+API, threaded under the source message — still without persisting it.
+
+Chat→project binding is global-unique on `(platform, chat_id)`: a
+`/start` from a chat already bound to a *different* account is refused
+(the bot replies), so one chat can't be silently re-pointed.
+
+Code-reuse notes for the slice:
+
+- `approve_core(db, account_id, code, project_id)` was factored out of
+  the API approve endpoint so the web `/connect/{code}` page mints the
+  exact same daemon token by the exact same path.
+- `authenticate` / `issue_session_token` were factored out of the API
+  login endpoint and reused by the web `/login`.
+- `src/brnrd_web/` is its own AGPLv3 package (own `LICENSE`), bundled
+  by the `brr[backend]` extra and `include_router`-ed by the app;
+  forms pull in `python-multipart`. Hand-rolled HTML for now — a
+  template engine lands with the fuller dashboard.
+- Latent bug fixed in passing: `auth._resolve` compared a naive
+  SQLite `expires_at` against an aware `now`; session tokens (the
+  first expiring bearer exercised) tripped it. Stored times are now
+  coerced to UTC before comparison.
 
 ## Build order
 
@@ -157,6 +216,15 @@ not forced here.
   response, persists its `since` cursor across a restart.
 - Shared-runtime extraction: the full existing Slack + Telegram
   suites stay green.
+- Slice 2 (`test_brnrd_telegram.py`): bad/absent webhook secret →
+  403; `/start <code>` binds the chat and confirms; an invalid code
+  is reported; a bound chat enqueues with the right `reply_to`; an
+  unbound chat is ignored; a runner response is forwarded back to the
+  originating chat, threaded under the source message.
+- Slice 2 (`test_brnrd_web.py`): login sets the session cookie and
+  rejects bad credentials; `/connect/{code}` redirects to login when
+  unauthenticated; the page lists the account's projects; approving
+  makes the CLI poll return the minted daemon token.
 
 ## Read next
 
