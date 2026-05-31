@@ -5173,3 +5173,49 @@ data-trace stage view with `↓` flow connectors (`[data-stage]` hooks for
 future animation), and kb-axis rendering; verified via CDP screenshots
 (desktop summary panel, data-trace, threatened invariant, kb card, 390px
 mobile). 510 tests still green.
+
+## [2026-05-27] implement | brnrd inbox-as-service spine (first slice)
+
+Built the first executable slice of `src/brnrd/`, the prototype that
+unblocks [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md).
+Sequenced in [`plan-brnrd-inbox-prototype.md`](plan-brnrd-inbox-prototype.md).
+
+- **Backend** (`src/brnrd/`, FastAPI + SQLAlchemy/SQLite, AGPLv3 per
+  [`decision-monorepo-structure.md`](decision-monorepo-structure.md)):
+  accounts + initial API key, sessions, projects (idempotent on name),
+  a device-flow connect handshake (`POST /v1/accounts/pair` →
+  account-approve → poll until paired, minting a project-scoped daemon
+  token), and the daemon-facing loop — `register`, long-poll
+  `inbox?since=&wait=`, `responses`, `deregister`. A `_dev/enqueue`
+  ingress stands in for the real Telegram/GitHub webhooks so the
+  queue/drain/respond loop is testable end-to-end.
+- **Data minimization, made concrete.** `POST /v1/daemons/responses`
+  records only metadata (status / length / latency-ms) and hands the
+  body to a `Forwarder` seam (no-op in prod default, capturing list in
+  tests, the platform post in production) — the response body is never
+  a column. The inbound task body is dropped once answered. This is the
+  "you own your data" stance from
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md) enforced at the
+  schema level.
+- **Code reuse (the operator's ask).** Extracted
+  `src/brr/gates/runtime.py` — gate state files, per-task progress-card
+  state, the backoff loop, and the `list_done → deliver → cleanup`
+  delivery skeleton — and migrated the Slack + Telegram gates onto it as
+  thin delegators (their suites stayed green unchanged; the per-platform
+  chat/thread resolution moved into each gate's `deliver` closure). The
+  new `cloud` gate is then a thin wrapper on that runtime plus an HTTP
+  seam; `brr brnrd connect` runs the device flow; `cloud` joined
+  `_BUILTIN_GATES`. The webhook/PR-shaped GitHub gate stays out of the
+  extraction (different protocol) — a noted later candidate, not forced.
+- **Bootstrap.** `pyproject.toml` gained a `backend` extra (folded into
+  `dev` so the suite exercises brnrd) + explicit src-layout package
+  discovery; per-package `LICENSE` files (`src/brr/` MIT, `src/brnrd/`
+  AGPLv3) and a root `LICENSE-OVERVIEW.md`.
+
+Tests: 14 new (round trip, long-poll timeout + wake-on-enqueue, cursor
+idempotency, project isolation, token-kind 401/403 scoping, pair
+secret, metadata-only response, idempotent project create; cloud-gate
+connect + drain/deliver + cursor-resume + orphan-skip). Full suite 524
+green. Open follow-ups: real webhook ingress + signature verification,
+project caps / subscription tiers, the dashboard, drop-queued-body-
+after-ack, threading the runner's real response status.

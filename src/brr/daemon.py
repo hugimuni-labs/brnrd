@@ -50,7 +50,7 @@ from . import updates
 from .task import Task
 
 _SCAN_INTERVAL = 3
-_BUILTIN_GATES = ["telegram", "slack", "github"]
+_BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
 # Cadence for the run-time heartbeat packet. 30s is short enough that
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
