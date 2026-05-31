@@ -210,6 +210,67 @@
 
   .empty { color: var(--fg-faint); padding: 30px 0; text-align: center; }
 
+  /* risk pointer (amber, not the green "enables" box) */
+  .enables.risk { background: rgba(232,192,106,.06); border-color: rgba(232,192,106,.22); color: var(--amber); }
+  .enables.risk .lab { color: var(--amber); }
+
+  /* visual stat panel — meant to imprint on a glance, not be read */
+  .stats { display: flex; flex-direction: column; gap: 12px; margin: 4px 0;
+           padding: 13px; border-radius: 7px; background: #07100c; border: 1px solid var(--border); }
+  .stat { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .stat .slab { color: var(--fg-dim); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .stat .cap { color: var(--fg-faint); font-size: 11.5px; overflow-wrap: anywhere; }
+  .segbar { display: flex; height: 15px; border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
+  .segbar .seg { display: flex; align-items: center; justify-content: center; min-width: 0;
+                 font-size: 9.5px; color: var(--bg); font-weight: 700; letter-spacing: .3px; overflow: hidden; }
+  .seg.fix { background: var(--green); } .seg.refactor { background: var(--cyan); } .seg.feature { background: var(--violet); }
+  .meter { height: 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-2); overflow: hidden; }
+  .meter > i { display: block; height: 100%; background: var(--green); }
+  .meter.warn > i { background: var(--amber); } .meter.kb > i { background: var(--violet); }
+  .delta { display: flex; align-items: center; gap: 8px; }
+  .delta .dbar { flex: 1; height: 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-2); overflow: hidden; }
+  .delta .dbar > i { display: block; height: 100%; }
+  .delta .from > i { background: var(--fg-faint); }
+  .delta .to.good > i { background: var(--green); } .delta .to.warn > i { background: var(--amber); }
+  .delta .arr { color: var(--fg-faint); }
+  .heat { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .heat .pip2 { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--border); background: var(--surface-2); }
+  .heat .pip2.good { background: rgba(116,224,140,.5); border-color: var(--green); }
+  .heat .pip2.warn { background: rgba(232,192,106,.6); border-color: var(--amber); cursor: pointer; }
+  .heat .pip2.bad { background: rgba(240,122,114,.6); border-color: var(--red); cursor: pointer; }
+  .tagrow { display: flex; flex-wrap: wrap; gap: 5px; }
+  .tagrow .tg { font-size: 11px; padding: 2px 8px; border-radius: 4px; color: var(--teal);
+                background: rgba(97,201,176,.08); border: 1px solid rgba(97,201,176,.2); overflow-wrap: anywhere; }
+  .rawsize { color: var(--fg-faint); font-size: 11px; margin-top: 13px; overflow-wrap: anywhere; }
+
+  /* invariants (item cards) */
+  .inv { display: flex; flex-wrap: wrap; gap: 7px; align-items: baseline; padding: 5px 0; }
+  .inv .pip { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; padding: 2px 7px;
+              border-radius: 4px; font-weight: 700; flex-shrink: 0; }
+  .inv.held .pip { background: rgba(116,224,140,.14); color: var(--green); }
+  .inv.threatened .pip { background: rgba(232,192,106,.16); color: var(--amber); }
+  .inv .iname { color: var(--fg); }
+  .inv .inote { color: var(--fg-dim); min-width: 0; overflow-wrap: anywhere; }
+  .inv .ilink { color: var(--amber); cursor: pointer; white-space: nowrap; }
+
+  /* data-trace stages — structured steppable (animation hook: [data-stage]) */
+  .trace { display: flex; flex-direction: column; gap: 0; margin: 4px 0; }
+  .stage { display: block; width: 100%; text-align: left; border: 1px solid var(--border);
+           border-left: 3px solid var(--teal); border-radius: 6px; background: var(--surface-2);
+           padding: 8px 11px; color: var(--fg); font-family: var(--mono); }
+  .stage.clk { cursor: pointer; } .stage.clk:hover { border-color: var(--teal); }
+  .stage .stlab { color: var(--teal); font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; }
+  .stage .datum { color: var(--fg); margin: 3px 0 2px; overflow-wrap: anywhere; font-size: 13px; }
+  .stage .snote { color: var(--fg-faint); font-size: 11.5px; overflow-wrap: anywhere; }
+  .trace .flow { color: var(--teal); text-align: center; font-size: 13px; line-height: 1; padding: 3px 0; }
+
+  /* kb-native axes */
+  .kbax .graph { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; color: var(--fg-dim); font-size: 12.5px; }
+  .kbax .graph b { color: var(--violet); }
+  .lifeflag { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+              padding: 2px 7px; border-radius: 4px; font-weight: 700;
+              background: rgba(185,140,224,.16); color: var(--violet); }
+
   /* never let a long label/value punch through the card on narrow viewports */
   .what, .enables, .headline, .tension .pair, .member .mnote,
   .card > .head .name { overflow-wrap: anywhere; }
@@ -368,6 +429,111 @@
     return el("div", { class: "prov" }, T("from " + bits.join(" · ")));
   }
 
+  // ---- visual stat panel (summary entry-stats) --------------------------
+  const pct = v => Math.max(0, Math.min(100, Math.round((v || 0) * 100)));
+  function statWidget(s) {
+    const wrap = el("div", { class: "stat" }, [ el("div", { class: "slab" }, T(s.label || "")) ]);
+    if (s.viz === "bar") {
+      const total = (s.segments || []).reduce((a, x) => a + (x.weight || 0), 0) || 1;
+      const bar = el("div", { class: "segbar" });
+      (s.segments || []).forEach(seg => bar.appendChild(
+        el("div", { class: "seg " + (seg.tone || ""), style: "flex:" + (seg.weight || 0) },
+          T((seg.weight / total) > 0.13 ? seg.label : ""))));
+      wrap.appendChild(bar);
+    } else if (s.viz === "meter") {
+      wrap.appendChild(el("div", { class: "meter " + (s.tone || "good") }, el("i", { style: "width:" + pct(s.value) + "%" })));
+    } else if (s.viz === "delta") {
+      wrap.appendChild(el("div", { class: "delta" }, [
+        el("div", { class: "dbar from" }, el("i", { style: "width:" + pct(s.before) + "%" })),
+        el("span", { class: "arr" }, T("→")),
+        el("div", { class: "dbar to " + (s.tone || "good") }, el("i", { style: "width:" + pct(s.after) + "%" })),
+      ]));
+    } else if (s.viz === "heat") {
+      const h = el("div", { class: "heat" });
+      (s.dots || []).forEach(dot => {
+        const pip = el("span", { class: "pip2 " + (dot.tone || "good"), title: dot.title || "" });
+        if (dot.ref && BYID[dot.ref]) pip.addEventListener("click", () => go({ type: "card", id: dot.ref }));
+        h.appendChild(pip);
+      });
+      wrap.appendChild(h);
+    } else if (s.viz === "tags") {
+      const tr = el("div", { class: "tagrow" });
+      (s.items || []).forEach(it => tr.appendChild(el("span", { class: "tg" }, T(it))));
+      wrap.appendChild(tr);
+    }
+    if (s.caption) wrap.appendChild(el("div", { class: "cap" }, T(s.caption)));
+    return wrap;
+  }
+  function statPanel(stats) {
+    if (!stats || !stats.length) return null;
+    const box = el("div", { class: "stats" });
+    stats.forEach(s => box.appendChild(statWidget(s)));
+    return box;
+  }
+
+  // ---- invariant axis (what the change holds constant) ------------------
+  function invariantBlock(c) {
+    if (!c.invariants || !c.invariants.length) return null;
+    const box = el("div");
+    box.appendChild(el("div", { class: "sec" }, T("invariant")));
+    c.invariants.forEach(iv => {
+      const row = el("div", { class: "inv " + (iv.state || "held") }, [
+        el("span", { class: "pip" }, T(iv.state || "held")),
+        el("span", { class: "iname" }, T(iv.name || "")),
+      ]);
+      if (iv.note) row.appendChild(el("span", { class: "inote" }, T("— " + iv.note)));
+      if (iv.ref && BYID[iv.ref]) row.appendChild(
+        el("span", { class: "ilink", on: { click: () => go({ type: "card", id: iv.ref }) } }, T("↗ concern")));
+      box.appendChild(row);
+    });
+    return box;
+  }
+
+  // ---- data-trace stages (follow the datum; steppable for animation) ----
+  function traceStages(c) {
+    if (!c.stages || !c.stages.length) return null;
+    const box = el("div");
+    box.appendChild(el("div", { class: "sec" }, T((c.trace_kind === "data" ? "data-trace" : "trace") + (c.datum ? " — follow: " + c.datum : ""))));
+    const tr = el("div", { class: "trace" });
+    c.stages.forEach((st, i) => {
+      if (i > 0) tr.appendChild(el("div", { class: "flow" }, T("↓")));
+      const tgt = st.card && BYID[st.card];
+      tr.appendChild(el(tgt ? "button" : "div", {
+        class: "stage" + (tgt ? " clk" : ""), "data-stage": i,
+        on: tgt ? { click: () => go({ type: "card", id: st.card }) } : null,
+      }, [
+        el("div", { class: "stlab" }, T(st.label || ("stage " + (i + 1)))),
+        el("div", { class: "datum" }, T(st.datum || "")),
+        st.note ? el("div", { class: "snote" }, T(st.note)) : null,
+      ]));
+    });
+    box.appendChild(tr);
+    return box;
+  }
+
+  // ---- kb-native axes (claim / graph position / lifecycle) --------------
+  function kbAxes(c) {
+    if (!c.kb_axes) return null;
+    const k = c.kb_axes, box = el("div", { class: "kbax" });
+    if (k.claim_delta) { box.appendChild(el("div", { class: "sec" }, T("claim delta"))); box.appendChild(el("div", { class: "what" }, T(k.claim_delta))); }
+    if (k.graph_delta) {
+      const g = k.graph_delta;
+      box.appendChild(el("div", { class: "sec" }, T("graph position")));
+      const line = el("div", { class: "graph" }, [ el("span", {}, [ T("inbound "), el("b", {}, T(g.inbound_before + " → " + g.inbound_after)) ]) ]);
+      if (g.outbound != null) line.appendChild(el("span", {}, [ T("· outbound "), el("b", {}, T(String(g.outbound))) ]));
+      if (g.hub) line.appendChild(el("span", {}, T("· hub " + g.hub)));
+      if (g.orphan === false) line.appendChild(el("span", {}, T("· not orphaned")));
+      box.appendChild(line);
+      const max = Math.max(g.inbound_after || 0, 6);
+      box.appendChild(el("div", { class: "meter kb", style: "margin-top:5px" }, el("i", { style: "width:" + pct((g.inbound_after || 0) / max) + "%" })));
+    }
+    if (k.lifecycle && k.lifecycle.to) {
+      box.appendChild(el("div", { class: "sec" }, T("lifecycle")));
+      box.appendChild(el("span", { class: "lifeflag" }, T((k.lifecycle.from ? k.lifecycle.from + " → " : "") + k.lifecycle.to)));
+    }
+    return box;
+  }
+
   // ---- per-kind body builders -------------------------------------------
   function bodyUncertainty(c) {
     const b = el("div", { class: "body" });
@@ -398,19 +564,29 @@
     if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
     if (c.shape) {
       const s = c.shape;
-      b.appendChild(el("div", { class: "sec" }, T((s.card_count ? s.card_count + " cards · " : "") + ((s.arcs && s.arcs.length) ? s.arcs.length + " braided arcs" : "shape"))));
-      (s.arcs || []).forEach(a => b.appendChild(el("div", { class: "row" }, [ el("span", { class: "key" }, T(a.theme)), el("span", { class: "val" }, T(a.what)) ])));
+      if (s.arcs && s.arcs.length) {
+        b.appendChild(el("div", { class: "sec" }, T(s.arcs.length + " braided arcs")));
+        s.arcs.forEach(a => b.appendChild(el("div", { class: "row" }, [ el("span", { class: "key" }, T(a.theme)), el("span", { class: "val" }, T(a.what)) ])));
+      }
       if (s.surface_area) { b.appendChild(el("div", { class: "sec" }, T("touches"))); b.appendChild(el("div", { class: "what" }, T(s.surface_area.join(" · ")))); }
-      if (s.risk_pointer) b.appendChild(el("div", { class: "enables" }, [ el("span", { class: "lab" }, T("⚠ risk")), T(s.risk_pointer) ]));
+      if (s.risk_pointer) b.appendChild(el("div", { class: "enables risk" }, [ el("span", { class: "lab" }, T("⚠ risk")), T(s.risk_pointer) ]));
     }
-    if (c.secondary_stats) { b.appendChild(el("div", { class: "sec" }, T("detail (numbers in service of the shape)"))); b.appendChild(rows(c.secondary_stats)); }
+    const sp = statPanel(c.entry_stats);
+    if (sp) { b.appendChild(el("div", { class: "sec" }, T("shape, at a glance"))); b.appendChild(sp); }
+    if (c.secondary_stats) {
+      const raw = c.secondary_stats, bits = [];
+      ["changed_files", "additions", "deletions", "commits"].forEach(k => { if (k in raw) bits.push(raw[k] + " " + k.replace(/_/g, " ")); });
+      if (bits.length) b.appendChild(el("div", { class: "rawsize" }, T("raw size (demoted): " + bits.join(" · "))));
+    }
     const ec = edgeChips(c); if (ec) { b.appendChild(el("div", { class: "sec" }, T("jump to"))); b.appendChild(ec); }
     return b;
   }
   function bodyWalkthrough(c) {
     const b = el("div", { class: "body" });
     if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
-    if (c.story) { ["setup", "action", "outcome"].forEach(k => { if (c.story[k]) b.appendChild(el("div", { class: "row" }, [ el("span", { class: "key" }, T(k)), el("span", { class: "val" }, T(c.story[k])) ])); }); }
+    const ts = traceStages(c);
+    if (ts) b.appendChild(ts);
+    else if (c.story) { ["setup", "action", "outcome"].forEach(k => { if (c.story[k]) b.appendChild(el("div", { class: "row" }, [ el("span", { class: "key" }, T(k)), el("span", { class: "val" }, T(c.story[k])) ])); }); }
     if (c.members && c.members.length) {
       b.appendChild(el("div", { class: "sec" }, T("members — open each (descends a level)")));
       c.members.forEach(m => {
@@ -431,6 +607,8 @@
     const b = el("div", { class: "body" });
     if (c.lore && c.lore.descriptive) b.appendChild(el("div", { class: "what" }, T(c.lore.descriptive)));
     if (c.lore && c.lore.possibility) b.appendChild(el("div", { class: "enables" }, [ el("span", { class: "lab" }, T("enables")), T(c.lore.possibility) ]));
+    const ka = kbAxes(c); if (ka) b.appendChild(ka);
+    const iv = invariantBlock(c); if (iv) b.appendChild(iv);
     if (c.stats) { b.appendChild(el("div", { class: "sec" }, T("stats"))); b.appendChild(rows(c.stats)); }
     if (c.demo && c.demo.content) { b.appendChild(el("div", { class: "sec" }, T("demo — " + (c.demo.kind || "")))); b.appendChild(el("pre", { class: "demo" }, T(c.demo.content))); }
     const zl = zoomLadder(c); if (zl) b.appendChild(zl);
