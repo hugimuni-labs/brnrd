@@ -10,8 +10,6 @@ Required setup:
 
 from __future__ import annotations
 
-import json
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -20,8 +18,8 @@ import requests
 
 from .. import protocol, run_progress
 from ..task import Task
+from . import runtime
 
-_BACKOFF_MAX = 120
 _POLL_INTERVAL = 5
 
 
@@ -51,62 +49,22 @@ def _slack_api(token: str, method: str, params: dict | None = None) -> dict:
 # ── State ────────────────────────────────────────────────────────────
 
 
-def _state_path(brr_dir: Path) -> Path:
-    return brr_dir / "gates" / "slack.json"
-
-
 def _load_state(brr_dir: Path) -> dict:
-    path = _state_path(brr_dir)
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+    return runtime.load_state(brr_dir, "slack")
 
 
 def _save_state(brr_dir: Path, state: dict) -> None:
-    path = _state_path(brr_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-
-
-_PROGRESS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _progress_state_path(brr_dir: Path, task_id: str) -> Path:
-    """Per-task progress card state file.
-
-    Each task owns its own state file under
-    ``.brr/gates/slack/progress/<task-id>.json``. The render path for
-    task A only reads / writes A's file, so concurrent workers handling
-    different tasks never share a state surface. See
-    ``kb/design-concurrent-execution.md``.
-    """
-    safe = _PROGRESS_SAFE_RE.sub("_", task_id) if task_id else "_unknown"
-    return brr_dir / "gates" / "slack" / "progress" / f"{safe}.json"
+    runtime.save_state(brr_dir, "slack", state)
 
 
 def _load_progress_for_task(brr_dir: Path, task_id: str) -> dict | None:
     """Return this task's previously-rendered card state, or None."""
-    path = _progress_state_path(brr_dir, task_id)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return runtime.load_task_card(brr_dir, "slack", task_id)
 
 
-def _save_progress_for_task(
-    brr_dir: Path, task_id: str, entry: dict,
-) -> None:
+def _save_progress_for_task(brr_dir: Path, task_id: str, entry: dict) -> None:
     """Write this task's card state file (atomic via rename)."""
-    path = _progress_state_path(brr_dir, task_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(entry, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+    runtime.save_task_card(brr_dir, "slack", task_id, entry)
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -167,16 +125,11 @@ def is_configured(brr_dir: Path) -> bool:
 
 
 def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
-    backoff = 1
-    while True:
-        try:
-            _loop_once(brr_dir, inbox_dir, responses_dir)
-            time.sleep(_POLL_INTERVAL)
-            backoff = 1
-        except Exception as e:
-            print(f"[brr:slack] error: {e}, retrying in {backoff}s")
-            time.sleep(backoff)
-            backoff = min(backoff * 2, _BACKOFF_MAX)
+    runtime.run_loop(
+        lambda: _loop_once(brr_dir, inbox_dir, responses_dir),
+        label="slack",
+        poll_interval=_POLL_INTERVAL,
+    )
 
 
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
@@ -233,11 +186,7 @@ def _deliver_responses(
     token: str,
     channel: str,
 ) -> None:
-    for event in protocol.list_done(inbox_dir, "slack"):
-        eid = event["id"]
-        body = protocol.read_response(responses_dir, eid)
-        if body is None:
-            continue
+    def deliver(event: dict, body: str) -> None:
         event_channel = str(event.get("slack_channel") or channel)
         # Match the progress card: prefer the parent thread when the
         # source message was itself a reply, otherwise treat the source
@@ -250,13 +199,9 @@ def _deliver_responses(
         params: dict = {"channel": event_channel, "text": body}
         if thread_ts:
             params["thread_ts"] = thread_ts
-        try:
-            _slack_api(token, "chat.postMessage", params)
-        except Exception as e:
-            print(f"[brr:slack] delivery error for {eid}: {e}")
-            continue
-        resp_path = protocol.response_path(responses_dir, eid)
-        protocol.cleanup(event["_path"], resp_path)
+        _slack_api(token, "chat.postMessage", params)
+
+    runtime.deliver_responses(inbox_dir, responses_dir, "slack", deliver)
 
 
 # ── Live progress card ──────────────────────────────────────────────
