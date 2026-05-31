@@ -1,6 +1,6 @@
 {
   "schema_version": "0.1-prototype",
-  "_note": "Hand-authored diffense review pack for Gurio/brr PR #64. NOT a runner emission. Authored 2026-05-29 to pressure-test the card schema before it is locked. Companion render + findings: kb/diffense-prototype-pr64.md. Runtime home would be .brr/diffense/64/pack.json.",
+  "_note": "Hand-authored diffense review pack for Gurio/brr PR #64. NOT a runner emission. Authored 2026-05-29, extended 2026-05-31 (pass 10: entry-stat distributions, invariants, data-trace, kb axes) to pressure-test the card schema before it is locked. Companion render + findings: kb/diffense-prototype-pr64.md. Runtime home would be .brr/diffense/<task-id>/pack.json (keyed by task, not PR \u2014 brr publishes a branch; see #68).",
   "metadata": {
     "pr": {
       "repo": "Gurio/brr",
@@ -41,7 +41,6 @@
         "descriptive": "Inline PR review-comment @-mentions now actually reach the gate (they were invisible — those comments live on /pulls/comments, not /issues/comments), replies land in-thread, and steady-state polling gets cheaper via conditional requests. Three arcs braided into one PR."
       },
       "shape": {
-        "card_count": 10,
         "arcs": [
           {"theme": "fix", "what": "inline review-comment round-trip: poll -> task -> in-thread reply"},
           {"theme": "refactor", "what": "monolithic github.py (1052 lines) -> 12-module package, brnrd-reusable core split out"},
@@ -50,7 +49,29 @@
         "surface_area": ["src/brr/gates/github/ (the GitHub gate)", "kb/ (1 new design page + cross-links)", "tests/test_github_gate.py"],
         "risk_pointer": "2 concerns (1 med: the seen-id cap) + 1 follow-up — read next"
       },
-      "secondary_stats": {"changed_files": 23, "additions": 2642, "deletions": 1221, "commits": 4},
+      "entry_stats": [
+        {"viz": "bar", "label": "change mix", "caption": "10 cards across 3 arcs",
+         "segments": [
+           {"label": "fix", "weight": 4, "tone": "fix"},
+           {"label": "refactor", "weight": 3, "tone": "refactor"},
+           {"label": "feature", "weight": 3, "tone": "feature"}
+         ]},
+        {"viz": "meter", "label": "public surface", "value": 1.0, "tone": "good",
+         "caption": "preserved verbatim — __all__ pinned across the 12-module split"},
+        {"viz": "heat", "label": "invariants", "caption": "2 held \u00b7 1 threatened (links the med concern)",
+         "dots": [
+           {"tone": "good", "title": "public import surface preserved"},
+           {"tone": "good", "title": "exactly-once delivery (since-cursor + seen-set)"},
+           {"tone": "warn", "title": "seen-set stays bounded \u2014 threatened on very busy PRs", "ref": "unc:seen-cap-dedup"}
+         ]},
+        {"viz": "delta", "label": "steady-state REST cost", "before": 1.0, "after": 0.05, "tone": "good",
+         "caption": "conditional 304s are free \u2014 a quiet repo polls at ~0 budget"},
+        {"viz": "meter", "label": "tests on new paths", "value": 0.9, "tone": "good",
+         "caption": "+6: transport 304, cursor threading, in-thread reply, review-comment event"},
+        {"viz": "tags", "label": "data-shape delta", "caption": "1 new event kind, 3 new cursor fields",
+         "items": ["+event pr-review-comment", "+cursor review_comments_since", "+cursor seen_review_comment_ids", "+cursor etags"]}
+      ],
+      "secondary_stats": {"_demoted": "raw size \u2014 tells you nothing about what to do", "changed_files": 23, "additions": 2642, "deletions": 1221, "commits": 4},
       "lateral_edges": [
         {"type": "points-at", "target": "unc:seen-cap-dedup"},
         {"type": "points-at", "target": "unc:summary-only-reviews"},
@@ -167,6 +188,15 @@
         "action": "The mention poller's review-comment pass reads /pulls/comments, filters for the mention, extracts pr_number/path/line, and emits a pr-review-comment event carrying github_path + github_line + branch_target.",
         "outcome": "The daemon builds a task scoped to that hunk; on delivery the response is posted in-thread via /pulls/{n}/comments/{cid}/replies with a quote-pointer preface, not as an orphaned top-level comment."
       },
+      "trace_kind": "data",
+      "datum": "an @-mention on an inline diff line",
+      "stages": [
+        {"label": "review comment", "datum": "{ body: '@brr \u2026', path, line, pull_request_url, id }", "note": "lives on /pulls/comments \u2014 invisible to the gate before this PR"},
+        {"label": "poll + filter", "datum": "kept iff mention \u2227 unseen \u2227 not self-authored", "note": "_poll_mention_review_comments", "card": "item:polling.review-comments"},
+        {"label": "normalise", "datum": "{ github_kind: 'pr-review-comment', github_path, github_line, github_pr_number, branch_target }", "note": "parse._format_review_comment_body + _extract_pr_number + _fetch_pr_head_branch"},
+        {"label": "task", "datum": "task scoped to the hunk (path + line + branch_target)", "note": "the daemon builds it"},
+        {"label": "in-thread reply", "datum": "POST /pulls/{n}/comments/{cid}/replies, quote-pointer preface", "note": "delivery._deliver_responses", "card": "item:delivery.in-thread-reply"}
+      ],
       "members": [
         {"order": 1, "card": "item:polling.review-comments", "note": "poll /pulls/comments for the mention"},
         {"order": 2, "card": "item:delivery.in-thread-reply", "note": "reply in the review thread"}
@@ -208,6 +238,9 @@
         "new_cursor_keys": ["review_comments_since", "seen_review_comment_ids"],
         "test_coverage": "+1 integration test (direct)"
       },
+      "invariants": [
+        {"name": "exactly-once review-comment delivery", "state": "threatened", "note": "the seen-set is bounded; an evicted id whose comment is later edited can re-fire", "ref": "unc:seen-cap-dedup"}
+      ],
       "zoom": [
         {"level": 0, "summary": "polls /pulls/comments for the mention; emits pr-review-comment events with path+line"},
         {"level": 1, "summary": "per comment: skip if seen / no mention / self-author; extract pr_number from pull_request_url; attach branch_target via _fetch_pr_head_branch; then check parent reviews for summary mentions"},
@@ -251,6 +284,9 @@
         "self_healing": true,
         "test_coverage": "+3 transport tests + 1 cursor-threading test"
       },
+      "invariants": [
+        {"name": "poll-result correctness under caching", "state": "held", "note": "304 means unchanged; a stale ETag self-heals at the cost of one 200, never a missed event"}
+      ],
       "zoom": [
         {"level": 0, "summary": "If-None-Match per (method,path); 304 is free; self-heals"},
         {"level": 1, "summary": "cache_key = '{method} {path}'; since-cursor deliberately excluded from the key so the latest ETag still rides every poll"},
@@ -294,6 +330,9 @@
         "quote_pointer": "all kinds in _COMMENT_KINDS get a blockquote preface",
         "test_coverage": "+1 in-thread reply test"
       },
+      "invariants": [
+        {"name": "the reply lands where the reviewer asked", "state": "held", "note": "routing keyed on kind + comment_id + pr_number; never an orphaned top-level comment"}
+      ],
       "zoom": [
         {"level": 0, "summary": "pr-review-comment -> in-thread reply; others -> top-level comment; all quote-prefaced"},
         {"leaf": "code", "locator_ref": "self"}
@@ -333,6 +372,9 @@
         "brnrd_reusable_modules": ["paths", "cache", "parse"],
         "oss_only_modules": ["client", "state", "wizard", "polling", "delivery", "progress", "loop"]
       },
+      "invariants": [
+        {"name": "public import surface", "state": "held", "note": "__init__.__all__ preserves every exported name verbatim; the 1052-line move is internal-only"}
+      ],
       "zoom": [
         {"level": 0, "summary": "monolith github.py -> github/ package; public surface unchanged"},
         {"level": 1, "summary": "split axis is reuse: pure core (paths/cache/parse) vs OSS-only transport; __all__ pins the surface so internal refactors stay private"},
@@ -368,6 +410,11 @@
         "inbound_links_delta": "0 -> 6 (index, plan-managed-gates-launch, subject-managed-mode, decision-runtime-dependencies, repo-dive-in-map, design-publish-kernel)",
         "sibling_sync": "design-git-layer-rework + plan-managed-gates-launch updated to point here",
         "successor_link_validity": "n/a (not superseding)"
+      },
+      "kb_axes": {
+        "claim_delta": "Asserts a citable OSS-gate \u27f7 managed-brnrd boundary: paths/cache/parse are the shared pure core brnrd imports; client/state/wizard/polling/delivery/progress/loop are OSS-only transport. Previously tribal knowledge.",
+        "graph_delta": {"inbound_before": 0, "inbound_after": 6, "outbound": 5, "hub": "subject-managed-mode", "orphan": false},
+        "lifecycle": {"from": null, "to": "accepted 2026-05-27"}
       },
       "zoom": [
         {"level": 0, "summary": "new accepted boundary doc: OSS gate vs brnrd App, and the shared pure core"},

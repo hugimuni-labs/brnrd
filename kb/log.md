@@ -5128,3 +5128,48 @@ server, and runner/publish wiring are not in it. With the read model
 validated, [`design-diffense.md`](design-diffense.md) flips to
 **accepted** (both gates — prototype pack + renderer — now met) and the
 in-tree `src/brr/diffense/` boundary is settled (zero runtime deps).
+
+## [2026-05-31] design | diffense pass 10: state/data/invariant axes, visual entry stats, data-trace, transport correction
+
+Post-acceptance format refinement of [`design-diffense.md`](design-diffense.md),
+demonstrated in the PR #64 prototype + live renderer. Five threads:
+
+- **Invariant axis + data-shape delta.** Cards now carry an **invariant
+  frame** — what the change holds constant (the reference a delta is read
+  against); a *threatened* invariant is exactly what an uncertainty card's
+  tension points at, which unifies two previously separate ideas. The
+  stats split **state shape** (control/behaviour) from **data shape**
+  (types/schema/event kinds), with a caveat that the cleaner cut than
+  "code=state, tests=data" is **possible vs actual** (code is the grammar,
+  tests are the sentences — which is why tests-as-grounding works).
+- **Entry stats as rolled-up visual distributions.** The summary card's
+  stats are now an *aggregation of the per-card axes* (change-kind mix,
+  surface/contract delta, invariants, data-shape, cost axes before→after),
+  rendered as **bars / meters / heat** to imprint pre-attentively rather
+  than be read. Raw size is demoted — it is the one stat that is *not* a
+  rollup, hence least useful.
+- **Control-trace vs data-trace walkthroughs.** A walkthrough can **follow
+  the datum** (shape at each hop), not just the execution path — the data
+  flow is precisely what a diff can't show. Structured as ordered steppable
+  stages so **animated data flow** is a renderer-only upgrade, not a
+  re-author (promoted from a deferred "GIF" to a named direction; motion is
+  pre-attentive in a way printed before/after is not).
+- **kb-native axes.** kb changes were reading flat because they were
+  flattened code cards. Their native shape is a **graph**: claim delta /
+  graph-position (inbound-link delta, hub, orphan check) / lifecycle. The
+  kb counterpart of a data-trace is **walking the link graph**.
+- **Transport correction.** Removed a sibling-drift bug: the page had said
+  brnrd *stores* the pack server-side, contradicting
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md)'s "data ownership
+  stays at the metadata-graph level" stance. brnrd is now a **transient
+  relay, never a pack store**; the pack stays the producer's
+  (`.brr/diffense/<task>/`, task-keyed not PR-keyed), the user-published PR
+  body is the durable forge artifact. Zachtronics (cost-axis distributions,
+  visible data-in-motion) added as a stated inspiration alongside Souls/DMC.
+
+Renderer (`template.html`) gained visual stat widgets (segmented bar /
+meter / before→after delta / heat dots / tags), an invariant block, a
+data-trace stage view with `↓` flow connectors (`[data-stage]` hooks for
+future animation), and kb-axis rendering; verified via CDP screenshots
+(desktop summary panel, data-trace, threatened invariant, kb card, 390px
+mobile). 510 tests still green.
