@@ -128,6 +128,40 @@ class Event(Base):
     responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class ChatBinding(Base):
+    """A platform chat bound to a project. Globally unique on
+    ``(platform, chat_id)`` so one chat can't fan out to two projects.
+    """
+
+    __tablename__ = "chat_bindings"
+    __table_args__ = (
+        UniqueConstraint("platform", "chat_id", name="uq_chat_binding"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(32), default="telegram")
+    chat_id: Mapped[str] = mapped_column(String(64), index=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class TgPairCode(Base):
+    """A one-time code issued by an account to bind a Telegram chat to
+    a project. Consumed when the user sends ``/start <code>`` to the bot.
+    """
+
+    __tablename__ = "tg_pair_codes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class PairRequest(Base):
     """A device-flow connect request.
 
