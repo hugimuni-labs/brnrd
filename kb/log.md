@@ -5219,3 +5219,44 @@ connect + drain/deliver + cursor-resume + orphan-skip). Full suite 524
 green. Open follow-ups: real webhook ingress + signature verification,
 project caps / subscription tiers, the dashboard, drop-queued-body-
 after-ack, threading the runner's real response status.
+
+## [2026-05-31] implement | brnrd slice 2: Telegram webhook ingress + thin approve dashboard
+
+Second slice of [`plan-brnrd-inbox-prototype.md`](plan-brnrd-inbox-prototype.md),
+turning the spine's producer half real and making `brr brnrd connect`
+human-completable.
+
+- **Telegram ingress.** `POST /v1/webhooks/telegram` — one managed bot
+  multiplexed by `chat_id`, authed by the `setWebhook` secret-token
+  header (constant-time compared, not a bearer). `/start <code>` binds
+  a chat to a project (account issues the `TG-…` code via
+  `POST /v1/accounts/pair/telegram`); a bound chat's message enqueues
+  with an opaque `reply_to = {platform, chat_id, topic_id, message_id}`;
+  an unbound chat is ignored. Bindings are global-unique on
+  `(platform, chat_id)` so a chat can't be silently re-pointed across
+  accounts.
+- **Routing home without storing.** `inbox.make_default_forwarder`
+  dispatches on `reply_to['platform']` and posts the runner's body back
+  via the Telegram Bot API, threaded under the source message — the
+  body is still never persisted. This replaces the no-op default
+  forwarder; `_dev/enqueue` stays as a dev-only stand-in.
+- **Thin dashboard** (`src/brnrd_web/`, its own AGPLv3 `LICENSE`,
+  bundled by `brr[backend]`): web `/login` (session cookie) + the
+  device-flow `/connect/{code}` approve page. It reuses the API's exact
+  paths — `approve_core` (factored out of the approve endpoint) mints
+  the same daemon token, and `authenticate` / `issue_session_token`
+  (factored out of API login) back the web login. Hand-rolled HTML +
+  `python-multipart` for forms; a template engine waits for the fuller
+  dashboard.
+- **Latent bug fixed.** `auth._resolve` compared a naive SQLite
+  `expires_at` to an aware `now`; session tokens — the first expiring
+  bearer actually exercised (web login → API project create) — tripped
+  it. Stored times are now coerced to UTC before comparison.
+
+Tests: 11 new (`test_brnrd_telegram.py` — secret reject, `/start` bind +
+confirm, invalid-code report, bound-chat enqueue w/ reply_to, unbound
+ignored, response forwarded back threaded; `test_brnrd_web.py` — login
+cookie, bad-login 401, connect-needs-login redirect, project listing,
+approve → poll returns token). Full suite 535 green. Open follow-ups
+unchanged minus the two now shipped: GitHub webhook ingress, fuller
+dashboard, caps/tiers/billing, drop-queued-body-after-ack.
