@@ -16,6 +16,12 @@ import httpx
 _API = "https://api.telegram.org/bot{token}/{method}"
 _START_RE = re.compile(r"^/start(?:@\w+)?\s+(\S+)")
 
+# Telegram rejects messages over 4096 chars with HTTP 400; stay under
+# it with margin and split long bodies across several messages rather
+# than letting the send fail (the daemon would otherwise retry forever).
+_MAX_LEN = 4000
+_MAX_CHUNKS = 12
+
 
 @dataclass
 class ParsedMessage:
@@ -52,6 +58,29 @@ def pair_code_from_text(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def split_message(text: str, limit: int = _MAX_LEN) -> list[str]:
+    """Split *text* into Telegram-sized parts, preferring line breaks.
+
+    Bodies past ``_MAX_CHUNKS`` parts are truncated with a marker so a
+    pathological response can't fan out into dozens of messages.
+    """
+    parts: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= limit:
+            parts.append(remaining)
+            break
+        cut = remaining.rfind("\n", 0, limit)
+        if cut <= 0:
+            cut = limit
+        parts.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip("\n")
+    if len(parts) > _MAX_CHUNKS:
+        parts = parts[:_MAX_CHUNKS]
+        parts[-1] = parts[-1][: limit - 16].rstrip() + "\n\n[truncated]"
+    return parts or [""]
+
+
 def send_message(
     token: str,
     chat_id: str | int,
@@ -61,13 +90,17 @@ def send_message(
     reply_to_message_id: int | None = None,
     timeout: float = 30.0,
 ) -> None:
-    params: dict = {"chat_id": chat_id, "text": text}
-    if topic_id:
-        params["message_thread_id"] = topic_id
-    if reply_to_message_id:
-        params["reply_to_message_id"] = reply_to_message_id
-        params["allow_sending_without_reply"] = True
-    resp = httpx.post(
-        _API.format(token=token, method="sendMessage"), json=params, timeout=timeout
-    )
-    resp.raise_for_status()
+    # Reply threading only on the first part; the rest follow it.
+    for i, part in enumerate(split_message(text)):
+        params: dict = {"chat_id": chat_id, "text": part or " "}
+        if topic_id:
+            params["message_thread_id"] = topic_id
+        if i == 0 and reply_to_message_id:
+            params["reply_to_message_id"] = reply_to_message_id
+            params["allow_sending_without_reply"] = True
+        resp = httpx.post(
+            _API.format(token=token, method="sendMessage"),
+            json=params,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
