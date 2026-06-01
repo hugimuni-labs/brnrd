@@ -207,7 +207,7 @@ flowchart TD
 | Renderer | Surface | Tenancy | Status |
 | --- | --- | --- | --- |
 | Responsive web | terminal-aesthetic HTML; `brr review` serves it locally | self-hosted (local; LAN/tunnel for phone) | **render model spiked** ([`src/brr/diffense/`](../src/brr/diffense)); local server + runner wiring next |
-| PR-body projection | humanized Markdown in the PR body | any forge reader | lossy fallback, ships alongside |
+| PR-body projection | humanized Markdown in the PR body | any forge reader | **ships** (2026-06-01) — [`prbody.py`](../src/brr/diffense/prbody.py), projected by `_maybe_open_pr` on publish; pack embedded in a marker, `extract_pack` recovers it |
 | CLI / TUI | `brr review` in the terminal | self-hosted | follow-up, same pack |
 | Hosted web | brnrd-dashboard renderer | hosted | future (after brnrd exists) |
 | Live agent | in-context Q&A over the pack | both | future |
@@ -1074,6 +1074,17 @@ reader with `brr review` or the hosted view gets the zoomable surface,
 while the forge-only reader still gets the orientation up top and the
 agent's flagged doubts one section down.
 
+**Shipped** (2026-06-01) as [`prbody.py`](../src/brr/diffense/prbody.py),
+a pure pack → Markdown function. The card→section mapping is mechanical:
+`summary` card → **Summary** (gloss + `shape.arcs` + `surface_area` + a
+concern-count line); `uncertainty` cards split by `subkind` — doubts
+(`concern`/`assumption`/`dilemma`/`meta`, and any unknown subkind) →
+**⚠ Concerns**, scope notes (`out-of-scope-flag`/`follow-up`) →
+**Deferred / open**; a `walkthrough` card's gloss → **Narrative** (the
+section appears only when such a card exists); every change card naming a
+file → **Touched**; `reading_order` → **Reading order** (ids resolved to
+labels). Each section renders only when the pack has material for it.
+
 ## Where packs live
 
 The pack is a run artifact with a contract; it needs to be (a) cached
@@ -1220,32 +1231,59 @@ the pack) on publish.
 
 **Producer B — runner emission — ships** (2026-06-01) as a gated prompt
 fragment ([`src/brr/prompts/diffense.md`](../src/brr/prompts/diffense.md)),
-appended to the daemon run prompt when `diffense.emit_pack=true` (off by
-default until PR-body projection consumes the pack — mirrors the
-`runner.self_review` opt-in). It instructs: *produce the pack for a
+appended to the daemon run prompt by `diffense_emit_enabled` (on by
+default since slice 3 wired the consumer; opt out with
+`diffense.emit_pack=false`). It instructs: *produce the pack for a
 review-worthy committed change under the six clamps; give each card its
 gloss → ground-truth-leaf locator; open with a summary, surface
 uncertainty cards (assumption / concern / dilemma / out-of-scope /
-follow-up) first; ground demos in real test values; write it to
-`.brr/diffense/<task-id>/pack.json`; then `brr review --check` it and fix
-every error before finishing.* Pack shape is taught by example
-([the PR #64 prototype](diffense-prototype-pr64.md)) + this page, not a
-duplicated schema doc.
+follow-up) first; ground demos in real test values; then `brr review
+--check` it and fix every error before finishing.* Pack shape is taught
+by example ([the PR #64 prototype](diffense-prototype-pr64.md)) + this
+page, not a duplicated schema doc.
 
-**PR creation is part of this slice, and net-new.** Today the publish
-kernel only *pushes a branch* (`publish()` in
+The pack path is **handed to the runner, not assumed.** The runner works
+in a worktree whose own `.brr/` is torn down at finalize, so a
+cwd-relative `.brr/diffense/...` would die before `publish()` could read
+it. The daemon computes an absolute path in the *shared* runtime dir and
+puts it in the Task Context Bundle as `Review pack path`
+(`<shared .brr>/diffense/<task-id>/pack.json`); the fragment writes there,
+and `publish()` reads the same path. Same plumbing pattern as
+`response_path` — brr names the file, the agent fills it, brr consumes it.
+
+**PR creation — slice 3 — ships** (2026-06-01), net-new. Before this the
+publish kernel only *pushed a branch* (`publish()` in
 [`src/brr/daemon.py`](../src/brr/daemon.py); the GitHub gate comments but
-never opens PRs — issue #68: a run always has a task id but not always a
-PR). So "the daemon writes the PR-body projection on publish" presumes a
-PR that doesn't yet exist. The coherent slice (decided 2026-06-01,
-against splitting it): publish gains an **open-PR-on-the-configured-forge**
-step (GitHub only for now), the PR body *is* the projection — so it's
-born as a pack render target, not a throwaway format bolted on before the
-pack arrives — and the full pack is relayed to brnrd for the
-rendered-surface link carried in the body / a comment (transient relay,
-see "Where packs live"). Pack-schema lock (see "Open questions") gates
-it; the PR-creation, projection, and relay land together because their
-shapes only make sense against the locked pack.
+never opened PRs — issue #68: a run always has a task id but not always a
+PR). Now, after a clean push, `_maybe_open_pr` opens a PR whose body *is*
+the projection ([`src/brr/diffense/prbody.py`](../src/brr/diffense/prbody.py)) —
+born as a pack render target, not a throwaway format. Policy:
+
+- **On by default** (`diffense.create_pr`, GitHub only via `gh`). No
+  pack emitted → it no-ops, so `diffense.emit_pack=false` turns it off
+  too; opt out independently to keep packs local and PR by hand.
+- **Create-if-absent, else refresh** keys off *the push, not bespoke
+  conflict logic.* The step only runs after a clean push, so the remote
+  head already equals our commits; an open PR on that head genuinely
+  contains our work and its body is refreshed (the "update this PR" /
+  "new commits on a PR'd branch" case). A *diverged* push never reaches
+  here — it was rejected upstream and flipped `publish_status` to
+  `conflict`, surfacing to the user with the work preserved on the task
+  branch. And because each task gets its own branch, "keep both" falls
+  out for free: a new task on an already-worked issue publishes a new
+  branch → a new PR, leaving the old one intact. So the publish kernel's
+  5-arm push (ff / lease / refspec / …) is the conflict adjudicator; the
+  PR step just rides its `publish_status`.
+- **PR url → the delivered card.** The url replaces the bare branch link
+  in the `view:` line (reusing `push_done`'s `view_url`, no new packet).
+- **The pack travels with the PR.** `project_pr_body` embeds the full
+  pack in a trailing `diffense:pack:v1` HTML-comment marker when it fits
+  the forge body budget (`extract_pack` is the inverse), so a reader can
+  recover the exact pack from the body with no side channel.
+
+Still pending: **slice 4** relays the pack to brnrd (transient) for a
+rendered-surface link in the body when the pack is too large to embed or
+a remote reviewer wants the rich hosted view (see "Where packs live").
 
 ## Adjacencies that ship-or-shipped already
 
@@ -1319,10 +1357,12 @@ is the whole point of the producer/pack split.
   breadcrumb heading-bar stack; a code leaf is jump-to-forge at v0
   (`path:line` inline, inline-diff deferred). See "Rendering the zoom."
 - **Pack transport.** Resolved on storage (the pack stays the producer's;
-  brnrd is a transient relay, never a store — see "Where packs live").
-  Still open: the PR-body embed size threshold above which a remote
-  reviewer falls back to the transient relay rather than an embedded
-  marker block.
+  brnrd is a transient relay, never a store — see "Where packs live"). The
+  PR-body embed threshold is now a concrete budget (`_BODY_BUDGET` in
+  `prbody.py`): under it the full pack rides in the body marker, over it
+  the embed degrades to a "render locally" pointer. Slice 4 (pending)
+  fills that gap with the transient brnrd relay link for oversized packs
+  and remote reviewers who want the hosted surface.
 - **Pack versioning across iterations.** A PR accrues successive packs as
   the feedback loop iterates; how to store them and render a "what
   changed since I last reviewed" pack-diff.

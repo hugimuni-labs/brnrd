@@ -6,9 +6,12 @@ trivial fix — emit a diffense *review pack* as the last step before you
 finish, so the change can be reviewed as a graph of cards rather than a
 raw diff.
 
-- **Write it to** `.brr/diffense/<task-id>/pack.json` (the task id is in
-  the Task Context Bundle). That is a gitignored runtime path — don't
-  commit it.
+- **Write it to the `Review pack path`** named in the Task Context Bundle
+  — an absolute path in the shared runtime dir. Use that exact path: a
+  cwd-relative `.brr/diffense/...` would land in the worktree and be torn
+  down before the pack can be read. It is a gitignored runtime path —
+  don't commit it. (No `Review pack path` in the bundle? Then pack
+  emission isn't wanted for this run — skip it.)
 - **Shape it** after the worked example at
   `kb/diffense-prototype-pr64-pack.json` and the card model in
   `kb/design-diffense.md`. Every card carries the always-present axes: a
@@ -25,10 +28,11 @@ raw diff.
   in real test values, never invented ones.
 - **Keep cards sharp** under the six clamps (see `kb/design-diffense.md`):
   skimmable, load-bearing, honest, non-prescriptive, emit-iff-honest.
-- **Validate before finishing**: run
-  `brr review --check .brr/diffense/<task-id>/pack.json` and fix every
-  error it reports — a dead locator, a dangling card edge, a missing axis.
-  A pack that fails `--check` is not done.
+- **Validate before finishing**: run `brr review --check <Review pack
+  path>` and fix every error it reports — a dead locator, a dangling card
+  edge, a missing axis. A pack that fails `--check` is not done.
 
 If the change isn't review-worthy, skip the pack: an honest absence beats
-a hollow pack.
+a hollow pack. When `diffense.create_pr` is on (the default), brr opens or
+refreshes the change's PR with this pack projected into the body — so the
+pack you emit *is* the PR a reviewer reads.
