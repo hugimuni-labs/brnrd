@@ -238,3 +238,34 @@ def test_response_is_forwarded_back_to_telegram(env):
     assert sends[0]["chat_id"] == "555"
     assert sends[0]["text"] == "here is your answer"
     assert sends[0]["reply_to_message_id"] == 77
+
+
+def test_telegram_pair_returns_deep_link_when_username_set():
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        telegram_bot_token="bot:TOKEN",
+        telegram_webhook_secret=_SECRET,
+        telegram_bot_username="@brnrd_bot",  # leading @ tolerated
+    )
+    client = TestClient(create_app(settings))
+    acc = _account(client)
+    pid = _project(client, acc)
+    body = client.post(
+        "/v1/accounts/pair/telegram", json={"project_id": pid}, headers=acc
+    ).json()
+    code = body["pair_code"]
+    assert code.startswith("TG-")
+    # @-prefix stripped; the pair code rides as the tap-to-open start= param.
+    assert body["deep_link"] == f"https://t.me/brnrd_bot?start={code}"
+    assert body["deep_link"] in body["instructions"]
+
+
+def test_telegram_pair_omits_deep_link_without_username(env):
+    _, client, _ = env  # fixture Settings sets no telegram_bot_username
+    acc = _account(client)
+    pid = _project(client, acc)
+    body = client.post(
+        "/v1/accounts/pair/telegram", json={"project_id": pid}, headers=acc
+    ).json()
+    assert body["deep_link"] is None
+    assert f"/start {body['pair_code']}" in body["instructions"]

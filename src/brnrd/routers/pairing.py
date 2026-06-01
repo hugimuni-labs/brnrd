@@ -145,23 +145,33 @@ def start_telegram_pair(
     else:
         raise HTTPException(status_code=503, detail="could not allocate pair code")
 
-    ttl = request.app.state.settings.pair_ttl_s
+    settings = request.app.state.settings
     db.add(
         TgPairCode(
             id=ids.tg_pair_code_id(),
             code=code,
             account_id=principal.account_id,
             project_id=project.id,
-            expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl),
+            expires_at=datetime.now(timezone.utc)
+            + timedelta(seconds=settings.pair_ttl_s),
         )
     )
     db.commit()
-    return schemas.TelegramPairStarted(
-        pair_code=code,
-        instructions=(
+
+    username = settings.telegram_bot_username.lstrip("@")
+    deep_link = f"https://t.me/{username}?start={code}" if username else None
+    if deep_link:
+        instructions = (
+            f"Open {deep_link} (or send `/start {code}` to the brnrd "
+            f"Telegram bot) to bind this chat to project '{project.name}'."
+        )
+    else:
+        instructions = (
             f"Send `/start {code}` to your brnrd Telegram bot to bind "
             f"this chat to project '{project.name}'."
-        ),
+        )
+    return schemas.TelegramPairStarted(
+        pair_code=code, instructions=instructions, deep_link=deep_link
     )
 
 

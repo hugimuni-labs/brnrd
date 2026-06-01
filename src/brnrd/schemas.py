@@ -24,6 +24,9 @@ class AccountCreate(BaseModel):
 class AccountCreated(BaseModel):
     account_id: str
     api_key: str
+    # A "default" project is created with the account so the user can pair
+    # a daemon immediately, without a separate project-create call first.
+    default_project_id: str
 
 
 class SessionCreate(BaseModel):
@@ -71,6 +74,9 @@ class TelegramPairStart(BaseModel):
 class TelegramPairStarted(BaseModel):
     pair_code: str
     instructions: str
+    # ``https://t.me/<bot>?start=<code>`` when the bot username is
+    # configured; None otherwise (fall back to the ``/start`` instructions).
+    deep_link: str | None = None
 
 
 class PairStatus(BaseModel):
