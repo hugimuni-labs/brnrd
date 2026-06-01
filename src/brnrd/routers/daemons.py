@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from .. import inbox as inbox_service
 from .. import ids, schemas
 from ..auth import Principal, get_db, require_daemon
-from ..models import Daemon
+from ..models import Daemon, Event
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
 
@@ -109,6 +109,70 @@ def post_response(
     if event is None:
         raise HTTPException(status_code=404, detail="event not found for this project")
     return schemas.ResponseAck(event_id=payload.event_id, forwarded=True)
+
+
+@router.post("/card", response_model=schemas.CardAck)
+def post_card(
+    request: Request,
+    payload: schemas.CardPost,
+    principal: Principal = Depends(require_daemon),
+    db: Session = Depends(get_db),
+):
+    """Relay a live progress card to the originating platform.
+
+    The daemon's shared card driver decides send-vs-edit and owns the
+    message id; brnrd just executes the platform call with the managed
+    token, routing to the event's *own* ``reply_to`` (never a
+    client-supplied target — that binding is the clamp that stops the
+    relay being an open send-proxy). The card text is relayed, not
+    stored. ``message_id`` absent → send a new card and return its id;
+    present → edit it. A vanished card answers 409 so the driver resends.
+    """
+    settings = request.app.state.settings
+    event = db.execute(
+        select(Event).where(
+            Event.event_id == payload.event_id,
+            Event.project_id == principal.project_id,
+        )
+    ).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(status_code=404, detail="event not found for this project")
+    if event.status == Event.STATUS_RESPONDED:
+        # The answer already went out; the card lifecycle is over.
+        return schemas.CardAck(event_id=payload.event_id, message_id=payload.message_id)
+
+    reply_to = inbox_service.reply_to_of(event)
+    if reply_to.get("platform") != "telegram" or not settings.telegram_bot_token:
+        # Unknown / unconfigured origin platform — nothing to relay.
+        return schemas.CardAck(event_id=payload.event_id, message_id=None)
+
+    from ..platforms import telegram as tg
+
+    try:
+        if payload.message_id is None:
+            mid = tg.send_card(
+                settings.telegram_bot_token,
+                reply_to["chat_id"],
+                payload.text,
+                topic_id=reply_to.get("topic_id") or None,
+                reply_to_message_id=reply_to.get("message_id") or None,
+            )
+            return schemas.CardAck(event_id=payload.event_id, message_id=mid)
+        tg.edit_card(
+            settings.telegram_bot_token,
+            reply_to["chat_id"],
+            payload.message_id,
+            payload.text,
+        )
+        return schemas.CardAck(event_id=payload.event_id, message_id=payload.message_id)
+    except tg.CardGone as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"card not editable: {e}"
+        ) from e
+    except Exception as e:  # noqa: BLE001 - normalize to a relay failure
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"card relay failed: {e}"
+        ) from e
 
 
 @router.post("/deregister")

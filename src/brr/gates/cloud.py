@@ -14,15 +14,15 @@ through the device-flow pairing handshake.
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 from typing import Any, Callable
 
 import requests
 
-from .. import protocol
-from . import runtime
+from .. import protocol, run_progress
+from ..task import Task
+from . import delivery, runtime
 
 # Server long-polls up to ~25s; the client timeout must comfortably
 # exceed that so a quiet inbox isn't read as a transport error.
@@ -181,12 +181,22 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     )
     events = result.get("events", [])
     for ev in events:
+        # Carry the origin platform's routing as discrete fields: the
+        # final response only needs cloud_event_id (brnrd derives the
+        # target from its own event row), but the live card needs the
+        # origin platform (to pick presentation) and chat (to thread the
+        # conversation). brnrd never receives these back — they stay local.
+        rt = ev.get("reply_to") or {}
+        chat_id = rt.get("chat_id")
+        topic_id = rt.get("topic_id")
         protocol.create_event(
             inbox_dir,
             source="cloud",
             body=ev.get("body") or "",
             cloud_event_id=ev["event_id"],
-            cloud_reply_to=json.dumps(ev.get("reply_to") or {}),
+            cloud_platform=rt.get("platform") or "",
+            cloud_chat_id="" if chat_id is None else chat_id,
+            cloud_topic_id="" if topic_id is None else topic_id,
         )
     cursor = result.get("cursor", since)
     if cursor > since:
@@ -212,3 +222,94 @@ def _deliver_responses(
         )
 
     runtime.deliver_responses(inbox_dir, responses_dir, "cloud", deliver)
+
+
+# ── Live progress card (relayed to brnrd) ───────────────────────────
+
+
+class _CloudCardTransport:
+    """brnrd-relay transport for the shared card driver.
+
+    ``send`` / ``edit`` become POSTs to brnrd's ``/v1/daemons/card``
+    relay, executed there with the managed token. The daemon owns the
+    platform message id (returned by ``send``, replayed on ``edit``);
+    brnrd stores none of it. A 409 from brnrd (card vanished) surfaces as
+    a raised error that the card driver turns into a fresh send.
+    """
+
+    def __init__(self, state: dict, event_id: str) -> None:
+        self._state = state
+        self._event_id = event_id
+
+    def _post(self, body: dict) -> dict:
+        return _request(
+            self._state["brnrd_url"], "POST", "/v1/daemons/card",
+            token=self._state["token"], json=body,
+        )
+
+    def send(self, text: str, *, reply_to: int | None = None) -> int | None:
+        result = self._post({"event_id": self._event_id, "text": text})
+        return result.get("message_id")
+
+    def edit(self, message_id: int, text: str) -> None:
+        self._post(
+            {"event_id": self._event_id, "text": text, "message_id": message_id}
+        )
+
+
+def _card_text_for(
+    brr_dir: Path, conv_key: str, task_id: str, platform: str
+) -> str | None:
+    """Render the progress card using the origin platform's presentation.
+
+    Reuses the OSS gate's renderer so a managed card is identical to the
+    self-hosted one. Only telegram-origin is wired today; an unknown
+    origin yields no card and the relay simply stays quiet.
+    """
+    if platform == "telegram":
+        from . import telegram
+
+        return telegram.card_text(brr_dir, conv_key, task_id)
+    return None
+
+
+def render_update(brr_dir: Path, packet: Any) -> None:
+    """Relay a live progress card for a cloud-sourced task to brnrd.
+
+    Mirrors the OSS gates: render the card daemon-side from
+    ``run_progress`` and drive the shared ``delivery.update_card``
+    lifecycle — but over a transport that POSTs to brnrd's card relay
+    instead of hitting a platform directly. Presentation is picked by the
+    event's origin platform, so a telegram-origin card looks the same
+    whether it came through the local telegram gate or the cloud gate.
+    Failures are swallowed; the daemon must keep running.
+    """
+    if getattr(packet, "type", None) not in run_progress.CARD_PACKETS:
+        return
+    state = _load_state(brr_dir)
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+
+    conv_key = getattr(packet, "conversation_key", "") or ""
+    task_id = run_progress.task_id_from_packet(packet)
+    if not conv_key or not task_id:
+        return
+
+    task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
+    if task is None or task.source != "cloud":
+        return
+    cloud_event_id = task.meta.get("cloud_event_id")
+    if not cloud_event_id:
+        return
+
+    text = _card_text_for(
+        brr_dir, conv_key, task_id, str(task.meta.get("cloud_platform") or "")
+    )
+    if text is None:
+        return
+
+    transport = _CloudCardTransport(state, str(cloud_event_id))
+    delivery.update_card(
+        brr_dir, "cloud", task_id, text,
+        transport=transport, render_tag=getattr(packet, "type", None),
+    )

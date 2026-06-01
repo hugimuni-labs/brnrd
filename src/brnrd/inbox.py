@@ -96,6 +96,11 @@ def _loads(blob: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def reply_to_of(event: Event) -> dict[str, Any]:
+    """Parse the opaque routing blob stored on an event row."""
+    return _loads(event.reply_to)
+
+
 def enqueue(
     db: Session,
     *,

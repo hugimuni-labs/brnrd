@@ -269,3 +269,108 @@ def test_telegram_pair_omits_deep_link_without_username(env):
     ).json()
     assert body["deep_link"] is None
     assert f"/start {body['pair_code']}" in body["instructions"]
+
+
+def _bound_telegram_event(app, client, *, message_id=77):
+    """Bind chat 555 and enqueue one task message; return its event_id."""
+    acc = _account(client)
+    pid = _project(client, acc)
+    code = _tg_pair_code(client, acc, pid)
+    client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "task", message_id=message_id),
+        headers=_HDR,
+    )
+    with app.state.SessionLocal() as db:
+        event_id = db.execute(
+            select(Event).where(Event.source == "telegram")
+        ).scalar_one().event_id
+    return acc, pid, event_id
+
+
+def test_card_relay_sends_then_edits(env, monkeypatch):
+    app, client, _ = env
+    cards: list[dict] = []
+
+    def fake_send_card(token, chat_id, text, *, topic_id=None,
+                       reply_to_message_id=None, timeout=30.0):
+        cards.append({"op": "send", "chat_id": chat_id, "text": text,
+                      "reply_to": reply_to_message_id})
+        return 4321
+
+    def fake_edit_card(token, chat_id, message_id, text, *, timeout=30.0):
+        cards.append({"op": "edit", "chat_id": chat_id,
+                      "message_id": message_id, "text": text})
+
+    monkeypatch.setattr("brnrd.platforms.telegram.send_card", fake_send_card)
+    monkeypatch.setattr("brnrd.platforms.telegram.edit_card", fake_edit_card)
+
+    acc, pid, event_id = _bound_telegram_event(app, client)
+    dmn = _daemon_headers(client, acc, pid)
+
+    # First card: no message_id → send, brnrd returns the platform id.
+    r1 = client.post(
+        "/v1/daemons/card",
+        json={"event_id": event_id, "text": "<b>preparing</b>"},
+        headers=dmn,
+    )
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["message_id"] == 4321
+
+    # Replaying that id → edit in place, not a second send.
+    r2 = client.post(
+        "/v1/daemons/card",
+        json={"event_id": event_id, "text": "<b>running</b>", "message_id": 4321},
+        headers=dmn,
+    )
+    assert r2.status_code == 200
+    assert r2.json()["message_id"] == 4321
+
+    assert [c["op"] for c in cards] == ["send", "edit"]
+    # Routed to the event's own bound chat + threaded under the source msg.
+    assert cards[0]["chat_id"] == "555"
+    assert cards[0]["reply_to"] == 77
+    assert cards[1]["message_id"] == 4321
+    assert cards[1]["text"] == "<b>running</b>"
+
+
+def test_card_relay_is_noop_after_responded(env, monkeypatch):
+    app, client, _ = env
+    cards: list = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.send_card",
+        lambda *a, **k: cards.append(a) or 1,
+    )
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.edit_card", lambda *a, **k: cards.append(a)
+    )
+
+    acc, pid, event_id = _bound_telegram_event(app, client)
+    dmn = _daemon_headers(client, acc, pid)
+
+    # Deliver the final answer first; the card lifecycle is then over.
+    client.post(
+        "/v1/daemons/responses",
+        json={"event_id": event_id, "body_markdown": "done", "status": "done"},
+        headers=dmn,
+    )
+    r = client.post(
+        "/v1/daemons/card", json={"event_id": event_id, "text": "late"}, headers=dmn
+    )
+    assert r.status_code == 200
+    assert cards == []  # no platform call after the answer went out
+
+
+def test_card_relay_unknown_event_is_404(env, monkeypatch):
+    app, client, _ = env
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.send_card", lambda *a, **k: 1
+    )
+    acc = _account(client)
+    pid = _project(client, acc)
+    dmn = _daemon_headers(client, acc, pid)
+    r = client.post(
+        "/v1/daemons/card", json={"event_id": "evt-nope", "text": "x"}, headers=dmn
+    )
+    assert r.status_code == 404
