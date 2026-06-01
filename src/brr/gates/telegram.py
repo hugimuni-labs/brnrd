@@ -13,7 +13,6 @@ incoming messages and stored on each event.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -120,19 +119,6 @@ def _edit_message(
     return _api_call(token, "editMessageText", params)
 
 
-def _post_gist(content: str, filename: str = "result.md") -> str | None:
-    try:
-        result = subprocess.run(
-            ["gh", "gist", "create", "--public", "-f", filename, "-"],
-            input=content, capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return None
-
-
 def _send_with_overflow(
     token: str,
     chat_id: int,
@@ -141,23 +127,13 @@ def _send_with_overflow(
     *,
     reply_to_message_id: int | None = None,
 ) -> None:
-    if len(text) <= _MAX_TG_LEN:
-        _send_message(
-            token, chat_id, text, topic_id,
-            reply_to_message_id=reply_to_message_id,
-        )
-        return
-    url = _post_gist(text)
-    if url:
-        _send_message(
-            token, chat_id, f"Result: {url}", topic_id,
-            reply_to_message_id=reply_to_message_id,
-        )
-    else:
-        _send_message(
-            token, chat_id, text[:_MAX_TG_LEN] + "\n\n[truncated]", topic_id,
-            reply_to_message_id=reply_to_message_id,
-        )
+    body = delivery.resolve_overflow(
+        text, limit=_MAX_TG_LEN, gist_fn=delivery.post_gist
+    )
+    _send_message(
+        token, chat_id, body, topic_id,
+        reply_to_message_id=reply_to_message_id,
+    )
 
 
 # ── State ────────────────────────────────────────────────────────────
