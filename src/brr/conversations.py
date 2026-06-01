@@ -103,6 +103,16 @@ def gate_thread_key(meta: dict[str, Any]) -> str | None:
         if repo and num is not None:
             return f"github:{repo}:{num}"
         return None
+    if source == "cloud":
+        # Managed mode: the cloud gate carries the origin platform's
+        # routing as discrete fields so back-and-forth in the same origin
+        # chat threads onto one conversation, like a native gate.
+        platform = (meta.get("cloud_platform") or "").strip()
+        chat = meta.get("cloud_chat_id")
+        topic = meta.get("cloud_topic_id") or ""
+        if platform and chat not in (None, ""):
+            return f"cloud:{platform}:{chat}:{topic}"
+        return "cloud:default"
     if source:
         return f"{source}:default"
     return None
