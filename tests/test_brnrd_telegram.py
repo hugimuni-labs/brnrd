@@ -173,6 +173,38 @@ def test_unbound_chat_is_ignored(env):
         assert db.execute(select(Event)).scalars().all() == []
 
 
+def test_split_message_prefers_newlines_and_loses_nothing():
+    from brnrd.platforms import telegram as tg
+
+    text = "\n".join("x" * 30 for _ in range(5))
+    parts = tg.split_message(text, limit=35)
+    assert all(len(p) <= 35 for p in parts)
+    assert not any(p.startswith("\n") for p in parts)
+    assert "".join(parts) == text.replace("\n", "")  # boundaries fall on newlines
+
+
+def test_send_message_chunks_long_body(monkeypatch):
+    from brnrd.platforms import telegram as tg
+
+    posts: list[dict] = []
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(tg.httpx, "post", lambda url, json=None, timeout=None: (
+        posts.append(json) or _Resp()
+    ))
+
+    body = "\n".join(f"line {i} " + "x" * 300 for i in range(80))  # well past 4096
+    tg.send_message("bot:T", 555, body, reply_to_message_id=42)
+
+    assert len(posts) >= 2                       # fanned out across messages
+    assert all(len(p["text"]) <= 4096 for p in posts)
+    assert posts[0]["reply_to_message_id"] == 42  # threading only on the first
+    assert "reply_to_message_id" not in posts[1]
+
+
 def test_response_is_forwarded_back_to_telegram(env):
     app, client, sends = env
     acc = _account(client)
