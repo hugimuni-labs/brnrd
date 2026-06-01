@@ -9,6 +9,11 @@ dist/
 
 # Local runtime state
 .brr/
+# brnrd's default local SQLite DB (sqlite:///./brnrd.db)
+brnrd.db
+*.sqlite3
+# diffense render spike scratch output
+out.html
 
 # Local scratch / contributor-specific
 .local/

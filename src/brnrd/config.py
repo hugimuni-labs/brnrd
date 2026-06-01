@@ -41,6 +41,9 @@ class Settings:
     inbox_poll_interval_s: float = _env_float("BRNRD_INBOX_POLL_INTERVAL_S", 0.5)
     # Pair requests (device-flow connect codes) expire after this long.
     pair_ttl_s: int = _env_int("BRNRD_PAIR_TTL_S", 600)
+    # Relayed diffense review packs live in RAM behind a capability token
+    # for this long, then drop. Never persisted (see pack_relay.py).
+    pack_relay_ttl_s: int = _env_int("BRNRD_PACK_RELAY_TTL_S", 3600)
     # The dev enqueue ingress stands in for real platform webhooks.
     # Off in production; on by default for the prototype.
     enable_dev_endpoints: bool = os.environ.get("BRNRD_ENABLE_DEV", "1") != "0"

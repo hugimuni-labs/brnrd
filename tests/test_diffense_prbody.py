@@ -147,6 +147,18 @@ def test_sections_absent_when_pack_lacks_material():
     assert "## Touched" not in body
 
 
+def test_render_banner_present_when_url_given():
+    body = prbody.project_pr_body(_pack(), render_url="https://brnrd.example/r/abc")
+    assert "**Interactive review:** https://brnrd.example/r/abc" in body
+    # The banner sits above the Summary so it's the first thing a reviewer sees.
+    assert body.index("Interactive review") < body.index("## Summary")
+
+
+def test_render_banner_absent_without_url():
+    body = prbody.project_pr_body(_pack())
+    assert "Interactive review" not in body
+
+
 def test_embed_round_trips_through_extract():
     pack = _pack()
     body = prbody.project_pr_body(pack, embed_pack=True)
