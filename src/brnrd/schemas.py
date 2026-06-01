@@ -127,6 +127,19 @@ class ResponseAck(BaseModel):
     forwarded: bool
 
 
+class CardPost(BaseModel):
+    event_id: str
+    text: str
+    # None → send a new card and return its id; set → edit that message
+    # in place. The daemon's card driver owns this id; brnrd stores none.
+    message_id: int | None = None
+
+
+class CardAck(BaseModel):
+    event_id: str
+    message_id: int | None = None
+
+
 # ── Dev ingress (webhook stand-in) ──────────────────────────────────
 
 
