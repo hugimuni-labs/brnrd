@@ -89,14 +89,23 @@ def post_response(
     db: Session = Depends(get_db),
 ):
     forwarder = request.app.state.forwarder
-    event = inbox_service.record_response(
-        db,
-        project_id=principal.project_id,
-        event_id=payload.event_id,
-        body_markdown=payload.body_markdown,
-        status=payload.status,
-        forwarder=forwarder,
-    )
+    try:
+        event = inbox_service.record_response(
+            db,
+            project_id=principal.project_id,
+            event_id=payload.event_id,
+            body_markdown=payload.body_markdown,
+            status=payload.status,
+            forwarder=forwarder,
+        )
+    except inbox_service.DeliveryError as e:
+        # Upstream platform rejected the send (e.g. unreachable). The
+        # event stays queued so the daemon can retry; signal 502 so the
+        # failure isn't mistaken for a brnrd bug.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"forward to platform failed: {e}",
+        ) from e
     if event is None:
         raise HTTPException(status_code=404, detail="event not found for this project")
     return schemas.ResponseAck(event_id=payload.event_id, forwarded=True)
