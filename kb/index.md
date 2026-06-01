@@ -596,8 +596,10 @@ dive-in map) and are stable until something contradicts them.
   emits packs (Producer B, gated fragment) and the publish kernel opens a
   PR with the body projected from the pack
   ([prbody.py](../src/brr/diffense/prbody.py), `_maybe_open_pr`), both **on
-  by default**, all shipped 2026-06-01. Pending: slice 4 — the transient
-  brnrd relay link for oversized packs / remote reviewers.
+  by default**. In managed mode the pack is relayed to brnrd's transient
+  RAM-only renderer (`POST /v1/daemons/pack` + public `/r/{token}`,
+  [pack_relay.py](../src/brnrd/pack_relay.py)) and an interactive link
+  rides the PR body — never persisted. All shipped 2026-06-01.
 - [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
   — *2026-05-29*. The first concrete pack
   ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that

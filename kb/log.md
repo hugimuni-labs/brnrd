@@ -5453,3 +5453,37 @@ gh create/edit/skip branches, config defaults, bundle pack-path); 604
 green. Pending: slice 4 — relay the pack to brnrd for a rendered-surface
 link when it's too large to embed or a remote reviewer wants the hosted
 view.
+
+## [2026-06-01] implement | diffense slice 4: transient brnrd pack relay + interactive PR link
+
+Closed Thread D. In managed mode the daemon now relays the review pack to
+brnrd for a *rendered* surface and prepends an **Interactive review** link
+to the PR body. The load-bearing constraint is "transient relay, never a
+store": brnrd holds the pack in a **RAM-only TTL store**
+(`src/brnrd/pack_relay.py`, capability token, swept on expiry) — never the
+database, never disk — and renders it on the public `GET /r/{token}` by
+reusing `brr.diffense.render` verbatim. `POST /v1/daemons/pack` (daemon
+bearer, size-capped → 413) hands back `{token, render_url, expires_at}`.
+Daemon side: `cloud.relay_pack` POSTs the pack; `_maybe_open_pr` calls it
+only when `cloud.is_configured` (so self-hosted stays a pure no-op — the
+body still carries the projection + embedded pack, and local `brr review`
+is the rich surface); `prbody.project_pr_body(..., render_url=)` puts the
+banner above the Summary. Best-effort throughout: a relay failure logs and
+drops the link, never blocking the PR.
+
+Render route is unauthenticated by design — a reviewer opening it from a
+PR isn't necessarily a brnrd user; the token is the capability, the TTL
+bounds exposure (matches publishing your own data to your own PR). Noted
+the productionizing path (shared *ephemeral* store, never durable) and the
+private-repo session-gating as open follow-ups. 12 new tests (store
+roundtrip+expiry, relay auth/oversize/render, no-DB invariant, cloud
+end-to-end render, prbody banner, managed-mode link); 616 green.
+
+Also decided (this turn) and documented in `design-publish-kernel.md`:
+**auto-fork-on-conflict** stays a *possible* future feature, not built —
+on `conflict`, fall back to a plain push of the already-unique
+`brr/<task-id>` branch so a remote user gets a salvageable branch link
+instead of nothing (work currently only survives on the host-local
+branch). No auto-second-PR: conflicts fall back to manual resolution. The
+"PR link if a PR exists, else the branch link" delivery already holds on
+every successful-push path via `push_done.view_url`.

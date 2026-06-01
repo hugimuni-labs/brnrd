@@ -569,6 +569,31 @@ the clamp that stops the relay from becoming an open send-proxy.
 The skip-if-unchanged optimisation lives in the driver daemon-side,
 so an unchanged card is never re-POSTed.
 
+### Transient review-pack relay
+
+The daemon publishes its own PR (body = the diffense pack projection;
+see [`design-diffense.md`](design-diffense.md)). This pair of endpoints
+backs the **rich** rendered view linked from that body, for oversized
+packs or remote reviewers who want the zoomable surface:
+
+| Method | Path | Auth | Description | Persists |
+|--------|------|------|-------------|----------|
+| `POST` | `/v1/daemons/pack` | daemon bearer | Relay a review pack. Body: `{pack, ttl_s?}`. brnrd stashes it in a RAM-only TTL store behind an unguessable token and returns `{token, render_url, expires_at}`. Size-capped (413 over the cap). | **Nothing** — RAM only, dropped on TTL/restart |
+| `GET` | `/r/{token}` | **none** (capability URL) | Render the pack as the self-contained diffense HTML (reuses `brr.diffense.render`). 404 once expired. | — |
+
+This is the pack's "transient relay, never a store" stance made
+concrete (the data-ownership line that also governs event/response
+bodies): a pack is derived from the user's diff + conversation, so
+brnrd renders it but never writes it to the database or disk. The
+render route is unauthenticated by design — a reviewer opening the link
+from a PR body isn't necessarily a brnrd user; the token is the
+capability and the TTL bounds exposure, matching the user publishing
+their own data to their own PR. A horizontally-scaled deployment would
+swap the in-process store for a shared *ephemeral* one (Redis-with-TTL),
+never a durable table. (Self-hosted mode skips this entirely — the local
+`brr review` is the rich surface, and the PR body still carries the
+projection + the embedded pack.)
+
 This is the **one** place shape H extends the protocol; the
 final-response path above is unchanged. Shape U (daemon renders
 everything; brnrd a formatting-free send/edit relay for the

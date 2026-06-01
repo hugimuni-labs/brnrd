@@ -209,7 +209,7 @@ flowchart TD
 | Responsive web | terminal-aesthetic HTML; `brr review` serves it locally | self-hosted (local; LAN/tunnel for phone) | **render model spiked** ([`src/brr/diffense/`](../src/brr/diffense)); local server + runner wiring next |
 | PR-body projection | humanized Markdown in the PR body | any forge reader | **ships** (2026-06-01) — [`prbody.py`](../src/brr/diffense/prbody.py), projected by `_maybe_open_pr` on publish; pack embedded in a marker, `extract_pack` recovers it |
 | CLI / TUI | `brr review` in the terminal | self-hosted | follow-up, same pack |
-| Hosted web | brnrd-dashboard renderer | hosted | future (after brnrd exists) |
+| Hosted web | brnrd renders a relayed pack at `/r/{token}` (transient) | hosted (managed mode) | **relay ships** (2026-06-01) — `POST /v1/daemons/pack` + public `/r/{token}`, RAM-only; the brnrd-dashboard renderer is the richer follow-up |
 | Live agent | in-context Q&A over the pack | both | future |
 
 The payoff of the split: the hardest, most valuable work (assembling the
@@ -1105,14 +1105,14 @@ reviewer's surface.
   permitting. This is the user publishing their own data to their own PR —
   not a third party storing it.
 - **brnrd is a transient relay, never a pack store** (opt-in,
-  config-gated). When a remote reviewer wants the rich surface and the
-  pack is too large to embed, brnrd *renders* it sourced live from the
-  producer's local daemon and does **not** persist it — mirroring brnrd's
-  existing event-content-transient, "data ownership stays at the
-  metadata-graph level" stance
-  ([`design-brnrd-protocol.md`](design-brnrd-protocol.md)). Persisting the
-  pack server-side would break that stance, since the pack is derived from
-  the conversation and the diff. (Earlier drafts of this page said brnrd
+  config-gated; **shipped 2026-06-01**). In managed mode the daemon relays
+  the pack to brnrd (`POST /v1/daemons/pack`), which holds it in a RAM-only
+  TTL store behind an unguessable token and renders it on `GET /r/{token}`
+  via `brr.diffense.render` — it does **not** persist it, mirroring brnrd's
+  event-content-transient, "data ownership stays at the metadata-graph
+  level" stance ([`design-brnrd-protocol.md`](design-brnrd-protocol.md)).
+  Persisting the pack server-side would break that stance, since the pack
+  is derived from the conversation and the diff. (Earlier drafts said brnrd
   *stored* the pack keyed by PR / conversation id; corrected 2026-05-31 —
   it contradicted the protocol's data-ownership stance.)
 - **Self-served** — `brr review` over LAN / a tunnel from the producer's
@@ -1281,9 +1281,16 @@ born as a pack render target, not a throwaway format. Policy:
   the forge body budget (`extract_pack` is the inverse), so a reader can
   recover the exact pack from the body with no side channel.
 
-Still pending: **slice 4** relays the pack to brnrd (transient) for a
-rendered-surface link in the body when the pack is too large to embed or
-a remote reviewer wants the rich hosted view (see "Where packs live").
+**Slice 4 — the transient brnrd relay — ships** (2026-06-01). In managed
+mode (cloud gate configured), `_maybe_open_pr` relays the pack to brnrd
+(`cloud.relay_pack` → `POST /v1/daemons/pack`) and prepends an
+**Interactive review** link to the body. brnrd holds the pack in a
+RAM-only TTL store behind a capability token and renders it on
+`GET /r/{token}` via `brr.diffense.render` (reused verbatim) — never
+persisting it (see "Where packs live" + `design-brnrd-protocol.md`).
+Best-effort and self-hosted-safe: no cloud config → no relay → the body
+still carries the projection + the embedded pack, and the local
+`brr review` is the rich surface.
 
 ## Adjacencies that ship-or-shipped already
 
@@ -1356,13 +1363,15 @@ is the whole point of the producer/pack split.
   resolved by the spike.** Lateral edges and zoom-drills share one
   breadcrumb heading-bar stack; a code leaf is jump-to-forge at v0
   (`path:line` inline, inline-diff deferred). See "Rendering the zoom."
-- **Pack transport.** Resolved on storage (the pack stays the producer's;
-  brnrd is a transient relay, never a store — see "Where packs live"). The
-  PR-body embed threshold is now a concrete budget (`_BODY_BUDGET` in
-  `prbody.py`): under it the full pack rides in the body marker, over it
-  the embed degrades to a "render locally" pointer. Slice 4 (pending)
-  fills that gap with the transient brnrd relay link for oversized packs
-  and remote reviewers who want the hosted surface.
+- **Pack transport — resolved.** The pack stays the producer's; brnrd is
+  a transient relay, never a store (see "Where packs live"). The PR-body
+  embed threshold is a concrete budget (`_BODY_BUDGET` in `prbody.py`):
+  under it the full pack rides in the body marker, over it the embed
+  degrades to a "render locally" pointer. The transient brnrd relay
+  (`/v1/daemons/pack` + `/r/{token}`, shipped) carries the rich hosted
+  view for oversized packs and remote reviewers. Still open: a richer
+  hosted renderer (the brnrd dashboard) beyond the reused static render,
+  and gating private-repo render links behind the reviewer's session.
 - **Pack versioning across iterations.** A PR accrues successive packs as
   the feedback loop iterates; how to store them and render a "what
   changed since I last reviewed" pack-diff.
