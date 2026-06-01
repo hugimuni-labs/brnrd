@@ -367,24 +367,9 @@ def _coerce_optional_int(value: object) -> int | None:
 # ── Live progress card ──────────────────────────────────────────────
 
 
-_RENDERABLE_PACKETS = {
-    "task_created",
-    "env_prepared",
-    "container_started",
-    "container_preserved",
-    "run_started",
-    "attempt_started",
-    "attempt_failed",
-    "retrying",
-    "artifact_created",
-    "heartbeat",
-    "finalizing",
-    "push_started",
-    "push_done",
-    "done",
-    "failed",
-    "conflict",
-}
+# Card-worthy lifecycle packets; the canonical set lives in run_progress
+# so the cloud gate renders exactly the same moments.
+_RENDERABLE_PACKETS = run_progress.CARD_PACKETS
 
 
 def _escape_html(text: str) -> str:
@@ -421,6 +406,17 @@ def _build_card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
         compact=True,
         style=run_progress.TELEGRAM_HTML_STYLE,
     )
+
+
+def card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
+    """Render the Telegram-flavoured progress card for a task.
+
+    Public seam so the managed ``cloud`` gate can reuse Telegram's
+    presentation for telegram-origin events (see
+    ``kb/design-managed-delivery.md`` → per-platform presentation), so a
+    managed card looks identical to a self-hosted one.
+    """
+    return _build_card_text(brr_dir, conv_key, task_id)
 
 
 def _sanitize_view_for_html(view):
