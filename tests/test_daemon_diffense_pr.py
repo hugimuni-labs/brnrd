@@ -110,6 +110,27 @@ def test_refreshes_body_when_open_pr_exists(tmp_path, monkeypatch):
     assert not any(c["cmd"][:3] == ["gh", "pr", "create"] for c in calls)
 
 
+def test_create_includes_brnrd_render_link_in_managed_mode(tmp_path, monkeypatch):
+    from brr.gates import cloud
+
+    brr_dir = tmp_path / ".brr"
+    task = Task(id="task-8", event_id="evt-8", body="x", status="done")
+    _write_pack(brr_dir, task.id)
+    _github_remote(monkeypatch)
+    # Managed mode: the pack is relayed to brnrd and the link rides the body.
+    monkeypatch.setattr(cloud, "is_configured", lambda _b: True)
+    monkeypatch.setattr(cloud, "relay_pack", lambda _b, _p: "https://brnrd.example/r/tok")
+    calls: list = []
+    monkeypatch.setattr(daemon.subprocess, "run", _fake_gh(calls, existing=None))
+
+    url = daemon._maybe_open_pr(tmp_path, task, brr_dir, {}, "origin", "brr/feat-x")
+
+    assert url == "https://github.com/o/r/pull/7"
+    create = next(c for c in calls if c["cmd"][:3] == ["gh", "pr", "create"])
+    assert "https://brnrd.example/r/tok" in create["input"]
+    assert "Interactive review" in create["input"]
+
+
 def test_noop_when_create_pr_disabled(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     task = Task(id="task-3", event_id="evt-3", body="x", status="done")
