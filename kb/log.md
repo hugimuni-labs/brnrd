@@ -5290,3 +5290,32 @@ mutually exclusive on the same token. Reusing a bot for brnrd retires
 the local gate for that bot; running both in parallel needs a second
 bot (the path chosen for this deploy). Secrets ride `upsun
 variable:create` (`env:` prefix), never committed.
+
+## [2026-06-01] fix | brnrd response forwarding: chunk long messages, forward-first, 502 not 500
+
+First live end-to-end test surfaced a poison-loop: a real task response
+exceeded Telegram's 4096-char limit, brnrd's forwarder sent it in one
+`sendMessage`, Telegram 400'd, and `POST /v1/daemons/responses` 500'd —
+forever, since the cloud gate retries delivery failures. (The short
+pairing-confirmation replies worked, which localized it to message
+length, not token/egress.)
+
+- `platforms/telegram.send_message` now splits bodies into ≤4096-char
+  parts on line boundaries (`split_message`, capped at 12 parts with a
+  truncation marker), threading the reply only on the first — mirroring
+  the local gate's overflow handling without its `gh`-gist dependency
+  (not available on the server).
+- `inbox.record_response` restructured to **forward-first**: it
+  delivers before mutating, so a failed send leaves the event queued
+  with its body intact (the daemon retries safely) instead of marking
+  it responded + dropping the body on a doomed send. It is now
+  idempotent (an already-responded event is a no-op, no double-send),
+  and a forwarder failure raises a typed `DeliveryError`.
+- `POST /v1/daemons/responses` maps `DeliveryError` to **502** (upstream
+  delivery failed), not 500, so a platform hiccup isn't mistaken for a
+  brnrd bug.
+
+Tests: +3 (split/chunk behaviour; delivery-failure keeps the event
+queued then recovers + stays idempotent). Full suite 538 green. Noted
+follow-up: a permanently-undeliverable response still retries every
+loop — bounded retries / dead-letter is the next hardening.
