@@ -104,3 +104,75 @@ def send_message(
             timeout=timeout,
         )
         resp.raise_for_status()
+
+
+class CardGone(RuntimeError):
+    """A progress card can't be edited (deleted/expired) — resend.
+
+    Distinct so the card relay can answer 409 and let the daemon's card
+    driver fall back to a fresh send instead of treating it as a hard
+    failure.
+    """
+
+
+def send_card(
+    token: str,
+    chat_id: str | int,
+    text: str,
+    *,
+    topic_id: int | None = None,
+    reply_to_message_id: int | None = None,
+    timeout: float = 30.0,
+) -> int | None:
+    """Send a single progress-card message (HTML), return its message id.
+
+    A card is small, so unlike ``send_message`` this never splits — and
+    it returns the platform ``message_id`` so the daemon's shared card
+    driver can edit the same message in place on later packets. The card
+    text arrives already HTML-formatted by the daemon.
+    """
+    params: dict = {"chat_id": chat_id, "text": text or " ", "parse_mode": "HTML"}
+    if topic_id:
+        params["message_thread_id"] = topic_id
+    if reply_to_message_id:
+        params["reply_to_message_id"] = reply_to_message_id
+        params["allow_sending_without_reply"] = True
+    resp = httpx.post(
+        _API.format(token=token, method="sendMessage"), json=params, timeout=timeout
+    )
+    resp.raise_for_status()
+    return ((resp.json() or {}).get("result") or {}).get("message_id")
+
+
+def edit_card(
+    token: str,
+    chat_id: str | int,
+    message_id: int,
+    text: str,
+    *,
+    timeout: float = 30.0,
+) -> None:
+    """Edit a progress card in place (HTML).
+
+    A Telegram "message is not modified" reply is a benign no-op
+    (success); any other 400 means the message is gone, surfaced as
+    ``CardGone`` so the relay can ask the daemon to send a fresh card.
+    """
+    params: dict = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text or " ",
+        "parse_mode": "HTML",
+    }
+    resp = httpx.post(
+        _API.format(token=token, method="editMessageText"), json=params, timeout=timeout
+    )
+    if resp.status_code == 400:
+        try:
+            desc = str((resp.json() or {}).get("description", ""))
+        except ValueError:
+            desc = resp.text
+        if "not modified" in desc.lower():
+            return
+        raise CardGone(desc or "card not editable")
+    resp.raise_for_status()
