@@ -1212,18 +1212,25 @@ to get buried under brnrd's complexity later.
 
 ## Where the runner / publish kernel wire in
 
-Deferred to implementation; the shape is named so future slices have an
-anchor. diffense hangs off the publish step
+diffense hangs off the publish step
 ([`design-publish-kernel.md`](design-publish-kernel.md)): the runner
 emits the pack as the last step before publish, runs `brr review --check`
 on it, and the daemon writes the PR-body projection (and embeds/attaches
-the pack) on publish. The runner prompt in `src/brr/prompts/` gains a
-step: *produce the diffense pack under the six clamps; give each card its
-gloss → zoom tree → ground-truth leaf and a resolvable locator; surface
+the pack) on publish.
+
+**Producer B — runner emission — ships** (2026-06-01) as a gated prompt
+fragment ([`src/brr/prompts/diffense.md`](../src/brr/prompts/diffense.md)),
+appended to the daemon run prompt when `diffense.emit_pack=true` (off by
+default until PR-body projection consumes the pack — mirrors the
+`runner.self_review` opt-in). It instructs: *produce the pack for a
+review-worthy committed change under the six clamps; give each card its
+gloss → ground-truth-leaf locator; open with a summary, surface
 uncertainty cards (assumption / concern / dilemma / out-of-scope /
-follow-up) with their tension references when they arose; use existing
-and new tests as grounding evidence; then `--check` the pack before
-publish.* No code in this commit.
+follow-up) first; ground demos in real test values; write it to
+`.brr/diffense/<task-id>/pack.json`; then `brr review --check` it and fix
+every error before finishing.* Pack shape is taught by example
+([the PR #64 prototype](diffense-prototype-pr64.md)) + this page, not a
+duplicated schema doc.
 
 **PR creation is part of this slice, and net-new.** Today the publish
 kernel only *pushes a branch* (`publish()` in

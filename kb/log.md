@@ -5395,3 +5395,24 @@ clean; 35 new tests pin the failure modes. Render-check stays deferred
 its renderability). Next in Thread D: Producer B (runner emits the pack +
 runs `--check` at publish), then PR creation in the publish kernel with
 the body as the pack projection, then the brnrd transient relay.
+
+## [2026-06-01] implement | diffense slice 2: Producer B — runner emits the pack
+
+Wired Producer B — the runner emitting its own pack, the
+deepest-context producer. New gated prompt fragment
+[`src/brr/prompts/diffense.md`](../src/brr/prompts/diffense.md) is appended
+to the daemon run prompt when `diffense.emit_pack=true` in `.brr/config`
+(off by default — mirrors the `runner.self_review` opt-in — until PR-body
+projection consumes the pack, so it doesn't tax every adopter's task
+before there's a consumer). It tells the runner to emit a review pack for
+a review-worthy committed change: the always-present axes + namespaced
+ids + resolvable locators, summary card first, uncertainty cards
+surfaced, demos grounded in real test values, the six clamps, written to
+`.brr/diffense/<task-id>/pack.json`, then `brr review --check`'d before
+finishing. Schema is taught by reference (the PR #64 prototype +
+`design-diffense.md`), not a duplicated doc. Threaded a `diffense` flag
+through `prompts.build_daemon_prompt` / `_join_prompt_parts` plus
+`prompts.diffense_emit_enabled(cfg)`, computed in the daemon worker beside
+`prompt_self_review`. 3 new prompt tests; 585 green. Next: PR creation in
+the publish kernel with the body as the pack projection (the consuming
+surface that flips this on by default), then the brnrd transient relay.
