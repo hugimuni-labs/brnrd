@@ -127,12 +127,17 @@ def _join_prompt_parts(
     trailer: str,
     *,
     self_review: bool = False,
+    diffense: bool = False,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
     parts = [preamble]
     context = _build_context_block(repo_root)
     if context:
         parts.append(context)
+    if diffense:
+        pack_step = read_prompt("diffense.md", repo_root)
+        if pack_step:
+            parts.append(pack_step)
     if self_review:
         nudge = read_prompt("self-review.md", repo_root)
         if nudge:
@@ -146,6 +151,19 @@ def self_review_enabled(cfg: dict[str, Any] | None) -> bool:
     if not cfg:
         return False
     return bool(cfg.get("runner.self_review", cfg.get("runner_self_review")))
+
+
+def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
+    """Return whether runner prompts should ask for a diffense review pack.
+
+    Off by default: pack emission only earns its prompt cost (and the
+    runner's time) once a consuming surface is wired — the local
+    ``brr review`` render and, next, PR-body projection. Opt in per repo
+    with ``diffense.emit_pack=true`` in ``.brr/config``.
+    """
+    if not cfg:
+        return False
+    return bool(cfg.get("diffense.emit_pack", cfg.get("diffense_emit_pack")))
 
 
 # ── Top-level builders ───────────────────────────────────────────────
@@ -188,6 +206,7 @@ def build_daemon_prompt(
     recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
     self_review: bool = False,
+    diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
@@ -216,7 +235,8 @@ def build_daemon_prompt(
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nTask: {task}"
     return _join_prompt_parts(
-        preamble, repo_root, trailer, self_review=self_review,
+        preamble, repo_root, trailer,
+        self_review=self_review, diffense=diffense,
     )
 
 

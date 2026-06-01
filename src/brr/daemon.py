@@ -641,6 +641,7 @@ def _run_worker(
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
     prompt_self_review = prompts.self_review_enabled(cfg)
+    prompt_diffense = prompts.diffense_emit_enabled(cfg)
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = prompts.build_daemon_prompt(
@@ -657,6 +658,7 @@ def _run_worker(
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
                 self_review=prompt_self_review,
+                diffense=prompt_diffense,
             )
         else:
             prompt = prompts.build_daemon_prompt(
@@ -676,6 +678,7 @@ def _run_worker(
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
                 self_review=prompt_self_review,
+                diffense=prompt_diffense,
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
