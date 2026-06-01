@@ -464,8 +464,18 @@ def _maybe_open_pr(
         print(f"[brr] diffense: unreadable pack, skipping PR ({exc})")
         return None
 
+    # In managed mode, relay the pack to brnrd for a transient rendered
+    # surface and link it from the body. Best-effort and self-hosted-safe:
+    # no cloud config → no relay → the body still carries the projection +
+    # the embedded pack (the local `brr review` fallback).
+    render_url: str | None = None
+    from .gates import cloud
+
+    if cloud.is_configured(brr_dir):
+        render_url = cloud.relay_pack(brr_dir, pack)
+
     title = prbody.pr_title(pack, fallback=remote_branch)
-    body = prbody.project_pr_body(pack)
+    body = prbody.project_pr_body(pack, render_url=render_url)
     number = _existing_open_pr(repo_root, remote_branch)
     try:
         if number is not None:
