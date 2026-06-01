@@ -49,6 +49,10 @@ class Settings:
     # echoes back from setWebhook (not a bearer).
     telegram_bot_token: str = os.environ.get("BRNRD_TELEGRAM_BOT_TOKEN", "")
     telegram_webhook_secret: str = os.environ.get("BRNRD_TELEGRAM_WEBHOOK_SECRET", "")
+    # Bot @username (without the leading @), used to build t.me deep-links
+    # so a user can tap to open the bot with the pair code prefilled
+    # instead of copy-pasting ``/start <code>``. Empty → no deep-link.
+    telegram_bot_username: str = os.environ.get("BRNRD_TELEGRAM_BOT_USERNAME", "")
     # Web dashboard session cookie name.
     session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
 

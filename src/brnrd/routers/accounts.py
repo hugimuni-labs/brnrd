@@ -73,8 +73,17 @@ def create_account(payload: schemas.AccountCreate, db: Session = Depends(get_db)
             label="initial",
         )
     )
+    # Seed a "default" project so a fresh account can pair a daemon (or a
+    # Telegram chat) right away. It counts as a normal project against the
+    # account's cap once cap enforcement lands; `create_project` is
+    # idempotent on name, so re-using "default" later is harmless.
+    project = Project(id=ids.project_id(), account_id=account.id, name="default")
+    db.add(project)
+
     db.commit()
-    return schemas.AccountCreated(account_id=account.id, api_key=raw_key)
+    return schemas.AccountCreated(
+        account_id=account.id, api_key=raw_key, default_project_id=project.id
+    )
 
 
 @router.post("/sessions", response_model=schemas.SessionCreated)
