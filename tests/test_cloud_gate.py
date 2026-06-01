@@ -68,6 +68,44 @@ def _handshake(client, acc_headers, pid):
     return paired["daemon_token"]
 
 
+def test_relay_pack_returns_render_url_that_renders(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    pack = {
+        "schema_version": "0.1-test",
+        "metadata": {},
+        "reading_order": ["summary:x"],
+        "cards": [
+            {
+                "id": "summary:x",
+                "kind": "summary",
+                "identity": {"label": "the change in shape"},
+                "lore": {"descriptive": "a small honest change"},
+                "provenance": {},
+            }
+        ],
+    }
+    url = cloud.relay_pack(brr_dir, pack)
+    assert url and "/r/" in url
+    # brnrd renders the relayed pack live at the returned capability URL.
+    page = client.get(url[url.index("/r/"):])
+    assert page.status_code == 200
+    assert "the change in shape" in page.text
+
+
+def test_relay_pack_noop_without_config(tmp_path):
+    # Self-hosted mode (no cloud state) -> no relay, no rich link.
+    assert cloud.relay_pack(tmp_path / ".brr", {"cards": []}) is None
+
+
 def test_connect_persists_token(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     scripted = iter(
