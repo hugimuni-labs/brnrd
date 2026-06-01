@@ -347,4 +347,24 @@ def test_project_create_is_idempotent(env):
     ).json()
     assert first["project_id"] == second["project_id"]
     listing = client.get("/v1/accounts/projects", headers=acc).json()
-    assert len(listing["projects"]) == 1
+    names = [p["name"] for p in listing["projects"]]
+    # Exactly one "same" (idempotent), alongside the auto-created "default".
+    assert names.count("same") == 1
+    assert "default" in names
+    assert len(listing["projects"]) == 2
+
+
+def test_account_creation_seeds_default_project(env):
+    _, client, _ = env
+    created = client.post(
+        "/v1/accounts", json={"email": "seed@b.com", "password": "supersecret"}
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    pid = body["default_project_id"]
+    assert pid
+
+    acc = {"Authorization": f"Bearer {body['api_key']}"}
+    listing = client.get("/v1/accounts/projects", headers=acc).json()
+    assert [p["project_id"] for p in listing["projects"]] == [pid]
+    assert listing["projects"][0]["name"] == "default"
