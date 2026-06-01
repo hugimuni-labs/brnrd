@@ -48,6 +48,15 @@ class CapturingForwarder:
 Forwarder = Callable[[ForwardItem], None]
 
 
+class DeliveryError(RuntimeError):
+    """The forwarder failed to deliver the response to its platform.
+
+    Distinct from an internal error so the endpoint can answer 502
+    (upstream delivery failed) instead of 500, and the daemon can
+    retry without the event being marked responded.
+    """
+
+
 def default_forwarder(item: ForwardItem) -> None:
     """Fallback seam when no platform is configured — a no-op.
     ``_dev/enqueue`` flows are observed via a capturing forwarder."""
@@ -154,11 +163,16 @@ def record_response(
     status: str,
     forwarder: Forwarder,
 ) -> Event | None:
-    """Record response metadata, drop + forward the body.
+    """Forward the response, then record metadata and drop the body.
 
     Returns the event, or None if it does not belong to this project.
-    The response body is never written to the database — only its
-    length, status, and end-to-end latency are kept.
+    Raises ``DeliveryError`` if the forwarder fails — in that case the
+    event is left untouched (still queued, body intact) so the daemon
+    can safely retry. The response body is never written to the
+    database; only its length, status, and latency are kept.
+
+    Idempotent: a re-POST for an already-responded event is a no-op
+    (no duplicate send), since the daemon only cleans up on a 2xx.
     """
     event = db.execute(
         select(Event).where(
@@ -167,6 +181,23 @@ def record_response(
     ).scalar_one_or_none()
     if event is None:
         return None
+    if event.status == Event.STATUS_RESPONDED:
+        return event
+
+    # Deliver first: only a successful forward commits the state change,
+    # so a delivery failure never marks the event done or drops its body.
+    reply_to = _loads(event.reply_to)
+    try:
+        forwarder(
+            ForwardItem(
+                event_id=event_id,
+                reply_to=reply_to,
+                body=body_markdown,
+                status=status,
+            )
+        )
+    except Exception as e:  # noqa: BLE001 - normalize to a delivery signal
+        raise DeliveryError(str(e)) from e
 
     now = datetime.now(timezone.utc)
     created = event.created_at
@@ -177,19 +208,9 @@ def record_response(
     event.response_ms = int((now - created).total_seconds() * 1000)
     event.responded_at = now
     event.status = Event.STATUS_RESPONDED
-    # Drop the inbound task body once the task is answered.
+    # Drop the inbound task body now that it's been answered + delivered.
     event.body = None
-    reply_to = _loads(event.reply_to)
     db.commit()
-
-    forwarder(
-        ForwardItem(
-            event_id=event_id,
-            reply_to=reply_to,
-            body=body_markdown,
-            status=status,
-        )
-    )
     return event
 
 

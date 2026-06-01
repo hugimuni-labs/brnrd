@@ -278,6 +278,64 @@ def test_dev_enqueue_rejects_foreign_project(env):
     assert resp.status_code == 404
 
 
+def test_delivery_failure_keeps_event_queued_then_recovers():
+    """A forwarder failure must not 500, must not mark the event done,
+    and must let the daemon retry safely (once) without double-sending."""
+
+    class Flaky:
+        def __init__(self):
+            self.fail = True
+            self.sent = []
+
+        def __call__(self, item):
+            if self.fail:
+                raise RuntimeError("telegram unreachable")
+            self.sent.append(item)
+
+    flaky = Flaky()
+    app = create_app(
+        Settings(
+            database_url="sqlite:///:memory:",
+            inbox_long_poll_max_s=0.2,
+            inbox_poll_interval_s=0.02,
+        ),
+        forwarder=flaky,
+    )
+    client = TestClient(app)
+    acc = _account(client)
+    pid = _project(client, acc)
+    dmn = _connect(client, acc, pid)
+    event_id = client.post(
+        "/v1/_dev/enqueue", json={"project_id": pid, "body": "task"}, headers=acc
+    ).json()["event_id"]
+
+    body = {"event_id": event_id, "body_markdown": "answer", "status": "done"}
+
+    # Forward fails -> 502 (not 500); event stays queued with its body.
+    bad = client.post("/v1/daemons/responses", json=body, headers=dmn)
+    assert bad.status_code == 502
+    assert flaky.sent == []
+    with app.state.SessionLocal() as db:
+        row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert row.status == Event.STATUS_QUEUED
+        assert row.body == "task"
+
+    # Recover: the retry delivers, marks responded, drops the body.
+    flaky.fail = False
+    ok = client.post("/v1/daemons/responses", json=body, headers=dmn)
+    assert ok.status_code == 200
+    assert len(flaky.sent) == 1
+    with app.state.SessionLocal() as db:
+        row = db.execute(select(Event).where(Event.event_id == event_id)).scalar_one()
+        assert row.status == Event.STATUS_RESPONDED
+        assert row.body is None
+
+    # Idempotent: a duplicate POST is a no-op, never a second send.
+    again = client.post("/v1/daemons/responses", json=body, headers=dmn)
+    assert again.status_code == 200
+    assert len(flaky.sent) == 1
+
+
 def test_project_create_is_idempotent(env):
     _, client, _ = env
     acc = _account(client)
