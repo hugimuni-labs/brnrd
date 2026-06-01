@@ -30,6 +30,13 @@ _POLL_WAIT_S = 25
 _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
 
+# Per-origin-platform single-message size budget for the final answer.
+# The daemon offloads anything larger to a gist before POSTing so the
+# body fits without relying on brnrd-side chunking (which stays only as a
+# safety net). Telegram's hard cap is 4096; stay under it with margin,
+# matching the OSS telegram gate. Unlisted platforms skip daemon overflow.
+_RESPONSE_LIMITS = {"telegram": 3900}
+
 
 # ── HTTP seam ────────────────────────────────────────────────────────
 
@@ -213,6 +220,15 @@ def _deliver_responses(
         cloud_event_id = event.get("cloud_event_id")
         if not cloud_event_id:
             raise RuntimeError("missing cloud_event_id")
+        # Offload an over-long body to a gist on the user's own gh and
+        # send the link, so the body fits the origin platform's single-
+        # message limit. brnrd never needs gist creds; its own chunking
+        # is just a safety net now (shape H — kb/design-managed-delivery.md).
+        limit = _RESPONSE_LIMITS.get(event.get("cloud_platform") or "")
+        if limit is not None:
+            body = delivery.resolve_overflow(
+                body, limit=limit, gist_fn=delivery.post_gist
+            )
         _request(
             state["brnrd_url"],
             "POST",
