@@ -5360,3 +5360,38 @@ implementation; no product code this pass.
   pack-schema lock. Framed productization as two producers of one pack —
   B (runner, in-tree, the steak) first; A (post-hoc PR agent over
   diff+repo) the deferred standalone demo.
+
+## [2026-06-01] implement | diffense slice 1: pack schema locked + `brr review --check`
+
+Thread D (the diffense PR-creation slice) is gated on a locked pack
+schema, so this slice locks it. New
+[`src/brr/diffense/pack.py`](../src/brr/diffense/pack.py) is the contract
+*and* the `brr review --check` engine:
+
+- **always-present axes + open-core kinds.** id uniqueness, identity
+  label, a gloss (`lore.descriptive` or an uncertainty `headline`),
+  provenance, and a `locator` on any card that names a file. Unknown
+  kinds *warn and degrade to generic* rather than failing — the taxonomy
+  grows from use (custom kinds), the way the kb does.
+- **card graph.** reading-order entries and card-namespaced lateral
+  edges / walkthrough members / data-trace stages must resolve to real
+  cards (dangling = error); free references (a bare symbol, a kb anchor)
+  are left alone. This is the `{card|locator}` edge distinction the PR
+  #64 prototype asked for.
+- **locator resolution against the working tree** — the headline value:
+  a missing file or a line past EOF is an error (what would have caught
+  the design's invented `cache.get_with_etag`); an absent
+  `identity.symbol` is a heuristic warning (tolerates dotted/renamed and
+  prose-y symbols). A locator escaping the repo is an error.
+- **cheap clamp lints** — oversized gloss (*sharp*), empty conditional
+  axis emitted anyway (*emit-iff-honest*), prescriptive phrasing
+  (*non-prescriptive*) — warnings, not blockers.
+
+Wired as `brr review [--check] [--json] <pack>` in the CLI; non-zero exit
+blocks publish of a broken pack, and `python -m brr` now propagates that
+exit code (was swallowed). The hand-authored PR #64 prototype validates
+clean; 35 new tests pin the failure modes. Render-check stays deferred
+(the only renderer is the schema-driven JS spike, so schema validity is
+its renderability). Next in Thread D: Producer B (runner emits the pack +
+runs `--check` at publish), then PR creation in the publish kernel with
+the body as the pack projection, then the brnrd transient relay.
