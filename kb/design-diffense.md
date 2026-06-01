@@ -931,24 +931,37 @@ since I last reviewed" pack-diff view — named in Open questions.
 
 ## The pack validation / render tool
 
-The agent that emits the pack needs to confirm it actually renders before
-publishing it — the pack is an artifact with a contract, and a malformed
+The agent that emits the pack confirms it before publishing — a malformed
 or clamp-violating pack is a silent quality regression. So diffense ships
-a checker the agent calls as the last step of pack generation:
+a checker the agent runs as the last step of pack generation:
 
-`brr review --check <pack>` (exact verb shape decided in the impl plan):
+**`brr review --check <pack>`** (shipped 2026-06-01,
+[`src/brr/diffense/pack.py`](../src/brr/diffense/pack.py)):
 
-- **schema-validates** the pack (discriminated union of card kinds;
-  required always-axes present; locators resolve);
-- **clamp-lints** heuristically (cards over a size budget fail *sharp*;
-  empty conditional axes that were emitted anyway fail *emit-iff-honest*;
-  prescriptive-phrase smells flagged for *non-prescriptive*);
-- **render-checks** by dry-rendering each renderer's view of the pack and
-  confirming no card fails to paint.
+- **schema-validates** — the always-present axes are present, card ids
+  are unique, the kind set is an *open core* (an unknown kind warns and
+  degrades to generic rather than failing), and any card that names a
+  file carries a `locator`;
+- **resolves the card graph** — every reading-order entry and every
+  card-namespaced lateral edge / walkthrough member / data-trace stage
+  resolves to a real card; a dangling card reference is an error, while a
+  free reference (a bare symbol, a kb anchor) is left alone;
+- **resolves locators against the repo** — a `locator.local` whose file
+  is missing or whose line is past end-of-file is an error (the check
+  that would have caught the design draft's invented
+  `cache.get_with_etag`); a named `identity.symbol` absent from the file
+  is a heuristic warning;
+- **clamp-lints** the cheap clamps — oversized glosses (*sharp*), empty
+  conditional axes emitted anyway (*emit-iff-honest*), prescriptive
+  phrasing (*non-prescriptive*).
 
-This is to diffense what a compile step is to code, and it folds into the
-runner's self-review (see "Where the runner / publish kernel wire in").
-Non-zero exit blocks publish of a broken pack.
+`--json` emits the machine-readable issue list; a non-zero exit blocks
+publish of a broken pack, and the step folds into the runner's
+self-review (see "Where the runner / publish kernel wire in"). The
+render-check arm — dry-rendering each renderer's view — stays deferred:
+the only renderer today is the schema-driven JS spike, so schema validity
+*is* its renderability; it returns as a real step once a server-side
+renderer exists.
 
 ## Discipline: the six clamps
 
@@ -1280,18 +1293,20 @@ is the whole point of the producer/pack split.
 
 ## Open questions
 
-- **Pack JSON schema.** A discriminated union over item kinds +
-  walkthroughs + uncertainty subkinds, each with its zoom-tree and
-  locator shape. A first hand-authored instance now exists — the
-  [PR #64 prototype](diffense-prototype-pr64.md) — and its findings
-  sharpen the schema before it locks: add `code-module-split` /
-  `code-move` kinds; make `edge.target` a `{card}` or `{locator}` (not
-  free text) so `--check` can resolve it; give uncertainty cards an
-  `honest_nuance` slot (grounding forced the seen-cap concern to its
-  true, narrower bound); derive mechanical stats rather than authoring
-  them; and re-run the prototype on a brr-*produced* PR to exercise
-  `provenance.conversation_msg`, the one field a hand-authored pack
-  can't. Finalized in the implementation plan.
+- **Pack JSON schema — locked as the `--check` contract (2026-06-01).**
+  The discriminated union over item kinds + walkthroughs + uncertainty
+  subkinds is now encoded in
+  [`src/brr/diffense/pack.py`](../src/brr/diffense/pack.py) and enforced
+  by `brr review --check` (v0.1). The
+  [PR #64 prototype](diffense-prototype-pr64.md) findings are folded in:
+  `code-module-split` / `code-move` are core kinds, the kind set is an
+  open core (custom kinds warn, never fail), card-namespaced edge targets
+  must resolve while free references don't, and uncertainty cards carry
+  `honest_nuance`. Deliberately *not* yet enforced, pending real
+  emission: mechanical-stat derivation (the prototype authored stats by
+  hand) and `provenance.conversation_msg`, the one field only a
+  brr-*produced* pack (Producer B) exercises. A `schema_version` bump
+  policy lands with that emission.
 - **Graph / inter-card navigation + code rendering at a locator —
   resolved by the spike.** Lateral edges and zoom-drills share one
   breadcrumb heading-bar stack; a code leaf is jump-to-forge at v0
