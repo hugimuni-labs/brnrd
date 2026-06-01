@@ -20,6 +20,7 @@ shape this implements.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -48,6 +49,27 @@ def resolve_overflow(
     if url:
         return f"Result: {url}"
     return text[:limit] + "\n\n[truncated]"
+
+
+def post_gist(content: str, filename: str = "result.md") -> str | None:
+    """Create a gist from *content* via the user's own ``gh``; URL or None.
+
+    Runs on the daemon (which holds the user's ``gh``), so large content
+    stays on the user's GitHub and only a short link is relayed — brnrd
+    never needs gist credentials (see ``kb/design-managed-delivery.md`` →
+    "Why gists stay daemon-side"). Returns None if ``gh`` is unavailable
+    or fails, leaving the caller to truncate.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "gist", "create", "--public", "-f", filename, "-"],
+            input=content, capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return None
 
 
 # ── Progress-card lifecycle ──────────────────────────────────────────
