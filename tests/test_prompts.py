@@ -5,6 +5,7 @@ from brr.prompts import (
     _read_recent_log,
     build_daemon_prompt,
     build_run_prompt,
+    diffense_emit_enabled,
     self_review_enabled,
 )
 
@@ -120,6 +121,27 @@ class TestPromptBuilding:
             self_review=True,
         )
         assert "Ergonomics review:" in prompt
+
+    def test_diffense_emit_enabled_from_config(self):
+        assert diffense_emit_enabled({"diffense.emit_pack": True})
+        assert not diffense_emit_enabled({"diffense.emit_pack": False})
+        assert diffense_emit_enabled({"diffense_emit_pack": True})
+        assert not diffense_emit_enabled(None)
+        assert not diffense_emit_enabled({})
+
+    def test_daemon_prompt_includes_diffense_pack_when_enabled(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            diffense=True,
+        )
+        assert "Review pack (diffense)" in prompt
+        assert "brr review --check" in prompt
+
+    def test_daemon_prompt_omits_diffense_pack_by_default(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+        )
+        assert "Review pack (diffense)" not in prompt
 
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
