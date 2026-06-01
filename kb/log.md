@@ -5319,3 +5319,44 @@ Tests: +3 (split/chunk behaviour; delivery-failure keeps the event
 queued then recovers + stays idempotent). Full suite 538 green. Noted
 follow-up: a permanently-undeliverable response still retries every
 loop — bounded retries / dead-letter is the next hardening.
+
+## [2026-06-01] decision | managed delivery shape H + deploy-repo + diffense PR-creation slice
+
+Etched architecture from a design session into the kb ahead of
+implementation; no product code this pass.
+
+- **Delivery shape H** (new [`design-managed-delivery.md`](design-managed-delivery.md)).
+  One daemon-side delivery driver — card lifecycle, per-platform
+  presentation, gist/truncate overflow — reused by the OSS gates
+  (direct transport, user token) and the cloud gate (brnrd relay
+  transport, managed token). brnrd stays a transient relay: it keeps
+  formatting the final answer per the accepted response shape, the
+  daemon pre-handles overflow so the body fits, and a thin additive
+  `POST /v1/daemons/card` relays the live progress card (brnrd holds
+  only the card `message_id`, never the text). Chose H (additive) over
+  U (daemon renders everything; brnrd a formatting-free pipe) on
+  maintainability + the self-host promise; U kept as a clean future
+  move. The card is daemon-rendered because `run_progress` reads
+  daemon-local `.brr/tasks/`, so brnrd can't see it — which generalises
+  to remote-env (Fly) daemon-equivalents. Amended
+  [`design-brnrd-protocol.md`](design-brnrd-protocol.md) with the
+  card-relay endpoint + a daemon-side-overflow note (retiring the
+  2026-06-01 brnrd chunking stopgap to a safety net).
+- **Live brnrd.dev deploy runs from a public `deploy` branch, off `main`**
+  ([`decision-monorepo-structure.md`](decision-monorepo-structure.md)).
+  Root `.upsun/` from `upsun project:init` is ops-in-the-OSS-tree
+  drift; canonical config → in-tree `deploy/upsun/` template, `main`
+  carries no root `.upsun/`. A long-lived `deploy` branch adds the root
+  config (a symlink to the template, so live == template; copy if Upsun
+  won't follow it), autosynced by a clean `main`→`deploy` merge Action
+  (no version pin — the branch is the source at that ref). Public won on
+  dogfooding/parity (secrets live in Upsun's store regardless).
+  Supersedes the first sketch of a separate deploy repo + SHA-bump pin.
+- **diffense Thread D + producers**
+  ([`design-diffense.md`](design-diffense.md)). PR *creation* is
+  net-new (`publish()` only pushes a branch today, issue #68) and lands
+  as one coherent slice with the pack: open-PR-on-forge + PR body = pack
+  projection + pack relayed to brnrd for the rendered link, gated on
+  pack-schema lock. Framed productization as two producers of one pack —
+  B (runner, in-tree, the steak) first; A (post-hoc PR agent over
+  diff+repo) the deferred standalone demo.

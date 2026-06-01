@@ -174,6 +174,16 @@ dive-in map) and are stable until something contradicts them.
   spawn-compute joined the protocol; renamed to
   `design-brnrd-protocol.md` on 2026-05-25 with the
   brnrd-naming-keep decision.
+- [Managed-mode delivery design](design-managed-delivery.md) —
+  *accepted 2026-06-01 (shape H)*. One daemon-side delivery driver
+  (card lifecycle + per-platform presentation + gist/truncate
+  overflow), two transports: direct (OSS gates → platform with the
+  user's own token) and brnrd relay (cloud gate → brnrd → managed
+  token). Locks **H** — brnrd keeps formatting the final answer, the
+  daemon pre-handles overflow, and a thin additive `/v1/daemons/card`
+  relays the live progress card — over **U** (brnrd a formatting-free
+  pipe). Keeps gists daemon-side and generalises to remote-env (Fly)
+  daemon-equivalents.
 - [Pricing shape decision](decision-pricing-shape.md) —
   *accepted 2026-05-26*. **Subscription for the platform + metered credits
   for compute.** Two tiers at launch: Free (3 projects, 100

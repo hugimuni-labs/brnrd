@@ -476,6 +476,19 @@ before posting, then drops the body. `status` drives whether the
 platform message gets a check / cross / warning glyph for
 at-a-glance triage.
 
+**Overflow is handled daemon-side, before the POST** (delivery
+shape H; see
+[`design-managed-delivery.md`](design-managed-delivery.md)). The
+daemon runs the shared delivery driver's `overflow()` step — gist
+via the user's own `gh`, else truncate — so `body_markdown` always
+fits the origin platform's single-message limit. brnrd therefore
+never chunks and never needs gist credentials; large content stays
+on the user's own GitHub as a gist link, never on brnrd. (Earlier
+the brnrd forwarder chunked over-long bodies itself — a stopgap
+for Telegram's 4096-char limit added 2026-06-01; the driver makes
+that a removable safety net, since the daemon is the side that has
+`gh`.)
+
 ## brnrd side — REST API surface
 
 ### Account / pairing / project endpoints
@@ -529,6 +542,41 @@ All require `Authorization: Bearer <api-key>` (long-lived account
 key) OR `Authorization: Bearer <task-key>` (short-lived per-task
 token issued when a failover sandbox spawns; scoped to a single
 `event_id`).
+
+### Live progress card relay (daemon-facing)
+
+Additive to the response shape above (added 2026-06-01, delivery
+shape **H** — see
+[`design-managed-delivery.md`](design-managed-delivery.md)). The
+OSS gates render a live progress card from local `run_progress`
+and edit it in place as a task moves (`task_created → running →
+finalizing → done`). That view is **daemon-local** — `run_progress`
+reads `.brr/tasks/` — so brnrd cannot render it; the daemon must.
+In managed mode the cloud gate renders the card text (via the
+shared delivery driver, styled per the event's origin platform)
+and relays it for the managed bot to post / edit in place:
+
+| Method | Path | Description | Persists |
+|--------|------|-------------|----------|
+| `POST` | `/v1/daemons/card` | Upsert the live progress card for an in-flight event. Body: `{event_id, reply_to, text}` (`reply_to` echoed from the event as on the response POST; `text` already platform-formatted by the daemon). brnrd verifies `reply_to` against the event's chat/repo binding, sends the card on the first call (storing the returned platform `message_id` keyed by `event_id`) and edits it in place thereafter. | Card `message_id` per `event_id` (routing metadata, dropped when the event is responded / TTL'd); **never the text** |
+
+Same auth as the inbox endpoints. The card text passes through
+like a response body — relayed to the platform, never stored;
+brnrd holds only the `message_id` it needs to edit in place
+(routing metadata, mirroring how it retains the echoed `reply_to`
+to forward the final response). The binding check on `reply_to` is
+the clamp that stops the relay from becoming an open send-proxy.
+The skip-if-unchanged optimisation lives in the driver daemon-side,
+so an unchanged card is never re-POSTed.
+
+This is the **one** place shape H extends the protocol; the
+final-response path above is unchanged. Shape U (daemon renders
+everything; brnrd a formatting-free send/edit relay for the
+response too) was weighed and deferred — it reshapes the accepted
+response shape for a mostly-philosophical data-min gain where H is
+purely additive. See
+[`design-managed-delivery.md`](design-managed-delivery.md) → "Why
+H, and what U would change".
 
 ### Webhook endpoints (platform-facing)
 
@@ -1501,6 +1549,13 @@ The brr daemon-hosting Upsun template (in
 [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md))
 shares the same constraints and benefits from the same patterns —
 write the Upsun shape once, use it twice.
+
+The live config itself lives on a public **`deploy` branch** (root
+`.upsun/` symlinked to the in-tree `deploy/upsun/` template, kept in
+sync by a clean `main`→`deploy` merge Action), not on `main` — see
+[`decision-monorepo-structure.md`](decision-monorepo-structure.md) →
+"The live brnrd.dev deployment runs from a `deploy` branch" for the
+branch + symlink + autosync shape.
 
 ## Out of scope (for this design)
 

@@ -1212,6 +1212,21 @@ follow-up) with their tension references when they arose; use existing
 and new tests as grounding evidence; then `--check` the pack before
 publish.* No code in this commit.
 
+**PR creation is part of this slice, and net-new.** Today the publish
+kernel only *pushes a branch* (`publish()` in
+[`src/brr/daemon.py`](../src/brr/daemon.py); the GitHub gate comments but
+never opens PRs — issue #68: a run always has a task id but not always a
+PR). So "the daemon writes the PR-body projection on publish" presumes a
+PR that doesn't yet exist. The coherent slice (decided 2026-06-01,
+against splitting it): publish gains an **open-PR-on-the-configured-forge**
+step (GitHub only for now), the PR body *is* the projection — so it's
+born as a pack render target, not a throwaway format bolted on before the
+pack arrives — and the full pack is relayed to brnrd for the
+rendered-surface link carried in the body / a comment (transient relay,
+see "Where packs live"). Pack-schema lock (see "Open questions") gates
+it; the PR-creation, projection, and relay land together because their
+shapes only make sense against the locked pack.
+
 ## Adjacencies that ship-or-shipped already
 
 - **The `pr-review` / `pr-review-comment` event handling** in
@@ -1247,6 +1262,21 @@ general-purpose "review cards for any repo" product is a fork in the road
 for later, once the pack format and the web renderer have earned their
 keep here. Noted so the option isn't forgotten, explicitly deferred so it
 doesn't pull focus.
+
+**Framed as two producers of one pack.** The pack format is the
+contract; what changes is who fills it. *Producer B* — the runner, at
+publish time (see "Where the runner / publish kernel wire in") — is the
+near-term one: it has the deepest inputs (conversation, kb graph,
+run-state, tests), and the pack is a byproduct of work brr already does,
+so it both lifts review and tends to make the run more structured.
+*Producer A* — a post-hoc agent triggered on a PR (mention-bot or Action,
+pay-as-you-go, self-hostable) over just the diff + repo — is the broader,
+standalone story but the shallower pack, and it would ride the same
+GitHub App ingress managed mode needs anyway. Decision (2026-06-01):
+**B first** — it's the steak (real review lift, in-tree, no new ingress);
+A is a self-contained demo deferred until B and the pack format have
+earned their keep. Both emit the same pack into the same renderers, which
+is the whole point of the producer/pack split.
 
 ## Open questions
 

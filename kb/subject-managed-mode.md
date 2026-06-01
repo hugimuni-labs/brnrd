@@ -762,7 +762,10 @@ Out of scope, explicitly:
    service both build against. Covers gates + failover dispatch
    + generalised credential vault (AI runner + docker-registry)
    + subscription endpoints + multi-project routing +
-   permission prompts + data minimization in one page.
+   permission prompts + data minimization in one page. Its
+   delivery half — one daemon-side driver, two transports
+   (direct + brnrd relay), shape H — is
+   [`design-managed-delivery.md`](design-managed-delivery.md).
 3. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
    for the Surface A launch sequencing (GH-then-TG + routing UX
    + permission-prompt integration).
