@@ -7,7 +7,8 @@ from fastapi import FastAPI
 from .config import Settings, get_settings
 from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
-from .routers import accounts, daemons, dev, pairing, webhooks
+from .pack_relay import PackRelayStore
+from .routers import accounts, daemons, dev, pairing, render, webhooks
 
 
 def create_app(
@@ -28,10 +29,14 @@ def create_app(
     # without being persisted. Default dispatches to the configured
     # platform (Telegram today); tests install a capturing forwarder.
     app.state.forwarder = forwarder or make_default_forwarder(settings)
+    # Transient, RAM-only relay for diffense review packs. Never touches
+    # the database — brnrd renders a relayed pack, it does not store it.
+    app.state.pack_relay = PackRelayStore(default_ttl_s=settings.pack_relay_ttl_s)
 
     app.include_router(accounts.router)
     app.include_router(pairing.router)
     app.include_router(daemons.router)
+    app.include_router(render.router)
     app.include_router(webhooks.router)
     if settings.enable_dev_endpoints:
         app.include_router(dev.router)

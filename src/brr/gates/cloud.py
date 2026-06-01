@@ -84,6 +84,35 @@ def is_configured(brr_dir: Path) -> bool:
     return bool(state.get("token") and state.get("brnrd_url") and state.get("project_id"))
 
 
+def relay_pack(brr_dir: Path, pack: dict, *, ttl_s: int | None = None) -> str | None:
+    """Relay a diffense review pack to brnrd for a transient rendered view.
+
+    brnrd holds the pack in memory behind an unguessable, TTL-bounded
+    token and renders it on demand — it never persists it
+    (``kb/design-diffense.md`` → "Where packs live"). Returns the render
+    URL to link from the PR body, or ``None`` when managed mode isn't
+    configured or the relay fails: a missing rich link is never worth
+    blocking the PR over (the body still carries the projection + the
+    embedded pack).
+    """
+    state = _load_state(brr_dir)
+    if not (state.get("token") and state.get("brnrd_url")):
+        return None
+    body: dict = {"pack": pack}
+    if ttl_s:
+        body["ttl_s"] = ttl_s
+    try:
+        result = _request(
+            state["brnrd_url"], "POST", "/v1/daemons/pack",
+            token=state["token"], json=body,
+        )
+    except Exception as e:  # noqa: BLE001 - best-effort rich surface
+        print(f"[brr:cloud] pack relay failed: {e}")
+        return None
+    url = result.get("render_url")
+    return url if isinstance(url, str) and url else None
+
+
 # ── Device-flow connect ──────────────────────────────────────────────
 
 

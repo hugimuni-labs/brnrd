@@ -140,6 +140,19 @@ class CardAck(BaseModel):
     message_id: int | None = None
 
 
+class PackRelayPost(BaseModel):
+    # The full diffense review pack to render. Held transiently in RAM
+    # behind a capability token; never persisted (see pack_relay.py).
+    pack: dict[str, Any]
+    ttl_s: int | None = None
+
+
+class PackRelayAck(BaseModel):
+    token: str
+    render_url: str
+    expires_at: float
+
+
 # ── Dev ingress (webhook stand-in) ──────────────────────────────────
 
 

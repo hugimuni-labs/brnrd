@@ -175,6 +175,37 @@ def post_card(
         ) from e
 
 
+# A relayed pack is held in RAM only; cap the size so a daemon can't pin
+# unbounded memory. Generous — real packs are KBs to low MBs.
+_MAX_PACK_BYTES = 4 * 1024 * 1024
+
+
+@router.post("/pack", response_model=schemas.PackRelayAck)
+def post_pack(
+    request: Request,
+    payload: schemas.PackRelayPost,
+    principal: Principal = Depends(require_daemon),
+):
+    """Relay a diffense review pack for a transient rendered surface.
+
+    The daemon publishes its own PR (body = the pack projection); this
+    relay backs the *rich* view linked from that body. brnrd stashes the
+    pack in a RAM-only, TTL-bounded store behind an unguessable token and
+    renders it on ``GET /r/{token}`` — it is **never** written to the
+    database or disk (``kb/design-diffense.md`` → "Where packs live": the
+    pack stays the producer's; brnrd is a transient relay, never a store).
+    """
+    blob = json.dumps(payload.pack, separators=(",", ":"))
+    if len(blob.encode("utf-8")) > _MAX_PACK_BYTES:
+        raise HTTPException(status_code=413, detail="review pack too large to relay")
+    store = request.app.state.pack_relay
+    token, expires_at = store.put(payload.pack, ttl_s=payload.ttl_s)
+    base = request.app.state.settings.public_base_url.rstrip("/")
+    return schemas.PackRelayAck(
+        token=token, render_url=f"{base}/r/{token}", expires_at=expires_at,
+    )
+
+
 @router.post("/deregister")
 def deregister(
     payload: schemas.DaemonDeregister,
