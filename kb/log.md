@@ -5416,3 +5416,40 @@ through `prompts.build_daemon_prompt` / `_join_prompt_parts` plus
 `prompt_self_review`. 3 new prompt tests; 585 green. Next: PR creation in
 the publish kernel with the body as the pack projection (the consuming
 surface that flips this on by default), then the brnrd transient relay.
+
+## [2026-06-01] implement | diffense slice 3: publish opens a PR, body = pack projection
+
+The consuming surface for Producer B. After a clean push, `publish()` now
+calls `_maybe_open_pr` ([`src/brr/daemon.py`](../src/brr/daemon.py)): it
+reads the emitted pack, projects it to a Markdown PR body
+([`src/brr/diffense/prbody.py`](../src/brr/diffense/prbody.py)), and opens
+or refreshes the change's PR via `gh` (GitHub only). `diffense.create_pr`
+and `diffense.emit_pack` both flip **on by default** now that the
+consumer exists (no users → no BC cost, per the call).
+
+Two design knots resolved:
+
+- **Pack survival across the worktree.** The runner works in a worktree
+  whose own `.brr/` is torn down at finalize, so a cwd-relative pack would
+  die before `publish()` reads it. Fixed by handing the runner an explicit
+  absolute `Review pack path` in the *shared* runtime dir via the Task
+  Context Bundle (same pattern as `response_path`); the fragment writes
+  there and `publish()` reads the same path.
+- **Create-vs-refresh + the user's "keep both / conflict" worry.** It
+  rides on the push, not bespoke conflict logic: the PR step only runs
+  after a clean push (remote head == our commits), so an open PR on that
+  head is refreshed; a diverged push never reaches it (rejected upstream →
+  `publish_status=conflict`, work preserved, user notified). Branch-per-
+  task makes "keep both" free — a new task → new branch → new PR, old PR
+  intact. The 5-arm push is the conflict adjudicator; the PR step just
+  reads its outcome.
+
+The PR url replaces the bare branch link in the delivered card's `view:`
+line (reuses `push_done`'s `view_url` — no new packet type, no per-gate
+allow-list churn). The full pack is embedded in a `diffense:pack:v1`
+HTML-comment marker when it fits `_BODY_BUDGET` (`extract_pack` is the
+inverse), so the PR is self-describing. 23 new tests (projection,
+gh create/edit/skip branches, config defaults, bundle pack-path); 604
+green. Pending: slice 4 — relay the pack to brnrd for a rendered-surface
+link when it's too large to embed or a remote reviewer wants the hosted
+view.

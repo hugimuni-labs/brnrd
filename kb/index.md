@@ -590,10 +590,14 @@ dive-in map) and are stable until something contradicts them.
   **data-trace** walkthroughs (follow the datum, steppable so animation is
   a renderer-only upgrade), and **kb-native axes**. Transport corrected:
   brnrd is a *transient relay*, never a pack store (matches its
-  data-ownership stance). The pack schema is now **locked as the
+  data-ownership stance). The pack schema is **locked as the
   `brr review --check` contract**
-  ([src/brr/diffense/pack.py](../src/brr/diffense/pack.py), shipped
-  2026-06-01); open: body-embed size threshold, runner wiring (Producer B).
+  ([src/brr/diffense/pack.py](../src/brr/diffense/pack.py)); the runner
+  emits packs (Producer B, gated fragment) and the publish kernel opens a
+  PR with the body projected from the pack
+  ([prbody.py](../src/brr/diffense/prbody.py), `_maybe_open_pr`), both **on
+  by default**, all shipped 2026-06-01. Pending: slice 4 — the transient
+  brnrd relay link for oversized packs / remote reviewers.
 - [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
   — *2026-05-29*. The first concrete pack
   ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that
