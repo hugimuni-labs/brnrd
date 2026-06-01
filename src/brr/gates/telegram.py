@@ -21,7 +21,7 @@ import requests
 
 from .. import protocol, run_progress
 from ..task import Task
-from . import runtime
+from . import delivery, runtime
 
 _API = "https://api.telegram.org/bot{token}/{method}"
 _MAX_TG_LEN = 3900
@@ -172,12 +172,20 @@ def _save_state(brr_dir: Path, state: dict) -> None:
 
 
 def _load_progress_for_task(brr_dir: Path, task_id: str) -> dict | None:
-    """Return this task's previously-rendered card state, or None."""
+    """Return this task's previously-rendered card state, or None.
+
+    Test-facing accessor for the per-task card file; the live write
+    path now lives in the shared ``delivery.update_card`` driver.
+    """
     return runtime.load_task_card(brr_dir, "telegram", task_id)
 
 
 def _save_progress_for_task(brr_dir: Path, task_id: str, entry: dict) -> None:
-    """Write this task's card state file (atomic via rename)."""
+    """Write this task's card state file (test-facing accessor).
+
+    Tests seed card state through this; the live write path goes
+    through ``delivery.update_card``.
+    """
     runtime.save_task_card(brr_dir, "telegram", task_id, entry)
 
 
@@ -444,6 +452,30 @@ def _sanitize_view_for_html(view):
     )
 
 
+class _CardTransport:
+    """Direct Telegram transport for the shared card driver."""
+
+    def __init__(self, token: str, chat_id: int, topic_id: int | None) -> None:
+        self._token = token
+        self._chat_id = chat_id
+        self._topic_id = topic_id
+
+    def send(self, text: str, *, reply_to: int | None = None) -> int | None:
+        resp = _send_message(
+            self._token, self._chat_id, text, self._topic_id,
+            parse_mode="HTML", reply_to_message_id=reply_to,
+        )
+        return (resp.get("result") or {}).get("message_id")
+
+    def edit(self, message_id: int, text: str) -> None:
+        try:
+            _edit_message(
+                self._token, self._chat_id, message_id, text, parse_mode="HTML",
+            )
+        except _TelegramNotModified:
+            raise delivery.CardUnchanged from None
+
+
 def render_update(brr_dir: Path, packet: Any) -> None:
     """Send/edit a Telegram progress card for *packet*.
 
@@ -482,64 +514,8 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     if text is None:
         return
 
-    entry = _load_progress_for_task(brr_dir, task_id)
-
-    if entry and entry.get("last_text") == text:
-        # Identical to the last rendered message — nothing to do. Avoids
-        # the Telegram round-trip and the "message is not modified" 400
-        # that would come back if we sent it.
-        entry["last_render"] = ptype
-        _save_progress_for_task(brr_dir, task_id, entry)
-        return
-
-    try:
-        if entry and entry.get("message_id"):
-            try:
-                _edit_message(
-                    token, chat_id, int(entry["message_id"]), text,
-                    parse_mode="HTML",
-                )
-            except _TelegramNotModified:
-                # Server-side check agrees the message body didn't change;
-                # treat as a successful no-op rather than falling through
-                # to send a replacement (which is the duplication bug).
-                pass
-            except Exception:
-                # The message is genuinely gone (deleted, expired, etc.).
-                # Fall through to send a replacement.
-                resp = _send_message(
-                    token, chat_id, text, topic_id, parse_mode="HTML",
-                    reply_to_message_id=reply_to,
-                )
-                message_id = (resp.get("result") or {}).get("message_id")
-                if message_id is None:
-                    return
-                _save_progress_for_task(brr_dir, task_id, {
-                    "chat_id": chat_id,
-                    "topic_id": topic_id,
-                    "message_id": message_id,
-                    "last_render": ptype,
-                    "last_text": text,
-                })
-                return
-            entry["last_render"] = ptype
-            entry["last_text"] = text
-            _save_progress_for_task(brr_dir, task_id, entry)
-            return
-
-        resp = _send_message(
-            token, chat_id, text, topic_id, parse_mode="HTML",
-            reply_to_message_id=reply_to,
-        )
-        message_id = (resp.get("result") or {}).get("message_id")
-        if message_id is None:
-            return
-        _save_progress_for_task(brr_dir, task_id, {
-            "chat_id": chat_id,
-            "topic_id": topic_id,
-            "message_id": message_id,
-            "last_render": ptype,
-            "last_text": text,
-        })
-    except Exception:
-        return
+    transport = _CardTransport(token, chat_id, topic_id)
+    delivery.update_card(
+        brr_dir, "telegram", task_id, text,
+        transport=transport, reply_to=reply_to, render_tag=ptype,
+    )
