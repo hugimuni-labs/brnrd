@@ -26,6 +26,14 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("instruction", help="what to do")
     p.set_defaults(func=cmd_run)
 
+    p = sub.add_parser("review", help="work with diffense review packs")
+    p.add_argument("pack", help="path to a review pack JSON file")
+    p.add_argument("--check", action="store_true",
+                   help="validate the pack's schema, card graph, and locators")
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.set_defaults(func=cmd_review)
+
     p = sub.add_parser("auth", help="authenticate a gate")
     p.add_argument("gate", help="gate name (telegram, slack, git)")
     p.set_defaults(func=cmd_auth)
@@ -120,6 +128,13 @@ def _maybe_brr_dir() -> Path | None:
         return None
 
 
+def _maybe_repo_root() -> Path | None:
+    try:
+        return _repo_root()
+    except (RuntimeError, SystemExit):
+        return None
+
+
 def cmd_init(args):
     from . import adopt
     adopt.init_repo(args.url, interactive=args.interactive)
@@ -134,6 +149,51 @@ def cmd_run(args):
 
     from . import runner
     runner.run_task(args.instruction)
+
+
+def cmd_review(args):
+    import json as _json
+
+    from .diffense import pack as pack_mod
+
+    path = Path(args.pack)
+    try:
+        loaded = pack_mod.load_pack(path)
+    except pack_mod.PackError as e:
+        if args.json:
+            print(_json.dumps({"ok": False, "error": str(e)}))
+        else:
+            print(f"[brr review] {e}")
+        return 2
+
+    if not args.check:
+        print("[brr review] only `--check` is implemented today; pass --check "
+              "(the local render/serve surface is a follow-up)")
+        return 0
+
+    repo_root = _maybe_repo_root()
+    issues = pack_mod.check_pack(loaded, repo_root=repo_root)
+    errors = [i for i in issues if i.level == "error"]
+    warnings = [i for i in issues if i.level == "warning"]
+
+    if args.json:
+        print(_json.dumps(
+            {
+                "ok": not errors,
+                "errors": len(errors),
+                "warnings": len(warnings),
+                "issues": [i.__dict__ for i in issues],
+            },
+            indent=2,
+        ))
+    else:
+        for issue in issues:
+            print(f"  {issue.format()}")
+        n_cards = len(loaded.get("cards") or [])
+        scope = "against repo" if repo_root else "structure-only (no repo)"
+        print(f"[brr review] {path.name}: {n_cards} cards, "
+              f"{len(errors)} error(s), {len(warnings)} warning(s) — {scope}")
+    return 1 if errors else 0
 
 
 def cmd_auth(args):
