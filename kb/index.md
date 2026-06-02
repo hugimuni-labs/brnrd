@@ -46,8 +46,9 @@ dive-in map) and are stable until something contradicts them.
   plus quiescent re-exec between tasks when brr package files change;
   kept explicit via `--dev-reload` / `dev_reload=true`, not a default.
 - [Agent ergonomics observability design](design-agent-ergonomics.md) —
-  *proposed 2026-05-27*. Replaces the user-visible `runner.self_review`
-  footer with a three-layer back-channel: deterministic probes (image
+  *active (probe slice shipped 2026-06-02)*. Replaces the user-visible
+  `runner.self_review` footer with a three-layer back-channel:
+  deterministic probes (image
   staleness, tool presence, auth resolvability), runtime telemetry
   (retry/exit/phase data piggybacking on `run_progress`), and sampled
   agent reflection wrapped in HTML comment markers and stripped from

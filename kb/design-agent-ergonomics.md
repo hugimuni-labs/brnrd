@@ -4,7 +4,12 @@ Status: active — proposed 2026-05-27 in response to the docker-runner
 ergonomics pass earlier the same day, where three independent agent
 reviews surfaced the same friction (stale image / missing pytest / gh
 auth confusion) and the only thing that aggregated the signal was a
-human pasting the reviews into a chat for analysis.
+human pasting the reviews into a chat for analysis. **Probe slice
+shipped 2026-06-02** (`src/brr/ergonomics/`): the deterministic probe
+layer, the `Null`/`Local` proxies, the local JSONL store, and the
+`brr ergonomics` read CLI. Telemetry, sampled reflection, the
+`BrnrdErgoProxy`, and the dashboard views remain designed-not-built
+below.
 
 Companion to:
 
@@ -198,6 +203,21 @@ unconditional once the proxy is non-null. They never gate the task —
 emitting an `error`-severity record doesn't refuse to run; the
 operator decides whether to act on it.
 
+**What shipped (2026-06-02).** The v1 probe set runs at **task prep
+only** — one hook in `daemon._run_worker` right after `env.prepare`,
+so the resolved image / GitHub token / worktree state is visible.
+Probes: `stale_image` (image `Created` vs the bundled Dockerfile's
+mtime, docker only), `auth_unresolvable` (docker task, github in play,
+no token resolved), `missing_tool` (host/worktree, `gh` absent while
+github configured), `worktree_buildup` (kept worktrees past a
+threshold), `low_disk`, `drifted_bundled_docs` (repo `AGENTS.md` vs the
+installed bundled template). Deferred to a follow-up: the one-shot
+**daemon-startup** audit (resolved here as design open-question #2 —
+hardcode task-prep first, add a startup phase only when a probe needs
+it), and **in-container** PATH probing for docker tasks (spawning a
+probe container breaks the O(ms) contract). `probe_task_prep`
+short-circuits on `NullErgoProxy` so the opt-out default pays nothing.
+
 **Telemetry** rides on the existing run-progress and task-lifecycle
 infrastructure. The daemon already emits structured packets
 (`run_progress.py`); the telemetry layer is a sidecar consumer that
@@ -296,6 +316,17 @@ Final shape settles when the implementation plan slices; the
 design only commits to "there is a CLI surface, it reads from
 `LocalErgoProxy`, it includes a sharing path."
 
+**Shipped (2026-06-02):** `brr ergonomics summary [--days N] [--json]`,
+`brr ergonomics list [--issue X] [--days N] [--limit N] [--json]`, and
+`brr ergonomics clear [--before YYYY-MM-DD]`, all reading the local
+JSONL store. `brr ergonomics share` is deferred until `BrnrdErgoProxy`
+lands (it needs the brnrd improve-pool endpoint). `brr config set
+ergonomics.proxy local` is just a flat-config write; until the
+`brr config` subcommand exists (#50), opt in by editing `.brr/config`
+(`ergonomics.proxy=local`). The verb is top-level and operator-facing,
+consistent with the #49 CLI-taxonomy split (human/operator verbs stay
+top-level; agent-only verbs move under `brr agent`).
+
 ## brnrd dashboard surface
 
 Two views, added to the dashboard MVP's eight as a follow-up slice:
@@ -334,11 +365,11 @@ fleet alone.
 
 | Slice | LOC | Ship-blocking on |
 |-------|-----|------------------|
-| `ErgoProxy` Protocol + `NullErgoProxy` + `LocalErgoProxy` | ~150 | — |
-| Probe set v1 (image staleness, gh auth resolvable, tools on PATH, worktree health) | ~250 | — |
+| `ErgoProxy` Protocol + `NullErgoProxy` + `LocalErgoProxy` | ~150 | — **(shipped 2026-06-02)** |
+| Probe set v1 (image staleness, gh auth resolvable, tools on PATH, worktree health, low disk, doc drift) | ~250 | — **(shipped 2026-06-02)** |
 | Telemetry sidecar reading from `run_progress` | ~200 | — |
 | Reflection wrapper-marker prompt + splitter + proxy wiring | ~80 | `ErgoProxy` + a small redaction helper |
-| `brr ergonomics` CLI | ~200 | `ErgoProxy` + JSONL store |
+| `brr ergonomics` CLI (`summary`/`list`/`clear`) | ~200 | `ErgoProxy` + JSONL store — **(shipped 2026-06-02; `share` deferred with `BrnrdErgoProxy`)** |
 | `BrnrdErgoProxy` + ergonomics endpoint stub | ~300 | `design-brnrd-protocol.md` slot for the endpoint |
 | Dashboard project-ergonomics view | ~400 | `plan-brnrd-dashboard-mvp.md` slice landing for templating infra |
 | Dashboard fleet-ergonomics view | ~200 | Platform-operator auth role in brnrd |
