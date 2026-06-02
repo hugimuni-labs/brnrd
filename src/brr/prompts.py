@@ -127,12 +127,17 @@ def _join_prompt_parts(
     trailer: str,
     *,
     self_review: bool = False,
+    diffense: bool = False,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
     parts = [preamble]
     context = _build_context_block(repo_root)
     if context:
         parts.append(context)
+    if diffense:
+        pack_step = read_prompt("diffense.md", repo_root)
+        if pack_step:
+            parts.append(pack_step)
     if self_review:
         nudge = read_prompt("self-review.md", repo_root)
         if nudge:
@@ -146,6 +151,32 @@ def self_review_enabled(cfg: dict[str, Any] | None) -> bool:
     if not cfg:
         return False
     return bool(cfg.get("runner.self_review", cfg.get("runner_self_review")))
+
+
+def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
+    """Return whether runner prompts should ask for a diffense review pack.
+
+    On by default now that the consuming surface ships: the publish kernel
+    projects the pack into the PR body (``diffense_create_pr_enabled``), so
+    a review-worthy change produces a richer PR for free. Opt out per repo
+    with ``diffense.emit_pack=false`` in ``.brr/config``. (Default was off
+    through slices 1–2, before the projection consumed the pack.)
+    """
+    cfg = cfg or {}
+    return bool(cfg.get("diffense.emit_pack", cfg.get("diffense_emit_pack", True)))
+
+
+def diffense_create_pr_enabled(cfg: dict[str, Any] | None) -> bool:
+    """Return whether the publish kernel should open/refresh a forge PR.
+
+    On by default (GitHub only for now): when a run leaves a review-worthy
+    pack, brr opens a PR whose body *is* the pack projection. It no-ops
+    naturally when no pack was emitted, so ``diffense.emit_pack=false``
+    also turns PR creation off. Opt out independently with
+    ``diffense.create_pr=false`` to keep packs local (review by hand).
+    """
+    cfg = cfg or {}
+    return bool(cfg.get("diffense.create_pr", cfg.get("diffense_create_pr", True)))
 
 
 # ── Top-level builders ───────────────────────────────────────────────
@@ -188,6 +219,7 @@ def build_daemon_prompt(
     recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
     self_review: bool = False,
+    diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
@@ -211,12 +243,14 @@ def build_daemon_prompt(
         context_path=context_path,
         recent_conversation=recent_conversation,
         event_body=event_body,
+        diffense=diffense,
     )
     trailer = bundle.rstrip()
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nTask: {task}"
     return _join_prompt_parts(
-        preamble, repo_root, trailer, self_review=self_review,
+        preamble, repo_root, trailer,
+        self_review=self_review, diffense=diffense,
     )
 
 
@@ -251,6 +285,7 @@ def _build_task_context_bundle(
     recent_conversation: list[dict[str, Any]] | None,
     event_body: str | None,
     self_review: bool = False,
+    diffense: bool = False,
 ) -> str:
     """Assemble the human-readable Task Context Bundle for the daemon prompt.
 
@@ -290,6 +325,17 @@ def _build_task_context_bundle(
         sections.append(f"- Current branch: {branch_name}")
     if runtime_dir:
         sections.append(f"- Shared runtime dir: {runtime_dir}")
+    if diffense and task_id:
+        # An absolute path in the *shared* runtime dir, not a cwd-relative
+        # `.brr/...`: the runner works in a worktree whose own `.brr/` is
+        # torn down at finalize, so a relative pack would die before the
+        # publish kernel could read it. This path is the one place the
+        # daemon looks for the emitted pack.
+        from . import gitops
+
+        base = Path(runtime_dir) if runtime_dir else gitops.shared_brr_dir(repo_root)
+        pack_path = base / "diffense" / task_id / "pack.json"
+        sections.append(f"- Review pack path: {pack_path}")
     if context_path:
         sections.append(f"- Run context file: {context_path}")
 

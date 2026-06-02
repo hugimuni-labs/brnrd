@@ -70,6 +70,23 @@ def test_conversation_key_github_missing_anchor_returns_none():
     ) is None
 
 
+def test_conversation_key_cloud_threads_by_origin_chat():
+    event = {
+        "source": "cloud",
+        "cloud_platform": "telegram",
+        "cloud_chat_id": 555,
+        "cloud_topic_id": 9,
+    }
+    assert conversations.conversation_key_for_event(event) == "cloud:telegram:555:9"
+
+
+def test_conversation_key_cloud_without_routing_falls_back_to_default():
+    # A drained event with no origin routing still gets a stable key.
+    assert (
+        conversations.conversation_key_for_event({"source": "cloud"}) == "cloud:default"
+    )
+
+
 def test_conversation_key_explicit_wins():
     event = {
         "source": "telegram",
