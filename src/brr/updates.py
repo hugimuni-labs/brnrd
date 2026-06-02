@@ -137,7 +137,7 @@ def _render_console(packet: UpdatePacket) -> None:
 def _dispatch_to_gates(brr_dir: Path, packet: UpdatePacket) -> None:
     from .gates import import_gate
 
-    for name in ("telegram", "slack", "github"):
+    for name in ("telegram", "slack", "github", "cloud"):
         try:
             mod = import_gate(name)
         except ImportError:

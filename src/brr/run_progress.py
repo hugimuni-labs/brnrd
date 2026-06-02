@@ -455,6 +455,30 @@ SLACK_MRKDWN_STYLE = RenderStyle(done_open="~", done_close="~")
 GITHUB_MARKDOWN_STYLE = RenderStyle(done_open="~~", done_close="~~")
 
 
+# Lifecycle packets that warrant (re)rendering a live progress card.
+# The canonical set lives here so every gate — telegram, slack, github,
+# and the managed cloud gate — surfaces exactly the same moments and
+# can't drift apart.
+CARD_PACKETS = frozenset({
+    "task_created",
+    "env_prepared",
+    "container_started",
+    "container_preserved",
+    "run_started",
+    "attempt_started",
+    "attempt_failed",
+    "retrying",
+    "artifact_created",
+    "heartbeat",
+    "finalizing",
+    "push_started",
+    "push_done",
+    "done",
+    "failed",
+    "conflict",
+})
+
+
 def render_text(
     view: RunProgressView,
     *,
