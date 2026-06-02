@@ -1,0 +1,471 @@
+"""Deterministic, daemon-side ergonomics probes (the ``probe`` layer).
+
+Each probe is a pure-ish function over a ``ProbeContext`` returning a
+list of ``Finding`` (issue + severity + structured detail). The
+orchestrator wraps findings into full ``Record`` envelopes and hands
+them to the configured proxy.
+
+Three contracts, from the design:
+
+- **Never gate the task.** A probe raising is swallowed; an
+  ``error``-severity finding is a signal, not a refusal to run.
+- **Cheap.** O(ms) each; the heaviest is a single ``docker image
+  inspect``. No probe spawns a container or hits the network.
+- **Off unless opted in.** ``probe_task_prep`` resolves the proxy first
+  and short-circuits on ``NullErgoProxy`` so the default path pays
+  nothing.
+
+Probes run host-side on the daemon, so env-sensitive checks
+(in-container PATH, etc.) are scoped by ``ctx.name``. In-container tool
+probing for docker tasks is deferred — it needs a probe container,
+which breaks the O(ms) contract.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+from ..task import Task
+from ..envs import RunContext
+from .record import Record
+from .proxy import ErgoProxy, NullErgoProxy, get_proxy
+
+# brr's installed package root (``src/brr``): probes.py lives at
+# ``src/brr/ergonomics/probes.py``, so two parents up is the package dir
+# that carries the bundled Dockerfile and AGENTS.md template.
+_PKG_ROOT = Path(__file__).resolve().parent.parent
+_BUNDLED_DOCKERFILE = _PKG_ROOT / "Dockerfile"
+_BUNDLED_AGENTS_MD = _PKG_ROOT / "AGENTS.md"
+
+
+@dataclass
+class Finding:
+    """A single probe result before the common envelope is attached."""
+
+    issue: str
+    severity: str
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ProbeContext:
+    task: Task
+    repo_root: Path
+    brr_dir: Path
+    cfg: dict[str, Any]
+    ctx: RunContext
+
+
+# ── individual probes ───────────────────────────────────────────────
+
+
+def probe_github_auth(p: ProbeContext) -> list[Finding]:
+    """Docker tasks need an injected token; the container can't reach
+    the host keyring. If github is in play and ``DockerEnv.prepare``
+    resolved no token, gh CLI and HTTPS push will silently be
+    unauthenticated — the exact confusion the design was born from.
+    """
+    if p.ctx.name != "docker" or not _github_in_play(p.task, p.brr_dir):
+        return []
+    if p.ctx.env_state.get("github_token"):
+        return []
+    return [
+        Finding(
+            "auth_unresolvable",
+            "warn",
+            {
+                "what": "github_token",
+                "hint": (
+                    "no GitHub token resolved for the container; gh CLI "
+                    "and HTTPS git push will run unauthenticated. Set "
+                    "GITHUB_TOKEN/GH_TOKEN on the daemon, authenticate the "
+                    "github gate, or make `gh auth token` resolvable."
+                ),
+            },
+        )
+    ]
+
+
+def probe_missing_tools(p: ProbeContext) -> list[Finding]:
+    """Host/worktree tasks run the runner on the host PATH. The runner
+    binary itself is already validated by ``resolve_runner``; the soft
+    gap that doesn't otherwise gate is ``gh`` when github is configured.
+    """
+    if p.ctx.name not in ("host", "worktree"):
+        return []
+    findings: list[Finding] = []
+    if _github_in_play(p.task, p.brr_dir) and shutil.which("gh") is None:
+        findings.append(
+            Finding(
+                "missing_tool",
+                "warn",
+                {
+                    "tool": "gh",
+                    "hint": (
+                        "github is configured but the gh CLI isn't on PATH; "
+                        "agents that shell out to gh will fail. Install gh "
+                        "or rely on GITHUB_TOKEN + the API."
+                    ),
+                },
+            )
+        )
+    return findings
+
+
+def probe_stale_image(p: ProbeContext) -> list[Finding]:
+    """Warn when the runner image predates brr's bundled Dockerfile.
+
+    The bundled Dockerfile's mtime tracks the installed brr version, so
+    "image older than the Dockerfile" approximates "image built before
+    your current brr expected these tools" — the stale-image / missing-
+    pytest failure mode. Skips silently when the image isn't local or
+    docker isn't reachable (no inspect → no signal, not a false alarm).
+    """
+    if p.ctx.name != "docker":
+        return []
+    image = p.ctx.env_state.get("docker_image")
+    if not image:
+        return []
+    created = _docker_image_created_epoch(str(image))
+    if created is None or not _BUNDLED_DOCKERFILE.exists():
+        return []
+    df_mtime = _BUNDLED_DOCKERFILE.stat().st_mtime
+    if created >= df_mtime:
+        return []
+    return [
+        Finding(
+            "stale_image",
+            "warn",
+            {
+                "image": image,
+                "image_built": _iso(created),
+                "bundled_dockerfile_modified": _iso(df_mtime),
+                "hint": (
+                    "the runner image predates brr's current bundled "
+                    "Dockerfile; rebuild it (`brr init -i`, or docker build "
+                    "from the bundled Dockerfile) so the container carries "
+                    "the tooling this brr version expects."
+                ),
+            },
+        )
+    ]
+
+
+def probe_worktree_buildup(p: ProbeContext) -> list[Finding]:
+    """Finalize keeps worktrees on failure/dirty exit; they accumulate.
+
+    A growing pile burns disk and makes ``git worktree list`` noisy.
+    Warn past a threshold so the operator prunes.
+    """
+    from .. import worktree
+
+    try:
+        worktrees = worktree.list_worktrees(p.repo_root)
+    except Exception:
+        return []
+    threshold = _int_cfg(p.cfg, "ergonomics.worktree_warn", 5)
+    if len(worktrees) < threshold:
+        return []
+    return [
+        Finding(
+            "worktree_buildup",
+            "warn",
+            {
+                "count": len(worktrees),
+                "threshold": threshold,
+                "paths": [str(w.path) for w in worktrees[:20]],
+                "hint": (
+                    "leftover task worktrees are piling up (kept on "
+                    "failure/dirty exit). Inspect and remove stale ones to "
+                    "reclaim space and cut noise."
+                ),
+            },
+        )
+    ]
+
+
+def probe_disk(p: ProbeContext) -> list[Finding]:
+    """Low free space on the repo filesystem breaks docker builds,
+    worktree creation, and trace writes. Cheap to check, easy to miss.
+    """
+    try:
+        usage = shutil.disk_usage(p.repo_root)
+    except OSError:
+        return []
+    free_gb = usage.free / (1024 ** 3)
+    warn_gb = _float_cfg(p.cfg, "ergonomics.disk_warn_gb", 2.0)
+    if free_gb >= warn_gb:
+        return []
+    severity = "error" if free_gb < warn_gb / 2 else "warn"
+    return [
+        Finding(
+            "low_disk",
+            severity,
+            {
+                "free_gb": round(free_gb, 2),
+                "threshold_gb": warn_gb,
+                "path": str(p.repo_root),
+                "hint": (
+                    "low free disk on the repo filesystem; docker builds, "
+                    "worktrees, and traces can fail. Free space or prune "
+                    "images/worktrees."
+                ),
+            },
+        )
+    ]
+
+
+def probe_doc_drift(p: ProbeContext) -> list[Finding]:
+    """The adopter's ``AGENTS.md`` is a copy ``brr init`` wrote; the
+    bundled template ships with the installed brr. After ``pip install
+    -U brr`` the two can diverge, leaving agents on stale guidance.
+    Compare and nudge a re-sync. In brr's own repo the repo file is a
+    symlink to the bundled one, so this never false-fires there.
+    """
+    if not _BUNDLED_AGENTS_MD.exists():
+        return []
+    repo_doc = p.repo_root / "AGENTS.md"
+    if not repo_doc.exists():
+        return []
+    try:
+        if repo_doc.resolve() == _BUNDLED_AGENTS_MD.resolve():
+            return []
+        bundled_text = _BUNDLED_AGENTS_MD.read_text(encoding="utf-8")
+        repo_text = repo_doc.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    if bundled_text == repo_text:
+        return []
+    return [
+        Finding(
+            "drifted_bundled_docs",
+            "info",
+            {
+                "doc": "AGENTS.md",
+                "bundled_revision": _revision_line(bundled_text),
+                "repo_revision": _revision_line(repo_text),
+                "hint": (
+                    "this repo's AGENTS.md differs from the playbook bundled "
+                    "with the installed brr. If brr was upgraded, re-sync the "
+                    "playbook so agents read current guidance."
+                ),
+            },
+        )
+    ]
+
+
+# Order is presentation-only; all probes run every task-prep.
+_PROBES: tuple[Callable[[ProbeContext], list[Finding]], ...] = (
+    probe_stale_image,
+    probe_github_auth,
+    probe_missing_tools,
+    probe_worktree_buildup,
+    probe_disk,
+    probe_doc_drift,
+)
+
+
+# ── orchestration ───────────────────────────────────────────────────
+
+
+def probe_task_prep(
+    *,
+    task: Task,
+    repo_root: Path,
+    brr_dir: Path,
+    cfg: dict[str, Any],
+    ctx: RunContext,
+) -> list[Record]:
+    """Resolve the proxy and run the task-prep probe set.
+
+    Short-circuits to an empty result on ``NullErgoProxy`` so the
+    default (opt-out) path runs no probes at all. Safe to call from the
+    daemon hot path: every failure mode is swallowed and returns ``[]``.
+    """
+    try:
+        proxy = get_proxy(cfg, brr_dir)
+    except Exception:
+        return []
+    if isinstance(proxy, NullErgoProxy):
+        return []
+    return run_probes(
+        task=task,
+        repo_root=repo_root,
+        brr_dir=brr_dir,
+        cfg=cfg,
+        ctx=ctx,
+        proxy=proxy,
+    )
+
+
+def run_probes(
+    *,
+    task: Task,
+    repo_root: Path,
+    brr_dir: Path,
+    cfg: dict[str, Any],
+    ctx: RunContext,
+    proxy: ErgoProxy,
+) -> list[Record]:
+    """Run every probe, emit findings to *proxy*, return the records.
+
+    Exposed separately from ``probe_task_prep`` so tests can drive it
+    with an explicit (non-null) proxy without touching config.
+    """
+    from .. import __version__
+
+    pctx = ProbeContext(
+        task=task, repo_root=repo_root, brr_dir=brr_dir, cfg=cfg, ctx=ctx
+    )
+    envelope = {
+        "project_id": _project_id(repo_root),
+        "task_id": task.id,
+        "env": ctx.name,
+        "image": ctx.env_state.get("docker_image"),
+        "source": task.source or None,
+        "daemon_version": __version__,
+    }
+    records: list[Record] = []
+    for probe in _PROBES:
+        try:
+            findings = probe(pctx) or []
+        except Exception:
+            continue
+        for finding in findings:
+            record = Record(
+                kind="probe",
+                issue=finding.issue,
+                severity=finding.severity,
+                detail=finding.detail,
+                **envelope,
+            )
+            try:
+                proxy.emit(record)
+            except Exception:
+                continue
+            records.append(record)
+    return records
+
+
+# ── helpers ─────────────────────────────────────────────────────────
+
+
+def _github_in_play(task: Task, brr_dir: Path) -> bool:
+    if (task.source or "") == "github":
+        return True
+    return (brr_dir / "gates" / "github.json").exists()
+
+
+def _docker_image_created_epoch(image: str) -> float | None:
+    if shutil.which("docker") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", image, "--format", "{{.Created}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_docker_time(result.stdout.strip())
+
+
+_DOCKER_TIME_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$"
+)
+
+
+def _parse_docker_time(value: str) -> float | None:
+    """Parse docker's RFC3339 ``.Created`` into an epoch float.
+
+    Docker emits up to nanosecond precision and a trailing ``Z`` that
+    older ``datetime.fromisoformat`` can't ingest; clamp the fraction to
+    microseconds and normalise the zone before parsing.
+    """
+    if not value:
+        return None
+    match = _DOCKER_TIME_RE.match(value.strip())
+    if not match:
+        return None
+    base, frac, zone = match.group(1), match.group(2), match.group(3)
+    text = base
+    if frac:
+        text += "." + frac[:6]
+    if zone in (None, "Z", "z"):
+        text += "+00:00"
+    elif ":" not in zone:
+        text += zone[:3] + ":" + zone[3:]
+    else:
+        text += zone
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def _iso(epoch: float) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def _revision_line(text: str) -> str:
+    for line in text.splitlines():
+        if "Revision:" in line:
+            return line.strip().lstrip("> ").strip()
+    return ""
+
+
+def _project_id(repo_root: Path) -> str:
+    """Best-effort ``owner/repo`` from the origin remote, else dir name.
+
+    Local-store records don't strictly need a stable project id (the
+    store is per-repo already); brnrd rollups will. Cheap to compute
+    now so the field is populated consistently.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return repo_root.name
+    url = result.stdout.strip()
+    if url:
+        from .. import forges
+
+        parsed = forges.parse_remote(url)
+        if parsed:
+            _host, owner, repo = parsed
+            return f"{owner}/{repo}"
+    return repo_root.name
+
+
+def _int_cfg(cfg: dict[str, Any], key: str, default: int) -> int:
+    raw = cfg.get(key, cfg.get(key.replace(".", "_"), default))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_cfg(cfg: dict[str, Any], key: str, default: float) -> float:
+    raw = cfg.get(key, cfg.get(key.replace(".", "_"), default))
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
