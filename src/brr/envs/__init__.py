@@ -695,6 +695,20 @@ class DockerEnv(WorktreeEnv):
                 and not os.environ.get("GITHUB_TOKEN")
                 else []
             ),
+            # Bind-mount the repo at the *same absolute path* inside the
+            # container (not a remapped /workspace). This is deliberate:
+            #   - git worktrees store an absolute pointer back to the main
+            #     .git; remapping breaks that pointer inside the container.
+            #   - paths the agent emits (commit text, the response file,
+            #     diffense pack locators) stay valid verbatim on the host.
+            #   - it's why response_path_host == response_path_env here, and
+            #     why artifacts under repo_root/.brr (response, review pack)
+            #     are the same inode inside and out — no copy step needed.
+            # Trade-off: this is dependency + network isolation running as
+            # the host UID over a RW repo mount + mounted creds — NOT a
+            # containment/credential boundary. It assumes a trusted agent.
+            # `docker.isolation=clone` (design-env-interface.md) is the seam
+            # for a no-shared-.git variant if that assumption ever changes.
             "-v", f"{ctx.repo_root}:{ctx.repo_root}",
             "-w", str(invocation.cwd or ctx.cwd),
             image,
