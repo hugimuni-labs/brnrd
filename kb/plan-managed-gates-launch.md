@@ -31,6 +31,10 @@ covers the dashboard view of all of this.
   [`design-brnrd-protocol.md`](design-brnrd-protocol.md) →
   "Upsun deployment notes." Lives at `src/brnrd/` per
   [`decision-monorepo-structure.md`](decision-monorepo-structure.md).
+  Being built in
+  [`plan-brnrd-inbox-prototype.md`](plan-brnrd-inbox-prototype.md)
+  (inbox spine + device-flow connect; SQLite for the prototype,
+  dev enqueue standing in for the real webhooks).
 - [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
   acceptance — the wire format (gates, routing, prompts) needs
   to be locked before both sides start building in parallel.

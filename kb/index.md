@@ -2,7 +2,7 @@
 
 Pages are grouped by **subject area** — Environments, Tasks &
 branching, Conversations & responses, Documentation strategy, Fleet &
-overlays, KB itself, Research. The grouping is editorial: the kb is
+overlays, KB itself, Reviews, Research. The grouping is editorial: the kb is
 ultimately a graph (see [`AGENTS.md`](../AGENTS.md) → "Knowledge base
 shape" and [`decision-kb-shape.md`](decision-kb-shape.md)). The index
 is the canonical entry point; once a subject accretes a real hub
@@ -174,6 +174,16 @@ dive-in map) and are stable until something contradicts them.
   spawn-compute joined the protocol; renamed to
   `design-brnrd-protocol.md` on 2026-05-25 with the
   brnrd-naming-keep decision.
+- [Managed-mode delivery design](design-managed-delivery.md) —
+  *accepted 2026-06-01 (shape H)*. One daemon-side delivery driver
+  (card lifecycle + per-platform presentation + gist/truncate
+  overflow), two transports: direct (OSS gates → platform with the
+  user's own token) and brnrd relay (cloud gate → brnrd → managed
+  token). Locks **H** — brnrd keeps formatting the final answer, the
+  daemon pre-handles overflow, and a thin additive `/v1/daemons/card`
+  relays the live progress card — over **U** (brnrd a formatting-free
+  pipe). Keeps gists daemon-side and generalises to remote-env (Fly)
+  daemon-equivalents.
 - [Pricing shape decision](decision-pricing-shape.md) —
   *accepted 2026-05-26*. **Subscription for the platform + metered credits
   for compute.** Two tiers at launch: Free (3 projects, 100
@@ -373,6 +383,21 @@ dive-in map) and are stable until something contradicts them.
   TG bot adapter + multi-project routing UX (fast-follow);
   permission-prompt API + gate-side integration (third). Backend
   lives at `src/brnrd/` in the monorepo.
+- [brnrd inbox-as-service prototype](plan-brnrd-inbox-prototype.md) —
+  *in flight (started 2026-05-27)*. The executable `src/brnrd/`
+  prototype unblocking the managed-gates launch. FastAPI +
+  SQLAlchemy (SQLite) backend. **Slice 1:** accounts / projects /
+  device-flow connect + the daemon-facing register / long-poll /
+  respond / deregister loop, with a `cloud` gate
+  (`src/brr/gates/cloud.py`) built on a shared gate runtime
+  (`src/brr/gates/runtime.py`) extracted from the Slack + Telegram
+  gates; response bodies are forwarded out and never persisted
+  (data-min). **Slice 2 (2026-05-31):** real `POST
+  /v1/webhooks/telegram` ingress (secret-header auth, chat→project
+  pairing, platform-dispatching forwarder) + a thin `src/brnrd_web/`
+  dashboard (login + the device-flow approve page) so connect is
+  human-completable. AGPLv3 per the license split. Deferred: GitHub
+  webhook, fuller dashboard, caps/billing, failover.
 - [GitHub gate vs brnrd GitHub App design](design-github-gate-vs-brnrd-app.md) —
   *accepted 2026-05-27*. Boundary doc for the GitHub side: what the
   OSS polling gate owns and keeps owning (PAT auth, three-trigger
@@ -530,6 +555,67 @@ dive-in map) and are stable until something contradicts them.
   marked.
 - [LLM Wiki framing](llm-wiki.md) — the source framing this project
   takes inspiration from for the wiki/synthesis layer.
+
+## Reviews
+
+- [diffense — kb-first PR review experience](design-diffense.md) —
+  *accepted 2026-05-29, format refined 2026-05-31 (passes 6–10)*. The review
+  surface for brr-generated PRs, built around the half-of-a-brr-PR-is-kb
+  pain. Inspect-mode model: reviews are a **zoomable graph of cards**
+  (item / walkthrough / uncertainty kinds) with two navigation axes —
+  lateral edges and zoom (gloss → detail → ground-truth leaf, where
+  leaves are the real diff/file/rendered-page and summaries are
+  clamp-gated). Two-axis lore (what-it-is + what-it-enables), per-kind
+  stat blocks, code **locators**, and tests-grounded demos. A JSON
+  **review pack** (generated at publish time, `brr review --check`'d) is
+  the contract. Build is **web-first**: one light, brnrd-independent
+  responsive-web renderer with a terminal aesthetic (ascii-looking cards;
+  opening a nested card collapses its parent to a heading bar, nesting
+  into a breadcrumb stack), built before brnrd for the self-hosting
+  story; CLI/TUI and hosted brnrd are follow-ups, the PR-body a lossy
+  fallback. The **feedback loop** closes through the shipped
+  `pr-review-comment` gate (flag a card → anchored comment → task →
+  re-pack). Six discipline clamps keep cards sharp; agent **uncertainty
+  cards** (incl. `follow-up` + tension references) read first; the
+  "entertaining" goal is framed as removing *accidental* burden, not
+  gamification. Folds with the [ergo proxy](design-agent-ergonomics.md)
+  as shared-source / split-audience. A **renderer spike**
+  ([src/brr/diffense/](../src/brr/diffense)) validated the read model and
+  resolved the two interaction questions — lateral nav and zoom-drills
+  share one breadcrumb stack; a code leaf is jump-to-forge. A later pass
+  added the **state / data / invariant** triad: an **invariant** axis (the
+  conserved frame; a *threatened* invariant is what a tension points at), a
+  **data-shape delta** distinct from the signature, **entry stats as
+  visual rolled-up distributions** (bars / meters / heat, size demoted),
+  **data-trace** walkthroughs (follow the datum, steppable so animation is
+  a renderer-only upgrade), and **kb-native axes**. Transport corrected:
+  brnrd is a *transient relay*, never a pack store (matches its
+  data-ownership stance). The pack schema is **locked as the
+  `brr review --check` contract**
+  ([src/brr/diffense/pack.py](../src/brr/diffense/pack.py)); the runner
+  emits packs (Producer B, gated fragment) and the publish kernel opens a
+  PR with the body projected from the pack
+  ([prbody.py](../src/brr/diffense/prbody.py), `_maybe_open_pr`), both **on
+  by default**. In managed mode the pack is relayed to brnrd's transient
+  RAM-only renderer (`POST /v1/daemons/pack` + public `/r/{token}`,
+  [pack_relay.py](../src/brnrd/pack_relay.py)) and an interactive link
+  rides the PR body — never persisted. All shipped 2026-06-01.
+- [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
+  — *2026-05-29*. The first concrete pack
+  ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that
+  pressure-tests the schema against a real braided PR (fix + refactor +
+  feature). Ten cards stand in for 23 files. Findings that sharpen the
+  schema before it locks: a missing `code-module-split` kind, `--check`
+  must resolve locators (it would have caught the design's invented
+  `cache.get_with_etag`), edges need `{card|locator}` targets,
+  uncertainty needs an `honest_nuance` slot. A second pass folded the
+  *shape* back into the design: a **summary / on-ramp card**, an **open
+  card-kind taxonomy** (agent declares `custom` + raises a meta concern;
+  `code-module-split` promoted), and **gloss-first** uncertainty cards.
+  Now rendered live by the [renderer spike](../src/brr/diffense)
+  (`render.py` inlines this pack into a self-contained HTML page); pass 10
+  extended the pack to demonstrate the visual entry-stat distributions,
+  the invariant axis, the data-trace walkthrough, and kb-native axes.
 
 ## Research
 

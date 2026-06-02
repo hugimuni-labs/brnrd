@@ -662,6 +662,14 @@ Per [`decision-monorepo-structure.md`](decision-monorepo-structure.md):
 - `brr.toml` at adopters' repo roots — committed project-scope
   config; brnrd-side spawns read this from the cloned repo
 
+The first executable slice of `src/brnrd/` is the inbox-as-service
+spine, sequenced in
+[`plan-brnrd-inbox-prototype.md`](plan-brnrd-inbox-prototype.md):
+accounts / projects / device-flow connect + the daemon-facing
+register / long-poll / respond / deregister loop, with a `cloud`
+gate on the daemon side built on a shared gate runtime extracted
+from the Slack + Telegram gates.
+
 First-party cloud envs (`fly_machines`, `codespaces`, future
 ones) live at `src/brr/envs/<name>/` inside the brr package,
 gated by `brr[<name>]` pip extras (per the single-package +
@@ -754,7 +762,10 @@ Out of scope, explicitly:
    service both build against. Covers gates + failover dispatch
    + generalised credential vault (AI runner + docker-registry)
    + subscription endpoints + multi-project routing +
-   permission prompts + data minimization in one page.
+   permission prompts + data minimization in one page. Its
+   delivery half — one daemon-side driver, two transports
+   (direct + brnrd relay), shape H — is
+   [`design-managed-delivery.md`](design-managed-delivery.md).
 3. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
    for the Surface A launch sequencing (GH-then-TG + routing UX
    + permission-prompt integration).

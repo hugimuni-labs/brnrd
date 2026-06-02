@@ -233,12 +233,19 @@ Concrete rules every `EnvBackend.finalize()` must satisfy:
 |---------------------------------------------|----------------------------------------|------------------------------------------|
 | Git commits on `ctx.branch_name`            | reachable in host's `.git`             | `ctx.branch_name is not None`            |
 | Response file `<event-id>.md`               | `repo_root/.brr/responses/<id>.md`     | always (existing daemon contract)        |
+| diffense review pack                        | `repo_root/.brr/diffense/<task-id>/pack.json` (the `Review pack path` handed in the bundle) | when pack emission is on and the agent produced one — read by `daemon.publish` for the PR projection |
 | Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | always written; removed on clean `status=done`, kept on `error`/`conflict` |
 | Env-private scratch teardown                | n/a — removed from env's territory     | clean `status=done` with no uncommitted files |
 
-Anything an agent writes outside of a commit, the response file, or a
-trace, is **not durable** and the framework makes no guarantee about it.
-This is documented in `prompts/run.md` and `docs/brr-internals.md`.
+The durable outputs are the ones landing under the **shared** `.brr/`
+(or as git refs): commit, response file, review pack, traces. Anything an
+agent writes inside its *worktree* (whose own `.brr/` is torn down at
+finalize) is **not durable** — which is exactly why the review pack is
+handed an absolute shared path rather than a cwd-relative one (see
+[`design-diffense.md`](design-diffense.md) → "Where packs live"). The
+pack rides the same shared-`.brr/` seam as the response, so it survives
+teardown for free, on every env, by the same mechanism. This is
+documented in `prompts/run.md` and `docs/brr-internals.md`.
 
 **Salvage rule.** Env scratch state (worktrees, containers, remote ssh
 dirs, devcontainers) is torn down only when the task finished cleanly
@@ -328,7 +335,14 @@ compose axis moves into a follow-up, not v1.
     pass-through plus host login-dir bind mounts), so the image no
     longer needs an API key baked in.
   - Bind-mount `repo_root` at the same absolute path inside the container
-    (read-write), so the prompt's host paths remain valid in the env.
+    (read-write), so the prompt's host paths remain valid in the env. The
+    same-path choice is deliberate, not incidental: a git worktree stores
+    an *absolute* pointer back to the main `.git`, so a remapped mount
+    (`/workspace`) would break worktree resolution inside the container;
+    and every absolute path the agent emits (commit text, the response
+    file, diffense pack locators) stays valid verbatim on the host. It is
+    also what keeps `response_path_host == response_path_env` (and the
+    review pack the same inode) without a copy step.
   - Network: configurable (`cfg["docker"]["network"]`, default `bridge`).
   - **Branch handling:** current-branch Docker tasks mount the main checkout.
     Non-current branch tasks first create the same `.brr/worktrees/<task-id>`
@@ -338,11 +352,27 @@ compose axis moves into a follow-up, not v1.
 - **invoke** → `docker run --name brr-<task-id>-<attempt> -v <repo>:<repo> -w <run-root> <image> <runner-cmd>`. The cmd line is built from the existing runner profile machinery. Note: **no `--rm`** — cleanup is `finalize`'s job so we can preserve the container for salvage and support retry diagnostics.
 - **finalize** → branch handling identical to worktree finalize. Container teardown matches the worktree salvage rule: `docker rm -f <container>` on clean `status=done`; preserve on `status ∈ {error, conflict}` or when the worktree has uncommitted/untracked files.
 
+#### Isolation posture (what `docker` is and isn't)
+
+The Docker env runs as the **host UID** over a **read-write** bind mount
+of the real repo, with host credential dirs mounted in and `GITHUB_TOKEN`
+injected. That makes it **dependency + network isolation** (clean
+toolchain, configurable network), **not** a containment or credential
+boundary: a misbehaving agent has the same blast radius on the repo and
+the same access to the mounted creds as a host run would. This is the
+right trade for brr's model — a *trusted* agent producing host commits —
+but it should be named, because "it's in Docker" invites the wrong
+assumption. brr's threat model is a trusted runner; if that ever changes,
+the boundary has to change with it, not just the env name.
+
 For users who want **stronger isolation** (no shared `.git`), the
 design leaves room for a future `docker.isolation=clone` sub-mode:
 `prepare` would clone the repo into a container-private volume and
 `finalize` would fetch it back to the host. Current source uses the
-bind-mount path because it is simpler and faster.
+bind-mount path because it is simpler and faster. Opt-in hardening knobs
+(network `none`, read-only credential mounts, dropping the cred mounts
+entirely) are the cheap defense-in-depth layer over the same base — a
+proposed follow-up (a stated trust model + these knobs), not yet wired.
 
 ### `ssh`
 

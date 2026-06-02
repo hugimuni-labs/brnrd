@@ -205,6 +205,43 @@ Fly / Render / etc. follow per
 daemon-hosting templates (per
 [`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md)).
 
+**The live brnrd.dev deployment runs from a `deploy` branch, off
+`main` (decided 2026-06-01).** Upsun (and most PaaS) want a
+`.upsun/` config at the *repo root*; `upsun project:init` against
+the monorepo drops one there — exactly the ops-in-the-OSS-tree
+smell this layout avoids. Resolution: the canonical, generic Upsun
+config lives in-tree under `deploy/upsun/` (a backend variant
+alongside the daemon template), and `main` carries **no** root
+`.upsun/`. A long-lived **`deploy` branch** adds the root config on
+top — ideally a symlink (`.upsun/config.yaml` →
+`../deploy/upsun/config.yaml`, and root `.environment` likewise) so
+the live config *is* the published template, zero divergence; if
+Upsun won't follow the symlink at build, the sync step copies it
+instead. The config is fully env-derived (DB URL + base URL from
+`PLATFORM_*` via `.environment`), so one file serves as both
+template and live config.
+
+**Public, autosynced by clean merge.** The deploy artifact is
+public — secrets live in Upsun's encrypted variable store
+regardless, so nothing sensitive sits in the branch, and a public
+deploy path keeps the self-hoster `deploy/upsun/` template
+dogfooded and bit-rot-free (brnrd's pitch is self-host parity). A
+GitHub Action on push-to-`main` checks out `deploy`, `git merge`s
+`main`, and pushes; Upsun redeploys on that push. Because the only
+deploy-only content is the root symlink (which `main` never
+touches), the merge is always conflict-free and needs no version
+pin — the branch *is* the source at that ref; protect `deploy` so
+only the Action writes it. (Supersedes an earlier sketch of a
+separate deploy repo pinning `brr[backend]@<sha>` with an Action
+bumping the SHA — the branch is simpler for an app that deploys its
+own monorepo source: no cross-repo auth, no pin dance. Visibility
+was weighed private vs public; public won on the dogfooding/parity
+argument.) Template shape:
+[`plan-daemon-deployment-templates.md`](plan-daemon-deployment-templates.md);
+backend specifics:
+[`design-brnrd-protocol.md`](design-brnrd-protocol.md) → "Upsun
+deployment notes".
+
 ## Alternatives considered
 
 ### Alt 1 — Multi-repo from day one

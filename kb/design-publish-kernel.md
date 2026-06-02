@@ -119,6 +119,37 @@ Decision (five mutually exclusive arms):
 A failed push flips `publish_status` to `conflict` and emits the
 `conflict` packet so gates render the delivery failure.
 
+### Riders on the publish outcome
+
+Two steps hang off a *successful* push, keyed only on `publish_status`,
+never re-deriving git state:
+
+- **Forge view link.** `_forge_view_url` builds the branch URL for the
+  `push_done` card.
+- **diffense PR step.** `_maybe_open_pr` opens or refreshes the change's
+  PR with the review-pack projection as the body (see
+  [`design-diffense.md`](design-diffense.md) → "Where the runner /
+  publish kernel wire in"). It runs only after a clean push, so the
+  remote head equals our commits — which is *why* create-vs-refresh needs
+  no conflict logic of its own: an open PR on that head genuinely contains
+  our work (refresh it); a diverged push never gets here (it was rejected
+  → `conflict`). The PR URL replaces the branch URL on the card.
+
+### Possible: auto-fork on conflict (not built)
+
+Today a `conflict` leaves the work on the **local** task branch in the
+daemon's checkout and emits the `conflict` packet. That's fine for an
+operator with shell access to the host, but a *remote* user (Telegram /
+Slack) can't see a host-local branch — they get "conflict" with no
+salvage path. A bounded improvement: on conflict, fall back to a plain
+push of the already-unique `brr/<task-id>` branch (no lease, its own
+namespace, so it can't collide), and deliver *that* branch's link
+alongside the conflict packet. The user can then open a PR from it,
+cherry-pick, or just delete it and re-run. Recommended as a small
+follow-up — it closes the one case where the publish kernel hands a
+remote user nothing actionable. Deliberately **not** an auto-second-PR:
+conflicts fall back to the user's manual resolution (decided 2026-06-01).
+
 ## Metadata
 
 The triple `preserved_branch` / `landed_branch` / `changed_branch`
