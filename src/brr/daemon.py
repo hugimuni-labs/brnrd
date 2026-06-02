@@ -723,6 +723,22 @@ def _run_worker(
     if branch_name:
         task.meta["branch_name"] = branch_name
 
+    # Deterministic ergonomics probes run once the env is prepared (so
+    # the resolved image/token/worktree state is visible). Opt-in: a
+    # no-op on the default null proxy. Never gates the task — every
+    # failure mode is swallowed here so a probe bug can't fail a run.
+    try:
+        from . import ergonomics
+        ergonomics.probe_task_prep(
+            task=task,
+            repo_root=repo_root,
+            brr_dir=brr_dir,
+            cfg=cfg,
+            ctx=env_ctx,
+        )
+    except Exception:
+        pass
+
     # Pin the OID the task branch sprouted from so the post-task
     # maintenance pass can ask "which kb / AGENTS.md pages did the
     # preceding work touch?" — that's the concrete review target the
