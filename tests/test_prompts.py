@@ -5,6 +5,8 @@ from brr.prompts import (
     _read_recent_log,
     build_daemon_prompt,
     build_run_prompt,
+    diffense_create_pr_enabled,
+    diffense_emit_enabled,
     self_review_enabled,
 )
 
@@ -120,6 +122,44 @@ class TestPromptBuilding:
             self_review=True,
         )
         assert "Ergonomics review:" in prompt
+
+    def test_diffense_emit_enabled_defaults_on(self):
+        # On by default now that the publish kernel consumes the pack;
+        # opt out explicitly.
+        assert diffense_emit_enabled({})
+        assert diffense_emit_enabled(None)
+        assert diffense_emit_enabled({"diffense.emit_pack": True})
+        assert not diffense_emit_enabled({"diffense.emit_pack": False})
+        assert not diffense_emit_enabled({"diffense_emit_pack": False})
+
+    def test_diffense_create_pr_enabled_defaults_on(self):
+        assert diffense_create_pr_enabled({})
+        assert diffense_create_pr_enabled(None)
+        assert diffense_create_pr_enabled({"diffense.create_pr": True})
+        assert not diffense_create_pr_enabled({"diffense.create_pr": False})
+        assert not diffense_create_pr_enabled({"diffense_create_pr": False})
+
+    def test_daemon_prompt_includes_diffense_pack_when_enabled(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-9",
+            runtime_dir="/repo/.brr",
+            diffense=True,
+        )
+        assert "Review pack (diffense)" in prompt
+        assert "brr review --check" in prompt
+        # The pack path is explicit and absolute in the shared runtime dir
+        # so it survives worktree teardown.
+        assert "Review pack path: /repo/.brr/diffense/task-9/pack.json" in prompt
+
+    def test_daemon_prompt_omits_diffense_pack_when_not_requested(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-9",
+            runtime_dir="/repo/.brr",
+        )
+        assert "Review pack (diffense)" not in prompt
+        assert "Review pack path" not in prompt
 
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

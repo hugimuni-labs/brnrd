@@ -13,10 +13,6 @@ incoming messages and stored on each event.
 
 from __future__ import annotations
 
-import json
-import re
-import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
@@ -24,11 +20,11 @@ import requests
 
 from .. import protocol, run_progress
 from ..task import Task
+from . import delivery, runtime
 
 _API = "https://api.telegram.org/bot{token}/{method}"
 _MAX_TG_LEN = 3900
 _POLL_TIMEOUT = 30
-_BACKOFF_MAX = 120
 
 
 # ── Bot API helpers ──────────────────────────────────────────────────
@@ -123,19 +119,6 @@ def _edit_message(
     return _api_call(token, "editMessageText", params)
 
 
-def _post_gist(content: str, filename: str = "result.md") -> str | None:
-    try:
-        result = subprocess.run(
-            ["gh", "gist", "create", "--public", "-f", filename, "-"],
-            input=content, capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return None
-
-
 def _send_with_overflow(
     token: str,
     chat_id: int,
@@ -144,84 +127,42 @@ def _send_with_overflow(
     *,
     reply_to_message_id: int | None = None,
 ) -> None:
-    if len(text) <= _MAX_TG_LEN:
-        _send_message(
-            token, chat_id, text, topic_id,
-            reply_to_message_id=reply_to_message_id,
-        )
-        return
-    url = _post_gist(text)
-    if url:
-        _send_message(
-            token, chat_id, f"Result: {url}", topic_id,
-            reply_to_message_id=reply_to_message_id,
-        )
-    else:
-        _send_message(
-            token, chat_id, text[:_MAX_TG_LEN] + "\n\n[truncated]", topic_id,
-            reply_to_message_id=reply_to_message_id,
-        )
+    body = delivery.resolve_overflow(
+        text, limit=_MAX_TG_LEN, gist_fn=delivery.post_gist
+    )
+    _send_message(
+        token, chat_id, body, topic_id,
+        reply_to_message_id=reply_to_message_id,
+    )
 
 
 # ── State ────────────────────────────────────────────────────────────
 
 
-def _state_path(brr_dir: Path) -> Path:
-    return brr_dir / "gates" / "telegram.json"
-
-
 def _load_state(brr_dir: Path) -> dict:
-    path = _state_path(brr_dir)
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return {}
+    return runtime.load_state(brr_dir, "telegram")
 
 
 def _save_state(brr_dir: Path, state: dict) -> None:
-    path = _state_path(brr_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
-
-
-_PROGRESS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
-
-
-def _progress_state_path(brr_dir: Path, task_id: str) -> Path:
-    """Per-task progress card state file.
-
-    Each task owns its own state file under
-    ``.brr/gates/telegram/progress/<task-id>.json``. The render path for
-    task A only reads / writes A's file, so concurrent workers handling
-    different tasks never share a state surface. See
-    ``kb/design-concurrent-execution.md``.
-    """
-    safe = _PROGRESS_SAFE_RE.sub("_", task_id) if task_id else "_unknown"
-    return brr_dir / "gates" / "telegram" / "progress" / f"{safe}.json"
+    runtime.save_state(brr_dir, "telegram", state)
 
 
 def _load_progress_for_task(brr_dir: Path, task_id: str) -> dict | None:
-    """Return this task's previously-rendered card state, or None."""
-    path = _progress_state_path(brr_dir, task_id)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    """Return this task's previously-rendered card state, or None.
+
+    Test-facing accessor for the per-task card file; the live write
+    path now lives in the shared ``delivery.update_card`` driver.
+    """
+    return runtime.load_task_card(brr_dir, "telegram", task_id)
 
 
-def _save_progress_for_task(
-    brr_dir: Path, task_id: str, entry: dict,
-) -> None:
-    """Write this task's card state file (atomic via rename)."""
-    path = _progress_state_path(brr_dir, task_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(entry, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+def _save_progress_for_task(brr_dir: Path, task_id: str, entry: dict) -> None:
+    """Write this task's card state file (test-facing accessor).
+
+    Tests seed card state through this; the live write path goes
+    through ``delivery.update_card``.
+    """
+    runtime.save_task_card(brr_dir, "telegram", task_id, entry)
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -305,17 +246,13 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     """Main gate loop — poll messages, create events, deliver responses.
 
     Designed to run in a daemon thread. Crashes are caught and retried
-    with exponential backoff.
+    with exponential backoff. No post-success pause: ``getUpdates``
+    long-polls for ``_POLL_TIMEOUT`` seconds itself.
     """
-    backoff = 1
-    while True:
-        try:
-            _loop_once(brr_dir, inbox_dir, responses_dir)
-            backoff = 1
-        except Exception as e:
-            print(f"[brr:telegram] error: {e}, retrying in {backoff}s")
-            time.sleep(backoff)
-            backoff = min(backoff * 2, _BACKOFF_MAX)
+    runtime.run_loop(
+        lambda: _loop_once(brr_dir, inbox_dir, responses_dir),
+        label="telegram",
+    )
 
 
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
@@ -375,27 +312,17 @@ def _deliver_responses(
     default_chat_id: int | None = None,
     default_topic_id: int | None = None,
 ) -> None:
-    for event in protocol.list_done(inbox_dir, "telegram"):
-        eid = event["id"]
-        body = protocol.read_response(responses_dir, eid)
-        if body is None:
-            continue
+    def deliver(event: dict, body: str) -> None:
         chat_id = _event_int(event, "telegram_chat_id", default_chat_id)
         if chat_id is None:
-            print(f"[brr:telegram] delivery error for {eid}: missing chat id")
-            continue
+            raise RuntimeError("missing chat id")
         topic_id = _event_int(event, "telegram_topic_id", default_topic_id)
         reply_to = _event_int(event, "telegram_message_id")
-        try:
-            _send_with_overflow(
-                token, chat_id, topic_id, body,
-                reply_to_message_id=reply_to,
-            )
-        except Exception as e:
-            print(f"[brr:telegram] delivery error for {eid}: {e}")
-            continue
-        resp_path = protocol.response_path(responses_dir, eid)
-        protocol.cleanup(event["_path"], resp_path)
+        _send_with_overflow(
+            token, chat_id, topic_id, body, reply_to_message_id=reply_to,
+        )
+
+    runtime.deliver_responses(inbox_dir, responses_dir, "telegram", deliver)
 
 
 def _event_int(event: dict, key: str, default: int | None = None) -> int | None:
@@ -416,24 +343,9 @@ def _coerce_optional_int(value: object) -> int | None:
 # ── Live progress card ──────────────────────────────────────────────
 
 
-_RENDERABLE_PACKETS = {
-    "task_created",
-    "env_prepared",
-    "container_started",
-    "container_preserved",
-    "run_started",
-    "attempt_started",
-    "attempt_failed",
-    "retrying",
-    "artifact_created",
-    "heartbeat",
-    "finalizing",
-    "push_started",
-    "push_done",
-    "done",
-    "failed",
-    "conflict",
-}
+# Card-worthy lifecycle packets; the canonical set lives in run_progress
+# so the cloud gate renders exactly the same moments.
+_RENDERABLE_PACKETS = run_progress.CARD_PACKETS
 
 
 def _escape_html(text: str) -> str:
@@ -472,6 +384,17 @@ def _build_card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
     )
 
 
+def card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
+    """Render the Telegram-flavoured progress card for a task.
+
+    Public seam so the managed ``cloud`` gate can reuse Telegram's
+    presentation for telegram-origin events (see
+    ``kb/design-managed-delivery.md`` → per-platform presentation), so a
+    managed card looks identical to a self-hosted one.
+    """
+    return _build_card_text(brr_dir, conv_key, task_id)
+
+
 def _sanitize_view_for_html(view):
     """Return a shallow copy of *view* with string fields HTML-escaped."""
     from dataclasses import replace
@@ -499,6 +422,30 @@ def _sanitize_view_for_html(view):
         error=_esc(view.error),
         phase_history=new_history,
     )
+
+
+class _CardTransport:
+    """Direct Telegram transport for the shared card driver."""
+
+    def __init__(self, token: str, chat_id: int, topic_id: int | None) -> None:
+        self._token = token
+        self._chat_id = chat_id
+        self._topic_id = topic_id
+
+    def send(self, text: str, *, reply_to: int | None = None) -> int | None:
+        resp = _send_message(
+            self._token, self._chat_id, text, self._topic_id,
+            parse_mode="HTML", reply_to_message_id=reply_to,
+        )
+        return (resp.get("result") or {}).get("message_id")
+
+    def edit(self, message_id: int, text: str) -> None:
+        try:
+            _edit_message(
+                self._token, self._chat_id, message_id, text, parse_mode="HTML",
+            )
+        except _TelegramNotModified:
+            raise delivery.CardUnchanged from None
 
 
 def render_update(brr_dir: Path, packet: Any) -> None:
@@ -539,64 +486,8 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     if text is None:
         return
 
-    entry = _load_progress_for_task(brr_dir, task_id)
-
-    if entry and entry.get("last_text") == text:
-        # Identical to the last rendered message — nothing to do. Avoids
-        # the Telegram round-trip and the "message is not modified" 400
-        # that would come back if we sent it.
-        entry["last_render"] = ptype
-        _save_progress_for_task(brr_dir, task_id, entry)
-        return
-
-    try:
-        if entry and entry.get("message_id"):
-            try:
-                _edit_message(
-                    token, chat_id, int(entry["message_id"]), text,
-                    parse_mode="HTML",
-                )
-            except _TelegramNotModified:
-                # Server-side check agrees the message body didn't change;
-                # treat as a successful no-op rather than falling through
-                # to send a replacement (which is the duplication bug).
-                pass
-            except Exception:
-                # The message is genuinely gone (deleted, expired, etc.).
-                # Fall through to send a replacement.
-                resp = _send_message(
-                    token, chat_id, text, topic_id, parse_mode="HTML",
-                    reply_to_message_id=reply_to,
-                )
-                message_id = (resp.get("result") or {}).get("message_id")
-                if message_id is None:
-                    return
-                _save_progress_for_task(brr_dir, task_id, {
-                    "chat_id": chat_id,
-                    "topic_id": topic_id,
-                    "message_id": message_id,
-                    "last_render": ptype,
-                    "last_text": text,
-                })
-                return
-            entry["last_render"] = ptype
-            entry["last_text"] = text
-            _save_progress_for_task(brr_dir, task_id, entry)
-            return
-
-        resp = _send_message(
-            token, chat_id, text, topic_id, parse_mode="HTML",
-            reply_to_message_id=reply_to,
-        )
-        message_id = (resp.get("result") or {}).get("message_id")
-        if message_id is None:
-            return
-        _save_progress_for_task(brr_dir, task_id, {
-            "chat_id": chat_id,
-            "topic_id": topic_id,
-            "message_id": message_id,
-            "last_render": ptype,
-            "last_text": text,
-        })
-    except Exception:
-        return
+    transport = _CardTransport(token, chat_id, topic_id)
+    delivery.update_card(
+        brr_dir, "telegram", task_id, text,
+        transport=transport, reply_to=reply_to, render_tag=ptype,
+    )
