@@ -5487,3 +5487,33 @@ instead of nothing (work currently only survives on the host-local
 branch). No auto-second-PR: conflicts fall back to manual resolution. The
 "PR link if a PR exists, else the branch link" delivery already holds on
 every successful-push path via `push_done.view_url`.
+
+## [2026-06-02] implement | agent ergonomics: deterministic probe slice + `brr ergonomics` CLI
+
+Shipped slice 1 of `design-agent-ergonomics.md` (the back-channel for
+agent friction data) — the deterministic **probe** layer, in a new
+`src/brr/ergonomics/` package. One canonical `Record` (kind / issue /
+severity / detail + envelope), a pluggable `ErgoProxy` Protocol with
+`NullErgoProxy` (default — drops, hot path free) and `LocalErgoProxy`
+(append-JSONL to `.brr/ergonomics/<YYYY-MM-DD>.jsonl`), a read-side
+`store` (filter by days/issue, severity-ranked `summarize`, `clear`),
+and six probes: `stale_image` (image `Created` vs bundled-Dockerfile
+mtime), `auth_unresolvable` (docker + github-in-play + no token),
+`missing_tool` (host `gh`), `worktree_buildup`, `low_disk`,
+`drifted_bundled_docs` (repo `AGENTS.md` vs installed template).
+
+Wiring: one hook in `daemon._run_worker` right after `env.prepare`,
+fully guarded — `probe_task_prep` short-circuits on the null proxy
+(opt-out default costs nothing) and every probe failure is swallowed,
+so a probe bug can **never** gate a task. CLI: top-level `brr
+ergonomics summary|list|clear` reading the local store (operator-facing
+verb, consistent with the #49 taxonomy). Opt in via
+`ergonomics.proxy=local` in `.brr/config`.
+
+Scope cuts (recorded in the design): task-prep probes only (daemon
+**startup** audit deferred — resolves the design's open-question #2 in
+favour of "hardcode the phase that has context first"); **in-container**
+PATH probing deferred (a probe container breaks the O(ms) contract);
+`brr ergonomics share` deferred with `BrnrdErgoProxy`. Greenlit by the
+operator on 2026-06-02 ("ship the deterministic probe layer first").
+31 new tests; full suite 647 green. Tracked as #81 under #23.
