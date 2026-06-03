@@ -724,9 +724,11 @@ def _run_worker(
         task.meta["branch_name"] = branch_name
 
     # Deterministic ergonomics probes run once the env is prepared (so
-    # the resolved image/token/worktree state is visible). Opt-in: a
-    # no-op on the default null proxy. Never gates the task — every
-    # failure mode is swallowed here so a probe bug can't fail a run.
+    # the resolved image/token/worktree state is visible). Routing is
+    # owner-aware (env_ctx.owner): user-owned runs default to a quiet
+    # daemon log, operator-owned runs and ergonomics=off resolve to the
+    # null proxy and short-circuit. Never gates the task — every failure
+    # mode is swallowed here so a probe bug can't fail a run.
     try:
         from . import ergonomics
         ergonomics.probe_task_prep(
@@ -810,7 +812,10 @@ def _run_worker(
     )
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
-    prompt_self_review = prompts.self_review_enabled(cfg)
+    # Reflection-in-reply is owner-gated: only a user-owned run with
+    # ergonomics=response injects the (skippable) review and leaves it
+    # visible. Operator-owned runs never do, regardless of config.
+    prompt_self_review = prompts.reflection_enabled(cfg, owner=env_ctx.owner)
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
