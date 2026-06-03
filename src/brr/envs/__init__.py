@@ -45,6 +45,15 @@ class RunContext:
     task_branch: str | None = None
     branch_plan: branching.PublishPlan | None = None
     env_state: dict[str, Any] = field(default_factory=dict)
+    # Who operates this run: "user" (the local daemon — host, worktree,
+    # and user-owned docker alike) or "operator" (a run dispatched onto
+    # managed compute). Launcher-stamped, never read from the repo, so a
+    # committed .brr/config can't forge it. Drives ergonomics routing
+    # (see kb/design-agent-ergonomics.md → "Ownership decides routing"):
+    # user-owned runs honour the `ergonomics` knob; operator-owned runs
+    # ignore it. Managed compute isn't built yet, so every run today is
+    # user-owned by default.
+    owner: str = "user"
 
 
 class EnvBackend(Protocol):
