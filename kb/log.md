@@ -5566,6 +5566,7 @@ is filed as #83.
 
 Tests reworked (mode normalisation, owner-aware resolve, log proxy +
 dedup, reflection gating); full suite 670 green. Same PR #82.
+
 ## [2026-06-03] implement | brnrd identity pivots to GitHub OAuth
 
 brnrd account identity now uses GitHub OAuth through the managed GitHub
@@ -5585,3 +5586,14 @@ email, and discards the GitHub user token after identity resolution.
 `decision-brnrd-github-oauth-identity.md` records the decision and the
 managed-mode/protocol/prototype/dashboard/pricing pages were reconciled
 so future work does not resurrect password forms. 624 tests green.
+
+## [2026-06-03] fix | kb ergonomics operator sink matches shipped resolver
+
+The kb lint pass grounded `design-agent-ergonomics.md` against
+`src/brr/ergonomics/proxy.py` and found aspirational drift: the design
+and index read as if operator-owned runs already route to
+`BrnrdErgoProxy`, while shipped code ignores the user knob and returns
+`NullErgoProxy` for operator-owned runs until the brnrd ergonomics
+endpoint/proxy slice exists. Reconciled the design and index to make
+the shipped Null path current state and the Brnrd path explicitly
+designed-not-built.

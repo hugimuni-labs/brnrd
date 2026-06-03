@@ -55,15 +55,16 @@ dive-in map) and are stable until something contradicts them.
   (retry/exit/phase data piggybacking on `run_progress`), and agent
   reflection. The user-facing knob is `ergonomics=off|log|local|response`
   (default `log` — a quiet daemon log for user-owned runs); `response`
-  re-homes `runner.self_review` as a skippable, visible reply footer —
-  to a pluggable **ergo proxy** (`NullErgoProxy` / `LogErgoProxy` /
-  `LocalErgoProxy` / `BrnrdErgoProxy`). Ownership decides the proxy:
-  user-owned runs default to `LogErgoProxy` and honour the knob
-  (`off`→null, `local`→on-disk store + `brr ergonomics` CLI,
-  `response`→reflection in reply); operator-owned (managed) runs ignore
-  the knob, route to `BrnrdErgoProxy`, and never put ergonomics in the
-  reply. The brnrd dashboard adds project + fleet ergonomics views for
-  users and platform operators respectively.
+  re-homes `runner.self_review` as a skippable, visible reply footer.
+  Shipped proxies are `NullErgoProxy`, `LogErgoProxy`, and
+  `LocalErgoProxy`; `BrnrdErgoProxy` remains the designed
+  operator-owned sink. User-owned runs default to `LogErgoProxy` and
+  honour the knob (`off`→null, `local`→on-disk store + `brr ergonomics`
+  CLI, `response`→reflection in reply). Operator-owned runs ignore the
+  knob and currently short-circuit to `NullErgoProxy` until the brnrd
+  proxy/endpoint lands; they never put ergonomics in the reply. The
+  brnrd dashboard's project + fleet ergonomics views are designed, not
+  built.
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native
