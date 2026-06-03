@@ -21,6 +21,11 @@ from typing import Any
 KINDS = ("probe", "telemetry", "reflection")
 SEVERITIES = ("info", "warn", "error")
 
+# Ordering for "which severity is worse" — used by the store rollup and
+# by the log proxy's warn+ threshold. Canonical here so producers and
+# readers agree on one scale.
+SEVERITY_RANK = {"info": 0, "warn": 1, "error": 2}
+
 
 @dataclass
 class Record:
