@@ -146,11 +146,31 @@ def _join_prompt_parts(
     return "\n\n".join(parts)
 
 
-def self_review_enabled(cfg: dict[str, Any] | None) -> bool:
-    """Return whether runner prompts should include the ergonomics footer nudge."""
-    if not cfg:
+def reflection_enabled(cfg: dict[str, Any] | None, owner: str = "user") -> bool:
+    """Return whether to inject the skippable reflection nudge and leave it visible.
+
+    True only for ``ergonomics=response`` on a **user-owned** run: a
+    self-hoster's explicit opt-in to see their own agent's ergonomics
+    notes in their own reply. Operator-owned runs never inject it (the
+    "no ergonomics in a managed reply, ever" invariant), regardless of
+    config. ``runner.self_review=true`` is honoured as a deprecated alias
+    for ``ergonomics=response`` via ``ergonomics_mode``.
+    """
+    if owner != "user":
         return False
-    return bool(cfg.get("runner.self_review", cfg.get("runner_self_review")))
+    from .ergonomics.proxy import ergonomics_mode
+
+    return ergonomics_mode(cfg) == "response"
+
+
+def self_review_enabled(cfg: dict[str, Any] | None) -> bool:
+    """Deprecated alias for ``reflection_enabled`` (user-owned).
+
+    Kept for back-compat with callers/tests written against the old
+    ``runner.self_review`` knob, which now resolves through the
+    ``ergonomics`` surface.
+    """
+    return reflection_enabled(cfg)
 
 
 def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
