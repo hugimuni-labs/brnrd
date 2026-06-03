@@ -326,8 +326,10 @@ def _fmt_ts(epoch: float) -> str:
 
 
 def _ergonomics_empty_hint() -> None:
-    print("[brr ergonomics] no records found. Capture is opt-in — enable it "
-          "with `brr config set ergonomics.proxy local` (or edit .brr/config).")
+    print("[brr ergonomics] no records found. This view reads the on-disk "
+          "store, which only `ergonomics=local` writes to. The default "
+          "(`ergonomics=log`) surfaces findings on the daemon log instead; "
+          "set `ergonomics=local` in .brr/config to persist them here.")
 
 
 def cmd_ergonomics_summary(args):

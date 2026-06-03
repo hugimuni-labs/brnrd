@@ -5517,3 +5517,43 @@ PATH probing deferred (a probe container breaks the O(ms) contract);
 `brr ergonomics share` deferred with `BrnrdErgoProxy`. Greenlit by the
 operator on 2026-06-02 ("ship the deterministic probe layer first").
 31 new tests; full suite 647 green. Tracked as #81 under #23.
+
+## [2026-06-03] decision | agent ergonomics: ownership-driven routing, log default, response mode, vantage rule
+
+Reworked the probe slice (#82, pre-merge) along two design refinements
+that came out of an operator discussion about a "response" proxy — both
+now written into `design-agent-ergonomics.md`.
+
+**Ownership decides routing, not a free-form knob.** Added
+`RunContext.owner` (`user` | `operator`), launcher-stamped, never read
+from the repo (so a committed `.brr/config` can't forge it). The owner
+selects both the default sink and who configures it: user-owned runs
+honour the user-facing `ergonomics = off|log|local|response` knob;
+operator-owned (managed compute) runs ignore it (sink becomes
+`BrnrdErgoProxy` when managed compute lands). This kills the
+"configurations that don't make sense" footgun — a managed user can't
+route their operator's ergonomics, by construction, with the override
+living in one resolver instead of scattered `if managed` checks.
+
+**Default shifted from silence to a quiet log.** New `LogErgoProxy`
+(warn+ to the daemon log, deduped by issue-signature on a process-global
+window) is the user-owned default. Probes now run for everyone by
+default at zero token cost and surface only actionable findings to the
+log; `off` short-circuits to null. `response` re-homes the old
+`runner.self_review` footer (now a deprecated alias) as a **skippable**,
+owner-gated reply nudge — `prompts.reflection_enabled(cfg, owner)`
+replaces `self_review_enabled` (kept as an alias). Hidden reflection
+capture (markers + splitter + sampling for `local`/`brnrd`) stays
+deferred; `response` needs none of it.
+
+**Vantage rule** (new design principle): probes observe only what's
+outside the agent's vantage (host/operator/cross-task facts); reflection
+covers what's inside the sandbox; never add a probe for something the
+agent can see for itself. Applying it **retired `missing_tool`** (host
+`gh` — the agent shares the host PATH and can check itself), leaving
+five host-vantage probes. The rule bounds probe growth: completeness is
+reflection's job, and a finding graduates to a probe only if it's
+host-vantage.
+
+Tests reworked (mode normalisation, owner-aware resolve, log proxy +
+dedup, reflection gating); full suite 670 green. Same PR #82.
