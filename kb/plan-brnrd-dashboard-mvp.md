@@ -21,17 +21,14 @@ maintain), and
 [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
 (`src/brnrd_web/` lives in the monorepo).
 
-## Status
+## Current implementation state
 
-**Not started.** Blocked on:
-
-- `design-brnrd-protocol.md` acceptance — the REST endpoints
-  the dashboard reads from need to lock first.
-- `plan-managed-gates-launch.md` and `plan-failover-compute.md`
-  slices 1+2 each — the dashboard's data sources are the
-  endpoints those plans deliver.
-- `decision-monorepo-structure.md` acceptance — settles where
-  the code lives.
+The dashboard MVP plan is accepted, but the full dashboard is not
+implemented. The prototype web shell in `src/brnrd_web/routes.py`
+currently covers GitHub login plus the device-flow approve page; the
+projects, tasks, credentials, failover, audit, allowance, and billing
+views still depend on the remaining managed-gates / failover /
+billing backend slices.
 
 Ship order within this plan: bootstrap (slice 1) → core views
 (slice 2) → cost / audit (slice 3) → polish (slice 4). Each slice
@@ -40,7 +37,7 @@ see your projects exist," already useful for self-hosters.
 
 ## Goals
 
-- A user can sign up, pair a daemon, install the GitHub App, send
+- A user can sign in with GitHub, pair a daemon, install the GitHub App, send
   a `@brr` comment, and see the resulting task appear in their
   dashboard — end-to-end, no CLI required after the daemon is up.
 - A user can configure failover (add AI credential, enable
@@ -106,7 +103,8 @@ endpoints:
 
 Plus:
 
-- Login / signup flow against `/v1/accounts/sessions`.
+- Login flow through GitHub OAuth (`/auth/github/start` →
+  `/auth/github/callback`); no email/password signup.
 - Top nav with account switcher (for users with multiple
   accounts; v1 most users have one) and a "+ New project"
   shortcut.
@@ -239,16 +237,18 @@ Steps:
    - `static/` HTMX asset, a small CSS, no JS-build pipeline
    - `__init__.py` registers the routes onto the brnrd FastAPI
      app (no separate web server).
-2. Auth flow: `/login` GET (form), POST → POST to
-   `/v1/accounts/sessions`, set session cookie, redirect.
-   `/signup` GET / POST against `/v1/accounts`.
+2. Auth flow: `/login` GET renders "Sign in with GitHub";
+   `/auth/github/start` redirects to GitHub with state + PKCE;
+   `/auth/github/callback` resolves the GitHub identity, creates or
+   updates the brnrd account, sets the session cookie, and redirects.
+   No `/signup` and no email/password fallback.
 3. Session middleware for protected routes; redirect to
    `/login` on miss.
 4. View 1: `GET /` → projects list. Renders against
    `GET /v1/accounts/projects`. Includes "+ New project" inline
    form (HTMX POST → `/v1/accounts/projects`, swap in the new
    row).
-5. Base layout: top nav (logo, account email, "+ New project"
+5. Base layout: top nav (logo, GitHub login/email, "+ New project"
    shortcut, log-out), main content area.
 6. Empty state: "No projects yet. Pair your first daemon with
    `brr brnrd connect` or install the GitHub App
@@ -366,7 +366,7 @@ Steps:
 | Templates, static assets, view routes | `src/brnrd_web/` |
 | FastAPI app composition (mounts web routes on the existing API app) | `src/brnrd/app.py` (or wherever it lives) |
 | Session middleware | `src/brnrd/middleware/session.py` |
-| Auth views (`/login`, `/signup`, `/logout`) | `src/brnrd_web/routes/auth.py` |
+| Auth views (`/login`, `/auth/github/start`, `/auth/github/callback`, `/logout`) | `src/brnrd_web/routes.py` now; split under `src/brnrd_web/routes/*.py` when the MVP grows |
 | Project / binding / credential / failover / audit views | `src/brnrd_web/routes/*.py` |
 | Tests | `tests/brnrd_web/` |
 | Build | None — Python-only, no JS bundler at MVP |

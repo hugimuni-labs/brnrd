@@ -13,6 +13,12 @@ Shipped so far:
   platform-dispatching forwarder, and a thin `src/brnrd_web` dashboard
   (login + the device-flow approve page) so connect is human-
   completable. See "Second slice" below.
+- **Identity pivot (2026-06-03).** brnrd account identity moved to
+  GitHub OAuth through the managed GitHub App / OAuth web flow.
+  Email+password account creation and login were removed before launch;
+  the existing brnrd bearer-token scheme remains for sessions and
+  project-scoped daemon tokens. See
+  [`decision-brnrd-github-oauth-identity.md`](decision-brnrd-github-oauth-identity.md).
 
 Still ahead (tracked in [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)):
 GitHub webhook ingress, the fuller dashboard (projects / tasks /
@@ -75,12 +81,18 @@ Daemon-facing (token kind `daemon`, project-scoped):
 | POST | `/v1/daemons/responses` | `{event_id, body_markdown, status}`; brnrd forwards body to the event's reply target, persists metadata only |
 | POST | `/v1/daemons/deregister` | mark the daemon offline |
 
+Web auth (GitHub OAuth):
+
+| Method | Path | Role |
+|--------|------|------|
+| GET | `/login` | login page with "Sign in with GitHub" |
+| GET | `/auth/github/start` | redirect to GitHub with state + PKCE |
+| GET | `/auth/github/callback` | resolve GitHub identity, create/update account, issue session cookie |
+
 Account-facing (token kind `account` — an API key or a session):
 
 | Method | Path | Role |
 |--------|------|------|
-| POST | `/v1/accounts` | create account (email + password) → account id + initial API key (shown once) |
-| POST | `/v1/accounts/sessions` | login → session token |
 | POST | `/v1/accounts/projects` | create project → `project_id` |
 | GET | `/v1/accounts/projects` | list projects |
 | POST | `/v1/_dev/enqueue` | dev-only webhook stand-in: `{project_id, body, reply_to}` → queues an event |
@@ -121,7 +133,9 @@ one.
 |--------|------|------|------|
 | POST | `/v1/accounts/pair/telegram` | account | issue a one-time `TG-…` code bound to a project |
 | POST | `/v1/webhooks/telegram` | secret header | `/start <code>` binds the chat; a bound chat's message enqueues; an unbound chat is ignored |
-| GET/POST | `/login` | — | web session login (sets the `brnrd_session` cookie) |
+| GET | `/login` | — | GitHub login entry point |
+| GET | `/auth/github/start` | — | starts GitHub OAuth with state + PKCE cookies |
+| GET | `/auth/github/callback` | state + PKCE cookies | creates/updates the GitHub-backed account and sets the `brnrd_session` cookie |
 | GET/POST | `/connect/{code}` | session cookie | the device-flow approve page (lists projects, calls `approve_core`) |
 
 Routing home: a bound chat's message enqueues with an opaque
@@ -140,8 +154,10 @@ Code-reuse notes for the slice:
 - `approve_core(db, account_id, code, project_id)` was factored out of
   the API approve endpoint so the web `/connect/{code}` page mints the
   exact same daemon token by the exact same path.
-- `authenticate` / `issue_session_token` were factored out of the API
-  login endpoint and reused by the web `/login`.
+- `account_for_github_identity` / `issue_session_token` back the OAuth
+  callback: GitHub id is the stable account key; login/email are
+  refreshed on each login; the session token remains a brnrd bearer
+  credential.
 - `src/brnrd_web/` is its own AGPLv3 package (own `LICENSE`), bundled
   by the `brr[backend]` extra and `include_router`-ed by the app;
   forms pull in `python-multipart`. Hand-rolled HTML for now — a
@@ -221,8 +237,10 @@ not forced here.
   is reported; a bound chat enqueues with the right `reply_to`; an
   unbound chat is ignored; a runner response is forwarded back to the
   originating chat, threaded under the source message.
-- Slice 2 (`test_brnrd_web.py`): login sets the session cookie and
-  rejects bad credentials; `/connect/{code}` redirects to login when
+- Slice 2 (`test_brnrd_web.py`): GitHub OAuth start redirects with
+  state + PKCE; callback verifies state, upserts the account, sets the
+  session cookie, and seeds the default project; provider failures
+  surface cleanly; `/connect/{code}` redirects to login when
   unauthenticated; the page lists the account's projects; approving
   makes the CLI poll return the minted daemon token.
 

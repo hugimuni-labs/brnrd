@@ -6,9 +6,10 @@ reviews surfaced the same friction (stale image / missing pytest / gh
 auth confusion) and the only thing that aggregated the signal was a
 human pasting the reviews into a chat for analysis. **Probe slice
 shipped 2026-06-02** (`src/brr/ergonomics/`): the deterministic probe
-layer, the proxies, the local JSONL store, and the `brr ergonomics`
-read CLI. Telemetry, the `BrnrdErgoProxy`, and the dashboard views
-remain designed-not-built below.
+layer, the shipped `NullErgoProxy` / `LogErgoProxy` /
+`LocalErgoProxy`, the owner-aware resolver, the local JSONL store, and
+the `brr ergonomics` CLI. Telemetry, `BrnrdErgoProxy`, and the
+dashboard views remain designed-not-built below.
 
 Two design refinements landed 2026-06-03 (see "Ownership decides
 routing" and "What probes are for — the vantage rule"): routing is
@@ -38,7 +39,7 @@ Companion to:
   and the 2026-05-27 log entry — the source material that
   motivated this design.
 
-## What's wrong with the current shape
+## Problem this design answered
 
 The baseline this design replaced was a single knob,
 `runner.self_review`, that injects
@@ -51,7 +52,7 @@ footer beyond shipping it as part of the response file to the gate.
 behaviour is now `ergonomics=response`, skippable and owner-gated. See
 "Ownership decides routing".)
 
-This shape has six concrete failure modes:
+That baseline had six concrete failure modes:
 
 1. **Signal lives in user-visible output.** The footer rides in the
    same response the user reads. For real users this is chat
@@ -88,7 +89,7 @@ Three sources, complementary, each catching what the others miss:
 
 | Layer | When it runs | Producer | Catches |
 |-------|--------------|----------|---------|
-| **Probe** | Task prep (pre-invoke), task finalize | Daemon code, deterministic | Stale image, missing tools, unresolvable auth, dirty repo, low disk, drifted bundled docs, anything checkable in O(ms) |
+| **Probe** | Task prep (pre-invoke; startup/finalize hooks still designed) | Daemon code, deterministic | Stale image, unresolvable auth, worktree buildup, low disk, drifted bundled docs, anything host/operator-vantage checkable in O(ms) |
 | **Telemetry** | During and after the runner invocation | Daemon code, deterministic | Runner exit code, attempt count, retry reasons, time-in-phase, subprocess failures inside container, tool-call patterns visible in trace |
 | **Reflection** | Sampled, post-task | Runner agent, free-text via prompt | Confusion, surprise, redundant tool calls, prompt incoherence, anything that needs introspection — the residual the deterministic layers can't see |
 
@@ -142,7 +143,7 @@ one user-facing knob (see "Ownership decides routing").
 
 | Proxy            | What it does |
 |------------------|--------------|
-| `NullErgoProxy`  | Drop the record. Hot path stays cheap; nothing captured. |
+| `NullErgoProxy`  | Drop the record. Resolved for `ergonomics=off` and operator-owned runs until the brnrd sink lands. |
 | `LogErgoProxy`   | Emit a `warn`+ line to the daemon log, deduped by issue-signature within a window. No disk, no tokens — the zero-config default for user-owned runs. |
 | `LocalErgoProxy` | Append JSONL to `.brr/ergonomics/<YYYY-MM-DD>.jsonl`; daily rotation; `brr ergonomics …` reads it. |
 | `BrnrdErgoProxy` | (designed, not built) Batched HTTPS POST to brnrd's ergonomics endpoint; per-project + cross-project rollups. Lands with managed compute. |
@@ -178,7 +179,7 @@ Ownership decides both the default sink and who gets to choose:
 | `owner` | default sink | who configures it | in the user's chat reply? |
 |---------|-------------|-------------------|---------------------------|
 | `user` (local daemon — host, worktree, *and* docker) | `LogErgoProxy` (quiet daemon log) | the user, via the `ergonomics` knob | only in `response` mode |
-| `operator` (managed compute run) | `BrnrdErgoProxy` (→ operator) | **fixed; the `ergonomics` knob is ignored** | never |
+| `operator` (managed compute run) | `NullErgoProxy` today; later `BrnrdErgoProxy` | **fixed; the `ergonomics` knob is ignored** | never |
 
 The user-facing knob is a single plain value (the word "proxy" stays
 out of the user surface):
@@ -202,7 +203,8 @@ Two rules make this non-leaky:
   ergonomics go" falls out for free. The override lives in one place
   (the owner-aware resolver), not as scattered `if managed` checks; if a
   user explicitly set `response`/`local` and lands in an operator-owned
-  run, the resolver ignores it (and can warn — loud, not silent).
+  run, the resolver ignores it. Current code returns `NullErgoProxy`
+  until `BrnrdErgoProxy` and its endpoint land.
 - **`response` only injects reflection; it never changes the operator
   path.** The "user never sees ergonomics in a *managed* reply, ever"
   invariant is absolute; `response` is a self-hosted, opt-in choice to
@@ -259,7 +261,7 @@ reusing the orientation forward-channel.
 | Tenancy | `owner` | Default | What the user sees in chat | What the operator sees |
 |---------|---------|---------|----------------------------|------------------------|
 | Self-hosted (with or without brnrd connected) | `user` | `LogErgoProxy` (quiet log) | Nothing, unless they set `ergonomics=response` | Nothing — *they are* the operator; opt into `local` + `brr ergonomics`, or explicitly share to brnrd's improve pool |
-| Managed compute run | `operator` | `BrnrdErgoProxy` | Nothing — `response` is ignored on operator runs | brnrd dashboard's per-project view + cross-project rollups |
+| Managed compute run | `operator` | `NullErgoProxy` today; later `BrnrdErgoProxy` | Nothing — `response` is ignored on operator runs | Nothing today; later, brnrd dashboard's per-project view + cross-project rollups |
 
 Two invariants this gives us:
 
@@ -268,10 +270,10 @@ Two invariants this gives us:
   leak into a managed reply. (A *self-hosted* user opting into
   `response` to see their own agent's notes in their own chat is a
   separate, deliberate choice — not pollution.)
-- **The platform operator's view is the only place fleet-wide
-  rollups exist.** Self-hosted users see their own data; brnrd
-  operators see the aggregate (and only that — per-user detail
-  needs explicit opt-in).
+- **The platform operator's view is the only planned place for
+  fleet-wide rollups.** Self-hosted users see their own data; brnrd
+  operators see the aggregate once the brnrd sink lands (and only that
+  — per-user detail needs explicit opt-in).
 
 Note this refines the original framing, which made `NullErgoProxy` the
 self-hosted default and treated *all* user-visible ergonomics as
@@ -305,15 +307,15 @@ would ship before consenting to share.
 
 ## When each layer runs
 
-**Probe** runs at two points:
+**Designed full probe lifecycle** has two points:
 
 1. Daemon startup: one-shot environment audit (config sanity, gate
    reachability, optional `gh auth token` check, bundled-doc
    freshness vs source). Emits records once per daemon process.
 2. Task prep: per-task probe set scoped to the resolved env (image
-   freshness, tool presence inside the container, GitHub token
-   resolvable for docker tasks, worktree health). Emits records
-   tagged with `task_id`.
+   freshness, GitHub token resolvable for docker tasks, worktree
+   health, disk health, bundled-doc drift). Emits records tagged with
+   `task_id`.
 
 Probes are cheap (O(ms) each, single-digit count per task) and
 unconditional once the proxy is non-null. They never gate the task —
@@ -336,9 +338,11 @@ host/worktree the agent shares the PATH and can check `gh` itself.
 Routing (2026-06-03) is owner-aware: `probe_task_prep` resolves the
 proxy from `RunContext.owner` plus the `ergonomics` knob, then emits
 findings. The default for user-owned runs is `LogErgoProxy` (quiet,
-deduped, token-free), so probes run for everyone by default and surface
-only `warn`+ to the daemon log; `off` short-circuits to `NullErgoProxy`
-and pays nothing. Deferred to a follow-up: the one-shot
+deduped, token-free), so probes run for every user-owned task by
+default and surface only `warn`+ to the daemon log; `off`
+short-circuits to `NullErgoProxy` and pays nothing. Operator-owned runs
+also short-circuit to `NullErgoProxy` until the brnrd sink is built.
+Deferred to a follow-up: the one-shot
 **daemon-startup** audit (resolved here as design open-question #2 —
 hardcode task-prep first, add a startup phase only when a probe needs
 it), and **in-container** PATH probing for docker tasks (spawning a
@@ -563,13 +567,11 @@ degenerate destination until the storage layer lands).
    revisit when there's demand for finer-grained per-task
    instrumentation.
 
-5. **Subject hub timing.** This design + the existing 4
-   ergonomics-related research pages + `plan-agent-orientation-
-   layering.md` could anchor a `subject-agent-ergonomics.md` or
-   `subject-observability.md` hub. Premature today (no shipped
-   implementation; the back-channel infrastructure is the
-   load-bearing missing piece); the hub goes in once the ergo
-   proxy + probe slices land.
+5. **Subject hub timing.** This design plus the existing ergonomics
+   research pages and `plan-agent-orientation-layering.md` could
+   anchor a `subject-agent-ergonomics.md` or `subject-observability.md`
+   hub. The design page stays the clearer home until telemetry and the
+   brnrd sink settle; promote once this stops being one design thread.
 
 ## What was rejected
 

@@ -119,6 +119,14 @@ convenience (infrastructure, multi-tenant scale, email support);
 the brr / brnrd OSS itself is unchanged whether you self-host
 or not.
 
+brnrd account identity is GitHub-backed at launch: users sign in
+with GitHub through the managed brnrd GitHub App's OAuth web flow
+(self-hosters configure their own GitHub App / OAuth client), and
+email+password signup/login is deliberately removed. The bearer-token
+scheme remains brnrd-owned for sessions, account API keys, and
+project-scoped daemon tokens. See
+[`decision-brnrd-github-oauth-identity.md`](decision-brnrd-github-oauth-identity.md).
+
 Daemon-side cloud envs (a laptop daemon fans out to *the user's*
 cloud via a first-party env extra like `brr[fly]` or a
 third-party env registered via the `brr.envs` entry point per
@@ -304,8 +312,8 @@ Managed gates collapse this to one CLI verb plus a bot
 interaction:
 
 1. User runs `brr brnrd connect`, gets a pairing flow / auth
-   URL (CLI shape per
-   [`decision-cli-shape.md`](decision-cli-shape.md)).
+   URL. The browser side signs in with GitHub before it can approve
+   daemon pairing.
 2. User `/start <code>` to @brr_bot on Telegram, or installs the
    brnrd GitHub App on selected repos.
 3. brnrd's hosted bot receives events and routes them to the
