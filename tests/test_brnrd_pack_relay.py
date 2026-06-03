@@ -20,6 +20,7 @@ from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.db import Base  # noqa: E402
 from brnrd.pack_relay import PackRelayStore  # noqa: E402
+from _helpers import brnrd_account_headers  # noqa: E402
 
 _PACK = {
     "schema_version": "0.1-test",
@@ -52,10 +53,9 @@ def client():
 
 
 def _daemon_headers(client):
-    key = client.post(
-        "/v1/accounts", json={"email": "a@b.com", "password": "supersecret"}
-    ).json()["api_key"]
-    acc = {"Authorization": f"Bearer {key}"}
+    acc = brnrd_account_headers(
+        client.app, github_id="123", login="octocat", email="a@b.com"
+    )
     pid = client.post(
         "/v1/accounts/projects", json={"name": "demo"}, headers=acc
     ).json()["project_id"]
