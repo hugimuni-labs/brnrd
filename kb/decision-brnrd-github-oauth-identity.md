@@ -40,10 +40,15 @@ waits; daemon bearer tokens that were already minted keep working.
 - The OAuth callback creates the account on first login, seeds a
   `default` project, issues a normal brnrd session token, and sets the
   dashboard session cookie.
-- The web flow uses a random state cookie plus PKCE. brnrd exchanges
-  the callback code with GitHub and fetches `/user`; when the public
-  user payload has no email, it asks GitHub's email endpoint and keeps
-  the primary verified email when available.
+- The web flow uses a random state cookie plus PKCE, and requests the
+  minimal `user:email` scope so the verified-email endpoint is
+  authorized (GitHub Apps ignore scope and gate email via the app's
+  "Email addresses" permission instead). The state, PKCE, and session
+  cookies are `httponly` + `samesite=lax`, and `Secure` whenever brnrd
+  is served over HTTPS; the session cookie's lifetime tracks the session
+  token TTL. brnrd exchanges the callback code with GitHub and fetches
+  `/user`; when the public user payload has no email, it asks GitHub's
+  email endpoint and keeps the primary verified email when available.
 - brnrd does not store GitHub OAuth refresh tokens for identity. The
   GitHub user token is used only during login to resolve identity, then
   discarded.
