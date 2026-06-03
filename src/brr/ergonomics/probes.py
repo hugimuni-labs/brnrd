@@ -11,14 +11,23 @@ Three contracts, from the design:
   ``error``-severity finding is a signal, not a refusal to run.
 - **Cheap.** O(ms) each; the heaviest is a single ``docker image
   inspect``. No probe spawns a container or hits the network.
-- **Off unless opted in.** ``probe_task_prep`` resolves the proxy first
-  and short-circuits on ``NullErgoProxy`` so the default path pays
-  nothing.
+- **The vantage rule bounds the set.** Every probe observes a
+  host/operator-vantage fact — something the sandboxed agent can't see
+  for itself (a host file, cross-task state, pre-run resolution,
+  installed-version drift). Anything the agent *can* check itself is
+  reflection's job, not a probe's.
 
-Probes run host-side on the daemon, so env-sensitive checks
-(in-container PATH, etc.) are scoped by ``ctx.name``. In-container tool
-probing for docker tasks is deferred — it needs a probe container,
-which breaks the O(ms) contract.
+Routing is owner-aware: ``probe_task_prep`` resolves the proxy from
+``RunContext.owner`` plus the ``ergonomics`` knob. The user-owned
+default (``LogErgoProxy``) means probes run for everyone and surface
+``warn``+ to the daemon log; ``ergonomics=off`` resolves to
+``NullErgoProxy``, which the orchestrator short-circuits so that path
+pays nothing.
+
+Probes run host-side on the daemon, so env-sensitive checks are scoped
+by ``ctx.name``. In-container probing for docker tasks is deferred — it
+needs a probe container (breaks the O(ms) contract) and most
+in-container facts are agent-vantage anyway.
 """
 
 from __future__ import annotations
@@ -33,7 +42,7 @@ from typing import Any, Callable
 from ..task import Task
 from ..envs import RunContext
 from .record import Record
-from .proxy import ErgoProxy, NullErgoProxy, get_proxy
+from .proxy import ErgoProxy, NullErgoProxy, resolve_proxy
 
 # brr's installed package root (``src/brr``): probes.py lives at
 # ``src/brr/ergonomics/probes.py``, so two parents up is the package dir
@@ -89,32 +98,6 @@ def probe_github_auth(p: ProbeContext) -> list[Finding]:
             },
         )
     ]
-
-
-def probe_missing_tools(p: ProbeContext) -> list[Finding]:
-    """Host/worktree tasks run the runner on the host PATH. The runner
-    binary itself is already validated by ``resolve_runner``; the soft
-    gap that doesn't otherwise gate is ``gh`` when github is configured.
-    """
-    if p.ctx.name not in ("host", "worktree"):
-        return []
-    findings: list[Finding] = []
-    if _github_in_play(p.task, p.brr_dir) and shutil.which("gh") is None:
-        findings.append(
-            Finding(
-                "missing_tool",
-                "warn",
-                {
-                    "tool": "gh",
-                    "hint": (
-                        "github is configured but the gh CLI isn't on PATH; "
-                        "agents that shell out to gh will fail. Install gh "
-                        "or rely on GITHUB_TOKEN + the API."
-                    ),
-                },
-            )
-        )
-    return findings
 
 
 def probe_stale_image(p: ProbeContext) -> list[Finding]:
@@ -259,11 +242,15 @@ def probe_doc_drift(p: ProbeContext) -> list[Finding]:
     ]
 
 
-# Order is presentation-only; all probes run every task-prep.
+# Order is presentation-only; all probes run every task-prep. Every
+# probe here observes a host/operator-vantage fact (the vantage rule in
+# kb/design-agent-ergonomics.md): something the agent in its sandbox
+# structurally can't see for itself. Checks the agent *can* run itself
+# (e.g. a tool on its own PATH) belong to reflection, not here — that's
+# why ``missing_tool`` was retired.
 _PROBES: tuple[Callable[[ProbeContext], list[Finding]], ...] = (
     probe_stale_image,
     probe_github_auth,
-    probe_missing_tools,
     probe_worktree_buildup,
     probe_disk,
     probe_doc_drift,
@@ -281,14 +268,16 @@ def probe_task_prep(
     cfg: dict[str, Any],
     ctx: RunContext,
 ) -> list[Record]:
-    """Resolve the proxy and run the task-prep probe set.
+    """Resolve the proxy (owner-aware) and run the task-prep probe set.
 
-    Short-circuits to an empty result on ``NullErgoProxy`` so the
-    default (opt-out) path runs no probes at all. Safe to call from the
+    Short-circuits to an empty result on ``NullErgoProxy`` — i.e.
+    ``ergonomics=off`` or an operator-owned run — so those paths run no
+    probes at all. Otherwise the proxy is ``LogErgoProxy`` (the
+    user-owned default) or ``LocalErgoProxy``. Safe to call from the
     daemon hot path: every failure mode is swallowed and returns ``[]``.
     """
     try:
-        proxy = get_proxy(cfg, brr_dir)
+        proxy = resolve_proxy(cfg, brr_dir, owner=getattr(ctx, "owner", "user"))
     except Exception:
         return []
     if isinstance(proxy, NullErgoProxy):
