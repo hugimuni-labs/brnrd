@@ -106,6 +106,31 @@ def main(argv: list[str] | None = None) -> None:
                    help="name to register this daemon under (default: hostname)")
     p.set_defaults(func=cmd_brnrd_connect)
 
+    erg_p = sub.add_parser(
+        "ergonomics", help="inspect locally captured agent-ergonomics records")
+    erg_sub = erg_p.add_subparsers(dest="ergonomics_command", required=True)
+
+    p = erg_sub.add_parser("summary", help="top issues with counts over a window")
+    p.add_argument("--days", type=int, default=7,
+                   help="window in days (default: 7)")
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.set_defaults(func=cmd_ergonomics_summary)
+
+    p = erg_sub.add_parser("list", help="raw records, newest last")
+    p.add_argument("--issue", default=None, help="filter to one issue identifier")
+    p.add_argument("--days", type=int, default=None, help="window in days")
+    p.add_argument("--limit", type=int, default=50,
+                   help="max records to show (default: 50)")
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.set_defaults(func=cmd_ergonomics_list)
+
+    p = erg_sub.add_parser("clear", help="delete locally stored records")
+    p.add_argument("--before", default=None,
+                   help="YYYY-MM-DD; delete days strictly before this (default: all)")
+    p.set_defaults(func=cmd_ergonomics_clear)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -287,6 +312,93 @@ def cmd_brnrd_connect(args):
     daemon_name = args.daemon_name or socket.gethostname()
     cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
     print("[brr] Start the daemon with `brr up` to begin draining the brnrd inbox.")
+
+
+def _fmt_ts(epoch: float) -> str:
+    from datetime import datetime, timezone
+
+    try:
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%SZ"
+        )
+    except (OverflowError, OSError, ValueError):
+        return str(epoch)
+
+
+def _ergonomics_empty_hint() -> None:
+    print("[brr ergonomics] no records found. This view reads the on-disk "
+          "store, which only `ergonomics=local` writes to. The default "
+          "(`ergonomics=log`) surfaces findings on the daemon log instead; "
+          "set `ergonomics=local` in .brr/config to persist them here.")
+
+
+def cmd_ergonomics_summary(args):
+    import json as _json
+
+    from . import ergonomics
+
+    brr_dir = _brr_dir()
+    records = ergonomics.read_records(brr_dir, days=args.days)
+    summaries = ergonomics.summarize(records)
+
+    if args.json:
+        print(_json.dumps(
+            {"days": args.days, "total": len(records),
+             "issues": [s.as_dict() for s in summaries]},
+            indent=2,
+        ))
+        return 0
+
+    if not summaries:
+        _ergonomics_empty_hint()
+        return 0
+
+    print(f"[brr ergonomics] {len(records)} record(s) over {args.days}d, "
+          f"{len(summaries)} issue(s):")
+    for s in summaries:
+        envs = ",".join(sorted(s.envs)) or "-"
+        print(f"  {s.severity:5}  {s.count:4}x  {s.issue:22}  "
+              f"last={_fmt_ts(s.last_seen)}  env={envs}")
+    return 0
+
+
+def cmd_ergonomics_list(args):
+    import json as _json
+
+    from . import ergonomics
+
+    brr_dir = _brr_dir()
+    records = ergonomics.read_records(brr_dir, days=args.days, issue=args.issue)
+    records = records[-args.limit:] if args.limit else records
+
+    if args.json:
+        print(_json.dumps([r.__dict__ for r in records], indent=2, default=str))
+        return 0
+
+    if not records:
+        _ergonomics_empty_hint()
+        return 0
+
+    for r in records:
+        hint = r.detail.get("hint") if isinstance(r.detail, dict) else None
+        line = (f"  {_fmt_ts(r.timestamp)}  {r.severity:5}  {r.issue:22}  "
+                f"env={r.env or '-'}")
+        if r.task_id:
+            line += f"  task={r.task_id}"
+        print(line)
+        if hint:
+            print(f"      {hint}")
+    return 0
+
+
+def cmd_ergonomics_clear(args):
+    from . import ergonomics
+
+    brr_dir = _brr_dir()
+    removed = ergonomics.clear(brr_dir, before=args.before)
+    scope = f"before {args.before}" if args.before else "all"
+    print(f"[brr ergonomics] cleared {len(removed)} day-file(s) ({scope}).")
+    return 0
 
 
 def _load_gate(name: str):
