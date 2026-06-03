@@ -42,6 +42,10 @@ dispatcher branches on BYO-cred presence at dispatch time
 launch alongside managed Fly; subsequent clouds get BYO when
 they get managed. Same BYO-for-subscribers principle pre-
 applies to future agentic-secretary connectors.
+On 2026-06-03, brnrd account identity pivoted from
+email+password to GitHub OAuth before launch; see
+[`decision-brnrd-github-oauth-identity.md`](decision-brnrd-github-oauth-identity.md).
+The bearer-token scheme remains brnrd-owned.
 
 ## Scope
 
@@ -128,7 +132,8 @@ lives on the daemon. Bake the following into every endpoint:
   creds).
 - **Audit log is metadata-only** — who, when, what platform, what
   outcome, what cost. Never task contents.
-- **Account email separated from credential storage** — different
+- **GitHub identity separated from credential storage** — account
+  identity/contact fields and encrypted credentials live in different
   tables, joined only at the API surface, so a partial DB leak
   doesn't compound.
 
@@ -145,7 +150,7 @@ sense, and listed in the audit log:
 
 | Held | Scope | TTL | Why |
 |------|-------|-----|-----|
-| Account email + password hash | Per account | Lifetime of account | Auth + billing contact |
+| GitHub identity (`github_id`, current login, optional verified email) | Per account | Lifetime of account | Auth + billing contact; no brnrd password hash |
 | Credentials (encrypted at rest) | Per account | Until user revokes | Two domains in one vault: (a) AI-runner credentials (Anthropic / OpenAI / Google / GitHub — API key OR `~/.claude`-style dir tarball for subscription-auth users); (b) Docker-registry credentials for private images. Both required for managed-compute spawns that use them. See "Credential vault endpoints" below. |
 | Subscription state (tier, plan, period_end, Stripe customer/subscription IDs) | Per account | Lifetime of account | Subscription leg of billing; see [`design-billing.md`](design-billing.md). Mirrored to account-scope settings as `subscription.tier` for in-band reads. |
 | Cumulative-purchase counters (`cumulative_purchased_credits_lifetime`, `cumulative_purchased_usd_lifetime`, `project_cap_unlocked`) | Per account | Lifetime of account; monotonic | Drives the subscriber project-cap unlock (25 → unlimited at $10 cumulative top-ups). Mirrored to account-scope settings as `subscription.project_cap` (3 / 25 / unlimited) and `subscription.project_cap_unlocked` (bool) for in-band reads by the dashboard + daemon. |
@@ -163,6 +168,7 @@ Things we explicitly do **not** hold:
 - Source code, prompts, agent traces, repo state (lives on daemon + git remote)
 - Plain-text cloud-platform tokens (Fly / Modal / etc.) — only ever held encrypted at rest in the credential vault for subscribers who opt into BYO compute, never in cleartext logs / metrics / DB
 - Per-user OAuth refresh tokens that grant broad provider access
+- Password hashes, password reset state, or email-verification state
 
 ## The protocol shape, at a glance
 
@@ -495,8 +501,8 @@ that a removable safety net, since the daemon is the side that has
 
 | Method | Path | Description | Persists |
 |--------|------|-------------|----------|
-| `POST` | `/v1/accounts` | Create account (email + password, or OAuth bind). Returns account ID + initial API key. | Email (hashed), password hash, account row |
-| `POST` | `/v1/accounts/sessions` | Login; returns a session JWT for web / CLI use. | Session row (TTL) |
+| `GET` | `/auth/github/start` | Begin "Sign in with GitHub"; redirects to GitHub with state + PKCE challenge. | OAuth state / PKCE cookies (TTL) |
+| `GET` | `/auth/github/callback` | Resolve GitHub identity, create/update the brnrd account, seed the default project on first login, issue the brnrd session cookie. | Account row keyed by `github_id`; session-token hash (TTL) |
 | `POST` | `/v1/accounts/api-keys` | Issue an additional API key. | API-key hash + metadata |
 | `DELETE` | `/v1/accounts/api-keys/{key_id}` | Revoke. | Mark revoked |
 | `POST` | `/v1/accounts/projects` | Create a project. Body: `{name}`. Returns `project_id`. **Enforced against the account's effective project cap** (3 on Free; 25 on Subscribed without unlock; unlimited on Subscribed with unlock per `cumulative_purchased_usd_lifetime >= 10`, per [`design-billing.md`](design-billing.md) § "Cumulative purchase tracking and the subscriber project cap unlock"); 409 with `subscription_hint` body when at cap, populated by tier: Free → "subscribe for 25"; Subscribed-not-unlocked → "top up $X.XX more to unlock unlimited". | Project row (name, account_id) |

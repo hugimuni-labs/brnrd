@@ -106,7 +106,8 @@ endpoints:
 
 Plus:
 
-- Login / signup flow against `/v1/accounts/sessions`.
+- Login flow through GitHub OAuth (`/auth/github/start` →
+  `/auth/github/callback`); no email/password signup.
 - Top nav with account switcher (for users with multiple
   accounts; v1 most users have one) and a "+ New project"
   shortcut.
@@ -239,16 +240,18 @@ Steps:
    - `static/` HTMX asset, a small CSS, no JS-build pipeline
    - `__init__.py` registers the routes onto the brnrd FastAPI
      app (no separate web server).
-2. Auth flow: `/login` GET (form), POST → POST to
-   `/v1/accounts/sessions`, set session cookie, redirect.
-   `/signup` GET / POST against `/v1/accounts`.
+2. Auth flow: `/login` GET renders "Sign in with GitHub";
+   `/auth/github/start` redirects to GitHub with state + PKCE;
+   `/auth/github/callback` resolves the GitHub identity, creates or
+   updates the brnrd account, sets the session cookie, and redirects.
+   No `/signup` and no email/password fallback.
 3. Session middleware for protected routes; redirect to
    `/login` on miss.
 4. View 1: `GET /` → projects list. Renders against
    `GET /v1/accounts/projects`. Includes "+ New project" inline
    form (HTMX POST → `/v1/accounts/projects`, swap in the new
    row).
-5. Base layout: top nav (logo, account email, "+ New project"
+5. Base layout: top nav (logo, GitHub login/email, "+ New project"
    shortcut, log-out), main content area.
 6. Empty state: "No projects yet. Pair your first daemon with
    `brr brnrd connect` or install the GitHub App

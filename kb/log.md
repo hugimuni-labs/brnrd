@@ -5566,3 +5566,22 @@ is filed as #83.
 
 Tests reworked (mode normalisation, owner-aware resolve, log proxy +
 dedup, reflection gating); full suite 670 green. Same PR #82.
+## [2026-06-03] implement | brnrd identity pivots to GitHub OAuth
+
+brnrd account identity now uses GitHub OAuth through the managed GitHub
+App / OAuth web flow, and the prototype email+password signup/login
+surface is gone before launch. Account rows key on stable `github_id`,
+refresh display login + optional verified email on login, seed the
+`default` project on first OAuth callback, and still issue normal brnrd
+session tokens (hashed at rest) for dashboard/API authorization. The
+daemon pairing flow is unchanged after identity: `brr brnrd connect`
+starts an unauthenticated pair request, the browser signs in with
+GitHub, and `/connect/{code}` approves against an account project to
+mint the project-scoped daemon token.
+
+The OAuth adapter exchanges GitHub web-flow codes with state + PKCE,
+fetches `/user`, falls back to `/user/emails` for a primary verified
+email, and discards the GitHub user token after identity resolution.
+`decision-brnrd-github-oauth-identity.md` records the decision and the
+managed-mode/protocol/prototype/dashboard/pricing pages were reconciled
+so future work does not resurrect password forms. 624 tests green.

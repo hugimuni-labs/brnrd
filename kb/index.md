@@ -179,6 +179,11 @@ dive-in map) and are stable until something contradicts them.
   spawn-compute joined the protocol; renamed to
   `design-brnrd-protocol.md` on 2026-05-25 with the
   brnrd-naming-keep decision.
+- [brnrd GitHub OAuth identity decision](decision-brnrd-github-oauth-identity.md) —
+  *accepted on 2026-06-03*. brnrd accounts are GitHub identities via
+  the managed GitHub App / OAuth web flow; email+password signup and
+  login are removed before launch, while brnrd's hashed bearer tokens
+  remain the API/session/daemon authorization primitive.
 - [Managed-mode delivery design](design-managed-delivery.md) —
   *accepted 2026-06-01 (shape H)*. One daemon-side delivery driver
   (card lifecycle + per-platform presentation + gist/truncate
