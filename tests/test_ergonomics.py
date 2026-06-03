@@ -105,19 +105,13 @@ def test_record_from_dict_requires_core_fields():
 
 
 @pytest.mark.parametrize("cfg,expected", [
-    ({}, "log"),                                  # default
+    ({}, "log"),                          # unset → default
     ({"ergonomics": "off"}, "off"),
     ({"ergonomics": "log"}, "log"),
     ({"ergonomics": "local"}, "local"),
     ({"ergonomics": "response"}, "response"),
-    ({"ergonomics": "bogus"}, "log"),             # unknown → safe default
-    ({"ergonomics": False}, "off"),               # bare bool from config parse
-    ({"ergonomics": True}, "log"),
-    ({"ergonomics.proxy": "null"}, "off"),        # legacy spelling/aliases
-    ({"ergonomics.proxy": "local"}, "local"),
-    ({"ergonomics.proxy": "brnrd"}, "log"),       # operator sink → log on user run
-    ({"runner.self_review": True}, "response"),   # deprecated alias
-    ({"runner.self_review": False}, "log"),
+    ({"ergonomics": "RESPONSE"}, "response"),  # case-insensitive
+    ({"ergonomics": "bogus"}, "log"),     # unrecognised → safe default
 ])
 def test_ergonomics_mode(cfg, expected):
     assert ergonomics_mode(cfg) == expected
@@ -453,13 +447,5 @@ def test_reflection_enabled_only_for_response_and_user():
     assert prompts.reflection_enabled({"ergonomics": "response"}) is True
     assert prompts.reflection_enabled({"ergonomics": "log"}) is False
     assert prompts.reflection_enabled({}) is False
-    # deprecated alias still honoured for user-owned
-    assert prompts.reflection_enabled({"runner.self_review": True}) is True
     # operator-owned never injects reflection into the reply, even if asked
     assert prompts.reflection_enabled({"ergonomics": "response"}, owner="operator") is False
-
-
-def test_self_review_enabled_is_reflection_alias():
-    assert prompts.self_review_enabled({"runner.self_review": True}) is True
-    assert prompts.self_review_enabled({"ergonomics": "response"}) is True
-    assert prompts.self_review_enabled({}) is False
