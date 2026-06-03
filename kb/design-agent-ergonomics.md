@@ -47,10 +47,9 @@ into runner prompts. That prompt asks the agent to end its stdout
 with a free-text **Ergonomics review:** footer covering orientation,
 tooling, and branch metadata. The daemon does nothing with the
 footer beyond shipping it as part of the response file to the gate.
-(As of 2026-06-03 this knob is a deprecated alias for
-`ergonomics=response`, which keeps the "review in the reply" behaviour
-but makes it skippable and owner-gated — see "Ownership decides
-routing".)
+(Removed 2026-06-03: the knob is gone — the same "review in the reply"
+behaviour is now `ergonomics=response`, skippable and owner-gated. See
+"Ownership decides routing".)
 
 This shape has six concrete failure modes:
 
@@ -210,8 +209,9 @@ Two rules make this non-leaky:
   see your *own* agent's notes in your *own* chat — the same spirit as
   `LocalErgoProxy` letting the user own the data, rendered inline.
 
-This supersedes the standalone `runner.self_review` knob, which is kept
-as a deprecated alias for `ergonomics=response`.
+This replaces the standalone `runner.self_review` knob, which was
+removed outright (no users yet) — the same behaviour is now
+`ergonomics=response`.
 
 ## What probes are for — the vantage rule
 
@@ -248,11 +248,11 @@ agent's to notice. The five kept probes are all host/operator-vantage:
 `low_disk` (host filesystem / operator health), `drifted_bundled_docs`
 (installed-brr-version vs repo).
 
-A future, *most-thin-harness* direction (not built): feed host-vantage
-facts **forward** into the agent's context and let the agent judge
-whether they matter for the task, while still recording them for
-operator aggregation — keeping the judgment with the agent and reusing
-the orientation forward-channel.
+A future, *most-thin-harness* direction (not built; tracked as #83):
+feed host-vantage facts **forward** into the agent's context and let the
+agent judge whether they matter for the task, while still recording them
+for operator aggregation — keeping the judgment with the agent and
+reusing the orientation forward-channel.
 
 ### Tenancy → routing → visibility
 
@@ -372,11 +372,10 @@ depends on the mode, and the two modes need different machinery:
 - **`response` (shipped 2026-06-03, user-owned only).** Inject the
   skippable nudge; leave the review **in the reply**. No splitter, no
   markers, no stripping — the review is the deliverable the user asked
-  to see. This is what re-homes the old `runner.self_review` footer
-  (now a deprecated alias for `ergonomics=response`), with one change:
-  the block is *skippable* — the agent omits it entirely when there's
-  nothing worth acting on, rather than writing a "nothing to report"
-  line.
+  to see. This replaces the old `runner.self_review` footer (removed),
+  with one change: the block is *skippable* — the agent omits it
+  entirely when there's nothing worth acting on, rather than writing a
+  "nothing to report" line.
 - **`local` / `brnrd` reflection (deferred).** Capture the review
   *without* showing it to the user — which needs the marker + splitter
   machinery below to cut it out of the response cleanly. Shipping this
@@ -495,12 +494,12 @@ records store that `BrnrdErgoProxy` writes to.
 Independent of using brnrd for managed compute, self-hosted users
 can opt to share their (redacted) ergonomics records with brnrd's
 improve pool. The wire format is identical to the managed-tenant
-proxy, but the user explicitly opts in via
-`brr ergonomics share --enable` or `brr config set
-ergonomics.proxy brnrd_pool`. The pool contributors get nothing
-back (no dashboard access; they're not paying customers) — the
-upside is "you helped find this bug" and the corresponding fix
-reaching their next `pip install -U brr`.
+proxy, but the user explicitly opts in via `brr ergonomics share
+--enable` (a dedicated opt-in, orthogonal to the `ergonomics` routing
+knob — sharing is a separate consent, not a fifth mode). The pool
+contributors get nothing back (no dashboard access; they're not paying
+customers) — the upside is "you helped find this bug" and the
+corresponding fix reaching their next `pip install -U brr`.
 
 This is small but load-bearing for the brr-as-OSS story: it gives
 self-hosters a way to contribute observability without forcing
@@ -579,8 +578,8 @@ degenerate destination until the storage layer lands).
   output (no skip); throws away data. Resolved 2026-06-03 by folding it
   into `ergonomics=response` — same "review in the reply" behaviour,
   but skippable, owner-gated (never on managed), and on the path that
-  also feeds `log`/`local` capture. `runner.self_review=true` is kept
-  as a deprecated alias.
+  also feeds `log`/`local` capture. The old knob was removed outright
+  (no users yet), not aliased.
 
 - **Force the agent to emit JSON instead of prose.** Forcing
   structure in the prompt costs tokens, constrains the agent's

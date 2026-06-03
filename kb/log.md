@@ -5539,12 +5539,19 @@ living in one resolver instead of scattered `if managed` checks.
 (warn+ to the daemon log, deduped by issue-signature on a process-global
 window) is the user-owned default. Probes now run for everyone by
 default at zero token cost and surface only actionable findings to the
-log; `off` short-circuits to null. `response` re-homes the old
-`runner.self_review` footer (now a deprecated alias) as a **skippable**,
-owner-gated reply nudge — `prompts.reflection_enabled(cfg, owner)`
-replaces `self_review_enabled` (kept as an alias). Hidden reflection
-capture (markers + splitter + sampling for `local`/`brnrd`) stays
-deferred; `response` needs none of it.
+log; `off` short-circuits to null. `response` replaces the old
+`runner.self_review` footer as a **skippable**, owner-gated reply nudge
+— `prompts.reflection_enabled(cfg, owner)` replaces `self_review_enabled`.
+Hidden reflection capture (markers + splitter + sampling for
+`local`/`brnrd`) stays deferred; `response` needs none of it.
+
+No back-compat kept (no users yet, solo active development): the
+`ergonomics` knob is the only routing surface — `runner.self_review`,
+the `ergonomics.proxy`/`ergonomics_proxy` spellings, `self_review_enabled`,
+and the loose value aliases (`null`/`brnrd`/bools) were all dropped
+rather than carried. Unset or unrecognised `ergonomics` falls back to
+`log`. The internal prompt toggle `self_review` was renamed `reflection`
+to match `reflection_enabled`.
 
 **Vantage rule** (new design principle): probes observe only what's
 outside the agent's vantage (host/operator/cross-task facts); reflection
@@ -5553,7 +5560,9 @@ agent can see for itself. Applying it **retired `missing_tool`** (host
 `gh` — the agent shares the host PATH and can check itself), leaving
 five host-vantage probes. The rule bounds probe growth: completeness is
 reflection's job, and a finding graduates to a probe only if it's
-host-vantage.
+host-vantage. The "most-thin-harness" follow-up — feeding host-vantage
+facts forward into the agent's context so the agent judges relevance —
+is filed as #83.
 
 Tests reworked (mode normalisation, owner-aware resolve, log proxy +
 dedup, reflection gating); full suite 670 green. Same PR #82.
