@@ -1,4 +1,9 @@
-"""Account, session, and project endpoints."""
+"""Account session helpers and project endpoints.
+
+GitHub OAuth is the only brnrd account-creation path. These API
+endpoints keep using brnrd bearer credentials for account-scoped
+actions, but there is no email/password signup or login surface.
+"""
 
 from __future__ import annotations
 
@@ -11,23 +16,52 @@ from sqlalchemy.orm import Session
 from .. import ids, schemas
 from ..auth import Principal, get_db, require_account
 from ..models import Account, Project, Token
-from ..security import hash_password, hash_token, verify_password
+from ..oauth import GitHubIdentity
+from ..security import hash_token
 
 router = APIRouter(prefix="/v1/accounts", tags=["accounts"])
 
 _SESSION_TTL = timedelta(days=30)
 
 
-def authenticate(db: Session, email: str, password: str) -> Account | None:
-    """Return the account if the email/password match, else None.
-
-    Shared by the API login endpoint and the web dashboard login.
-    """
-    account = db.execute(
-        select(Account).where(Account.email == email.strip().lower())
+def _ensure_default_project(db: Session, account: Account) -> Project:
+    project = db.execute(
+        select(Project).where(
+            Project.account_id == account.id, Project.name == "default"
+        )
     ).scalar_one_or_none()
-    if account is None or not verify_password(password, account.password_hash):
-        return None
+    if project is not None:
+        return project
+    project = Project(id=ids.project_id(), account_id=account.id, name="default")
+    db.add(project)
+    return project
+
+
+def account_for_github_identity(db: Session, identity: GitHubIdentity) -> Account:
+    """Return the brnrd account for a GitHub user, creating it if needed."""
+    account = db.execute(
+        select(Account).where(Account.github_id == identity.github_id)
+    ).scalar_one_or_none()
+    if account is None:
+        account = Account(
+            id=ids.account_id(),
+            github_id=identity.github_id,
+            github_login=identity.login,
+            email=identity.email,
+        )
+        db.add(account)
+        _ensure_default_project(db, account)
+        db.commit()
+        db.refresh(account)
+        return account
+
+    # GitHub logins and primary emails can change; GitHub id is the stable
+    # identity key. Keep the display/contact fields fresh at login time.
+    account.github_login = identity.login
+    account.email = identity.email
+    _ensure_default_project(db, account)
+    db.commit()
+    db.refresh(account)
     return account
 
 
@@ -46,53 +80,6 @@ def issue_session_token(db: Session, account: Account) -> str:
     )
     db.commit()
     return raw
-
-
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=schemas.AccountCreated)
-def create_account(payload: schemas.AccountCreate, db: Session = Depends(get_db)):
-    email = payload.email.strip().lower()
-    if "@" not in email or "." not in email.split("@")[-1]:
-        raise HTTPException(status_code=422, detail="invalid email")
-    if db.execute(select(Account).where(Account.email == email)).scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="email already registered")
-
-    account = Account(
-        id=ids.account_id(),
-        email=email,
-        password_hash=hash_password(payload.password),
-    )
-    db.add(account)
-
-    raw_key = ids.api_key()
-    db.add(
-        Token(
-            id=ids.token_id(),
-            account_id=account.id,
-            kind=Token.KIND_API_KEY,
-            token_hash=hash_token(raw_key),
-            label="initial",
-        )
-    )
-    # Seed a "default" project so a fresh account can pair a daemon (or a
-    # Telegram chat) right away. It counts as a normal project against the
-    # account's cap once cap enforcement lands; `create_project` is
-    # idempotent on name, so re-using "default" later is harmless.
-    project = Project(id=ids.project_id(), account_id=account.id, name="default")
-    db.add(project)
-
-    db.commit()
-    return schemas.AccountCreated(
-        account_id=account.id, api_key=raw_key, default_project_id=project.id
-    )
-
-
-@router.post("/sessions", response_model=schemas.SessionCreated)
-def login(payload: schemas.SessionCreate, db: Session = Depends(get_db)):
-    account = authenticate(db, payload.email, payload.password)
-    if account is None:
-        raise HTTPException(status_code=401, detail="invalid credentials")
-    raw = issue_session_token(db, account)
-    return schemas.SessionCreated(account_id=account.id, session_token=raw)
 
 
 @router.post(
