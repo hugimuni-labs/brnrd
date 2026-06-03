@@ -13,30 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-# ── Accounts / sessions / projects ──────────────────────────────────
-
-
-class AccountCreate(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=8)
-
-
-class AccountCreated(BaseModel):
-    account_id: str
-    api_key: str
-    # A "default" project is created with the account so the user can pair
-    # a daemon immediately, without a separate project-create call first.
-    default_project_id: str
-
-
-class SessionCreate(BaseModel):
-    email: str
-    password: str
-
-
-class SessionCreated(BaseModel):
-    account_id: str
-    session_token: str
+# ── Accounts / projects ─────────────────────────────────────────────
 
 
 class ProjectCreate(BaseModel):
