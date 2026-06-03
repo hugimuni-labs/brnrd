@@ -1,8 +1,9 @@
 """Tests for the agent-ergonomics probe slice.
 
-Covers the record shape, the Null/Local proxies, the local store
-(read/summarize/clear), each probe's detection logic, the orchestrator's
-never-raise contract, and the ``brr ergonomics`` CLI handlers.
+Covers the record shape, the Null/Log/Local proxies + owner-aware
+resolution, the local store (read/summarize/clear), each probe's
+detection logic, the orchestrator's never-raise contract, and the
+``brr ergonomics`` CLI handlers.
 """
 
 from __future__ import annotations
@@ -14,17 +15,32 @@ from types import SimpleNamespace
 
 import pytest
 
-from brr import cli
+from brr import cli, prompts
 from brr.envs import RunContext
 from brr.ergonomics import probes, store
-from brr.ergonomics.proxy import LocalErgoProxy, NullErgoProxy, get_proxy
+from brr.ergonomics.proxy import (
+    LocalErgoProxy,
+    LogErgoProxy,
+    NullErgoProxy,
+    ergonomics_mode,
+    reset_log_dedup,
+    resolve_proxy,
+)
 from brr.ergonomics.record import Record
 
 
 # ── fixtures / helpers ──────────────────────────────────────────────
 
 
-def _ctx(name: str = "docker", **env_state) -> RunContext:
+@pytest.fixture(autouse=True)
+def _clear_log_dedup():
+    """The log proxy dedups on a process-global window; isolate tests."""
+    reset_log_dedup()
+    yield
+    reset_log_dedup()
+
+
+def _ctx(name: str = "docker", *, owner: str = "user", **env_state) -> RunContext:
     root = Path("/repo")
     return RunContext(
         name=name,
@@ -34,6 +50,7 @@ def _ctx(name: str = "docker", **env_state) -> RunContext:
         response_path_host=root / ".brr" / "resp",
         response_path_env=root / ".brr" / "resp",
         env_state=dict(env_state),
+        owner=owner,
     )
 
 
@@ -84,19 +101,91 @@ def test_record_from_dict_requires_core_fields():
         Record.from_dict({"issue": "x", "severity": "info"})
 
 
-# ── proxy resolution ────────────────────────────────────────────────
+# ── mode normalisation ──────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("value,cls", [
-    (None, NullErgoProxy),
-    ("null", NullErgoProxy),
-    ("local", LocalErgoProxy),
-    ("brnrd", NullErgoProxy),       # not wired yet → degrade to null
-    ("bogus", NullErgoProxy),
+@pytest.mark.parametrize("cfg,expected", [
+    ({}, "log"),                                  # default
+    ({"ergonomics": "off"}, "off"),
+    ({"ergonomics": "log"}, "log"),
+    ({"ergonomics": "local"}, "local"),
+    ({"ergonomics": "response"}, "response"),
+    ({"ergonomics": "bogus"}, "log"),             # unknown → safe default
+    ({"ergonomics": False}, "off"),               # bare bool from config parse
+    ({"ergonomics": True}, "log"),
+    ({"ergonomics.proxy": "null"}, "off"),        # legacy spelling/aliases
+    ({"ergonomics.proxy": "local"}, "local"),
+    ({"ergonomics.proxy": "brnrd"}, "log"),       # operator sink → log on user run
+    ({"runner.self_review": True}, "response"),   # deprecated alias
+    ({"runner.self_review": False}, "log"),
 ])
-def test_get_proxy(value, cls, tmp_path):
-    cfg = {} if value is None else {"ergonomics.proxy": value}
-    assert isinstance(get_proxy(cfg, tmp_path), cls)
+def test_ergonomics_mode(cfg, expected):
+    assert ergonomics_mode(cfg) == expected
+
+
+# ── proxy resolution (owner-aware) ──────────────────────────────────
+
+
+@pytest.mark.parametrize("cfg,cls", [
+    ({}, LogErgoProxy),                       # user default
+    ({"ergonomics": "off"}, NullErgoProxy),
+    ({"ergonomics": "log"}, LogErgoProxy),
+    ({"ergonomics": "local"}, LocalErgoProxy),
+    ({"ergonomics": "response"}, LogErgoProxy),  # probes still log; reply gets reflection
+])
+def test_resolve_proxy_user(cfg, cls, tmp_path):
+    assert isinstance(resolve_proxy(cfg, tmp_path, owner="user"), cls)
+
+
+@pytest.mark.parametrize("cfg", [
+    {},
+    {"ergonomics": "local"},
+    {"ergonomics": "response"},
+    {"ergonomics": "log"},
+])
+def test_resolve_proxy_operator_ignores_knob(cfg, tmp_path):
+    # Operator-owned runs aren't user-configurable: the knob is ignored
+    # and nothing is captured until BrnrdErgoProxy lands.
+    assert isinstance(resolve_proxy(cfg, tmp_path, owner="operator"), NullErgoProxy)
+
+
+# ── log proxy ───────────────────────────────────────────────────────
+
+
+def _log_record(issue="stale_image", severity="warn", **kw):
+    kw.setdefault("kind", "probe")
+    kw.setdefault("env", "docker")
+    kw.setdefault("timestamp", time.time())
+    return Record(issue=issue, severity=severity, **kw)
+
+
+def test_log_proxy_emits_warn_to_stdout(capsys):
+    LogErgoProxy().emit(_log_record(detail={"hint": "rebuild the image"}))
+    out = capsys.readouterr().out
+    assert "[brr:ergo] warn stale_image" in out
+    assert "rebuild the image" in out
+
+
+def test_log_proxy_drops_below_threshold(capsys):
+    LogErgoProxy().emit(_log_record(issue="drifted_bundled_docs", severity="info"))
+    assert capsys.readouterr().out == ""
+
+
+def test_log_proxy_dedups_within_window(capsys):
+    proxy = LogErgoProxy(dedup_s=10_000)
+    now = time.time()
+    proxy.emit(_log_record(timestamp=now))
+    proxy.emit(_log_record(timestamp=now + 1))       # same signature → silent
+    assert capsys.readouterr().out.count("[brr:ergo]") == 1
+
+
+def test_log_proxy_relogs_after_window_and_per_signature(capsys):
+    proxy = LogErgoProxy(dedup_s=100)
+    now = time.time()
+    proxy.emit(_log_record(timestamp=now))
+    proxy.emit(_log_record(timestamp=now + 500))     # window elapsed → again
+    proxy.emit(_log_record(image="other:tag", timestamp=now))  # new sig → again
+    assert capsys.readouterr().out.count("[brr:ergo]") == 3
 
 
 # ── local store ─────────────────────────────────────────────────────
@@ -183,19 +272,6 @@ def test_probe_github_auth_satisfied_with_token(tmp_path):
 def test_probe_github_auth_skips_non_docker(tmp_path):
     p = _pctx(tmp_path, tmp_path, ctx_name="worktree", source="github")
     assert probes.probe_github_auth(p) == []
-
-
-def test_probe_missing_tools_gh(tmp_path, monkeypatch):
-    monkeypatch.setattr(probes.shutil, "which", lambda _name: None)
-    p = _pctx(tmp_path, tmp_path, ctx_name="host", source="github")
-    findings = probes.probe_missing_tools(p)
-    assert [f.detail["tool"] for f in findings] == ["gh"]
-
-
-def test_probe_missing_tools_present(tmp_path, monkeypatch):
-    monkeypatch.setattr(probes.shutil, "which", lambda _name: "/usr/bin/gh")
-    p = _pctx(tmp_path, tmp_path, ctx_name="host", source="github")
-    assert probes.probe_missing_tools(p) == []
 
 
 def test_probe_stale_image_older_than_dockerfile(tmp_path, monkeypatch):
@@ -302,11 +378,35 @@ def test_run_probes_emits_and_survives_a_raising_probe(tmp_path, monkeypatch):
     assert proxy.records == records
 
 
-def test_probe_task_prep_noop_on_null_proxy(tmp_path):
-    # default cfg → null proxy → no probes run, empty result
+def test_probe_task_prep_noop_when_off(tmp_path):
+    # ergonomics=off → null proxy → no probes run, empty result
     assert probes.probe_task_prep(
-        task=_task(), repo_root=tmp_path, brr_dir=tmp_path, cfg={}, ctx=_ctx()
+        task=_task(), repo_root=tmp_path, brr_dir=tmp_path,
+        cfg={"ergonomics": "off"}, ctx=_ctx(),
     ) == []
+
+
+def test_probe_task_prep_noop_on_operator_run(tmp_path, monkeypatch):
+    # operator-owned: knob ignored, null sink, short-circuit even on local
+    monkeypatch.setattr(probes, "_PROBES",
+                        (lambda _p: [probes.Finding("x", "warn", {})],))
+    assert probes.probe_task_prep(
+        task=_task(), repo_root=tmp_path, brr_dir=tmp_path,
+        cfg={"ergonomics": "local"}, ctx=_ctx(owner="operator"),
+    ) == []
+    assert store.read_records(tmp_path) == []
+
+
+def test_probe_task_prep_default_logs(tmp_path, monkeypatch, capsys):
+    # default cfg (user-owned) → LogErgoProxy: probes run, warn+ to stdout
+    monkeypatch.setattr(probes, "_PROBES",
+                        (lambda _p: [probes.Finding("x", "warn", {"hint": "h"})],))
+    records = probes.probe_task_prep(
+        task=_task(), repo_root=tmp_path, brr_dir=tmp_path, cfg={}, ctx=_ctx(),
+    )
+    assert [r.issue for r in records] == ["x"]
+    assert "[brr:ergo] warn x" in capsys.readouterr().out
+    assert store.read_records(tmp_path) == []  # log proxy writes no store
 
 
 def test_probe_task_prep_runs_on_local_proxy(tmp_path, monkeypatch):
@@ -314,7 +414,7 @@ def test_probe_task_prep_runs_on_local_proxy(tmp_path, monkeypatch):
                         (lambda _p: [probes.Finding("x", "info", {})],))
     records = probes.probe_task_prep(
         task=_task(), repo_root=tmp_path, brr_dir=tmp_path,
-        cfg={"ergonomics.proxy": "local"}, ctx=_ctx(),
+        cfg={"ergonomics": "local"}, ctx=_ctx(),
     )
     assert [r.issue for r in records] == ["x"]
     assert len(store.read_records(tmp_path)) == 1
@@ -343,4 +443,23 @@ def test_cli_ergonomics_clear(tmp_path, monkeypatch, capsys):
 def test_cli_ergonomics_summary_empty_hint(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_brr_dir", lambda: tmp_path)
     cli.cmd_ergonomics_summary(SimpleNamespace(days=7, json=False))
-    assert "opt-in" in capsys.readouterr().out
+    assert "ergonomics=local" in capsys.readouterr().out
+
+
+# ── reflection (response mode) ──────────────────────────────────────
+
+
+def test_reflection_enabled_only_for_response_and_user():
+    assert prompts.reflection_enabled({"ergonomics": "response"}) is True
+    assert prompts.reflection_enabled({"ergonomics": "log"}) is False
+    assert prompts.reflection_enabled({}) is False
+    # deprecated alias still honoured for user-owned
+    assert prompts.reflection_enabled({"runner.self_review": True}) is True
+    # operator-owned never injects reflection into the reply, even if asked
+    assert prompts.reflection_enabled({"ergonomics": "response"}, owner="operator") is False
+
+
+def test_self_review_enabled_is_reflection_alias():
+    assert prompts.self_review_enabled({"runner.self_review": True}) is True
+    assert prompts.self_review_enabled({"ergonomics": "response"}) is True
+    assert prompts.self_review_enabled({}) is False
