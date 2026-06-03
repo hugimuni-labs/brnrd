@@ -57,6 +57,8 @@ def authorize_url(
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
     }
+    if settings.github_oauth_scope:
+        params["scope"] = settings.github_oauth_scope
     return f"{settings.github_oauth_authorize_url}?{urlencode(params)}"
 
 

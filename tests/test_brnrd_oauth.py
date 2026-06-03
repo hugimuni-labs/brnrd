@@ -46,6 +46,7 @@ def test_authorize_url_uses_pkce_state_and_callback():
     assert "state=state123" in url
     assert "code_challenge_method=S256" in url
     assert f"code_challenge={challenge}" in url
+    assert "scope=user%3Aemail" in url
 
 
 def test_exchange_code_requests_json_access_token(monkeypatch):
