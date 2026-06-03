@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .record import Record
+from .record import Record, SEVERITY_RANK
 
 
 def ergonomics_dir(brr_dir: Path) -> Path:
@@ -81,10 +81,6 @@ class IssueSummary:
         }
 
 
-# Rank for choosing the "worst" severity seen for an issue.
-_SEVERITY_RANK = {"info": 0, "warn": 1, "error": 2}
-
-
 def summarize(records: list[Record]) -> list[IssueSummary]:
     """Roll records up by issue: count, worst severity, last seen, envs.
 
@@ -98,7 +94,7 @@ def summarize(records: list[Record]) -> list[IssueSummary]:
             summary = IssueSummary(issue=record.issue)
             by_issue[record.issue] = summary
         summary.count += 1
-        if _SEVERITY_RANK.get(record.severity, 0) >= _SEVERITY_RANK.get(
+        if SEVERITY_RANK.get(record.severity, 0) >= SEVERITY_RANK.get(
             summary.severity, 0
         ):
             summary.severity = record.severity
@@ -107,7 +103,7 @@ def summarize(records: list[Record]) -> list[IssueSummary]:
             summary.envs.add(record.env)
     return sorted(
         by_issue.values(),
-        key=lambda s: (_SEVERITY_RANK.get(s.severity, 0), s.count),
+        key=lambda s: (SEVERITY_RANK.get(s.severity, 0), s.count),
         reverse=True,
     )
 
