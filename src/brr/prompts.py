@@ -126,7 +126,7 @@ def _join_prompt_parts(
     repo_root: Path,
     trailer: str,
     *,
-    self_review: bool = False,
+    reflection: bool = False,
     diffense: bool = False,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
@@ -138,7 +138,7 @@ def _join_prompt_parts(
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
             parts.append(pack_step)
-    if self_review:
+    if reflection:
         nudge = read_prompt("self-review.md", repo_root)
         if nudge:
             parts.append(nudge)
@@ -153,24 +153,13 @@ def reflection_enabled(cfg: dict[str, Any] | None, owner: str = "user") -> bool:
     self-hoster's explicit opt-in to see their own agent's ergonomics
     notes in their own reply. Operator-owned runs never inject it (the
     "no ergonomics in a managed reply, ever" invariant), regardless of
-    config. ``runner.self_review=true`` is honoured as a deprecated alias
-    for ``ergonomics=response`` via ``ergonomics_mode``.
+    config.
     """
     if owner != "user":
         return False
     from .ergonomics.proxy import ergonomics_mode
 
     return ergonomics_mode(cfg) == "response"
-
-
-def self_review_enabled(cfg: dict[str, Any] | None) -> bool:
-    """Deprecated alias for ``reflection_enabled`` (user-owned).
-
-    Kept for back-compat with callers/tests written against the old
-    ``runner.self_review`` knob, which now resolves through the
-    ``ergonomics`` surface.
-    """
-    return reflection_enabled(cfg)
 
 
 def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
@@ -238,7 +227,7 @@ def build_daemon_prompt(
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
-    self_review: bool = False,
+    reflection: bool = False,
     diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
@@ -270,7 +259,7 @@ def build_daemon_prompt(
         trailer = f"{trailer}\nTask: {task}"
     return _join_prompt_parts(
         preamble, repo_root, trailer,
-        self_review=self_review, diffense=diffense,
+        reflection=reflection, diffense=diffense,
     )
 
 
@@ -304,7 +293,6 @@ def _build_task_context_bundle(
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
     event_body: str | None,
-    self_review: bool = False,
     diffense: bool = False,
 ) -> str:
     """Assemble the human-readable Task Context Bundle for the daemon prompt.

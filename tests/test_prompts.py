@@ -7,7 +7,7 @@ from brr.prompts import (
     build_run_prompt,
     diffense_create_pr_enabled,
     diffense_emit_enabled,
-    self_review_enabled,
+    reflection_enabled,
 )
 
 
@@ -111,15 +111,17 @@ class TestPromptBuilding:
         assert "Bug fix" in prompt
         assert "do something" in prompt
 
-    def test_self_review_enabled_from_config(self):
-        assert self_review_enabled({"runner.self_review": True})
-        assert not self_review_enabled({"runner.self_review": False})
-        assert self_review_enabled({"runner_self_review": True})
+    def test_reflection_enabled_from_config(self):
+        assert reflection_enabled({"ergonomics": "response"})
+        assert not reflection_enabled({"ergonomics": "log"})
+        assert not reflection_enabled({})
+        # owner-gated: operator runs never inject the reply nudge
+        assert not reflection_enabled({"ergonomics": "response"}, owner="operator")
 
-    def test_daemon_prompt_self_review_nudge_when_requested(self, tmp_path):
+    def test_daemon_prompt_reflection_nudge_when_requested(self, tmp_path):
         prompt = build_daemon_prompt(
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
-            self_review=True,
+            reflection=True,
         )
         assert "Ergonomics review:" in prompt
 
