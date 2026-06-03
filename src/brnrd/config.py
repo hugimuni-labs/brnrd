@@ -58,6 +58,37 @@ class Settings:
     telegram_bot_username: str = os.environ.get("BRNRD_TELEGRAM_BOT_USERNAME", "")
     # Web dashboard session cookie name.
     session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
+    # GitHub OAuth / GitHub App user-authorization settings. The same
+    # managed GitHub App that receives webhooks can serve as brnrd's
+    # identity provider; self-hosters can point these at their own app.
+    github_oauth_client_id: str = os.environ.get("BRNRD_GITHUB_OAUTH_CLIENT_ID", "")
+    github_oauth_client_secret: str = os.environ.get(
+        "BRNRD_GITHUB_OAUTH_CLIENT_SECRET", ""
+    )
+    github_oauth_authorize_url: str = os.environ.get(
+        "BRNRD_GITHUB_OAUTH_AUTHORIZE_URL",
+        "https://github.com/login/oauth/authorize",
+    )
+    github_oauth_token_url: str = os.environ.get(
+        "BRNRD_GITHUB_OAUTH_TOKEN_URL",
+        "https://github.com/login/oauth/access_token",
+    )
+    github_api_base_url: str = os.environ.get(
+        "BRNRD_GITHUB_API_BASE_URL", "https://api.github.com"
+    )
+    github_api_version: str = os.environ.get(
+        "BRNRD_GITHUB_API_VERSION", "2026-03-10"
+    )
+    oauth_state_cookie: str = os.environ.get(
+        "BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state"
+    )
+    oauth_pkce_cookie: str = os.environ.get(
+        "BRNRD_OAUTH_PKCE_COOKIE", "brnrd_oauth_pkce"
+    )
+    oauth_next_cookie: str = os.environ.get(
+        "BRNRD_OAUTH_NEXT_COOKIE", "brnrd_oauth_next"
+    )
+    oauth_state_ttl_s: int = _env_int("BRNRD_OAUTH_STATE_TTL_S", 600)
 
 
 def get_settings() -> Settings:
