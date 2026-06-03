@@ -17,6 +17,7 @@ from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brnrd.models import Event  # noqa: E402
 from sqlalchemy import select  # noqa: E402
+from _helpers import brnrd_account_headers  # noqa: E402
 
 
 @pytest.fixture()
@@ -32,11 +33,9 @@ def env():
     return app, client, forwarder
 
 
-def _account(client, email="a@b.com", password="supersecret"):
-    r = client.post("/v1/accounts", json={"email": email, "password": password})
-    assert r.status_code == 201, r.text
-    key = r.json()["api_key"]
-    return {"Authorization": f"Bearer {key}"}
+def _account(client, email="a@b.com"):
+    login = email.split("@", 1)[0].replace(".", "-")
+    return brnrd_account_headers(client.app, login=login, email=email)
 
 
 def _project(client, headers, name="demo"):
@@ -354,17 +353,16 @@ def test_project_create_is_idempotent(env):
     assert len(listing["projects"]) == 2
 
 
-def test_account_creation_seeds_default_project(env):
+def test_github_account_seeds_default_project(env):
     _, client, _ = env
-    created = client.post(
-        "/v1/accounts", json={"email": "seed@b.com", "password": "supersecret"}
-    )
-    assert created.status_code == 201, created.text
-    body = created.json()
-    pid = body["default_project_id"]
-    assert pid
-
-    acc = {"Authorization": f"Bearer {body['api_key']}"}
+    acc = _account(client, email="seed@b.com")
     listing = client.get("/v1/accounts/projects", headers=acc).json()
-    assert [p["project_id"] for p in listing["projects"]] == [pid]
+    assert len(listing["projects"]) == 1
     assert listing["projects"][0]["name"] == "default"
+
+
+def test_password_account_endpoints_are_not_exposed(env):
+    _, client, _ = env
+    payload = {"email": "a@b.com", "password": "supersecret"}
+    assert client.post("/v1/accounts", json=payload).status_code == 404
+    assert client.post("/v1/accounts/sessions", json=payload).status_code == 404
