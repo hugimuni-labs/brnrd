@@ -127,44 +127,21 @@ def _utc_day(timestamp: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(timestamp))
 
 
-# Old/loose spellings folded onto the four-value surface, so a config
-# someone wrote against an earlier cut (or a bare bool) still resolves.
-_MODE_ALIASES = {
-    "null": "off",
-    "none": "off",
-    "false": "off",
-    "0": "off",
-    "true": "log",
-    "1": "log",
-    # operator sinks aren't user-selectable; on a user-owned run they
-    # degrade to the quiet log rather than silently doing nothing.
-    "brnrd": "log",
-    "cloud": "log",
-}
+_MODES = ("off", "log", "local", "response")
 
 
 def ergonomics_mode(cfg: dict[str, Any] | None) -> str:
     """Normalise the user-facing ``ergonomics`` knob to off|log|local|response.
 
     Default is ``log`` (quiet daemon log) — the user-owned default that
-    gives a self-hoster free efficiency signal with no token cost. Reads
-    the bare ``ergonomics`` key, accepting the older ``ergonomics.proxy``
-    spelling and a few loose aliases. ``runner.self_review=true`` (the
-    deprecated standalone knob) is treated as ``response``.
+    gives a self-hoster free efficiency signal with no token cost. Any
+    unset or unrecognised value falls back to ``log``.
     """
-    cfg = cfg or {}
-    raw = cfg.get("ergonomics")
+    raw = (cfg or {}).get("ergonomics")
     if raw is None:
-        raw = cfg.get("ergonomics.proxy", cfg.get("ergonomics_proxy"))
-    if raw is None:
-        if cfg.get("runner.self_review", cfg.get("runner_self_review")):
-            return "response"
         return "log"
     mode = str(raw).strip().lower()
-    mode = _MODE_ALIASES.get(mode, mode)
-    if mode not in ("off", "log", "local", "response"):
-        return "log"
-    return mode
+    return mode if mode in _MODES else "log"
 
 
 def resolve_proxy(
