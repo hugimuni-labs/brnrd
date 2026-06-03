@@ -37,7 +37,10 @@ def client():
             github_api_base_url="https://api.github.example",
         )
     )
-    return TestClient(app)
+    # brnrd is served over HTTPS in production (public_base_url is https),
+    # so the session/OAuth cookies carry the Secure flag. Model that here
+    # so a Secure cookie round-trips back to the app on follow-up requests.
+    return TestClient(app, base_url="https://testserver")
 
 
 def _account_and_project(client):
@@ -99,6 +102,7 @@ def test_github_login_redirect_uses_state_and_pkce(client):
     assert query["client_id"] == ["gh-client"]
     assert query["redirect_uri"] == ["https://brnrd.example/auth/github/callback"]
     assert query["code_challenge_method"] == ["S256"]
+    assert query["scope"] == ["user:email"]
     assert query["state"][0]
     assert query["code_challenge"][0]
 
