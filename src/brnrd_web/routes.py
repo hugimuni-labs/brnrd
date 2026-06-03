@@ -1,4 +1,4 @@
-"""Web routes for the brnrd dashboard (login + daemon approve page).
+"""Web routes for the brnrd dashboard (GitHub login + approve page).
 
 Hand-rolled HTML for this thin slice (no template engine dependency
 yet); the approve page reuses the same ``approve_core`` the API uses,
@@ -8,16 +8,19 @@ so the device-flow connect handshake is human-completable end-to-end.
 from __future__ import annotations
 
 import html
+import hmac
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from brnrd import oauth
 from brnrd.auth import get_db
 from brnrd.models import Project, Token
-from brnrd.routers.accounts import authenticate, issue_session_token
+from brnrd.routers.accounts import account_for_github_identity, issue_session_token
 from brnrd.routers.pairing import approve_core
 from brnrd.security import hash_token
 
@@ -30,6 +33,9 @@ _STYLE = (
     "input,select,button{font:inherit;padding:.55rem;margin:.35rem 0;width:100%;"
     "box-sizing:border-box;background:#111827;color:#e5e7eb;border:1px solid #334155;"
     "border-radius:6px}button{cursor:pointer;background:#1e293b}"
+    ".button{display:block;text-align:center;text-decoration:none;font:inherit;padding:.65rem;"
+    "margin:.6rem 0;width:100%;box-sizing:border-box;background:#1e293b;"
+    "color:#e5e7eb;border:1px solid #334155;border-radius:6px}"
     ".card{border:1px solid #334155;border-radius:10px;padding:1.3rem}"
     ".muted{color:#64748b}h2{margin-top:0}"
 )
@@ -42,6 +48,32 @@ def _page(title: str, body: str) -> str:
         f"<title>{html.escape(title)}</title><style>{_STYLE}</style></head>"
         f"<body>{body}</body></html>"
     )
+
+
+def _safe_next(value: str) -> str:
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
+
+
+def _oauth_redirect_uri(request: Request) -> str:
+    settings = request.app.state.settings
+    return f"{settings.public_base_url.rstrip('/')}/auth/github/callback"
+
+
+def _github_oauth_ready(request: Request) -> bool:
+    settings = request.app.state.settings
+    return bool(settings.github_oauth_client_id and settings.github_oauth_client_secret)
+
+
+def _clear_oauth_cookies(resp: RedirectResponse, request: Request) -> None:
+    settings = request.app.state.settings
+    for name in (
+        settings.oauth_state_cookie,
+        settings.oauth_pkce_cookie,
+        settings.oauth_next_cookie,
+    ):
+        resp.delete_cookie(name)
 
 
 def _account_id(request: Request, db: Session) -> str | None:
@@ -66,43 +98,107 @@ def _account_id(request: Request, db: Session) -> str | None:
 
 @router.get("/login", response_class=HTMLResponse)
 def login_form(next: str = "/"):
+    signin = f"/auth/github/start?next={quote(_safe_next(next), safe='/')}"
     body = (
         "<div class='card'><h2>brnrd login</h2>"
-        "<form method='post' action='/login'>"
-        f"<input type='hidden' name='next' value='{html.escape(next)}'>"
-        "<input name='email' type='email' placeholder='email' required>"
-        "<input name='password' type='password' placeholder='password' required>"
-        "<button type='submit'>Log in</button></form></div>"
+        "<p class='muted'>Use your GitHub account to continue.</p>"
+        f"<a class='button' href='{html.escape(signin)}'>Sign in with GitHub</a>"
+        "</div>"
     )
     return _page("brnrd login", body)
 
 
-@router.post("/login")
-def login_submit(
+@router.get("/auth/github/start")
+def github_login_start(request: Request, next: str = "/"):
+    if not _github_oauth_ready(request):
+        return HTMLResponse(
+            _page(
+                "login unavailable",
+                "<div class='card'><h2>GitHub login is not configured</h2>"
+                "<p class='muted'>Set the brnrd GitHub OAuth client id and secret.</p>"
+                "</div>",
+            ),
+            status_code=503,
+        )
+
+    state = oauth.new_state()
+    verifier, challenge = oauth.new_pkce_pair()
+    settings = request.app.state.settings
+    redirect_uri = _oauth_redirect_uri(request)
+    resp = RedirectResponse(
+        oauth.authorize_url(
+            settings,
+            state=state,
+            redirect_uri=redirect_uri,
+            code_challenge=challenge,
+        ),
+        status_code=303,
+    )
+    max_age = settings.oauth_state_ttl_s
+    resp.set_cookie(settings.oauth_state_cookie, state, httponly=True,
+                    samesite="lax", max_age=max_age)
+    resp.set_cookie(settings.oauth_pkce_cookie, verifier, httponly=True,
+                    samesite="lax", max_age=max_age)
+    resp.set_cookie(settings.oauth_next_cookie, _safe_next(next), httponly=True,
+                    samesite="lax", max_age=max_age)
+    return resp
+
+
+@router.get("/auth/github/callback")
+def github_login_callback(
     request: Request,
-    email: str = Form(...),
-    password: str = Form(...),
-    next: str = Form("/"),
+    code: str | None = None,
+    state: str | None = None,
     db: Session = Depends(get_db),
 ):
-    account = authenticate(db, email, password)
-    if account is None:
+    settings = request.app.state.settings
+    expected_state = request.cookies.get(settings.oauth_state_cookie)
+    verifier = request.cookies.get(settings.oauth_pkce_cookie)
+    next_url = _safe_next(request.cookies.get(settings.oauth_next_cookie, "/"))
+    if (
+        not code
+        or not state
+        or not expected_state
+        or not verifier
+        or not hmac.compare_digest(state, expected_state)
+    ):
         return HTMLResponse(
             _page(
                 "login failed",
-                "<div class='card'><p>Invalid credentials.</p>"
+                "<div class='card'><h2>Could not verify GitHub login</h2>"
                 "<a href='/login'>Try again</a></div>",
             ),
-            status_code=401,
+            status_code=400,
         )
+
+    try:
+        identity = oauth.resolve_identity(
+            settings,
+            code=code,
+            redirect_uri=_oauth_redirect_uri(request),
+            code_verifier=verifier,
+        )
+    except oauth.OAuthError as exc:
+        return HTMLResponse(
+            _page(
+                "login failed",
+                "<div class='card'><h2>GitHub login failed</h2>"
+                f"<p>{html.escape(str(exc))}</p>"
+                "<a href='/login'>Try again</a></div>",
+            ),
+            status_code=502,
+        )
+
+    account = account_for_github_identity(db, identity)
     raw = issue_session_token(db, account)
-    resp = RedirectResponse(url=next or "/", status_code=303)
+    resp = RedirectResponse(url=next_url, status_code=303)
     resp.set_cookie(
-        request.app.state.settings.session_cookie,
+        settings.session_cookie,
         raw,
         httponly=True,
         samesite="lax",
     )
+    _clear_oauth_cookies(resp, request)
     return resp
 
 
