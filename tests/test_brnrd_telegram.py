@@ -13,6 +13,7 @@ from sqlalchemy import select  # noqa: E402
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
 from brnrd.models import ChatBinding, Event  # noqa: E402
+from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "webhook-secret"
 _HDR = {"X-Telegram-Bot-Api-Secret-Token": _SECRET}
@@ -46,10 +47,9 @@ def env(monkeypatch):
 
 
 def _account(client):
-    key = client.post(
-        "/v1/accounts", json={"email": "a@b.com", "password": "supersecret"}
-    ).json()["api_key"]
-    return {"Authorization": f"Bearer {key}"}
+    return brnrd_account_headers(
+        client.app, github_id="123", login="octocat", email="a@b.com"
+    )
 
 
 def _project(client, headers, name="demo"):
