@@ -126,7 +126,7 @@ def _join_prompt_parts(
     repo_root: Path,
     trailer: str,
     *,
-    self_review: bool = False,
+    reflection: bool = False,
     diffense: bool = False,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
@@ -138,7 +138,7 @@ def _join_prompt_parts(
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
             parts.append(pack_step)
-    if self_review:
+    if reflection:
         nudge = read_prompt("self-review.md", repo_root)
         if nudge:
             parts.append(nudge)
@@ -146,11 +146,20 @@ def _join_prompt_parts(
     return "\n\n".join(parts)
 
 
-def self_review_enabled(cfg: dict[str, Any] | None) -> bool:
-    """Return whether runner prompts should include the ergonomics footer nudge."""
-    if not cfg:
+def reflection_enabled(cfg: dict[str, Any] | None, owner: str = "user") -> bool:
+    """Return whether to inject the skippable reflection nudge and leave it visible.
+
+    True only for ``ergonomics=response`` on a **user-owned** run: a
+    self-hoster's explicit opt-in to see their own agent's ergonomics
+    notes in their own reply. Operator-owned runs never inject it (the
+    "no ergonomics in a managed reply, ever" invariant), regardless of
+    config.
+    """
+    if owner != "user":
         return False
-    return bool(cfg.get("runner.self_review", cfg.get("runner_self_review")))
+    from .ergonomics.proxy import ergonomics_mode
+
+    return ergonomics_mode(cfg) == "response"
 
 
 def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
@@ -218,7 +227,7 @@ def build_daemon_prompt(
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
-    self_review: bool = False,
+    reflection: bool = False,
     diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
@@ -250,7 +259,7 @@ def build_daemon_prompt(
         trailer = f"{trailer}\nTask: {task}"
     return _join_prompt_parts(
         preamble, repo_root, trailer,
-        self_review=self_review, diffense=diffense,
+        reflection=reflection, diffense=diffense,
     )
 
 
@@ -284,7 +293,6 @@ def _build_task_context_bundle(
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
     event_body: str | None,
-    self_review: bool = False,
     diffense: bool = False,
 ) -> str:
     """Assemble the human-readable Task Context Bundle for the daemon prompt.
