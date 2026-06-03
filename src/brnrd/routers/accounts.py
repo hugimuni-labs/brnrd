@@ -21,7 +21,7 @@ from ..security import hash_token
 
 router = APIRouter(prefix="/v1/accounts", tags=["accounts"])
 
-_SESSION_TTL = timedelta(days=30)
+SESSION_TTL = timedelta(days=30)
 
 
 def _ensure_default_project(db: Session, account: Account) -> Project:
@@ -75,7 +75,7 @@ def issue_session_token(db: Session, account: Account) -> str:
             kind=Token.KIND_SESSION,
             token_hash=hash_token(raw),
             label="session",
-            expires_at=datetime.now(timezone.utc) + _SESSION_TTL,
+            expires_at=datetime.now(timezone.utc) + SESSION_TTL,
         )
     )
     db.commit()

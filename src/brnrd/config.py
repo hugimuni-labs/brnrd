@@ -65,6 +65,13 @@ class Settings:
     github_oauth_client_secret: str = os.environ.get(
         "BRNRD_GITHUB_OAUTH_CLIENT_SECRET", ""
     )
+    # Minimal scope: identity (`/user` id + login) needs none, but the
+    # verified-email endpoint requires `user:email`. GitHub Apps ignore
+    # scope and gate email via the app's "Email addresses" permission,
+    # where this param is harmless. Self-hosters can override or clear it.
+    github_oauth_scope: str = os.environ.get(
+        "BRNRD_GITHUB_OAUTH_SCOPE", "user:email"
+    )
     github_oauth_authorize_url: str = os.environ.get(
         "BRNRD_GITHUB_OAUTH_AUTHORIZE_URL",
         "https://github.com/login/oauth/authorize",
