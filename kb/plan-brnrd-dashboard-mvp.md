@@ -21,17 +21,14 @@ maintain), and
 [`decision-monorepo-structure.md`](decision-monorepo-structure.md)
 (`src/brnrd_web/` lives in the monorepo).
 
-## Status
+## Current implementation state
 
-**Not started.** Blocked on:
-
-- `design-brnrd-protocol.md` acceptance — the REST endpoints
-  the dashboard reads from need to lock first.
-- `plan-managed-gates-launch.md` and `plan-failover-compute.md`
-  slices 1+2 each — the dashboard's data sources are the
-  endpoints those plans deliver.
-- `decision-monorepo-structure.md` acceptance — settles where
-  the code lives.
+The dashboard MVP plan is accepted, but the full dashboard is not
+implemented. The prototype web shell in `src/brnrd_web/routes.py`
+currently covers GitHub login plus the device-flow approve page; the
+projects, tasks, credentials, failover, audit, allowance, and billing
+views still depend on the remaining managed-gates / failover /
+billing backend slices.
 
 Ship order within this plan: bootstrap (slice 1) → core views
 (slice 2) → cost / audit (slice 3) → polish (slice 4). Each slice
@@ -40,7 +37,7 @@ see your projects exist," already useful for self-hosters.
 
 ## Goals
 
-- A user can sign up, pair a daemon, install the GitHub App, send
+- A user can sign in with GitHub, pair a daemon, install the GitHub App, send
   a `@brr` comment, and see the resulting task appear in their
   dashboard — end-to-end, no CLI required after the daemon is up.
 - A user can configure failover (add AI credential, enable
@@ -369,7 +366,7 @@ Steps:
 | Templates, static assets, view routes | `src/brnrd_web/` |
 | FastAPI app composition (mounts web routes on the existing API app) | `src/brnrd/app.py` (or wherever it lives) |
 | Session middleware | `src/brnrd/middleware/session.py` |
-| Auth views (`/login`, `/signup`, `/logout`) | `src/brnrd_web/routes/auth.py` |
+| Auth views (`/login`, `/auth/github/start`, `/auth/github/callback`, `/logout`) | `src/brnrd_web/routes.py` now; split under `src/brnrd_web/routes/*.py` when the MVP grows |
 | Project / binding / credential / failover / audit views | `src/brnrd_web/routes/*.py` |
 | Tests | `tests/brnrd_web/` |
 | Build | None — Python-only, no JS bundler at MVP |

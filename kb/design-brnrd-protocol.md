@@ -441,10 +441,11 @@ For users running their daemon on a small box with N projects in
 parallel, N daemons is fine (they share the host but stay
 independently configured).
 
-The API key is issued by brnrd at signup; the daemon never
-generates one. `daemon_name` lets a user run multiple daemons under
-one account (laptop, home server) and have brnrd route events to
-the right one (see "Multi-daemon routing" below).
+The daemon token is minted by brnrd after the GitHub-backed browser
+approval flow; the daemon never generates one. `daemon_name` lets a
+user run multiple daemons under one account (laptop, home server)
+and have brnrd route events to the right one (see "Multi-daemon
+routing" below).
 
 ### Lifecycle
 
@@ -931,8 +932,8 @@ Layer-by-layer:
 Layer 1 — account pair (one-time per machine)
   → POST /v1/accounts/pair             { machine_hostname }
     ← { pair_code, pair_url, account_id_when_done }
-  → CLI prints `pair_url`; user opens in browser, signs in /
-    signs up, approves the pairing
+  → CLI prints `pair_url`; user opens it in the browser, signs in
+    with GitHub, and approves the pairing
   → CLI long-polls GET /v1/accounts/pair/{pair_code} until
     status: paired
   → CLI stores the account-scoped daemon token in
