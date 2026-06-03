@@ -5487,3 +5487,82 @@ instead of nothing (work currently only survives on the host-local
 branch). No auto-second-PR: conflicts fall back to manual resolution. The
 "PR link if a PR exists, else the branch link" delivery already holds on
 every successful-push path via `push_done.view_url`.
+
+## [2026-06-02] implement | agent ergonomics: deterministic probe slice + `brr ergonomics` CLI
+
+Shipped slice 1 of `design-agent-ergonomics.md` (the back-channel for
+agent friction data) — the deterministic **probe** layer, in a new
+`src/brr/ergonomics/` package. One canonical `Record` (kind / issue /
+severity / detail + envelope), a pluggable `ErgoProxy` Protocol with
+`NullErgoProxy` (default — drops, hot path free) and `LocalErgoProxy`
+(append-JSONL to `.brr/ergonomics/<YYYY-MM-DD>.jsonl`), a read-side
+`store` (filter by days/issue, severity-ranked `summarize`, `clear`),
+and six probes: `stale_image` (image `Created` vs bundled-Dockerfile
+mtime), `auth_unresolvable` (docker + github-in-play + no token),
+`missing_tool` (host `gh`), `worktree_buildup`, `low_disk`,
+`drifted_bundled_docs` (repo `AGENTS.md` vs installed template).
+
+Wiring: one hook in `daemon._run_worker` right after `env.prepare`,
+fully guarded — `probe_task_prep` short-circuits on the null proxy
+(opt-out default costs nothing) and every probe failure is swallowed,
+so a probe bug can **never** gate a task. CLI: top-level `brr
+ergonomics summary|list|clear` reading the local store (operator-facing
+verb, consistent with the #49 taxonomy). Opt in via
+`ergonomics.proxy=local` in `.brr/config`.
+
+Scope cuts (recorded in the design): task-prep probes only (daemon
+**startup** audit deferred — resolves the design's open-question #2 in
+favour of "hardcode the phase that has context first"); **in-container**
+PATH probing deferred (a probe container breaks the O(ms) contract);
+`brr ergonomics share` deferred with `BrnrdErgoProxy`. Greenlit by the
+operator on 2026-06-02 ("ship the deterministic probe layer first").
+31 new tests; full suite 647 green. Tracked as #81 under #23.
+
+## [2026-06-03] decision | agent ergonomics: ownership-driven routing, log default, response mode, vantage rule
+
+Reworked the probe slice (#82, pre-merge) along two design refinements
+that came out of an operator discussion about a "response" proxy — both
+now written into `design-agent-ergonomics.md`.
+
+**Ownership decides routing, not a free-form knob.** Added
+`RunContext.owner` (`user` | `operator`), launcher-stamped, never read
+from the repo (so a committed `.brr/config` can't forge it). The owner
+selects both the default sink and who configures it: user-owned runs
+honour the user-facing `ergonomics = off|log|local|response` knob;
+operator-owned (managed compute) runs ignore it (sink becomes
+`BrnrdErgoProxy` when managed compute lands). This kills the
+"configurations that don't make sense" footgun — a managed user can't
+route their operator's ergonomics, by construction, with the override
+living in one resolver instead of scattered `if managed` checks.
+
+**Default shifted from silence to a quiet log.** New `LogErgoProxy`
+(warn+ to the daemon log, deduped by issue-signature on a process-global
+window) is the user-owned default. Probes now run for everyone by
+default at zero token cost and surface only actionable findings to the
+log; `off` short-circuits to null. `response` replaces the old
+`runner.self_review` footer as a **skippable**, owner-gated reply nudge
+— `prompts.reflection_enabled(cfg, owner)` replaces `self_review_enabled`.
+Hidden reflection capture (markers + splitter + sampling for
+`local`/`brnrd`) stays deferred; `response` needs none of it.
+
+No back-compat kept (no users yet, solo active development): the
+`ergonomics` knob is the only routing surface — `runner.self_review`,
+the `ergonomics.proxy`/`ergonomics_proxy` spellings, `self_review_enabled`,
+and the loose value aliases (`null`/`brnrd`/bools) were all dropped
+rather than carried. Unset or unrecognised `ergonomics` falls back to
+`log`. The internal prompt toggle `self_review` was renamed `reflection`
+to match `reflection_enabled`.
+
+**Vantage rule** (new design principle): probes observe only what's
+outside the agent's vantage (host/operator/cross-task facts); reflection
+covers what's inside the sandbox; never add a probe for something the
+agent can see for itself. Applying it **retired `missing_tool`** (host
+`gh` — the agent shares the host PATH and can check itself), leaving
+five host-vantage probes. The rule bounds probe growth: completeness is
+reflection's job, and a finding graduates to a probe only if it's
+host-vantage. The "most-thin-harness" follow-up — feeding host-vantage
+facts forward into the agent's context so the agent judges relevance —
+is filed as #83.
+
+Tests reworked (mode normalisation, owner-aware resolve, log proxy +
+dedup, reflection gating); full suite 670 green. Same PR #82.
