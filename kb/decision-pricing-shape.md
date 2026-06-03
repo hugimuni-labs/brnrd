@@ -413,8 +413,8 @@ leverage = approximately zero.
 
 **What about the 10 × 10-credit signup bonuses (= 100
 credits = $1 of compute)?** Bounded by signup velocity per
-email / OAuth identity (Stripe and email verification on
-account creation handle the common case); the cost of 10
+GitHub identity plus Stripe checkout checks once billing is in
+play; the cost of 10
 duplicate accounts is at most $1 of compute, which is below
 the cost of investigating abuse cases. Accept as immaterial.
 
@@ -1003,8 +1003,8 @@ instrument from day one:
   AI credentials encrypted at rest with per-account envelope
   keys.
 - "What we DO hold, named and bounded" — full table in the
-  design page's "What we DO hold" subsection: account email +
-  password hash; credentials (encrypted, until revoke — AI
+  design page's "What we DO hold" subsection: GitHub account
+  identity plus optional verified email; credentials (encrypted, until revoke — AI
   credentials AND, per the generalised credential vault,
   docker-registry credentials); project bindings; event
   metadata graph (30-day TTL, no body / no preview / no

@@ -151,7 +151,7 @@ path.
   glue (request construction, JSON encode, header juggling, the
   `_read_error_payload` / `_api_call` dance in
   [`src/brr/gates/telegram.py`](../src/brr/gates/telegram.py) and
-  [`src/brr/gates/github.py`](../src/brr/gates/github.py)) suggests
+  [`src/brr/gates/github/`](../src/brr/gates/github/)) suggests
   80-100 LOC removable. That's not transformative on a 9k-LOC
   codebase, but it's a clean reduction.
 - **Better failure stderr.** The github gate has a custom
@@ -175,7 +175,7 @@ The LOC math is more interesting here than for `requests`:
 
 | Gate | Current LOC | Estimated post-SDK | Notes |
 |------|-------------|---------------------|-------|
-| [`gates/github.py`](../src/brr/gates/github.py) | 1044 | ~600-700 | githubkit or PyGithub absorb pagination, rate-limit headers, comment posting. The trigger logic stays brr-specific. |
+| [`gates/github/`](../src/brr/gates/github/) | 1044 at the 2026-05-21 monolith snapshot | ~600-700 | githubkit or PyGithub absorb pagination, rate-limit headers, comment posting. The trigger logic stays brr-specific. |
 | [`gates/telegram.py`](../src/brr/gates/telegram.py) | 593 | ~400-450 | python-telegram-bot owns getUpdates, sendMessage, editMessageText, parse_mode handling, HTTP retries. |
 | [`gates/slack.py`](../src/brr/gates/slack.py) | 359 | ~250-300 | slack_sdk handles auth, conversations.history, chat.postMessage / chat.update. |
 
