@@ -12,6 +12,7 @@ copies.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -169,3 +170,30 @@ def succeed_invoke(response: str = "all done\n") -> InvokeFn:
         )
 
     return _invoke
+
+
+# ── brnrd backend scaffolding ───────────────────────────────────────
+
+
+def brnrd_account_headers(
+    app,
+    *,
+    github_id: str | None = None,
+    login: str = "octocat",
+    email: str | None = "octocat@example.com",
+) -> dict[str, str]:
+    """Seed a GitHub-backed brnrd account and return account auth headers."""
+    from brnrd.oauth import GitHubIdentity
+    from brnrd.routers.accounts import account_for_github_identity, issue_session_token
+
+    if github_id is None:
+        basis = email or login
+        github_id = str(int(hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12], 16))
+
+    with app.state.SessionLocal() as db:
+        account = account_for_github_identity(
+            db,
+            GitHubIdentity(github_id=github_id, login=login, email=email),
+        )
+        token = issue_session_token(db, account)
+    return {"Authorization": f"Bearer {token}"}

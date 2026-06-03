@@ -14,6 +14,7 @@ from brnrd.config import Settings  # noqa: E402
 from brnrd.inbox import CapturingForwarder  # noqa: E402
 from brr import protocol  # noqa: E402
 from brr.gates import cloud  # noqa: E402
+from _helpers import brnrd_account_headers  # noqa: E402
 
 
 def _make_brnrd():
@@ -44,10 +45,9 @@ def _route_to(client):
 
 
 def _account_and_project(client):
-    key = client.post(
-        "/v1/accounts", json={"email": "a@b.com", "password": "supersecret"}
-    ).json()["api_key"]
-    headers = {"Authorization": f"Bearer {key}"}
+    headers = brnrd_account_headers(
+        client.app, github_id="123", login="octocat", email="a@b.com"
+    )
     pid = client.post(
         "/v1/accounts/projects", json={"name": "demo"}, headers=headers
     ).json()["project_id"]
