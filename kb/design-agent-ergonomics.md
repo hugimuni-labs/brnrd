@@ -21,6 +21,10 @@ for user-owned runs (token-free), not silence.
 
 Companion to:
 
+- [`design-environment-shaping.md`](design-environment-shaping.md) — the
+  observe → remember → shape **loop** that consumes this back-channel's
+  observations and routes them to action (salience triage, layered-control
+  routing, action rungs). This design is that loop's observation layer.
 - [`subject-managed-mode.md`](subject-managed-mode.md) — the tenancy
   split (self-hosted brr vs hosted brnrd) that shapes who needs to
   see ergonomics data and where it routes.

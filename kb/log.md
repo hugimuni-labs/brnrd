@@ -5597,3 +5597,33 @@ and index read as if operator-owned runs already route to
 endpoint/proxy slice exists. Reconciled the design and index to make
 the shipped Null path current state and the Brnrd path explicitly
 designed-not-built.
+
+## [2026-06-04] design | environment-shaping loop frame (proposed)
+
+Synthesised an ongoing design dialogue into
+[`design-environment-shaping.md`](design-environment-shaping.md)
+(`Status: proposed`). The frame unifies three things previously reasoned
+about in isolation — the ergonomics back-channel, the kb-as-memory layer,
+and brr's interactivity — into one **observe → remember → shape → retire**
+loop where captured failures are *transient* (slashed once the environment
+carries them), which is the answer to the kb-overgrowth toil.
+
+Key moves: (1) interactivity × agency are two ends of one **steering-signal
+spectrum** (latency × source) — brr owns the durable end and interoperates
+with live tools (Cursor as first-class citizen) rather than rebuilding an
+IDE loop; (2) the **robustness hierarchy** (recall → affordance → forcing
+function) doubles as a **retrieval-cost hierarchy**, so compile-and-inject
+beats RAG/subagents (which also contradict the llm-wiki foundation); (3) a
+**salience** ("pain") score = recurrence × cost ÷ ease-of-workaround decides
+which records are *generative*, framed as a functional signal, not assumed
+qualia; (4) **layered-control routing** (rings 0–3) sends each fix to its
+controller, extending `RunContext.owner`; (5) gates are a *conversation
+medium*, and observability rides a **transient relay** to the user's surface
+so it doesn't break data-min; (6) agent-satisfaction is promoted to an
+operating principle **subordinated to** the task contract (the alignment
+guardrail), and gating survives as collaboration protocol, not containment.
+First slice: trigger-indexed failure memory riding `brr kb` (#41). Open
+threads noted: brr-as-product/project boundary, possible OSS extraction of
+the loop engine (rule-of-three + IP caution re: employer SRE work), and a
+recon of `future-agi` (adjacent eval/observability platform, likely an
+`ErgoProxy`/OTel sink, not a competitor).

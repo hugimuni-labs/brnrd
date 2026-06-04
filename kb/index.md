@@ -65,6 +65,16 @@ dive-in map) and are stable until something contradicts them.
   proxy/endpoint lands; they never put ergonomics in the reply. The
   brnrd dashboard's project + fleet ergonomics views are designed, not
   built.
+- [Environment shaping loop](design-environment-shaping.md) —
+  *proposed (2026-06-04)*. Unifies the ergonomics back-channel, the
+  kb-as-memory layer, and brr's interactivity into one **observe → remember
+  → shape → retire** loop. Frames the two design axes (interactivity ×
+  agency), the robustness=retrieval-cost hierarchy, a **salience** ("pain")
+  triage on ergonomics records, **layered-control routing** (rings 0–3 for
+  who fixes what), gates as a conversation medium, observability via
+  transient relay (preserves data-min), and agent-satisfaction-as-operating-
+  principle with its alignment guardrail. First slice: trigger-indexed
+  failure memory on `brr kb`.
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native
