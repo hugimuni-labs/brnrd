@@ -1,7 +1,8 @@
 # Environment shaping — the observe → remember → shape loop
 
-Status: proposed (2026-06-04) — synthesis of an ongoing design dialogue,
-not yet accepted. Captures a frame that spans the ergonomics back-channel,
+Status: proposed (2026-06-04, expanded 2026-06-05) — synthesis of an ongoing
+design dialogue, not yet accepted. Captures a frame that spans the ergonomics
+back-channel,
 the kb-as-memory layer, and brr's interactivity, so those pieces stop being
 reasoned about in isolation.
 
@@ -132,6 +133,15 @@ salience(class) ≈ (recurrence × per-incidence cost) / workaround-ease
 Above a threshold → generative, routed to the rung/ring below; under it → drop
 or log only.
 
+**Measurement honesty.** Only **recurrence** is cleanly deterministic (a
+counter). **Per-incidence cost** has a measurable floor (wall-clock between
+detect and recovery, retries, exit codes — telemetry) but a tail that's
+agent-perceived (did it derail the reasoning?). **Workaround-ease** is mostly
+perceived. So salience is a **hybrid over the three ergonomics layers** —
+probe/telemetry supply the measurable parts, reflection supplies the perceived
+parts — not a clean deterministic number. That's tolerable because of *how it
+adapts* (next), not because the inputs are precise.
+
 | Issue-class | recurrence | cost | ease | salience | action |
 |---|---|---|---|---|---|
 | forgot-to-salt lint nit | low | low | high (fix at the table) | low | drop / log |
@@ -139,19 +149,24 @@ or log only.
 | docker image lacks python | high (every run) | high (install wait / fail) | low | high | escalate w/ drafted Dockerfile fix |
 | `auth_unresolvable`, github task | medium | high (silent unauth push) | low | high | escalate to the Ring-1 controller |
 
-**Evolving (the part that keeps it honest over time).** A static threshold
-rots. Salience adapts — cheaply and deterministically, *not* via a learned
-model (that would fight the stdlib / O(ms) probe ethos):
+**Evolving — adapt, don't learn.** A static threshold rots, but we don't need
+a learned model (that would fight the stdlib / O(ms) ethos *and* demand the
+precise inputs we just admitted we don't have). The move that makes imperfect
+perception tolerable: **outcome feedback makes precise input measurement
+unnecessary.** You don't score pain accurately up front — you observe whether
+*acting* on a class helped, and correct from there:
 
+- **dismissal feedback** — when an escalation is repeatedly ignored by its
+  controller, *lower* that class's salience: the human implicitly said "not
+  worth it," exactly like the salt. When acting on it dropped the recurrence,
+  the scoring was right — leave it. This corrective washes noisy cost/ease
+  inputs out over a few cycles, which is precisely why perceptual inputs are
+  acceptable here.
 - **decay** — recurrence counters age out, so a class that stops firing falls
   below threshold on its own.
-- **dismissal feedback** — when an escalation is repeatedly ignored by its
-  controller, *lower* that class's salience: the human has implicitly said
-  "not worth it," exactly like the salt. When it was acted on and helped
-  (recurrence drops after), the scoring was right — leave it.
 - **retirement coupling** — once a forcing function guards the class (a lint,
-  a baked-in tool), its record is slashed and its salience disappears. This is
-  the **retire** edge of the loop applied to salience itself: the triage is
+  a baked-in tool), its record is slashed and its salience disappears: the
+  **retire** edge of the loop applied to salience itself. The triage is
   *self-applying*.
 
 Concrete hook: a `salience` field on the ergonomics `Record` alongside
@@ -225,6 +240,45 @@ fix travels without new authority:
    lint/test that fails on a blind retry, then **slash** the `Pitfall:` prose —
    the environment now carries it.
 
+## Keeping the loop humane (fatigue + framing)
+
+Two failure modes kill this loop in practice — one per audience.
+
+**User fatigue (output side).** "Env-shaping as a core UX loop" dies the moment
+it nags; alert-fatigue is how good monitoring becomes ignored monitoring. The
+defense is structural, not a volume knob: **escalation is the rung of last
+resort.** Most friction is absorbed *below the user's view* — self-heal
+(Ring 0/1) and affordances never reach them; only the residual that genuinely
+needs a human surfaces. On top of that the loop applies **its own salience
+triage to its own nudges** (a nudge spends attention — don't spend it unless the
+expected fix value clears that cost), **batches** into a digest instead of
+per-incident pings, and **converges to the user's tolerance** through
+dismissal-feedback — a class they keep ignoring goes quiet on its own. The user
+should feel the loop mostly as *things quietly getting smoother*, and only
+rarely as a single well-formed, pre-drafted ask.
+
+**Mechanical reports (input side).** A good "inconvenience" report can't be
+extracted with a checklist — a mechanically-phrased playbook earns
+mechanically-minimal compliance. The framing has to carry *context, rationale,
+and provenance*: name the agent's environment and disposition, and that the
+practice was distilled by agents (human or artificial) who hit the same friction
+— the same paper-trail / note / log craft engineers have always used. Intent-rich
+framing engages the full model (it reasons about what the report is *for*, and
+generalises), which is the "explain *why*, not *what*" principle this repo
+already applies to commit messages. **Economy is the hard constraint, though:**
+agentic harnesses are already thick with nudges, sometimes contradictory, so
+this framing must be *short and high-signal* and should *replace* mechanical
+instruction, not pile onto it. Quality of framing, not quantity of instruction.
+
+**Mechanism.** The report rides the daemon's existing file exchange (it already
+brokers event/response files). The worktree-teardown worry for docker/remote
+envs has solved precedent: hand the agent an absolute report path in the
+*shared* runtime dir — the way the diffense-pack path is handed through the
+bundle — let it write there, daemon reads after finalize. This is the deferred
+reflection-capture slice of
+[`design-agent-ergonomics.md`](design-agent-ergonomics.md), now with a clear
+account of *why it's phrased the way it is.*
+
 ## Gates as a conversation medium
 
 A gate (GitHub / Telegram / cloud) is not only an I/O boundary — it is the
@@ -249,11 +303,16 @@ its origin-gate's history; "go do what we just discussed on GH" sent from
 Telegram forces the agent to re-gather context by hand. That siloing fights
 the "one conversation across time" idea and blocks **global status cards** and
 the larger interactivity story. It was done for good reasons (simplicity,
-data-min) and may be fine for a while — but the seed of a fix already exists:
+data-min), and — since gate flows are *rarely* mixed in practice — the fix
+should be **pull, not push**: never inject other gates' history into every
+prompt (that's noise on the common path, and it dilutes the runner's context);
+resolve a cross-gate reference *on demand*, only when the user actually makes
+one ("go do what we discussed on GH"). The seed already exists:
 [`plan-conversation-id-propagation.md`](plan-conversation-id-propagation.md)
 plus brnrd's metadata graph + on-demand gate-history fetch (the brnrd
 protocol's cross-gate-continuity mechanism). Cross-gate *continuity* is
-designed; cross-gate *live sync* is not. Tracked as an open thread.
+designed; cross-gate *live sync* (for global status cards) is not. Tracked as
+an open thread.
 
 **Observability vs. data-minimization.** Making runs observable seems to fight
 brnrd's "we keep none of your data" stance. It doesn't, if observability is the
@@ -326,6 +385,16 @@ serves the user / brr / Cursor-citizen audiences at once, and directly closes
   likely complementary (it self-improves the *model* via evals; brr shapes the
   *environment*); the interest is reuse / inspiration — plausibly an OTel /
   `ErgoProxy` sink — not competition.
+- **Task/subtask decomposition + interleaving (future).** Reasoning about a
+  task's subtasks *for a given environment*, with costs and priorities, so work
+  can be interleaved across waits — the way one cooks, feeds animals, and talks
+  at once, and even within a single task (start something on the fire, cut while
+  it heats). The cost-estimation overlaps with salience's cost signal; the "for
+  a given environment" overlaps with the rings. It's a *scheduling* layer above
+  this loop, distinct from
+  [`design-concurrent-execution.md`](design-concurrent-execution.md)'s
+  cross-task daemon concurrency — this is *within*-task interleaving an agent
+  plans for itself. Note for later, not now.
 - **Far future (out of kb scope).** World-models-over-LLMs, embodiment, a
   "continuous living agent" — the north star, deliberately *not* project
   doctrine. It motivates direction; it does not constrain current design.
