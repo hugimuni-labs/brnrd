@@ -16,6 +16,11 @@ the design-actionable shape.
 
 Companion to:
 
+- [`design-agent-dominion.md`](design-agent-dominion.md) — the *substrate*: the
+  resident agent, its durable memory (the orphan-branch dominion + kb), and the
+  single-flight loop that invokes it. This page is the *behaviour* that runs on
+  that substrate — the self-heal / durable-affordance rungs write into the
+  dominion, and the salience counters live there.
 - [`design-agent-ergonomics.md`](design-agent-ergonomics.md) — the observation
   back-channel (probe / telemetry / reflection). This page is the *loop* that
   consumes those observations and routes them to action.

@@ -5627,3 +5627,36 @@ threads noted: brr-as-product/project boundary, possible OSS extraction of
 the loop engine (rule-of-three + IP caution re: employer SRE work), and a
 recon of `future-agi` (adjacent eval/observability platform, likely an
 `ErgoProxy`/OTel sink, not a competitor).
+
+## [2026-06-07] design | agent dominion + the resident-agent reshape (proposed)
+
+Wrote [`design-agent-dominion.md`](design-agent-dominion.md) (`Status:
+proposed`), the substrate companion to the environment-shaping loop, sequenced
+as the next work ahead of the release-readiness items (#23) because it reshapes
+the execution + memory foundation those items build on.
+
+Core moves, from a long design dialogue: (1) **the agent is its memory, not its
+process** — one-shot CLIs can't be held open, so a "thought" is a runner woken
+by an event or a self-scheduled cron, and continuity is reconstructed each wake
+from durable memory (so durability of memory = continuity of the agent). (2)
+**Memory splits on a durability × ownership matrix**; the missing durable+owned
+cell is the **dominion**, and the unlock is that ownership is a *curation policy
+on a path*, not gitignored-ness — so kb stays curated+shared, the dominion is
+committed-but-review-exempt, joined by a dominion→kb promotion bridge (kb was
+overloaded trying to be both). (3) The dominion is a **forge-backed orphan
+branch** (owned/unsupervised, inspectable, non-polluting, durable, fetchable
+anywhere) with a bounded **auto-injected digest**; it also cures
+managed-failover amnesia without brnrd holding anything. (4) **Local
+parallelism discarded** (reshapes `design-concurrent-execution.md`) for a
+**single-flight reflex/deliberation loop**: the daemon body spawns one thought
+when idle and handles explicit `/cancel` + a liveness backstop; the woken mind
+checks the inbox at plan boundaries, with cancellation detection semantic
+(agent-side) and interleaving requiring a **multi-response protocol** (per-event
+response files written mid-flight). (5) The **playbook** is the convergence
+point — multi-response aware, ownership-defining, pain-evaluation input,
+lifecycle-as-action-and-growth — framed as intent-rich peer-craft, not a
+mechanical checklist. (6) Naming resolves cleanly: **brr** = the
+project-resident agent, **brnrd** = the manager of brrs (the locked brand); no
+re-acronym. Open threads: remote live-event delivery, dominion layout/digest
+format, destructive-edit consent rung, whether ad-hoc agents write the dominion,
+and the playbook copy / cringe line.
