@@ -75,6 +75,17 @@ dive-in map) and are stable until something contradicts them.
   transient relay (preserves data-min), and agent-satisfaction-as-operating-
   principle with its alignment guardrail. First slice: trigger-indexed
   failure memory on `brr kb`.
+- [Agent dominion — the resident agent](design-agent-dominion.md) —
+  *proposed (2026-06-07)*. The substrate companion to the environment-shaping
+  loop, sequenced as the next work (pre-release). Reshapes brr from
+  spawn-per-event into a **resident agent**: the agent *is* its durable memory,
+  a *thought* is a runner woken by an event or self-scheduled cron, execution is
+  **single-flight** (reflex/deliberation split, replacing the threaded pool),
+  and durable memory splits into a **forge-backed orphan-branch dominion**
+  (owned, auto-injected digest) plus the curated kb, joined by a promotion
+  bridge. Folds the **playbook** as the convergence point (multi-response,
+  ownership, pain-evaluation input, wake-as-action-and-growth). Reshapes
+  [`design-concurrent-execution.md`](design-concurrent-execution.md).
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native
