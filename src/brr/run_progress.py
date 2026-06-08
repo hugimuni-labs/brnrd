@@ -311,9 +311,11 @@ def _project(
             # protocol). The body is streamed to the user by the gate's
             # own delivery loop; here it only annotates the live card.
             view.interim_count += 1
-            view.detail = (
-                f"shipped interim reply (#{view.interim_count})"
-            )
+            target = record.get("target_event")
+            if target:
+                view.detail = f"answered a folded-in event ({target})"
+            else:
+                view.detail = f"shipped interim reply (#{view.interim_count})"
         elif ptype == "heartbeat":
             # Heartbeats only bump updated_at — they don't move state.
             # The render reads the current wall clock to compute elapsed,
