@@ -449,13 +449,14 @@ class TestRevisitSignalGuardrails:
 
     def test_run_prompt_mentions_revisit_signals(self):
         prompt = _read_bundled_run_prompt()
-        # Section header that gates the new guidance.
+        # Section header that gates the guidance.
         assert "When the task asks you to reconsider" in prompt
-        # A representative subset of the trigger phrases. We don't pin
-        # every phrase verbatim so future copy edits stay cheap, but
-        # the load-bearing ones must be named.
-        for phrase in ("revisit", "not great", "wdyt", "is this the right shape"):
-            assert phrase in prompt, f"missing trigger phrase: {phrase!r}"
+        # The trigger is ownership intent, not a brittle keyword list:
+        # the stance lives in the resident playbook and AGENTS.md →
+        # Stewardship, which this section leans on instead of
+        # re-enumerating trigger phrases.
+        assert "engage with the substance" in prompt
+        assert "ownership stance" in prompt
 
     def test_run_prompt_authorizes_no_commit_for_revisit(self):
         prompt = _read_bundled_run_prompt()
