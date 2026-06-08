@@ -157,6 +157,9 @@ def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
 
     assert "Playbook — your standing orientation" in digest
     assert "self-inject: full playbook.md" in digest  # provenance marker
+    # The rich seed (not the old stub) shipped and was injected in full.
+    assert "single-flight" in digest
+    assert "is genuinely yours to shape" in digest
 
 
 def test_resolve_self_inject_modes(tmp_path):
