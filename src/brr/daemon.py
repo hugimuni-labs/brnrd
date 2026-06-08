@@ -37,6 +37,7 @@ from . import branching
 from . import config as conf
 from . import conversations
 from . import dev_reload as reload_mod
+from . import dominion
 from . import envs
 from . import forges
 from . import gitops
@@ -1517,6 +1518,19 @@ def start(
         reload_mod.DevReloadWatcher.for_repo(repo_root)
         if dev_reload_mode else None
     )
+
+    if bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        try:
+            dpath = dominion.ensure_dominion(
+                repo_root,
+                branch=str(cfg.get(
+                    "dominion.branch",
+                    cfg.get("dominion_branch", dominion.DEFAULT_BRANCH),
+                )),
+            )
+            print(f"[brr] dominion ready: {dpath}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[brr] dominion bootstrap skipped: {exc}")
 
     gate_threads = _start_gates(brr_dir, inbox_dir, responses_dir)
     if not gate_threads:
