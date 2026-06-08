@@ -31,6 +31,7 @@ PACKET_TYPES = (
     "attempt_failed",
     "retrying",
     "artifact_created",
+    "interim_response",
     "heartbeat",
     "finalizing",
     "container_preserved",
