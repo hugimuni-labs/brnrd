@@ -253,7 +253,9 @@ Three mechanics this implies:
   streams of work separately — a cross-context code change usually wants its own
   branch and is cleaner as a fresh spawn — but we **don't insist**; the resident
   decides how to organise its own work. (Downstream: the delivery driver must
-  handle interim + multiple responses — nudges the delivery work, #74.)
+  handle interim + multiple responses — nudges the delivery work, #74.) The
+  protocol contract — drop zone, partials queue, streaming delivery, interleaving,
+  liveness — is specified in [`design-multi-response.md`](design-multi-response.md).
 - **Self-scheduled crons.** The agent schedules its own future wakes; the cron
   specs live in the durable dominion (so they survive dormancy and reinstall),
   and the daemon fires them as a reflex.
