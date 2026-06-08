@@ -196,6 +196,29 @@ def list_done(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
     return events
 
 
+def list_active(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
+    """Return processing+done events matching *source*, oldest first.
+
+    The delivery surface for the streaming (multi-response) protocol: a
+    *processing* event may already have interim responses queued, and a
+    *done* event additionally has its terminal response ready. A plain
+    single-response run shows up here only once it reaches ``done`` (it
+    has no partials while processing), so this stays behaviourally
+    identical to ``list_done`` for that case.
+    """
+    if not inbox_dir.exists():
+        return []
+    events = []
+    for entry in sorted(os.scandir(inbox_dir), key=_event_sort_key):
+        if not entry.name.endswith(".md"):
+            continue
+        ev = _read_event(Path(entry.path))
+        if ev and ev.get("status") in ("processing", "done") \
+                and ev.get("source") == source:
+            events.append(ev)
+    return events
+
+
 def set_status(event: dict[str, Any], status: str) -> None:
     """Update the status field of an event file atomically."""
     path: Path = event["_path"]
@@ -248,8 +271,73 @@ def write_response(responses_dir: Path, event_id: str, body: str) -> Path:
     return path
 
 
-def cleanup(event_path: Path, response_path: Path | None = None) -> None:
-    """Delete event and optionally response files."""
+# ── Interim response partials (the streaming queue) ─────────────────
+# A per-event queue of interim responses the resident ships mid-flight
+# (the multi-response protocol, see kb/design-multi-response.md). The
+# terminal response stays ``<eid>.md``; partials live in
+# ``<eid>.partials/`` as ordered files, delivered before the terminal
+# and deleted as they go. Absent any partials, delivery is exactly the
+# single-response flow — this surface no-ops when unused.
+
+
+def partials_dir(responses_dir: Path, event_id: str) -> Path:
+    """Return the interim-response queue directory for an event."""
+    return responses_dir / f"{event_id}.partials"
+
+
+def list_partials(responses_dir: Path, event_id: str) -> list[Path]:
+    """Return pending interim response files for an event, oldest first.
+
+    Names are zero-padded sequence numbers, so a lexical sort is a
+    chronological sort. Delivered partials are deleted, so the queue
+    holds only the not-yet-delivered tail.
+    """
+    pdir = partials_dir(responses_dir, event_id)
+    if not pdir.exists():
+        return []
+    return sorted(
+        (p for p in pdir.iterdir() if p.suffix == ".md"),
+        key=lambda p: p.name,
+    )
+
+
+def write_partial(responses_dir: Path, event_id: str, body: str) -> Path:
+    """Append an interim response to an event's queue. Returns the path.
+
+    Sequence numbers continue past the current max so ordering survives
+    even though delivered partials are deleted (a reset can only happen
+    once the queue is empty, i.e. nothing is left to mis-order against).
+    """
+    pdir = partials_dir(responses_dir, event_id)
+    pdir.mkdir(parents=True, exist_ok=True)
+    existing = [int(p.stem) for p in pdir.glob("*.md") if p.stem.isdigit()]
+    seq = (max(existing) + 1) if existing else 1
+    if not body.endswith("\n"):
+        body = body + "\n"
+    path = pdir / f"{seq:06d}.md"
+    _atomic_write(path, body)
+    return path
+
+
+def read_partial(path: Path) -> str | None:
+    """Read an interim response body, or None if it can't be read."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return frontmatter_body(text).strip()
+
+
+def cleanup(
+    event_path: Path,
+    response_path: Path | None = None,
+    partials: Path | None = None,
+) -> None:
+    """Delete event, optional terminal response, and the partials queue."""
     event_path.unlink(missing_ok=True)
     if response_path:
         response_path.unlink(missing_ok=True)
+    if partials and partials.exists():
+        for p in partials.iterdir():
+            p.unlink(missing_ok=True)
+        partials.rmdir()
