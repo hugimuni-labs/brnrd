@@ -1,14 +1,15 @@
-"""KB graph statistics for the maintenance pass.
+"""KB graph statistics for the resident's wake-time kb-health block.
 
 The deterministic preflight (:mod:`brr.kb_preflight`) tells the
-LLM-driven maintenance pass *what's wrong*. This module tells it
-*how the graph is shaped*: how many pages by kind, who's heavily
-referenced, which pages might be drifting toward orphan status, and
-how big the chronological log is getting.
+resident *what's wrong*. This module tells it *how the graph is
+shaped*: how many pages by kind, who's heavily referenced, which pages
+might be drifting toward orphan status, and how big the chronological
+log is getting.
 
-The stats are advisory. The maintenance pass uses them to decide
-whether the kb needs splitting, compressing, or just a small touch —
-without scanning every page itself.
+The stats are advisory. They ride alongside the preflight findings in
+``prompts._build_kb_health_block`` so the resident can decide whether
+the kb needs splitting, compressing, or just a small touch — without
+scanning every page itself.
 
 The module is deliberately stdlib-only and side-effect-free; it
 reads from disk once and returns a frozen ``GraphStats`` snapshot.
@@ -86,15 +87,16 @@ def compute_graph_stats(
     """Return a :class:`GraphStats` snapshot for ``repo_root/kb``.
 
     Returns an all-zero ``GraphStats`` when ``kb/`` does not exist;
-    the maintenance pass can format that block trivially and the
-    skip-fast contract from :mod:`brr.kb_preflight` still drops it
-    when ``kb/`` was untouched.
+    the formatter renders that trivially and the skip-fast contract
+    from :mod:`brr.kb_preflight` drops the wake block when the scan is
+    clean.
 
     When *task_touched* is supplied, the snapshot records the count
-    of kb / AGENTS.md pages the preceding task changed. The
-    formatter surfaces this as a one-line context cue ("task touched
-    N pages this run") so the maintenance agent's primary review
-    target is visible alongside the structural stats.
+    of kb / AGENTS.md pages changed; the formatter surfaces it as a
+    one-line context cue ("task touched N pages this run") alongside
+    the structural stats. (The wake-time inject leaves it unset; the
+    parameter is retained for callers that already know the touched
+    set.)
     """
     repo_root = repo_root.resolve()
     kb_dir = repo_root / "kb"

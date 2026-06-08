@@ -27,7 +27,6 @@ def _patch_runner(monkeypatch):
         daemon.prompts, "build_daemon_prompt",
         lambda task, eid, rp, _root, **kw: f"RUN {eid}: {task} -> {rp}",
     )
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _: False)
 
 
 def _update_records(brr_dir: Path, conv_key: str) -> list[dict]:
