@@ -16,6 +16,7 @@ self-inject index into a wake-time digest lands separately.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from . import gitops
@@ -25,6 +26,10 @@ DEFAULT_BRANCH = "brr-home"
 WORKTREE_DIRNAME = "dominion"
 SELF_INJECT_FILE = "self-inject"
 PLAYBOOK_FILE = "playbook.md"
+DEFAULT_INJECT_BUDGET_BYTES = 8192
+
+_HEAD_RE = re.compile(r"^head:(\d+)$")
+_TAIL_RE = re.compile(r"^tail:(\d+)$")
 
 
 def dominion_path(repo_root: Path) -> Path:
@@ -96,6 +101,97 @@ def ensure_dominion(
     if push and remote:
         gitops.push_branch(repo_root, remote, branch)
     return path
+
+
+def resolve_self_inject(
+    dominion_dir: Path,
+    *,
+    budget_bytes: int = DEFAULT_INJECT_BUDGET_BYTES,
+) -> str:
+    """Resolve the self-inject manifest into a wake-time digest.
+
+    Reads the ``self-inject`` manifest (one ``<mode> <path>`` entry per
+    line; ``#`` comments and blank lines ignored), renders each entry
+    against the dominion's own files, and concatenates the fragments in
+    order within *budget_bytes* (UTF-8) — entries past the budget are
+    truncated, so order the manifest by importance.
+
+    Modes: ``full`` | ``head:N`` | ``tail:N`` | ``grep:<pattern>``.
+    ``exec`` is recognised but **not run** yet — it is the
+    integrity-sensitive entry and lands with its guard in a later slice,
+    so such entries are skipped. Returns ``""`` when the manifest is
+    missing, empty, or resolves to nothing.
+    """
+    manifest = dominion_dir / SELF_INJECT_FILE
+    if not manifest.exists():
+        return ""
+
+    fragments: list[str] = []
+    used = 0
+    for raw in manifest.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        mode, _, rest = line.partition(" ")
+        target = rest.strip()
+        if not target:
+            continue
+        rendered = _render_entry(dominion_dir, mode, target)
+        if not rendered:
+            continue
+        fragment = f"<!-- self-inject: {line} -->\n{rendered}".rstrip()
+        sep = 2 if fragments else 0  # fragments are joined with "\n\n"
+        frag_bytes = len(fragment.encode("utf-8"))
+        if used + sep + frag_bytes <= budget_bytes:
+            fragments.append(fragment)
+            used += sep + frag_bytes
+            continue
+        remaining = budget_bytes - used - sep
+        if remaining > 0:
+            clipped = fragment.encode("utf-8")[:remaining].decode("utf-8", "ignore")
+            fragments.append(
+                f"{clipped}\n…[truncated to fit dominion inject budget]"
+            )
+        break
+
+    return "\n\n".join(fragments).strip()
+
+
+def _render_entry(dominion_dir: Path, mode: str, target: str) -> str:
+    """Render one self-inject entry to text, or ``""`` to skip it."""
+    if mode == "exec":
+        return ""  # deferred: persistent-execution surface needs its guard
+
+    candidate = dominion_dir / target
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(dominion_dir.resolve())
+    except (OSError, ValueError):
+        return ""  # keep reads inside the dominion
+    if not resolved.is_file():
+        return ""
+    text = resolved.read_text(encoding="utf-8", errors="replace")
+
+    if mode == "full":
+        return text.rstrip("\n")
+    head = _HEAD_RE.match(mode)
+    if head:
+        return "\n".join(text.splitlines()[: int(head.group(1))])
+    tail = _TAIL_RE.match(mode)
+    if tail:
+        n = int(tail.group(1))
+        return "\n".join(text.splitlines()[-n:]) if n else ""
+    if mode.startswith("grep:"):
+        pattern = mode[len("grep:"):]
+        if not pattern:
+            return ""
+        try:
+            rx = re.compile(pattern)
+            matched = [ln for ln in text.splitlines() if rx.search(ln)]
+        except re.error:
+            matched = [ln for ln in text.splitlines() if pattern in ln]
+        return "\n".join(matched)
+    return ""  # unknown mode
 
 
 def _seed(path: Path) -> None:

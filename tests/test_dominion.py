@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from brr import dominion, gitops
+from brr import dominion, gitops, prompts
 
 from _helpers import commit_files, init_git_repo
 
@@ -144,3 +144,120 @@ def test_fresh_bootstrap_without_remote_does_not_raise(tmp_path):
     path = dominion.ensure_dominion(repo)  # push defaults True; no-op without remote
     assert path.is_dir()
     assert gitops.branch_exists(repo, "brr-home")
+
+
+# ── Self-inject resolution ───────────────────────────────────────────
+
+
+def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+
+    digest = dominion.resolve_self_inject(path)
+
+    assert "Playbook — your standing orientation" in digest
+    assert "self-inject: full playbook.md" in digest  # provenance marker
+
+
+def test_resolve_self_inject_modes(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "notes.md").write_text(
+        "alpha\nbeta\nGAMMA marker\ndelta\nepsilon\n", encoding="utf-8",
+    )
+    (path / "self-inject").write_text(
+        "head:2 notes.md\ntail:1 notes.md\ngrep:GAMMA notes.md\n",
+        encoding="utf-8",
+    )
+
+    digest = dominion.resolve_self_inject(path)
+
+    assert "alpha\nbeta" in digest      # head:2
+    assert "epsilon" in digest          # tail:1
+    assert "GAMMA marker" in digest     # grep:GAMMA
+    assert "delta" not in digest        # selected by no entry
+
+
+def test_resolve_self_inject_skips_exec(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "danger.sh").write_text("echo pwned\n", encoding="utf-8")
+    (path / "self-inject").write_text("exec danger.sh\n", encoding="utf-8")
+
+    # exec is recognised but not run yet; nothing is injected from it.
+    assert dominion.resolve_self_inject(path) == ""
+
+
+def test_resolve_self_inject_respects_budget(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "big.md").write_text("x" * 5000, encoding="utf-8")
+    (path / "self-inject").write_text("full big.md\n", encoding="utf-8")
+
+    digest = dominion.resolve_self_inject(path, budget_bytes=512)
+
+    assert len(digest.encode("utf-8")) <= 512 + 64  # budget + truncation marker
+    assert "truncated" in digest
+
+
+def test_resolve_self_inject_stays_inside_dominion(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    # A path escaping the dominion is refused, not read.
+    (path / "self-inject").write_text(
+        "full ../../etc/hostname\n", encoding="utf-8",
+    )
+
+    assert dominion.resolve_self_inject(path) == ""
+
+
+def test_resolve_missing_manifest_is_empty(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    (path / "self-inject").unlink()
+
+    assert dominion.resolve_self_inject(path) == ""
+
+
+# ── Wake-time injection into prompts ─────────────────────────────────
+
+
+def test_run_prompt_injects_dominion_digest(tmp_path):
+    repo = _repo(tmp_path)
+    dominion.ensure_dominion(repo, push=False)
+
+    prompt = prompts.build_run_prompt("do the thing", repo)
+
+    assert "Your dominion (working memory)" in prompt
+    assert "Playbook — your standing orientation" in prompt
+
+
+def test_daemon_prompt_injects_dominion_digest(tmp_path):
+    repo = _repo(tmp_path)
+    dominion.ensure_dominion(repo, push=False)
+
+    prompt = prompts.build_daemon_prompt(
+        "do the thing", "evt-1", "/tmp/resp.md", repo,
+    )
+
+    assert "Your dominion (working memory)" in prompt
+
+
+def test_prompt_without_dominion_has_no_block(tmp_path):
+    repo = _repo(tmp_path)  # .brr exists, but no dominion materialized
+
+    prompt = prompts.build_run_prompt("do the thing", repo)
+
+    assert "Your dominion (working memory)" not in prompt
+
+
+def test_disabled_dominion_is_not_injected(tmp_path):
+    repo = _repo(tmp_path)
+    dominion.ensure_dominion(repo, push=False)
+    from brr import config as conf
+
+    conf.write_config(repo, {"dominion.enabled": False})
+
+    prompt = prompts.build_run_prompt("do the thing", repo)
+
+    assert "Your dominion (working memory)" not in prompt
