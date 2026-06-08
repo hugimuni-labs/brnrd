@@ -1,6 +1,17 @@
 # Design: Concurrent task execution via partitioned state
 
-Status: accepted on 2026-05-16.
+Status: superseded by [`design-agent-dominion.md`](design-agent-dominion.md) on 2026-06-08.
+
+The threaded daemon loop this doc accepted is reversed by the resident-agent
+reshape: local execution is now **single-flight** (spawn one thought when idle),
+because a resident agent's continuity lives in durable memory, not in
+throughput-parallel workers. What **survives** and is not superseded: the
+per-task worktree / branch isolation and the partitioned per-event/per-task state
+(per-event jsonl conversations, per-task progress json) — those primitives
+predate this doc and now anchor in
+[`subject-tasks-branching.md`](subject-tasks-branching.md) and
+[`subject-daemon.md`](subject-daemon.md). Only the *concurrency-via-threading*
+thesis retires.
 
 Replaces the deferred-serial pose and the abandoned merge-coordinator
 shape from

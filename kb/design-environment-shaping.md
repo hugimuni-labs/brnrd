@@ -1,8 +1,13 @@
 # Environment shaping — the observe → remember → shape loop
 
-Status: proposed (2026-06-04, expanded 2026-06-05) — synthesis of an ongoing
-design dialogue, not yet accepted. Captures a frame that spans the ergonomics
-back-channel,
+Status: proposed (2026-06-04, expanded 2026-06-05); **treated as prior reasoning
+since 2026-06-08** — the substrate it assumed is now specified and accepted in
+[`design-agent-dominion.md`](design-agent-dominion.md), the primary spec to
+implement against. This page remains the canonical description of the *loop*
+(observe → remember → shape → retire; salience; rings; action rungs) but is
+partly stale on substrate detail (e.g. the `Pitfall:` failure-memory now lives in
+the dominion, not as a kb marker); reconcile when the loop is implemented.
+Captures a frame that spans the ergonomics back-channel,
 the kb-as-memory layer, and brr's interactivity, so those pieces stop being
 reasoned about in isolation.
 

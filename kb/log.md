@@ -5660,3 +5660,58 @@ project-resident agent, **brnrd** = the manager of brrs (the locked brand); no
 re-acronym. Open threads: remote live-event delivery, dominion layout/digest
 format, destructive-edit consent rung, whether ad-hoc agents write the dominion,
 and the playbook copy / cringe line.
+
+## [2026-06-08] decision | accept agent-dominion; supersede concurrent-execution
+
+Accepted [`design-agent-dominion.md`](design-agent-dominion.md) (the
+resident-agent reshape) and superseded
+[`design-concurrent-execution.md`](design-concurrent-execution.md): its threaded
+daemon loop is reversed to **single-flight**, while the per-task worktree/branch
+isolation + partitioned per-event state it built on survive (now anchored in
+`subject-tasks-branching` / `subject-daemon`).
+[`design-environment-shaping.md`](design-environment-shaping.md) is demoted to
+*prior reasoning* — still the canonical description of the loop, but partly stale
+on substrate (the `Pitfall:` failure-memory now lives in the dominion, not as a
+kb marker); agent-dominion is the primary spec to implement against.
+
+Final design points settled this round, closing the dialogue: (1) **concurrency
+is Society-of-Mind, not locked** — tolerate concurrent / contradictory writes,
+resolve dissonance with a later *thought* (the salience loop pointed inward);
+append-mostly is the cheap default, not a cage; the system is already
+multi-thought via ad-hoc sessions, so single-flight daemon + concurrent ad-hoc is
+the holistic shape (no multi-process daemon earns its cost). (2)
+**Materialization**: the dominion is one long-lived `git worktree` on the
+`brr-home` orphan branch at `.brr/dominion/` — durable *branch*, disposable
+*checkout*; bootstrap is fetch-or-create-orphan; a thought touches two trees
+(per-task worktree → `main`; shared dominion worktree → `brr-home`); degrades
+gracefully with no remote. (3) **Self-improvement** is assessable only as a
+relation to the memory of a past pain — so pain-memory in the dominion is the
+yardstick (validated by consequence + the git diff of the prior self, not by a
+felt before/after). (4) "**dominion**" kept as the agent-facing concept (earned
+ownership; the cringe risk is user-facing, so the CLI label can stay plainer).
+Next: implement, **dominion substrate first** (orphan-branch bootstrap + worktree
+materialization + self-inject read on wake), then the single-flight loop, then
+the playbook.
+
+## [2026-06-08] implement | dominion substrate (slice 1a) — orphan-branch bootstrap + worktree
+
+Shipped the first slice of the resident-agent reshape
+([`design-agent-dominion.md`](design-agent-dominion.md)): the dominion now
+materializes. New `src/brr/dominion.py` `ensure_dominion()` is idempotent and
+fetch-or-create — re-attaches if the `brr-home` worktree is already registered;
+adds a worktree on an existing local branch; fetches + adds a *tracking*
+worktree when the remote has the branch (second machine / reinstall / failover);
+else creates the orphan branch **empty** via plumbing (`mktree` → `commit-tree`
+→ `update-ref` — portable across git versions, never touches `main`'s index or
+HEAD), seeds it (README + playbook stub + `self-inject` manifest), and pushes
+best-effort. The worktree lands at `.brr/dominion/` (durable *branch*, disposable
+*checkout*). Git plumbing (`remote_branch_exists`, `create_orphan_branch`,
+`add_worktree`, `fetch_branch`, `push_branch`, `commit_all`) added to
+`gitops.py`. Wired into both `brr init` (`adopt._bootstrap_dominion` +
+`dominion.enabled` / `dominion.branch` config defaults) and the idempotent
+`daemon.start` ensure (best-effort — a missing committer identity or push
+permission is a soft skip, never crashes boot). `tests/test_dominion.py` covers
+fresh / orphan-history / custom-branch / restart-idempotent / returning-local /
+returning-from-remote / no-remote; full suite green (678 passed). Next: **1b** —
+self-inject resolution (`full|head|tail|grep`, budget cap) + wake-time injection
+at `prompts._join_prompt_parts`.
