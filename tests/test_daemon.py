@@ -592,8 +592,8 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
         source="github",
         conversation_key="github:owner/repo#17",
         meta={
-            "publish_branch": "brr/deliver-before-kb-maintenance",
-            "target_branch": "brr/deliver-before-kb-maintenance",
+            "publish_branch": "brr/deliver-pr-rebase",
+            "target_branch": "brr/deliver-pr-rebase",
             "expected_remote_oid": "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
         },
     )
@@ -611,7 +611,7 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     event = {"id": "evt-lease", "source": "github", "body": "rebase"}
     daemon._run_worker_and_finalize(event, tmp_path, tmp_path / ".brr", {}, 0)
 
-    assert captured["publish_branch"] == "brr/deliver-before-kb-maintenance"
+    assert captured["publish_branch"] == "brr/deliver-pr-rebase"
     assert (
         captured["expected_remote_oid"]
         == "6c1ca158d19c6ba40c06e8a46f7c338ada056246"
