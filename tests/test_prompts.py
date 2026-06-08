@@ -229,6 +229,29 @@ class TestPromptBuilding:
         assert "mid-thought" not in prompt
         assert "outbox directory" not in prompt
 
+    def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A",
+            task_id="task-A",
+            pending_events=[
+                {"id": "evt-B", "source": "telegram",
+                 "summary": "quick question about X"},
+            ],
+        )
+        assert "Inbox — other pending events" in prompt
+        assert "evt-B" in prompt
+        assert "quick question about X" in prompt
+        # The fold-in contract names the frontmatter handle.
+        assert "event: <id>" in prompt
+
+    def test_daemon_prompt_omits_inbox_when_no_pending_events(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A", task_id="task-A",
+        )
+        assert "other pending events" not in prompt
+
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
