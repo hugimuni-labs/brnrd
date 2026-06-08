@@ -49,6 +49,7 @@ _PHASE_BY_PACKET: dict[str, str] = {
     "retrying": "running",
     "run_started": "running",
     "artifact_created": "running",
+    "interim_response": "running",
     "finalizing": "finalizing",
     "container_preserved": "finalizing",
     "push_started": "delivering",
@@ -106,6 +107,7 @@ class RunProgressView:
     started_at: str | None = None
     updated_at: str | None = None
     detail: str = ""
+    interim_count: int = 0
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     container_ids: list[str] = field(default_factory=list)
     response_path: str | None = None
@@ -304,6 +306,14 @@ def _project(
         elif ptype == "artifact_created":
             label = record.get("label") or record.get("kind") or "artifact"
             view.detail = f"artifact: {label}"
+        elif ptype == "interim_response":
+            # The resident shipped a mid-flight reply (multi-response
+            # protocol). The body is streamed to the user by the gate's
+            # own delivery loop; here it only annotates the live card.
+            view.interim_count += 1
+            view.detail = (
+                f"shipped interim reply (#{view.interim_count})"
+            )
         elif ptype == "heartbeat":
             # Heartbeats only bump updated_at — they don't move state.
             # The render reads the current wall clock to compute elapsed,

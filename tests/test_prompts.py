@@ -210,6 +210,25 @@ class TestPromptBuilding:
         assert "Review pack (diffense)" not in prompt
         assert "Review pack path" not in prompt
 
+    def test_daemon_prompt_includes_outbox_contract_when_given(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            task_id="task-9",
+        )
+        assert "/repo/.brr/outbox/evt-1" in prompt
+        assert "mid-thought" in prompt
+        # interim replies are framed as optional extras, not the final reply
+        assert "optional" in prompt.lower()
+
+    def test_daemon_prompt_omits_outbox_contract_without_path(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-9",
+        )
+        assert "mid-thought" not in prompt
+        assert "outbox directory" not in prompt
+
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)

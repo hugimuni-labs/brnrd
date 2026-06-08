@@ -41,6 +41,13 @@ class RunContext:
     runtime_dir: Path
     response_path_host: Path
     response_path_env: Path
+    # Per-event interim-response drop zone (the multi-response protocol,
+    # kb/design-multi-response.md). The resident drops mid-flight reply
+    # files here; the daemon promotes them to the response partials queue.
+    # Host vs env mirrors response_path_* — identical under today's envs
+    # (the docker mount keeps `.brr/` the same inode inside and out).
+    outbox_host: Path | None = None
+    outbox_env: Path | None = None
     branch_name: str | None = None
     task_branch: str | None = None
     branch_plan: branching.PublishPlan | None = None
@@ -67,6 +74,7 @@ class EnvBackend(Protocol):
         *,
         branch_plan: branching.PublishPlan,
         response_path: Path,
+        outbox_path: Path | None = None,
     ) -> RunContext:
         ...
 
@@ -101,6 +109,7 @@ class HostEnv:
         *,
         branch_plan: branching.PublishPlan,
         response_path: Path,
+        outbox_path: Path | None = None,
     ) -> RunContext:
         return RunContext(
             name=self.name,
@@ -109,6 +118,8 @@ class HostEnv:
             runtime_dir=gitops.shared_brr_dir(repo_root),
             response_path_host=response_path,
             response_path_env=response_path,
+            outbox_host=outbox_path,
+            outbox_env=outbox_path,
             branch_name=None,
             branch_plan=branch_plan,
         )
@@ -144,6 +155,7 @@ class WorktreeEnv(HostEnv):
         *,
         branch_plan: branching.PublishPlan,
         response_path: Path,
+        outbox_path: Path | None = None,
     ) -> RunContext:
         run_root, task_branch_name = worktree.create(
             repo_root, task.id, base_ref=branch_plan.seed_ref,
@@ -167,6 +179,8 @@ class WorktreeEnv(HostEnv):
             runtime_dir=gitops.shared_brr_dir(repo_root),
             response_path_host=response_path,
             response_path_env=response_path,
+            outbox_host=outbox_path,
+            outbox_env=outbox_path,
             branch_name=starting_branch,
             task_branch=task_branch_name,
             branch_plan=branch_plan,
@@ -604,6 +618,7 @@ class DockerEnv(WorktreeEnv):
         *,
         branch_plan: branching.PublishPlan,
         response_path: Path,
+        outbox_path: Path | None = None,
     ) -> RunContext:
         if shutil.which("docker") is None:
             raise RuntimeError("docker env requires the Docker CLI on PATH")
@@ -617,6 +632,7 @@ class DockerEnv(WorktreeEnv):
             cfg,
             branch_plan=branch_plan,
             response_path=response_path,
+            outbox_path=outbox_path,
         )
         ctx.name = self.name
 
