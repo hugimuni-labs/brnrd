@@ -204,7 +204,6 @@ def _join_prompt_parts(
     repo_root: Path,
     trailer: str,
     *,
-    reflection: bool = False,
     diffense: bool = False,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
@@ -222,28 +221,8 @@ def _join_prompt_parts(
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
             parts.append(pack_step)
-    if reflection:
-        nudge = read_prompt("self-review.md", repo_root)
-        if nudge:
-            parts.append(nudge)
     parts.append(trailer)
     return "\n\n".join(parts)
-
-
-def reflection_enabled(cfg: dict[str, Any] | None, owner: str = "user") -> bool:
-    """Return whether to inject the skippable reflection nudge and leave it visible.
-
-    True only for ``ergonomics=response`` on a **user-owned** run: a
-    self-hoster's explicit opt-in to see their own agent's ergonomics
-    notes in their own reply. Operator-owned runs never inject it (the
-    "no ergonomics in a managed reply, ever" invariant), regardless of
-    config.
-    """
-    if owner != "user":
-        return False
-    from .ergonomics.proxy import ergonomics_mode
-
-    return ergonomics_mode(cfg) == "response"
 
 
 def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
@@ -311,7 +290,6 @@ def build_daemon_prompt(
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
-    reflection: bool = False,
     diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
@@ -342,8 +320,7 @@ def build_daemon_prompt(
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nTask: {task}"
     return _join_prompt_parts(
-        preamble, repo_root, trailer,
-        reflection=reflection, diffense=diffense,
+        preamble, repo_root, trailer, diffense=diffense,
     )
 
 
