@@ -336,18 +336,22 @@ borrowed drama. The actual copy — and the line between awe and cringe — is a
 downstream artifact that needs real-agent and real-user reaction; this doc
 specifies what the playbook must *do*, not its wording.
 
-**The playbook replaces the stage overlays.** Today brr layers a different
-prompt overlay per stage (run, kb-maintenance, self-review, …). Most retire: the
-resident reads *one standing environment description* (this playbook, assembled
-from the dominion's self-inject index), and **events stay lightweight** — body
-and metadata are enough to act on, carrying no per-stage scaffolding. What the
-overlays carried that's still load-bearing — the delivery contract, the
-ownership map, the multi-response protocol — migrates *into* the playbook rather
-than vanishing; the rest goes.
+**The playbook replaces the stage overlays.** brr used to layer a different
+prompt overlay per stage (run, kb-maintenance, self-review, …). Most have now
+retired (2026-06-08): the `kb-maintenance.md` second-spawn and the
+`self-review.md` reflection footer are gone, leaving `run.md` (the thin daemon
+delivery contract) and `setup.md` (adoption). The resident reads *one standing
+environment description* (this playbook, assembled from the dominion's
+self-inject index), and **events stay lightweight** — body and metadata are
+enough to act on, carrying no per-stage scaffolding. What the overlays carried
+that's still load-bearing — the delivery contract, the ownership map, the
+(coming) multi-response protocol — migrates *into* the playbook rather than
+vanishing; the rest is gone. Deterministic kb-health is the one signal that
+still rides the wake prompt, injected only when the preflight finds something.
 
-So the playbook is the wake-time layer of
+So the playbook is the resident self-orientation layer of
 [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md)'s
-four-layer model — fed by the dominion's self-inject index, the resident's
+five-layer model — fed by the dominion's self-inject index, the resident's
 standing self-orientation, not a block mechanically stamped onto every task.
 
 ## 6. Naming
@@ -390,7 +394,7 @@ split ever grates — it just trades a sliver of human cringe for zero registers
 | [`design-concurrent-execution.md`](design-concurrent-execution.md) | **Superseded (2026-06-08).** Its threaded-loop concurrency thesis is reversed → single-flight; the partitioned-state + per-task worktree/branch primitives it built on survive in [`subject-tasks-branching.md`](subject-tasks-branching.md) / [`subject-daemon.md`](subject-daemon.md). |
 | [`design-environment-shaping.md`](design-environment-shaping.md) | **Companion.** This is the substrate; that is the loop. Salience counters + captured friction (incl. the `Pitfall:` failure-memory, formerly a kb marker / first slice) live in the dominion; the playbook carries the loop's pain-evaluation input; and the loop now runs *inward* too, as dominion dissonance-resolution. |
 | [`design-agent-ergonomics.md`](design-agent-ergonomics.md) | **Inherited.** The probe/telemetry/reflection sensing layer is how the resident perceives; probe-first is still the right first slice; reflection feeds the dominion journal. |
-| [`subject-kb.md`](subject-kb.md) / [`decision-kb-shape.md`](decision-kb-shape.md) | **Extended.** The dominion fills the missing durable+owned cell; kb stays curated+shared; the promotion bridge connects them. Reconcile the four-layer framing on accept. |
+| [`subject-kb.md`](subject-kb.md) / [`decision-kb-shape.md`](decision-kb-shape.md) | **Extended.** The dominion fills the missing durable+owned cell; kb stays curated+shared; the promotion bridge connects them. Reconcile the layering framing on accept. |
 | [`subject-daemon.md`](subject-daemon.md) | **Reshaped.** The worker pool becomes spawn-one-when-idle; reflex/deliberation split; explicit-cancel + liveness backstop; staged post-task pipeline removed. |
 | [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md) | **Reshaped.** Most per-stage overlay prompts retire; the standing playbook (from the dominion self-inject index) becomes the wake-time orientation, and events stay lightweight (body + metadata). |
 | [`subject-tasks-branching.md`](subject-tasks-branching.md) / [`design-publish-kernel.md`](design-publish-kernel.md) | **Mostly inherited.** Per-task branch → PR publish unchanged; the dominion branch is **never** PR'd or merged to `main` — it's pushed directly. |

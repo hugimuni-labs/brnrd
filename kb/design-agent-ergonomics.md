@@ -59,12 +59,13 @@ Companion to:
 ## Problem this design answered
 
 The baseline this design replaced was a single knob,
-`runner.self_review`, that injects
-[`src/brr/prompts/self-review.md`](../src/brr/prompts/self-review.md)
-into runner prompts. That prompt asks the agent to end its stdout
-with a free-text **Ergonomics review:** footer covering orientation,
-tooling, and branch metadata. The daemon does nothing with the
-footer beyond shipping it as part of the response file to the gate.
+`runner.self_review`, that injected a `src/brr/prompts/self-review.md`
+overlay into runner prompts. That prompt asked the agent to end its
+stdout with a free-text **Ergonomics review:** footer covering
+orientation, tooling, and branch metadata. The daemon did nothing with
+the footer beyond shipping it as part of the response file to the gate.
+(Both the knob and, later, the `ergonomics=response` mode that replaced
+it were retired — see the breadcrumb at the top of this page.)
 (Removed 2026-06-03: the knob is gone — the same "review in the reply"
 behaviour is now `ergonomics=response`, skippable and owner-gated. See
 "Ownership decides routing".)

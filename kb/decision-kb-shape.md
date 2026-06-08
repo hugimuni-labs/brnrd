@@ -16,9 +16,14 @@ refinement lives in
 Supersedes: the implicit "every task writes a `kb/log.md` entry" rule in
 [`prompts/run.md`](../src/brr/prompts/run.md) and the per-task log file
 mechanism (`kb/log-task-<id>.md`, `RunContext.log_file`,
-`WorktreeEnv.prepare`'s log-file plumbing). Reframes the brr-only
-[`prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
-phase as a redundant safety pass on top of agent-driven maintenance.
+`WorktreeEnv.prepare`'s log-file plumbing). Reframed the brr-only
+`kb-maintenance` phase as a redundant safety pass on top of agent-driven
+maintenance. (That separate pass was itself retired 2026-06-08 with the
+resident reshape — the deterministic preflight survives and now injects
+its findings into the resident's own wake prompt; see
+[`design-agent-dominion.md`](design-agent-dominion.md) and
+[`subject-kb.md`](subject-kb.md). The Phase 4 notes below are kept as the
+reasoning record.)
 
 Sibling decisions in the same "drop the noisy abstraction" pattern:
 [`decision-remove-triage.md`](decision-remove-triage.md) (the LLM
@@ -271,6 +276,12 @@ The bar throughout this phase: *would a future agent or human, reading this page
 - Add reciprocal links between obviously connected pages — e.g. [`decision-drop-streams.md`](decision-drop-streams.md) ↔ [`decision-remove-triage.md`](decision-remove-triage.md) ↔ this decision, all instances of the same "drop the noisy abstraction" pattern; [`repo-dive-in-map.md`](repo-dive-in-map.md) gets refreshed for the new index shape (subject hubs) and the absent log mandate.
 
 ### Phase 4 — daemon maintenance phase becomes safety net
+
+(Superseded 2026-06-08: the LLM redundancy pass + `_maybe_kb_maintenance`
+were retired with the resident reshape; the deterministic preflight
+survives and now rides the resident's own wake prompt via
+`prompts._build_kb_health_block`. The steps below are the reasoning
+record, not the current shape.)
 
 - Rewrite `src/brr/prompts/kb-maintenance.md` as a thin redundancy pass: "you are a final lint after the previous task. Follow the Knowledge base section in AGENTS.md. Below are concrete findings the deterministic preflight produced." Keep the prompt short.
 - Add a deterministic preflight inside `src/brr/daemon.py:_maybe_kb_maintenance`: scan for orphan pages, missing index entries, stale lifecycle markers; format the findings; inject into the maintenance prompt. No LLM in the preflight.

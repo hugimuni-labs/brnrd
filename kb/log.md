@@ -5770,3 +5770,43 @@ pool→single-flight round trip) and `design-agent-dominion.md` §4 (no command
 layer; cancellation is the agent's, liveness is the substrate's). Full suite green
 (687 passed). Next: **slice 3** — playbook + wake orientation; retire per-stage
 overlay prompts.
+
+## [2026-06-08] implement | playbook + wake orientation (slice 3): overlays retire into the resident's standing self-orientation
+
+Landed the slice-3 reshape: the resident now wakes into **one standing
+self-orientation** — its playbook (seeded from `prompts/dominion-playbook.md`,
+injected on wake from the dominion's self-inject index) — instead of a different
+prompt overlay stamped per stage. Three per-stage overlays retired:
+
+- **kb-maintenance second-spawn.** Removed `daemon._maybe_kb_maintenance` + the
+  `prompts/kb-maintenance.md` overlay + the `kb_maintenance_done` packet/renderer
+  plumbing. The deterministic `kb_preflight` / `kb_health` scanners **survive**
+  and now ride the resident's own wake prompt via `prompts._build_kb_health_block`
+  (silent when clean; `kb_maintenance=never` opts out). A resident that curates
+  the shared kb as part of its single thought doesn't need a second LLM pass.
+- **self-review reflection footer.** Removed `prompts/self-review.md` +
+  `prompts.reflection_enabled` + the `reflection` plumbing, and collapsed the
+  `ergonomics=response` mode into `log` (existing configs map via the normaliser).
+  Runtime friction now lands in the resident's dominion journal (the playbook's
+  pain-evaluation loop), not a one-shot reply footer. The deferred
+  hidden-reflection-capture pipeline (the `reflection` `Record` kind) is untouched.
+- **reconsider-signal keyword list** in `run.md` trimmed: the brittle "watch for
+  wdyt / not great / …" enumeration gave way to ownership intent (carried by the
+  playbook for residents, AGENTS.md → Stewardship for everyone). The load-bearing
+  operational contract (a chat-only reply is a complete task; the follow-up event
+  carries the diff) stays. Events were already lightweight (body + metadata, no
+  command layer) since slice 2.
+
+**AGENTS.md** dropped the retired kb-maintenance stage, named the resident
+playbook/dominion as the self-orientation layer that rests on the repo contract,
+and carved `.brr/dominion/` out of the "don't explore `.brr/`" guidance (revision
+bumped to 2026-06-08). **plan-agent-orientation-layering.md** grew from a four- to
+**five-layer** model (resident self-orientation between contract and stage
+overlay). Reconciled the kb graph so the retired passes aren't described as
+current (`subject-kb.md`, `decision-kb-shape.md`, `index.md`, `repo-dive-in-map.md`,
+`design-agent-{dominion,ergonomics}.md`); ran the deterministic preflight and
+cleared the two broken links it caught (the deleted `self-review.md`, and the
+slice-2 `test_daemon_concurrency.py` rename). Full suite green (665 passed; net
+deletion across the slice). Next: **slice 4** — multi-response protocol (per-event
+response files written mid-flight; folds in diffense and the finer idle-liveness
+timer).

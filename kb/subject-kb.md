@@ -113,17 +113,21 @@ brr-specific behaviour.
 The brr daemon's role is the **safety net**:
 
 - A **deterministic preflight** ([`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py))
-  scans the kb after every task: orphans missing from the index,
+  scans the kb on every wake: orphans missing from the index,
   index entries pointing to deleted files, broken cross-links inside
   kb pages. It runs every time, costs nothing, and produces
   structured findings.
-- A **thin LLM redundancy pass**
-  ([`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
-  invoked from
-  [`daemon._maybe_kb_maintenance`](../src/brr/daemon.py)) only runs
-  when the preflight has findings *or* the task touched `kb/`. The
-  prompt points back at AGENTS.md → "Knowledge base shape" for the
-  rules and addresses the injected findings.
+- When the preflight finds something, those findings are **injected
+  into the resident's own wake prompt** (via
+  [`prompts._build_kb_health_block`](../src/brr/prompts.py)), so the
+  resident folds the fix into its current thought against the AGENTS.md
+  → "Knowledge base" rules. A clean preflight is silent — no tax on
+  every wake. (Earlier this was a separate post-task LLM pass —
+  `daemon._maybe_kb_maintenance` + a `prompts/kb-maintenance.md`
+  overlay; retired 2026-06-08 with the resident reshape, since a
+  resident that curates the shared kb as part of its single thought
+  doesn't need a second spawn to do it. See
+  [`design-agent-dominion.md`](design-agent-dominion.md).)
 
 External tools (Cursor / Codex / Claude Code) don't have brr's
 preflight, so they fall back to the AGENTS.md schema alone.
@@ -163,15 +167,6 @@ describe the current shape, lineage breadcrumbs replace inline
 running diffs of past wording, and git is the deep-history layer.
 The execution plan is in
 [`plan-kb-state-first-maintenance.md`](plan-kb-state-first-maintenance.md).
-
-The inline maintenance pass
-([`daemon._maybe_kb_maintenance`](../src/brr/daemon.py) plus
-[`prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md))
-runs on the task's own branch after delivery so cleanup rides on the
-same branch as the work that triggered it. The plan also makes the
-pass commit its edits and surface a status packet so the operator
-sees that grooming happened, rather than the pass silently dropping
-edits (the current bug).
 
 ## What was deliberately rejected
 
@@ -215,11 +210,11 @@ In priority order:
 4. [`llm-wiki.md`](llm-wiki.md) — the framing the kb pattern took
    inspiration from. Skim for context, not as a spec.
 5. [`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py) and its
-   tests — the deterministic side of the maintenance contract; the
+   tests — the deterministic side of the maintenance contract (its
+   findings ride the resident's wake prompt via
+   [`prompts._build_kb_health_block`](../src/brr/prompts.py)); the
    shortest path to "what is structurally enforceable about the kb."
-6. [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
-   — the LLM redundancy pass; short by design.
-7. The "drop the noisy abstraction" decision trio:
+6. The "drop the noisy abstraction" decision trio:
    [`decision-remove-triage.md`](decision-remove-triage.md) →
    [`decision-drop-streams.md`](decision-drop-streams.md) → this
    subject's triggering decision. Same pattern three times: when an
