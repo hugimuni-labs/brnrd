@@ -15,15 +15,16 @@ The bottom-up source route is still
 
 ## Current shape
 
-The daemon is intentionally small and foreground-owned. `brr up` runs
-one Python process in the repo, writes `.brr/daemon.pid`, starts any
-configured gate threads, and dispatches pending events from
-`.brr/inbox/` into a bounded worker pool. `brr down` sends `SIGTERM`
-to the recorded PID. The signal handlers for `SIGTERM` and `SIGINT`
-only flip the loop flag, so a signal received while workers are
-running asks the daemon to stop accepting new events and drain the
-pool before exiting rather than trying to cancel the in-flight
-runners.
+The daemon is intentionally small and foreground-owned — a thin
+**reflex** layer that leaves judgement to the agent it wakes. `brr up`
+runs one Python process in the repo, writes `.brr/daemon.pid`, starts
+any configured gate threads, and runs **single-flight**: it scans
+`.brr/inbox/` and spawns one *thought* (one `_run_worker` invocation)
+when idle and work is pending. `brr down` sends `SIGTERM` to the
+recorded PID. The signal handlers for `SIGTERM` and `SIGINT` only flip
+the loop flag, so a signal received mid-thought asks the daemon to stop
+spawning and let the in-flight thought drain before exiting rather than
+interrupting the running runner.
 
 The daemon owns orchestration, not meaning:
 
@@ -43,54 +44,65 @@ The daemon owns orchestration, not meaning:
   env synthesis hub is [`subject-envs.md`](subject-envs.md); the protocol
   spec lives in [`design-env-interface.md`](design-env-interface.md).
 
-## Concurrency model
+## Execution model — single-flight
 
-The daemon runs tasks concurrently in a bounded worker pool (default
-`max_workers=4`, configurable via `.brr/config`). Each worker thread
-takes one pending event from the inbox, runs the full `_run_worker`
-pipeline end-to-end (including push and post-task housekeeping), and
-returns. Workers don't share mutable state with each other — the
-shipped design is contention-free by partitioning, not by locking.
+The daemon runs **one thought at a time**. When idle and work is
+pending it spawns a single worker, which runs the full `_run_worker`
+pipeline end-to-end (env prepare, runner invocation + retries, response
+capture, kb maintenance, finalize, push) and returns; only then does the
+daemon consider the next pending event. The worker runs off the main
+thread (a one-slot executor) so the loop stays responsive to dev-reload,
+gate-thread liveness, and shutdown signals while a long thought runs.
 
-The partitioning rules that make concurrency safe without per-shared-
-file locks:
+This reshapes the former parallel worker pool: local parallelism is
+discarded, and concurrency within one resident becomes cooperative
+rather than parallel across workers. (The threaded-pool thesis —
+`max_workers`, default 4 — was reversed 2026-06-08; the knob is now
+ignored. See [`design-agent-dominion.md`](design-agent-dominion.md) §4;
+the superseded
+[`design-concurrent-execution.md`](design-concurrent-execution.md)
+holds the prior reasoning.)
+
+The per-task isolation primitives the parallel design relied on
+**survive** — they still earn their keep for crash recovery, ad-hoc
+sessions, and the managed multi-daemon case:
 
 - **Worktree / branch identity is per task.** Each task gets a fresh
   `brr/<task-id>` branch sprouted from the resolved seed ref into
   `.brr/worktrees/<task-id>/`. Task ids are globally unique
-  (`evt-<nanotime>-<random>`), so two concurrent task starts never
-  collide on branch name or worktree directory.
+  (`evt-<nanotime>-<random>`), so task starts never collide on branch
+  name or worktree directory.
 - **Conversation log is one file per event pipeline.**
   `.brr/conversations/<key>/<event-id>.jsonl` holds every record one
-  worker invocation emits (event arrival, task lifecycle, update
-  packets, artifact records). The file has exactly one writer for its
-  lifetime. Readers glob the directory and merge by `ts` for
-  projection. The conversations bundled doc
+  worker invocation emits; one writer per file, readers glob and merge
+  by `ts`. The bundled doc
   ([`src/brr/docs/conversations.md`](../src/brr/docs/conversations.md))
-  describes the user-visible side; the design page named below
-  carries the per-event-file partitioning rationale.
-- **Gate progress card state is one file per task.**
-  `.brr/gates/<gate>/progress/<task-id>.json` carries the rendered
-  card state for one task; the render path reads and writes only its
-  own file.
-- **Per-task artefacts** (`.brr/tasks/<task-id>.md`, response file
-  at `.brr/responses/<event-id>.md`, trace dirs) are already keyed by
-  id and don't overlap.
-
-What still needs explicit synchronisation, because it touches a
-genuinely shared git ref:
-
+  describes the user-visible side.
+- **Gate progress card state is one file per task**
+  (`.brr/gates/<gate>/progress/<task-id>.json`); the render path reads
+  and writes only its own file.
+- **Per-task artefacts** (`.brr/tasks/<task-id>.md`, the response file
+  at `.brr/responses/<event-id>.md`, trace dirs) are keyed by id.
 - **Publish** (`daemon.publish`) takes a per-branch lock keyed on the
-  branch being pushed, so two tasks publishing under the same name
-  (or under the same `expected_publish_branch` via a refspec push)
-  serialise on the push. Tasks publishing different branches don't
-  contend. Finalize no longer participates in this lock — the env
-  layer never updates a non-task ref since the 2026-05-21 publish-
-  kernel collapse (see
-  [`design-publish-kernel.md`](design-publish-kernel.md)).
+  branch being pushed. Within one single-flight daemon this is now
+  uncontended (one publish at a time), but it still guards a daemon
+  publish racing an ad-hoc session that pushes the same branch, and
+  stays cheap. Finalize no longer participates — the env layer never
+  updates a non-task ref since the 2026-05-21 publish-kernel collapse
+  (see [`design-publish-kernel.md`](design-publish-kernel.md)).
 
-Cancellation is still not in v1: signals request drain-and-exit, they
-don't interrupt a running AI CLI.
+**No command layer, and liveness is a substrate backstop.** The daemon
+never parses `/cancel` or any command — every event either wakes the
+agent or waits for the living agent to handle it (cancel/redirect
+semantics are the agent's job, reconsidered at plan boundaries; the
+mid-flight inbox channel is the multi-response protocol, designed in
+[`design-agent-dominion.md`](design-agent-dominion.md) §4, not yet
+shipped). What the daemon *does* guarantee is that the single-flight
+slot is reclaimed even if a runner subprocess wedges: the runner's
+wall-clock timeout (`runner.timeout_seconds`, default 3600s) kills it. A
+finer idle timeout ("no agent check-in in N minutes") only becomes an
+honest death signal once the agent can check in mid-run, so it's
+sequenced with multi-response, not before.
 
 ## Worker lifecycle
 
@@ -185,11 +197,10 @@ product restart feature. The shipped path is captured in
 [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md): use an
 editable install, then run `brr up --dev-reload` (or set
 `dev_reload=true`) so the foreground daemon re-execs when brr's own
-package files change. Under the concurrent worker pool the reload
-remains quiescent-only — when a worker notices changed package files
-on task completion, the daemon stops accepting new events and re-execs
-once the pool drains to zero in-flight tasks. The reload path stays
-terminal-owned and explicit, not a remote command.
+package files change. The reload stays quiescent-only — when the
+watcher notices changed package files, the daemon stops spawning and
+re-execs once the in-flight thought (if any) drains. The reload path
+stays terminal-owned and explicit, not a remote command.
 
 ## Status and troubleshooting
 
@@ -213,18 +224,24 @@ removed on 2026-05-14 once the only importers were tests and stale docs.
   multiple repos from one process.
 - **Windows native service install.** Deferred until there is real user
   demand and the daemon model can support Windows honestly.
-- **True cancellation.** The daemon has no cancellation in v1. Signals
-  request drain-and-exit; they do not interrupt a running AI CLI.
+- **Agent-driven cancellation + finer liveness.** The daemon honours no
+  cancel command by design; the living agent handles cancel/redirect at
+  plan boundaries, and the wall-clock `runner.timeout_seconds` is the
+  only hard backstop until the multi-response check-in channel makes a
+  shorter idle timeout honest (see
+  [`design-agent-dominion.md`](design-agent-dominion.md) §4).
 
-(Earlier versions of this page recorded a concurrent worker pool as
-deferred and the original merge-coordinator design as abandoned;
-both were reversed on 2026-05-16 when concurrency shipped on top of
-the contention-free per-event/per-task partitioning above, so the
-coordinator never came back. See
-[`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) for
-the lineage of the partial pre-2026-05-16 shape and
+(Lineage: a concurrent worker pool was once deferred and the original
+merge-coordinator design abandoned; both were reversed 2026-05-16 when
+concurrency shipped on the per-event/per-task partitioning above, so the
+coordinator never came back. Then concurrency itself was reversed to
+single-flight 2026-06-08 with the resident-agent reshape — the
+partitioning primitives survived the round trip and now serve crash
+recovery / ad-hoc sessions instead. See
+[`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) for the
+pre-2026-05-16 shape and
 [`design-concurrent-execution.md`](design-concurrent-execution.md)
-for the accepted design.)
+(superseded) for the parallel design's reasoning.)
 
 ## Read next
 
