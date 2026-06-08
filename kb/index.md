@@ -53,18 +53,18 @@ dive-in map) and are stable until something contradicts them.
   facts the sandboxed agent can't see — image staleness, auth
   resolvability, worktree/disk/doc drift), runtime telemetry
   (retry/exit/phase data piggybacking on `run_progress`), and agent
-  reflection. The user-facing knob is `ergonomics=off|log|local|response`
-  (default `log` — a quiet daemon log for user-owned runs); `response`
-  re-homes `runner.self_review` as a skippable, visible reply footer.
-  Shipped proxies are `NullErgoProxy`, `LogErgoProxy`, and
-  `LocalErgoProxy`; `BrnrdErgoProxy` remains the designed
-  operator-owned sink. User-owned runs default to `LogErgoProxy` and
-  honour the knob (`off`→null, `local`→on-disk store + `brr ergonomics`
-  CLI, `response`→reflection in reply). Operator-owned runs ignore the
-  knob and currently short-circuit to `NullErgoProxy` until the brnrd
-  proxy/endpoint lands; they never put ergonomics in the reply. The
-  brnrd dashboard's project + fleet ergonomics views are designed, not
-  built.
+  reflection. The user-facing knob is `ergonomics=off|log|local`
+  (default `log` — a quiet daemon log for user-owned runs). Shipped
+  proxies are `NullErgoProxy`, `LogErgoProxy`, and `LocalErgoProxy`;
+  `BrnrdErgoProxy` remains the designed operator-owned sink. User-owned
+  runs default to `LogErgoProxy` and honour the knob (`off`→null,
+  `local`→on-disk store + `brr ergonomics` CLI). Operator-owned runs
+  ignore the knob and currently short-circuit to `NullErgoProxy` until
+  the brnrd proxy/endpoint lands; they never put ergonomics in the
+  reply. (The visible-reflection `response` mode was retired 2026-06-08
+  with the resident reshape — reflection now feeds the dominion journal,
+  not a reply footer.) The brnrd dashboard's project + fleet ergonomics
+  views are designed, not built.
 - [Environment shaping loop](design-environment-shaping.md) —
   *proposed (2026-06-04); prior reasoning since 2026-06-08 — substrate
   absorbed into [`design-agent-dominion.md`](design-agent-dominion.md)*.
