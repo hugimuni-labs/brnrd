@@ -5715,3 +5715,24 @@ fresh / orphan-history / custom-branch / restart-idempotent / returning-local /
 returning-from-remote / no-remote; full suite green (678 passed). Next: **1b** —
 self-inject resolution (`full|head|tail|grep`, budget cap) + wake-time injection
 at `prompts._join_prompt_parts`.
+
+## [2026-06-08] implement | dominion substrate (slice 1b) — self-inject digest on wake
+
+Made the dominion *speak* into context. `dominion.resolve_self_inject()` reads the
+agent-owned `self-inject` manifest (one `<mode> <path>` per line; `#` comments
+skipped), renders each entry — `full | head:N | tail:N | grep:<pattern>` — and
+concatenates fragments in manifest order within a UTF-8 byte budget
+(`DEFAULT_INJECT_BUDGET_BYTES=8192`), truncating the overflowing entry with a
+marker so order = priority. Two deliberate guards: `exec` is *recognised but not
+run* (the integrity-sensitive mode lands with its guard in a later slice, so it's
+skipped for now), and every path is `resolve()`d and kept inside the dominion dir
+(an escaping `../` is refused, not read). Injection lives in
+`prompts._build_dominion_block` → `_join_prompt_parts`, so **both** the daemon
+prompt and `brr run` carry it (ad-hoc sessions are the same resident). Reads the
+shared dominion via `shared_brr_dir`, so a per-task worktree still finds the one
+`.brr/dominion/`. Decision: the digest is **prompt-only**, *not* mirrored into the
+`run_context.md` recovery file — `render_context` already omits the `kb/log` block
+for the same reason (the bundle is the hot path; the recovery file is for details
+the bundle lacks). Config knob `dominion.inject_budget_bytes` added to `brr init`
+defaults. Full suite green (688 passed). Next: **slice 2** — single-flight daemon
+loop (spawn-one-when-idle; inbox scan at plan boundaries).
