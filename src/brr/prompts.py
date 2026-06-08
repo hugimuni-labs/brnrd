@@ -279,6 +279,7 @@ def build_daemon_prompt(
     response_path: str,
     repo_root: Path,
     *,
+    outbox_path: str | None = None,
     task_id: str | None = None,
     source: str | None = None,
     environment: str | None = None,
@@ -302,6 +303,7 @@ def build_daemon_prompt(
     bundle = _build_task_context_bundle(
         event_id=event_id,
         response_path=response_path,
+        outbox_path=outbox_path,
         repo_root=repo_root,
         task_id=task_id,
         source=source,
@@ -337,6 +339,7 @@ def _build_task_context_bundle(
     *,
     event_id: str,
     response_path: str,
+    outbox_path: str | None = None,
     repo_root: Path,
     task_id: str | None,
     source: str | None,
@@ -416,6 +419,19 @@ def _build_task_context_bundle(
         "write that file yourself, and don't substitute a file path for "
         "the answer."
     )
+    if outbox_path:
+        sections.append(
+            "- You can also send the user a reply *mid-thought* — before a "
+            "long stretch, to share trajectory, or to answer a quick thing "
+            "right away — by writing a markdown file into your outbox "
+            f"directory `{outbox_path}`. brr delivers each file as its own "
+            "chat message, in order, while you keep working, then your final "
+            "stdout closes the thread. One file is one message; write the "
+            "complete reply (stage as `*.tmp` and rename if you want an "
+            "atomic write). Interim replies are extra messages, not a "
+            "substitute for the final stdout — don't repeat yourself. This "
+            "is optional: a single final stdout is a complete, healthy run."
+        )
     sections.append(
         "- The user reads your reply remotely (Telegram / Slack / etc.). "
         "Refer to files by basename only — `subject-envs.md`, "

@@ -689,10 +689,16 @@ def _run_worker(
 
     task.update_status("running", tasks_dir)
     resp_path = protocol.response_path(responses_dir, eid)
+    # Per-event drop zone for interim responses the resident ships
+    # mid-flight (the multi-response protocol, kb/design-multi-response.md).
+    # Created up front so the agent can write to it the moment it wakes.
+    outbox_dir = brr_dir / "outbox" / eid
+    outbox_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[brr] task {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)
+    task.meta["outbox_path"] = str(outbox_dir)
     task.meta.update(branch_plan.meta_items())
 
     event_body_for_prompt = event.get("body", "") or ""
@@ -705,6 +711,7 @@ def _run_worker(
             cfg,
             branch_plan=branch_plan,
             response_path=resp_path,
+            outbox_path=outbox_dir,
         )
     except RuntimeError as e:
         print(f"[brr] task {task.id}: env setup failed: {e}")
@@ -798,6 +805,7 @@ def _run_worker(
         if attempt == 1:
             prompt = prompts.build_daemon_prompt(
                 task.body, eid, str(env_ctx.response_path_env), run_root,
+                outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
                 task_id=task.id,
                 source=task.source or event.get("source"),
                 environment=task.env,
@@ -817,6 +825,7 @@ def _run_worker(
                 f"Print your full response as the final stdout message.\n\n"
                 f"Original task: {task.body}",
                 eid, str(env_ctx.response_path_env), run_root,
+                outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
                 task_id=task.id,
                 source=task.source or event.get("source"),
                 environment=task.env,
@@ -837,6 +846,10 @@ def _run_worker(
         attempt_started_monotonic = time.monotonic()
 
         def _emit_heartbeat() -> None:
+            # Drain first: promoting an interim response is the resident's
+            # mid-run check-in, and the partial should reach the gate as
+            # promptly as the heartbeat that observed the agent is alive.
+            _drain_outbox(emit, task, responses_dir, eid, outbox_dir)
             elapsed = int(time.monotonic() - attempt_started_monotonic)
             emit(
                 "heartbeat",
@@ -863,6 +876,9 @@ def _run_worker(
             on_heartbeat=_emit_heartbeat,
         )
         _emit_new_containers(emit, task.id, env_ctx, seen_containers)
+        # Final drain after the runner returns: catch interim responses
+        # written between the last heartbeat and exit, before finalize.
+        _drain_outbox(emit, task, responses_dir, eid, outbox_dir)
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
         try:
@@ -899,6 +915,7 @@ def _run_worker(
             with _branch_lock(branch_plan.target_branch):
                 task = env_backend.finalize(env_ctx, task, tasks_dir)
             _cleanup_traces_on_success(brr_dir, tasks_dir, task)
+            _remove_outbox(outbox_dir)
             _emit_preserved_containers(emit, task)
             emit(
                 "done",
@@ -954,6 +971,7 @@ def _run_worker(
     emit("finalizing", task_id=task.id, stage="failed")
     with _branch_lock(branch_plan.target_branch):
         task = env_backend.finalize(env_ctx, task, tasks_dir)
+    _remove_outbox(outbox_dir)
     _emit_preserved_containers(emit, task)
     failed_payload: dict[str, object] = {
         "task_id": task.id,
@@ -1088,6 +1106,78 @@ def _emit_preserved_containers(
     if not containers:
         return
     emit("container_preserved", task_id=task.id, containers=containers)
+
+
+def _drain_outbox(
+    emit: _WorkerEmit,
+    task: Task,
+    responses_dir: Path,
+    event_id: str,
+    outbox_dir: Path | None,
+) -> int:
+    """Promote interim responses the resident dropped in its outbox.
+
+    The producer half of the multi-response protocol
+    (``kb/design-multi-response.md``). Scans the per-event drop zone
+    oldest-first, promotes each complete file to the event's partials
+    queue (so gates stream it ahead of the terminal reply), indexes it
+    on the conversation log, emits an ``interim_response`` packet, and
+    removes the consumed file. ``.tmp`` files are skipped so the agent
+    has an atomic-write staging name. Returns the count promoted — a
+    promoting drain is also a liveness check-in.
+
+    Called from the heartbeat tick (so it drains while the runner is
+    alive) and once more right after the runner returns (to catch the
+    final writes before finalize). Errors are swallowed: a drain bug
+    must never break a real run.
+    """
+    if not outbox_dir or not outbox_dir.exists():
+        return 0
+    try:
+        entries = sorted(
+            (p for p in outbox_dir.iterdir() if p.is_file()),
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
+        )
+    except OSError:
+        return 0
+    promoted = 0
+    for fpath in entries:
+        if fpath.suffix == ".tmp":
+            continue
+        try:
+            body = protocol.read_partial(fpath)
+            ppath = (
+                protocol.write_partial(responses_dir, event_id, body)
+                if body else None
+            )
+            fpath.unlink(missing_ok=True)
+        except OSError:
+            continue
+        if not ppath:
+            continue
+        promoted += 1
+        if emit.conversation_key:
+            conversations.append_artifact(
+                emit.brr_dir, emit.conversation_key,
+                kind="interim_response",
+                path=str(ppath),
+                task_id=task.id,
+                event_id=event_id,
+                label=f"interim:{event_id}",
+            )
+        emit(
+            "interim_response",
+            task_id=task.id,
+            event_id=event_id,
+            path=str(ppath),
+        )
+    return promoted
+
+
+def _remove_outbox(outbox_dir: Path | None) -> None:
+    """Best-effort removal of a drained per-event outbox drop zone."""
+    if outbox_dir:
+        shutil.rmtree(outbox_dir, ignore_errors=True)
 
 
 def _record_response_artifact(

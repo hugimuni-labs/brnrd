@@ -29,7 +29,8 @@ def _stub_env_isolated(monkeypatch, tmp_path):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path,
+                    outbox_path=None):
             return envs.RunContext(
                 name=self.name,
                 cwd=worktree_path,
@@ -37,6 +38,8 @@ def _stub_env_isolated(monkeypatch, tmp_path):
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
+                outbox_host=outbox_path,
+                outbox_env=outbox_path,
                 branch_name=f"brr/{task.id}",
                 env_state={"worktree_path": str(worktree_path)},
             )
@@ -145,12 +148,15 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
     class RetryEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path,
+                    outbox_path=None):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
+                outbox_host=outbox_path,
+                outbox_env=outbox_path,
                 branch_name=f"brr/{task.id}",
                 env_state={"worktree_path": str(tmp_path)},
             )
