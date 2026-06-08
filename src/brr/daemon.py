@@ -694,6 +694,7 @@ def _run_worker(
     # Created up front so the agent can write to it the moment it wakes.
     outbox_dir = brr_dir / "outbox" / eid
     outbox_dir.mkdir(parents=True, exist_ok=True)
+    inbox_dir = brr_dir / "inbox"
 
     print(f"[brr] task {task.id} (event {eid}): env={task.env}")
 
@@ -777,6 +778,19 @@ def _run_worker(
         if conv_key else []
     )
 
+    # Snapshot of other waiting events so the resident can fold a quick
+    # one in mid-thought (the multi-response interleaving contract). Taken
+    # at wake; more may arrive after. Excludes this event (now processing).
+    pending_events_snapshot = [
+        {
+            "id": ev.get("id"),
+            "source": ev.get("source"),
+            "summary": ev.get("body") or "",
+        }
+        for ev in protocol.list_pending(inbox_dir)
+        if ev.get("id") != eid
+    ]
+
     context_path = run_context.write_context_file(
         brr_dir,
         task,
@@ -816,6 +830,7 @@ def _run_worker(
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
+                pending_events=pending_events_snapshot,
                 event_body=event_body_for_prompt,
                 diffense=prompt_diffense,
             )
@@ -836,6 +851,7 @@ def _run_worker(
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
+                pending_events=pending_events_snapshot,
                 event_body=event_body_for_prompt,
                 diffense=prompt_diffense,
             )
@@ -849,7 +865,7 @@ def _run_worker(
             # Drain first: promoting an interim response is the resident's
             # mid-run check-in, and the partial should reach the gate as
             # promptly as the heartbeat that observed the agent is alive.
-            _drain_outbox(emit, task, responses_dir, eid, outbox_dir)
+            _drain_outbox(emit, task, responses_dir, eid, outbox_dir, inbox_dir)
             elapsed = int(time.monotonic() - attempt_started_monotonic)
             emit(
                 "heartbeat",
@@ -878,7 +894,7 @@ def _run_worker(
         _emit_new_containers(emit, task.id, env_ctx, seen_containers)
         # Final drain after the runner returns: catch interim responses
         # written between the last heartbeat and exit, before finalize.
-        _drain_outbox(emit, task, responses_dir, eid, outbox_dir)
+        _drain_outbox(emit, task, responses_dir, eid, outbox_dir, inbox_dir)
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
         try:
@@ -1108,28 +1124,48 @@ def _emit_preserved_containers(
     emit("container_preserved", task_id=task.id, containers=containers)
 
 
+def _find_pending_event(inbox_dir: Path | None, event_id: str) -> dict | None:
+    """Return the inbox event with *event_id* if it's still pending/processing."""
+    if not inbox_dir:
+        return None
+    for ev in protocol.list_pending(inbox_dir):
+        if ev.get("id") == event_id:
+            return ev
+    return None
+
+
 def _drain_outbox(
     emit: _WorkerEmit,
     task: Task,
     responses_dir: Path,
     event_id: str,
     outbox_dir: Path | None,
+    inbox_dir: Path | None = None,
 ) -> int:
-    """Promote interim responses the resident dropped in its outbox.
+    """Promote interim/interleaved responses the resident dropped in its outbox.
 
     The producer half of the multi-response protocol
     (``kb/design-multi-response.md``). Scans the per-event drop zone
-    oldest-first, promotes each complete file to the event's partials
-    queue (so gates stream it ahead of the terminal reply), indexes it
-    on the conversation log, emits an ``interim_response`` packet, and
-    removes the consumed file. ``.tmp`` files are skipped so the agent
-    has an atomic-write staging name. Returns the count promoted — a
-    promoting drain is also a liveness check-in.
+    oldest-first; for each complete file it reads an optional
+    ``event: <id>`` frontmatter target:
+
+    - **Current event** (no target, or the target is this event): promote
+      to this event's partials queue as an interim reply, streamed ahead
+      of the terminal stdout.
+    - **Another pending event** (interleaving): the resident folded a
+      quick request in without waiting for its own spawn — promote the
+      body to *that* event's queue and mark *that* event ``done`` so the
+      gate delivers the reply to its thread and cleans it up. A target
+      that isn't a live pending event is dropped (don't misroute).
+
+    Each promotion is indexed on the conversation log and emits an
+    ``interim_response`` packet; the consumed file is removed. ``.tmp``
+    files are skipped so the agent has an atomic-write staging name.
+    Returns the count promoted — a promoting drain is also a liveness
+    check-in. Errors are swallowed: a drain bug must never break a run.
 
     Called from the heartbeat tick (so it drains while the runner is
-    alive) and once more right after the runner returns (to catch the
-    final writes before finalize). Errors are swallowed: a drain bug
-    must never break a real run.
+    alive) and once more right after the runner returns.
     """
     if not outbox_dir or not outbox_dir.exists():
         return 0
@@ -1145,17 +1181,27 @@ def _drain_outbox(
         if fpath.suffix == ".tmp":
             continue
         try:
-            body = protocol.read_partial(fpath)
-            ppath = (
-                protocol.write_partial(responses_dir, event_id, body)
-                if body else None
-            )
-            fpath.unlink(missing_ok=True)
+            text = fpath.read_text(encoding="utf-8")
         except OSError:
             continue
+        target = str(protocol.parse_frontmatter(text).get("event") or "").strip()
+        target = target or event_id
+        body = protocol.frontmatter_body(text).strip()
+        cross = target != event_id
+        target_event = _find_pending_event(inbox_dir, target) if cross else None
+        if cross and target_event is None:
+            # Unknown or already-handled target — don't deliver to the
+            # wrong thread; drop with a console note.
+            print(f"[brr] outbox: no deliverable event {target!r}; dropping reply")
+            fpath.unlink(missing_ok=True)
+            continue
+        ppath = protocol.write_partial(responses_dir, target, body) if body else None
+        fpath.unlink(missing_ok=True)
         if not ppath:
             continue
         promoted += 1
+        if cross and target_event is not None:
+            _set_event_status_if_present(target_event, "done")
         if emit.conversation_key:
             conversations.append_artifact(
                 emit.brr_dir, emit.conversation_key,
@@ -1163,13 +1209,14 @@ def _drain_outbox(
                 path=str(ppath),
                 task_id=task.id,
                 event_id=event_id,
-                label=f"interim:{event_id}",
+                label=(f"reply:{target}" if cross else f"interim:{event_id}"),
             )
         emit(
             "interim_response",
             task_id=task.id,
             event_id=event_id,
             path=str(ppath),
+            target_event=(target if cross else None),
         )
     return promoted
 
