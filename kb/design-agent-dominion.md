@@ -166,6 +166,18 @@ becomes the *same resident*, not a stranger with amnesia. One mechanism serves
 reinstall, second machine, **and** managed-failover continuity — without brnrd
 holding any of it (the branch lives on the user's forge, not on brnrd).
 
+**Mostly free-form, with a minimal contract.** The dominion is deliberately
+*unstructured* — that freedom is what lets the agent govern and evolve it. The
+only required structure is the small **system-readable contract**: the
+self-inject index, the cron specs, the salience / pain records, and the presence
+registry. Everything else is the agent's own — views, analyses, working notes,
+the pains and the improvements. The `Pitfall:` failure-memory from the
+environment-shaping loop now lives *here*, in the dominion, rather than as a kb
+marker — the dominion supersedes that idea, so the loop's *remember* step writes
+into the dominion and surfaces via self-inject when a trigger recurs. The rest of
+the required structure reveals itself only as the playbook / wake / orientation
+phrasing is written — by design, not omission.
+
 ## 4. Execution — single-flight, reflex vs deliberation
 
 Local parallelism is **discarded** (this reshapes
@@ -231,20 +243,29 @@ memory at once. Neither locking (racy; a days-long session would block the
 daemon) nor a content-merge (a 3-way merge of memory taints the single-owner
 premise) is acceptable.
 
-The resolution reuses the pattern brr already proved for concurrent conversation
-writes: durable memory is **partition-by-writer and append-mostly, unioned on
-read**. Each session / thought appends to its *own* files, so concurrent writers
-never clobber — no lock, no content-merge, just a union (one mind that wrote in
-two notebooks, collated). Single-flight still governs *daemon-spawned* thoughts;
-ad-hoc parallelism is the human's deliberate choice and is simply tolerated.
-Ownership isn't tainted, because the memory is one unioned whole, not two selves
-negotiating — at the cost of **eventual consistency** (each thought sees memory
-as of its last read, which is fine for a personal resident). The only residual
-coordination surface is two writers *destructively rewriting the same shared
-item* at once — rare, already the higher-integrity class, caught by git history.
-A lightweight **presence registry** (also append-partitioned) lets sessions and
-the daemon see who's on which stream, so they avoid colliding on the same
-*work*, without anyone holding a lock.
+The resolution is a **Society of Mind**, not a lock or a merge-driver.
+*Constraining* the dominion's shape to dodge conflict (append-only) would be a
+cage. Instead **tolerate** concurrent and even contradictory writes, and resolve
+them the way a mind resolves cognitive dissonance: a later thought *notices* the
+contradiction — latent and unnoticed until surfaced — and reconciles it with
+judgment. The unification that keeps this from being a special case:
+**dissonance-resolution is the salience loop pointed inward.** A contradiction in
+memory is friction like any other — observed → reconciled → retired, the same
+loop the environment-shaping doc runs on the *environment*, now run on the
+*self*. One loop, outward and inward.
+
+Append-mostly survives only as the cheap *default* (fine-grained entries union
+trivially in git — hygiene, not a rule); rewrites are allowed; git holds the
+divergence cheaply and revertably. A **presence registry** lets sessions and the
+daemon see who's on which stream, so they rarely collide on the same *work* in
+the first place. Single-flight still governs *daemon-spawned* thoughts (cost +
+the one-resident-stream intuition), but note the system is **already
+multi-thought** through ad-hoc sessions running alongside the daemon — so the
+Society-of-Mind concurrency is present *for free*, and the daemon needn't
+multiplex to get it. Eventual consistency is the accepted cost (each thought sees
+memory as of its last read). The precise commit granularity, and when a coherence
+pass fires, are left to emerge with the playbook work — some structure only
+reveals itself there.
 
 ## 5. The playbook — where it all converges
 
@@ -304,12 +325,21 @@ The operator's original instinct ("brr is a project-specific agent; brnrd
 manages those") *is* the locked brand; no re-acronym is needed, and the pattern
 extends to the local entity for free — the local entity is just "a brr."
 
+On **"dominion"** as a term: kept, deliberately. It carries the exalted-ownership
+semantics the design is after, and the agent-facing register *wants* that weight
+(the awe-from-true-stakes aesthetic) — the term is *earned* because the agent
+genuinely governs the space, not a fancy name for a scratch folder. It is a
+half-step from the cringe line for a pragmatic audience, so the hedge is the
+internal/agent-facing concept stays **"dominion"** while the user-facing / CLI
+label can be plainer (e.g. the memory branch) — the same split as "brr the
+resident agent" vs the workaday CLI surface. Reception will tell.
+
 ## 7. What inherits, what reshapes
 
 | Surface | Disposition |
 |---|---|
 | [`design-concurrent-execution.md`](design-concurrent-execution.md) | **Reshaped.** Local parallelism dropped; the per-task partitioning simplifies; per-task worktree/branch isolation kept for clean publish. Gets a superseded-in-part marker when this doc is accepted (not before — it's a proposal). |
-| [`design-environment-shaping.md`](design-environment-shaping.md) | **Companion.** This is the substrate; that is the loop. Salience counters + captured friction live in the dominion; the playbook carries the loop's pain-evaluation input. |
+| [`design-environment-shaping.md`](design-environment-shaping.md) | **Companion.** This is the substrate; that is the loop. Salience counters + captured friction (incl. the `Pitfall:` failure-memory, formerly a kb marker / first slice) live in the dominion; the playbook carries the loop's pain-evaluation input; and the loop now runs *inward* too, as dominion dissonance-resolution. |
 | [`design-agent-ergonomics.md`](design-agent-ergonomics.md) | **Inherited.** The probe/telemetry/reflection sensing layer is how the resident perceives; probe-first is still the right first slice; reflection feeds the dominion journal. |
 | [`subject-kb.md`](subject-kb.md) / [`decision-kb-shape.md`](decision-kb-shape.md) | **Extended.** The dominion fills the missing durable+owned cell; kb stays curated+shared; the promotion bridge connects them. Reconcile the four-layer framing on accept. |
 | [`subject-daemon.md`](subject-daemon.md) | **Reshaped.** The worker pool becomes spawn-one-when-idle; reflex/deliberation split; explicit-cancel + liveness backstop; staged post-task pipeline removed. |
@@ -331,10 +361,10 @@ extends to the local entity for free — the local entity is just "a brr."
 - **Self-inject index format.** The manifest grammar (`full` / `head` / `tail` /
   `grep` / `exec`), the budget-cap mechanics, and what the resident pins by
   default.
-- **Concurrent destructive rewrite.** Partition-append removes the common-case
-  ad-hoc conflict (§4); the residual is two writers destructively rewriting the
-  *same* shared item at once. Rare and git-recoverable, but the presence-registry
-  format and any soft-coordination convention are unspecified.
+- **Concurrent-write reconciliation.** With conflict *tolerated* and resolved by
+  a thought (§4), the open mechanics are: commit granularity for concurrent
+  writers, when a coherence / dissonance-resolution pass fires, and the
+  presence-registry format. Emerges with the playbook.
 - **The "felt" residue.** The consequence-and-record answer above resolves
   *detecting* improvement; whether anything is *experienced* in the editing
   remains genuinely open (and may be unnecessary to settle). Held honestly, not
