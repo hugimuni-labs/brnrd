@@ -95,9 +95,9 @@ sessions, and the managed multi-daemon case:
 never parses `/cancel` or any command — every event either wakes the
 agent or waits for the living agent to handle it (cancel/redirect
 semantics are the agent's job, reconsidered at plan boundaries; the
-mid-flight inbox channel is the multi-response protocol, designed in
-[`design-agent-dominion.md`](design-agent-dominion.md) §4, not yet
-shipped). What the daemon *does* guarantee is that the single-flight
+mid-flight inbox channel is the multi-response protocol, specified in
+[`design-multi-response.md`](design-multi-response.md), in flight). What
+the daemon *does* guarantee is that the single-flight
 slot is reclaimed even if a runner subprocess wedges: the runner's
 wall-clock timeout (`runner.timeout_seconds`, default 3600s) kills it. A
 finer idle timeout ("no agent check-in in N minutes") only becomes an
