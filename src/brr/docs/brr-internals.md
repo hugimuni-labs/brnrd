@@ -138,25 +138,22 @@ never in `.brr/`. The split is:
 - `src/brr/docs/` (bundled) + `.brr/docs/` (override) — tool
   documentation, same across all repos unless a user overrides.
 
-## KB maintenance: preflight + redundancy pass
+## KB maintenance: deterministic preflight, injected on wake
 
-After every successful task, the daemon runs a deterministic kb
-consistency scan (`brr.kb_preflight.scan(run_root)`) over `kb/` and
-*may* follow it with a short LLM redundancy pass invoked with
-`prompts/kb-maintenance.md`. The decision logic is:
+brr runs a deterministic kb consistency scan
+(`brr.kb_preflight.scan(repo_root)`) over `kb/` as part of prompt
+assembly (`prompts._build_kb_health_block`). When the scan finds
+anything, the findings — plus a one-line graph-stats summary
+(`brr.kb_health`) — ride into the resident's wake prompt as a
+`kb health (deterministic preflight)` block, and the resident folds
+fixes into its own thought. A clean scan injects nothing.
 
-```
-policy = cfg["kb_maintenance"]  # default: "auto"
-
-if policy == "never":   skip both preflight and LLM pass
-findings = kb_preflight.scan(run_root)
-kb_changed = git diff / ls-files in kb/
-
-if policy == "auto" and not kb_changed and not findings:
-    skip the LLM pass — the safety net is clean
-else:
-    inject findings into the maintenance prompt and run the LLM pass
-```
+There is **no separate post-task kb-maintenance agent**. (Earlier
+versions spawned a second LLM pass after every kb-touching task, with
+its own `prompts/kb-maintenance.md`; removed 2026-06-08 — the resident
+curates the shared kb as part of its single thought, with the
+deterministic scan as the standing safety net. See
+`kb/design-agent-dominion.md` and `kb/subject-daemon.md`.)
 
 The preflight is cheap and structural — it only flags things a
 deterministic scanner can be confident about:
@@ -169,45 +166,24 @@ deterministic scanner can be confident about:
   to a path that doesn't exist.
 
 Lifecycle-marker drift, contradictions with the log, and other
-judgement calls are left to the LLM redundancy pass — they need
-synthesis the scanner can't do.
+judgement calls aren't the scanner's job — they need synthesis the
+resident does directly as it works.
 
-### "Did this task touch kb/" check
+### Why a deterministic safety net
 
-```
-git diff --name-only -- kb/                     # tracked-file changes
-git ls-files --others --exclude-standard -- kb/ # new untracked files
-```
-
-If either output is non-empty, the kb was touched. If the git command
-fails (missing, timeout) the check returns False — the preflight
-findings still carry the maintenance pass on their own when needed.
-
-### Why preflight + redundancy
-
-Earlier drafts ran the LLM pass on every kb-touched task and skipped
-otherwise — a task-body heuristic. The preflight inverts the contract:
-deterministic checks are cheap enough to run every time, so they
-become the safety net that catches drift left by *previous* tasks too
-(say, a slashed page that another page still links to). The LLM pass
-is reserved for the synthesis-heavy work, with the concrete findings
-already in the prompt.
-
-A failed maintenance pass is logged but never fails the parent task.
+Deterministic checks are cheap enough to run on every wake, so they
+catch drift left by *previous* work too (say, a slashed page another
+page still links to), surfaced where the resident is already working
+rather than in a separate pass that has to be spawned and that
+historically dropped its edits silently.
 
 ### Configuring it
 
 In `.brr/config`:
 
-- `kb_maintenance=auto` (default) — preflight always; LLM pass only
-  when kb changed or the preflight has findings.
-- `kb_maintenance=always` — LLM pass after every successful task,
-  even with a clean kb and clean preflight.
-- `kb_maintenance=never` — skip both the preflight and the LLM pass.
-
-Set to `always` if you want stricter kb/ hygiene at the cost of one
-extra runner invocation per task. Set to `never` if you prefer to do
-kb maintenance manually.
+- `kb_maintenance=auto` (default) — inject preflight findings on wake
+  whenever the scan isn't clean.
+- `kb_maintenance=never` — never inject; do kb hygiene by hand.
 
 ## Run progress UX
 

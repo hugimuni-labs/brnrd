@@ -159,6 +159,46 @@ def _build_dominion_block(repo_root: Path) -> str:
     )
 
 
+def _build_kb_health_block(repo_root: Path) -> str:
+    """Render the deterministic kb-health preflight as a wake-time block.
+
+    Runs the cheap consistency scan (:mod:`brr.kb_preflight`) plus the
+    graph-stats snapshot (:mod:`brr.kb_health`) over ``kb/`` and surfaces
+    any findings so the resident folds fixes into the current thought.
+    Returns ``""`` when the scan is clean (a clean preflight is silent,
+    not a tax on every wake) or when the inject is disabled with
+    ``kb_maintenance=never`` in ``.brr/config``.
+
+    (Earlier versions spawned a separate post-task kb-maintenance agent
+    that consumed these findings; removed 2026-06-08 — the resident
+    curates the shared kb as part of its own thought, with this
+    deterministic signal injected on wake instead. See
+    ``kb/design-agent-dominion.md`` and ``kb/subject-daemon.md``.)
+    """
+    from . import config as conf
+    from . import kb_health, kb_preflight
+
+    cfg = conf.load_config(repo_root)
+    if str(cfg.get("kb_maintenance", "auto")).strip().lower() == "never":
+        return ""
+    findings = kb_preflight.scan(repo_root)
+    if not findings:
+        return ""
+    findings_block = kb_preflight.format_findings(findings)
+    stats_block = kb_health.format_graph_stats(
+        kb_health.compute_graph_stats(repo_root),
+    )
+    body = "\n\n".join(b for b in (findings_block, stats_block) if b)
+    return (
+        "## kb health (deterministic preflight)\n\n"
+        "The shared `kb/` has the consistency findings below. Fold fixes "
+        "into your work where they fit — `kb/` is shared and governed by "
+        "`AGENTS.md`; the graph stays clean when each waking leaves it no "
+        "worse than it found it.\n\n"
+        f"{body}"
+    )
+
+
 def _join_prompt_parts(
     preamble: str,
     repo_root: Path,
@@ -175,6 +215,9 @@ def _join_prompt_parts(
     context = _build_context_block(repo_root)
     if context:
         parts.append(context)
+    kb_health_block = _build_kb_health_block(repo_root)
+    if kb_health_block:
+        parts.append(kb_health_block)
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
@@ -302,11 +345,6 @@ def build_daemon_prompt(
         preamble, repo_root, trailer,
         reflection=reflection, diffense=diffense,
     )
-
-
-def build_kb_maintenance_prompt(repo_root: Path) -> str:
-    """Return the post-task KB consistency-check prompt (or empty)."""
-    return read_prompt("kb-maintenance.md", repo_root)
 
 
 # ── Task Context Bundle internals ────────────────────────────────────
