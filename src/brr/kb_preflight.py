@@ -1,30 +1,32 @@
-"""Deterministic kb consistency scan for the post-task maintenance pass.
+"""Deterministic kb consistency scan, injected into the resident's wake.
 
 The preflight reads the on-disk shape of ``kb/`` and produces a list
-of structured findings. It does not modify anything; the LLM-driven
-kb-maintenance prompt either acts on the findings or explains why no
-action is needed.
+of structured findings. It does not modify anything; the resident sees
+the findings on wake (via ``prompts._build_kb_health_block``) and folds
+fixes into its own thought.
 
-Skip-fast contract: when the preflight returns no findings *and*
-``kb/`` was untouched by the preceding task, the maintenance pass can
-be skipped entirely. That keeps the daemon's hot path cheap and
-turns kb-maintenance into a true safety net rather than a tax on
-every run.
+Skip-fast contract: when the preflight returns no findings, the wake
+block is dropped entirely — a clean preflight is silent, never a tax on
+every wake.
+
+(Earlier versions fed an LLM-driven kb-maintenance prompt spawned as a
+separate post-task pass; that pass was removed 2026-06-08 in favour of
+the resident curating the shared kb as part of its thought. See
+``kb/design-agent-dominion.md`` and ``kb/subject-daemon.md``.)
 
 Each finding carries a ``severity``:
 
 - ``error``: a structural inconsistency the scanner is confident
   about. Existing types: ``missing-from-index``, ``stale-index-entry``,
   ``broken-link``, ``missing-index``.
-- ``warning``: a heuristic advisory the maintenance pass should act
-  on when proportional. Types: ``oversized-page``,
-  ``missing-status-marker``, ``revision-history-heavy``.
-- ``info``: a soft hint for the maintenance pass. Types:
-  ``recent-log-budget-exceeded``, ``hub-coverage``,
-  ``proposal-scaffolding``.
+- ``warning``: a heuristic advisory worth acting on when proportional.
+  Types: ``oversized-page``, ``missing-status-marker``,
+  ``revision-history-heavy``.
+- ``info``: a soft hint. Types: ``recent-log-budget-exceeded``,
+  ``hub-coverage``, ``proposal-scaffolding``.
 
-Contradictions with the log and similar judgement calls live in the
-LLM redundancy pass on top — they need synthesis the scanner can't do.
+Contradictions with the log and similar judgement calls aren't the
+scanner's job — they need synthesis the resident does directly.
 """
 
 from __future__ import annotations

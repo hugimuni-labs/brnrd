@@ -53,6 +53,11 @@ delivery contract is explicit: stdout is the user's chat reply, kb
 writes are optional — agents log only when there's something worth
 logging (see AGENTS.md → Knowledge base).
 
+Prompt assembly also injects the resident's dominion digest (per its
+`self-inject` index) and, when the deterministic kb preflight isn't
+clean, a `kb health` block of findings for the resident to fold into
+its work (see [`brr-internals.md`](brr-internals.md) → KB maintenance).
+
 ### 4. Response
 
 The agent's final reply is its last stdout message. brr captures stdout
@@ -68,10 +73,10 @@ stop. The operator sees the reply in the gate thread and follows up
 with another event.
 
 Once the response file is validated, the daemon marks the inbox event
-`done` before running kb maintenance, environment finalization, or
-branch push. Gates deliver `done` events and clean up the inbox and
-response files after a successful send, while the progress card can
-continue to show post-response housekeeping.
+`done` before environment finalization or branch push. Gates deliver
+`done` events and clean up the inbox and response files after a
+successful send, while the progress card can continue to show
+post-response housekeeping.
 
 If the runner exits cleanly but stdout is empty, the daemon retries up
 to `response_retries` times before failing the task. Hard failures
@@ -79,18 +84,7 @@ to `response_retries` times before failing the task. Hard failures
 default 3600s) are surfaced to the gate immediately with the captured
 error rather than burning another expensive attempt.
 
-### 5. KB maintenance (preflight + optional LLM pass)
-
-After the response is released, `brr.kb_preflight.scan` runs over
-`kb/` and returns structured findings (orphan pages, broken links,
-index drift). When findings exist or the task modified `kb/`, a short
-LLM redundancy pass runs with the findings injected into the prompt;
-otherwise the LLM pass is skipped. The primary maintenance contract
-lives in AGENTS.md (the universal kb shape rules every tool follows);
-this hook is the brr-side safety net. See `brr-internals.md` for the
-preflight check list and trigger logic.
-
-### 6. Finalization
+### 5. Finalization
 
 For worktree tasks, the daemon inspects the worktree's git state. If
 the agent left commits on the original `brr/<task-id>` branch and the

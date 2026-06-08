@@ -116,10 +116,6 @@ class RunProgressView:
     push_ok: bool = True
     push_error: str | None = None
     view_url: str | None = None
-    maintenance_ran: bool = False
-    maintenance_commits: int = 0
-    maintenance_files: int = 0
-    maintenance_ok: bool = True
     sync_summary: str | None = None
 
     @property
@@ -342,13 +338,6 @@ def _project(
                 )
             else:
                 view.detail = "push failed"
-        elif ptype == "kb_maintenance_done":
-            view.maintenance_ran = True
-            commits = record.get("commits")
-            files = record.get("files")
-            view.maintenance_commits = int(commits) if isinstance(commits, int) else view.maintenance_commits
-            view.maintenance_files = int(files) if isinstance(files, int) else view.maintenance_files
-            view.maintenance_ok = bool(record.get("ok", True))
         elif ptype == "failed":
             view.state = "failed"
             stage = record.get("stage")
@@ -659,19 +648,6 @@ def _terminal_extra(view: RunProgressView, entry: PhaseEntry) -> str:
         parts.append(f"pushed {view.push_commits} commit{plural}")
     elif entry.name == "delivered" and not view.push_ok:
         parts.append("push failed")
-    if entry.name == "delivered" and view.maintenance_ran:
-        # When the maintenance pass ran, surface it in the card so
-        # the operator sees that kb cleanup happened on the same
-        # branch. Without this packet the pass was historically a
-        # silent drop — the response card was the only place the
-        # operator looked, and it never reported maintenance state.
-        if view.maintenance_commits:
-            plural = "" if view.maintenance_commits == 1 else "s"
-            parts.append(
-                f"maintenance: {view.maintenance_commits} kb commit{plural}"
-            )
-        else:
-            parts.append("maintenance: clean")
     return " · ".join(parts)
 
 
