@@ -1,22 +1,28 @@
-"""Daemon — main loop that scans the inbox, runs workers, pushes results.
+"""Daemon — reflex loop that scans the inbox, wakes the agent, pushes results.
 
-The daemon is a single foreground process (``brr up``).  It:
+The daemon is a single foreground process (``brr up``) and a deliberately
+thin **reflex** layer: it does as little orchestration as possible and
+leaves judgement to the agent it wakes. It:
 
 1. Starts configured gate threads (each gate polls its own channel).
 2. Scans ``.brr/inbox/`` for pending events on a timer.
-3. Dispatches pending events into a bounded worker pool.
-4. Each worker owns the full pipeline for its event: runner invocation,
+3. Runs **single-flight** — one *thought* at a time. When idle and work
+   is pending it spawns one worker; new events that arrive mid-thought
+   simply wait (the living agent reconsiders its inbox at plan
+   boundaries, or the next spawn handles them). Concurrency within one
+   resident is cooperative, not parallel across workers. See
+   ``kb/design-agent-dominion.md`` §4 and ``kb/subject-daemon.md``.
+4. The worker owns the full pipeline for its event: runner invocation,
    retries, response capture, response release to gates, kb maintenance,
    env finalize, and branch push.
-5. Workers don't share mutable state — conversation logs and gate
-   progress cards are partitioned per event / per task. The only
-   resources that need synchronisation are git refs at fast-forward and
-   push, which take per-branch locks. See
-   ``kb/design-concurrent-execution.md`` for the full contract.
 
-No cancellation in v1 — runners run to completion. ``brr down`` /
-SIGTERM flip the loop flag; the dispatch loop stops accepting new
-events and the pool drains before the process exits.
+There is no command layer: every event either wakes the agent or waits
+for the living agent — the daemon never parses ``/cancel`` or the like.
+The liveness backstop is the runner's own wall-clock timeout
+(``runner.timeout_seconds``), which reclaims the single-flight slot even
+if the CLI subprocess wedges (deadlock, hung network read, OS-level
+failure). ``brr down`` / SIGTERM flip the loop flag; the in-flight
+thought drains before the process exits.
 """
 
 from __future__ import annotations
@@ -57,17 +63,6 @@ _BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
 _HEARTBEAT_INTERVAL = 30.0
-# Default worker pool size. Four parallel tasks cover the usual burst
-# (several channels or follow-ups while longer work is in flight) without
-# most adopters needing to tune config. Forge API quota and runner
-# subscription limits still apply — set ``max_workers=1`` for strictly
-# serial behaviour, or lower/raise via ``.brr/config`` as needed.
-_DEFAULT_MAX_WORKERS = 4
-# How long to wait for in-flight workers to drain on shutdown. None
-# means "wait forever"; the loop only exits the pool join when every
-# worker is done. A long-running task killed mid-flight by an external
-# signal still leaves trace dirs and the response file for forensics.
-_SHUTDOWN_DRAIN_TIMEOUT: float | None = None
 # Extra rows pulled from the conversation log on top of what the prompt
 # actually renders. Absorbs the in-flight event + task records (and any
 # pre-runner update packets for the same event) that
@@ -1470,12 +1465,15 @@ def start(
 ) -> None:
     """Run the daemon main loop (blocking, foreground).
 
-    Tasks dispatch into a bounded ``ThreadPoolExecutor`` so unrelated
-    events run in parallel. ``max_workers`` reads from ``.brr/config``
-    (default ``4``); set ``max_workers=1`` to reproduce the previous
-    serial behaviour exactly. Workers don't share mutable state — see
-    ``kb/design-concurrent-execution.md`` and ``kb/subject-daemon.md``
-    for the partitioning contract.
+    **Single-flight**: one *thought* runs at a time. When idle and work
+    is pending the loop spawns one worker; events that arrive mid-thought
+    wait their turn (the living agent reconsiders its inbox at plan
+    boundaries, or the next spawn picks them up). The worker still runs
+    off the main thread, so the loop stays responsive to dev-reload,
+    gate-thread liveness, and shutdown while a long thought runs. The
+    per-task worktree/branch isolation and partitioned state survive from
+    the former parallel design — see ``kb/subject-daemon.md`` and
+    ``kb/design-agent-dominion.md`` §4.
 
     Traces are always written and worktrees/containers are kept on
     failure (or when uncommitted files are left behind) but discarded
@@ -1483,7 +1481,7 @@ def start(
 
     *dev_reload* enables the brr-development re-exec watcher.  When
     ``None``, falls back to the ``dev_reload`` key in ``.brr/config``.
-    Reload waits until the worker pool drains so no in-flight task
+    Reload waits until the in-flight thought drains so no running task
     has its process replaced underneath it.
     """
     brr_dir = gitops.shared_brr_dir(repo_root)
@@ -1509,7 +1507,6 @@ def start(
 
     cfg = conf.load_config(repo_root)
     max_retries = int(cfg.get("response_retries", 1))
-    max_workers = max(1, int(cfg.get("max_workers", _DEFAULT_MAX_WORKERS)))
     dev_reload_mode = (
         dev_reload if dev_reload is not None
         else bool(cfg.get("dev_reload", False))
@@ -1538,74 +1535,62 @@ def start(
 
     if reload_watcher is not None:
         print("[brr] developer reload enabled")
-    print(
-        f"[brr] daemon started (pid {os.getpid()}, "
-        f"max_workers={max_workers})"
-    )
+    print(f"[brr] daemon started (pid {os.getpid()}, single-flight)")
 
+    # Single-flight: one thought off the main thread at a time. A
+    # one-slot executor keeps the clean future lifecycle (done / result /
+    # drain-on-shutdown) while the loop stays responsive to dev-reload,
+    # gate liveness, and signals during a long thought. The runner's own
+    # wall-clock timeout (runner.timeout_seconds) is the liveness
+    # backstop that reclaims the slot if the CLI subprocess wedges.
     pool = concurrent.futures.ThreadPoolExecutor(
-        max_workers=max_workers,
-        thread_name_prefix="brr-worker",
+        max_workers=1,
+        thread_name_prefix="brr-thought",
     )
-    # Maps event path → in-flight future, so we don't double-dispatch
-    # an event the gate hasn't observed as "done" yet on its next
-    # scan. The path is a stable identity for the inbox file.
-    in_flight: dict[Path, concurrent.futures.Future] = {}
+    current: concurrent.futures.Future | None = None
     reload_requested = False
 
     try:
         while running:
-            # Top of loop: poll the dev-reload watcher exactly once.
-            # The watcher mutates its own snapshot; the main thread is
-            # its only caller so the changed() bookkeeping stays
-            # consistent. Workers don't poll the watcher themselves.
+            # Poll the dev-reload watcher exactly once per iteration —
+            # the main thread is its only caller, so the changed()
+            # bookkeeping stays consistent.
             if reload_watcher is not None and reload_watcher.changed():
                 reload_requested = True
 
-            # Reap completed futures so capacity reflects reality on
-            # this iteration's dispatch decisions.
-            completed = [
-                path for path, fut in in_flight.items() if fut.done()
-            ]
-            for path in completed:
-                fut = in_flight.pop(path)
+            # Reap the in-flight thought once it finishes.
+            if current is not None and current.done():
                 try:
-                    fut.result()
+                    current.result()
                 except Exception as exc:  # noqa: BLE001
-                    # Worker crashed before returning a Task. The task
-                    # file may or may not exist; the operator sees the
-                    # traceback in the daemon console.
-                    print(f"[brr] worker crashed: {exc}")
+                    # The thought crashed before returning a Task; the
+                    # operator sees the traceback in the daemon console.
+                    print(f"[brr] thought crashed: {exc}")
+                current = None
 
-            # Quiescent reload: only re-exec when no worker is in
-            # flight, so an in-progress task can't have its process
-            # replaced underneath it. The dev_reload design's
-            # "between tasks" guarantee generalises to "between
-            # batches" under the concurrent pool.
-            if reload_requested and not in_flight:
+            # Quiescent reload: only re-exec between thoughts, so a
+            # running task can't have its process replaced underneath it.
+            if reload_requested and current is None:
                 print("[brr] package files changed; re-execing daemon")
                 pool.shutdown(wait=True)
                 reload_mod.reexec()  # noreturn on success
 
-            # Dispatch new events as capacity allows. Stop accepting
-            # new events once reload is requested so the pool can
-            # drain — bounds reload latency to "longest in-flight
-            # task at flag time".
-            if not reload_requested:
-                events = protocol.list_pending(inbox_dir)
-                for event in events:
-                    if event["_path"] in in_flight:
-                        continue
-                    if len(in_flight) >= max_workers:
-                        break
+            # Spawn one thought when idle and work is pending. Events that
+            # arrive while a thought runs stay pending — the living agent
+            # picks them up at a plan boundary (multi-response), or the
+            # next spawn handles them. Reload also holds dispatch so the
+            # slot can drain.
+            if current is None and not reload_requested:
+                pending = protocol.list_pending(inbox_dir)
+                if pending:
+                    event = pending[0]
                     eid = event["id"]
                     print(f"[brr] processing: {eid}")
                     protocol.set_status(event, "processing")
-                    fut = pool.submit(
+                    current = pool.submit(
                         _run_worker_and_finalize,
                         event, repo_root, responses_dir, cfg, max_retries,
                     )
-                    in_flight[event["_path"]] = fut
 
             time.sleep(_SCAN_INTERVAL)
 
@@ -1614,10 +1599,7 @@ def start(
                     print(f"[brr] warning: gate thread {t.name} died")
 
     finally:
-        # Drain in-flight workers before exiting. cancel_futures=False
-        # because every submitted future has already started (we
-        # throttle dispatch ourselves to max_workers); cancellation
-        # would only cancel a queued task we don't have.
+        # Drain the in-flight thought before exiting.
         pool.shutdown(wait=True, cancel_futures=False)
         _clear_pid(brr_dir)
         print("[brr] daemon stopped")
