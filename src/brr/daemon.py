@@ -793,10 +793,6 @@ def _run_worker(
     )
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
-    # Reflection-in-reply is owner-gated: only a user-owned run with
-    # ergonomics=response injects the (skippable) review and leaves it
-    # visible. Operator-owned runs never do, regardless of config.
-    prompt_reflection = prompts.reflection_enabled(cfg, owner=env_ctx.owner)
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
@@ -813,7 +809,6 @@ def _run_worker(
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
-                reflection=prompt_reflection,
                 diffense=prompt_diffense,
             )
         else:
@@ -833,7 +828,6 @@ def _run_worker(
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 event_body=event_body_for_prompt,
-                reflection=prompt_reflection,
                 diffense=prompt_diffense,
             )
 
