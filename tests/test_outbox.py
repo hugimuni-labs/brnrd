@@ -76,6 +76,57 @@ class TestDrainOutbox:
         assert daemon._drain_outbox(
             emit, task, responses, "evt-1", brr_dir / "outbox" / "nope") == 0
 
+    def test_cross_event_routes_to_target_and_marks_done(self, tmp_path, monkeypatch):
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        # A second event B is waiting in the inbox.
+        protocol.create_event(inbox, source="telegram", body="quick q")
+        evB = protocol.list_pending(inbox)[0]
+        bid = evB["id"]
+        # The resident folds B in and drops a reply targeting it.
+        (outbox / "reply.md").write_text(
+            f"---\nevent: {bid}\n---\nhere's the answer\n")
+        emitted = []
+        monkeypatch.setattr(daemon.updates, "emit",
+                            lambda brr, pkt: emitted.append(pkt))
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        # Body went to B's queue, not the current event's.
+        assert [protocol.read_partial(p)
+                for p in protocol.list_partials(responses, bid)] == ["here's the answer"]
+        assert protocol.list_partials(responses, "evt-A") == []
+        # B is marked done so the gate delivers + cleans it up; it won't
+        # wake as its own thought.
+        assert [e["id"] for e in protocol.list_done(inbox, "telegram")] == [bid]
+        assert protocol.list_pending(inbox) == []
+        assert emitted[0].payload.get("target_event") == bid
+
+    def test_cross_event_unknown_target_is_dropped(self, tmp_path, monkeypatch):
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "reply.md").write_text("---\nevent: evt-ghost\n---\nhi\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        # No deliverable target: dropped rather than misrouted.
+        assert n == 0
+        assert not (outbox / "reply.md").exists()
+        assert protocol.list_partials(responses, "evt-ghost") == []
+
 
 def test_remove_outbox_is_best_effort(tmp_path):
     outbox = tmp_path / ".brr" / "outbox" / "evt-1"
@@ -108,6 +159,23 @@ def test_interim_response_packet_updates_card(tmp_path):
     assert "interim" in view.detail.lower()
     # An interim reply is mid-run progress, not a terminal state.
     assert view.state == "active"
+
+
+def test_cross_event_interim_card_names_the_folded_in_event(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:1:"
+    conversations.append_task(
+        brr_dir, key, task_id="task-A", event_id="evt-A",
+        env="worktree", status="running",
+    )
+    _emit(brr_dir, key, "run_started", task_id="task-A")
+    _emit(brr_dir, key, "interim_response", task_id="task-A", event_id="evt-A",
+          target_event="evt-B", path="/x/.brr/responses/evt-B.partials/000001.md")
+
+    view = run_progress.project_task(brr_dir, key, "task-A")
+    assert view is not None
+    assert "folded-in" in view.detail
+    assert "evt-B" in view.detail
 
 
 def test_run_context_includes_outbox_paths(tmp_path):
