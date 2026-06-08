@@ -18,9 +18,14 @@ Three proxies ship today:
 
 ``BrnrdErgoProxy`` (batched HTTPS to brnrd, the operator-owned sink) is
 a later slice gated on managed compute + the brnrd ergonomics endpoint.
-``response`` is not a proxy — it's a reflection-visibility choice
-(``prompts.reflection_enabled``); its probe/telemetry records still flow
-through ``LogErgoProxy``.
+
+(An ``ergonomics=response`` mode used to surface the agent's reflection
+as a visible reply footer via ``prompts.reflection_enabled`` +
+``prompts/self-review.md``; both were retired 2026-06-08 with the
+resident-agent reshape. The resident folds friction into its own
+dominion journal — the pain-evaluation loop in its playbook — so the
+visible footer no longer earns its keep. Probe/telemetry routing here is
+unchanged.)
 """
 
 from __future__ import annotations
@@ -127,15 +132,16 @@ def _utc_day(timestamp: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(timestamp))
 
 
-_MODES = ("off", "log", "local", "response")
+_MODES = ("off", "log", "local")
 
 
 def ergonomics_mode(cfg: dict[str, Any] | None) -> str:
-    """Normalise the user-facing ``ergonomics`` knob to off|log|local|response.
+    """Normalise the user-facing ``ergonomics`` knob to off|log|local.
 
     Default is ``log`` (quiet daemon log) — the user-owned default that
     gives a self-hoster free efficiency signal with no token cost. Any
-    unset or unrecognised value falls back to ``log``.
+    unset or unrecognised value falls back to ``log`` (this includes the
+    retired ``response`` mode, which now resolves to plain ``log``).
     """
     raw = (cfg or {}).get("ergonomics")
     if raw is None:
@@ -156,9 +162,7 @@ def resolve_proxy(
 
     - ``off`` → ``NullErgoProxy`` (short-circuited by the orchestrator)
     - ``local`` → ``LocalErgoProxy`` (on-disk JSONL store)
-    - ``log`` (default) / ``response`` → ``LogErgoProxy``; ``response``
-      additionally shows the agent's reflection in the reply, wired in
-      the prompt path (``prompts.reflection_enabled``), not here.
+    - ``log`` (default) → ``LogErgoProxy``
     """
     if owner != "user":
         return NullErgoProxy()
