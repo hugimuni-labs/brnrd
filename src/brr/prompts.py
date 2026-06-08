@@ -290,6 +290,7 @@ def build_daemon_prompt(
     runtime_dir: str | None = None,
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
+    pending_events: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
     diffense: bool = False,
 ) -> str:
@@ -315,6 +316,7 @@ def build_daemon_prompt(
         runtime_dir=runtime_dir,
         context_path=context_path,
         recent_conversation=recent_conversation,
+        pending_events=pending_events,
         event_body=event_body,
         diffense=diffense,
     )
@@ -351,6 +353,7 @@ def _build_task_context_bundle(
     runtime_dir: str | None,
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
+    pending_events: list[dict[str, Any]] | None = None,
     event_body: str | None,
     diffense: bool = False,
 ) -> str:
@@ -432,6 +435,14 @@ def _build_task_context_bundle(
             "substitute for the final stdout — don't repeat yourself. This "
             "is optional: a single final stdout is a complete, healthy run."
         )
+        sections.append(
+            "- To answer a *different* pending event inline (see Inbox "
+            "below), start the outbox file with a frontmatter `event: <id>` "
+            "naming that event. brr delivers it to that event's thread and "
+            "marks the event handled, so it won't wake again. Use one "
+            "complete reply per folded-in event; prefer letting anything "
+            "that wants its own branch wake as its own thought."
+        )
     sections.append(
         "- The user reads your reply remotely (Telegram / Slack / etc.). "
         "Refer to files by basename only — `subject-envs.md`, "
@@ -471,6 +482,19 @@ def _build_task_context_bundle(
                 "placeholder name."
             )
 
+    inbox_block = _format_pending_events(pending_events)
+    if inbox_block:
+        sections.append("")
+        sections.append("### Inbox — other pending events")
+        sections.append(
+            "Other events are waiting. You can fold a quick, related one in "
+            "now (answer it via the outbox `event: <id>` contract above) "
+            "instead of leaving it for its own spawn — your call. This is a "
+            "snapshot from when you woke; more may have arrived since."
+        )
+        sections.append("")
+        sections.append(inbox_block)
+
     recent_block = _format_recent_conversation(recent_conversation)
     if recent_block:
         sections.append("")
@@ -488,6 +512,32 @@ def _build_task_context_bundle(
 
     sections.append("")
     return "\n".join(sections) + "\n"
+
+
+def _format_pending_events(
+    events: list[dict[str, Any]] | None,
+) -> str:
+    """Render other pending inbox events as bullets for the bundle.
+
+    Each entry shows the event id (the handle the resident names in the
+    outbox ``event:`` frontmatter to fold it in), its source, and a
+    one-line summary. Returns an empty string when nothing is waiting.
+    """
+    if not events:
+        return ""
+    bullets: list[str] = []
+    for ev in events:
+        eid = str(ev.get("id") or "").strip()
+        if not eid:
+            continue
+        source = str(ev.get("source") or "").strip()
+        summary = " ".join(str(ev.get("summary") or "").split())
+        if len(summary) > 140:
+            summary = summary[:137].rstrip() + "..."
+        src = f" ({source})" if source else ""
+        sep = f": {summary}" if summary else ""
+        bullets.append(f"- {eid}{src}{sep}")
+    return "\n".join(bullets)
 
 
 def _format_recent_conversation(
