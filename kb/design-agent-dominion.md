@@ -213,9 +213,11 @@ across many.
 
 **The body (reflex — Python, ~free).** Poll gates, write events to the inbox,
 **spawn one thought when idle and work is pending**, deliver newly-arrived
-events into the running thought's view, honour an explicit `/cancel`
-(hard-kill), and keep a **liveness backstop** (kill a runaway/looping thought
-that has stopped checking in).
+events into the running thought's view, and keep a **liveness backstop** so a
+wedged CLI subprocess can't hold the single-flight slot forever. No command
+layer: the reflex never parses `/cancel` or the like — every event either wakes
+the agent or waits for the living agent. Keeping the body this thin is
+deliberate — orchestration stays minimal; judgement lives in the mind.
 
 **The mind (deliberation — the woken runner).** Work the task; at **plan / todo
 boundaries** (not on a wall-clock timer — natural seams where re-planning is
@@ -225,12 +227,23 @@ a new spawn.
 
 Three mechanics this implies:
 
-- **Cancellation = detection vs execution.** Detection is *semantic* and
-  therefore the agent's job — a static parser cannot catch "oh no, that's not
-  what I meant." Execution is a graceful self-stop (the agent can re-plan and
-  clean up) with the daemon hard-kill as backstop for the unresponsive case.
-  Explicit `/cancel` is the reflex fast-path. (Earlier this doc put cancellation
-  wholly in the reflex layer; corrected — static detection is insufficient.)
+- **Cancellation is the agent's; liveness is the substrate's.** Cancellation is
+  *semantic* — "oh no, that's not what I meant" — so it is wholly the agent's
+  job: it reconsiders the inbox at a plan boundary, then gracefully self-stops
+  (re-plan, clean up) or redirects. The daemon adds **no** cancel command (the
+  thin-body principle). What the substrate owes is only *liveness*: the
+  single-flight slot must be reclaimed even if the CLI subprocess wedges
+  (deadlock, hung network read, OS-level failure). Today that backstop is the
+  runner's wall-clock timeout (`runner.timeout_seconds`, generous by default so
+  a long healthy build survives). A finer **idle** timeout ("no agent check-in
+  in ~5 min; the agent is instructed to treat that as fatal and manage its
+  process accordingly") is only honest once the agent can check in mid-run —
+  nothing can tell a silent-wedged process from a silent-healthy one (xhigh
+  reasoning, a long build) without a check-in — so it is sequenced **with** the
+  multi-response channel below, not before. (Lineage: earlier drafts put an
+  explicit `/cancel` in the reflex layer, then split cancel detection/execution
+  across layers; corrected 2026-06-08 — no command layer, semantic cancel is the
+  agent's, the daemon only guarantees liveness.)
 - **Interleaving ⇒ a multi-response protocol.** A quick request needn't wait for
   the next spawn: the in-flight agent re-prioritises, ships an interim output,
   and resumes. That breaks today's "one event → one final stdout → daemon

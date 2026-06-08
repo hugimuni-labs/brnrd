@@ -5736,3 +5736,37 @@ for the same reason (the bundle is the hot path; the recovery file is for detail
 the bundle lacks). Config knob `dominion.inject_budget_bytes` added to `brr init`
 defaults. Full suite green (688 passed). Next: **slice 2** — single-flight daemon
 loop (spawn-one-when-idle; inbox scan at plan boundaries).
+
+## [2026-06-08] implement | single-flight daemon loop (slice 2) — thin reflex, no command layer
+
+Reversed the threaded worker pool to **single-flight**: `daemon.start` now spawns
+one *thought* (one `_run_worker` invocation) when idle and work is pending, off a
+one-slot executor so the loop stays responsive to dev-reload / gate liveness /
+signals while a long thought runs. Removed `max_workers` + `_DEFAULT_MAX_WORKERS`
++ the unused `_SHUTDOWN_DRAIN_TIMEOUT`; the legacy `max_workers` config knob is
+now ignored (test guards that). Events that arrive mid-thought just stay pending
+until the slot frees (the living agent's mid-flight inbox pickup is multi-response,
+slice 4). The per-task worktree/branch isolation + partitioned conversation/card
+files **survive** — they now serve crash recovery, ad-hoc sessions, and managed
+multi-daemon rather than parallelism.
+
+Two decisions settled with the user (who steered toward a deliberately thin
+orchestration layer): (1) **no command layer** — the daemon never parses
+`/cancel`; every event wakes the agent or waits for it, and cancel/redirect is the
+agent's *semantic* job at plan boundaries. (2) **Liveness backstop = the existing
+wall-clock `runner.timeout_seconds`** (default 3600s, generous so a long healthy
+build isn't killed). A finer ~5-min *idle* timeout is the honest goal but is
+**deferred to slice 4**: there's no mid-run liveness signal today (the runner is
+one opaque `subprocess.communicate`; the 30s heartbeat is wall-clock, not agent
+liveness), so a silent-wedged process is indistinguishable from silent-healthy
+(xhigh reasoning / long build) until the agent can check in. Notably single-flight
+also *fixes* a latent bug: `runner._active_proc` is a single global, which the
+parallel pool could clobber.
+
+Renamed `tests/test_daemon_concurrency.py` → `test_daemon_single_flight.py`
+(peak-concurrency==1 invariant, legacy-knob-ignored, crash-resilience). Reshaped
+`subject-daemon.md` (Execution model — single-flight; lineage breadcrumb for the
+pool→single-flight round trip) and `design-agent-dominion.md` §4 (no command
+layer; cancellation is the agent's, liveness is the substrate's). Full suite green
+(687 passed). Next: **slice 3** — playbook + wake orientation; retire per-stage
+overlay prompts.
