@@ -121,6 +121,44 @@ def _build_context_block(repo_root: Path) -> str:
     )
 
 
+def _build_dominion_block(repo_root: Path) -> str:
+    """Render the wake-time self-inject digest from the agent's dominion.
+
+    Reads from the shared dominion worktree (``.brr/dominion/``, resolved
+    via the git common dir so a per-task worktree still finds the one
+    dominion). Returns ``""`` when the dominion is disabled, not yet
+    materialized, or resolves to nothing — the caller drops the block.
+    """
+    from . import config as conf
+    from . import dominion
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    path = dominion.dominion_path(repo_root)
+    if not path.is_dir():
+        return ""
+    budget = int(
+        cfg.get(
+            "dominion.inject_budget_bytes",
+            cfg.get(
+                "dominion_inject_budget_bytes",
+                dominion.DEFAULT_INJECT_BUDGET_BYTES,
+            ),
+        )
+    )
+    digest = dominion.resolve_self_inject(path, budget_bytes=budget)
+    if not digest:
+        return ""
+    return (
+        "## Your dominion (working memory)\n\n"
+        "Self-injected from `.brr/dominion/` (branch `brr-home`) per its "
+        "`self-inject` index — your own durable memory, carried across "
+        "wakings and yours to reshape:\n\n"
+        f"{digest}"
+    )
+
+
 def _join_prompt_parts(
     preamble: str,
     repo_root: Path,
@@ -131,6 +169,9 @@ def _join_prompt_parts(
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
     parts = [preamble]
+    dominion_block = _build_dominion_block(repo_root)
+    if dominion_block:
+        parts.append(dominion_block)
     context = _build_context_block(repo_root)
     if context:
         parts.append(context)
