@@ -111,6 +111,68 @@ class TestPromptBuilding:
         assert "Bug fix" in prompt
         assert "do something" in prompt
 
+    def test_run_prompt_injects_kb_health_when_findings(self, tmp_path, monkeypatch):
+        """A non-clean deterministic preflight rides into the wake prompt
+        so the resident folds kb fixes into its own thought (replacing
+        the retired post-task kb-maintenance spawn)."""
+        from brr import kb_preflight
+
+        prompts_dir = tmp_path / ".brr" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "run.md").write_text("You are an agent.")
+        monkeypatch.setattr(
+            kb_preflight, "scan",
+            lambda _root: [
+                kb_preflight.Finding(
+                    type="missing-from-index",
+                    target="kb/decision-orphan.md",
+                    description="needs an index entry",
+                ),
+            ],
+        )
+
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "kb health (deterministic preflight)" in prompt
+        assert "missing-from-index" in prompt
+        assert "kb/decision-orphan.md" in prompt
+
+    def test_run_prompt_omits_kb_health_when_clean(self, tmp_path, monkeypatch):
+        """A clean preflight is silent — no wake-time tax."""
+        from brr import kb_preflight
+
+        prompts_dir = tmp_path / ".brr" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "run.md").write_text("You are an agent.")
+        monkeypatch.setattr(kb_preflight, "scan", lambda _root: [])
+
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "kb health" not in prompt
+
+    def test_run_prompt_kb_health_disabled_with_never(self, tmp_path, monkeypatch):
+        """``kb_maintenance=never`` opts out of the wake-time inject even
+        when the preflight has findings."""
+        from brr import config as conf
+        from brr import kb_preflight
+
+        prompts_dir = tmp_path / ".brr" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "run.md").write_text("You are an agent.")
+        monkeypatch.setattr(
+            kb_preflight, "scan",
+            lambda _root: [
+                kb_preflight.Finding(
+                    type="broken-link", target="kb/x.md",
+                    description="dangling reference",
+                ),
+            ],
+        )
+        monkeypatch.setattr(
+            conf, "load_config", lambda _root: {"kb_maintenance": "never"},
+        )
+
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "kb health" not in prompt
+
     def test_reflection_enabled_from_config(self):
         assert reflection_enabled({"ergonomics": "response"})
         assert not reflection_enabled({"ergonomics": "log"})
