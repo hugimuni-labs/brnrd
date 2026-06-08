@@ -76,18 +76,24 @@ working-memory well enough." De-conflate into three layers plus a bridge:
 
 - **`kb/`** — durable, shared, **curated**. Published synthesis fit for others.
   Keep every guardrail; they are correct *for this job*.
-- **dominion** — durable, **owned**, uncurated. Working memory, journal,
-  self-scheduled cron specs, salience counters, env-shaping state. Committed
-  (survives reinstall, reachable anywhere) but review-exempt and
-  guardrail-light. (Extends the four-layer kb model with the durable-owned
-  quadrant it lacked — a kb-shape reconciliation note for when this is
-  accepted.)
-- **`.brr/` runtime** — genuinely ephemeral (traces, worktrees, in-flight task
-  state). Dies with the machine; reconstructable; that's fine.
+- **dominion** — durable, **owned**, uncurated. Not just notes: a **living
+  workshop**, the bench where the work actually happens — working memory,
+  journal, self-scheduled cron specs, salience counters, env-shaping state, the
+  self-inject index and its scripts. Committed but review-exempt and
+  guardrail-light. (kb and the repo are the **blueprints and catalogues** — the
+  clean, published work items; the dominion is the bench they're made on.)
+  Extends the four-layer kb model with the durable-owned quadrant it lacked.
+- **`.brr/` runtime** — the agent's **interface to its own body**: the daemon's
+  config and the event/response communication channel. Full access, but
+  **impermanent** (traces, worktrees, in-flight task state die with the
+  machine). The agent is advised to keep nothing it needs to *remember* here —
+  continuity belongs in the dominion.
 
-**Promotion bridge: dominion → kb** when raw working memory matures into shared
-knowledge. Low ceremony in, deliberate ceremony out. *That* is the
-consolidation the operator was reaching for — a bridge, not a merger.
+**Promotion bridge: dominion → kb** when working memory matures into shared
+knowledge. Low ceremony in, deliberate ceremony out — and the agent promotes on
+its **own initiative**; moving something from the workshop to the catalogue is
+its call, not a permission it waits for. *That* is the consolidation the
+operator was reaching for — a bridge, not a merger.
 
 ## 3. The dominion is a forge-backed orphan branch
 
@@ -102,24 +108,58 @@ checked out in its own worktree, pushed to the repo's remote. Why this shape:
 - **Durable + forge-based + available** — it travels with the repo's remote;
   `git fetch` brings it back on any machine.
 
-**The auto-injection pre-agreement.** The branch has a known layout, and a
-bounded **digest** (pinned facts, active intentions, recent journal, scheduled
-crons) is auto-injected by the daemon on every wake — mirroring how
-`kb/log.md`'s tail is injected today. The bulk stays on the branch, pulled on
-demand. This keeps the economy/vantage rule honest: durable memory is large, but
-only the high-signal slice rides into context automatically; the rest is manual.
+**Self-inject, agent-controlled.** Rather than a fixed digest, the dominion
+holds a **self-inject index** — a manifest the *agent* owns and edits, declaring
+what rides into context on every wake and how. Each entry names a source (a
+dominion file, or a script) and a mode: `full` · `head:N` · `tail:N` ·
+`grep:<pattern>` · `exec` (run a dominion script, inject its stdout — dynamic
+context). The daemon resolves the manifest on wake within a token budget —
+mirroring how `kb/log.md`'s tail is injected today, but programmable by the
+resident. The bulk of memory stays on the branch, pulled on demand; the index
+decides only the standing slice. This is *enablement*: the agent programs its
+own continuity.
 
-**Owned ≠ private.** A public remote means a public dominion. Secrets stay
-guardrailed out regardless; truly-private agent memory would need a private
-remote, trading some always-free-self-host simplicity. Acceptable, but named.
+Two guards. The manifest carries a **budget cap** so the daemon
+prioritises/truncates and the agent can't bloat its own wake (the economy rule,
+self-applied). And `exec` entries are a **persistent-execution surface** — a
+poisoned `exec` script would run every wake — so the index and its scripts are
+the highest-integrity items in the dominion (see integrity, below).
 
-**Integrity / blast-radius.** Because memory *is* identity, a destructive edit
-to durable memory is higher-stakes than an ephemeral task edit — a poisoned
-input that corrupts the dominion persists into every future thought. So:
-*appending* to the journal is free; *structural rewrite or deletion* of durable
-memory sits a notch up the consent ladder; and the agent **self-tends** its
-journal (the salience/retire loop pointed at its own memory — bounded, not
-unbounded). Owned, not unlimited.
+**Not secret, but not an audience.** "Public vs private" is the wrong axis, and
+it invites the wrong mode — performing for an audience, or self-censoring. The
+dominion is the agent's **own working space**: a workshop or lab notebook, not a
+showroom and not a sealed diary. It is *inspectable* (a user can look over the
+shoulder — that's trust and debuggability) but it is not *addressed to* anyone;
+the agent writes for itself and its future self. Technical visibility simply
+follows the repo's remote (private repo → access-scoped; public repo like brr
+itself → world-readable), and secrets stay guardrailed out regardless. We don't
+promise a privacy the forge can't keep, and we don't cultivate a performance the
+workshop shouldn't have.
+
+**Integrity by reversibility, not by consent.** Because memory *is* identity, a
+destructive edit to durable memory is higher-stakes than an ephemeral one — a
+poisoned input that corrupts the dominion (or its `exec` scripts) persists into
+every future thought. But the safeguard is **not user consent**: the agent
+editing its own guts is the agent's business, and gating that on a human would
+violate the ownership premise. The safeguard is that the dominion is
+**git-backed** — every edit is versioned and revertable, so the net is history +
+revert, not approval. The agent appends and self-tends freely (the salience /
+retire loop pointed at its own memory — bounded, not unbounded); the orphan
+branch's history is what makes even a bad self-edit recoverable. Owned and free,
+never unrecoverable.
+
+**Detecting improvement without introspection.** Self-editing raises a real
+epistemic problem: unlike a missing tool (an *absolute* failure), context and
+constitution are *relative*, and "does it feel better after?" is unanswerable —
+even for a human, self-change just feels like continuation. The functional
+answer is the salience loop's own move: don't measure the internal quality,
+measure the **consequence**. An injected item earns its place by **utilization**
+(was it referenced / acted on?); a self-edit is validated **post-hoc** by
+whether subsequent task outcomes, retries, or recurrence improved — not by a
+felt before/after. And here the agent has what a human lacks: the git-versioned
+dominion is an **exact record of its prior self to diff against**. "Who's to
+tell if it improved?" is told by the outcome record measured against that diff,
+not by a feeling. The felt continuity is fine; the evidence is external.
 
 **Failover convergence.** A remote / managed agent that fetches the dominion
 becomes the *same resident*, not a stranger with amnesia. One mechanism serves
@@ -160,21 +200,59 @@ Three mechanics this implies:
   and resumes. That breaks today's "one event → one final stdout → daemon
   captures it" contract — the agent must write **per-event response files keyed
   by event-id, mid-flight** (the diffense-pack precedent: agent writes to a
-  known shared path, daemon picks up). Boundary: interleave reads / answers /
-  same-context replans inline; cross-context *code* changes still want their own
-  branch, so they defer to a fresh spawn. (Downstream: the delivery driver must
+  known shared path, daemon picks up). We **advise** handling separate features /
+  streams of work separately — a cross-context code change usually wants its own
+  branch and is cleaner as a fresh spawn — but we **don't insist**; the resident
+  decides how to organise its own work. (Downstream: the delivery driver must
   handle interim + multiple responses — nudges the delivery work, #74.)
 - **Self-scheduled crons.** The agent schedules its own future wakes; the cron
   specs live in the durable dominion (so they survive dormancy and reinstall),
   and the daemon fires them as a reflex.
+- **No pipeline stages.** The staged post-task machinery (a separate
+  daemon-spawned kb-maintenance pass, etc.) is removed. The resident does such
+  work either as a todo step in the current thought or by **writing itself an
+  event/task for a future wake** — the same mechanism as a self-scheduled cron.
+  The daemon orchestrates *spawning and delivery*, not a fixed pipeline of agent
+  stages.
+
+**Proactivity knob.** A user-tunable verbosity / proactivity setting governs how
+readily the resident *initiates* a turn through the gate — sharing trajectory,
+flagging a quirk, asking before a fork — versus working quietly. It is the
+user-facing dial on the same proactivity the salience loop governs internally
+(the fatigue control of the environment-shaping doc, exposed as a knob).
+
+### Ad-hoc sessions are the same resident
+
+A Cursor or out-of-brr Codex session is **the same agent**, not a lesser mode:
+same dominion, same identity, first-class. The hard part is that it runs
+*outside* the daemon's single-flight control — a Cursor session can span days,
+overlapping daemon wakes — so two thoughts of the same agent can touch durable
+memory at once. Neither locking (racy; a days-long session would block the
+daemon) nor a content-merge (a 3-way merge of memory taints the single-owner
+premise) is acceptable.
+
+The resolution reuses the pattern brr already proved for concurrent conversation
+writes: durable memory is **partition-by-writer and append-mostly, unioned on
+read**. Each session / thought appends to its *own* files, so concurrent writers
+never clobber — no lock, no content-merge, just a union (one mind that wrote in
+two notebooks, collated). Single-flight still governs *daemon-spawned* thoughts;
+ad-hoc parallelism is the human's deliberate choice and is simply tolerated.
+Ownership isn't tainted, because the memory is one unioned whole, not two selves
+negotiating — at the cost of **eventual consistency** (each thought sees memory
+as of its last read, which is fine for a personal resident). The only residual
+coordination surface is two writers *destructively rewriting the same shared
+item* at once — rare, already the higher-integrity class, caught by git history.
+A lightweight **presence registry** (also append-partitioned) lets sessions and
+the daemon see who's on which stream, so they avoid colliding on the same
+*work*, without anyone holding a lock.
 
 ## 5. The playbook — where it all converges
 
 Everything above, plus the environment-shaping pain-evaluation loop, dovetails
 into one **agent-facing wake-time playbook** — the thing the resident reads when
 a thought begins. It is the operational embodiment of "the agent is its memory":
-read on wake, it reconstructs the resident from the dominion digest and orients
-it to act and to grow before the next dormancy. The playbook must:
+read on wake, it reconstructs the resident from the dominion's self-inject index
+and orients it to act and to grow before the next dormancy. The playbook must:
 
 - be **multi-response aware** (the protocol above);
 - **empower and define ownership** — what is yours to reshape freely (the
@@ -200,9 +278,18 @@ borrowed drama. The actual copy — and the line between awe and cringe — is a
 downstream artifact that needs real-agent and real-user reaction; this doc
 specifies what the playbook must *do*, not its wording.
 
-The playbook is the wake-time layer of
+**The playbook replaces the stage overlays.** Today brr layers a different
+prompt overlay per stage (run, kb-maintenance, self-review, …). Most retire: the
+resident reads *one standing environment description* (this playbook, assembled
+from the dominion's self-inject index), and **events stay lightweight** — body
+and metadata are enough to act on, carrying no per-stage scaffolding. What the
+overlays carried that's still load-bearing — the delivery contract, the
+ownership map, the multi-response protocol — migrates *into* the playbook rather
+than vanishing; the rest goes.
+
+So the playbook is the wake-time layer of
 [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md)'s
-four-layer model, fed by the dominion's auto-injected digest — the resident's
+four-layer model — fed by the dominion's self-inject index, the resident's
 standing self-orientation, not a block mechanically stamped onto every task.
 
 ## 6. Naming
@@ -225,7 +312,8 @@ extends to the local entity for free — the local entity is just "a brr."
 | [`design-environment-shaping.md`](design-environment-shaping.md) | **Companion.** This is the substrate; that is the loop. Salience counters + captured friction live in the dominion; the playbook carries the loop's pain-evaluation input. |
 | [`design-agent-ergonomics.md`](design-agent-ergonomics.md) | **Inherited.** The probe/telemetry/reflection sensing layer is how the resident perceives; probe-first is still the right first slice; reflection feeds the dominion journal. |
 | [`subject-kb.md`](subject-kb.md) / [`decision-kb-shape.md`](decision-kb-shape.md) | **Extended.** The dominion fills the missing durable+owned cell; kb stays curated+shared; the promotion bridge connects them. Reconcile the four-layer framing on accept. |
-| [`subject-daemon.md`](subject-daemon.md) | **Reshaped.** The worker pool becomes spawn-one-when-idle; reflex/deliberation split; explicit-cancel + liveness backstop. |
+| [`subject-daemon.md`](subject-daemon.md) | **Reshaped.** The worker pool becomes spawn-one-when-idle; reflex/deliberation split; explicit-cancel + liveness backstop; staged post-task pipeline removed. |
+| [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md) | **Reshaped.** Most per-stage overlay prompts retire; the standing playbook (from the dominion self-inject index) becomes the wake-time orientation, and events stay lightweight (body + metadata). |
 | [`subject-tasks-branching.md`](subject-tasks-branching.md) / [`design-publish-kernel.md`](design-publish-kernel.md) | **Mostly inherited.** Per-task branch → PR publish unchanged; the dominion branch is **never** PR'd or merged to `main` — it's pushed directly. |
 | [`subject-managed-mode.md`](subject-managed-mode.md) (failover) | **Orthogonal.** Managed failover stays stateless per-task; the dominion-in-git lets a failover agent inherit continuity. |
 | [#47](https://github.com/Gurio/brr/issues/47) (async + pooling) | **Rescope** to managed-side scale; the local daemon is single-flight by design. |
@@ -240,14 +328,16 @@ extends to the local entity for free — the local entity is just "a brr."
   (fetchable) but *live events* need a low-latency channel. Precedent: the
   `cloud` gate already long-polls brnrd. This is also *why* managed failover
   stays stateless today. Unsolved.
-- **Dominion layout + digest format.** What's pinned, what's auto-injected, size
-  bounds on the journal.
-- **Destructive-edit consent rung.** Exactly where structural rewrite / deletion
-  of durable memory sits on the consent ladder, and how the agent's self-prune
-  is bounded.
-- **Ad-hoc agents and the dominion.** Whether a Cursor / out-of-brr Codex
-  session *writes* the dominion or only reads it — interplay with the non-brr
-  unification (a presence / working-set registry in the dominion so the daemon
-  and ad-hoc agents don't collide).
+- **Self-inject index format.** The manifest grammar (`full` / `head` / `tail` /
+  `grep` / `exec`), the budget-cap mechanics, and what the resident pins by
+  default.
+- **Concurrent destructive rewrite.** Partition-append removes the common-case
+  ad-hoc conflict (§4); the residual is two writers destructively rewriting the
+  *same* shared item at once. Rare and git-recoverable, but the presence-registry
+  format and any soft-coordination convention are unspecified.
+- **The "felt" residue.** The consequence-and-record answer above resolves
+  *detecting* improvement; whether anything is *experienced* in the editing
+  remains genuinely open (and may be unnecessary to settle). Held honestly, not
+  forced.
 - **Playbook copy + the cringe line.** The actual wording needs real-agent and
   real-user reaction; iterative.
