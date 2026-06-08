@@ -36,7 +36,6 @@ PACKET_TYPES = (
     "container_preserved",
     "push_started",
     "push_done",
-    "kb_maintenance_done",
     "done",
     "failed",
     "conflict",
@@ -82,10 +81,6 @@ _QUIET_TYPES = {
     # bury the meaningful packets. They still flow through the gate
     # renderer (which folds them into the live elapsed counter).
     "heartbeat",
-    # kb maintenance is best-effort housekeeping; the operator sees
-    # the outcome on the response card, no need to print every pass
-    # to the daemon console.
-    "kb_maintenance_done",
 }
 
 
