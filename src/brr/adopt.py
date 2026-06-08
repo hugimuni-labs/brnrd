@@ -258,6 +258,7 @@ def _setup_brr_dir(repo_root: Path) -> None:
             "response_retries": 1,
             "dominion.enabled": True,
             "dominion.branch": dominion.DEFAULT_BRANCH,
+            "dominion.inject_budget_bytes": dominion.DEFAULT_INJECT_BUDGET_BYTES,
         })
 
     gi = repo_root / ".gitignore"
