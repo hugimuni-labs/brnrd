@@ -294,3 +294,125 @@ def remote_url(repo_root: Path, remote: str) -> str | None:
         return None
     value = result.stdout.strip()
     return value or None
+
+
+def remote_branch_exists(repo_root: Path, remote: str, branch: str) -> bool:
+    """Return True if *branch* exists on *remote* (best-effort, networked).
+
+    Wraps ``git ls-remote --heads``. Any git failure (no network, unknown
+    remote) reads as "absent" so callers fall through to local creation.
+    """
+    if not remote or not branch:
+        return False
+    result = _git(repo_root, "ls-remote", "--heads", remote, branch, check=False)
+    if result.returncode != 0:
+        return False
+    return bool(result.stdout.strip())
+
+
+def create_orphan_branch(
+    repo_root: Path,
+    branch: str,
+    *,
+    message: str = "initialize",
+) -> str | None:
+    """Create *branch* as an orphan root commit over the empty tree.
+
+    Uses plumbing (``mktree`` → ``commit-tree`` → ``update-ref``) so it
+    works on any git version and never touches the main worktree's index
+    or HEAD. Returns the new commit OID, the existing head if *branch*
+    already exists, or ``None`` on failure (e.g. no committer identity).
+    """
+    if branch_exists(repo_root, branch):
+        return branch_head(repo_root, branch)
+
+    tree = subprocess.run(
+        ["git", "mktree"],
+        cwd=repo_root, input="", text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if tree.returncode != 0:
+        return None
+    tree_oid = tree.stdout.strip()
+
+    commit = subprocess.run(
+        ["git", "commit-tree", tree_oid, "-m", message],
+        cwd=repo_root, input="", text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if commit.returncode != 0:
+        return None
+    commit_oid = commit.stdout.strip()
+
+    update = _git(
+        repo_root, "update-ref", f"refs/heads/{branch}", commit_oid, check=False,
+    )
+    if update.returncode != 0:
+        return None
+    return commit_oid
+
+
+def add_worktree(
+    repo_root: Path,
+    worktree_path: Path,
+    *,
+    branch: str,
+    create_branch: bool = False,
+    start_point: str | None = None,
+    track: bool = False,
+) -> None:
+    """Add a git worktree at *worktree_path* checked out on *branch*.
+
+    With ``create_branch=False`` (default) the local *branch* must already
+    exist. With ``create_branch=True`` a new *branch* is sprouted from
+    *start_point*; ``track=True`` adds ``--track`` so it follows that
+    start point's remote. Raises ``RuntimeError`` with git's message on
+    failure.
+    """
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    args = ["worktree", "add"]
+    if track:
+        args.append("--track")
+    if create_branch:
+        args += ["-b", branch]
+    args.append(str(worktree_path))
+    args.append(start_point or branch if create_branch else branch)
+    result = _git(repo_root, *args, check=False)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(detail or f"failed to add worktree {worktree_path}")
+
+
+def fetch_branch(repo_root: Path, remote: str, branch: str) -> bool:
+    """Fetch *branch* from *remote*, updating its remote-tracking ref. Best-effort."""
+    if not remote or not branch:
+        return False
+    result = _git(repo_root, "fetch", remote, branch, check=False)
+    return result.returncode == 0
+
+
+def push_branch(
+    repo_root: Path,
+    remote: str,
+    branch: str,
+    *,
+    set_upstream: bool = True,
+) -> bool:
+    """Push local *branch* to *remote*. Best-effort; returns success."""
+    if not remote or not branch:
+        return False
+    args = ["push"]
+    if set_upstream:
+        args.append("-u")
+    args += [remote, branch]
+    result = _git(repo_root, *args, check=False)
+    return result.returncode == 0
+
+
+def commit_all(worktree_path: Path, message: str) -> bool:
+    """Stage everything and commit in *worktree_path*. Best-effort; returns success."""
+    add = _git(worktree_path, "add", "-A", check=False)
+    if add.returncode != 0:
+        return False
+    commit = _git(worktree_path, "commit", "-m", message, check=False)
+    return commit.returncode == 0
