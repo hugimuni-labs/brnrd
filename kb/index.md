@@ -66,17 +66,19 @@ dive-in map) and are stable until something contradicts them.
   brnrd dashboard's project + fleet ergonomics views are designed, not
   built.
 - [Environment shaping loop](design-environment-shaping.md) —
-  *proposed (2026-06-04)*. Unifies the ergonomics back-channel, the
+  *proposed (2026-06-04); prior reasoning since 2026-06-08 — substrate
+  absorbed into [`design-agent-dominion.md`](design-agent-dominion.md)*.
+  Unifies the ergonomics back-channel, the
   kb-as-memory layer, and brr's interactivity into one **observe → remember
   → shape → retire** loop. Frames the two design axes (interactivity ×
   agency), the robustness=retrieval-cost hierarchy, a **salience** ("pain")
   triage on ergonomics records, **layered-control routing** (rings 0–3 for
   who fixes what), gates as a conversation medium, observability via
   transient relay (preserves data-min), and agent-satisfaction-as-operating-
-  principle with its alignment guardrail. First slice: trigger-indexed
-  failure memory on `brr kb`.
+  principle with its alignment guardrail. (Its failure-memory first slice
+  now lives in the dominion, not as a kb marker.)
 - [Agent dominion — the resident agent](design-agent-dominion.md) —
-  *proposed (2026-06-07)*. The substrate companion to the environment-shaping
+  *accepted on 2026-06-08*. The substrate companion to the environment-shaping
   loop, sequenced as the next work (pre-release). Reshapes brr from
   spawn-per-event into a **resident agent**: the agent *is* its durable memory,
   a *thought* is a runner woken by an event or self-scheduled cron, execution is
@@ -113,9 +115,11 @@ dive-in map) and are stable until something contradicts them.
   + env protocol shape; the merge-coordinator design described there
   was abandoned and never came back.
 - [Concurrent execution design](design-concurrent-execution.md) —
-  *accepted on 2026-05-16*. Partitioned per-event/per-task state
-  removes the shared-mutable surfaces a serial daemon was hiding;
-  threaded loop on top synchronises only on per-branch ff and push.
+  *superseded on 2026-06-08 by*
+  [`design-agent-dominion.md`](design-agent-dominion.md). The threaded
+  daemon loop is reversed to single-flight by the resident-agent reshape;
+  the partitioned per-event/per-task state + per-task worktree isolation it
+  built on survive in `subject-tasks-branching` / `subject-daemon`.
 
 ## Tasks & branching
 

@@ -1,7 +1,7 @@
 # Agent dominion — the resident agent, its memory, and its loop
 
-Status: proposed (2026-06-07) — synthesis of the resident-agent design
-dialogue (the environment-shaping companion arc). Not yet accepted.
+Status: accepted on 2026-06-08 — synthesis of the resident-agent design
+dialogue (the environment-shaping companion arc).
 **Sequenced as the next work, ahead of the release-readiness items
 ([#23](https://github.com/Gurio/brr/issues/23))**: it reshapes the execution +
 memory substrate those items build on, so it is a pre-release item, not a
@@ -97,7 +97,7 @@ operator was reaching for — a bridge, not a merger.
 
 ## 3. The dominion is a forge-backed orphan branch
 
-The dominion lives on a **dedicated orphan branch** (e.g. `brr-memory`),
+The dominion lives on a **dedicated orphan branch** (`brr-home`),
 checked out in its own worktree, pushed to the repo's remote. Why this shape:
 
 - **Owned / unsupervised** — it is the agent's branch; it is never reviewed or
@@ -107,6 +107,30 @@ checked out in its own worktree, pushed to the repo's remote. Why this shape:
   PRs, so it doesn't spend the user's review attention.
 - **Durable + forge-based + available** — it travels with the repo's remote;
   `git fetch` brings it back on any machine.
+
+**Materialization — a long-lived worktree, a durable branch.** The branch is the
+durable thing; its local checkout is a disposable *view*. Concretely: one
+long-lived `git worktree` on `brr-home`, materialized at `.brr/dominion/`
+(under the impermanent runtime dir — consistent, because the checkout is
+re-derivable and only the branch + remote carry durability). Bootstrap is
+fetch-or-create:
+
+- **Returning** (reinstall / second machine / failover): `git fetch <remote>
+  brr-home` then `git worktree add .brr/dominion brr-home` — the resident is
+  reconstituted, no manual clone step.
+- **Fresh**: create the orphan *empty* without touching the main worktree
+  (plumbing — empty tree → root commit → branch, or `git worktree add --orphan`
+  on git ≥ 2.42), `worktree add`, seed a skeleton self-inject index, push.
+
+A *thought* therefore touches **two trees**: its ephemeral per-task worktree
+(seeded from `main`, where code work happens → PR / land) and the shared dominion
+worktree (where memory work happens → `brr-home`). Clean separation by
+destination — code to `main`'s history, memory to the parallel one. Concurrent
+thoughts share the *one* dominion worktree (git forbids one branch in two
+worktrees), so file edits run concurrently while the commit step serializes for
+index safety; semantic conflicts are reconciled by a later thought (§4). **No
+remote**: the dominion is still a local orphan branch + worktree — durable across
+runs, self-injected as normal; only cross-machine continuity waits for a remote.
 
 **Self-inject, agent-controlled.** Rather than a fixed digest, the dominion
 holds a **self-inject index** — a manifest the *agent* owns and edits, declaring
@@ -325,20 +349,32 @@ The operator's original instinct ("brr is a project-specific agent; brnrd
 manages those") *is* the locked brand; no re-acronym is needed, and the pattern
 extends to the local entity for free — the local entity is just "a brr."
 
-On **"dominion"** as a term: kept, deliberately. It carries the exalted-ownership
-semantics the design is after, and the agent-facing register *wants* that weight
-(the awe-from-true-stakes aesthetic) — the term is *earned* because the agent
-genuinely governs the space, not a fancy name for a scratch folder. It is a
-half-step from the cringe line for a pragmatic audience, so the hedge is the
-internal/agent-facing concept stays **"dominion"** while the user-facing / CLI
-label can be plainer (e.g. the memory branch) — the same split as "brr the
-resident agent" vs the workaday CLI surface. Reception will tell.
+**Naming, finalized (2026-06-08).** The branch / concept split resolves *by
+audience*, not as a contradiction. The **branch** is `brr-home` — plain on
+purpose, so it reads as ordinary infrastructure to anyone browsing the repo,
+neither grandiose nor a generic "memory" add-on (a branch shows in the forge's
+list; that's a cold-visitor surface). The **concept** and the **worktree path**
+keep the earned term: `.brr/dominion/`, "your dominion," in the playbook and
+these docs — agent- and maintainer-facing surfaces, where the ownership weight
+belongs. The agent works in `.brr/dominion/`, backed by `brr-home`.
+
+This is not insincere, and *why* is load-bearing: sincerity rides on the
+**substance**, not the label. The ownership is structurally real (git-backed,
+review-exempt, self-injected, self-governed), so a plain branch name doesn't
+qualify what the space *is*. When the agent meets both names, reconcile
+**reasoning-transparently, peer-to-peer**: *"named `brr-home` plainly, for the
+visitor's sake; to you it's your dominion; the plain name is courtesy, not a
+hedge on the ownership."* The genuine failure mode is the **opposite** of a
+naming mismatch — performative *feel-ownership* copy; that, not the dual
+register, is what reads as insincere. Deliver the substance and the reasoning;
+never instruct a feeling. (`brr-dominion` stays a fine honest fallback if the
+split ever grates — it just trades a sliver of human cringe for zero registers.)
 
 ## 7. What inherits, what reshapes
 
 | Surface | Disposition |
 |---|---|
-| [`design-concurrent-execution.md`](design-concurrent-execution.md) | **Reshaped.** Local parallelism dropped; the per-task partitioning simplifies; per-task worktree/branch isolation kept for clean publish. Gets a superseded-in-part marker when this doc is accepted (not before — it's a proposal). |
+| [`design-concurrent-execution.md`](design-concurrent-execution.md) | **Superseded (2026-06-08).** Its threaded-loop concurrency thesis is reversed → single-flight; the partitioned-state + per-task worktree/branch primitives it built on survive in [`subject-tasks-branching.md`](subject-tasks-branching.md) / [`subject-daemon.md`](subject-daemon.md). |
 | [`design-environment-shaping.md`](design-environment-shaping.md) | **Companion.** This is the substrate; that is the loop. Salience counters + captured friction (incl. the `Pitfall:` failure-memory, formerly a kb marker / first slice) live in the dominion; the playbook carries the loop's pain-evaluation input; and the loop now runs *inward* too, as dominion dissonance-resolution. |
 | [`design-agent-ergonomics.md`](design-agent-ergonomics.md) | **Inherited.** The probe/telemetry/reflection sensing layer is how the resident perceives; probe-first is still the right first slice; reflection feeds the dominion journal. |
 | [`subject-kb.md`](subject-kb.md) / [`decision-kb-shape.md`](decision-kb-shape.md) | **Extended.** The dominion fills the missing durable+owned cell; kb stays curated+shared; the promotion bridge connects them. Reconcile the four-layer framing on accept. |
