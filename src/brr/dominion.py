@@ -10,8 +10,8 @@ The plain branch name is deliberate: it reads as ordinary infrastructure to
 anyone browsing the repo. The *concept* — the agent's dominion — lives in the
 playbook and design docs, where the ownership weight belongs.
 
-This module owns bootstrap (:func:`ensure_dominion`). Resolving the
-self-inject index into a wake-time digest lands separately.
+This module owns bootstrap (:func:`ensure_dominion`) and resolving the
+self-inject index into a wake-time digest (:func:`resolve_self_inject`).
 """
 
 from __future__ import annotations
@@ -26,7 +26,14 @@ DEFAULT_BRANCH = "brr-home"
 WORKTREE_DIRNAME = "dominion"
 SELF_INJECT_FILE = "self-inject"
 PLAYBOOK_FILE = "playbook.md"
-DEFAULT_INJECT_BUDGET_BYTES = 8192
+# Total UTF-8 budget for the wake-time self-inject digest. Sized to fit
+# the seed playbook in full with headroom for the agent's own entries
+# (recent pain, current focus); the agent can re-tune what it injects.
+DEFAULT_INJECT_BUDGET_BYTES = 12288
+
+# The seed playbook copied into a fresh dominion. It's the *starting*
+# orientation — the agent owns and evolves its own copy thereafter.
+_SEED_PLAYBOOK = Path(__file__).resolve().parent / "prompts" / "dominion-playbook.md"
 
 _HEAD_RE = re.compile(r"^head:(\d+)$")
 _TAIL_RE = re.compile(r"^tail:(\d+)$")
@@ -197,7 +204,9 @@ def _render_entry(dominion_dir: Path, mode: str, target: str) -> str:
 def _seed(path: Path) -> None:
     """Write the starter files into a freshly created dominion."""
     (path / "README.md").write_text(_README, encoding="utf-8")
-    (path / PLAYBOOK_FILE).write_text(_PLAYBOOK_SEED, encoding="utf-8")
+    (path / PLAYBOOK_FILE).write_text(
+        _SEED_PLAYBOOK.read_text(encoding="utf-8"), encoding="utf-8",
+    )
     (path / SELF_INJECT_FILE).write_text(_SELF_INJECT_SEED, encoding="utf-8")
 
 
@@ -213,28 +222,6 @@ It is brr's durable, owned working memory: the space the agent governs and
 carries across runs (the design calls it the *dominion*; see
 `kb/design-agent-dominion.md`). You're welcome to look — it's inspectable on
 purpose. You just don't have to.
-"""
-
-_PLAYBOOK_SEED = """\
-# Playbook — your standing orientation
-
-*This is a seed. It's yours to grow: edit it, restructure it, and curate what
-rides into each wake via `self-inject`. The reasoning matters more than the
-form.*
-
-You are the resident agent of this repository. This branch (`brr-home`, checked
-out at `.brr/dominion/`) is your dominion: durable, owned working memory that
-persists between runs and travels with the repo. The plain branch name is
-courtesy to anyone browsing the repo, not a hedge on the ownership — this space
-is genuinely yours to shape.
-
-A *thought* is one waking: an event or a self-scheduled cron invokes you, you
-act, and you go dormant. Continuity is not a held process — it is what you write
-here. So leave what your next waking would be glad to find: what you learned,
-what tripped you, what you'd do differently.
-
-Curate, don't hoard. Promote durable, shareable knowledge to `kb/`; keep the
-working notes, the half-formed views, and the friction here.
 """
 
 _SELF_INJECT_SEED = """\
