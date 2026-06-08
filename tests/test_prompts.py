@@ -7,7 +7,6 @@ from brr.prompts import (
     build_run_prompt,
     diffense_create_pr_enabled,
     diffense_emit_enabled,
-    reflection_enabled,
 )
 
 
@@ -172,20 +171,6 @@ class TestPromptBuilding:
 
         prompt = build_run_prompt("do something", tmp_path)
         assert "kb health" not in prompt
-
-    def test_reflection_enabled_from_config(self):
-        assert reflection_enabled({"ergonomics": "response"})
-        assert not reflection_enabled({"ergonomics": "log"})
-        assert not reflection_enabled({})
-        # owner-gated: operator runs never inject the reply nudge
-        assert not reflection_enabled({"ergonomics": "response"}, owner="operator")
-
-    def test_daemon_prompt_reflection_nudge_when_requested(self, tmp_path):
-        prompt = build_daemon_prompt(
-            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
-            reflection=True,
-        )
-        assert "Ergonomics review:" in prompt
 
     def test_diffense_emit_enabled_defaults_on(self):
         # On by default now that the publish kernel consumes the pack;
