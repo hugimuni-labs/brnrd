@@ -15,7 +15,12 @@ event (inbox) → task (persisted) → context file → run env → response →
 
 A gate (Telegram, Slack, GitHub, future forge gates) or a script writes a
 markdown file to `.brr/inbox/`. The file has frontmatter (`id`,
-`source`, `status`) and a body with the user's message.
+`source`, `status`) and a body with the user's message. The resident also
+emits events to its **own** future: each reflex tick the daemon fires any
+due entry from the dominion's `schedule.md` as a `schedule`-source inbox
+event (`schedule.py`; `at:` one-shot / `every:` interval), so a
+self-scheduled wake enters this same flow — see
+`kb/design-self-scheduled-thoughts.md`.
 
 ### 2. Task created
 
@@ -129,6 +134,7 @@ files changed. Reload never interrupts a running worker.
 | Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; removed at finalize |
 | Presence      | `.brr/presence/<id>.json`                   | While a thought/session is active; pruned on read |
 | Dominion      | `.brr/dominion/` (branch `brr-home`)        | Durable; committed at sleep, travels with the remote |
+| Schedule state | `.brr/schedule/state.json`                 | Machine-persistent (firing-state); specs live in dominion `schedule.md` |
 | Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Kept on `error` / `conflict`, removed on clean `done` |
 | Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
