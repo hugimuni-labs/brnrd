@@ -6089,3 +6089,39 @@ the tone can keep being tuned. New design note
 `design-context-introspection.md`, linked from `design-environment-shaping.md`
 and `index.md`. Tests pin both toggle behavior (on/off, run + daemon, placement)
 and the bundled text's awe + dialogue intent. Full suite green (772 passed; +5).
+
+## [2026-06-09] implement | Context provenance breadcrumbs + playbook continuity/presence; fix silent playbook truncation
+
+Three small playbook/wake-assembly refinements, plus a real bug they surfaced.
+
+**Provenance breadcrumbs.** Every wake block now opens with a one-line tag of
+*where it came from* and how to treat it, so the resident can tell the layers
+apart (its own owned memory vs. the shared governed `kb/` vs. per-thought
+runtime facts vs. brr's prompts) and weight them differently. The pitfalls and
+dominion blocks already self-identified; sharpened the `kb/log.md` *Recent
+Activity* intro (names it the shared, curated continuity through-line) and added
+a daemon-origin tag to the Task Context Bundle (`prompts.py`). A new playbook
+section, *Where your context comes from*, gives the resident the canonical
+four-layer key the per-block tags point into, and ties it to introspection mode.
+
+**Continuity rests on `kb/log.md`.** Playbook *What you are, mechanically* now
+says memory has two homes — the dominion (private workshop) and `kb/log.md` (the
+shared dated through-line, injected each wake as Recent Activity) — and that a
+log entry on a real learning/decision/change is how you hand the thread to
+whoever wakes next, not bookkeeping.
+
+**Single-flight vs. presence.** The old "single-flight … you aren't racing
+anyone" read as *you're the only actor*, which fights the later "you may not be
+the only one awake." Reframed: single-flight is about **execution** (one thought
+runs in this daemon, this one is yours, uninterrupted) — not **memory** (other
+wakings, often other versions of you, may be writing the shared dominion while
+you think). They share the *memory* under the thought, not the thought.
+
+**Bug found while doing it:** the seed playbook had silently grown to 13.3 KiB
+against a 12288-byte inject budget the comment claimed it "fits in full," so its
+closing section was being **clipped on every wake** — undetected because nothing
+guarded the invariant. Bumped `DEFAULT_INJECT_BUDGET_BYTES` 12288 → 20480 (fits
+the now-15.5 KiB seed with headroom for the resident's own pins) and added a
+guard test that fails if the seed outgrows the cap again, forcing a deliberate
+bump over silent loss. Recorded as a lineage breadcrumb in
+`design-agent-dominion.md`. Full suite green (773 passed; +1 guard).
