@@ -151,11 +151,18 @@ false-positive on exactly the long honest work it's meant to protect.
 
 A safe idle-kill needs a check-in the substrate can **rely on as
 periodic** (a heartbeat the agent is obligated to emit, distinct from
-opportunistic user-facing replies). Until that contract exists, the
-wall-clock `runner.timeout_seconds` stays the only hard kill, and the
-drain serves as an *informational* liveness signal (enriching the
-progress card) rather than a kill trigger. Revisit when there's a reason
-to add an obligatory agent heartbeat.
+opportunistic user-facing replies). Until that contract exists, this
+*silence-based* kill stays deferred and the drain serves as an
+*informational* liveness signal (enriching the progress card) rather than
+a kill trigger. Revisit when there's a reason to add an obligatory agent
+heartbeat.
+
+(The flat budget itself is no longer a blunt `communicate` timeout: as of
+2026-06-09 it's enforced from the daemon heartbeat, **agent-extensible**
+via a `.keepalive` control file, and shutdown kills the in-flight runner.
+That's a different axis from the silence-based idle-kill deferred here —
+see [`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md)
+§2.)
 
 ## What this is not
 

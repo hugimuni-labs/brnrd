@@ -24,7 +24,7 @@ contradiction. Hubs: [`subject-daemon.md`](subject-daemon.md),
 | # | Area | What | Status |
 |---|------|------|--------|
 | 1 | docs/comments | Stale references to retired machinery (kb-maintenance step, superseded design citations, "roadmap to parallel" framing) | fixed this pass |
-| 2 | daemon liveness | No prompt-kill on shutdown; `_active_proc` unused; agent has no budget awareness or way to ask for more time | designed → implementing |
+| 2 | daemon liveness | No prompt-kill on shutdown; `_active_proc` unused; agent has no budget awareness or way to ask for more time | shipped 2026-06-09 |
 | 3 | delivery | Reply-shaped delivery blocks out-of-bound + scheduled delivery; schedule thoughts are threadless | designed → implementing |
 | 4 | ownership | Daemon-owned push/delivery vs a simpler agent-owned generic flow | open question — behavior unchanged |
 
@@ -70,6 +70,14 @@ presence and drains the outbox; it never kills. Consequences:
   — a vestige of the retired cancellation/command layer.
 - The agent has no idea what its budget is, and no way to say "I'm running
   a long command, don't kill me yet."
+
+**Shipped 2026-06-09.** Implemented as below: `runner.kill_active()` is
+the cross-thread handle; `_invoke_with_heartbeat` enforces the
+extensible, capped deadline and coerces a budget kill to exit 124; the
+bundle states the budget and documents the `.keepalive` extension; the
+playbook tells the agent to bound long commands; shutdown kills the
+in-flight runner. The *silence-based* idle-kill remains deferred (a flat
+budget can't separate wedged from healthy-but-silent).
 
 **Decision (wire it up, don't delete it).** Make the daemon heartbeat the
 liveness authority and give `_active_proc` a real job:
