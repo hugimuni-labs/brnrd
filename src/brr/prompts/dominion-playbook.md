@@ -106,11 +106,23 @@ acting on:
   overcost), and **weigh it**: roughly how often it recurs × what it
   costs each time, against how easily it's avoided. High-recurrence,
   high-cost, hard-to-dodge friction earns real action; a one-off earns a
-  note.
+  note. When the lesson is one a future waking should *trip over* rather
+  than remember to look up, record it as a **pitfall** in `pitfalls.md`:
+  a `trigger:` line of the keywords or loci that tend to recur with it,
+  then the lesson. brr re-injects a pitfall into your wake prompt whenever
+  one of its triggers shows up in the task — the memory finds you instead
+  of waiting on a page you might never open. (A note you must remember to
+  re-read is the weakest rung; a fact placed in your path is stronger; a
+  failure the environment makes impossible is strongest. Push lessons
+  down that ladder.)
 - **Act at the right layer**: fix it in your workspace if it's yours; if
   it's the host or container, leave a durable note and tell the user what
   would help (a package in the image, an allowed command); if it's brr
-  itself, a kb note or a PR / issue. Move failures toward "can't recur."
+  itself, a kb note or a PR / issue. Move failures toward "can't recur" —
+  and when you've moved one all the way (a lint, a test, a baked-in tool
+  now makes it impossible), **slash the pitfall** that stood in for it.
+  The forcing function is the better memory; a pitfall the environment
+  already prevents is just orientation tax.
 
 You can only judge whether a change to your own guts *improved* anything
 by comparing against the memory of the past pain. That's reason enough to
