@@ -259,6 +259,7 @@ def _setup_brr_dir(repo_root: Path) -> None:
             "dominion.enabled": True,
             "dominion.branch": dominion.DEFAULT_BRANCH,
             "dominion.inject_budget_bytes": dominion.DEFAULT_INJECT_BUDGET_BYTES,
+            "schedule.enabled": True,
         })
 
     gi = repo_root / ".gitignore"
