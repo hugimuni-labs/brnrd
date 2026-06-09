@@ -63,6 +63,24 @@ the superseded
 [`design-concurrent-execution.md`](design-concurrent-execution.md)
 holds the prior reasoning.)
 
+### Self-scheduled thoughts (the resident's own clock)
+
+The resident isn't only summoned — it wakes itself. Each reflex tick,
+**before** listing pending events, the daemon reads the dominion's
+`schedule.md` specs against a runtime firing-state and the clock
+(`_fire_due_schedules` → [`schedule.py`](../src/brr/schedule.py)) and
+fires any due entry as an ordinary `schedule`-source inbox event. Two
+trigger forms, deliberately not cron syntax: `at:` (one-shot, absolute)
+and `every:` (interval). A fired event queues behind a running thought
+like any other — no new concurrency. Specs are owned + durable (dominion,
+committed); firing-state is daemon-owned + ephemeral
+(`.brr/schedule/state.json`), so the reflex never writes the agent's
+`schedule.md` and firing never races the dominion commit lock. A gateless
+schedule thought is retired by the daemon when it completes
+(`_retire_internal_event`) — its effect is the work it did, not a chat
+reply. See
+[`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md).
+
 The per-task isolation primitives the parallel design relied on
 **survive** — they still earn their keep for crash recovery, ad-hoc
 sessions, and the managed multi-daemon case:

@@ -5938,3 +5938,41 @@ needed; ad-hoc agents get the surface through `brr run`'s wake prompt instead.
 Reconciled across `design-agent-dominion.md`, `design-environment-shaping.md`
 (First slice now marked shipped), `subject-daemon.md` (pipeline step 6), and
 `index.md`. Full suite green (723 passed).
+
+## [2026-06-09] implement | self-scheduled thoughts + agent-owned dominion sync (slice 7)
+
+Made the resident **proactive** (it can wake itself) and handed it ownership of
+its dominion's **remote git lifecycle**. Two halves, from one design note
+(`design-self-scheduled-thoughts.md`):
+
+- **7a — self-scheduled thoughts.** New `schedule.py` + a reflex hook
+  (`daemon._fire_due_schedules`, run each tick before the inbox poll). The
+  resident owns a declarative `schedule.md` in its dominion; the daemon fires due
+  entries as ordinary `schedule`-source inbox events that flow through the normal
+  single-flight pipeline. Generalised away from cron syntax per the user's steer:
+  `at:` (one-shot absolute — travels with the dominion, fires correctly on a
+  second machine) and `every:` (interval, anchored on first sight). A self-wake
+  is just an event whose source is the resident itself; ambient initiative
+  emerges as a recurring self-thought with the interval as its throttle;
+  self-continuation is `at: <now>`; conditional watchers are noted future.
+  **Specs owned + durable** (dominion); **firing-state operational**
+  (`.brr/schedule/state.json`, daemon-owned, machine-persistent) — so the daemon
+  never writes the agent's `schedule.md` and firing never races the commit lock.
+  Gateless schedule events are retired by the daemon on completion
+  (`_retire_internal_event`).
+- **7b — agent-owned dominion sync.** Addressed the review note that
+  `dominion.commit` silently gave up on a diverged `brr-home` remote. Division:
+  daemon = local durability floor + best-effort push; **agent = remote
+  reconciliation** (fetch/merge/resolve/push), because merging two divergent
+  memories is synthesis — judgement — the same reason there's no deterministic
+  dissonance detector (slice 5). A rejected push now sets a `needs_sync` marker
+  (runtime) instead of vanishing; a successful push (incl. a clean-tree no-op)
+  clears it; the wake dominion block surfaces the divergence with its recorded
+  reason; the playbook codifies the ownership and points at a recurring schedule
+  entry as the proactive reconcile.
+
+Playbook gained a "Waking yourself" section and the sync-ownership paragraph.
+Reconciled `design-agent-dominion.md` (§4 self-scheduled *thoughts*, §5/§8 sync
+refinement + resolved threads), `subject-daemon.md` (new reflex subsection),
+`index.md`, and the new design page. Full suite green (747 passed; +24 over
+slice 6).

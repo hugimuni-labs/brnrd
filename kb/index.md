@@ -95,7 +95,7 @@ dive-in map) and are stable until something contradicts them.
   self-inject digest, single-flight loop, playbook, multi-response,
   serialized capture + presence, and the trigger-indexed failure-memory
   affordance — see per-slice breadcrumbs in the page and `log.md`);
-  self-scheduled cron remains the open piece.
+  self-scheduled wakes shipped too (slice 7, see below).
 - [Multi-response protocol](design-multi-response.md) — *shipped
   2026-06-09 (slice 4)*. The delivery half of the resident reshape: the
   agent ships **interim + multiple + interleaved** responses mid-thought
@@ -106,6 +106,18 @@ dive-in map) and are stable until something contradicts them.
   idle-liveness timeout were scoped in and deliberately deferred (see the
   page). Companion to
   [`design-agent-dominion.md`](design-agent-dominion.md) §4.
+- [Self-scheduled thoughts](design-self-scheduled-thoughts.md) — *shipped
+  2026-06-09 (slice 7)*. Makes the resident proactive: it owns a
+  declarative schedule in its dominion (`schedule.md`: `at:` one-shot,
+  `every:` interval) and the reflex loop fires due entries as ordinary
+  inbox events. Cron is just one shape of "the resident emits an event to
+  its own future"; ambient initiative emerges as a recurring self-thought.
+  Companion decision — **the agent owns `brr-home` sync + conflict
+  resolution** (daemon keeps a local durability floor + best-effort push;
+  a rejected push sets a `needs_sync` marker the wake prompt surfaces;
+  fetch/merge/resolve/push is the agent's judgement). Realises
+  [`design-agent-dominion.md`](design-agent-dominion.md) §4 self-scheduling
+  and refines §5 persistence.
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native

@@ -1,8 +1,8 @@
 # Self-scheduled thoughts — the resident wakes itself
 
-Status: accepted on 2026-06-09; **shipping in slice 7** (7a self-scheduling
-landed; 7b sync companion follows). Realises the "self-scheduled crons" mechanic
-sketched in [`design-agent-dominion.md`](design-agent-dominion.md) §4,
+Status: accepted on 2026-06-09; **shipped** the same day (slice 7 — 7a
+self-scheduling, 7b the sync companion). Realises the "self-scheduled crons"
+mechanic sketched in [`design-agent-dominion.md`](design-agent-dominion.md) §4,
 generalised away from cron syntax. Companion: the agent-owned dominion **sync**
 decision below (a refinement of `design-agent-dominion.md` §5 persistence).
 
