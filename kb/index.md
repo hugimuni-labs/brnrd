@@ -53,18 +53,79 @@ dive-in map) and are stable until something contradicts them.
   facts the sandboxed agent can't see — image staleness, auth
   resolvability, worktree/disk/doc drift), runtime telemetry
   (retry/exit/phase data piggybacking on `run_progress`), and agent
-  reflection. The user-facing knob is `ergonomics=off|log|local|response`
-  (default `log` — a quiet daemon log for user-owned runs); `response`
-  re-homes `runner.self_review` as a skippable, visible reply footer.
-  Shipped proxies are `NullErgoProxy`, `LogErgoProxy`, and
-  `LocalErgoProxy`; `BrnrdErgoProxy` remains the designed
-  operator-owned sink. User-owned runs default to `LogErgoProxy` and
-  honour the knob (`off`→null, `local`→on-disk store + `brr ergonomics`
-  CLI, `response`→reflection in reply). Operator-owned runs ignore the
-  knob and currently short-circuit to `NullErgoProxy` until the brnrd
-  proxy/endpoint lands; they never put ergonomics in the reply. The
-  brnrd dashboard's project + fleet ergonomics views are designed, not
-  built.
+  reflection. The user-facing knob is `ergonomics=off|log|local`
+  (default `log` — a quiet daemon log for user-owned runs). Shipped
+  proxies are `NullErgoProxy`, `LogErgoProxy`, and `LocalErgoProxy`;
+  `BrnrdErgoProxy` remains the designed operator-owned sink. User-owned
+  runs default to `LogErgoProxy` and honour the knob (`off`→null,
+  `local`→on-disk store + `brr ergonomics` CLI). Operator-owned runs
+  ignore the knob and currently short-circuit to `NullErgoProxy` until
+  the brnrd proxy/endpoint lands; they never put ergonomics in the
+  reply. (The visible-reflection `response` mode was retired 2026-06-08
+  with the resident reshape — reflection now feeds the dominion journal,
+  not a reply footer.) The brnrd dashboard's project + fleet ergonomics
+  views are designed, not built.
+- [Environment shaping loop](design-environment-shaping.md) —
+  *proposed (2026-06-04); prior reasoning since 2026-06-08 — substrate
+  absorbed into [`design-agent-dominion.md`](design-agent-dominion.md)*.
+  Unifies the ergonomics back-channel, the
+  kb-as-memory layer, and brr's interactivity into one **observe → remember
+  → shape → retire** loop. Frames the two design axes (interactivity ×
+  agency), the robustness=retrieval-cost hierarchy, a **salience** ("pain")
+  triage on ergonomics records, **layered-control routing** (rings 0–3 for
+  who fixes what), gates as a conversation medium, observability via
+  transient relay (preserves data-min), and agent-satisfaction-as-operating-
+  principle with its alignment guardrail. (Its failure-memory **first
+  slice shipped 2026-06-09, slice 6**: trigger-indexed `Pitfall:` records
+  in the dominion, surfaced on wake by a deterministic matcher
+  [`pitfalls.py`](../src/brr/pitfalls.py) — not a kb marker + `brr kb
+  check`.)
+- [Agent dominion — the resident agent](design-agent-dominion.md) —
+  *accepted on 2026-06-08*. The substrate companion to the environment-shaping
+  loop, sequenced as the next work (pre-release). Reshapes brr from
+  spawn-per-event into a **resident agent**: the agent *is* its durable memory,
+  a *thought* is a runner woken by an event or self-scheduled cron, execution is
+  **single-flight** (reflex/deliberation split, replacing the threaded pool),
+  and durable memory splits into a **forge-backed orphan-branch dominion**
+  (owned, auto-injected digest) plus the curated kb, joined by a promotion
+  bridge. Folds the **playbook** as the convergence point (multi-response,
+  ownership, pain-evaluation input, wake-as-action-and-growth). Reshapes
+  [`design-concurrent-execution.md`](design-concurrent-execution.md).
+  **Substrate shipped across slices 1–6** (2026-06: dominion worktree +
+  self-inject digest, single-flight loop, playbook, multi-response,
+  serialized capture + presence, and the trigger-indexed failure-memory
+  affordance — see per-slice breadcrumbs in the page and `log.md`);
+  self-scheduled wakes shipped too (slice 7, see below).
+- [Multi-response protocol](design-multi-response.md) — *shipped
+  2026-06-09 (slice 4)*. The delivery half of the resident reshape: the
+  agent ships **interim + multiple + interleaved** responses mid-thought
+  by dropping files in `.brr/outbox/<eid>/`, which the daemon promotes to
+  a per-event partials queue (`responses/<eid>.partials/`) and gates
+  stream to the user before the thought ends — additive and backward
+  compatible with the one-final-stdout case. Diffense-fold and a finer
+  idle-liveness timeout were scoped in and deliberately deferred (see the
+  page). Companion to
+  [`design-agent-dominion.md`](design-agent-dominion.md) §4.
+- [Self-scheduled thoughts](design-self-scheduled-thoughts.md) — *shipped
+  2026-06-09 (slice 7)*. Makes the resident proactive: it owns a
+  declarative schedule in its dominion (`schedule.md`: `at:` one-shot,
+  `every:` interval) and the reflex loop fires due entries as ordinary
+  inbox events. Cron is just one shape of "the resident emits an event to
+  its own future"; ambient initiative emerges as a recurring self-thought.
+  Companion decision — **the agent owns `brr-home` sync + conflict
+  resolution** (daemon keeps a local durability floor + best-effort push;
+  a rejected push sets a `needs_sync` marker the wake prompt surfaces;
+  fetch/merge/resolve/push is the agent's judgement). Realises
+  [`design-agent-dominion.md`](design-agent-dominion.md) §4 self-scheduling
+  and refines §5 persistence.
+- [Context introspection — "look at it" mode](design-context-introspection.md) —
+  *shipped 2026-06-09, opt-in (default off)*. A co-development toggle
+  (`introspect.enabled`): when on, every wake invites the resident to inspect the
+  **shape of its own injected context** — how the parts connect, where it fights
+  itself, what's assumed but unsaid — and raise improvements to the user as
+  dialogue, not a silent edit. The interactivity-axis counterpart to the
+  [environment-shaping](design-environment-shaping.md) loop's automatic
+  remember → shape machinery.
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native
@@ -92,9 +153,11 @@ dive-in map) and are stable until something contradicts them.
   + env protocol shape; the merge-coordinator design described there
   was abandoned and never came back.
 - [Concurrent execution design](design-concurrent-execution.md) —
-  *accepted on 2026-05-16*. Partitioned per-event/per-task state
-  removes the shared-mutable surfaces a serial daemon was hiding;
-  threaded loop on top synchronises only on per-branch ff and push.
+  *superseded on 2026-06-08 by*
+  [`design-agent-dominion.md`](design-agent-dominion.md). The threaded
+  daemon loop is reversed to single-flight by the resident-agent reshape;
+  the partitioned per-event/per-task state + per-task worktree isolation it
+  built on survive in `subject-tasks-branching` / `subject-daemon`.
 
 ## Tasks & branching
 

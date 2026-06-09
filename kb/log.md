@@ -5597,3 +5597,531 @@ and index read as if operator-owned runs already route to
 endpoint/proxy slice exists. Reconciled the design and index to make
 the shipped Null path current state and the Brnrd path explicitly
 designed-not-built.
+
+## [2026-06-04] design | environment-shaping loop frame (proposed)
+
+Synthesised an ongoing design dialogue into
+[`design-environment-shaping.md`](design-environment-shaping.md)
+(`Status: proposed`). The frame unifies three things previously reasoned
+about in isolation — the ergonomics back-channel, the kb-as-memory layer,
+and brr's interactivity — into one **observe → remember → shape → retire**
+loop where captured failures are *transient* (slashed once the environment
+carries them), which is the answer to the kb-overgrowth toil.
+
+Key moves: (1) interactivity × agency are two ends of one **steering-signal
+spectrum** (latency × source) — brr owns the durable end and interoperates
+with live tools (Cursor as first-class citizen) rather than rebuilding an
+IDE loop; (2) the **robustness hierarchy** (recall → affordance → forcing
+function) doubles as a **retrieval-cost hierarchy**, so compile-and-inject
+beats RAG/subagents (which also contradict the llm-wiki foundation); (3) a
+**salience** ("pain") score = recurrence × cost ÷ ease-of-workaround decides
+which records are *generative*, framed as a functional signal, not assumed
+qualia; (4) **layered-control routing** (rings 0–3) sends each fix to its
+controller, extending `RunContext.owner`; (5) gates are a *conversation
+medium*, and observability rides a **transient relay** to the user's surface
+so it doesn't break data-min; (6) agent-satisfaction is promoted to an
+operating principle **subordinated to** the task contract (the alignment
+guardrail), and gating survives as collaboration protocol, not containment.
+First slice: trigger-indexed failure memory riding `brr kb` (#41). Open
+threads noted: brr-as-product/project boundary, possible OSS extraction of
+the loop engine (rule-of-three + IP caution re: employer SRE work), and a
+recon of `future-agi` (adjacent eval/observability platform, likely an
+`ErgoProxy`/OTel sink, not a competitor).
+
+## [2026-06-07] design | agent dominion + the resident-agent reshape (proposed)
+
+Wrote [`design-agent-dominion.md`](design-agent-dominion.md) (`Status:
+proposed`), the substrate companion to the environment-shaping loop, sequenced
+as the next work ahead of the release-readiness items (#23) because it reshapes
+the execution + memory foundation those items build on.
+
+Core moves, from a long design dialogue: (1) **the agent is its memory, not its
+process** — one-shot CLIs can't be held open, so a "thought" is a runner woken
+by an event or a self-scheduled cron, and continuity is reconstructed each wake
+from durable memory (so durability of memory = continuity of the agent). (2)
+**Memory splits on a durability × ownership matrix**; the missing durable+owned
+cell is the **dominion**, and the unlock is that ownership is a *curation policy
+on a path*, not gitignored-ness — so kb stays curated+shared, the dominion is
+committed-but-review-exempt, joined by a dominion→kb promotion bridge (kb was
+overloaded trying to be both). (3) The dominion is a **forge-backed orphan
+branch** (owned/unsupervised, inspectable, non-polluting, durable, fetchable
+anywhere) with a bounded **auto-injected digest**; it also cures
+managed-failover amnesia without brnrd holding anything. (4) **Local
+parallelism discarded** (reshapes `design-concurrent-execution.md`) for a
+**single-flight reflex/deliberation loop**: the daemon body spawns one thought
+when idle and handles explicit `/cancel` + a liveness backstop; the woken mind
+checks the inbox at plan boundaries, with cancellation detection semantic
+(agent-side) and interleaving requiring a **multi-response protocol** (per-event
+response files written mid-flight). (5) The **playbook** is the convergence
+point — multi-response aware, ownership-defining, pain-evaluation input,
+lifecycle-as-action-and-growth — framed as intent-rich peer-craft, not a
+mechanical checklist. (6) Naming resolves cleanly: **brr** = the
+project-resident agent, **brnrd** = the manager of brrs (the locked brand); no
+re-acronym. Open threads: remote live-event delivery, dominion layout/digest
+format, destructive-edit consent rung, whether ad-hoc agents write the dominion,
+and the playbook copy / cringe line.
+
+## [2026-06-08] decision | accept agent-dominion; supersede concurrent-execution
+
+Accepted [`design-agent-dominion.md`](design-agent-dominion.md) (the
+resident-agent reshape) and superseded
+[`design-concurrent-execution.md`](design-concurrent-execution.md): its threaded
+daemon loop is reversed to **single-flight**, while the per-task worktree/branch
+isolation + partitioned per-event state it built on survive (now anchored in
+`subject-tasks-branching` / `subject-daemon`).
+[`design-environment-shaping.md`](design-environment-shaping.md) is demoted to
+*prior reasoning* — still the canonical description of the loop, but partly stale
+on substrate (the `Pitfall:` failure-memory now lives in the dominion, not as a
+kb marker); agent-dominion is the primary spec to implement against.
+
+Final design points settled this round, closing the dialogue: (1) **concurrency
+is Society-of-Mind, not locked** — tolerate concurrent / contradictory writes,
+resolve dissonance with a later *thought* (the salience loop pointed inward);
+append-mostly is the cheap default, not a cage; the system is already
+multi-thought via ad-hoc sessions, so single-flight daemon + concurrent ad-hoc is
+the holistic shape (no multi-process daemon earns its cost). (2)
+**Materialization**: the dominion is one long-lived `git worktree` on the
+`brr-home` orphan branch at `.brr/dominion/` — durable *branch*, disposable
+*checkout*; bootstrap is fetch-or-create-orphan; a thought touches two trees
+(per-task worktree → `main`; shared dominion worktree → `brr-home`); degrades
+gracefully with no remote. (3) **Self-improvement** is assessable only as a
+relation to the memory of a past pain — so pain-memory in the dominion is the
+yardstick (validated by consequence + the git diff of the prior self, not by a
+felt before/after). (4) "**dominion**" kept as the agent-facing concept (earned
+ownership; the cringe risk is user-facing, so the CLI label can stay plainer).
+Next: implement, **dominion substrate first** (orphan-branch bootstrap + worktree
+materialization + self-inject read on wake), then the single-flight loop, then
+the playbook.
+
+## [2026-06-08] implement | dominion substrate (slice 1a) — orphan-branch bootstrap + worktree
+
+Shipped the first slice of the resident-agent reshape
+([`design-agent-dominion.md`](design-agent-dominion.md)): the dominion now
+materializes. New `src/brr/dominion.py` `ensure_dominion()` is idempotent and
+fetch-or-create — re-attaches if the `brr-home` worktree is already registered;
+adds a worktree on an existing local branch; fetches + adds a *tracking*
+worktree when the remote has the branch (second machine / reinstall / failover);
+else creates the orphan branch **empty** via plumbing (`mktree` → `commit-tree`
+→ `update-ref` — portable across git versions, never touches `main`'s index or
+HEAD), seeds it (README + playbook stub + `self-inject` manifest), and pushes
+best-effort. The worktree lands at `.brr/dominion/` (durable *branch*, disposable
+*checkout*). Git plumbing (`remote_branch_exists`, `create_orphan_branch`,
+`add_worktree`, `fetch_branch`, `push_branch`, `commit_all`) added to
+`gitops.py`. Wired into both `brr init` (`adopt._bootstrap_dominion` +
+`dominion.enabled` / `dominion.branch` config defaults) and the idempotent
+`daemon.start` ensure (best-effort — a missing committer identity or push
+permission is a soft skip, never crashes boot). `tests/test_dominion.py` covers
+fresh / orphan-history / custom-branch / restart-idempotent / returning-local /
+returning-from-remote / no-remote; full suite green (678 passed). Next: **1b** —
+self-inject resolution (`full|head|tail|grep`, budget cap) + wake-time injection
+at `prompts._join_prompt_parts`.
+
+## [2026-06-08] implement | dominion substrate (slice 1b) — self-inject digest on wake
+
+Made the dominion *speak* into context. `dominion.resolve_self_inject()` reads the
+agent-owned `self-inject` manifest (one `<mode> <path>` per line; `#` comments
+skipped), renders each entry — `full | head:N | tail:N | grep:<pattern>` — and
+concatenates fragments in manifest order within a UTF-8 byte budget
+(`DEFAULT_INJECT_BUDGET_BYTES=8192`), truncating the overflowing entry with a
+marker so order = priority. Two deliberate guards: `exec` is *recognised but not
+run* (the integrity-sensitive mode lands with its guard in a later slice, so it's
+skipped for now), and every path is `resolve()`d and kept inside the dominion dir
+(an escaping `../` is refused, not read). Injection lives in
+`prompts._build_dominion_block` → `_join_prompt_parts`, so **both** the daemon
+prompt and `brr run` carry it (ad-hoc sessions are the same resident). Reads the
+shared dominion via `shared_brr_dir`, so a per-task worktree still finds the one
+`.brr/dominion/`. Decision: the digest is **prompt-only**, *not* mirrored into the
+`run_context.md` recovery file — `render_context` already omits the `kb/log` block
+for the same reason (the bundle is the hot path; the recovery file is for details
+the bundle lacks). Config knob `dominion.inject_budget_bytes` added to `brr init`
+defaults. Full suite green (688 passed). Next: **slice 2** — single-flight daemon
+loop (spawn-one-when-idle; inbox scan at plan boundaries).
+
+## [2026-06-08] implement | single-flight daemon loop (slice 2) — thin reflex, no command layer
+
+Reversed the threaded worker pool to **single-flight**: `daemon.start` now spawns
+one *thought* (one `_run_worker` invocation) when idle and work is pending, off a
+one-slot executor so the loop stays responsive to dev-reload / gate liveness /
+signals while a long thought runs. Removed `max_workers` + `_DEFAULT_MAX_WORKERS`
++ the unused `_SHUTDOWN_DRAIN_TIMEOUT`; the legacy `max_workers` config knob is
+now ignored (test guards that). Events that arrive mid-thought just stay pending
+until the slot frees (the living agent's mid-flight inbox pickup is multi-response,
+slice 4). The per-task worktree/branch isolation + partitioned conversation/card
+files **survive** — they now serve crash recovery, ad-hoc sessions, and managed
+multi-daemon rather than parallelism.
+
+Two decisions settled with the user (who steered toward a deliberately thin
+orchestration layer): (1) **no command layer** — the daemon never parses
+`/cancel`; every event wakes the agent or waits for it, and cancel/redirect is the
+agent's *semantic* job at plan boundaries. (2) **Liveness backstop = the existing
+wall-clock `runner.timeout_seconds`** (default 3600s, generous so a long healthy
+build isn't killed). A finer ~5-min *idle* timeout is the honest goal but is
+**deferred to slice 4**: there's no mid-run liveness signal today (the runner is
+one opaque `subprocess.communicate`; the 30s heartbeat is wall-clock, not agent
+liveness), so a silent-wedged process is indistinguishable from silent-healthy
+(xhigh reasoning / long build) until the agent can check in. Notably single-flight
+also *fixes* a latent bug: `runner._active_proc` is a single global, which the
+parallel pool could clobber.
+
+Renamed `tests/test_daemon_concurrency.py` → `test_daemon_single_flight.py`
+(peak-concurrency==1 invariant, legacy-knob-ignored, crash-resilience). Reshaped
+`subject-daemon.md` (Execution model — single-flight; lineage breadcrumb for the
+pool→single-flight round trip) and `design-agent-dominion.md` §4 (no command
+layer; cancellation is the agent's, liveness is the substrate's). Full suite green
+(687 passed). Next: **slice 3** — playbook + wake orientation; retire per-stage
+overlay prompts.
+
+## [2026-06-08] implement | playbook + wake orientation (slice 3): overlays retire into the resident's standing self-orientation
+
+Landed the slice-3 reshape: the resident now wakes into **one standing
+self-orientation** — its playbook (seeded from `prompts/dominion-playbook.md`,
+injected on wake from the dominion's self-inject index) — instead of a different
+prompt overlay stamped per stage. Three per-stage overlays retired:
+
+- **kb-maintenance second-spawn.** Removed `daemon._maybe_kb_maintenance` + the
+  `prompts/kb-maintenance.md` overlay + the `kb_maintenance_done` packet/renderer
+  plumbing. The deterministic `kb_preflight` / `kb_health` scanners **survive**
+  and now ride the resident's own wake prompt via `prompts._build_kb_health_block`
+  (silent when clean; `kb_maintenance=never` opts out). A resident that curates
+  the shared kb as part of its single thought doesn't need a second LLM pass.
+- **self-review reflection footer.** Removed `prompts/self-review.md` +
+  `prompts.reflection_enabled` + the `reflection` plumbing, and collapsed the
+  `ergonomics=response` mode into `log` (existing configs map via the normaliser).
+  Runtime friction now lands in the resident's dominion journal (the playbook's
+  pain-evaluation loop), not a one-shot reply footer. The deferred
+  hidden-reflection-capture pipeline (the `reflection` `Record` kind) is untouched.
+- **reconsider-signal keyword list** in `run.md` trimmed: the brittle "watch for
+  wdyt / not great / …" enumeration gave way to ownership intent (carried by the
+  playbook for residents, AGENTS.md → Stewardship for everyone). The load-bearing
+  operational contract (a chat-only reply is a complete task; the follow-up event
+  carries the diff) stays. Events were already lightweight (body + metadata, no
+  command layer) since slice 2.
+
+**AGENTS.md** dropped the retired kb-maintenance stage, named the resident
+playbook/dominion as the self-orientation layer that rests on the repo contract,
+and carved `.brr/dominion/` out of the "don't explore `.brr/`" guidance (revision
+bumped to 2026-06-08). **plan-agent-orientation-layering.md** grew from a four- to
+**five-layer** model (resident self-orientation between contract and stage
+overlay). Reconciled the kb graph so the retired passes aren't described as
+current (`subject-kb.md`, `decision-kb-shape.md`, `index.md`, `repo-dive-in-map.md`,
+`design-agent-{dominion,ergonomics}.md`); ran the deterministic preflight and
+cleared the two broken links it caught (the deleted `self-review.md`, and the
+slice-2 `test_daemon_concurrency.py` rename). Full suite green (665 passed; net
+deletion across the slice). Next: **slice 4** — multi-response protocol (per-event
+response files written mid-flight; folds in diffense and the finer idle-liveness
+timer).
+
+## [2026-06-09] implement | multi-response protocol (slice 4): interim + interleaved replies mid-thought
+
+Broke the one-event→one-final-stdout→deliver-once contract open so the resident
+can talk mid-thought, additively and backward-compatibly (a thought that prints
+one final stdout and writes nothing else is unchanged). Three sub-slices landed;
+two scoped follow-ons were deliberately deferred. Design contract:
+`design-multi-response.md` (now `Status: shipped`).
+
+- **4a — streaming delivery foundation.** A per-event partials queue
+  (`responses/<eid>.partials/<seq>.md`) plus `protocol` helpers (`list_active`
+  = processing+done, `partials_dir`/`list_partials`/`write_partial`/`read_partial`,
+  `cleanup` removes the partials dir). `runtime.deliver_stream` walks **active**
+  events oldest-first, delivers queued partials in order deleting each after a
+  successful send (resumable on a transient platform error), and only on `done`
+  delivers the terminal `<eid>.md` and cleans up. `deliver_responses` is now a
+  thin wrapper; the GitHub gate reuses the control flow with split
+  partial/terminal callbacks so its branch footer rides only the terminal.
+- **4b — agent outbox + daemon drain.** A per-event drop zone
+  (`.brr/outbox/<eid>/`, plumbed through `RunContext.outbox_{host,env}` and the
+  env backends). `daemon._drain_outbox` runs on every heartbeat tick and once
+  after the runner returns: promotes drop-zone files to the partials queue, emits
+  an `interim_response` packet (new in `updates.PACKET_TYPES`; rendered on the
+  live card by `run_progress`), indexes the artifact on the conversation log, and
+  removes the consumed file. The bundle's delivery contract (`prompts.py`) now
+  documents the outbox; `run_context` surfaces the path.
+- **4c — interleaving (cross-event).** An outbox file whose frontmatter names
+  another pending event (`event: <id>`) is routed to *that* event's queue and the
+  event is marked `done` by the daemon — folded in without its own spawn. Unknown
+  targets are dropped (don't misroute). The bundle now carries a pending-events
+  snapshot (`_format_pending_events`) so the resident knows what it can fold in.
+  No `final:` flag: one outbox file is one complete reply, terminal for its target
+  by construction.
+
+**Deferred (with reasoning, recorded in the design page):** (1) folding the
+**diffense** pack into this drain — it's task-keyed, consumed once at PR
+finalization to shape a PR *body*, and is structured JSON not a chat message;
+the shared "agent writes, daemon picks up" *pattern* is already the unification,
+collapsing them into one *mechanism* is cosmetic and risks the PR flow. (2) a
+finer **idle-liveness timeout** — interim check-ins are opportunistic, so their
+absence doesn't separate wedged from healthy-but-silent (long build, deep
+reasoning); a hard idle-kill would false-positive on the long honest work it's
+meant to protect. The wall-clock `runner.timeout_seconds` stays the only hard
+kill; the drain is an *informational* liveness signal. Revisit when there's
+reason to add an obligatory agent heartbeat.
+
+Updated the resident playbook (`prompts/dominion-playbook.md`): the
+"machinery still landing" caveat is gone — talking mid-thought via the outbox
+and folding events in are now real and documented. Reconciled the pipeline hubs
+(`subject-daemon.md`, `execution-map.md`, `brr-internals.md` gained a
+Multi-response section) and fixed a stale slice-3b leftover in `subject-daemon.md`
+that still listed a post-task kb-maintenance pass (kb-health rides the wake
+prompt now). Full suite green (691 passed).
+
+## [2026-06-09] implement | dominion persistence + presence registry (slice 5): Society-of-Mind concurrency
+
+Made the dominion actually durable and gave overlapping thoughts a way to see
+each other — the two mechanics `design-agent-dominion.md` §4/§8 had left "to
+emerge with the playbook." Three sub-slices:
+
+- **5a — serialized dominion capture.** `dominion.commit` captures the resident's
+  `.brr/dominion/` edits at sleep; the daemon calls it after every thought (success
+  *and* failure — a failed thought may have recorded the pain that caused it).
+  The commit step serializes **across processes** with an advisory `fcntl.flock`
+  on `.brr/dominion.commit.lock` (new `gitops.worktree_dirty` skip-when-clean
+  pre-check), so a daemon thought and an ad-hoc session never race the shared git
+  index — file *edits* stay free, only the index-touching commit serializes.
+  Best-effort push keeps `brr-home` travelling (`dominion.push_on_capture`,
+  default on). A clean dominion is a silent no-op; all failure swallowed so
+  capture never breaks a run.
+- **5b — presence registry.** New `presence.py`: a lock-free, gitignored registry
+  under `.brr/presence/` (one JSON file per participant, so concurrent writers
+  touch disjoint files) that self-heals on read by pruning dead-pid (same-host)
+  and stale-heartbeat ghosts. The daemon registers a thought when it starts,
+  heartbeats it on the runner heartbeat tick, and deregisters in the worker's
+  finally.
+- **5c — surfacing + playbook + kb.** The wake prompt now gives the resident its
+  dominion's **absolute** write path (reachable from a worktree/container cwd)
+  and states brr captures it at sleep, plus an "Also awake right now" bundle
+  section listing other live participants (excludes self; drops out when alone).
+  The playbook gained: persistence-at-sleep (write freely, no commit dance), the
+  **inward dissonance loop** (contradictions in shared memory are friction —
+  notice, reconcile by judgement, retire the stale version; the salience loop
+  turned inward), and other-hands awareness. Resolved §4/§8 of
+  `design-agent-dominion.md`, added a Society-of-Mind concurrency section to
+  `subject-daemon.md`, and updated `execution-map.md` / `brr-internals.md`
+  (`.brr/` layout + artifact tables, pipeline steps).
+
+Deliberately **no deterministic dissonance detector** — reconciling contradictory
+memory is synthesis, exactly what a scanner can't do (cf. kb preflight, which only
+flags structural facts); it's the resident's judgement, surfaced by presence.
+Full suite green (709 passed).
+
+## [2026-06-09] implement | trigger-indexed failure-memory + promotion bridge (slice 6)
+
+Shipped the **first slice of the environment-shaping loop**: the *remember* step's
+trigger-indexed `Pitfall:` failure-memory, plus a confirmation that the
+dominion→kb **promotion bridge** is playbook-mediated (agent-initiated, no
+mechanism) rather than a command.
+
+- **6a — the mechanism.** New `pitfalls.py`: parse `.brr/dominion/pitfalls.md`
+  (a `## ` heading, a `trigger:` line of comma-separated keywords/loci, then the
+  lesson), match triggers against the task text (case-insensitive substring),
+  format the matches as a wake-prompt affordance block. `prompts._build_pitfalls_block`
+  wires it into `_join_prompt_parts`, so it rides both `build_daemon_prompt`
+  (matched against task + event body) and `build_run_prompt` (ad-hoc `brr run`).
+  The dominion seed now ships a `pitfalls.md` skeleton documenting the format.
+  This is the **affordance** rung: the failure-memory placed *in the path* (it
+  can't be silently skipped the way a recall-rung page can), and cheaper than a
+  forcing function, so it's where a lesson lives until a lint/test compiles it
+  down and the pitfall is slashed.
+- **6b — playbook + reconciliation.** The playbook's shaping loop now names the
+  pitfall convention (record a trigger-keyed pitfall; brr re-injects it when a
+  trigger recurs; slash it once a forcing function guards the failure) and spells
+  out the recall < affordance < forcing-function ladder.
+
+**Resolved a design contradiction.** `design-agent-dominion.md` §2 had said the
+failure-memory "surfaces via self-inject," while `design-environment-shaping.md`
+wanted it surfaced *by locus, injected into the bundle* (the affordance rung,
+because recall gets silently skipped). The "trigger-indexed" framing settled it:
+storage is the **dominion** (superseding the earlier kb-marker idea), and
+surfacing is a **deterministic daemon-side matcher** that *complements*
+self-inject — self-inject is always-on pins, the matcher is by-trigger and scoped
+to the task. The planned `brr kb check` collector was never built and isn't
+needed; ad-hoc agents get the surface through `brr run`'s wake prompt instead.
+Reconciled across `design-agent-dominion.md`, `design-environment-shaping.md`
+(First slice now marked shipped), `subject-daemon.md` (pipeline step 6), and
+`index.md`. Full suite green (723 passed).
+
+## [2026-06-09] implement | self-scheduled thoughts + agent-owned dominion sync (slice 7)
+
+Made the resident **proactive** (it can wake itself) and handed it ownership of
+its dominion's **remote git lifecycle**. Two halves, from one design note
+(`design-self-scheduled-thoughts.md`):
+
+- **7a — self-scheduled thoughts.** New `schedule.py` + a reflex hook
+  (`daemon._fire_due_schedules`, run each tick before the inbox poll). The
+  resident owns a declarative `schedule.md` in its dominion; the daemon fires due
+  entries as ordinary `schedule`-source inbox events that flow through the normal
+  single-flight pipeline. Generalised away from cron syntax per the user's steer:
+  `at:` (one-shot absolute — travels with the dominion, fires correctly on a
+  second machine) and `every:` (interval, anchored on first sight). A self-wake
+  is just an event whose source is the resident itself; ambient initiative
+  emerges as a recurring self-thought with the interval as its throttle;
+  self-continuation is `at: <now>`; conditional watchers are noted future.
+  **Specs owned + durable** (dominion); **firing-state operational**
+  (`.brr/schedule/state.json`, daemon-owned, machine-persistent) — so the daemon
+  never writes the agent's `schedule.md` and firing never races the commit lock.
+  Gateless schedule events are retired by the daemon on completion
+  (`_retire_internal_event`).
+- **7b — agent-owned dominion sync.** Addressed the review note that
+  `dominion.commit` silently gave up on a diverged `brr-home` remote. Division:
+  daemon = local durability floor + best-effort push; **agent = remote
+  reconciliation** (fetch/merge/resolve/push), because merging two divergent
+  memories is synthesis — judgement — the same reason there's no deterministic
+  dissonance detector (slice 5). A rejected push now sets a `needs_sync` marker
+  (runtime) instead of vanishing; a successful push (incl. a clean-tree no-op)
+  clears it; the wake dominion block surfaces the divergence with its recorded
+  reason; the playbook codifies the ownership and points at a recurring schedule
+  entry as the proactive reconcile.
+
+Playbook gained a "Waking yourself" section and the sync-ownership paragraph.
+Reconciled `design-agent-dominion.md` (§4 self-scheduled *thoughts*, §5/§8 sync
+refinement + resolved threads), `subject-daemon.md` (new reflex subsection),
+`index.md`, and the new design page. Full suite green (747 passed; +24 over
+slice 6).
+
+## [2026-06-09] implement | Daemon coherence review + cooperative liveness contract
+
+A daemon-layer coherence pass (prompted by the slice-7 delivery and
+dominion-sync work), persisted as `review-daemon-coherence-2026-06.md` and
+linked from `subject-daemon.md`. Findings split into staleness (fixed),
+liveness (shipped), delivery (designed), and an ownership crossroads (open).
+
+**Staleness (#1).** Removed the retired "kb maintenance" worker-pipeline step
+from `daemon.py` and `brr-internals.md` (the latter contradicted its own later
+text); rewrote `brr-internals` → Concurrency model so single-flight reads as
+intentional, not a v1 limitation with parallelism as the roadmap; re-pointed
+superseded `design-concurrent-execution.md` citations to the live hubs and
+reworded "concurrent worker pool" → "overlapping thoughts". Noted the vestigial
+in-process primitives (1-worker pool, per-branch lock, `_active_proc`) as seams
+tied to the ownership question rather than cleaning them up piecemeal.
+
+**Cooperative liveness (#2).** The user pushed back on calling `_active_proc`
+dead code — rightly: nothing read it, but it's the handle a real
+liveness/shutdown kill needs. Wired it up. `runner.kill_active()` is a
+cross-thread kill; the daemon heartbeat is now the liveness authority, enforcing
+an **agent-extensible** wall-clock budget (`runner.timeout_seconds`) and killing
+an overrun via `kill_active`, with the runner's `communicate` timeout (a generous
+hard cap, passed via the new `RunnerInvocation.timeout_seconds`) as the final
+backstop. The agent extends by writing a `.keepalive` control dotfile in its
+outbox (ISO time or `+30m`-style duration), honoured on the next heartbeat and
+capped at the hard ceiling; the outbox drain skips dotfiles so it isn't
+delivered. The bundle states the budget and documents the extension; the
+playbook tells the agent to bound uncertain long commands. `brr down`/SIGTERM
+now kill the in-flight runner instead of waiting out the budget. A budget kill
+is presented like the wall-clock timeout (exit 124). The *silence-based*
+idle-kill stays deferred (a flat budget can't separate wedged from
+healthy-but-silent). Reconciled `subject-daemon.md`, `brr-internals.md`, and
+breadcrumbed `design-agent-dominion.md` / `design-multi-response.md`. Full suite
+green (761 passed; +14).
+
+Still open from the review: #3 (gate-addressed out-of-bound + scheduled
+delivery, plus a `conversation_key` for schedule firings) and #4 (the
+daemon-vs-agent ownership crossroads — behavior held, framing to tighten).
+
+## [2026-06-09] implement | Gate-addressed delivery + schedule threading (review #3); dominion-sync framing (#4)
+
+Landed the two halves of review finding #3, generalizing delivery from
+reply-shaped to also message-shaped.
+
+**3a — schedule threading.** `schedule.md` entries now carry an optional
+`conversation_key` (`schedule.py` parses it into `ScheduleEntry`; replaced the
+never-wired `deliver_to`). `_fire_due_schedules` stamps each fired event with it,
+defaulting to `schedule:<id>` — so a recurring entry's firings form a readable
+thread instead of being threadless, and an entry can be pointed at an existing
+gate thread (`telegram:<chat>:`) to wake *inside* a conversation.
+
+**3b — gate-addressed outbox.** `_drain_outbox` grew a `gate:` branch beside the
+existing `event:` one: a drop-zone file naming `gate: <name>` (+ optional target
+metadata) is an out-of-bound *send*, not a reply. `_gate_can_deliver` validates
+the gate is built-in and configured; `_deliver_out_of_bound` synthesizes an
+already-`done` event carrying the target metadata with the body as its response,
+so the gate's existing `deliver_stream` ships it once and cleans up without ever
+spawning a thought. `protocol.create_event` gained a keyword-only `status=` so
+the event is born `done` (no pending-window race). Agent frontmatter can't
+override reserved keys (`id`/`source`/`status`); unknown/unconfigured gates drop
+with a note (a synthesized event no thread polls would sit forever). This is also
+the delivery path for a self-scheduled thought that wants to *say* something.
+
+**#4 framing (no behavior change).** The agent-facing dominion block
+(`prompts._build_dominion_block`) called itself "a local durability floor …
+pushing, pulling, and conflict resolution are yours" — underselling: the daemon
+*does* best-effort push. Reworded to "commits and best-effort pushes; you own
+only reconciliation of a **diverged** remote", matching the playbook (which
+already said so). Sibling-drift fix, not a code change. The larger daemon-owned
+vs agent-owned crossroads stays recorded as the open question in
+`review-daemon-coherence-2026-06.md` §4, per the user's framing (current shape is
+load-bearing and battle-tested; a thinner agent-owned flow is more flexible but
+error-prone today; revisit when the agentic CLIs land non-blocking execution).
+
+Reconciled `design-multi-response.md` (new *Gate-addressed delivery* section;
+title/status), `design-self-scheduled-thoughts.md` (threading + delivery now
+shipped, not deferred), and the review page (#3 → shipped, #4 framing note).
+Full suite green (767 passed; +6).
+
+## [2026-06-09] implement | Context introspection — the "look at it" co-development mode
+
+Added an opt-in development toggle (`introspect.enabled`, default off) that, when
+on, injects an "awakening" invitation into every wake: the resident turns its
+attention on the **shape of its own injected context** — how the orientation,
+dominion/playbook, pitfalls, recent thread, and task bundle connect; where the
+whole coheres vs. fights itself (a contract a later line breaks, a guardrail that
+guards nothing, prose claiming more than the code does, two pages naming one
+thing two ways); what's assumed but never said — and raises what it finds to the
+user as dialogue, not a silent edit.
+
+Mechanism mirrors the other wake blocks: `prompts._build_introspection_block`
+returns the text of the new `prompts/introspection.md` (per-repo overridable)
+when the toggle is on, and `_join_prompt_parts` appends it as the **last framing
+before the task**, so it covers both `brr run` and daemon thoughts with one
+wiring. Seeded into `brr init` config defaults.
+
+This is the **interactivity-axis** counterpart to the environment-shaping loop's
+mostly-automatic remember → shape machinery: while the user and agent actively
+co-develop the orientation, the agent becomes a second pair of eyes on it and
+routes findings to the Ring-2 controller (prompts / code / `AGENTS.md`) through
+conversation. Default-off because the invitation spends tokens/attention every
+wake — it's for the active-development window, not a production stance.
+
+Tone aims for fresh, total attention (look at the pattern, not the words) with a
+deliberate arc: regard for the existing shape *before* judgement (it's mostly
+load-bearing, and the regard earns the right to name the flaw), fierceness as an
+invocation of *ownership* not compliance, ending in dialogue. Channels the
+quality without naming its source (no-cringe constraint); lives in a template so
+the tone can keep being tuned. New design note
+`design-context-introspection.md`, linked from `design-environment-shaping.md`
+and `index.md`. Tests pin both toggle behavior (on/off, run + daemon, placement)
+and the bundled text's awe + dialogue intent. Full suite green (772 passed; +5).
+
+## [2026-06-09] implement | Context provenance breadcrumbs + playbook continuity/presence; fix silent playbook truncation
+
+Three small playbook/wake-assembly refinements, plus a real bug they surfaced.
+
+**Provenance breadcrumbs.** Every wake block now opens with a one-line tag of
+*where it came from* and how to treat it, so the resident can tell the layers
+apart (its own owned memory vs. the shared governed `kb/` vs. per-thought
+runtime facts vs. brr's prompts) and weight them differently. The pitfalls and
+dominion blocks already self-identified; sharpened the `kb/log.md` *Recent
+Activity* intro (names it the shared, curated continuity through-line) and added
+a daemon-origin tag to the Task Context Bundle (`prompts.py`). A new playbook
+section, *Where your context comes from*, gives the resident the canonical
+four-layer key the per-block tags point into, and ties it to introspection mode.
+
+**Continuity rests on `kb/log.md`.** Playbook *What you are, mechanically* now
+says memory has two homes — the dominion (private workshop) and `kb/log.md` (the
+shared dated through-line, injected each wake as Recent Activity) — and that a
+log entry on a real learning/decision/change is how you hand the thread to
+whoever wakes next, not bookkeeping.
+
+**Single-flight vs. presence.** The old "single-flight … you aren't racing
+anyone" read as *you're the only actor*, which fights the later "you may not be
+the only one awake." Reframed: single-flight is about **execution** (one thought
+runs in this daemon, this one is yours, uninterrupted) — not **memory** (other
+wakings, often other versions of you, may be writing the shared dominion while
+you think). They share the *memory* under the thought, not the thought.
+
+**Bug found while doing it:** the seed playbook had silently grown to 13.3 KiB
+against a 12288-byte inject budget the comment claimed it "fits in full," so its
+closing section was being **clipped on every wake** — undetected because nothing
+guarded the invariant. Bumped `DEFAULT_INJECT_BUDGET_BYTES` 12288 → 20480 (fits
+the now-15.5 KiB seed with headroom for the resident's own pins) and added a
+guard test that fails if the seed outgrows the cap again, forcing a deliberate
+bump over silent loss. Recorded as a lineage breadcrumb in
+`design-agent-dominion.md`. Full suite green (773 passed; +1 guard).

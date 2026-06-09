@@ -169,7 +169,6 @@ Read:
 - [`src/brr/prompts.py`](../src/brr/prompts.py)
 - [`src/brr/envs/__init__.py`](../src/brr/envs/__init__.py)
 - [`src/brr/prompts/run.md`](../src/brr/prompts/run.md)
-- [`src/brr/prompts/kb-maintenance.md`](../src/brr/prompts/kb-maintenance.md)
 - [`src/brr/kb_preflight.py`](../src/brr/kb_preflight.py)
 - [`src/brr/kb_health.py`](../src/brr/kb_health.py)
 
@@ -234,7 +233,7 @@ push otherwise — and attaches a `forges.view_branch_url` link to
 
 Tests: [daemon](../tests/test_daemon.py),
 [heartbeat](../tests/test_daemon_heartbeat.py),
-[concurrency](../tests/test_daemon_concurrency.py),
+[single-flight](../tests/test_daemon_single_flight.py),
 [dev reload](../tests/test_dev_reload.py), and
 [sync](../tests/test_sync.py).
 

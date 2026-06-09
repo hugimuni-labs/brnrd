@@ -19,8 +19,25 @@ rule** so the harness doesn't accrete static checks that belong to the
 agent. The shipped default is now a quiet daemon-log of probe findings
 for user-owned runs (token-free), not silence.
 
+**The `response` mode (visible reflection footer) was retired
+2026-06-08** with the resident-agent reshape (see
+[`design-agent-dominion.md`](design-agent-dominion.md)). The user knob
+is now `off|log|local`; an `ergonomics=response` config value collapses
+to `log`, and `prompts/self-review.md` + `prompts.reflection_enabled`
+are gone. The resident folds runtime friction into its own **dominion
+journal** — the pain-evaluation loop in its playbook — rather than a
+reply footer, so the agent's reflection has a durable home instead of a
+one-shot footer. This retires only the *visible* reflection surface;
+the deferred hidden-reflection-capture pipeline (the `reflection`
+`Record` kind, sampling, splitter) described below is unaffected, and
+when it lands it feeds the dominion/ergonomics back-channel, not a reply.
+
 Companion to:
 
+- [`design-environment-shaping.md`](design-environment-shaping.md) — the
+  observe → remember → shape **loop** that consumes this back-channel's
+  observations and routes them to action (salience triage, layered-control
+  routing, action rungs). This design is that loop's observation layer.
 - [`subject-managed-mode.md`](subject-managed-mode.md) — the tenancy
   split (self-hosted brr vs hosted brnrd) that shapes who needs to
   see ergonomics data and where it routes.
@@ -42,12 +59,13 @@ Companion to:
 ## Problem this design answered
 
 The baseline this design replaced was a single knob,
-`runner.self_review`, that injects
-[`src/brr/prompts/self-review.md`](../src/brr/prompts/self-review.md)
-into runner prompts. That prompt asks the agent to end its stdout
-with a free-text **Ergonomics review:** footer covering orientation,
-tooling, and branch metadata. The daemon does nothing with the
-footer beyond shipping it as part of the response file to the gate.
+`runner.self_review`, that injected a `src/brr/prompts/self-review.md`
+overlay into runner prompts. That prompt asked the agent to end its
+stdout with a free-text **Ergonomics review:** footer covering
+orientation, tooling, and branch metadata. The daemon did nothing with
+the footer beyond shipping it as part of the response file to the gate.
+(Both the knob and, later, the `ergonomics=response` mode that replaced
+it were retired — see the breadcrumb at the top of this page.)
 (Removed 2026-06-03: the knob is gone — the same "review in the reply"
 behaviour is now `ergonomics=response`, skippable and owner-gated. See
 "Ownership decides routing".)
