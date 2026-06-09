@@ -41,6 +41,8 @@ gitignored; do not commit its contents.
 | `tasks/`     | Task manifests, one per event (source of truth for the worker)     |
 | `responses/` | Agent final responses destined for gate replies; per-event `<id>.partials/` hold queued interim replies |
 | `outbox/`    | Per-event drop zone (`<id>/`) where the resident writes interim/interleaved replies mid-thought |
+| `presence/`  | Who's awake right now — one JSON file per active thought/session, pruned on read |
+| `dominion/`  | The resident's durable working memory (worktree on the `brr-home` branch); captured at sleep |
 | `runs/`      | Generated per-task context files for daemon runner invocations     |
 | `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
 | `traces/`    | Prompt + stdout + meta per runner invocation (cleaned on success)  |
