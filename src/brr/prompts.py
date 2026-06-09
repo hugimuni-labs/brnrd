@@ -116,9 +116,165 @@ def _build_context_block(repo_root: Path) -> str:
         return ""
     return (
         "## Recent Activity (from kb/log.md)\n\n"
-        "This is your conversation context — what happened in previous sessions:\n\n"
+        "From `kb/log.md` — the shared, curated through-line of what's been "
+        "done and learned. brr injects this recent tail every wake; it's what "
+        "your continuity across thoughts (and other hands) rests on, and what "
+        "earlier wakings chose to hand forward:\n\n"
         f"{recent}"
     )
+
+
+def _build_dominion_block(repo_root: Path) -> str:
+    """Render the wake-time self-inject digest from the agent's dominion.
+
+    Reads from the shared dominion worktree (``.brr/dominion/``, resolved
+    via the git common dir so a per-task worktree still finds the one
+    dominion). Returns ``""`` when the dominion is disabled, not yet
+    materialized, or resolves to nothing — the caller drops the block.
+    """
+    from . import config as conf
+    from . import dominion
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    path = dominion.dominion_path(repo_root)
+    if not path.is_dir():
+        return ""
+    budget = int(
+        cfg.get(
+            "dominion.inject_budget_bytes",
+            cfg.get(
+                "dominion_inject_budget_bytes",
+                dominion.DEFAULT_INJECT_BUDGET_BYTES,
+            ),
+        )
+    )
+    digest = dominion.resolve_self_inject(path, budget_bytes=budget)
+    if not digest:
+        return ""
+    sync_note = ""
+    diverged = dominion.needs_sync(path.parent)
+    if diverged:
+        sync_note = (
+            "\n\n**Your dominion's remote has diverged** — brr's last push of "
+            "`brr-home` was rejected, so another machine or session wrote it "
+            "too. brr commits locally so nothing is lost, but reconciling the "
+            "remote is yours (it's a merge — judgement, not a reflex): when "
+            f"you're the one awake, in `{path}` fetch, merge / resolve any "
+            "conflicts, and push. "
+            f"(Reason on record: {diverged})"
+        )
+    return (
+        "## Your dominion (working memory)\n\n"
+        f"Your dominion is the `brr-home` branch, checked out at `{path}` — "
+        "an absolute path, reachable from any working directory (your task "
+        "may run in a worktree or container whose cwd is elsewhere). It's "
+        "your durable memory: write notes, pain records, and your "
+        "`self-inject` index there freely. **brr commits whatever you leave "
+        "there when this thought ends and best-effort pushes `brr-home`** — a "
+        "durability floor, so your memory survives to your next wake (and "
+        "reaches the remote when it can) with no commit dance needed. What brr "
+        "*won't* do is reconcile a **diverged** remote: when a push is rejected "
+        "(another machine or session wrote `brr-home` too), fetch / merge / "
+        "resolve / push is yours to own — it's a merge, judgement not reflex, "
+        "and you'll see a note here when it's needed."
+        f"{sync_note}\n\n"
+        "Self-injected below per your `self-inject` index — yours to "
+        "reshape:\n\n"
+        f"{digest}"
+    )
+
+
+def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
+    """Render dominion pitfalls whose triggers fire for *task_text*.
+
+    The affordance surface of the env-shaping loop: failure-memory the
+    resident recorded in ``.brr/dominion/pitfalls.md``, injected only when
+    a trigger appears in the task at hand (see
+    ``kb/design-environment-shaping.md`` and ``pitfalls.py``). Returns
+    ``""`` when the dominion is disabled / absent, or nothing matches.
+    """
+    if not task_text:
+        return ""
+    from . import config as conf
+    from . import dominion, pitfalls
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    path = dominion.dominion_path(repo_root)
+    if not path.is_dir():
+        return ""
+    matched = pitfalls.match(pitfalls.parse_pitfalls(path), task_text)
+    return pitfalls.format_block(matched)
+
+
+def _build_kb_health_block(repo_root: Path) -> str:
+    """Render the deterministic kb-health preflight as a wake-time block.
+
+    Runs the cheap consistency scan (:mod:`brr.kb_preflight`) plus the
+    graph-stats snapshot (:mod:`brr.kb_health`) over ``kb/`` and surfaces
+    any findings so the resident folds fixes into the current thought.
+    Returns ``""`` when the scan is clean (a clean preflight is silent,
+    not a tax on every wake) or when the inject is disabled with
+    ``kb_maintenance=never`` in ``.brr/config``.
+
+    (Earlier versions spawned a separate post-task kb-maintenance agent
+    that consumed these findings; removed 2026-06-08 — the resident
+    curates the shared kb as part of its own thought, with this
+    deterministic signal injected on wake instead. See
+    ``kb/design-agent-dominion.md`` and ``kb/subject-daemon.md``.)
+    """
+    from . import config as conf
+    from . import kb_health, kb_preflight
+
+    cfg = conf.load_config(repo_root)
+    if str(cfg.get("kb_maintenance", "auto")).strip().lower() == "never":
+        return ""
+    findings = kb_preflight.scan(repo_root)
+    if not findings:
+        return ""
+    findings_block = kb_preflight.format_findings(findings)
+    stats_block = kb_health.format_graph_stats(
+        kb_health.compute_graph_stats(repo_root),
+    )
+    body = "\n\n".join(b for b in (findings_block, stats_block) if b)
+    return (
+        "## kb health (deterministic preflight)\n\n"
+        "The shared `kb/` has the consistency findings below. Fold fixes "
+        "into your work where they fit — `kb/` is shared and governed by "
+        "`AGENTS.md`; the graph stays clean when each waking leaves it no "
+        "worse than it found it.\n\n"
+        f"{body}"
+    )
+
+
+def _build_introspection_block(repo_root: Path) -> str:
+    """Render the introspection/development invitation when toggled on.
+
+    An opt-in, co-development stance (``introspect.enabled`` in
+    ``.brr/config``, **default off**): it invites the resident to turn its
+    attention on the *shape of its own injected context* — the
+    orientation, dominion + playbook, pitfalls, recent thread, and task
+    bundle assembled into this wake — perceive how the whole connects,
+    find the seams / contradictions / dead guardrails / unstated
+    assumptions, and raise them with the user as a turn in the
+    conversation about how the context should evolve.
+
+    Off by default because it's an active-development aid, not a
+    production wake stance (it spends tokens and attention every wake).
+    The text lives in ``prompts/introspection.md`` so the tone can be
+    iterated on and per-repo overridden; see
+    ``kb/design-context-introspection.md``. Returns ``""`` when the toggle
+    is off or the template is missing — the caller drops the block.
+    """
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("introspect.enabled", cfg.get("introspect_enabled", False))):
+        return ""
+    return read_prompt("introspection.md", repo_root).strip()
 
 
 def _join_prompt_parts(
@@ -126,40 +282,36 @@ def _join_prompt_parts(
     repo_root: Path,
     trailer: str,
     *,
-    reflection: bool = False,
+    task_text: str | None = None,
     diffense: bool = False,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
     parts = [preamble]
+    dominion_block = _build_dominion_block(repo_root)
+    if dominion_block:
+        parts.append(dominion_block)
+    if task_text:
+        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
+        if pitfalls_block:
+            parts.append(pitfalls_block)
     context = _build_context_block(repo_root)
     if context:
         parts.append(context)
+    kb_health_block = _build_kb_health_block(repo_root)
+    if kb_health_block:
+        parts.append(kb_health_block)
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
             parts.append(pack_step)
-    if reflection:
-        nudge = read_prompt("self-review.md", repo_root)
-        if nudge:
-            parts.append(nudge)
+    # Last framing before the task: invite the resident to look at the whole
+    # shape it has just read (opt-in dev mode). Placed here so it can refer to
+    # everything above and sit fresh against the task bundle.
+    introspection_block = _build_introspection_block(repo_root)
+    if introspection_block:
+        parts.append(introspection_block)
     parts.append(trailer)
     return "\n\n".join(parts)
-
-
-def reflection_enabled(cfg: dict[str, Any] | None, owner: str = "user") -> bool:
-    """Return whether to inject the skippable reflection nudge and leave it visible.
-
-    True only for ``ergonomics=response`` on a **user-owned** run: a
-    self-hoster's explicit opt-in to see their own agent's ergonomics
-    notes in their own reply. Operator-owned runs never inject it (the
-    "no ergonomics in a managed reply, ever" invariant), regardless of
-    config.
-    """
-    if owner != "user":
-        return False
-    from .ergonomics.proxy import ergonomics_mode
-
-    return ergonomics_mode(cfg) == "response"
 
 
 def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
@@ -207,7 +359,9 @@ def build_init_prompt(repo_root: Path) -> str:
 def build_run_prompt(task: str, repo_root: Path) -> str:
     """Build the prompt for ``brr run`` — run.md + recent context + task."""
     preamble = read_prompt("run.md", repo_root)
-    return _join_prompt_parts(preamble, repo_root, f"---\nTask: {task}")
+    return _join_prompt_parts(
+        preamble, repo_root, f"---\nTask: {task}", task_text=task,
+    )
 
 
 def build_daemon_prompt(
@@ -216,6 +370,7 @@ def build_daemon_prompt(
     response_path: str,
     repo_root: Path,
     *,
+    outbox_path: str | None = None,
     task_id: str | None = None,
     source: str | None = None,
     environment: str | None = None,
@@ -226,8 +381,10 @@ def build_daemon_prompt(
     runtime_dir: str | None = None,
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
+    pending_events: list[dict[str, Any]] | None = None,
+    present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
-    reflection: bool = False,
+    budget_seconds: int | None = None,
     diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
@@ -240,6 +397,8 @@ def build_daemon_prompt(
     bundle = _build_task_context_bundle(
         event_id=event_id,
         response_path=response_path,
+        outbox_path=outbox_path,
+        budget_seconds=budget_seconds,
         repo_root=repo_root,
         task_id=task_id,
         source=source,
@@ -251,21 +410,20 @@ def build_daemon_prompt(
         runtime_dir=runtime_dir,
         context_path=context_path,
         recent_conversation=recent_conversation,
+        pending_events=pending_events,
+        present=present,
         event_body=event_body,
         diffense=diffense,
     )
     trailer = bundle.rstrip()
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nTask: {task}"
+    # Match pitfalls against the task and the original event text — the
+    # triggers the resident recorded tend to echo how a request is phrased.
+    pitfall_text = "\n".join(t for t in (task, event_body) if t)
     return _join_prompt_parts(
-        preamble, repo_root, trailer,
-        reflection=reflection, diffense=diffense,
+        preamble, repo_root, trailer, task_text=pitfall_text, diffense=diffense,
     )
-
-
-def build_kb_maintenance_prompt(repo_root: Path) -> str:
-    """Return the post-task KB consistency-check prompt (or empty)."""
-    return read_prompt("kb-maintenance.md", repo_root)
 
 
 # ── Task Context Bundle internals ────────────────────────────────────
@@ -281,6 +439,8 @@ def _build_task_context_bundle(
     *,
     event_id: str,
     response_path: str,
+    outbox_path: str | None = None,
+    budget_seconds: int | None = None,
     repo_root: Path,
     task_id: str | None,
     source: str | None,
@@ -292,6 +452,8 @@ def _build_task_context_bundle(
     runtime_dir: str | None,
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
+    pending_events: list[dict[str, Any]] | None = None,
+    present: list[dict[str, Any]] | None = None,
     event_body: str | None,
     diffense: bool = False,
 ) -> str:
@@ -302,6 +464,12 @@ def _build_task_context_bundle(
     grepping the prompt keeps working.
     """
     sections: list[str] = ["---", "## Task Context Bundle"]
+    sections.append("")
+    sections.append(
+        "_From the brr daemon: the runtime facts for *this* thought — task "
+        "metadata, environment, and the delivery contract. Operational and "
+        "per-thought, not durable memory (that's your dominion)._"
+    )
 
     sections.append("")
     sections.append("### Mode")
@@ -311,6 +479,14 @@ def _build_task_context_bundle(
     if environment:
         sections.append(f"- Environment: {environment}")
     sections.append("- Delivery: stdout captured by brr (see Delivery contract below)")
+    if budget_seconds:
+        sections.append(
+            f"- Budget: ~{budget_seconds // 60}m of wall-clock runtime before "
+            "brr kills this thought to reclaim the single-flight slot. Bound "
+            "uncertain long-running commands yourself (own timeout, or "
+            "background + poll); extend the deadline if you genuinely need "
+            "longer (see Delivery contract)."
+        )
     if context_path:
         sections.append(
             f"- Runtime recovery: {context_path} "
@@ -360,6 +536,47 @@ def _build_task_context_bundle(
         "write that file yourself, and don't substitute a file path for "
         "the answer."
     )
+    if outbox_path:
+        sections.append(
+            "- You can also send the user a reply *mid-thought* — before a "
+            "long stretch, to share trajectory, or to answer a quick thing "
+            "right away — by writing a markdown file into your outbox "
+            f"directory `{outbox_path}`. brr delivers each file as its own "
+            "chat message, in order, while you keep working, then your final "
+            "stdout closes the thread. One file is one message; write the "
+            "complete reply (stage as `*.tmp` and rename if you want an "
+            "atomic write). Interim replies are extra messages, not a "
+            "substitute for the final stdout — don't repeat yourself. This "
+            "is optional: a single final stdout is a complete, healthy run."
+        )
+        sections.append(
+            "- To answer a *different* pending event inline (see Inbox "
+            "below), start the outbox file with a frontmatter `event: <id>` "
+            "naming that event. brr delivers it to that event's thread and "
+            "marks the event handled, so it won't wake again. Use one "
+            "complete reply per folded-in event; prefer letting anything "
+            "that wants its own branch wake as its own thought."
+        )
+        sections.append(
+            "- To send a message to a destination with *no* waiting event "
+            "— ping a chat, post an out-of-bound note, deliver from a "
+            "scheduled thought — start the outbox file with a frontmatter "
+            "`gate: <name>` (e.g. `gate: telegram`) plus any target fields "
+            "that gate needs (omit them to use its configured default). The "
+            "body is the message; brr delivers it once to that destination. "
+            "It's a send, not a reply to this thread, and an unconfigured "
+            "gate is dropped."
+        )
+        if budget_seconds:
+            sections.append(
+                "- Running something that will outlast your budget? Don't get "
+                f"killed mid-run: write `{outbox_path}/.keepalive` whose first "
+                "line is either an ISO-8601 time (\"busy until T\") or "
+                "`+<duration>` like `+30m` (\"busy this much longer\", measured "
+                "from when you write it). brr honours it on its next heartbeat "
+                "and holds the slot until then; rewrite it to extend again. "
+                "It's a control file, not a message — brr never delivers it."
+            )
     sections.append(
         "- The user reads your reply remotely (Telegram / Slack / etc.). "
         "Refer to files by basename only — `subject-envs.md`, "
@@ -399,6 +616,33 @@ def _build_task_context_bundle(
                 "placeholder name."
             )
 
+    inbox_block = _format_pending_events(pending_events)
+    if inbox_block:
+        sections.append("")
+        sections.append("### Inbox — other pending events")
+        sections.append(
+            "Other events are waiting. You can fold a quick, related one in "
+            "now (answer it via the outbox `event: <id>` contract above) "
+            "instead of leaving it for its own spawn — your call. This is a "
+            "snapshot from when you woke; more may have arrived since."
+        )
+        sections.append("")
+        sections.append(inbox_block)
+
+    presence_block = _format_presence(present)
+    if presence_block:
+        sections.append("")
+        sections.append("### Also awake right now")
+        sections.append(
+            "Other thoughts are active in this repo (ad-hoc sessions, or "
+            "another worker). You share one dominion, so if one is on the "
+            "same stream or files, expect its edits to land alongside yours "
+            "— don't fight it. Contradictions in shared memory are normal "
+            "and get reconciled by judgement, not locks (see your playbook)."
+        )
+        sections.append("")
+        sections.append(presence_block)
+
     recent_block = _format_recent_conversation(recent_conversation)
     if recent_block:
         sections.append("")
@@ -416,6 +660,55 @@ def _build_task_context_bundle(
 
     sections.append("")
     return "\n".join(sections) + "\n"
+
+
+def _format_pending_events(
+    events: list[dict[str, Any]] | None,
+) -> str:
+    """Render other pending inbox events as bullets for the bundle.
+
+    Each entry shows the event id (the handle the resident names in the
+    outbox ``event:`` frontmatter to fold it in), its source, and a
+    one-line summary. Returns an empty string when nothing is waiting.
+    """
+    if not events:
+        return ""
+    bullets: list[str] = []
+    for ev in events:
+        eid = str(ev.get("id") or "").strip()
+        if not eid:
+            continue
+        source = str(ev.get("source") or "").strip()
+        summary = " ".join(str(ev.get("summary") or "").split())
+        if len(summary) > 140:
+            summary = summary[:137].rstrip() + "..."
+        src = f" ({source})" if source else ""
+        sep = f": {summary}" if summary else ""
+        bullets.append(f"- {eid}{src}{sep}")
+    return "\n".join(bullets)
+
+
+def _format_presence(
+    entries: list[dict[str, Any]] | None,
+) -> str:
+    """Render other active thoughts (the presence registry) as bullets.
+
+    Each entry shows the participant kind and the stream it's on, so the
+    resident can tell whether another thought might touch the same work.
+    Returns an empty string when nobody else is awake — the common case
+    under single-flight, so the section drops out entirely.
+    """
+    if not entries:
+        return ""
+    bullets: list[str] = []
+    for e in entries:
+        kind = str(e.get("kind") or "thought").strip()
+        stream = str(e.get("stream") or "").strip()
+        tid = str(e.get("task_id") or "").strip()
+        where = f" on `{stream}`" if stream else ""
+        tag = f" (task {tid})" if tid else ""
+        bullets.append(f"- {kind}{where}{tag}")
+    return "\n".join(bullets)
 
 
 def _format_recent_conversation(
