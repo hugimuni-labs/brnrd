@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs
+from brr import daemon, envs, presence
 from brr.task import Task
 from brr.runner import RunnerResult
 
@@ -131,6 +131,46 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     persisted = Task.from_file(tmp_path / ".brr" / "tasks" / f"{task.id}.md")
     assert persisted is not None
     assert persisted.status == "error"
+
+
+def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-p1")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *a, **k: "PROMPT",
+    )
+    # _run_worker_and_finalize calls publish at the end; stub it so the test
+    # exercises the presence finally without real git pushes.
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+
+    brr_dir = tmp_path / ".brr"
+    seen: dict[str, object] = {}
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        # Mid-run: this thought is recorded as present on its stream, so a
+        # concurrent session would see it and could avoid colliding.
+        active = presence.list_active(brr_dir)
+        seen["during"] = [(e["kind"], e["task_id"]) for e in active]
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker_and_finalize(
+        event, tmp_path, brr_dir / "responses", {}, 0,
+    )
+
+    assert seen["during"] == [("daemon", task.id)]
+    # The thought is no longer awake → its presence entry is gone.
+    assert presence.list_active(brr_dir) == []
 
 
 def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
