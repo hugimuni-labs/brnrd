@@ -39,6 +39,13 @@ Companion to:
   makes the loop reachable by ad-hoc agents (Cursor / Codex / Claude), #41.
 - [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md) —
   the forward channel into the agent's context.
+- [`design-context-introspection.md`](design-context-introspection.md) — the
+  opt-in co-development mode (shipped 2026-06-09) where the resident inspects the
+  *shape of its own injected context* and raises improvements to the user. The
+  deliberate, dialogue-driven counterpart to this loop's mostly-automatic
+  remember → shape machinery; it routes what it finds to the Ring-2 controller
+  (brr prompts / code / `AGENTS.md`) through conversation rather than a silent
+  edit.
 
 ## The loop
 

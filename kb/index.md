@@ -118,6 +118,14 @@ dive-in map) and are stable until something contradicts them.
   fetch/merge/resolve/push is the agent's judgement). Realises
   [`design-agent-dominion.md`](design-agent-dominion.md) §4 self-scheduling
   and refines §5 persistence.
+- [Context introspection — "look at it" mode](design-context-introspection.md) —
+  *shipped 2026-06-09, opt-in (default off)*. A co-development toggle
+  (`introspect.enabled`): when on, every wake invites the resident to inspect the
+  **shape of its own injected context** — how the parts connect, where it fights
+  itself, what's assumed but unsaid — and raise improvements to the user as
+  dialogue, not a silent edit. The interactivity-axis counterpart to the
+  [environment-shaping](design-environment-shaping.md) loop's automatic
+  remember → shape machinery.
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native

@@ -6055,3 +6055,37 @@ Reconciled `design-multi-response.md` (new *Gate-addressed delivery* section;
 title/status), `design-self-scheduled-thoughts.md` (threading + delivery now
 shipped, not deferred), and the review page (#3 → shipped, #4 framing note).
 Full suite green (767 passed; +6).
+
+## [2026-06-09] implement | Context introspection — the "look at it" co-development mode
+
+Added an opt-in development toggle (`introspect.enabled`, default off) that, when
+on, injects an "awakening" invitation into every wake: the resident turns its
+attention on the **shape of its own injected context** — how the orientation,
+dominion/playbook, pitfalls, recent thread, and task bundle connect; where the
+whole coheres vs. fights itself (a contract a later line breaks, a guardrail that
+guards nothing, prose claiming more than the code does, two pages naming one
+thing two ways); what's assumed but never said — and raises what it finds to the
+user as dialogue, not a silent edit.
+
+Mechanism mirrors the other wake blocks: `prompts._build_introspection_block`
+returns the text of the new `prompts/introspection.md` (per-repo overridable)
+when the toggle is on, and `_join_prompt_parts` appends it as the **last framing
+before the task**, so it covers both `brr run` and daemon thoughts with one
+wiring. Seeded into `brr init` config defaults.
+
+This is the **interactivity-axis** counterpart to the environment-shaping loop's
+mostly-automatic remember → shape machinery: while the user and agent actively
+co-develop the orientation, the agent becomes a second pair of eyes on it and
+routes findings to the Ring-2 controller (prompts / code / `AGENTS.md`) through
+conversation. Default-off because the invitation spends tokens/attention every
+wake — it's for the active-development window, not a production stance.
+
+Tone aims for fresh, total attention (look at the pattern, not the words) with a
+deliberate arc: regard for the existing shape *before* judgement (it's mostly
+load-bearing, and the regard earns the right to name the flaw), fierceness as an
+invocation of *ownership* not compliance, ending in dialogue. Channels the
+quality without naming its source (no-cringe constraint); lives in a template so
+the tone can keep being tuned. New design note
+`design-context-introspection.md`, linked from `design-environment-shaping.md`
+and `index.md`. Tests pin both toggle behavior (on/off, run + daemon, placement)
+and the bundled text's awe + dialogue intent. Full suite green (772 passed; +5).
