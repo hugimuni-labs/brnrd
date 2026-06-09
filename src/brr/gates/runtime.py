@@ -54,9 +54,9 @@ def task_card_path(brr_dir: Path, gate: str, task_id: str) -> Path:
     """Per-task progress-card state file.
 
     Each task owns its own file under
-    ``.brr/gates/<gate>/progress/<task-id>.json``, so concurrent
-    workers handling different tasks never share a state surface.
-    See ``kb/design-concurrent-execution.md``.
+    ``.brr/gates/<gate>/progress/<task-id>.json``, so overlapping
+    thoughts (ad-hoc sessions, a second daemon) never share a state
+    surface. See ``kb/subject-daemon.md``.
     """
     safe = _PROGRESS_SAFE_RE.sub("_", task_id) if task_id else "_unknown"
     return brr_dir / "gates" / gate / "progress" / f"{safe}.json"
