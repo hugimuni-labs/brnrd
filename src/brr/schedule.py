@@ -39,7 +39,7 @@ STATE_DIRNAME = "schedule"  # under the .brr runtime dir
 STATE_FILE = "state.json"
 DEFAULT_STALE_GRACE_S = 7 * 24 * 3600  # an `at:` older than this won't surprise-fire
 
-_FIELD_RE = re.compile(r"^\s*(at|every|deliver_to)\s*:\s*(.+?)\s*$", re.IGNORECASE)
+_FIELD_RE = re.compile(r"^\s*(at|every|conversation_key)\s*:\s*(.+?)\s*$", re.IGNORECASE)
 _DURATION_TOKEN_RE = re.compile(r"(\d+)\s*([smhd])", re.IGNORECASE)
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -55,6 +55,11 @@ class ScheduleEntry:
     at: float | None = None  # epoch seconds, for kind == "at"
     interval: float | None = None  # seconds, for kind == "every"
     raw_when: str = ""  # original trigger string, for messages
+    # Optional conversation this entry's firings thread into. Defaults
+    # (at fire time) to ``schedule:<id>`` so a recurring entry's wakes
+    # share a readable history; set explicitly to thread into an existing
+    # gate conversation (e.g. ``telegram:12345:``).
+    conversation_key: str | None = None
 
 
 # ── Parsing ──────────────────────────────────────────────────────────
@@ -106,17 +111,23 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
     if not eid:
         return None
     body = "\n".join(body_lines).strip()
+    conv = (fields.get("conversation_key") or "").strip() or None
     # `every` wins if both are present (one trigger per entry is the convention).
     if "every" in fields:
         interval = parse_duration(fields["every"])
         if not interval or interval <= 0:
             return None
-        return ScheduleEntry(eid, "every", body, interval=interval, raw_when=fields["every"])
+        return ScheduleEntry(
+            eid, "every", body, interval=interval,
+            raw_when=fields["every"], conversation_key=conv,
+        )
     if "at" in fields:
         at = parse_iso(fields["at"])
         if at is None:
             return None
-        return ScheduleEntry(eid, "at", body, at=at, raw_when=fields["at"])
+        return ScheduleEntry(
+            eid, "at", body, at=at, raw_when=fields["at"], conversation_key=conv,
+        )
     return None  # no trigger → inert, skipped
 
 
@@ -124,9 +135,11 @@ def parse_schedule(dominion_dir: Path) -> list[ScheduleEntry]:
     """Parse the dominion's ``schedule.md`` into :class:`ScheduleEntry` records.
 
     Format: a ``## `` heading per entry (its id is the slugified heading),
-    an ``at:`` or ``every:`` line, then optional body prose (the thought to
-    run). Text before the first heading is a comment/header and ignored. An
-    entry with no/invalid trigger is dropped.
+    an ``at:`` or ``every:`` line, an optional ``conversation_key:`` line
+    (threads the firings; defaults to ``schedule:<id>`` at fire time), then
+    optional body prose (the thought to run). Text before the first heading
+    is a comment/header and ignored. An entry with no/invalid trigger is
+    dropped.
     """
     path = dominion_dir / SCHEDULE_FILE
     try:

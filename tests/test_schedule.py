@@ -62,6 +62,23 @@ def test_parse_at_entry(tmp_path: Path):
     assert e.body == "check CI"
 
 
+def test_parse_reads_optional_conversation_key(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom",
+        "## Daily standup\nevery: 24h\nconversation_key: telegram:55:\nPost a summary\n",
+    )
+    (e,) = schedule.parse_schedule(dom)
+    # The value keeps its inner colons (gate-thread fingerprint).
+    assert e.conversation_key == "telegram:55:"
+    assert e.body == "Post a summary"
+
+
+def test_parse_conversation_key_optional(tmp_path: Path):
+    dom = _write(tmp_path / "dom", "## Ping\nevery: 1h\ndo a thing\n")
+    (e,) = schedule.parse_schedule(dom)
+    assert e.conversation_key is None
+
+
 def test_parse_ignores_preamble_and_inert_entries(tmp_path: Path):
     dom = _write(
         tmp_path / "dom",
