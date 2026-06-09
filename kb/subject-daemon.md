@@ -336,3 +336,7 @@ Read these in order when changing daemon behavior:
    recent simplifications that keep daemon context lean.
 8. [`design-daemon-dev-reload.md`](design-daemon-dev-reload.md) for the
    current development reload proposal.
+9. [`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md)
+   for the in-flight coherence pass: the cooperative liveness contract,
+   generic gate-addressed delivery, and the daemon-vs-agent ownership
+   crossroads.

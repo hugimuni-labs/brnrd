@@ -28,8 +28,8 @@ A conversation key is the gate-thread fingerprint:
 
 For directory names, `:` is encoded as `__`. Each `<event-id>.jsonl`
 file is owned by the one worker that handles that event — the
-contention-free layout keeps the concurrent worker pool from sharing
-mutable state across pipelines. Every record carries a `ts` (UTC ISO
+contention-free layout keeps overlapping thoughts (ad-hoc sessions, a
+second daemon) from sharing mutable state across pipelines. Every record carries a `ts` (UTC ISO
 8601, microsecond precision) and a `kind`:
 
 | `kind`   | What it captures                                          |
