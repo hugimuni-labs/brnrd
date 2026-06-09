@@ -122,25 +122,33 @@ For each pending event, the daemon:
    invariant is described in
    [`design-git-layer-rework.md`](design-git-layer-rework.md);
 3. resolves the branch plan, then creates and persists a `Task`;
-4. prepares the selected env backend (`host`, `worktree`, or `docker`);
-5. builds the daemon prompt with the Task Context Bundle;
-6. invokes the configured runner headlessly;
-7. captures the runner's final stdout as the terminal response file, and
+4. records the thought in the presence registry (`presence.py`,
+   `.brr/presence/`) so concurrent thoughts see who's on which stream;
+5. prepares the selected env backend (`host`, `worktree`, or `docker`);
+6. builds the daemon prompt with the Task Context Bundle (including the
+   dominion digest, other pending events, and who else is present);
+7. invokes the configured runner headlessly;
+8. captures the runner's final stdout as the terminal response file, and
    drains the agent's outbox on each heartbeat and once after the runner
    returns — promoting any interim or interleaved replies to the
    per-event partials queue (the multi-response protocol,
    [`design-multi-response.md`](design-multi-response.md));
-8. retries if no terminal response was produced;
-9. marks the inbox event `done`; the originating gate streams any queued
-   interim partials, then the terminal reply, then cleans up;
-10. finalizes the environment, classifying the worktree's final state
+9. captures the resident's dominion edits via a serialized commit
+   (`dominion.commit`; runs on success *and* failure — a failed thought
+   may still have recorded pain), best-effort pushing the `brr-home`
+   branch so the memory travels;
+10. retries if no terminal response was produced;
+11. marks the inbox event `done`; the originating gate streams any queued
+    interim partials, then the terminal reply, then cleans up;
+12. finalizes the environment, classifying the worktree's final state
     into a `publish_status` and recording the branch to publish;
-11. publishes that branch via `daemon.publish` under a per-branch lock.
+13. publishes that branch via `daemon.publish` under a per-branch lock,
+    and deregisters the thought from the presence registry.
 
 The durable user response is plain stdout captured by
 [`runner.invoke_runner`](../src/brr/runner.py), not a file the agent
 writes manually — though the agent may *additionally* stream interim
-replies through its outbox (step 7). This contract is documented in
+replies through its outbox (step 8). This contract is documented in
 [`execution-map.md`](../src/brr/docs/execution-map.md) and enforced by
 the daemon prompt assembled in [`prompts.py`](../src/brr/prompts.py).
 Response delivery is intentionally released before environment
@@ -150,6 +158,33 @@ continue to show finalization and push after the final reply is already
 in the originating chat thread. (Deterministic kb-health now rides the
 *wake* prompt rather than a post-task pass; see
 [`subject-kb.md`](subject-kb.md).)
+
+### Society-of-Mind concurrency (dominion + presence)
+
+The daemon is single-flight, but the repo is *already* multi-thought:
+ad-hoc sessions (Cursor, Codex, a hand-run agent) work alongside the
+daemon and can touch the one shared dominion (`.brr/dominion/`,
+`brr-home`) at the same moment. brr tolerates that rather than caging it
+(the model is laid out in
+[`design-agent-dominion.md`](design-agent-dominion.md) §4):
+
+- **Serialized capture, free edits.** `dominion.commit` captures the
+  resident's working-memory edits at sleep. Only the index-touching commit
+  serializes — across processes, via an advisory `fcntl.flock` on
+  `.brr/dominion.commit.lock` — so two thoughts never corrupt the shared
+  git index, while their *file edits* run without coordination. A clean
+  dominion is a silent no-op; the step is best-effort and never fails a
+  run.
+- **Presence registry.** `presence.py` keeps a lock-free, prune-on-read
+  registry under `.brr/presence/` (one JSON file per participant). The
+  daemon registers a thought at step 4, heartbeats it on the runner
+  heartbeat, and deregisters at step 13; the wake bundle surfaces other
+  live participants so a thought knows when it shares memory.
+- **Reconciliation is judgement.** Contradictions left in shared memory
+  are resolved by a later thought noticing and reconciling them (the
+  playbook's inward salience loop), not by a lock or a deterministic
+  detector. Eventual consistency — each thought sees memory as of its last
+  read — is the accepted cost.
 
 ## Forge-aware response card
 

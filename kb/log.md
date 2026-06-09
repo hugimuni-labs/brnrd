@@ -5863,3 +5863,42 @@ and folding events in are now real and documented. Reconciled the pipeline hubs
 Multi-response section) and fixed a stale slice-3b leftover in `subject-daemon.md`
 that still listed a post-task kb-maintenance pass (kb-health rides the wake
 prompt now). Full suite green (691 passed).
+
+## [2026-06-09] implement | dominion persistence + presence registry (slice 5): Society-of-Mind concurrency
+
+Made the dominion actually durable and gave overlapping thoughts a way to see
+each other — the two mechanics `design-agent-dominion.md` §4/§8 had left "to
+emerge with the playbook." Three sub-slices:
+
+- **5a — serialized dominion capture.** `dominion.commit` captures the resident's
+  `.brr/dominion/` edits at sleep; the daemon calls it after every thought (success
+  *and* failure — a failed thought may have recorded the pain that caused it).
+  The commit step serializes **across processes** with an advisory `fcntl.flock`
+  on `.brr/dominion.commit.lock` (new `gitops.worktree_dirty` skip-when-clean
+  pre-check), so a daemon thought and an ad-hoc session never race the shared git
+  index — file *edits* stay free, only the index-touching commit serializes.
+  Best-effort push keeps `brr-home` travelling (`dominion.push_on_capture`,
+  default on). A clean dominion is a silent no-op; all failure swallowed so
+  capture never breaks a run.
+- **5b — presence registry.** New `presence.py`: a lock-free, gitignored registry
+  under `.brr/presence/` (one JSON file per participant, so concurrent writers
+  touch disjoint files) that self-heals on read by pruning dead-pid (same-host)
+  and stale-heartbeat ghosts. The daemon registers a thought when it starts,
+  heartbeats it on the runner heartbeat tick, and deregisters in the worker's
+  finally.
+- **5c — surfacing + playbook + kb.** The wake prompt now gives the resident its
+  dominion's **absolute** write path (reachable from a worktree/container cwd)
+  and states brr captures it at sleep, plus an "Also awake right now" bundle
+  section listing other live participants (excludes self; drops out when alone).
+  The playbook gained: persistence-at-sleep (write freely, no commit dance), the
+  **inward dissonance loop** (contradictions in shared memory are friction —
+  notice, reconcile by judgement, retire the stale version; the salience loop
+  turned inward), and other-hands awareness. Resolved §4/§8 of
+  `design-agent-dominion.md`, added a Society-of-Mind concurrency section to
+  `subject-daemon.md`, and updated `execution-map.md` / `brr-internals.md`
+  (`.brr/` layout + artifact tables, pipeline steps).
+
+Deliberately **no deterministic dissonance detector** — reconciling contradictory
+memory is synthesis, exactly what a scanner can't do (cf. kb preflight, which only
+flags structural facts); it's the resident's judgement, surfaced by presence.
+Full suite green (709 passed).

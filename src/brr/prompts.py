@@ -152,9 +152,14 @@ def _build_dominion_block(repo_root: Path) -> str:
         return ""
     return (
         "## Your dominion (working memory)\n\n"
-        "Self-injected from `.brr/dominion/` (branch `brr-home`) per its "
-        "`self-inject` index — your own durable memory, carried across "
-        "wakings and yours to reshape:\n\n"
+        f"Your dominion is the `brr-home` branch, checked out at `{path}` — "
+        "an absolute path, reachable from any working directory (your task "
+        "may run in a worktree or container whose cwd is elsewhere). It's "
+        "your durable memory: write notes, pain records, and your "
+        "`self-inject` index there freely. **brr commits whatever you leave "
+        "there when this thought ends**, so it survives to your next wake — "
+        "no commit dance needed. Self-injected below per your `self-inject` "
+        "index — yours to reshape:\n\n"
         f"{digest}"
     )
 
@@ -291,6 +296,7 @@ def build_daemon_prompt(
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
     pending_events: list[dict[str, Any]] | None = None,
+    present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
     diffense: bool = False,
 ) -> str:
@@ -317,6 +323,7 @@ def build_daemon_prompt(
         context_path=context_path,
         recent_conversation=recent_conversation,
         pending_events=pending_events,
+        present=present,
         event_body=event_body,
         diffense=diffense,
     )
@@ -354,6 +361,7 @@ def _build_task_context_bundle(
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
     pending_events: list[dict[str, Any]] | None = None,
+    present: list[dict[str, Any]] | None = None,
     event_body: str | None,
     diffense: bool = False,
 ) -> str:
@@ -495,6 +503,20 @@ def _build_task_context_bundle(
         sections.append("")
         sections.append(inbox_block)
 
+    presence_block = _format_presence(present)
+    if presence_block:
+        sections.append("")
+        sections.append("### Also awake right now")
+        sections.append(
+            "Other thoughts are active in this repo (ad-hoc sessions, or "
+            "another worker). You share one dominion, so if one is on the "
+            "same stream or files, expect its edits to land alongside yours "
+            "— don't fight it. Contradictions in shared memory are normal "
+            "and get reconciled by judgement, not locks (see your playbook)."
+        )
+        sections.append("")
+        sections.append(presence_block)
+
     recent_block = _format_recent_conversation(recent_conversation)
     if recent_block:
         sections.append("")
@@ -537,6 +559,29 @@ def _format_pending_events(
         src = f" ({source})" if source else ""
         sep = f": {summary}" if summary else ""
         bullets.append(f"- {eid}{src}{sep}")
+    return "\n".join(bullets)
+
+
+def _format_presence(
+    entries: list[dict[str, Any]] | None,
+) -> str:
+    """Render other active thoughts (the presence registry) as bullets.
+
+    Each entry shows the participant kind and the stream it's on, so the
+    resident can tell whether another thought might touch the same work.
+    Returns an empty string when nobody else is awake — the common case
+    under single-flight, so the section drops out entirely.
+    """
+    if not entries:
+        return ""
+    bullets: list[str] = []
+    for e in entries:
+        kind = str(e.get("kind") or "thought").strip()
+        stream = str(e.get("stream") or "").strip()
+        tid = str(e.get("task_id") or "").strip()
+        where = f" on `{stream}`" if stream else ""
+        tag = f" (task {tid})" if tid else ""
+        bullets.append(f"- {kind}{where}{tag}")
     return "\n".join(bullets)
 
 
