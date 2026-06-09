@@ -79,6 +79,57 @@ class TestDrainOutbox:
         # it; it is never delivered as a message or consumed by the drain.
         assert (outbox / ".keepalive").exists()
 
+    def test_gate_addressed_message_synthesizes_done_event(self, tmp_path, monkeypatch):
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        # A `status:` in the frontmatter must not resurrect a pending event.
+        (outbox / "ping.md").write_text(
+            "---\ngate: telegram\nstatus: pending\ntelegram_chat_id: 999\n---\n"
+            "daily summary\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        # A done event for the telegram gate now waits for delivery.
+        done = protocol.list_done(inbox, "telegram")
+        assert len(done) == 1
+        ev = done[0]
+        assert ev["status"] == "done"
+        assert str(ev.get("telegram_chat_id")) == "999"
+        # Its response carries the message body; the gate delivers that.
+        assert protocol.read_response(responses, ev["id"]).strip() == "daily summary"
+        # Born done: invisible to the inbox poll, so it never spawns a thought.
+        assert protocol.list_pending(inbox) == []
+        assert not (outbox / "ping.md").exists()
+
+    def test_gate_addressed_unknown_gate_dropped(self, tmp_path, monkeypatch):
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text("---\ngate: nosuchgate\n---\nhi\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        # Unconfigured/unknown gate: dropped, not queued (it'd never deliver).
+        assert n == 0
+        assert protocol.list_done(inbox, "nosuchgate") == []
+        assert protocol.list_pending(inbox) == []
+        assert not (outbox / "ping.md").exists()
+
     def test_missing_outbox_is_noop(self, tmp_path):
         brr_dir = tmp_path / ".brr"
         emit = daemon._WorkerEmit(

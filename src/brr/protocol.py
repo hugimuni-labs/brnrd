@@ -125,16 +125,26 @@ def create_event(
     inbox_dir: Path,
     source: str,
     body: str,
+    *,
+    status: str = "pending",
     **meta: object,
 ) -> Path:
-    """Create a new event file in *inbox_dir*. Returns the file path."""
+    """Create a new event file in *inbox_dir*. Returns the file path.
+
+    *status* defaults to ``pending`` (a normal inbound event the daemon
+    will wake on). Pass ``status="done"`` to inject an outbound-only event
+    a gate delivers but the daemon never processes — the mechanism behind
+    agent-initiated out-of-bound / scheduled delivery (the event is born
+    ``done`` in one atomic write so the inbox poll can never grab it as
+    pending and spawn a stray thought).
+    """
     inbox_dir.mkdir(parents=True, exist_ok=True)
     eid = _generate_id()
     lines = [
         "---",
         f"id: {eid}",
         f"source: {source}",
-        "status: pending",
+        f"status: {status}",
     ]
     for k, v in meta.items():
         lines.append(f"{k}: {v}")

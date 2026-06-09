@@ -47,6 +47,36 @@ def test_fire_due_creates_event_for_past_at(tmp_path):
     assert len(protocol.list_pending(inbox)) == 1
 
 
+def test_fire_due_threads_with_default_conversation_key(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    _write_schedule(path, f"## Daily Sweep\nat: {past}\nsweep\n")
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+
+    ev = protocol.list_pending(inbox)[0]
+    # Default per-entry thread so a recurring entry's firings share history.
+    assert ev["conversation_key"] == "schedule:daily-sweep"
+
+
+def test_fire_due_honors_explicit_conversation_key(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    _write_schedule(
+        path, f"## Nudge\nat: {past}\nconversation_key: telegram:7:\nnudge\n")
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})
+
+    ev = protocol.list_pending(inbox)[0]
+    assert ev["conversation_key"] == "telegram:7:"
+
+
 def test_fire_due_every_anchors_then_fires(tmp_path):
     repo = _repo(tmp_path)
     brr_dir = repo / ".brr"
