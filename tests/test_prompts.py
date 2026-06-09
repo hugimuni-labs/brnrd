@@ -237,6 +237,27 @@ class TestPromptBuilding:
         assert "mid-thought" not in prompt
         assert "outbox directory" not in prompt
 
+    def test_daemon_prompt_states_budget_and_keepalive(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            budget_seconds=3600,
+            task_id="task-9",
+        )
+        assert "Budget:" in prompt
+        assert "60m" in prompt
+        # The extension how-to is anchored on the agent's outbox path.
+        assert "/repo/.brr/outbox/evt-1/.keepalive" in prompt
+
+    def test_daemon_prompt_omits_budget_without_value(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            task_id="task-9",
+        )
+        assert "Budget:" not in prompt
+        assert ".keepalive" not in prompt
+
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
