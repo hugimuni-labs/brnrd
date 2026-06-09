@@ -4,8 +4,9 @@ These gates differ only in *how* they talk to their platform; the
 plumbing around it is identical: a JSON state file under
 ``.brr/gates/<gate>.json``, per-task progress-card state under
 ``.brr/gates/<gate>/progress/<task>.json``, a crash-resilient
-backoff loop, and a response-delivery skeleton that walks
-``protocol.list_done`` and cleans up after a successful send.
+backoff loop, and a streaming response-delivery skeleton that walks
+``protocol.list_active`` (interim responses then the terminal) and
+cleans up after a successful send.
 
 This module owns that plumbing so each gate is just its platform
 client plus a ``deliver`` closure. The webhook/PR-shaped GitHub
@@ -53,9 +54,9 @@ def task_card_path(brr_dir: Path, gate: str, task_id: str) -> Path:
     """Per-task progress-card state file.
 
     Each task owns its own file under
-    ``.brr/gates/<gate>/progress/<task-id>.json``, so concurrent
-    workers handling different tasks never share a state surface.
-    See ``kb/design-concurrent-execution.md``.
+    ``.brr/gates/<gate>/progress/<task-id>.json``, so overlapping
+    thoughts (ad-hoc sessions, a second daemon) never share a state
+    surface. See ``kb/subject-daemon.md``.
     """
     safe = _PROGRESS_SAFE_RE.sub("_", task_id) if task_id else "_unknown"
     return brr_dir / "gates" / gate / "progress" / f"{safe}.json"
@@ -115,28 +116,68 @@ def run_loop(
 # ── Response delivery skeleton ───────────────────────────────────────
 
 
+def deliver_stream(
+    inbox_dir: Path,
+    responses_dir: Path,
+    source: str,
+    deliver_partial: Callable[[dict, str], None],
+    deliver_terminal: Callable[[dict, str], None] | None = None,
+) -> None:
+    """Stream a per-event response queue, then the terminal response.
+
+    The multi-response delivery surface (see
+    ``kb/design-multi-response.md``). For each **active**
+    (``processing`` or ``done``) event matching *source*, oldest first:
+
+    1. deliver each pending interim response in order, deleting it
+       after a successful send — so delivery is resumable: a transient
+       platform error retries from the first undelivered partial on the
+       next loop;
+    2. **only when the event is ``done``**, deliver the terminal
+       response (``<eid>.md``) and clean up the event, terminal file,
+       and partials queue.
+
+    *deliver_partial* sends an interim message; *deliver_terminal* sends
+    the closing message (defaults to *deliver_partial*). The split lets
+    a gate decorate the terminal differently (e.g. the GitHub gate's
+    branch footer rides only the terminal). A raised exception stops
+    that one event and is logged; other events still flow.
+    """
+    if deliver_terminal is None:
+        deliver_terminal = deliver_partial
+    for event in protocol.list_active(inbox_dir, source):
+        eid = event["id"]
+        try:
+            for ppath in protocol.list_partials(responses_dir, eid):
+                body = protocol.read_partial(ppath)
+                if body:
+                    deliver_partial(event, body)
+                ppath.unlink(missing_ok=True)
+            if event.get("status") == "done":
+                body = protocol.read_response(responses_dir, eid)
+                if body is not None:
+                    deliver_terminal(event, body)
+                protocol.cleanup(
+                    event["_path"],
+                    protocol.response_path(responses_dir, eid),
+                    protocol.partials_dir(responses_dir, eid),
+                )
+        except Exception as e:  # noqa: BLE001 - one bad event must not stall the rest
+            print(f"[brr:{source}] delivery error for {eid}: {e}")
+            continue
+
+
 def deliver_responses(
     inbox_dir: Path,
     responses_dir: Path,
     source: str,
     deliver: Callable[[dict, str], None],
 ) -> None:
-    """Deliver completed responses for *source*, then clean up.
+    """Deliver responses for *source* (interim + terminal), then clean up.
 
-    For each done event with a response, call ``deliver(event, body)``.
-    A raised exception marks a per-event delivery failure: it is
-    logged and skipped (no cleanup), so a transient platform error
-    retries on the next loop. Cleanup (event + response file removal)
-    happens only after a successful deliver.
+    Thin wrapper over :func:`deliver_stream` for gates whose interim and
+    terminal messages are delivered the same way (telegram, slack,
+    cloud). A plain single-response run delivers exactly one message and
+    cleans up on ``done`` — unchanged from before the streaming queue.
     """
-    for event in protocol.list_done(inbox_dir, source):
-        eid = event["id"]
-        body = protocol.read_response(responses_dir, eid)
-        if body is None:
-            continue
-        try:
-            deliver(event, body)
-        except Exception as e:  # noqa: BLE001 - one bad event must not stall the rest
-            print(f"[brr:{source}] delivery error for {eid}: {e}")
-            continue
-        protocol.cleanup(event["_path"], protocol.response_path(responses_dir, eid))
+    deliver_stream(inbox_dir, responses_dir, source, deliver)

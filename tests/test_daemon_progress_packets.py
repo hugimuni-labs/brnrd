@@ -27,7 +27,6 @@ def _patch_runner(monkeypatch):
         daemon.prompts, "build_daemon_prompt",
         lambda task, eid, rp, _root, **kw: f"RUN {eid}: {task} -> {rp}",
     )
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _: False)
 
 
 def _update_records(brr_dir: Path, conv_key: str) -> list[dict]:
@@ -204,7 +203,8 @@ class _FakeDockerEnv:
         self.succeed = succeed
         self.containers: list[str] = []
 
-    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
+    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path,
+                outbox_path=None):
         ctx = envs.RunContext(
             name=self.name,
             cwd=repo_root,
@@ -212,6 +212,8 @@ class _FakeDockerEnv:
             runtime_dir=repo_root / ".brr",
             response_path_host=response_path,
             response_path_env=response_path,
+            outbox_host=outbox_path,
+            outbox_env=outbox_path,
             branch_name=None,
         )
         ctx.env_state.update({

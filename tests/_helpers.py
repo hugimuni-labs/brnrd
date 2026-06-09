@@ -131,7 +131,8 @@ class StubWorktreeEnv:
     def __init__(self, *, invoke_fn: InvokeFn) -> None:
         self._invoke = invoke_fn
 
-    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
+    def prepare(self, task, repo_root, cfg, *, branch_plan, response_path,
+                outbox_path=None):
         return envs.RunContext(
             name=self.name,
             cwd=repo_root,
@@ -139,6 +140,8 @@ class StubWorktreeEnv:
             runtime_dir=repo_root / ".brr",
             response_path_host=response_path,
             response_path_env=response_path,
+            outbox_host=outbox_path,
+            outbox_env=outbox_path,
             branch_name=f"brr/{task.id}",
             env_state={"worktree_path": str(repo_root)},
         )

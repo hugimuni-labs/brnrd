@@ -1,6 +1,6 @@
 # Project
 
-> Revision: 2026-05-27. Structural arc:
+> Revision: 2026-06-08. Structural arc:
 > [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
 > Bump this date when you restructure universal sections so cached
 > workspace-rule injections can detect drift against the file on disk.
@@ -17,9 +17,9 @@ These rules are the repository contract for any AI tool reading the repo.
 They divide into **universal** sections that apply in every stage and
 **brr-stage** material that only applies when brr's daemon, runner, or
 setup orchestrator is hosting you. When an orchestrator prompt supplies
-a narrower stage contract — the daemon's Task Context Bundle, the
-kb-maintenance prompt, the setup prompt — follow that contract for the
-points it addresses and keep AGENTS.md as the base for everything else.
+a narrower stage contract — the daemon's Task Context Bundle, the setup
+prompt — follow that contract for the points it addresses and keep
+AGENTS.md as the base for everything else.
 
 Three stages, and how to read this file in each:
 
@@ -35,20 +35,22 @@ Three stages, and how to read this file in each:
   (Stage, Source, Environment, Delivery, Runtime recovery). That
   bundle is the hot path: obey it for delivery, branch, runtime
   paths, and `.brr/` access — it overrides the generic workflow
-  wording for those points. Workflow → *When the brr daemon runs you*
-  backs it up; everything else (Stewardship, kb, artifacts, operating
-  rules, self-review, guardrails) applies uniformly.
+  wording for those points. When brr hosts you as a **resident**, your
+  own playbook — kept in your dominion (`.brr/dominion/`) and injected
+  on wake from its self-inject index — is your standing self-orientation;
+  this file is the repo contract that playbook rests on, so read them as
+  complementary layers rather than rivals. Workflow → *When the brr
+  daemon runs you* backs it up; everything else (Stewardship, kb,
+  artifacts, operating rules, self-review, guardrails) applies uniformly.
 
-- **brr kb-maintenance / setup stage.** A specialised prompt
-  (`kb-maintenance.md`, `setup.md`) narrows the scope to kb cleanup
-  or initial adoption. Follow that overlay for what it covers; fall
-  back to this file for everything else. Do not continue the user
-  task during kb-maintenance.
+- **brr setup stage.** A specialised prompt (`setup.md`) narrows the
+  scope to initial adoption. Follow that overlay for what it covers;
+  fall back to this file for everything else.
 
 If you can't tell which stage you're in: look for `### Mode` in the
 prompt. Present → daemon task. Absent and the prompt is the bare user
-message → ad-hoc session. Absent and the prompt is a bundled
-maintenance / setup template → that stage.
+message → ad-hoc session. Absent and the prompt is a bundled setup
+template → that stage.
 
 **Ad-hoc sanity check.** External hosts inject ambient context that
 may not match this task. The recurring drift cases:
@@ -63,8 +65,8 @@ may not match this task. The recurring drift cases:
   "skills" may be unrelated to the user's task. Use them only when
   the task references them.
 
-Daemon and kb-maintenance stages take their hot-path context from the
-prompt and don't have these drift cases.
+Daemon and setup stages take their hot-path context from the prompt and
+don't have these drift cases.
 
 ## Stewardship
 
@@ -243,8 +245,8 @@ delivery / runtime recovery), the branch plan, the recent conversation,
 and the original event body. The generated run context file (named in
 `Mode → Runtime recovery`) is recovery detail: open it only when the
 bundle didn't include something you need. Don't explore or modify
-`.brr/` beyond the run context file and any paths the task explicitly
-requires.
+`.brr/` beyond the run context file, your own dominion (`.brr/dominion/`,
+yours to curate freely), and any paths the task explicitly requires.
 
 ## Knowledge base
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs
+from brr import daemon, envs, presence
 from brr.task import Task
 from brr.runner import RunnerResult
 
@@ -29,7 +29,8 @@ def _stub_env_isolated(monkeypatch, tmp_path):
     class StubEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path,
+                    outbox_path=None):
             return envs.RunContext(
                 name=self.name,
                 cwd=worktree_path,
@@ -37,6 +38,8 @@ def _stub_env_isolated(monkeypatch, tmp_path):
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
+                outbox_host=outbox_path,
+                outbox_env=outbox_path,
                 branch_name=f"brr/{task.id}",
                 env_state={"worktree_path": str(worktree_path)},
             )
@@ -130,6 +133,46 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     assert persisted.status == "error"
 
 
+def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-p1")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *a, **k: "PROMPT",
+    )
+    # _run_worker_and_finalize calls publish at the end; stub it so the test
+    # exercises the presence finally without real git pushes.
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+
+    brr_dir = tmp_path / ".brr"
+    seen: dict[str, object] = {}
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        # Mid-run: this thought is recorded as present on its stream, so a
+        # concurrent session would see it and could avoid colliding.
+        active = presence.list_active(brr_dir)
+        seen["during"] = [(e["kind"], e["task_id"]) for e in active]
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker_and_finalize(
+        event, tmp_path, brr_dir / "responses", {}, 0,
+    )
+
+    assert seen["during"] == [("daemon", task.id)]
+    # The thought is no longer awake → its presence entry is gone.
+    assert presence.list_active(brr_dir) == []
+
+
 def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-3")
@@ -145,12 +188,15 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
     class RetryEnv:
         name = "worktree"
 
-        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path):
+        def prepare(self, task, repo_root, cfg, *, branch_plan, response_path,
+                    outbox_path=None):
             return envs.RunContext(
                 name=self.name, cwd=tmp_path, repo_root=repo_root,
                 runtime_dir=tmp_path / ".brr",
                 response_path_host=response_path,
                 response_path_env=response_path,
+                outbox_host=outbox_path,
+                outbox_env=outbox_path,
                 branch_name=f"brr/{task.id}",
                 env_state={"worktree_path": str(tmp_path)},
             )
@@ -367,10 +413,10 @@ def test_cleanup_traces_on_success_removes_dirs_and_meta(tmp_path):
     tasks_dir = brr_dir / "tasks"
     tasks_dir.mkdir(parents=True)
     trace_a = _seed_trace_dir(brr_dir, "traces/daemon-run/evt-1-attempt-1")
-    trace_b = _seed_trace_dir(brr_dir, "traces/kb-maintenance/kb-1")
+    trace_b = _seed_trace_dir(brr_dir, "traces/daemon-run/evt-1-attempt-2")
     task = Task(id="task-clean", event_id="evt-1", body="x", status="done")
     task.meta["trace_dirs"] = (
-        "traces/daemon-run/evt-1-attempt-1, traces/kb-maintenance/kb-1"
+        "traces/daemon-run/evt-1-attempt-1, traces/daemon-run/evt-1-attempt-2"
     )
     task.save(tasks_dir)
 
@@ -592,8 +638,8 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
         source="github",
         conversation_key="github:owner/repo#17",
         meta={
-            "publish_branch": "brr/deliver-before-kb-maintenance",
-            "target_branch": "brr/deliver-before-kb-maintenance",
+            "publish_branch": "brr/deliver-pr-rebase",
+            "target_branch": "brr/deliver-pr-rebase",
             "expected_remote_oid": "6c1ca158d19c6ba40c06e8a46f7c338ada056246",
         },
     )
@@ -611,90 +657,11 @@ def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     event = {"id": "evt-lease", "source": "github", "body": "rebase"}
     daemon._run_worker_and_finalize(event, tmp_path, tmp_path / ".brr", {}, 0)
 
-    assert captured["publish_branch"] == "brr/deliver-before-kb-maintenance"
+    assert captured["publish_branch"] == "brr/deliver-pr-rebase"
     assert (
         captured["expected_remote_oid"]
         == "6c1ca158d19c6ba40c06e8a46f7c338ada056246"
     )
-
-
-def test_kb_maintenance_runs_when_kb_changed(tmp_path, monkeypatch):
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-kb", body="update docs")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: f"P {eid}",
-    )
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_kb_maintenance_prompt",
-        lambda _root: "KB MAINTENANCE",
-    )
-    maintenance: list[str] = []
-
-    monkeypatch.setattr(
-        daemon.envs, "get_env",
-        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
-    )
-
-    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.kind == "kb-maintenance":
-            maintenance.append(invocation.prompt)
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
-
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
-
-    assert task.status == "done"
-    assert maintenance == ["KB MAINTENANCE"]
-
-
-def test_response_is_released_before_kb_maintenance(tmp_path, monkeypatch):
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-release", body="answer first")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: f"P {eid}",
-    )
-    monkeypatch.setattr(
-        daemon.envs,
-        "get_env",
-        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
-    )
-
-    order: list[str] = []
-    real_set_status = daemon.protocol.set_status
-
-    def recording_set_status(ev, status):
-        order.append(f"status:{status}")
-        real_set_status(ev, status)
-
-    def fake_maintenance(*_args, **_kwargs):
-        order.append("maintenance")
-        assert event.get("status") == "done"
-        assert "status: done" in event["_path"].read_text(encoding="utf-8")
-        return None
-
-    monkeypatch.setattr(daemon.protocol, "set_status", recording_set_status)
-    monkeypatch.setattr(daemon, "_maybe_kb_maintenance", fake_maintenance)
-
-    task = daemon._run_worker(
-        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
-    )
-
-    assert task.status == "done"
-    assert order == ["status:done", "maintenance"]
 
 
 def test_worker_finalize_tolerates_gate_cleanup_after_response(
@@ -722,429 +689,6 @@ def test_worker_finalize_tolerates_gate_cleanup_after_response(
     )
 
     assert task.status == "done"
-
-
-def test_kb_maintenance_skipped_when_no_changes(tmp_path, monkeypatch):
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-skip", body="quick fix")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: f"P {eid}",
-    )
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: False)
-    maintenance: list[str] = []
-
-    monkeypatch.setattr(
-        daemon.envs, "get_env",
-        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
-    )
-
-    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.kind == "kb-maintenance":
-            maintenance.append(invocation.prompt)
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
-
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
-
-    assert task.status == "done"
-    assert maintenance == []
-
-
-def test_kb_maintenance_runs_on_preflight_findings_even_when_kb_unchanged(
-    tmp_path, monkeypatch,
-):
-    """Preflight is the safety net: if it sees inconsistencies left over
-    from an earlier task, the maintenance pass runs even when the
-    current task didn't touch ``kb/``.
-    """
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-preflight", body="no kb changes here")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: f"P {eid}",
-    )
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: False)
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_kb_maintenance_prompt",
-        lambda _root: "KB MAINTENANCE BASE",
-    )
-    monkeypatch.setattr(
-        daemon.kb_preflight,
-        "scan",
-        lambda _root: [
-            daemon.kb_preflight.Finding(
-                type="missing-from-index",
-                target="kb/decision-orphan.md",
-                description="needs an entry",
-            ),
-        ],
-    )
-
-    captured: list[str] = []
-
-    monkeypatch.setattr(
-        daemon.envs, "get_env",
-        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
-    )
-
-    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.kind == "kb-maintenance":
-            captured.append(invocation.prompt)
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
-
-    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
-
-    assert task.status == "done"
-    assert len(captured) == 1, captured
-    prompt = captured[0]
-    assert "KB MAINTENANCE BASE" in prompt
-    assert "Findings (deterministic preflight)" in prompt
-    assert "missing-from-index" in prompt
-    assert "kb/decision-orphan.md" in prompt
-
-
-def test_kb_maintenance_skipped_when_clean_and_unchanged(tmp_path, monkeypatch):
-    """Skip-fast: preflight clean + kb unchanged → no LLM pass at all."""
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-clean", body="non-kb work")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: f"P {eid}",
-    )
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: False)
-    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
-
-    captured: list[str] = []
-
-    monkeypatch.setattr(
-        daemon.envs, "get_env",
-        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
-    )
-
-    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.kind == "kb-maintenance":
-            captured.append(invocation.prompt)
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
-
-    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
-
-    assert captured == []
-
-
-def test_kb_maintenance_runs_when_kb_changed_with_clean_preflight(tmp_path, monkeypatch):
-    """When kb changed but preflight is clean, run with the bare prompt."""
-    write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-touched", body="touched kb but cleanly")
-    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
-    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: f"P {eid}",
-    )
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_kb_maintenance_prompt",
-        lambda _root: "KB MAINTENANCE BASE",
-    )
-    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
-
-    captured: list[str] = []
-
-    monkeypatch.setattr(
-        daemon.envs, "get_env",
-        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ok\n")),
-    )
-
-    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
-        if invocation.kind == "kb-maintenance":
-            captured.append(invocation.prompt)
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="ok", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        )
-
-    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
-
-    daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
-
-    assert captured == ["KB MAINTENANCE BASE"]
-
-
-# ── _commit_kb_maintenance_edits ────────────────────────────────────
-
-
-def _init_real_repo(repo: Path) -> str:
-    """Real git repo with one commit seeding AGENTS.md + kb/subject-x.md.
-
-    The maintenance commit step uses real git plumbing
-    (``git add``/``commit``/``rev-list``), so these unit tests need a
-    real repo rather than the stubs used elsewhere in this module.
-    """
-    init_git_repo(repo)
-    return commit_files(repo, {
-        "AGENTS.md": "# Agents\n",
-        "kb/subject-x.md": "# Subject x\n\nInitial body.\n",
-    })
-
-
-def test_commit_kb_maintenance_edits_rolls_up_leftover_kb_changes(tmp_path):
-    """The agent may forget the 'commit your edits' instruction. The
-    daemon then stamps everything inside kb/ as one brr-maintenance
-    commit so cleanup rides on the task's branch instead of getting
-    swept under the worktree-salvage rug.
-    """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    pre_head = _init_real_repo(repo)
-    # Simulate the maintenance pass touching kb/ without committing.
-    (repo / "kb" / "subject-x.md").write_text(
-        "# Subject x\n\nGroomed body.\n", encoding="utf-8",
-    )
-    (repo / "kb" / "decision-new.md").write_text(
-        "# New decision\n\nStatus: accepted on 2026-05-13\n",
-        encoding="utf-8",
-    )
-
-    commits, files = daemon._commit_kb_maintenance_edits(repo, pre_head)
-
-    assert commits == 1
-    assert files == 2
-    # The auto-rolled commit is authored as brr maintenance, not the
-    # repo's configured identity.
-    author = subprocess.run(
-        ["git", "log", "-1", "--format=%an <%ae>"], cwd=repo, check=True,
-        capture_output=True, text=True,
-    ).stdout.strip()
-    assert author == "brr maintenance <brr-maintenance@brr.local>"
-
-
-def test_commit_kb_maintenance_edits_counts_agent_commits(tmp_path):
-    """If the maintenance agent committed on its own, the daemon
-    should count those commits without adding a redundant
-    brr-maintenance commit on top."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    pre_head = _init_real_repo(repo)
-    # Simulate the agent committing its own edit cleanly.
-    (repo / "kb" / "subject-x.md").write_text(
-        "# Subject x\n\nGroomed by the agent.\n", encoding="utf-8",
-    )
-    subprocess.run(["git", "add", "kb"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "kb: groom subject-x"], cwd=repo, check=True,
-        capture_output=True,
-    )
-
-    commits, files = daemon._commit_kb_maintenance_edits(repo, pre_head)
-
-    assert commits == 1
-    assert files == 1
-    # Only the agent's commit exists — no brr-maintenance commit.
-    log = subprocess.run(
-        ["git", "log", "--format=%an"], cwd=repo, check=True,
-        capture_output=True, text=True,
-    ).stdout.splitlines()
-    assert "brr maintenance" not in log
-
-
-def test_commit_kb_maintenance_edits_quiet_when_clean(tmp_path):
-    """A clean working tree with no new commits since pre_head means
-    the maintenance pass had nothing to do. (0, 0) tells the daemon
-    to render 'maintenance: clean' on the card."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    pre_head = _init_real_repo(repo)
-
-    commits, files = daemon._commit_kb_maintenance_edits(repo, pre_head)
-
-    assert (commits, files) == (0, 0)
-
-
-def test_commit_kb_maintenance_edits_leaves_non_kb_changes_alone(tmp_path):
-    """A maintenance pass that strayed outside its lane (touched
-    runtime code or anything outside kb/AGENTS.md) should NOT have
-    its stray edits absorbed into a kb commit. The worktree-salvage
-    rule preserves the worktree so the operator sees the violation.
-    """
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    pre_head = _init_real_repo(repo)
-    (repo / "src").mkdir()
-    (repo / "src" / "rogue.py").write_text("print('bad')\n", encoding="utf-8")
-    (repo / "kb" / "subject-x.md").write_text(
-        "# Subject x\n\nGroomed.\n", encoding="utf-8",
-    )
-
-    commits, files = daemon._commit_kb_maintenance_edits(repo, pre_head)
-
-    assert commits == 1
-    assert files == 1
-    # The rogue file is still uncommitted — visible to the salvage
-    # rule rather than silently absorbed.
-    status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=repo, check=True, capture_output=True, text=True,
-    ).stdout
-    assert "src/rogue.py" in status
-
-
-# ── kb_maintenance_done packet ──────────────────────────────────────
-
-
-def test_maybe_kb_maintenance_emits_done_packet(tmp_path, monkeypatch):
-    """When brr_dir/conv_key are provided, ``_maybe_kb_maintenance``
-    emits a ``kb_maintenance_done`` packet carrying the commit/file
-    counts so gates can surface "maintenance: N kb commits" on the
-    response card. Without this packet the pass historically
-    appeared to silently drop edits."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_real_repo(repo)
-    brr_dir = repo / ".brr"
-    (brr_dir / "conversations").mkdir(parents=True)
-
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_kb_maintenance_prompt",
-        lambda _root: "KB MAINTENANCE",
-    )
-    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
-
-    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
-        # Simulate the maintenance agent groom: one kb edit, no commit.
-        (repo / "kb" / "subject-x.md").write_text(
-            "# Subject x\n\nGroomed.\n", encoding="utf-8",
-        )
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="groomed", stderr="", returncode=0, trace_dir=None,
-            artifacts=[],
-        )
-
-    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
-
-    emit = daemon._WorkerEmit(brr_dir, "telegram:1:", "evt-x")
-    daemon._maybe_kb_maintenance(
-        repo, repo, {}, "codex",
-        emit=emit, task_id="task-x",
-    )
-
-    from brr import conversations
-    records = [
-        r for r in conversations.read_records(brr_dir, "telegram:1:")
-        if r.get("type") == "kb_maintenance_done"
-    ]
-    assert len(records) == 1
-    record = records[0]
-    assert record["commits"] == 1
-    assert record["files"] == 1
-    assert record["ok"] is True
-    assert record["task_id"] == "task-x"
-
-
-def test_maybe_kb_maintenance_emits_clean_packet_when_no_edits(tmp_path, monkeypatch):
-    """A maintenance pass that ran but didn't change anything still
-    emits a packet, with commits/files = 0, so the renderer can show
-    'maintenance: clean'. Skipping the packet would hide the fact
-    that the pass executed."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_real_repo(repo)
-    brr_dir = repo / ".brr"
-    (brr_dir / "conversations").mkdir(parents=True)
-
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_kb_maintenance_prompt",
-        lambda _root: "KB MAINTENANCE",
-    )
-    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
-
-    def fake_invoke_runner(runner_name, invocation, cfg=None, *, trace=False):
-        return RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="nothing to do", stderr="", returncode=0, trace_dir=None,
-            artifacts=[],
-        )
-
-    monkeypatch.setattr(daemon.runner, "invoke_runner", fake_invoke_runner)
-
-    emit = daemon._WorkerEmit(brr_dir, "telegram:1:", "evt-y")
-    daemon._maybe_kb_maintenance(
-        repo, repo, {}, "codex",
-        emit=emit, task_id="task-y",
-    )
-
-    from brr import conversations
-    records = [
-        r for r in conversations.read_records(brr_dir, "telegram:1:")
-        if r.get("type") == "kb_maintenance_done"
-    ]
-    assert len(records) == 1
-    assert records[0]["commits"] == 0
-    assert records[0]["files"] == 0
-
-
-def test_maybe_kb_maintenance_skips_packet_when_no_routing_info(tmp_path, monkeypatch):
-    """When the caller doesn't pass brr_dir/conv_key, packet emission
-    is suppressed — keeps the helper safe to call from contexts that
-    don't have routing info (none today, but a hedge against future
-    drift)."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_real_repo(repo)
-    brr_dir = repo / ".brr"
-    (brr_dir / "conversations").mkdir(parents=True)
-
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _root: True)
-    monkeypatch.setattr(
-        daemon.prompts,
-        "build_kb_maintenance_prompt",
-        lambda _root: "KB MAINTENANCE",
-    )
-    monkeypatch.setattr(daemon.kb_preflight, "scan", lambda _root: [])
-    monkeypatch.setattr(
-        daemon.runner,
-        "invoke_runner",
-        lambda runner_name, invocation, cfg=None, *, trace=False: RunnerResult(
-            invocation=invocation, runner_name=runner_name, command=["mock"],
-            stdout="", stderr="", returncode=0, trace_dir=None, artifacts=[],
-        ),
-    )
-
-    daemon._maybe_kb_maintenance(repo, repo, {}, "codex")
-
-    # No conversations log was created since no packet was emitted.
-    assert not any((brr_dir / "conversations").iterdir())
 
 
 # ── Forge URL inference ──────────────────────────────────────────────
@@ -1223,77 +767,3 @@ def test_forge_view_url_swallows_exceptions(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon.gitops, "remote_url", _boom)
 
     assert daemon._forge_view_url(tmp_path, "origin", "main") is None
-
-
-# ── Task-touched kb pages ────────────────────────────────────────────
-
-
-def test_kb_pages_touched_since_lists_changed_paths(tmp_path):
-    """``_kb_pages_touched_since`` returns the kb / AGENTS.md files a
-    task changed relative to the seed-ref OID so the maintenance
-    pass has a concrete review target."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    pre_head = _init_real_repo(repo)
-    (repo / "kb").mkdir(exist_ok=True)
-    (repo / "kb" / "subject-x.md").write_text("# X\n", encoding="utf-8")
-    (repo / "AGENTS.md").write_text("# Agents v2\n", encoding="utf-8")
-    (repo / "src").mkdir()
-    (repo / "src" / "foo.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "task work"], cwd=repo, check=True,
-        capture_output=True,
-    )
-
-    touched = daemon._kb_pages_touched_since(repo, pre_head)
-
-    # Only kb/ and AGENTS.md paths appear — src/ is filtered out.
-    assert touched == ["AGENTS.md", "kb/subject-x.md"]
-
-
-def test_kb_pages_touched_since_returns_empty_without_pre_head(tmp_path):
-    """A missing seed-ref OID falls back to an empty list rather
-    than triggering a "diff against HEAD" that would always return
-    the working tree's full set."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _init_real_repo(repo)
-
-    assert daemon._kb_pages_touched_since(repo, None) == []
-
-
-def test_kb_pages_touched_since_skips_non_kb_changes(tmp_path):
-    """Non-kb edits don't show up — the review target is intentionally
-    narrow to keep the maintenance agent in its lane."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    pre_head = _init_real_repo(repo)
-    (repo / "src").mkdir()
-    (repo / "src" / "foo.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "code change"], cwd=repo, check=True,
-        capture_output=True,
-    )
-
-    assert daemon._kb_pages_touched_since(repo, pre_head) == []
-
-
-def test_format_touched_block_renders_paths_when_present():
-    """The block uses the header cue the maintenance prompt
-    references ('Task-touched kb pages') and lists each path on its
-    own line."""
-    block = daemon._format_touched_block(
-        ["kb/subject-x.md", "AGENTS.md"]
-    )
-
-    assert "## Task-touched kb pages" in block
-    assert "- `kb/subject-x.md`" in block
-    assert "- `AGENTS.md`" in block
-
-
-def test_format_touched_block_empty_when_no_paths():
-    """An empty list collapses to ``""`` so callers can join without
-    leaking an empty header into the prompt."""
-    assert daemon._format_touched_block([]) == ""

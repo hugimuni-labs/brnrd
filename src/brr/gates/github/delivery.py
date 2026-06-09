@@ -19,8 +19,8 @@ from requests.utils import quote
 
 from ... import protocol
 from ...task import Task
+from .. import runtime
 from . import client
-from .client import GitHubAPIError
 from .constants import _COMMENT_KINDS
 from .paths import issue_comments, pull_comment_replies
 
@@ -95,41 +95,51 @@ def _thread_reply_body(event: dict, body: str) -> str:
     return preface + body
 
 
+def _post_comment(token: str, event: dict, body: str) -> None:
+    """Post one message (interim or terminal) as a GitHub comment.
+
+    Raises on a missing target or API error so the streaming driver
+    skips the event and retries it on the next loop (rather than
+    silently dropping the message or cleaning up prematurely).
+    """
+    eid = event["id"]
+    repo = event.get("github_repo")
+    number = _coerce_int(event.get("github_issue_number"))
+    if not repo or number is None:
+        raise ValueError("missing repo / issue_number")
+    threaded_body = _thread_reply_body(event, body)
+    kind = str(event.get("github_kind") or "")
+    review_cid = _coerce_int(event.get("github_comment_id"))
+    pr_number = _coerce_int(
+        event.get("github_pr_number") or event.get("github_issue_number"),
+    )
+    if kind == "pr-review-comment" and review_cid is not None and pr_number is not None:
+        post_path = pull_comment_replies(repo, pr_number, review_cid)
+    else:
+        post_path = issue_comments(repo, number)
+    client._api_post(token, post_path, body={"body": threaded_body})
+
+
 def _deliver_responses(
     brr_dir: Path,
     inbox_dir: Path,
     responses_dir: Path,
     token: str,
 ) -> None:
-    for event in protocol.list_done(inbox_dir, "github"):
-        eid = event["id"]
+    def deliver_partial(event: dict, body: str) -> None:
+        _post_comment(token, event, body)
+
+    def deliver_terminal(event: dict, body: str) -> None:
+        # The branch footer (committed SHA + compare link) is the
+        # thread's closing context, so it rides only the terminal reply.
         repo = event.get("github_repo")
-        number = _coerce_int(event.get("github_issue_number"))
-        body = protocol.read_response(responses_dir, eid)
-        if body is None:
-            continue
-        if not repo or number is None:
-            print(f"[brr:github] delivery error for {eid}: missing repo / issue_number")
-            continue
-        task = _find_task_for_event(brr_dir, eid)
-        if task is not None:
+        task = _find_task_for_event(brr_dir, event["id"])
+        if repo and task is not None:
             footer = _branch_footer(repo, task)
             if footer:
                 body = body.rstrip() + footer + "\n"
-        threaded_body = _thread_reply_body(event, body)
-        kind = str(event.get("github_kind") or "")
-        review_cid = _coerce_int(event.get("github_comment_id"))
-        pr_number = _coerce_int(
-            event.get("github_pr_number") or event.get("github_issue_number"),
-        )
-        if kind == "pr-review-comment" and review_cid is not None and pr_number is not None:
-            post_path = pull_comment_replies(repo, pr_number, review_cid)
-        else:
-            post_path = issue_comments(repo, number)
-        try:
-            client._api_post(token, post_path, body={"body": threaded_body})
-        except GitHubAPIError as exc:
-            print(f"[brr:github] delivery error for {eid}: {exc}")
-            continue
-        resp_path = protocol.response_path(responses_dir, eid)
-        protocol.cleanup(event["_path"], resp_path)
+        _post_comment(token, event, body)
+
+    runtime.deliver_stream(
+        inbox_dir, responses_dir, "github", deliver_partial, deliver_terminal,
+    )

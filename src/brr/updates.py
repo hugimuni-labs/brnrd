@@ -31,12 +31,12 @@ PACKET_TYPES = (
     "attempt_failed",
     "retrying",
     "artifact_created",
+    "interim_response",
     "heartbeat",
     "finalizing",
     "container_preserved",
     "push_started",
     "push_done",
-    "kb_maintenance_done",
     "done",
     "failed",
     "conflict",
@@ -54,11 +54,10 @@ class UpdatePacket:
 
     *event_id* selects the per-event-pipeline jsonl file under that
     directory. The contention-free conversation layer (see
-    ``kb/design-concurrent-execution.md``) routes every record one
-    worker emits into the same ``<event-id>.jsonl`` so concurrent
-    workers never share a file. Packets without ``event_id`` fall
-    through to the orphan log so a buggy emitter is observable rather
-    than silently dropped.
+    ``kb/subject-daemon.md``) routes every record one worker emits into
+    the same ``<event-id>.jsonl`` so overlapping thoughts never share a
+    file. Packets without ``event_id`` fall through to the orphan log so
+    a buggy emitter is observable rather than silently dropped.
     """
 
     type: str
@@ -82,10 +81,6 @@ _QUIET_TYPES = {
     # bury the meaningful packets. They still flow through the gate
     # renderer (which folds them into the live elapsed counter).
     "heartbeat",
-    # kb maintenance is best-effort housekeeping; the operator sees
-    # the outcome on the response card, no need to print every pass
-    # to the daemon console.
-    "kb_maintenance_done",
 }
 
 

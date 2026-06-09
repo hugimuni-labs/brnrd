@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from brr import cli, prompts
+from brr import cli
 from brr.envs import RunContext
 from brr.ergonomics import probes, store
 from brr.ergonomics.proxy import (
@@ -109,8 +109,7 @@ def test_record_from_dict_requires_core_fields():
     ({"ergonomics": "off"}, "off"),
     ({"ergonomics": "log"}, "log"),
     ({"ergonomics": "local"}, "local"),
-    ({"ergonomics": "response"}, "response"),
-    ({"ergonomics": "RESPONSE"}, "response"),  # case-insensitive
+    ({"ergonomics": "response"}, "log"),  # retired mode → collapses to log
     ({"ergonomics": "bogus"}, "log"),     # unrecognised → safe default
 ])
 def test_ergonomics_mode(cfg, expected):
@@ -125,7 +124,7 @@ def test_ergonomics_mode(cfg, expected):
     ({"ergonomics": "off"}, NullErgoProxy),
     ({"ergonomics": "log"}, LogErgoProxy),
     ({"ergonomics": "local"}, LocalErgoProxy),
-    ({"ergonomics": "response"}, LogErgoProxy),  # probes still log; reply gets reflection
+    ({"ergonomics": "response"}, LogErgoProxy),  # retired mode collapses to log
 ])
 def test_resolve_proxy_user(cfg, cls, tmp_path):
     assert isinstance(resolve_proxy(cfg, tmp_path, owner="user"), cls)
@@ -438,14 +437,3 @@ def test_cli_ergonomics_summary_empty_hint(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_brr_dir", lambda: tmp_path)
     cli.cmd_ergonomics_summary(SimpleNamespace(days=7, json=False))
     assert "ergonomics=local" in capsys.readouterr().out
-
-
-# ── reflection (response mode) ──────────────────────────────────────
-
-
-def test_reflection_enabled_only_for_response_and_user():
-    assert prompts.reflection_enabled({"ergonomics": "response"}) is True
-    assert prompts.reflection_enabled({"ergonomics": "log"}) is False
-    assert prompts.reflection_enabled({}) is False
-    # operator-owned never injects reflection into the reply, even if asked
-    assert prompts.reflection_enabled({"ergonomics": "response"}, owner="operator") is False
