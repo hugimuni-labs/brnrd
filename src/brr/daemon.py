@@ -895,6 +895,11 @@ def _run_worker(
         # Final drain after the runner returns: catch interim responses
         # written between the last heartbeat and exit, before finalize.
         _drain_outbox(emit, task, responses_dir, eid, outbox_dir, inbox_dir)
+        # Capture the resident's dominion edits before any branch/exit. One
+        # call site covers success, retry, and hard failure: a clean
+        # dominion no-ops, and on retry the next pass just re-captures any
+        # new writes (idempotent — see _capture_dominion).
+        _capture_dominion(repo_root, cfg, task)
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
         try:
@@ -1225,6 +1230,42 @@ def _remove_outbox(outbox_dir: Path | None) -> None:
     """Best-effort removal of a drained per-event outbox drop zone."""
     if outbox_dir:
         shutil.rmtree(outbox_dir, ignore_errors=True)
+
+
+def _capture_dominion(
+    repo_root: Path,
+    cfg: dict,
+    task: Task,
+) -> None:
+    """Commit whatever the resident wrote into its dominion this thought.
+
+    The persistence step of the agent-as-memory model: the resident edits
+    ``.brr/dominion/`` freely during a thought; brr captures those edits
+    at sleep so they survive to the next wake without the agent running a
+    commit dance. Serialized + best-effort (see
+    :func:`dominion.commit`) — a clean dominion is a silent no-op, and any
+    failure is swallowed so capturing memory never breaks the run. Runs on
+    both the success and failure exits (a failed thought may still have
+    recorded the pain that caused it).
+    """
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return
+    branch = str(
+        cfg.get("dominion.branch", cfg.get("dominion_branch", dominion.DEFAULT_BRANCH))
+    )
+    remote = gitops.default_remote(repo_root)
+    push = bool(
+        cfg.get("dominion.push_on_capture", cfg.get("dominion_push_on_capture", True))
+    )
+    committed = dominion.commit(
+        dominion.dominion_path(repo_root),
+        f"brr-home: capture working memory after task {task.id}",
+        remote=remote,
+        branch=branch,
+        push=push and bool(remote),
+    )
+    if committed:
+        print(f"[brr] dominion: captured working memory after {task.id}")
 
 
 def _record_response_artifact(
