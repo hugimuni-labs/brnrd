@@ -165,6 +165,33 @@ def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
     assert "is genuinely yours to shape" in digest
 
 
+def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
+    """The seed playbook must inject *in full* under the default budget,
+    with headroom for the agent's own entries.
+
+    It silently grew past the budget once (2026-06-09: 13.3 KiB vs a
+    12288-byte budget, so the closing section was clipped on every wake);
+    the budget was bumped to fit. This guard fails if the seed outgrows
+    the budget again, forcing a deliberate bump rather than silent loss.
+    """
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+
+    digest = dominion.resolve_self_inject(path)  # default budget
+
+    # The playbook's closing line survives — nothing was clipped.
+    assert "build it like it's yours" in digest
+    assert "truncated to fit dominion inject budget" not in digest
+
+    # The invariant, numerically: seed + its inject wrapper fit the default
+    # budget with real headroom for the agent's own self-inject entries.
+    seed = (path / dominion.PLAYBOOK_FILE).read_text(encoding="utf-8")
+    wrapper = len(b"<!-- self-inject: full playbook.md -->\n")
+    seed_bytes = len(seed.encode("utf-8")) + wrapper
+    assert seed_bytes <= dominion.DEFAULT_INJECT_BUDGET_BYTES
+    assert dominion.DEFAULT_INJECT_BUDGET_BYTES - seed_bytes >= 2048
+
+
 def test_dominion_block_surfaces_write_path_and_capture(tmp_path):
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
