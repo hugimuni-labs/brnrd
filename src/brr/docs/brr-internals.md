@@ -43,6 +43,7 @@ gitignored; do not commit its contents.
 | `outbox/`    | Per-event drop zone (`<id>/`) where the resident writes interim/interleaved replies mid-thought |
 | `presence/`  | Who's awake right now — one JSON file per active thought/session, pruned on read |
 | `dominion/`  | The resident's durable working memory (worktree on the `brr-home` branch); captured at sleep |
+| `schedule/`  | Firing-state (`state.json`) for self-scheduled thoughts; specs live in the dominion's `schedule.md` |
 | `runs/`      | Generated per-task context files for daemon runner invocations     |
 | `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
 | `traces/`    | Prompt + stdout + meta per runner invocation (cleaned on success)  |
