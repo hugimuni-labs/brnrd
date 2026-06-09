@@ -18,11 +18,13 @@ leaves judgement to the agent it wakes. It:
 
 There is no command layer: every event either wakes the agent or waits
 for the living agent — the daemon never parses ``/cancel`` or the like.
-The liveness backstop is the runner's own wall-clock timeout
-(``runner.timeout_seconds``), which reclaims the single-flight slot even
-if the CLI subprocess wedges (deadlock, hung network read, OS-level
-failure). ``brr down`` / SIGTERM flip the loop flag; the in-flight
-thought drains before the process exits.
+Liveness is enforced from the heartbeat: each tick checks an
+agent-extensible budget (``runner.timeout_seconds``, pushed out by a
+keepalive the agent writes) and kills a runner that outlives it via
+``runner.kill_active``; the runner's own ``communicate`` timeout is the
+final backstop if the heartbeat path wedges. ``brr down`` / SIGTERM flip
+the loop flag and kill the in-flight runner, so the single-flight slot is
+reclaimed promptly rather than waiting out a long budget.
 """
 
 from __future__ import annotations
@@ -839,6 +841,13 @@ def _run_worker(
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
+    # Liveness budget: the heartbeat enforces this soft, agent-extensible
+    # deadline; the runner's communicate() backstops at the hard cap. The
+    # agent extends it by writing the keepalive control dotfile in its
+    # outbox (skipped by the drain — see _drain_outbox).
+    budget_seconds = runner.runner_timeout(cfg)
+    hard_cap_seconds = max(budget_seconds * 4, budget_seconds + 3600)
+    keepalive_path = outbox_dir / ".keepalive"
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = prompts.build_daemon_prompt(
@@ -857,6 +866,7 @@ def _run_worker(
                 pending_events=pending_events_snapshot,
                 present=present_snapshot,
                 event_body=event_body_for_prompt,
+                budget_seconds=budget_seconds,
                 diffense=prompt_diffense,
             )
         else:
@@ -879,6 +889,7 @@ def _run_worker(
                 pending_events=pending_events_snapshot,
                 present=present_snapshot,
                 event_body=event_body_for_prompt,
+                budget_seconds=budget_seconds,
                 diffense=prompt_diffense,
             )
 
@@ -914,10 +925,14 @@ def _run_worker(
                 cwd=run_root,
                 repo_root=repo_root,
                 response_path=str(env_ctx.response_path_host),
+                timeout_seconds=hard_cap_seconds,
             ),
             cfg=cfg,
             trace=True,
             on_heartbeat=_emit_heartbeat,
+            budget_seconds=budget_seconds,
+            hard_cap_seconds=hard_cap_seconds,
+            keepalive_path=keepalive_path,
         )
         _emit_new_containers(emit, task.id, env_ctx, seen_containers)
         # Final drain after the runner returns: catch interim responses
@@ -1039,6 +1054,55 @@ def _run_worker(
     return task
 
 
+def _keepalive_until(keepalive_path: Path | None) -> float | None:
+    """Read an agent-written keepalive into an absolute epoch deadline.
+
+    The file is a control dotfile in the task outbox carrying one line:
+    an ISO-8601 timestamp ("busy until T"), or ``+<duration>`` (e.g.
+    ``+30m``) interpreted from the file's mtime ("busy for N from when I
+    wrote this", so re-reads don't slide). Returns epoch seconds, or
+    ``None`` when the file is absent, empty, or unparseable.
+    """
+    if keepalive_path is None or not keepalive_path.exists():
+        return None
+    try:
+        raw = keepalive_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    first = raw.splitlines()[0].strip()
+    if first.startswith("+"):
+        secs = schedule_mod.parse_duration(first[1:].strip())
+        if secs is None:
+            return None
+        try:
+            mtime = keepalive_path.stat().st_mtime
+        except OSError:
+            return None
+        return mtime + secs
+    return schedule_mod.parse_iso(first)
+
+
+def _budget_exceeded(
+    start_mono: float,
+    budget_seconds: float,
+    hard_cap_seconds: float | None,
+    keepalive_path: Path | None,
+) -> bool:
+    """True when the runner has outlived its extensible, capped budget."""
+    now_mono = time.monotonic()
+    deadline = start_mono + budget_seconds
+    until = _keepalive_until(keepalive_path)
+    if until is not None:
+        # Translate the wall-clock extension into the monotonic clock the
+        # loop measures against.
+        deadline = max(deadline, now_mono + (until - time.time()))
+    if hard_cap_seconds is not None:
+        deadline = min(deadline, start_mono + hard_cap_seconds)
+    return now_mono >= deadline
+
+
 def _invoke_with_heartbeat(
     env_backend,
     env_ctx,
@@ -1049,17 +1113,28 @@ def _invoke_with_heartbeat(
     trace: bool,
     on_heartbeat,
     interval: float = _HEARTBEAT_INTERVAL,
+    budget_seconds: float | None = None,
+    hard_cap_seconds: float | None = None,
+    keepalive_path: Path | None = None,
 ) -> "runner.RunnerResult":
     """Run *env_backend.invoke* in a thread, ticking *on_heartbeat* every
-    *interval* seconds while it's alive.
+    *interval* seconds while it's alive, and enforce the liveness budget.
 
     The runner subprocess can sit silent for many minutes — codex with
     xhigh reasoning routinely chews for 5-10 min without emitting any
     daemon-side packets. The heartbeat keeps the chat card alive: each
-    tick prompts gates to re-render with a fresh elapsed counter.
-    Heartbeat callbacks run on the daemon's main thread (synchronous
-    with the loop), not in the runner thread, so a misbehaving
-    callback can't corrupt the in-flight runner invocation.
+    tick prompts gates to re-render with a fresh elapsed counter. The
+    callbacks run on the thought thread driving this invocation (the same
+    stack that called here), not on the runner's inner thread, so a
+    misbehaving callback can't corrupt the in-flight runner.
+
+    When *budget_seconds* is set, the same tick is the liveness authority:
+    past ``start + budget`` the runner is killed via
+    :func:`runner.kill_active` to reclaim the single-flight slot — unless
+    the agent extended its deadline by writing *keepalive_path*.
+    Extensions are capped at *hard_cap_seconds* so a forgotten keepalive
+    can't pin the daemon forever, and the runner's own ``communicate``
+    timeout (set to the hard cap) is the final backstop.
     """
     import threading
 
@@ -1079,18 +1154,34 @@ def _invoke_with_heartbeat(
         name=f"runner-{invocation.label}",
     )
     worker.start()
+    start = time.monotonic()
+    deadline_killed = False
     while worker.is_alive():
         worker.join(timeout=interval)
-        if worker.is_alive():
-            try:
-                on_heartbeat()
-            except Exception:
-                # Heartbeat is best-effort; never let it break a real run.
-                pass
+        if not worker.is_alive():
+            break
+        try:
+            on_heartbeat()
+        except Exception:
+            # Heartbeat is best-effort; never let it break a real run.
+            pass
+        if budget_seconds is not None and _budget_exceeded(
+            start, budget_seconds, hard_cap_seconds, keepalive_path,
+        ):
+            if runner.kill_active():
+                deadline_killed = True
+                worker.join()  # let the killed proc surface its result
+            break
 
     outcome = holder[0]
     if isinstance(outcome, BaseException):
         raise outcome
+    if deadline_killed and isinstance(outcome, runner.RunnerResult):
+        # Present a budget kill like the wall-clock timeout (124) so the
+        # retry/finalize path and the operator read it the same way.
+        outcome.returncode = 124
+        note = f"runner exceeded its {int(budget_seconds)}s liveness budget"
+        outcome.stderr = (outcome.stderr + "\n" if outcome.stderr else "") + note
     return outcome
 
 
@@ -1212,7 +1303,10 @@ def _drain_outbox(
         return 0
     promoted = 0
     for fpath in entries:
-        if fpath.suffix == ".tmp":
+        # ``.tmp`` is the agent's atomic-write staging name; dotfiles are
+        # reserved as control channels (e.g. ``.keepalive`` for the
+        # liveness budget) and must never be delivered as a message.
+        if fpath.suffix == ".tmp" or fpath.name.startswith("."):
             continue
         try:
             text = fpath.read_text(encoding="utf-8")
@@ -1595,7 +1689,12 @@ def start(
                     print(f"[brr] warning: gate thread {t.name} died")
 
     finally:
-        # Drain the in-flight thought before exiting.
+        # Shutdown requested (signal): kill the in-flight runner so we
+        # reclaim the slot promptly instead of waiting out its (long,
+        # possibly extended) budget, then drain the thought.
+        if current is not None and not current.done():
+            if runner.kill_active():
+                print("[brr] shutdown: terminated in-flight runner")
         pool.shutdown(wait=True, cancel_futures=False)
         _clear_pid(brr_dir)
         print("[brr] daemon stopped")
