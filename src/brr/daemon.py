@@ -806,6 +806,14 @@ def _run_worker(
         if ev.get("id") != eid
     ]
 
+    # Other thoughts awake right now (presence registry), excluding this
+    # one — so the resident knows it may share the dominion with a
+    # concurrent session and reconciles rather than fights (slice 5).
+    present_snapshot = [
+        e for e in presence.list_active(brr_dir)
+        if e.get("task_id") != task.id
+    ]
+
     context_path = run_context.write_context_file(
         brr_dir,
         task,
@@ -846,6 +854,7 @@ def _run_worker(
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 pending_events=pending_events_snapshot,
+                present=present_snapshot,
                 event_body=event_body_for_prompt,
                 diffense=prompt_diffense,
             )
@@ -867,6 +876,7 @@ def _run_worker(
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
                 pending_events=pending_events_snapshot,
+                present=present_snapshot,
                 event_body=event_body_for_prompt,
                 diffense=prompt_diffense,
             )

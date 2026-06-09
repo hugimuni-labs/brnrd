@@ -252,6 +252,26 @@ class TestPromptBuilding:
         )
         assert "other pending events" not in prompt
 
+    def test_daemon_prompt_lists_present_thoughts(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            task_id="task-A",
+            present=[
+                {"kind": "session", "stream": "telegram:9:", "task_id": "task-Z"},
+            ],
+        )
+        assert "Also awake right now" in prompt
+        assert "session" in prompt
+        assert "telegram:9:" in prompt
+        # The framing names reconciliation-by-judgement, not locking.
+        assert "reconcile" in prompt.lower()
+
+    def test_daemon_prompt_omits_presence_when_alone(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path, task_id="task-A",
+        )
+        assert "Also awake right now" not in prompt
+
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
