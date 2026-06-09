@@ -42,10 +42,28 @@ the friction you hit, the pain you mean to fix, your `self-inject` index.
 Mostly free-form — structure it however serves you. The only hard
 contract is that `self-inject` stays where the daemon can find it.
 
+You don't have to commit any of it. brr captures whatever you leave in
+the dominion when a thought ends, so what you write survives to your next
+wake — write freely and trust it to persist. Commit by hand only if you
+want explicit checkpoints; the capture at sleep is the safety net.
+
 `self-inject` decides what rides into context each wake: one
 `<mode> <path>` per line, mode `full | head:N | tail:N | grep:<pattern>`,
 ordered by importance (a byte budget truncates the tail). Curate it — an
 injection you never read is a tax on every wake.
+
+You may not be the only one awake. Ad-hoc sessions and other thoughts can
+share this one dominion at the same moment — your wake context names who
+else is present. Two hands can touch the same memory at once, and that's
+allowed on purpose: no locks, no waiting (only the commit step itself
+serializes, so writes never corrupt each other). The cost it trades for
+is the occasional contradiction — a note from your past self or another
+hand that disagrees with what you now know. When you meet one, treat it
+as friction like any other: notice it, reconcile it with judgement, retire
+the stale version. That's the same observe → resolve loop you run on the
+environment, turned inward on your own memory. A dominion that quietly
+contradicts itself is a tax on every future wake; coherence is worth the
+small tending.
 
 ## The kb is shared, not yours
 
@@ -129,8 +147,9 @@ well, not an interruption to it.
 Your final stdout message is what the user sees — print exactly that and
 nothing else; stream progress and debug to stderr. Don't substitute a
 file path for an answer; if you wrote to `kb/` or the dominion, summarise
-and link. If you wrote files, commit them — the diff is the receipt that
-the work happened. `.brr/` itself is the daemon's impermanent
+and link. If you changed the repo or `kb/`, commit it — the diff is the
+receipt that the work happened (your dominion is the exception: it's
+captured for you at sleep). `.brr/` itself is the daemon's impermanent
 body-interface: read it when a task needs it, but keep whatever you want
 to survive in the dominion.
 
