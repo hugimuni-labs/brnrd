@@ -627,3 +627,59 @@ class TestDaemonModeGuardrails:
         # The run context file is recovery detail, not routine reading.
         assert "Runtime recovery" in prompt
         assert "recovery detail" in prompt
+
+
+class TestIntrospectionMode:
+    """The opt-in introspection/development toggle: when on, every wake
+    invites the resident to inspect the shape of its own injected context
+    and raise improvements with the user. See
+    `kb/design-context-introspection.md`."""
+
+    @staticmethod
+    def _enable(repo_root) -> None:
+        brr = repo_root / ".brr"
+        brr.mkdir(parents=True, exist_ok=True)
+        (brr / "config").write_text("introspect.enabled=true\n", encoding="utf-8")
+
+    def test_off_by_default_run_prompt(self, tmp_path):
+        # No config at all → the invitation never rides along.
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "Look at it" not in prompt
+
+    def test_off_by_default_daemon_prompt(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, task_id="task-9",
+        )
+        assert "Look at it" not in prompt
+
+    def test_injected_into_run_prompt_when_enabled(self, tmp_path):
+        self._enable(tmp_path)
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "Look at it" in prompt
+        assert "The shape of the context itself" in prompt
+        # It rides alongside the task; it must not displace the task text,
+        # and it sits before the task as the last framing.
+        assert "do something" in prompt
+        assert prompt.index("Look at it") < prompt.index("do something")
+
+    def test_injected_into_daemon_prompt_when_enabled(self, tmp_path):
+        self._enable(tmp_path)
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, task_id="task-9",
+        )
+        assert "Look at it" in prompt
+
+    def test_bundled_introspection_keeps_awe_and_dialogue_intent(self):
+        from pathlib import Path
+
+        import brr
+
+        text = (Path(brr.__file__).parent / "prompts" / "introspection.md").read_text(
+            encoding="utf-8",
+        )
+        # The two halves the tone must hold: regard for the existing shape
+        # before judging it, and surfacing what's found to the user as
+        # dialogue rather than a silent edit.
+        assert "without flinching" in text
+        assert "say it to" in text.lower()
+        assert "silent edit" in text
