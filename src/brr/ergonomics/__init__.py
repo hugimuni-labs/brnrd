@@ -8,7 +8,7 @@ brnrd proxy are later slices that reuse the same ``Record`` shape and
 ``ErgoProxy`` seam.
 
 Routing keys off ``RunContext.owner`` plus the ``ergonomics`` knob
-(``off|log|local|response``, default ``log``): the user-owned default is
+(``off|log|local``, default ``log``): the user-owned default is
 a quiet daemon log, operator-owned runs ignore the knob. Daemon entry
 point is ``probe_task_prep`` (per-task probe set; no-ops when the
 resolved proxy is null). The CLI reads via ``store``.
