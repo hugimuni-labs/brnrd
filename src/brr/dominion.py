@@ -35,6 +35,7 @@ WORKTREE_DIRNAME = "dominion"
 SELF_INJECT_FILE = "self-inject"
 PLAYBOOK_FILE = "playbook.md"
 COMMIT_LOCK_FILE = "dominion.commit.lock"
+SYNC_MARKER_FILE = "dominion.needs-sync"
 # Total UTF-8 budget for the wake-time self-inject digest. Sized to fit
 # the seed playbook in full with headroom for the agent's own entries
 # (recent pain, current focus); the agent can re-tune what it injects.
@@ -161,6 +162,39 @@ def _commit_lock(dominion_dir: Path, timeout: float):
         os.close(fd)
 
 
+def mark_needs_sync(brr_dir: Path, reason: str) -> None:
+    """Record that the dominion's remote diverged (a push was rejected).
+
+    A best-effort hint, written to the runtime dir (gitignored), surfaced
+    in the next wake prompt so the resident reconciles ``brr-home`` itself
+    — pull / merge / resolve / push is git-layer dissonance resolution,
+    the agent's judgement, not the daemon's (``kb/design-self-scheduled-
+    thoughts.md`` → sync companion). Cleared by the next successful push.
+    """
+    try:
+        brr_dir.mkdir(parents=True, exist_ok=True)
+        (brr_dir / SYNC_MARKER_FILE).write_text(reason.strip() + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_needs_sync(brr_dir: Path) -> None:
+    """Clear the dominion sync-needed marker (best-effort)."""
+    try:
+        (brr_dir / SYNC_MARKER_FILE).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def needs_sync(brr_dir: Path) -> str | None:
+    """Return the dominion sync-needed reason, or ``None`` when in sync."""
+    try:
+        text = (brr_dir / SYNC_MARKER_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
+
+
 def commit(
     dominion_dir: Path,
     message: str,
@@ -187,22 +221,42 @@ def commit(
     made. A clean worktree is a no-op (False) — most thoughts don't touch
     the dominion. Every failure is swallowed to False: capturing memory
     must never break the thought that produced it.
+
+    **Push is a durability floor, not a merge.** When *push* is on, brr
+    best-effort pushes ``brr-home`` after committing. A *rejected* push
+    (the remote diverged — a second machine / failover host wrote it) is
+    **not** silently swallowed: it sets a ``needs_sync`` marker so the next
+    thought reconciles by hand (fetch / merge / resolve / push is the
+    agent's judgement). A successful push clears the marker — including a
+    clean-tree no-op push, so a resident that reconciled out-of-band clears
+    its own stale marker on the next capture.
     """
     if not dominion_dir.is_dir():
         return False
+    brr_dir = dominion_dir.parent
+    committed = False
     try:
         with _commit_lock(dominion_dir, lock_timeout) as held:
             if not held:
                 return False
-            if not gitops.worktree_dirty(dominion_dir):
-                return False
-            if not gitops.commit_all(dominion_dir, message):
-                return False
+            if gitops.worktree_dirty(dominion_dir):
+                committed = gitops.commit_all(dominion_dir, message)
         if push and remote:
             target = branch or gitops.current_branch(dominion_dir)
-            if target and target != "HEAD":
-                gitops.push_branch(dominion_dir, remote, target)
-        return True
+            # Push after a real commit, or to settle a standing divergence
+            # (clean tree but a marker is set — the agent may have just
+            # reconciled). Otherwise leave the network alone.
+            if target and target != "HEAD" and (committed or needs_sync(brr_dir)):
+                if gitops.push_branch(dominion_dir, remote, target):
+                    clear_needs_sync(brr_dir)
+                else:
+                    mark_needs_sync(
+                        brr_dir,
+                        f"push of {target} to {remote} was rejected — the "
+                        f"dominion's remote has diverged; reconcile by hand "
+                        f"(fetch / merge / push) in {dominion_dir}",
+                    )
+        return committed
     except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
         return False
 
