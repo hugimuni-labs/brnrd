@@ -1,14 +1,16 @@
-# Multi-response protocol — interim + interleaved delivery
+# Multi-response protocol — interim, interleaved + out-of-bound delivery
 
 Status: shipped (interim + interleaved delivery) on 2026-06-09 — slice 4
 of the resident-agent reshape
-([`design-agent-dominion.md`](design-agent-dominion.md) §4). The
-streaming-delivery foundation, the agent outbox + daemon drain, and
-cross-event interleaving are live; two follow-ons are **deliberately
-deferred** (see "Deferred follow-ons" below): folding the diffense pack
-into this drain, and a finer idle-liveness timeout. This page is the
-protocol contract; [`subject-daemon.md`](subject-daemon.md) carries the
-daemon-pipeline synthesis and [`brr-internals.md`](../src/brr/docs/brr-internals.md)
+([`design-agent-dominion.md`](design-agent-dominion.md) §4);
+**gate-addressed out-of-bound delivery** added 2026-06-09 (coherence
+review §3). The streaming-delivery foundation, the agent outbox + daemon
+drain, cross-event interleaving, and gate-addressed sends are live; two
+follow-ons are **deliberately deferred** (see "Deferred follow-ons"
+below): folding the diffense pack into this drain, and a finer
+*silence-based* idle-kill. This page is the protocol contract;
+[`subject-daemon.md`](subject-daemon.md) carries the daemon-pipeline
+synthesis and [`brr-internals.md`](../src/brr/docs/brr-internals.md)
 → Multi-response the user-facing reference.
 
 ## Why
@@ -112,6 +114,34 @@ We **advise** handling separate features / streams of work as separate
 spawns (a cross-context change usually wants its own branch and is
 cleaner fresh) but don't insist — the resident decides how to organise
 its own work.
+
+## Gate-addressed (out-of-bound) delivery
+
+The two forms above are **reply-shaped**: they deliver to an event that
+already exists (the current one, or another pending one). A resident also
+needs to *initiate* — ping a chat, post an out-of-bound note, deliver a
+scheduled thought's summary — to a destination with no waiting event.
+
+A drop-zone file whose frontmatter names `gate: <name>` (plus any target
+fields that gate's deliver closure reads — `telegram_chat_id`, a channel,
+a thread — or none, to use the gate's configured default) is an
+out-of-bound message. The daemon (`_deliver_out_of_bound`) synthesizes an
+already-`done` event for that gate carrying the target metadata and writes
+the body as its response. The gate's existing `deliver_stream` picks it up
+off `list_active`, delivers it once, and cleans it up; born `done`, it
+never spawns a thought. Agent-written frontmatter can't override the
+reserved event keys (`id`/`source`/`status`), so a stray `status:` can't
+resurrect it as pending. An unknown or unconfigured gate is dropped with a
+note — a synthesized event no thread polls would sit forever. `event:` is
+"reply to a waiting thread"; `gate:` is "send to a destination" — same
+outbox, same drain, one extra branch.
+
+This is also the delivery path for self-scheduled thoughts (a firing that
+wants to *say* something writes a `gate:` file; see
+[`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md)),
+and the first concrete step toward the agent-owned delivery flow weighed
+in [`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md)
+§4.
 
 ## Deferred follow-ons
 

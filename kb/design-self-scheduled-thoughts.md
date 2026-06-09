@@ -63,8 +63,8 @@ mirrors the memory-layer model:
 - **`.brr/dominion/schedule.md`** — the declarative specs, in the agent's owned,
   durable, committed memory. The resident adds / edits / removes entries freely
   ([`schedule.py`](../src/brr/schedule.py) parses it: a `## ` heading is the
-  entry id, then `at:` / `every:` / optional body lines). Travels with the
-  dominion to a second machine / failover.
+  entry id, then `at:` / `every:`, an optional `conversation_key:`, and optional
+  body lines). Travels with the dominion to a second machine / failover.
 - **`.brr/schedule/state.json`** — last-fired timestamps, keyed by entry id.
   Daemon-owned, gitignored, *ephemeral but machine-persistent* (survives daemon
   restarts; lost only on machine-loss). The daemon mutates this, never the
@@ -79,12 +79,20 @@ spawn-one-when-idle path, so a due schedule waits politely behind a running
 thought — no new concurrency.
 
 **Lifecycle of an internal event.** A `schedule`-source event has no gate to
-deliver its response to, so the daemon **cleans it up itself** once the thought
-completes (delete event + response). The *effect* of a self-scheduled thought is
-its work — an edited file, a commit, a fixed footgun — not a chat reply.
-(Routing a schedule thought's reply to a real gate — a daily summary to
-Telegram — needs target-chat metadata and is deferred; the resident can already
-reach a user mid-thought through its normal outbox.)
+deliver its *own* response to, so the daemon **cleans it up itself** once the
+thought completes (delete event + response). The *effect* of a self-scheduled
+thought is usually its work — an edited file, a commit, a fixed footgun — not a
+chat reply. When a firing *should* say something (a daily summary to Telegram),
+it delivers through the **gate-addressed outbox** like any out-of-bound message
+(`gate: <name>` + target; see
+[`design-multi-response.md`](design-multi-response.md)), which the daemon turns
+into a one-shot delivery — no schedule-specific delivery path. Firings also
+**thread**: each entry carries a `conversation_key` (default `schedule:<id>`,
+overridable to a gate thread like `telegram:<chat>:`), so a recurring entry's
+wakes share a readable history and a firing can wake *inside* an existing
+conversation. (Earlier, routing a schedule reply was deferred for lack of target
+metadata; the gate-addressed outbox subsumed it 2026-06-09 — see
+[`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md) §3.)
 
 **Reinstall safety.** `every:` re-anchors on a fresh machine (no fire storm). An
 `at:` whose time is more than `schedule.stale_grace_seconds` in the past is

@@ -1,6 +1,8 @@
 # Review: daemon-layer coherence + delivery generalization (2026-06)
 
-Status: active — working review; fold into the hubs and retire as items land.
+Status: active — findings #1–#3 landed (2026-06-09) and are folded into the
+hubs; this page now primarily holds the open #4 ownership crossroads that the
+daemon/delivery hubs link to. Retire when #4 resolves.
 
 Prompted by two observations during the slice-7 work (self-scheduled
 thoughts + agent-owned dominion sync):
@@ -25,8 +27,8 @@ contradiction. Hubs: [`subject-daemon.md`](subject-daemon.md),
 |---|------|------|--------|
 | 1 | docs/comments | Stale references to retired machinery (kb-maintenance step, superseded design citations, "roadmap to parallel" framing) | fixed this pass |
 | 2 | daemon liveness | No prompt-kill on shutdown; `_active_proc` unused; agent has no budget awareness or way to ask for more time | shipped 2026-06-09 |
-| 3 | delivery | Reply-shaped delivery blocks out-of-bound + scheduled delivery; schedule thoughts are threadless | designed → implementing |
-| 4 | ownership | Daemon-owned push/delivery vs a simpler agent-owned generic flow | open question — behavior unchanged |
+| 3 | delivery | Reply-shaped delivery blocks out-of-bound + scheduled delivery; schedule thoughts are threadless | shipped 2026-06-09 |
+| 4 | ownership | Daemon-owned push/delivery vs a simpler agent-owned generic flow | open question — framing tightened, behavior unchanged |
 
 ## 1. Stale references (fixed this pass)
 
@@ -119,6 +121,18 @@ exists: gate deliver closures honor a per-event target (e.g.
 `telegram_chat_id`) and fall back to a configured default, and
 `deliver_stream` already delivers `done` events and cleans up.
 
+**Shipped 2026-06-09.** Both halves landed as designed:
+[`schedule.py`](../src/brr/schedule.py) entries now carry an optional
+`conversation_key` (default `schedule:<id>`), wired through `_fire_due_schedules`
+so a recurring entry's firings thread; and `_drain_outbox` grew a `gate:` branch
+(`_gate_can_deliver` + `_deliver_out_of_bound`) that synthesizes an
+already-`done` event for the named gate — `protocol.create_event` gained a
+`status=` param so the event is born `done` without a pending-window race.
+Reserved keys (`id`/`source`/`status`) can't be overridden by agent frontmatter;
+unknown/unconfigured gates are dropped with a note. Contract written up in
+[`design-multi-response.md`](design-multi-response.md) → *Gate-addressed
+delivery*; the playbook + bundle carry the agent wording.
+
 **Decision.**
 
 - **3a — Thread the schedule.** Let a `schedule.md` entry carry a stable
@@ -162,6 +176,18 @@ hands the agent the wheel on divergence — it is not a pure "local
 durability floor"). Revisit the larger bet when the CLI tooling lands.
 The #3 `gate:` primitive lets us drift toward the agent-owned flow
 incrementally instead of via a big-bang rewrite.
+
+*Framing tightened 2026-06-09.* The agent-facing dominion block
+(`prompts.py` `_build_dominion_block`) used to read "a local durability
+floor … pushing, pulling, and conflict resolution are yours" — which
+implied the daemon never pushes. It now states the daemon **commits and
+best-effort pushes**, and the agent owns only reconciliation of a
+**diverged** remote, matching the playbook (which already said
+"brr best-effort pushes"). The other surfaces
+([`design-agent-dominion.md`](design-agent-dominion.md) §4,
+[`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md),
+[`index.md`](index.md)) already named the push and were left as-is.
+Behavior unchanged; this was sibling-drift, not a code fix.
 
 **Vestigial concurrency primitives.** Trimming parallel execution to
 single-flight left a few in-process primitives that no longer contend

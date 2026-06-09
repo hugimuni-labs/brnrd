@@ -169,9 +169,13 @@ def _build_dominion_block(repo_root: Path) -> str:
         "may run in a worktree or container whose cwd is elsewhere). It's "
         "your durable memory: write notes, pain records, and your "
         "`self-inject` index there freely. **brr commits whatever you leave "
-        "there when this thought ends** (a local durability floor), so it "
-        "survives to your next wake — no commit dance needed. Pushing, "
-        "pulling, and conflict resolution of `brr-home` are yours to own."
+        "there when this thought ends and best-effort pushes `brr-home`** — a "
+        "durability floor, so your memory survives to your next wake (and "
+        "reaches the remote when it can) with no commit dance needed. What brr "
+        "*won't* do is reconcile a **diverged** remote: when a push is rejected "
+        "(another machine or session wrote `brr-home` too), fetch / merge / "
+        "resolve / push is yours to own — it's a merge, judgement not reflex, "
+        "and you'll see a note here when it's needed."
         f"{sync_note}\n\n"
         "Self-injected below per your `self-inject` index — yours to "
         "reshape:\n\n"
@@ -510,6 +514,16 @@ def _build_task_context_bundle(
             "marks the event handled, so it won't wake again. Use one "
             "complete reply per folded-in event; prefer letting anything "
             "that wants its own branch wake as its own thought."
+        )
+        sections.append(
+            "- To send a message to a destination with *no* waiting event "
+            "— ping a chat, post an out-of-bound note, deliver from a "
+            "scheduled thought — start the outbox file with a frontmatter "
+            "`gate: <name>` (e.g. `gate: telegram`) plus any target fields "
+            "that gate needs (omit them to use its configured default). The "
+            "body is the message; brr delivers it once to that destination. "
+            "It's a send, not a reply to this thread, and an unconfigured "
+            "gate is dropped."
         )
         if budget_seconds:
             sections.append(
