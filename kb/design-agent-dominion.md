@@ -196,11 +196,18 @@ only required structure is the small **system-readable contract**: the
 self-inject index, the cron specs, the salience / pain records, and the presence
 registry. Everything else is the agent's own — views, analyses, working notes,
 the pains and the improvements. The `Pitfall:` failure-memory from the
-environment-shaping loop now lives *here*, in the dominion, rather than as a kb
-marker — the dominion supersedes that idea, so the loop's *remember* step writes
-into the dominion and surfaces via self-inject when a trigger recurs. The rest of
-the required structure reveals itself only as the playbook / wake / orientation
-phrasing is written — by design, not omission.
+environment-shaping loop now lives *here*, in the dominion (`pitfalls.md`),
+rather than as a kb marker — the dominion supersedes that idea. The loop's
+*remember* step writes a **trigger-keyed pitfall** into the dominion, and brr's
+wake builder re-injects it whenever a trigger recurs in the task — a
+deterministic daemon-side matcher ([`pitfalls.py`](../src/brr/pitfalls.py)),
+the **affordance** rung that complements the agent-curated self-inject digest
+with a *by-trigger* surface scoped to the task at hand (**shipped 2026-06-09,
+slice 6**; earlier drafts of this section said "surfaces via self-inject," which
+conflated the always-on pins with the by-trigger affordance — they're
+complementary, not the same surface). The rest of the required structure reveals
+itself only as the playbook / wake / orientation phrasing is written — by design,
+not omission.
 
 ## 4. Execution — single-flight, reflex vs deliberation
 

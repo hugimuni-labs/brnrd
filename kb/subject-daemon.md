@@ -126,7 +126,10 @@ For each pending event, the daemon:
    `.brr/presence/`) so concurrent thoughts see who's on which stream;
 5. prepares the selected env backend (`host`, `worktree`, or `docker`);
 6. builds the daemon prompt with the Task Context Bundle (including the
-   dominion digest, other pending events, and who else is present);
+   dominion digest, any dominion pitfalls whose triggers the task text
+   hits — the env-shaping loop's failure-memory affordance,
+   [`pitfalls.py`](../src/brr/pitfalls.py) — other pending events, and who
+   else is present);
 7. invokes the configured runner headlessly;
 8. captures the runner's final stdout as the terminal response file, and
    drains the agent's outbox on each heartbeat and once after the runner

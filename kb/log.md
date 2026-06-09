@@ -5902,3 +5902,39 @@ Deliberately **no deterministic dissonance detector** — reconciling contradict
 memory is synthesis, exactly what a scanner can't do (cf. kb preflight, which only
 flags structural facts); it's the resident's judgement, surfaced by presence.
 Full suite green (709 passed).
+
+## [2026-06-09] implement | trigger-indexed failure-memory + promotion bridge (slice 6)
+
+Shipped the **first slice of the environment-shaping loop**: the *remember* step's
+trigger-indexed `Pitfall:` failure-memory, plus a confirmation that the
+dominion→kb **promotion bridge** is playbook-mediated (agent-initiated, no
+mechanism) rather than a command.
+
+- **6a — the mechanism.** New `pitfalls.py`: parse `.brr/dominion/pitfalls.md`
+  (a `## ` heading, a `trigger:` line of comma-separated keywords/loci, then the
+  lesson), match triggers against the task text (case-insensitive substring),
+  format the matches as a wake-prompt affordance block. `prompts._build_pitfalls_block`
+  wires it into `_join_prompt_parts`, so it rides both `build_daemon_prompt`
+  (matched against task + event body) and `build_run_prompt` (ad-hoc `brr run`).
+  The dominion seed now ships a `pitfalls.md` skeleton documenting the format.
+  This is the **affordance** rung: the failure-memory placed *in the path* (it
+  can't be silently skipped the way a recall-rung page can), and cheaper than a
+  forcing function, so it's where a lesson lives until a lint/test compiles it
+  down and the pitfall is slashed.
+- **6b — playbook + reconciliation.** The playbook's shaping loop now names the
+  pitfall convention (record a trigger-keyed pitfall; brr re-injects it when a
+  trigger recurs; slash it once a forcing function guards the failure) and spells
+  out the recall < affordance < forcing-function ladder.
+
+**Resolved a design contradiction.** `design-agent-dominion.md` §2 had said the
+failure-memory "surfaces via self-inject," while `design-environment-shaping.md`
+wanted it surfaced *by locus, injected into the bundle* (the affordance rung,
+because recall gets silently skipped). The "trigger-indexed" framing settled it:
+storage is the **dominion** (superseding the earlier kb-marker idea), and
+surfacing is a **deterministic daemon-side matcher** that *complements*
+self-inject — self-inject is always-on pins, the matcher is by-trigger and scoped
+to the task. The planned `brr kb check` collector was never built and isn't
+needed; ad-hoc agents get the surface through `brr run`'s wake prompt instead.
+Reconciled across `design-agent-dominion.md`, `design-environment-shaping.md`
+(First slice now marked shipped), `subject-daemon.md` (pipeline step 6), and
+`index.md`. Full suite green (723 passed).

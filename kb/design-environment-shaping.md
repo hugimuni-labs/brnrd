@@ -4,10 +4,14 @@ Status: proposed (2026-06-04, expanded 2026-06-05); **treated as prior reasoning
 since 2026-06-08** — the substrate it assumed is now specified and accepted in
 [`design-agent-dominion.md`](design-agent-dominion.md), the primary spec to
 implement against. This page remains the canonical description of the *loop*
-(observe → remember → shape → retire; salience; rings; action rungs) but is
-partly stale on substrate detail (e.g. the `Pitfall:` failure-memory now lives in
-the dominion, not as a kb marker); reconcile when the loop is implemented.
-Captures a frame that spans the ergonomics back-channel,
+(observe → remember → shape → retire; salience; rings; action rungs). Its
+**first slice shipped 2026-06-09 (slice 6)**: the *remember* step's trigger-
+indexed `Pitfall:` failure-memory now lives in the dominion (`pitfalls.md`) and
+is surfaced by a deterministic daemon-side matcher
+([`pitfalls.py`](../src/brr/pitfalls.py)), not as a kb marker scanned by a
+`brr kb check` collector — see "First slice" below. Remaining substrate detail
+(salience counters, action-rung automation) reconciles as the rest of the loop
+is implemented. Captures a frame that spans the ergonomics back-channel,
 the kb-as-memory layer, and brr's interactivity, so those pieces stop being
 reasoned about in isolation.
 
@@ -111,8 +115,8 @@ relevant fact *placed in the path* so the agent trips over it without having
 to recall or retrieve it. Two instances we already have names for: (a) **#83
 forward-feed** — host-vantage *execution* facts (image is stale, token
 unresolved) injected into the agent's context; (b) **pitfall injection** —
-*knowledge*-side failure-memory (`Pitfall:` markers, see "First slice")
-surfaced when the agent touches the relevant locus. Same mechanism, two
+*knowledge*-side failure-memory (dominion `Pitfall:` records, see "First
+slice") surfaced when a trigger recurs in the task. Same mechanism, two
 sources: execution vs. design.
 
 ## Salience — the "pain" triage
@@ -230,11 +234,12 @@ ready if a lever ever appears (a provider feedback API, a swappable harness).
 The action half of the loop, cheapest/safest first — each rung is how far the
 fix travels without new authority:
 
-1. **Affordance in path** (`#83` forward-feed; a `Pitfall:` breadcrumb on the
-   page you'll read). Always safe; needs no authority. *Example:* inject "image
-   built 3 weeks before the current Dockerfile" into the agent's context so it
-   expects missing tools; or surface `Pitfall: blind 5xx retry masked caller
-   bugs` when it opens the HTTP client.
+1. **Affordance in path** (`#83` forward-feed; a dominion `Pitfall:` record
+   surfaced by trigger — shipped, see "First slice"). Always safe; needs no
+   authority. *Example:* inject "image built 3 weeks before the current
+   Dockerfile" into the agent's context so it expects missing tools; or
+   re-surface `Pitfall: blind 5xx retry masked caller bugs` when "retry" or
+   "http client" shows up in the task.
 2. **Self-heal** (Ring 0/1, daemon-side, opt-in). The *daemon* shapes the
    agent's environment; the sandboxed agent never silently mutates the host.
    *Example:* on a high-salience `stale_image`, the daemon rebuilds the image
@@ -361,15 +366,32 @@ as collaboration protocol, not containment. The posture is adults, not deluded
 optimists; but with a deliberate lean toward enablement over restriction
 (pessimism reads as smart, but it doesn't ship).
 
-## First slice
+## First slice — shipped 2026-06-09 (slice 6)
 
-Trigger-indexed failure-memory affordance, riding #41 rather than net-new
-infrastructure: a lightweight `Pitfall:` convention on kb pages + extend the
-planned `brr kb check` collector to surface them *by locus*, injected into the
-daemon bundle and reachable by ad-hoc agents through the same `brr kb` port.
-Compile-and-slash friendly (a pitfall is deleted once a lint/test guards it),
-serves the user / brr / Cursor-citizen audiences at once, and directly closes
-"failure memory isn't retrievable by trigger."
+Trigger-indexed failure-memory affordance. The original sketch rode the planned
+`brr kb check` collector over `Pitfall:` markers on **kb pages**; the dominion
+design ([`design-agent-dominion.md`](design-agent-dominion.md) §2) superseded
+that storage choice before this shipped, and `brr kb check` was never built.
+What landed instead:
+
+- **Storage is the dominion**, not shared kb pages: the resident records
+  pitfalls in `.brr/dominion/pitfalls.md` (owned, durable, low-ceremony) — a
+  `## ` heading, a `trigger:` line of keywords/loci, then the lesson.
+- **Surfacing is a deterministic daemon-side matcher**
+  ([`pitfalls.py`](../src/brr/pitfalls.py)), not a kb collector: on each wake
+  brr matches the task text against pitfall triggers and injects the matches
+  into the prompt as an affordance block ([`prompts.py`](../src/brr/prompts.py)
+  `_build_pitfalls_block`). `brr run` gets the same surface, so ad-hoc agents
+  benefit too — the access port the sketch wanted, realized through the
+  wake-prompt builder rather than a `brr kb` subcommand.
+- **Complements self-inject, doesn't duplicate it**: self-inject is the agent's
+  *always-on* pins; the pitfall matcher is *by-trigger*, scoped to the task at
+  hand. Both ride the wake prompt.
+
+Compile-and-slash friendly (the playbook tells the resident to delete a pitfall
+once a lint/test/baked tool guards the failure — the forcing function is the
+better memory), and directly closes "failure memory isn't retrievable by
+trigger."
 
 ## Open threads (not resolved)
 

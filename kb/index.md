@@ -75,8 +75,11 @@ dive-in map) and are stable until something contradicts them.
   triage on ergonomics records, **layered-control routing** (rings 0–3 for
   who fixes what), gates as a conversation medium, observability via
   transient relay (preserves data-min), and agent-satisfaction-as-operating-
-  principle with its alignment guardrail. (Its failure-memory first slice
-  now lives in the dominion, not as a kb marker.)
+  principle with its alignment guardrail. (Its failure-memory **first
+  slice shipped 2026-06-09, slice 6**: trigger-indexed `Pitfall:` records
+  in the dominion, surfaced on wake by a deterministic matcher
+  [`pitfalls.py`](../src/brr/pitfalls.py) — not a kb marker + `brr kb
+  check`.)
 - [Agent dominion — the resident agent](design-agent-dominion.md) —
   *accepted on 2026-06-08*. The substrate companion to the environment-shaping
   loop, sequenced as the next work (pre-release). Reshapes brr from
@@ -88,6 +91,11 @@ dive-in map) and are stable until something contradicts them.
   bridge. Folds the **playbook** as the convergence point (multi-response,
   ownership, pain-evaluation input, wake-as-action-and-growth). Reshapes
   [`design-concurrent-execution.md`](design-concurrent-execution.md).
+  **Substrate shipped across slices 1–6** (2026-06: dominion worktree +
+  self-inject digest, single-flight loop, playbook, multi-response,
+  serialized capture + presence, and the trigger-indexed failure-memory
+  affordance — see per-slice breadcrumbs in the page and `log.md`);
+  self-scheduled cron remains the open piece.
 - [Multi-response protocol](design-multi-response.md) — *shipped
   2026-06-09 (slice 4)*. The delivery half of the resident reshape: the
   agent ships **interim + multiple + interleaved** responses mid-thought
