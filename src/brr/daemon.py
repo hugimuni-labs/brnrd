@@ -52,6 +52,7 @@ from . import prompts
 from . import protocol
 from . import run_context
 from . import runner
+from . import schedule as schedule_mod
 from . import sync
 from . import updates
 from .task import Task
@@ -1259,6 +1260,77 @@ def _remove_outbox(outbox_dir: Path | None) -> None:
         shutil.rmtree(outbox_dir, ignore_errors=True)
 
 
+def _schedule_enabled(cfg: dict) -> bool:
+    return bool(cfg.get("schedule.enabled", cfg.get("schedule_enabled", True)))
+
+
+def _fire_due_schedules(
+    repo_root: Path,
+    brr_dir: Path,
+    inbox_dir: Path,
+    cfg: dict,
+) -> None:
+    """Emit inbox events for any self-scheduled thoughts that are now due.
+
+    The reflex half of self-invocation: the resident owns its
+    ``.brr/dominion/schedule.md`` specs; this reads them against the
+    daemon-owned firing-state and the clock, and fires due entries as
+    ordinary ``schedule``-source events (picked up by the normal
+    spawn-one-when-idle path). Specs live in the dominion; firing-state
+    lives in the runtime dir — the daemon never writes the agent's
+    ``schedule.md``. Best-effort: any failure is swallowed so scheduling
+    never wedges the loop. See ``kb/design-self-scheduled-thoughts.md``.
+    """
+    if not _schedule_enabled(cfg):
+        return
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return
+    dom = dominion.dominion_path(repo_root)
+    if not dom.is_dir():
+        return
+    try:
+        entries = schedule_mod.parse_schedule(dom)
+        if not entries:
+            return
+        state = schedule_mod.load_state(brr_dir)
+        grace = float(
+            cfg.get(
+                "schedule.stale_grace_seconds",
+                cfg.get("schedule_stale_grace_seconds", schedule_mod.DEFAULT_STALE_GRACE_S),
+            )
+        )
+        due, new_state = schedule_mod.due_entries(
+            entries, state, time.time(), stale_grace=grace,
+        )
+        for entry in due:
+            body = entry.body or f"(self-scheduled thought: {entry.id})"
+            protocol.create_event(inbox_dir, "schedule", body, schedule_id=entry.id)
+            print(f"[brr] schedule: fired {entry.id}")
+        if new_state != state:
+            schedule_mod.save_state(brr_dir, new_state)
+    except Exception as exc:  # noqa: BLE001 - scheduling must never wedge the loop
+        print(f"[brr] schedule: skipped tick ({exc})")
+
+
+def _retire_internal_event(event: dict, responses_dir: Path) -> bool:
+    """Retire a gateless (``schedule``-source) event after it completes.
+
+    A self-scheduled thought has no gate to deliver its response to or
+    clean up after it — its effect is the work it did, not a chat reply —
+    so the daemon deletes the event and any response/partials itself.
+    Returns True when it cleaned up.
+    """
+    if event.get("source") != "schedule" or not event.get("_path"):
+        return False
+    eid = event.get("id", "")
+    protocol.cleanup(
+        event["_path"],
+        protocol.response_path(responses_dir, eid),
+        protocol.partials_dir(responses_dir, eid),
+    )
+    return True
+
+
 def _capture_dominion(
     repo_root: Path,
     cfg: dict,
@@ -1360,6 +1432,7 @@ def _run_worker_and_finalize(
             print(f"[brr] task {task.id}: failed")
 
         publish(repo_root, task)
+        _retire_internal_event(event, responses_dir)
         return task
     finally:
         # Leave the presence registry — the thought is no longer awake.
@@ -1490,6 +1563,12 @@ def start(
                 print("[brr] package files changed; re-execing daemon")
                 pool.shutdown(wait=True)
                 reload_mod.reexec()  # noreturn on success
+
+            # Fire any self-scheduled thoughts that have come due — they
+            # land in the inbox as ordinary events and queue behind a
+            # running thought like any other (kb/design-self-scheduled-
+            # thoughts.md). Runs every tick, busy or idle.
+            _fire_due_schedules(repo_root, brr_dir, inbox_dir, cfg)
 
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
