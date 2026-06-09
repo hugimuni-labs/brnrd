@@ -344,6 +344,7 @@ def build_daemon_prompt(
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
+    budget_seconds: int | None = None,
     diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
@@ -357,6 +358,7 @@ def build_daemon_prompt(
         event_id=event_id,
         response_path=response_path,
         outbox_path=outbox_path,
+        budget_seconds=budget_seconds,
         repo_root=repo_root,
         task_id=task_id,
         source=source,
@@ -398,6 +400,7 @@ def _build_task_context_bundle(
     event_id: str,
     response_path: str,
     outbox_path: str | None = None,
+    budget_seconds: int | None = None,
     repo_root: Path,
     task_id: str | None,
     source: str | None,
@@ -430,6 +433,14 @@ def _build_task_context_bundle(
     if environment:
         sections.append(f"- Environment: {environment}")
     sections.append("- Delivery: stdout captured by brr (see Delivery contract below)")
+    if budget_seconds:
+        sections.append(
+            f"- Budget: ~{budget_seconds // 60}m of wall-clock runtime before "
+            "brr kills this thought to reclaim the single-flight slot. Bound "
+            "uncertain long-running commands yourself (own timeout, or "
+            "background + poll); extend the deadline if you genuinely need "
+            "longer (see Delivery contract)."
+        )
     if context_path:
         sections.append(
             f"- Runtime recovery: {context_path} "
@@ -500,6 +511,16 @@ def _build_task_context_bundle(
             "complete reply per folded-in event; prefer letting anything "
             "that wants its own branch wake as its own thought."
         )
+        if budget_seconds:
+            sections.append(
+                "- Running something that will outlast your budget? Don't get "
+                f"killed mid-run: write `{outbox_path}/.keepalive` whose first "
+                "line is either an ISO-8601 time (\"busy until T\") or "
+                "`+<duration>` like `+30m` (\"busy this much longer\", measured "
+                "from when you write it). brr honours it on its next heartbeat "
+                "and holds the slot until then; rewrite it to extend again. "
+                "It's a control file, not a message — brr never delivers it."
+            )
     sections.append(
         "- The user reads your reply remotely (Telegram / Slack / etc.). "
         "Refer to files by basename only — `subject-envs.md`, "
