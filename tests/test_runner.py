@@ -329,3 +329,41 @@ class TestRetryReason:
             response_path=str(tmp_path / "r.md"),
         )
         assert result.retry_reason() == "runner produced no response on stdout"
+
+
+class TestKillActive:
+    """kill_active is the cross-thread handle the daemon's heartbeat and
+    shutdown use to reclaim the single-flight slot."""
+
+    def test_kills_live_process_then_noop(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        with runner_mod._proc_lock:
+            runner_mod._active_proc = proc
+        try:
+            assert runner_mod.kill_active() is True
+            proc.wait(timeout=5)
+            assert proc.returncode != 0
+            # Already dead: nothing live to signal.
+            assert runner_mod.kill_active() is False
+        finally:
+            with runner_mod._proc_lock:
+                runner_mod._active_proc = None
+            if proc.poll() is None:
+                proc.kill()
+
+    def test_noop_when_idle(self):
+        with runner_mod._proc_lock:
+            runner_mod._active_proc = None
+        assert runner_mod.kill_active() is False
+
+    def test_invocation_timeout_seconds_overrides_cfg_default(self):
+        # The daemon passes a generous hard cap here; cfg's
+        # runner.timeout_seconds is the fallback only when unset.
+        inv = RunnerInvocation(
+            kind="daemon-run", label="x", prompt="p", repo_root=None,
+            timeout_seconds=99,
+        )
+        assert inv.timeout_seconds == 99
+        assert RunnerInvocation(
+            kind="daemon-run", label="x", prompt="p", repo_root=None,
+        ).timeout_seconds is None

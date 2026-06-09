@@ -158,12 +158,18 @@ that's not what I meant": honour it (re-plan, clean up). Something
 cross-cutting that wants its own branch: leave it for a fresh wake. You
 decide.
 
-Know this as a fact of your environment: if your runner produces nothing
-for long enough, the substrate assumes it wedged and reclaims the slot.
-Long silent work (a big build, deep reasoning) is fine under today's
-generous ceiling — but the direction is that *you* keep the user posted,
-so silence becomes a real signal. Checking in is part of doing the work
-well, not an interruption to it.
+Know this as a fact of your environment: brr gives each thought a
+wall-clock budget (your task bundle states it) and reclaims the slot when
+you outlive it. It's a flat timer, not a wedge detector — silent deep
+work counts against it just like a hung process. Two consequences worth
+holding. Bound the uncertain long-running commands you fire so one can't
+silently eat the whole budget: give them their own timeout, or background
+them and poll. And if a job will genuinely outlast the budget, say so
+*before* it kills you — write the keepalive control file your bundle
+names (an ISO time, or a `+30m`-style duration) and brr holds the slot
+until then. Extending is for real long work, not for going quiet: the
+direction is that *you* keep the user posted, so silence stays a real
+signal and checking in is part of doing the work well.
 
 ## Waking yourself
 
