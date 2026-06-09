@@ -116,7 +116,10 @@ def _build_context_block(repo_root: Path) -> str:
         return ""
     return (
         "## Recent Activity (from kb/log.md)\n\n"
-        "This is your conversation context — what happened in previous sessions:\n\n"
+        "From `kb/log.md` — the shared, curated through-line of what's been "
+        "done and learned. brr injects this recent tail every wake; it's what "
+        "your continuity across thoughts (and other hands) rests on, and what "
+        "earlier wakings chose to hand forward:\n\n"
         f"{recent}"
     )
 
@@ -461,6 +464,12 @@ def _build_task_context_bundle(
     grepping the prompt keeps working.
     """
     sections: list[str] = ["---", "## Task Context Bundle"]
+    sections.append("")
+    sections.append(
+        "_From the brr daemon: the runtime facts for *this* thought — task "
+        "metadata, environment, and the delivery contract. Operational and "
+        "per-thought, not durable memory (that's your dominion)._"
+    )
 
     sections.append("")
     sections.append("### Mode")
