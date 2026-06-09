@@ -221,11 +221,15 @@ diffense precedent (agent writes a known path, daemon picks up):
 
 This is additive and backward compatible: a thought that prints one
 final stdout and writes nothing to its outbox behaves exactly as before.
-A finer idle-liveness timeout is *not* built on this yet — interim
+A finer *silence-based* idle-kill is *not* built on this — interim
 check-ins are opportunistic, so their absence doesn't reliably mean
-wedged; the wall-clock `runner.timeout_seconds` remains the only hard
-kill. The full protocol contract lives in
-`kb/design-multi-response.md`.
+wedged. The liveness budget itself (`runner.timeout_seconds`) is now
+heartbeat-enforced and agent-extensible: a long-running thought writes a
+`.keepalive` control dotfile in its outbox (an ISO time or `+30m`-style
+duration) to push the deadline out, capped at a hard ceiling, and
+shutdown kills the in-flight runner to reclaim the slot. The full
+protocol contract lives in `kb/design-multi-response.md`; the liveness
+contract in `kb/review-daemon-coherence-2026-06.md` §2.
 
 ## Run progress UX
 
