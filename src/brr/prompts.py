@@ -164,6 +164,30 @@ def _build_dominion_block(repo_root: Path) -> str:
     )
 
 
+def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
+    """Render dominion pitfalls whose triggers fire for *task_text*.
+
+    The affordance surface of the env-shaping loop: failure-memory the
+    resident recorded in ``.brr/dominion/pitfalls.md``, injected only when
+    a trigger appears in the task at hand (see
+    ``kb/design-environment-shaping.md`` and ``pitfalls.py``). Returns
+    ``""`` when the dominion is disabled / absent, or nothing matches.
+    """
+    if not task_text:
+        return ""
+    from . import config as conf
+    from . import dominion, pitfalls
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    path = dominion.dominion_path(repo_root)
+    if not path.is_dir():
+        return ""
+    matched = pitfalls.match(pitfalls.parse_pitfalls(path), task_text)
+    return pitfalls.format_block(matched)
+
+
 def _build_kb_health_block(repo_root: Path) -> str:
     """Render the deterministic kb-health preflight as a wake-time block.
 
@@ -209,6 +233,7 @@ def _join_prompt_parts(
     repo_root: Path,
     trailer: str,
     *,
+    task_text: str | None = None,
     diffense: bool = False,
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
@@ -216,6 +241,10 @@ def _join_prompt_parts(
     dominion_block = _build_dominion_block(repo_root)
     if dominion_block:
         parts.append(dominion_block)
+    if task_text:
+        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
+        if pitfalls_block:
+            parts.append(pitfalls_block)
     context = _build_context_block(repo_root)
     if context:
         parts.append(context)
@@ -275,7 +304,9 @@ def build_init_prompt(repo_root: Path) -> str:
 def build_run_prompt(task: str, repo_root: Path) -> str:
     """Build the prompt for ``brr run`` — run.md + recent context + task."""
     preamble = read_prompt("run.md", repo_root)
-    return _join_prompt_parts(preamble, repo_root, f"---\nTask: {task}")
+    return _join_prompt_parts(
+        preamble, repo_root, f"---\nTask: {task}", task_text=task,
+    )
 
 
 def build_daemon_prompt(
@@ -330,8 +361,11 @@ def build_daemon_prompt(
     trailer = bundle.rstrip()
     if (event_body or "").strip() != task.strip():
         trailer = f"{trailer}\nTask: {task}"
+    # Match pitfalls against the task and the original event text — the
+    # triggers the resident recorded tend to echo how a request is phrased.
+    pitfall_text = "\n".join(t for t in (task, event_body) if t)
     return _join_prompt_parts(
-        preamble, repo_root, trailer, diffense=diffense,
+        preamble, repo_root, trailer, task_text=pitfall_text, diffense=diffense,
     )
 
 
