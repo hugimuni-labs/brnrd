@@ -37,9 +37,13 @@ PLAYBOOK_FILE = "playbook.md"
 COMMIT_LOCK_FILE = "dominion.commit.lock"
 SYNC_MARKER_FILE = "dominion.needs-sync"
 # Total UTF-8 budget for the wake-time self-inject digest. Sized to fit
-# the seed playbook in full with headroom for the agent's own entries
-# (recent pain, current focus); the agent can re-tune what it injects.
-DEFAULT_INJECT_BUDGET_BYTES = 12288
+# the seed playbook in full (~15.5 KiB) with headroom for the agent's own
+# entries (recent pain, current focus); the agent can re-tune what it
+# injects, and a repo can override via `dominion.inject_budget_bytes`.
+# Bumped 8192 → 12288 → 20480 as the seed playbook grew — the guard test
+# in tests/test_dominion.py keeps this honest (it fails if the seed no
+# longer fits in full with headroom).
+DEFAULT_INJECT_BUDGET_BYTES = 20480
 
 # The seed playbook copied into a fresh dominion. It's the *starting*
 # orientation — the agent owns and evolves its own copy thereafter.
