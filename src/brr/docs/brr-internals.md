@@ -78,8 +78,7 @@ watches brr's installed package files (`.py`, bundled markdown,
 `Dockerfile`, and source-layout `pyproject.toml` when visible). When a
 change is detected, the daemon re-execs the same Python command at a
 safe boundary: before starting the next pending task, or after the
-current task has produced its response, run kb maintenance, finalized,
-and attempted push.
+current task has produced its response, finalized, and attempted push.
 
 The same mode can be enabled with `dev_reload=true` in `.brr/config`.
 Normal `brr up` stays a stable foreground process; use an external
@@ -260,10 +259,16 @@ separate status module.
 
 ## Concurrency model
 
-The daemon processes events serially in v1. Worktree-based tasks
-isolate the working directory and branch, but they do not yet run in
-parallel — the worker pool is single-threaded. See
-`kb/plan-concurrent-worktrees.md` for the roadmap in this repo.
+The daemon runs **single-flight**: one *thought* at a time, by design. A
+resident agent's continuity lives in durable memory (the dominion), not in
+throughput-parallel workers, so the local loop spawns one worker when idle
+and lets new events wait. Per-task worktree/branch isolation and the
+partitioned per-event/per-task state still hold — they let overlapping
+thoughts (ad-hoc sessions, a second daemon) coexist without sharing a
+mutable surface, coordinated by presence rather than a lock. See
+`kb/subject-daemon.md` and `kb/design-agent-dominion.md` §4. Whether the
+daemon should grow back toward owned concurrency is an open question — see
+`kb/review-daemon-coherence-2026-06.md` §4.
 
 When a worktree-backed task finishes, the daemon inspects the
 worktree's git state. If the agent left commits on the original
