@@ -416,3 +416,18 @@ def commit_all(worktree_path: Path, message: str) -> bool:
         return False
     commit = _git(worktree_path, "commit", "-m", message, check=False)
     return commit.returncode == 0
+
+
+def worktree_dirty(worktree_path: Path) -> bool:
+    """Return True if *worktree_path* has staged, unstaged, or untracked changes.
+
+    A cheap pre-check so callers can skip a no-op commit (``git commit``
+    fails with a non-zero exit when there's nothing to commit, which is
+    indistinguishable from a real error). An unreadable / non-repo path
+    reports clean rather than raising — callers treat capture as
+    best-effort.
+    """
+    result = _git(worktree_path, "status", "--porcelain", check=False)
+    if result.returncode != 0:
+        return False
+    return bool(result.stdout.strip())
