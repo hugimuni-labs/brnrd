@@ -47,11 +47,11 @@ rule.
 
 The runner receives `run.md` + recent `kb/log.md` context + daemon
 metadata (task ID, event ID, execution root, seed ref, optional
-auto-land target, current branch, response path, shared runtime dir,
-generated run context file). The bundle's
-delivery contract is explicit: stdout is the user's chat reply, kb
-writes are optional — agents log only when there's something worth
-logging (see AGENTS.md → Knowledge base).
+auto-land target, current branch, response path, interim-response outbox,
+other pending events, shared runtime dir, generated run context file).
+The bundle's delivery contract is explicit: stdout is the user's chat
+reply, kb writes are optional — agents log only when there's something
+worth logging (see AGENTS.md → Knowledge base).
 
 Prompt assembly also injects the resident's dominion digest (per its
 `self-inject` index) and, when the deterministic kb preflight isn't
@@ -77,6 +77,17 @@ Once the response file is validated, the daemon marks the inbox event
 `done` events and clean up the inbox and response files after a
 successful send, while the progress card can continue to show
 post-response housekeeping.
+
+The agent may *also* stream replies mid-thought (the multi-response
+protocol; see [`brr-internals.md`](brr-internals.md) → Multi-response).
+It drops markdown files in its per-event outbox (`.brr/outbox/<event-id>/`);
+the daemon drains them on every heartbeat and once after the runner
+returns, promoting each to a per-event partials queue
+(`.brr/responses/<event-id>.partials/`). Gates stream queued partials —
+for `processing` or `done` events — ahead of the terminal reply. An
+outbox file whose frontmatter names another pending event
+(`event: <id>`) is delivered to *that* event's thread and marks it
+handled, so a quick request can be folded in without its own spawn.
 
 If the runner exits cleanly but stdout is empty, the daemon retries up
 to `response_retries` times before failing the task. Hard failures
@@ -107,6 +118,8 @@ files changed. Reload never interrupts a running worker.
 | Events        | `.brr/inbox/<event-id>.md`                  | Yes (until cleanup)                 |
 | Tasks         | `.brr/tasks/<task-id>.md`                   | Yes                                 |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
+| Interim queue | `.brr/responses/<event-id>.partials/`       | Until streamed + cleaned up         |
+| Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; removed at finalize |
 | Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Kept on `error` / `conflict`, removed on clean `done` |
 | Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
