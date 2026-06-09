@@ -250,7 +250,11 @@ Three mechanics this implies:
   multi-response channel below, not before. (Lineage: earlier drafts put an
   explicit `/cancel` in the reflex layer, then split cancel detection/execution
   across layers; corrected 2026-06-08 — no command layer, semantic cancel is the
-  agent's, the daemon only guarantees liveness.)
+  agent's, the daemon only guarantees liveness. Update 2026-06-09: the liveness
+  backstop is now enforced from the heartbeat and is **agent-extensible** via a
+  `.keepalive` file, and shutdown kills the in-flight runner; only the
+  *silence-based* idle timeout stays deferred — see
+  [`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md) §2.)
 - **Interleaving ⇒ a multi-response protocol.** A quick request needn't wait for
   the next spawn: the in-flight agent re-prioritises, ships an interim output,
   and resumes. That breaks today's "one event → one final stdout → daemon

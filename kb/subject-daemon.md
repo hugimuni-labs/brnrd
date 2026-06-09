@@ -21,10 +21,11 @@ runs one Python process in the repo, writes `.brr/daemon.pid`, starts
 any configured gate threads, and runs **single-flight**: it scans
 `.brr/inbox/` and spawns one *thought* (one `_run_worker` invocation)
 when idle and work is pending. `brr down` sends `SIGTERM` to the
-recorded PID. The signal handlers for `SIGTERM` and `SIGINT` only flip
-the loop flag, so a signal received mid-thought asks the daemon to stop
-spawning and let the in-flight thought drain before exiting rather than
-interrupting the running runner.
+recorded PID. The signal handlers for `SIGTERM` and `SIGINT` flip the
+loop flag so the daemon stops spawning; if a thought is in flight when
+the signal lands, shutdown kills its runner (`runner.kill_active`) to
+reclaim the slot promptly rather than waiting out the wall-clock budget,
+then finalizes and exits.
 
 The daemon owns orchestration, not meaning:
 
@@ -109,25 +110,31 @@ sessions, and the managed multi-daemon case:
   updates a non-task ref since the 2026-05-21 publish-kernel collapse
   (see [`design-publish-kernel.md`](design-publish-kernel.md)).
 
-**No command layer, and liveness is a substrate backstop.** The daemon
-never parses `/cancel` or any command — every event either wakes the
-agent or waits for the living agent to handle it (cancel/redirect
-semantics are the agent's job, reconsidered at plan boundaries; the
-mid-flight inbox channel is the multi-response protocol, specified in
-[`design-multi-response.md`](design-multi-response.md) — interim,
-multiple, and interleaved replies now ship via the agent's outbox). What
-the daemon *does* guarantee is that the single-flight
-slot is reclaimed even if a runner subprocess wedges: the runner's
-wall-clock timeout (`runner.timeout_seconds`, default 3600s) kills it. A
-finer idle timeout ("no agent check-in in N minutes") stays deferred even
-now that multi-response shipped: the agent *can* check in mid-run (its
-outbox drain is a positive liveness signal), but those check-ins are
-opportunistic, so their *absence* still doesn't separate a wedged process
-from a healthy-but-silent one (a long build, deep reasoning). A safe
-idle-kill needs a check-in the substrate can count on as periodic; until
-that contract exists the generous wall-clock ceiling is the only hard
-kill. (See [`design-multi-response.md`](design-multi-response.md) →
-liveness.)
+**No command layer; liveness is a heartbeat-enforced, agent-extensible
+budget.** The daemon never parses `/cancel` or any command — every event
+either wakes the agent or waits for the living agent to handle it
+(cancel/redirect semantics are the agent's job, reconsidered at plan
+boundaries; the mid-flight inbox channel is the multi-response protocol,
+specified in [`design-multi-response.md`](design-multi-response.md) —
+interim, multiple, and interleaved replies ship via the agent's outbox).
+What the daemon *does* guarantee is that the single-flight slot is
+reclaimed: the heartbeat tick enforces a wall-clock budget
+(`runner.timeout_seconds`, default 3600s) and kills an overrunning runner
+via `runner.kill_active`; the runner's own `communicate` timeout, set to
+a generous hard cap, is the final backstop if the heartbeat path itself
+wedges. The budget is **agent-extensible** — a thought that knows it will
+run long writes a `.keepalive` control file in its outbox (an ISO time or
+a `+30m`-style duration) and the heartbeat holds the slot until then,
+capped at the hard ceiling. `brr down` / SIGTERM also kill the in-flight
+runner, so shutdown reclaims the slot promptly instead of waiting out a
+long budget. A finer *silence-based* idle-kill ("no check-in in N
+minutes") stays deferred: the budget is a flat timer, and an absent
+check-in still can't separate a wedged process from a healthy-but-silent
+one (a long build, deep reasoning) — see
+[`design-multi-response.md`](design-multi-response.md) → liveness.
+(Liveness shipped as a cooperative budget 2026-06-09; see
+[`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md)
+§2.)
 
 ## Worker lifecycle
 
@@ -292,12 +299,17 @@ removed on 2026-05-14 once the only importers were tests and stale docs.
   multiple repos from one process.
 - **Windows native service install.** Deferred until there is real user
   demand and the daemon model can support Windows honestly.
-- **Agent-driven cancellation + finer liveness.** The daemon honours no
-  cancel command by design; the living agent handles cancel/redirect at
-  plan boundaries, and the wall-clock `runner.timeout_seconds` is the
-  only hard backstop until the multi-response check-in channel makes a
-  shorter idle timeout honest (see
-  [`design-agent-dominion.md`](design-agent-dominion.md) §4).
+- **Agent-driven cancellation + silence-based idle-kill.** The daemon
+  honours no cancel command by design; the living agent handles
+  cancel/redirect at plan boundaries. The liveness budget is now
+  heartbeat-enforced and agent-extensible, and shutdown kills the
+  in-flight runner (shipped 2026-06-09). What stays deferred is a
+  *silence-based* idle-kill: a flat budget can't separate a wedged
+  process from a healthy-but-silent one, so a shorter idle timeout still
+  waits on a check-in the substrate can count on (see
+  [`design-multi-response.md`](design-multi-response.md) → liveness and
+  [`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md)
+  §2).
 
 (Lineage: a concurrent worker pool was once deferred and the original
 merge-coordinator design abandoned; both were reversed 2026-05-16 when

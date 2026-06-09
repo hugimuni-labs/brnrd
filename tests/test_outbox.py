@@ -66,6 +66,19 @@ class TestDrainOutbox:
         # A blank file is consumed (removed) but never promoted.
         assert not (outbox / "blank.md").exists()
 
+    def test_skips_control_dotfiles(self, tmp_path, monkeypatch):
+        n, responses, outbox, _ = self._drain(
+            tmp_path, monkeypatch,
+            [(".keepalive", "+30m\n"), ("real.md", "hi\n")],
+        )
+        assert n == 1
+        bodies = [protocol.read_partial(p)
+                  for p in protocol.list_partials(responses, "evt-1")]
+        assert bodies == ["hi"]
+        # The keepalive control file is left in place — the heartbeat reads
+        # it; it is never delivered as a message or consumed by the drain.
+        assert (outbox / ".keepalive").exists()
+
     def test_missing_outbox_is_noop(self, tmp_path):
         brr_dir = tmp_path / ".brr"
         emit = daemon._WorkerEmit(

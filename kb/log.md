@@ -5976,3 +5976,42 @@ Reconciled `design-agent-dominion.md` (§4 self-scheduled *thoughts*, §5/§8 sy
 refinement + resolved threads), `subject-daemon.md` (new reflex subsection),
 `index.md`, and the new design page. Full suite green (747 passed; +24 over
 slice 6).
+
+## [2026-06-09] implement | Daemon coherence review + cooperative liveness contract
+
+A daemon-layer coherence pass (prompted by the slice-7 delivery and
+dominion-sync work), persisted as `review-daemon-coherence-2026-06.md` and
+linked from `subject-daemon.md`. Findings split into staleness (fixed),
+liveness (shipped), delivery (designed), and an ownership crossroads (open).
+
+**Staleness (#1).** Removed the retired "kb maintenance" worker-pipeline step
+from `daemon.py` and `brr-internals.md` (the latter contradicted its own later
+text); rewrote `brr-internals` → Concurrency model so single-flight reads as
+intentional, not a v1 limitation with parallelism as the roadmap; re-pointed
+superseded `design-concurrent-execution.md` citations to the live hubs and
+reworded "concurrent worker pool" → "overlapping thoughts". Noted the vestigial
+in-process primitives (1-worker pool, per-branch lock, `_active_proc`) as seams
+tied to the ownership question rather than cleaning them up piecemeal.
+
+**Cooperative liveness (#2).** The user pushed back on calling `_active_proc`
+dead code — rightly: nothing read it, but it's the handle a real
+liveness/shutdown kill needs. Wired it up. `runner.kill_active()` is a
+cross-thread kill; the daemon heartbeat is now the liveness authority, enforcing
+an **agent-extensible** wall-clock budget (`runner.timeout_seconds`) and killing
+an overrun via `kill_active`, with the runner's `communicate` timeout (a generous
+hard cap, passed via the new `RunnerInvocation.timeout_seconds`) as the final
+backstop. The agent extends by writing a `.keepalive` control dotfile in its
+outbox (ISO time or `+30m`-style duration), honoured on the next heartbeat and
+capped at the hard ceiling; the outbox drain skips dotfiles so it isn't
+delivered. The bundle states the budget and documents the extension; the
+playbook tells the agent to bound uncertain long commands. `brr down`/SIGTERM
+now kill the in-flight runner instead of waiting out the budget. A budget kill
+is presented like the wall-clock timeout (exit 124). The *silence-based*
+idle-kill stays deferred (a flat budget can't separate wedged from
+healthy-but-silent). Reconciled `subject-daemon.md`, `brr-internals.md`, and
+breadcrumbed `design-agent-dominion.md` / `design-multi-response.md`. Full suite
+green (761 passed; +14).
+
+Still open from the review: #3 (gate-addressed out-of-bound + scheduled
+delivery, plus a `conversation_key` for schedule firings) and #4 (the
+daemon-vs-agent ownership crossroads — behavior held, framing to tighten).
