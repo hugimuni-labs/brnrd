@@ -88,14 +88,15 @@ dive-in map) and are stable until something contradicts them.
   bridge. Folds the **playbook** as the convergence point (multi-response,
   ownership, pain-evaluation input, wake-as-action-and-growth). Reshapes
   [`design-concurrent-execution.md`](design-concurrent-execution.md).
-- [Multi-response protocol](design-multi-response.md) — *in flight
-  (slice 4)*. The delivery half of the resident reshape: the agent ships
-  **interim + multiple + interleaved** responses mid-thought by dropping
-  files in `.brr/outbox/<eid>/`, which the daemon promotes to a per-event
-  partials queue (`responses/<eid>.partials/`) and gates stream to the
-  user before the thought ends — additive and backward compatible with
-  the one-final-stdout case. Also the liveness signal the finer idle
-  timeout waits on. Companion to
+- [Multi-response protocol](design-multi-response.md) — *shipped
+  2026-06-09 (slice 4)*. The delivery half of the resident reshape: the
+  agent ships **interim + multiple + interleaved** responses mid-thought
+  by dropping files in `.brr/outbox/<eid>/`, which the daemon promotes to
+  a per-event partials queue (`responses/<eid>.partials/`) and gates
+  stream to the user before the thought ends — additive and backward
+  compatible with the one-final-stdout case. Diffense-fold and a finer
+  idle-liveness timeout were scoped in and deliberately deferred (see the
+  page). Companion to
   [`design-agent-dominion.md`](design-agent-dominion.md) §4.
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a

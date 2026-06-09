@@ -1,11 +1,15 @@
 # Multi-response protocol — interim + interleaved delivery
 
-Status: in flight — slice 4 of the resident-agent reshape
-([`design-agent-dominion.md`](design-agent-dominion.md) §4). Foundation
-(streaming delivery) lands first; agent outbox, interleaving, and the
-idle-liveness timer layer on top. This page is the protocol contract;
-[`subject-daemon.md`](subject-daemon.md) carries the daemon-pipeline
-synthesis once it ships.
+Status: shipped (interim + interleaved delivery) on 2026-06-09 — slice 4
+of the resident-agent reshape
+([`design-agent-dominion.md`](design-agent-dominion.md) §4). The
+streaming-delivery foundation, the agent outbox + daemon drain, and
+cross-event interleaving are live; two follow-ons are **deliberately
+deferred** (see "Deferred follow-ons" below): folding the diffense pack
+into this drain, and a finer idle-liveness timeout. This page is the
+protocol contract; [`subject-daemon.md`](subject-daemon.md) carries the
+daemon-pipeline synthesis and [`brr-internals.md`](../src/brr/docs/brr-internals.md)
+→ Multi-response the user-facing reference.
 
 ## Why
 
@@ -88,28 +92,70 @@ behaviour. The terminal always lands last and closes the thread.
 
 ## Interleaving (cross-event)
 
-A drop-zone file may target a *different* pending event. Convention: a
-file under `.brr/outbox/<other-eid>/`, or a file carrying a minimal
-frontmatter (`event: <eid>`, optional `final: true`). When the daemon
-drains a `final` response for an event that is **not** the current
-task's event, it routes the body to that event's queue and marks that
-event `done` itself — the daemon owns inbox status, so the folded-in
-event gets delivered and cleaned up without ever being spawned as its
-own thought. The resident learns which events are pending from a
+A drop-zone file may target a *different* pending event by carrying a
+minimal frontmatter naming it (`event: <eid>`). When the daemon drains a
+file whose target is **not** the current task's event, it routes the
+body to that event's partials queue and marks that event `done` itself —
+the daemon owns inbox status, so the folded-in event gets delivered and
+cleaned up without ever being spawned as its own thought. A target that
+isn't a live pending event is dropped (don't misroute to a stale
+thread). The resident learns which events are pending from a
 **pending-events list** added to the Task Context Bundle.
+
+There is no separate "final" flag: one outbox file is one complete reply
+to its target event, so a cross-event reply is terminal for that event
+by construction. (An earlier draft floated an optional `final: true`
+marker; dropped — folding an event in means answering it, and a
+half-answer that wants more work belongs in its own wake.)
 
 We **advise** handling separate features / streams of work as separate
 spawns (a cross-context change usually wants its own branch and is
 cleaner fresh) but don't insist — the resident decides how to organise
 its own work.
 
-## Diffense fold
+## Deferred follow-ons
 
-The diffense review pack is already an "agent writes to a known shared
-path, daemon picks up" artifact (`.brr/diffense/<task-id>/pack.json`).
-It folds into the same drain/promote machinery rather than staying a
-bespoke post-run pickup, so there is one mid-flight emission mechanism,
-not two. (Sequenced last in the slice.)
+Two items were scoped into slice 4 and then deliberately deferred — the
+core (interim + interleaved delivery) ships without them because each
+buys little today and carries real risk.
+
+### Diffense fold — deferred
+
+The diffense review pack is also an "agent writes a known shared path,
+daemon picks up" artifact (`.brr/diffense/<task-id>/pack.json`), so the
+tempting unification was to route it through this same drain. We didn't,
+because the two are different artifacts doing different jobs:
+
+- diffense is **task-keyed**, the chat queue is **event-keyed**;
+- diffense is consumed **once, at PR finalization**, to shape a PR
+  *body* — not streamed to a chat thread mid-thought;
+- it is structured JSON a forge step renders, not a ready-to-send
+  markdown message.
+
+Folding it in would mean reshaping it into a chat-reply at the exact
+moment it's least chat-shaped, to share a code path it doesn't actually
+want. The genuine commonality — "agent writes, daemon picks up" — is
+already the shared *pattern*; collapsing them into one *mechanism* is
+cosmetic and risks the load-bearing PR-body flow. Left as-is.
+
+### Finer idle-liveness timeout — deferred
+
+The hope was that the drain (now a positive check-in) would let a tight
+idle timeout replace the generous wall-clock ceiling: "no check-in in N
+minutes ⇒ wedged ⇒ kill." But interim replies are **opportunistic** —
+a healthy thought doing a long build or a deep stretch of reasoning
+legitimately writes nothing to its outbox for a long while. So the
+*absence* of a check-in still doesn't separate wedged from
+healthy-but-silent, and a hard idle-kill on that signal would
+false-positive on exactly the long honest work it's meant to protect.
+
+A safe idle-kill needs a check-in the substrate can **rely on as
+periodic** (a heartbeat the agent is obligated to emit, distinct from
+opportunistic user-facing replies). Until that contract exists, the
+wall-clock `runner.timeout_seconds` stays the only hard kill, and the
+drain serves as an *informational* liveness signal (enriching the
+progress card) rather than a kill trigger. Revisit when there's a reason
+to add an obligatory agent heartbeat.
 
 ## What this is not
 

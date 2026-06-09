@@ -5810,3 +5810,56 @@ slice-2 `test_daemon_concurrency.py` rename). Full suite green (665 passed; net
 deletion across the slice). Next: **slice 4** — multi-response protocol (per-event
 response files written mid-flight; folds in diffense and the finer idle-liveness
 timer).
+
+## [2026-06-09] implement | multi-response protocol (slice 4): interim + interleaved replies mid-thought
+
+Broke the one-event→one-final-stdout→deliver-once contract open so the resident
+can talk mid-thought, additively and backward-compatibly (a thought that prints
+one final stdout and writes nothing else is unchanged). Three sub-slices landed;
+two scoped follow-ons were deliberately deferred. Design contract:
+`design-multi-response.md` (now `Status: shipped`).
+
+- **4a — streaming delivery foundation.** A per-event partials queue
+  (`responses/<eid>.partials/<seq>.md`) plus `protocol` helpers (`list_active`
+  = processing+done, `partials_dir`/`list_partials`/`write_partial`/`read_partial`,
+  `cleanup` removes the partials dir). `runtime.deliver_stream` walks **active**
+  events oldest-first, delivers queued partials in order deleting each after a
+  successful send (resumable on a transient platform error), and only on `done`
+  delivers the terminal `<eid>.md` and cleans up. `deliver_responses` is now a
+  thin wrapper; the GitHub gate reuses the control flow with split
+  partial/terminal callbacks so its branch footer rides only the terminal.
+- **4b — agent outbox + daemon drain.** A per-event drop zone
+  (`.brr/outbox/<eid>/`, plumbed through `RunContext.outbox_{host,env}` and the
+  env backends). `daemon._drain_outbox` runs on every heartbeat tick and once
+  after the runner returns: promotes drop-zone files to the partials queue, emits
+  an `interim_response` packet (new in `updates.PACKET_TYPES`; rendered on the
+  live card by `run_progress`), indexes the artifact on the conversation log, and
+  removes the consumed file. The bundle's delivery contract (`prompts.py`) now
+  documents the outbox; `run_context` surfaces the path.
+- **4c — interleaving (cross-event).** An outbox file whose frontmatter names
+  another pending event (`event: <id>`) is routed to *that* event's queue and the
+  event is marked `done` by the daemon — folded in without its own spawn. Unknown
+  targets are dropped (don't misroute). The bundle now carries a pending-events
+  snapshot (`_format_pending_events`) so the resident knows what it can fold in.
+  No `final:` flag: one outbox file is one complete reply, terminal for its target
+  by construction.
+
+**Deferred (with reasoning, recorded in the design page):** (1) folding the
+**diffense** pack into this drain — it's task-keyed, consumed once at PR
+finalization to shape a PR *body*, and is structured JSON not a chat message;
+the shared "agent writes, daemon picks up" *pattern* is already the unification,
+collapsing them into one *mechanism* is cosmetic and risks the PR flow. (2) a
+finer **idle-liveness timeout** — interim check-ins are opportunistic, so their
+absence doesn't separate wedged from healthy-but-silent (long build, deep
+reasoning); a hard idle-kill would false-positive on the long honest work it's
+meant to protect. The wall-clock `runner.timeout_seconds` stays the only hard
+kill; the drain is an *informational* liveness signal. Revisit when there's
+reason to add an obligatory agent heartbeat.
+
+Updated the resident playbook (`prompts/dominion-playbook.md`): the
+"machinery still landing" caveat is gone — talking mid-thought via the outbox
+and folding events in are now real and documented. Reconciled the pipeline hubs
+(`subject-daemon.md`, `execution-map.md`, `brr-internals.md` gained a
+Multi-response section) and fixed a stale slice-3b leftover in `subject-daemon.md`
+that still listed a post-task kb-maintenance pass (kb-health rides the wake
+prompt now). Full suite green (691 passed).

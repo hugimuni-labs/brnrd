@@ -96,13 +96,20 @@ never parses `/cancel` or any command — every event either wakes the
 agent or waits for the living agent to handle it (cancel/redirect
 semantics are the agent's job, reconsidered at plan boundaries; the
 mid-flight inbox channel is the multi-response protocol, specified in
-[`design-multi-response.md`](design-multi-response.md), in flight). What
+[`design-multi-response.md`](design-multi-response.md) — interim,
+multiple, and interleaved replies now ship via the agent's outbox). What
 the daemon *does* guarantee is that the single-flight
 slot is reclaimed even if a runner subprocess wedges: the runner's
 wall-clock timeout (`runner.timeout_seconds`, default 3600s) kills it. A
-finer idle timeout ("no agent check-in in N minutes") only becomes an
-honest death signal once the agent can check in mid-run, so it's
-sequenced with multi-response, not before.
+finer idle timeout ("no agent check-in in N minutes") stays deferred even
+now that multi-response shipped: the agent *can* check in mid-run (its
+outbox drain is a positive liveness signal), but those check-ins are
+opportunistic, so their *absence* still doesn't separate a wedged process
+from a healthy-but-silent one (a long build, deep reasoning). A safe
+idle-kill needs a check-in the substrate can count on as periodic; until
+that contract exists the generous wall-clock ceiling is the only hard
+kill. (See [`design-multi-response.md`](design-multi-response.md) →
+liveness.)
 
 ## Worker lifecycle
 
@@ -118,26 +125,31 @@ For each pending event, the daemon:
 4. prepares the selected env backend (`host`, `worktree`, or `docker`);
 5. builds the daemon prompt with the Task Context Bundle;
 6. invokes the configured runner headlessly;
-7. captures the runner's final stdout as the response file;
-8. retries if no response was produced;
-9. marks the inbox event `done`, making the response file deliverable
-   by the originating gate;
-10. runs kb preflight plus the optional redundancy pass after successful
-   work;
-11. finalizes the environment, classifying the worktree's final state
+7. captures the runner's final stdout as the terminal response file, and
+   drains the agent's outbox on each heartbeat and once after the runner
+   returns — promoting any interim or interleaved replies to the
+   per-event partials queue (the multi-response protocol,
+   [`design-multi-response.md`](design-multi-response.md));
+8. retries if no terminal response was produced;
+9. marks the inbox event `done`; the originating gate streams any queued
+   interim partials, then the terminal reply, then cleans up;
+10. finalizes the environment, classifying the worktree's final state
     into a `publish_status` and recording the branch to publish;
-12. publishes that branch via `daemon.publish` under a per-branch lock.
+11. publishes that branch via `daemon.publish` under a per-branch lock.
 
 The durable user response is plain stdout captured by
 [`runner.invoke_runner`](../src/brr/runner.py), not a file the agent
-writes manually. This contract is documented in
+writes manually — though the agent may *additionally* stream interim
+replies through its outbox (step 7). This contract is documented in
 [`execution-map.md`](../src/brr/docs/execution-map.md) and enforced by
 the daemon prompt assembled in [`prompts.py`](../src/brr/prompts.py).
-Response delivery is intentionally released before kb maintenance,
-environment finalization, and push: those stages are post-response
-housekeeping and should not delay the operator seeing the result. The
-progress card can continue to show maintenance, finalization, and push
-after the final reply is already in the originating chat thread.
+Response delivery is intentionally released before environment
+finalization and push: those stages are post-response housekeeping and
+should not delay the operator seeing the result. The progress card can
+continue to show finalization and push after the final reply is already
+in the originating chat thread. (Deterministic kb-health now rides the
+*wake* prompt rather than a post-task pass; see
+[`subject-kb.md`](subject-kb.md).)
 
 ## Forge-aware response card
 
