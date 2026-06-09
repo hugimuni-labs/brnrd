@@ -75,15 +75,14 @@ or take wide guesses to avoid stopping.
 ## When the task asks you to reconsider
 
 Some tasks are not "implement this" — they are "I think the current
-shape is wrong, push back or rework". Watch for revisit/reconsider
-signals in the task body: phrases like *"revisit"*, *"rethink"*,
-*"not great"*, *"not happy with"*, *"useless"*, *"I'm not sure"*,
-*"I don't see how"*, *"wdyt"*, *"is this the right shape"*, *"why
-do we even"*, *"this feels off"*. When you see them, the request is
-asking you to engage with the substance, not to ship the
-closest-fitting code change.
+shape is wrong, push back or rework". Read for that intent: the request
+wants you to engage with the substance, not to ship the closest-fitting
+code change. (When brr hosts you as a resident, this is just your
+ownership stance applied to the task; `AGENTS.md` → Stewardship carries
+the same stance for every other reader — so trust that intent rather
+than scanning the body for trigger words.)
 
-Concretely, when a task carries those signals:
+Concretely, when a task reads that way:
 
 1. Re-read the relevant code and the kb pages that describe the
    current design. Don't infer the shape from the task body alone.

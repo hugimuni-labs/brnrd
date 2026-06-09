@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 from . import config as conf
+from . import dominion
 from . import gitops
 from . import prompts
 from . import runner
@@ -112,6 +113,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
 
     repo_root = _ensure_repo()
     _setup_brr_dir(repo_root)
+    _bootstrap_dominion(repo_root)
 
     available = runner.detect_all_runners(repo_root)
     if not available:
@@ -254,6 +256,15 @@ def _setup_brr_dir(repo_root: Path) -> None:
             "runner": "auto",
             "environment": "auto",
             "response_retries": 1,
+            "dominion.enabled": True,
+            "dominion.branch": dominion.DEFAULT_BRANCH,
+            "dominion.inject_budget_bytes": dominion.DEFAULT_INJECT_BUDGET_BYTES,
+            "schedule.enabled": True,
+            # Co-development aid (off by default): when on, every wake
+            # invites the agent to inspect the shape of its own injected
+            # context and raise improvements with you. See
+            # kb/design-context-introspection.md.
+            "introspect.enabled": False,
         })
 
     gi = repo_root / ".gitignore"
@@ -267,6 +278,26 @@ def _setup_brr_dir(repo_root: Path) -> None:
         gi.write_text(f"# brr runtime\n{marker}\n", encoding="utf-8")
 
     print("[brr] .brr/ directory ready")
+
+
+def _bootstrap_dominion(repo_root: Path) -> None:
+    """Create the agent's dominion branch + worktree at init (best-effort).
+
+    The daemon also ensures this on every boot (idempotent), so a failure
+    here — no committer identity yet, no write access to push — is a soft
+    skip, not a fatal init error.
+    """
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return
+    branch = str(cfg.get(
+        "dominion.branch", cfg.get("dominion_branch", dominion.DEFAULT_BRANCH),
+    ))
+    try:
+        path = dominion.ensure_dominion(repo_root, branch=branch)
+        print(f"[brr] dominion ready: {path} (branch {branch})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[brr] dominion setup skipped: {exc}")
 
 
 def _run_setup(runner_name: str, repo_root: Path) -> None:

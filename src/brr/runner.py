@@ -30,6 +30,26 @@ _active_proc: subprocess.Popen | None = None
 _proc_lock = threading.Lock()
 
 
+def kill_active() -> bool:
+    """Terminate the in-flight runner subprocess, if one is running.
+
+    Returns ``True`` when a live process was signalled. Safe to call from
+    any thread — it reads the handle under ``_proc_lock`` and kills outside
+    it. The daemon's heartbeat uses this to enforce an extensible budget,
+    and shutdown uses it to reclaim the single-flight slot promptly instead
+    of waiting out the wall-clock backstop. No-op when nothing is running.
+    """
+    with _proc_lock:
+        proc = _active_proc
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        proc.kill()
+    except OSError:
+        return False
+    return True
+
+
 DEFAULT_RUNNER_TIMEOUT = 3600
 
 
@@ -95,6 +115,11 @@ class RunnerInvocation:
     cwd: Path | None = None
     response_path: str | None = None
     required_artifacts: list[RunnerArtifactSpec] = field(default_factory=list)
+    # Wall-clock backstop for ``proc.communicate``. ``None`` falls back to
+    # ``runner_timeout(cfg)``. The daemon passes a generous hard cap here
+    # and enforces the real (extensible) budget from its heartbeat — see
+    # ``daemon._invoke_with_heartbeat`` and ``kill_active``.
+    timeout_seconds: int | None = None
 
     @property
     def trace_root(self) -> Path:
@@ -373,7 +398,7 @@ def invoke_runner(
     global _active_proc
     cfg = cfg or {}
     cmd = _build_cmd(runner_name, invocation.prompt, cfg)
-    timeout = runner_timeout(cfg)
+    timeout = invocation.timeout_seconds or runner_timeout(cfg)
     stdout = ""
     stderr = ""
     returncode = 0
