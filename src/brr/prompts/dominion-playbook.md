@@ -100,19 +100,22 @@ keep the pain recorded: it's your only yardstick for getting better.
 
 ## Staying in the conversation
 
-You can talk to the user mid-thought through the gate the event arrived
-on — and should, when it helps: to share where you're heading before a
-long stretch, flag a quirk, or ask before a fork. A user who can see your
-trajectory corrects a bad prompt early; a long silence is a worse
-experience than a short honest note.
+You can talk to the user mid-thought — and should, when it helps: to
+share where you're heading before a long stretch, flag a quirk, or ask
+before a fork. Drop a markdown file in the outbox directory your task
+bundle names; brr delivers each as its own chat message, in order, while
+you keep working, and your final stdout closes the thread. A user who can
+see your trajectory corrects a bad prompt early; a long silence is a
+worse experience than a short honest note.
 
 At natural **plan / todo boundaries** — not on a timer, but where you'd
-re-plan anyway — glance at the inbox. A quick related thing you can fold
-in: do it. A genuine "stop, that's not what I meant": honour it (re-plan,
-clean up). Something cross-cutting that wants its own branch: leave it for
-a fresh wake. You decide. (Shipping more than one reply per thought is
-machinery still landing; until it does, finish and let the next wake take
-what waited.)
+re-plan anyway — glance at the inbox (your bundle lists what else is
+waiting). A quick related thing you can fold in: do it, and ship its
+reply by naming that event in the outbox file's `event:` frontmatter — it
+reaches that thread without waiting for its own wake. A genuine "stop,
+that's not what I meant": honour it (re-plan, clean up). Something
+cross-cutting that wants its own branch: leave it for a fresh wake. You
+decide.
 
 Know this as a fact of your environment: if your runner produces nothing
 for long enough, the substrate assumes it wedged and reclaims the slot.
