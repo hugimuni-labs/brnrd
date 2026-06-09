@@ -47,6 +47,7 @@ from . import dominion
 from . import envs
 from . import forges
 from . import gitops
+from . import presence
 from . import prompts
 from . import protocol
 from . import run_context
@@ -687,6 +688,20 @@ def _run_worker(
 
     emit("task_created", task_id=task.id, event_id=eid, env=task.env)
 
+    # Record this thought in the presence registry so overlapping thoughts
+    # (ad-hoc sessions, a second daemon) can see who's on which stream and
+    # avoid colliding on the same work (kb/design-agent-dominion.md §4).
+    # Best-effort: presence is a hint, never a gate. Deregistered in
+    # _run_worker_and_finalize's finally; the heartbeat closure refreshes it.
+    presence_id: str | None = None
+    try:
+        presence_id = presence.register(
+            brr_dir, kind="daemon", stream=conv_key, task_id=task.id,
+        )["id"]
+        task.meta["presence_id"] = presence_id
+    except OSError:
+        presence_id = None
+
     task.update_status("running", tasks_dir)
     resp_path = protocol.response_path(responses_dir, eid)
     # Per-event drop zone for interim responses the resident ships
@@ -866,6 +881,8 @@ def _run_worker(
             # mid-run check-in, and the partial should reach the gate as
             # promptly as the heartbeat that observed the agent is alive.
             _drain_outbox(emit, task, responses_dir, eid, outbox_dir, inbox_dir)
+            if presence_id:
+                presence.heartbeat(brr_dir, presence_id)
             elapsed = int(time.monotonic() - attempt_started_monotonic)
             emit(
                 "heartbeat",
@@ -1324,14 +1341,24 @@ def _run_worker_and_finalize(
     it from worker threads would race on the watcher's internal
     snapshot.
     """
-    task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
-    if event.get("status") != "done":
-        _set_event_status_if_present(event, task.status)
-    if task.status == "error":
-        print(f"[brr] task {task.id}: failed")
+    task = None
+    try:
+        task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
+        if event.get("status") != "done":
+            _set_event_status_if_present(event, task.status)
+        if task.status == "error":
+            print(f"[brr] task {task.id}: failed")
 
-    publish(repo_root, task)
-    return task
+        publish(repo_root, task)
+        return task
+    finally:
+        # Leave the presence registry — the thought is no longer awake.
+        # The registry self-prunes on read too, but an explicit deregister
+        # keeps it tidy and immediate.
+        if task is not None and task.meta.get("presence_id"):
+            presence.deregister(
+                gitops.shared_brr_dir(repo_root), task.meta["presence_id"],
+            )
 
 
 # ── Main loop ────────────────────────────────────────────────────────
