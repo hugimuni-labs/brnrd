@@ -150,6 +150,18 @@ def _build_dominion_block(repo_root: Path) -> str:
     digest = dominion.resolve_self_inject(path, budget_bytes=budget)
     if not digest:
         return ""
+    sync_note = ""
+    diverged = dominion.needs_sync(path.parent)
+    if diverged:
+        sync_note = (
+            "\n\n**Your dominion's remote has diverged** — brr's last push of "
+            "`brr-home` was rejected, so another machine or session wrote it "
+            "too. brr commits locally so nothing is lost, but reconciling the "
+            "remote is yours (it's a merge — judgement, not a reflex): when "
+            f"you're the one awake, in `{path}` fetch, merge / resolve any "
+            "conflicts, and push. "
+            f"(Reason on record: {diverged})"
+        )
     return (
         "## Your dominion (working memory)\n\n"
         f"Your dominion is the `brr-home` branch, checked out at `{path}` — "
@@ -157,9 +169,12 @@ def _build_dominion_block(repo_root: Path) -> str:
         "may run in a worktree or container whose cwd is elsewhere). It's "
         "your durable memory: write notes, pain records, and your "
         "`self-inject` index there freely. **brr commits whatever you leave "
-        "there when this thought ends**, so it survives to your next wake — "
-        "no commit dance needed. Self-injected below per your `self-inject` "
-        "index — yours to reshape:\n\n"
+        "there when this thought ends** (a local durability floor), so it "
+        "survives to your next wake — no commit dance needed. Pushing, "
+        "pulling, and conflict resolution of `brr-home` are yours to own."
+        f"{sync_note}\n\n"
+        "Self-injected below per your `self-inject` index — yours to "
+        "reshape:\n\n"
         f"{digest}"
     )
 
