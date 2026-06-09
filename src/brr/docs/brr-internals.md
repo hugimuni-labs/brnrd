@@ -39,7 +39,8 @@ gitignored; do not commit its contents.
 | ------------ | ------------------------------------------------------------------ |
 | `inbox/`     | Incoming events from gates, one markdown file per event            |
 | `tasks/`     | Task manifests, one per event (source of truth for the worker)     |
-| `responses/` | Agent final responses destined for gate replies                    |
+| `responses/` | Agent final responses destined for gate replies; per-event `<id>.partials/` hold queued interim replies |
+| `outbox/`    | Per-event drop zone (`<id>/`) where the resident writes interim/interleaved replies mid-thought |
 | `runs/`      | Generated per-task context files for daemon runner invocations     |
 | `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
 | `traces/`    | Prompt + stdout + meta per runner invocation (cleaned on success)  |
@@ -185,14 +186,53 @@ In `.brr/config`:
   whenever the scan isn't clean.
 - `kb_maintenance=never` — never inject; do kb hygiene by hand.
 
+## Multi-response: interim + interleaved replies
+
+The default delivery contract is one event → one final stdout → one
+chat reply. On top of that, the resident can ship **interim** replies
+mid-thought and **fold in** other pending events without waiting for
+their own spawn. The mechanism is a file drop zone, mirroring the
+diffense precedent (agent writes a known path, daemon picks up):
+
+- **Drop zone** — `.brr/outbox/<event-id>/`. The resident writes a
+  complete markdown reply per file (staging as `*.tmp` and renaming for
+  an atomic write). The path rides the Task Context Bundle's delivery
+  contract.
+- **Drain** — on every heartbeat tick and once right after the runner
+  returns, the daemon (`daemon._drain_outbox`) scans the drop zone
+  oldest-first, promotes each file to a per-event partials queue
+  (`protocol.write_partial` → `.brr/responses/<id>.partials/<seq>.md`),
+  emits an `interim_response` packet, indexes the artifact on the
+  conversation log, and removes the consumed file. A promoting drain is
+  a positive liveness check-in.
+- **Streaming delivery** — `runtime.deliver_stream` walks **active**
+  events (`processing` *or* `done`): it delivers queued partials in
+  order, deleting each after a successful send (so delivery is
+  resumable), and only on `done` delivers the terminal `<id>.md` and
+  cleans up the event, terminal file, and partials dir.
+- **Interleaving** — an outbox file whose frontmatter names another
+  pending event (`event: <id>`) is routed to *that* event's queue and
+  that event is marked `done`, so its thread gets the reply and it never
+  wakes as its own thought. The bundle lists other pending events so the
+  resident knows what it can fold in. Unknown targets are dropped, not
+  misrouted.
+
+This is additive and backward compatible: a thought that prints one
+final stdout and writes nothing to its outbox behaves exactly as before.
+A finer idle-liveness timeout is *not* built on this yet — interim
+check-ins are opportunistic, so their absence doesn't reliably mean
+wedged; the wall-clock `runner.timeout_seconds` remains the only hard
+kill. The full protocol contract lives in
+`kb/design-multi-response.md`.
+
 ## Run progress UX
 
 The daemon emits typed lifecycle packets through `brr.updates` for
 every task: `task_created`, `env_prepared`, `container_started`,
 `attempt_started`, `attempt_failed`, `retrying`, `run_started`,
-`artifact_created`, `finalizing`, `container_preserved`,
-`push_started`, `push_done`, plus the terminal `done` / `failed` /
-`conflict`.
+`artifact_created`, `interim_response`, `finalizing`,
+`container_preserved`, `push_started`, `push_done`, plus the terminal
+`done` / `failed` / `conflict`.
 
 Gates may opt in to a `render_update(brr_dir, packet)` hook to surface
 progress to a human:
