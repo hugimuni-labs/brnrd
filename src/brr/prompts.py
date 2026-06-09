@@ -247,6 +247,33 @@ def _build_kb_health_block(repo_root: Path) -> str:
     )
 
 
+def _build_introspection_block(repo_root: Path) -> str:
+    """Render the introspection/development invitation when toggled on.
+
+    An opt-in, co-development stance (``introspect.enabled`` in
+    ``.brr/config``, **default off**): it invites the resident to turn its
+    attention on the *shape of its own injected context* — the
+    orientation, dominion + playbook, pitfalls, recent thread, and task
+    bundle assembled into this wake — perceive how the whole connects,
+    find the seams / contradictions / dead guardrails / unstated
+    assumptions, and raise them with the user as a turn in the
+    conversation about how the context should evolve.
+
+    Off by default because it's an active-development aid, not a
+    production wake stance (it spends tokens and attention every wake).
+    The text lives in ``prompts/introspection.md`` so the tone can be
+    iterated on and per-repo overridden; see
+    ``kb/design-context-introspection.md``. Returns ``""`` when the toggle
+    is off or the template is missing — the caller drops the block.
+    """
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("introspect.enabled", cfg.get("introspect_enabled", False))):
+        return ""
+    return read_prompt("introspection.md", repo_root).strip()
+
+
 def _join_prompt_parts(
     preamble: str,
     repo_root: Path,
@@ -274,6 +301,12 @@ def _join_prompt_parts(
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
             parts.append(pack_step)
+    # Last framing before the task: invite the resident to look at the whole
+    # shape it has just read (opt-in dev mode). Placed here so it can refer to
+    # everything above and sit fresh against the task bundle.
+    introspection_block = _build_introspection_block(repo_root)
+    if introspection_block:
+        parts.append(introspection_block)
     parts.append(trailer)
     return "\n\n".join(parts)
 
