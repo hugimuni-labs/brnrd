@@ -14,10 +14,10 @@ Runtime layout::
             <event-id>.jsonl    — append-only records for one pipeline run
 
 Each ``<event-id>.jsonl`` file has exactly one writer for its lifetime:
-the worker thread handling that one event/task pipeline. This per-
-event-pipeline partitioning is what makes the concurrent worker pool
-contention-free without per-shared-file locks — see
-``kb/design-concurrent-execution.md``.
+the worker handling that one event/task pipeline. This per-event-
+pipeline partitioning keeps overlapping thoughts (ad-hoc sessions, a
+second daemon) contention-free without per-shared-file locks — see
+``kb/subject-daemon.md``.
 
 Each record carries ``ts`` (microsecond-precision UTC ISO 8601) plus a
 ``kind`` discriminator (``event``, ``task``, ``artifact``, ``update``)
@@ -352,7 +352,7 @@ def read_recent(
     fixed-size chunks, and a small heap selects the newest *limit* rows.
     This matches :func:`read_records` as long as ``ts`` is non-decreasing
     within each file (single writer, monotonic clock — see
-    ``kb/design-concurrent-execution.md``).
+    ``kb/subject-daemon.md``).
 
     *limit* <= 0 means no cap — same as :func:`read_records` (full merge
     and sort).
