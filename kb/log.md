@@ -6015,3 +6015,43 @@ green (761 passed; +14).
 Still open from the review: #3 (gate-addressed out-of-bound + scheduled
 delivery, plus a `conversation_key` for schedule firings) and #4 (the
 daemon-vs-agent ownership crossroads — behavior held, framing to tighten).
+
+## [2026-06-09] implement | Gate-addressed delivery + schedule threading (review #3); dominion-sync framing (#4)
+
+Landed the two halves of review finding #3, generalizing delivery from
+reply-shaped to also message-shaped.
+
+**3a — schedule threading.** `schedule.md` entries now carry an optional
+`conversation_key` (`schedule.py` parses it into `ScheduleEntry`; replaced the
+never-wired `deliver_to`). `_fire_due_schedules` stamps each fired event with it,
+defaulting to `schedule:<id>` — so a recurring entry's firings form a readable
+thread instead of being threadless, and an entry can be pointed at an existing
+gate thread (`telegram:<chat>:`) to wake *inside* a conversation.
+
+**3b — gate-addressed outbox.** `_drain_outbox` grew a `gate:` branch beside the
+existing `event:` one: a drop-zone file naming `gate: <name>` (+ optional target
+metadata) is an out-of-bound *send*, not a reply. `_gate_can_deliver` validates
+the gate is built-in and configured; `_deliver_out_of_bound` synthesizes an
+already-`done` event carrying the target metadata with the body as its response,
+so the gate's existing `deliver_stream` ships it once and cleans up without ever
+spawning a thought. `protocol.create_event` gained a keyword-only `status=` so
+the event is born `done` (no pending-window race). Agent frontmatter can't
+override reserved keys (`id`/`source`/`status`); unknown/unconfigured gates drop
+with a note (a synthesized event no thread polls would sit forever). This is also
+the delivery path for a self-scheduled thought that wants to *say* something.
+
+**#4 framing (no behavior change).** The agent-facing dominion block
+(`prompts._build_dominion_block`) called itself "a local durability floor …
+pushing, pulling, and conflict resolution are yours" — underselling: the daemon
+*does* best-effort push. Reworded to "commits and best-effort pushes; you own
+only reconciliation of a **diverged** remote", matching the playbook (which
+already said so). Sibling-drift fix, not a code change. The larger daemon-owned
+vs agent-owned crossroads stays recorded as the open question in
+`review-daemon-coherence-2026-06.md` §4, per the user's framing (current shape is
+load-bearing and battle-tested; a thinner agent-owned flow is more flexible but
+error-prone today; revisit when the agentic CLIs land non-blocking execution).
+
+Reconciled `design-multi-response.md` (new *Gate-addressed delivery* section;
+title/status), `design-self-scheduled-thoughts.md` (threading + delivery now
+shipped, not deferred), and the review page (#3 → shipped, #4 framing note).
+Full suite green (767 passed; +6).

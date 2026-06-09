@@ -1277,11 +1277,18 @@ def _drain_outbox(
     - **Current event** (no target, or the target is this event): promote
       to this event's partials queue as an interim reply, streamed ahead
       of the terminal stdout.
-    - **Another pending event** (interleaving): the resident folded a
-      quick request in without waiting for its own spawn — promote the
-      body to *that* event's queue and mark *that* event ``done`` so the
-      gate delivers the reply to its thread and cleans it up. A target
-      that isn't a live pending event is dropped (don't misroute).
+    - **Another pending event** (``event: <id>``, interleaving): the
+      resident folded a quick request in without waiting for its own
+      spawn — promote the body to *that* event's queue and mark *that*
+      event ``done`` so the gate delivers the reply to its thread and
+      cleans it up. A target that isn't a live pending event is dropped
+      (don't misroute).
+    - **A gate destination** (``gate: <name>`` + target metadata): an
+      agent-initiated message with no waiting event (a scheduled ping, an
+      out-of-bound note). ``_deliver_out_of_bound`` synthesizes an
+      already-``done`` event the gate delivers and cleans up. ``event:``
+      is "reply to a waiting thread"; ``gate:`` is "send to a
+      destination".
 
     Each promotion is indexed on the conversation log and emits an
     ``interim_response`` packet; the consumed file is removed. ``.tmp``
@@ -1312,9 +1319,22 @@ def _drain_outbox(
             text = fpath.read_text(encoding="utf-8")
         except OSError:
             continue
-        target = str(protocol.parse_frontmatter(text).get("event") or "").strip()
-        target = target or event_id
+        fm = protocol.parse_frontmatter(text)
         body = protocol.frontmatter_body(text).strip()
+        gate = str(fm.get("gate") or "").strip()
+        if gate:
+            # Gate-addressed: an agent-initiated message to a destination
+            # with no waiting event (a scheduled ping, an out-of-bound
+            # note). Synthesize an already-`done` event the gate delivers
+            # and cleans up; it never wakes a thought.
+            if _deliver_out_of_bound(
+                emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
+            ):
+                promoted += 1
+            fpath.unlink(missing_ok=True)
+            continue
+        target = str(fm.get("event") or "").strip()
+        target = target or event_id
         cross = target != event_id
         target_event = _find_pending_event(inbox_dir, target) if cross else None
         if cross and target_event is None:
@@ -1347,6 +1367,74 @@ def _drain_outbox(
             target_event=(target if cross else None),
         )
     return promoted
+
+
+def _gate_can_deliver(brr_dir: Path, gate: str) -> bool:
+    """True when *gate* is a builtin gate configured to deliver here.
+
+    Guards out-of-bound delivery against typos and unconfigured gates: a
+    synthesized event for a gate no thread is polling would sit undelivered
+    forever, so an unknown/unconfigured target is dropped with a note
+    instead.
+    """
+    if gate not in _BUILTIN_GATES:
+        return False
+    try:
+        from .gates import import_gate
+        mod = import_gate(gate)
+    except ImportError:
+        return False
+    is_configured = getattr(mod, "is_configured", None)
+    return bool(is_configured) and bool(is_configured(brr_dir))
+
+
+def _deliver_out_of_bound(
+    emit: _WorkerEmit,
+    task: Task,
+    responses_dir: Path,
+    inbox_dir: Path | None,
+    event_id: str,
+    gate: str,
+    fm: dict,
+    body: str,
+) -> bool:
+    """Queue an agent-initiated message to a gate destination.
+
+    Synthesizes an already-`done` event for *gate* carrying the target
+    metadata the agent named (chat id, channel, thread — whatever that
+    gate's deliver closure reads, falling back to its configured default),
+    with *body* as the response. The gate's normal deliver loop sends it
+    and cleans it up; being `done` it never spawns a thought. This is the
+    one core behind both out-of-bound pings and scheduled delivery.
+    Returns True when queued.
+    """
+    if inbox_dir is None or not body:
+        print(f"[brr] outbox: gate {gate!r} message had no body/inbox; dropping")
+        return False
+    if not _gate_can_deliver(emit.brr_dir, gate):
+        print(f"[brr] outbox: gate {gate!r} is not a configured gate; dropping message")
+        return False
+    # Never let agent-written frontmatter override the reserved event keys
+    # (a stray `status:` would resurrect the event as pending and spawn a
+    # stray thought).
+    reserved = {"gate", "event", "id", "source", "status", "created"}
+    target_meta = {k: v for k, v in fm.items() if k not in reserved}
+    new_path = protocol.create_event(
+        inbox_dir, gate, "", status="done", **target_meta,
+    )
+    new_eid = new_path.stem
+    protocol.write_response(responses_dir, new_eid, body)
+    print(f"[brr] outbox: queued out-of-bound message to gate {gate!r} ({new_eid})")
+    if emit.conversation_key:
+        conversations.append_artifact(
+            emit.brr_dir, emit.conversation_key,
+            kind="outbound_message",
+            path=str(protocol.response_path(responses_dir, new_eid)),
+            task_id=task.id,
+            event_id=event_id,
+            label=f"outbound:{gate}",
+        )
+    return True
 
 
 def _remove_outbox(outbox_dir: Path | None) -> None:
@@ -1399,7 +1487,14 @@ def _fire_due_schedules(
         )
         for entry in due:
             body = entry.body or f"(self-scheduled thought: {entry.id})"
-            protocol.create_event(inbox_dir, "schedule", body, schedule_id=entry.id)
+            # Thread the firing so a recurring entry's wakes share a
+            # readable history; default per-entry, overridable to an
+            # existing gate conversation.
+            conv = entry.conversation_key or f"schedule:{entry.id}"
+            protocol.create_event(
+                inbox_dir, "schedule", body,
+                schedule_id=entry.id, conversation_key=conv,
+            )
             print(f"[brr] schedule: fired {entry.id}")
         if new_state != state:
             schedule_mod.save_state(brr_dir, new_state)
