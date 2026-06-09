@@ -13,8 +13,8 @@ leaves judgement to the agent it wakes. It:
    resident is cooperative, not parallel across workers. See
    ``kb/design-agent-dominion.md`` §4 and ``kb/subject-daemon.md``.
 4. The worker owns the full pipeline for its event: runner invocation,
-   retries, response capture, response release to gates, kb maintenance,
-   env finalize, and branch push.
+   retries, response capture, response release to gates, env finalize,
+   and branch push.
 
 There is no command layer: every event either wakes the agent or waits
 for the living agent — the daemon never parses ``/cancel`` or the like.
@@ -647,7 +647,7 @@ def _run_worker(
     Every update packet rides through the local ``emit`` closure so
     ``conversation_key`` and ``event_id`` are populated automatically.
     Per-event-pipeline conversation routing relies on that — see
-    ``kb/design-concurrent-execution.md``.
+    ``kb/subject-daemon.md``.
     """
     eid = event["id"]
     brr_dir = gitops.shared_brr_dir(repo_root)
@@ -957,10 +957,11 @@ def _run_worker(
             task.update_status("done", tasks_dir)
             _set_event_status_if_present(event, "done")
             emit("finalizing", task_id=task.id, stage="done")
-            # Per-branch lock around finalize: if this task's expected
-            # publish branch overlaps another concurrent worker's, the
-            # publish step must serialise on that name. Tasks
-            # targeting different branches don't contend.
+            # Per-branch lock around finalize: serialises publish on a
+            # branch name so two pushers can't race it. Under single-flight
+            # one daemon never contends here; the lock stays as cheap
+            # insurance and a seam for a future concurrency revisit (see
+            # kb/review-daemon-coherence-2026-06.md §4).
             with _branch_lock(branch_plan.target_branch):
                 task = env_backend.finalize(env_ctx, task, tasks_dir)
             _cleanup_traces_on_success(brr_dir, tasks_dir, task)
