@@ -260,6 +260,11 @@ def _setup_brr_dir(repo_root: Path) -> None:
             "dominion.branch": dominion.DEFAULT_BRANCH,
             "dominion.inject_budget_bytes": dominion.DEFAULT_INJECT_BUDGET_BYTES,
             "schedule.enabled": True,
+            # Co-development aid (off by default): when on, every wake
+            # invites the agent to inspect the shape of its own injected
+            # context and raise improvements with you. See
+            # kb/design-context-introspection.md.
+            "introspect.enabled": False,
         })
 
     gi = repo_root / ".gitignore"
