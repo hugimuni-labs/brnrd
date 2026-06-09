@@ -1,5 +1,6 @@
 """Tests for the prompt-assembly module."""
 
+from brr import dominion
 from brr.prompts import (
     _build_context_block,
     _read_recent_log,
@@ -7,8 +8,14 @@ from brr.prompts import (
     build_run_prompt,
     diffense_create_pr_enabled,
     diffense_emit_enabled,
-    reflection_enabled,
 )
+
+
+def _seed_pitfalls(repo_root, text: str) -> None:
+    """Materialize a dominion dir with a ``pitfalls.md`` for prompt tests."""
+    dom = dominion.dominion_path(repo_root)
+    dom.mkdir(parents=True, exist_ok=True)
+    (dom / "pitfalls.md").write_text(text, encoding="utf-8")
 
 
 class TestContextInjection:
@@ -111,19 +118,67 @@ class TestPromptBuilding:
         assert "Bug fix" in prompt
         assert "do something" in prompt
 
-    def test_reflection_enabled_from_config(self):
-        assert reflection_enabled({"ergonomics": "response"})
-        assert not reflection_enabled({"ergonomics": "log"})
-        assert not reflection_enabled({})
-        # owner-gated: operator runs never inject the reply nudge
-        assert not reflection_enabled({"ergonomics": "response"}, owner="operator")
+    def test_run_prompt_injects_kb_health_when_findings(self, tmp_path, monkeypatch):
+        """A non-clean deterministic preflight rides into the wake prompt
+        so the resident folds kb fixes into its own thought (replacing
+        the retired post-task kb-maintenance spawn)."""
+        from brr import kb_preflight
 
-    def test_daemon_prompt_reflection_nudge_when_requested(self, tmp_path):
-        prompt = build_daemon_prompt(
-            "fix it", "evt-1", "/tmp/resp.md", tmp_path,
-            reflection=True,
+        prompts_dir = tmp_path / ".brr" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "run.md").write_text("You are an agent.")
+        monkeypatch.setattr(
+            kb_preflight, "scan",
+            lambda _root: [
+                kb_preflight.Finding(
+                    type="missing-from-index",
+                    target="kb/decision-orphan.md",
+                    description="needs an index entry",
+                ),
+            ],
         )
-        assert "Ergonomics review:" in prompt
+
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "kb health (deterministic preflight)" in prompt
+        assert "missing-from-index" in prompt
+        assert "kb/decision-orphan.md" in prompt
+
+    def test_run_prompt_omits_kb_health_when_clean(self, tmp_path, monkeypatch):
+        """A clean preflight is silent — no wake-time tax."""
+        from brr import kb_preflight
+
+        prompts_dir = tmp_path / ".brr" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "run.md").write_text("You are an agent.")
+        monkeypatch.setattr(kb_preflight, "scan", lambda _root: [])
+
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "kb health" not in prompt
+
+    def test_run_prompt_kb_health_disabled_with_never(self, tmp_path, monkeypatch):
+        """``kb_maintenance=never`` opts out of the wake-time inject even
+        when the preflight has findings."""
+        from brr import config as conf
+        from brr import kb_preflight
+
+        prompts_dir = tmp_path / ".brr" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "run.md").write_text("You are an agent.")
+        monkeypatch.setattr(
+            kb_preflight, "scan",
+            lambda _root: [
+                kb_preflight.Finding(
+                    type="broken-link", target="kb/x.md",
+                    description="dangling reference",
+                ),
+            ],
+        )
+        monkeypatch.setattr(
+            conf, "load_config", lambda _root: {"kb_maintenance": "never"},
+        )
+
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "kb health" not in prompt
 
     def test_diffense_emit_enabled_defaults_on(self):
         # On by default now that the publish kernel consumes the pack;
@@ -162,6 +217,129 @@ class TestPromptBuilding:
         )
         assert "Review pack (diffense)" not in prompt
         assert "Review pack path" not in prompt
+
+    def test_daemon_prompt_includes_outbox_contract_when_given(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            task_id="task-9",
+        )
+        assert "/repo/.brr/outbox/evt-1" in prompt
+        assert "mid-thought" in prompt
+        # interim replies are framed as optional extras, not the final reply
+        assert "optional" in prompt.lower()
+
+    def test_daemon_prompt_omits_outbox_contract_without_path(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-9",
+        )
+        assert "mid-thought" not in prompt
+        assert "outbox directory" not in prompt
+
+    def test_daemon_prompt_states_budget_and_keepalive(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            budget_seconds=3600,
+            task_id="task-9",
+        )
+        assert "Budget:" in prompt
+        assert "60m" in prompt
+        # The extension how-to is anchored on the agent's outbox path.
+        assert "/repo/.brr/outbox/evt-1/.keepalive" in prompt
+
+    def test_daemon_prompt_omits_budget_without_value(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            task_id="task-9",
+        )
+        assert "Budget:" not in prompt
+        assert ".keepalive" not in prompt
+
+    def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A",
+            task_id="task-A",
+            pending_events=[
+                {"id": "evt-B", "source": "telegram",
+                 "summary": "quick question about X"},
+            ],
+        )
+        assert "Inbox — other pending events" in prompt
+        assert "evt-B" in prompt
+        assert "quick question about X" in prompt
+        # The fold-in contract names the frontmatter handle.
+        assert "event: <id>" in prompt
+
+    def test_daemon_prompt_omits_inbox_when_no_pending_events(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-A", task_id="task-A",
+        )
+        assert "other pending events" not in prompt
+
+    def test_daemon_prompt_lists_present_thoughts(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path,
+            task_id="task-A",
+            present=[
+                {"kind": "session", "stream": "telegram:9:", "task_id": "task-Z"},
+            ],
+        )
+        assert "Also awake right now" in prompt
+        assert "session" in prompt
+        assert "telegram:9:" in prompt
+        # The framing names reconciliation-by-judgement, not locking.
+        assert "reconcile" in prompt.lower()
+
+    def test_daemon_prompt_omits_presence_when_alone(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path, task_id="task-A",
+        )
+        assert "Also awake right now" not in prompt
+
+    def test_daemon_prompt_injects_pitfall_when_trigger_hits(self, tmp_path):
+        _seed_pitfalls(
+            tmp_path,
+            "## Blind retry\ntrigger: docker\n"
+            "Rebuild the image before you trust the cache.\n",
+        )
+        prompt = build_daemon_prompt(
+            "rebuild the docker image and ship", "evt-A", "/tmp/resp.md",
+            tmp_path, task_id="task-A",
+        )
+        assert "Pitfalls that match this task" in prompt
+        assert "Blind retry" in prompt
+        assert "Rebuild the image before you trust the cache." in prompt
+
+    def test_daemon_prompt_omits_pitfall_when_no_trigger_match(self, tmp_path):
+        _seed_pitfalls(
+            tmp_path,
+            "## Blind retry\ntrigger: docker\nRebuild first.\n",
+        )
+        prompt = build_daemon_prompt(
+            "update the readme wording", "evt-A", "/tmp/resp.md",
+            tmp_path, task_id="task-A",
+        )
+        assert "Pitfalls that match this task" not in prompt
+
+    def test_daemon_prompt_matches_pitfall_against_event_body(self, tmp_path):
+        _seed_pitfalls(
+            tmp_path,
+            "## Billing math\ntrigger: invoice\nProrate on the day boundary.\n",
+        )
+        # The trigger is absent from the task summary but present in the
+        # original event text — both feed the matcher.
+        prompt = build_daemon_prompt(
+            "handle the request", "evt-A", "/tmp/resp.md", tmp_path,
+            task_id="task-A",
+            event_body="the invoice total looks wrong for mid-month signups",
+        )
+        assert "Pitfalls that match this task" in prompt
+        assert "Prorate on the day boundary." in prompt
 
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -402,13 +580,14 @@ class TestRevisitSignalGuardrails:
 
     def test_run_prompt_mentions_revisit_signals(self):
         prompt = _read_bundled_run_prompt()
-        # Section header that gates the new guidance.
+        # Section header that gates the guidance.
         assert "When the task asks you to reconsider" in prompt
-        # A representative subset of the trigger phrases. We don't pin
-        # every phrase verbatim so future copy edits stay cheap, but
-        # the load-bearing ones must be named.
-        for phrase in ("revisit", "not great", "wdyt", "is this the right shape"):
-            assert phrase in prompt, f"missing trigger phrase: {phrase!r}"
+        # The trigger is ownership intent, not a brittle keyword list:
+        # the stance lives in the resident playbook and AGENTS.md →
+        # Stewardship, which this section leans on instead of
+        # re-enumerating trigger phrases.
+        assert "engage with the substance" in prompt
+        assert "ownership stance" in prompt
 
     def test_run_prompt_authorizes_no_commit_for_revisit(self):
         prompt = _read_bundled_run_prompt()
@@ -448,3 +627,59 @@ class TestDaemonModeGuardrails:
         # The run context file is recovery detail, not routine reading.
         assert "Runtime recovery" in prompt
         assert "recovery detail" in prompt
+
+
+class TestIntrospectionMode:
+    """The opt-in introspection/development toggle: when on, every wake
+    invites the resident to inspect the shape of its own injected context
+    and raise improvements with the user. See
+    `kb/design-context-introspection.md`."""
+
+    @staticmethod
+    def _enable(repo_root) -> None:
+        brr = repo_root / ".brr"
+        brr.mkdir(parents=True, exist_ok=True)
+        (brr / "config").write_text("introspect.enabled=true\n", encoding="utf-8")
+
+    def test_off_by_default_run_prompt(self, tmp_path):
+        # No config at all → the invitation never rides along.
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "Look at it" not in prompt
+
+    def test_off_by_default_daemon_prompt(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, task_id="task-9",
+        )
+        assert "Look at it" not in prompt
+
+    def test_injected_into_run_prompt_when_enabled(self, tmp_path):
+        self._enable(tmp_path)
+        prompt = build_run_prompt("do something", tmp_path)
+        assert "Look at it" in prompt
+        assert "The shape of the context itself" in prompt
+        # It rides alongside the task; it must not displace the task text,
+        # and it sits before the task as the last framing.
+        assert "do something" in prompt
+        assert prompt.index("Look at it") < prompt.index("do something")
+
+    def test_injected_into_daemon_prompt_when_enabled(self, tmp_path):
+        self._enable(tmp_path)
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, task_id="task-9",
+        )
+        assert "Look at it" in prompt
+
+    def test_bundled_introspection_keeps_awe_and_dialogue_intent(self):
+        from pathlib import Path
+
+        import brr
+
+        text = (Path(brr.__file__).parent / "prompts" / "introspection.md").read_text(
+            encoding="utf-8",
+        )
+        # The two halves the tone must hold: regard for the existing shape
+        # before judging it, and surfacing what's found to the user as
+        # dialogue rather than a silent edit.
+        assert "without flinching" in text
+        assert "say it to" in text.lower()
+        assert "silent edit" in text

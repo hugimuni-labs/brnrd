@@ -87,6 +87,11 @@ def render_context(
         f"- Response path for the runner: {ctx.response_path_env}",
         f"- Response path on the host: {ctx.response_path_host}",
     ])
+    if ctx.outbox_env:
+        lines.append(
+            f"- Interim-response outbox (drop a file to ship an update "
+            f"mid-thought): {ctx.outbox_env}"
+        )
 
     if recent_conversation:
         rendered = _render_recent_conversation(recent_conversation)
@@ -108,6 +113,8 @@ def render_context(
         f"- Task file: {task_file}",
         f"- Response file: {ctx.response_path_host}",
     ])
+    if ctx.outbox_host:
+        lines.append(f"- Interim-response outbox: {ctx.outbox_host}")
     if task.conversation_key:
         from . import conversations
         conv_path = conversations.conversation_path(

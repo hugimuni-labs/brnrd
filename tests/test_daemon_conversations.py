@@ -31,7 +31,6 @@ def _patch_runner_minimal(monkeypatch, captured_prompts=None):
         return f"RUN {eid}: {task} -> {rp}"
 
     monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", _build_daemon)
-    monkeypatch.setattr(daemon, "_kb_changed", lambda _: False)
     monkeypatch.setattr(
         daemon.runner,
         "invoke_runner",
