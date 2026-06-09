@@ -1,5 +1,6 @@
 """Tests for the prompt-assembly module."""
 
+from brr import dominion
 from brr.prompts import (
     _build_context_block,
     _read_recent_log,
@@ -8,6 +9,13 @@ from brr.prompts import (
     diffense_create_pr_enabled,
     diffense_emit_enabled,
 )
+
+
+def _seed_pitfalls(repo_root, text: str) -> None:
+    """Materialize a dominion dir with a ``pitfalls.md`` for prompt tests."""
+    dom = dominion.dominion_path(repo_root)
+    dom.mkdir(parents=True, exist_ok=True)
+    (dom / "pitfalls.md").write_text(text, encoding="utf-8")
 
 
 class TestContextInjection:
@@ -271,6 +279,46 @@ class TestPromptBuilding:
             "work on A", "evt-A", "/tmp/resp.md", tmp_path, task_id="task-A",
         )
         assert "Also awake right now" not in prompt
+
+    def test_daemon_prompt_injects_pitfall_when_trigger_hits(self, tmp_path):
+        _seed_pitfalls(
+            tmp_path,
+            "## Blind retry\ntrigger: docker\n"
+            "Rebuild the image before you trust the cache.\n",
+        )
+        prompt = build_daemon_prompt(
+            "rebuild the docker image and ship", "evt-A", "/tmp/resp.md",
+            tmp_path, task_id="task-A",
+        )
+        assert "Pitfalls that match this task" in prompt
+        assert "Blind retry" in prompt
+        assert "Rebuild the image before you trust the cache." in prompt
+
+    def test_daemon_prompt_omits_pitfall_when_no_trigger_match(self, tmp_path):
+        _seed_pitfalls(
+            tmp_path,
+            "## Blind retry\ntrigger: docker\nRebuild first.\n",
+        )
+        prompt = build_daemon_prompt(
+            "update the readme wording", "evt-A", "/tmp/resp.md",
+            tmp_path, task_id="task-A",
+        )
+        assert "Pitfalls that match this task" not in prompt
+
+    def test_daemon_prompt_matches_pitfall_against_event_body(self, tmp_path):
+        _seed_pitfalls(
+            tmp_path,
+            "## Billing math\ntrigger: invoice\nProrate on the day boundary.\n",
+        )
+        # The trigger is absent from the task summary but present in the
+        # original event text — both feed the matcher.
+        prompt = build_daemon_prompt(
+            "handle the request", "evt-A", "/tmp/resp.md", tmp_path,
+            task_id="task-A",
+            event_body="the invoice total looks wrong for mid-month signups",
+        )
+        assert "Pitfalls that match this task" in prompt
+        assert "Prorate on the day boundary." in prompt
 
     def test_daemon_prompt_includes_branch_and_runtime_paths(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
