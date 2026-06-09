@@ -15,7 +15,12 @@ event (inbox) → task (persisted) → context file → run env → response →
 
 A gate (Telegram, Slack, GitHub, future forge gates) or a script writes a
 markdown file to `.brr/inbox/`. The file has frontmatter (`id`,
-`source`, `status`) and a body with the user's message.
+`source`, `status`) and a body with the user's message. The resident also
+emits events to its **own** future: each reflex tick the daemon fires any
+due entry from the dominion's `schedule.md` as a `schedule`-source inbox
+event (`schedule.py`; `at:` one-shot / `every:` interval), so a
+self-scheduled wake enters this same flow — see
+`kb/design-self-scheduled-thoughts.md`.
 
 ### 2. Task created
 
@@ -47,11 +52,16 @@ rule.
 
 The runner receives `run.md` + recent `kb/log.md` context + daemon
 metadata (task ID, event ID, execution root, seed ref, optional
-auto-land target, current branch, response path, shared runtime dir,
-generated run context file). The bundle's
-delivery contract is explicit: stdout is the user's chat reply, kb
-writes are optional — agents log only when there's something worth
-logging (see AGENTS.md → Knowledge base).
+auto-land target, current branch, response path, interim-response outbox,
+other pending events, shared runtime dir, generated run context file).
+The bundle's delivery contract is explicit: stdout is the user's chat
+reply, kb writes are optional — agents log only when there's something
+worth logging (see AGENTS.md → Knowledge base).
+
+Prompt assembly also injects the resident's dominion digest (per its
+`self-inject` index) and, when the deterministic kb preflight isn't
+clean, a `kb health` block of findings for the resident to fold into
+its work (see [`brr-internals.md`](brr-internals.md) → KB maintenance).
 
 ### 4. Response
 
@@ -68,10 +78,28 @@ stop. The operator sees the reply in the gate thread and follows up
 with another event.
 
 Once the response file is validated, the daemon marks the inbox event
-`done` before running kb maintenance, environment finalization, or
-branch push. Gates deliver `done` events and clean up the inbox and
-response files after a successful send, while the progress card can
-continue to show post-response housekeeping.
+`done` before environment finalization or branch push. Gates deliver
+`done` events and clean up the inbox and response files after a
+successful send, while the progress card can continue to show
+post-response housekeeping.
+
+The agent may *also* stream replies mid-thought (the multi-response
+protocol; see [`brr-internals.md`](brr-internals.md) → Multi-response).
+It drops markdown files in its per-event outbox (`.brr/outbox/<event-id>/`);
+the daemon drains them on every heartbeat and once after the runner
+returns, promoting each to a per-event partials queue
+(`.brr/responses/<event-id>.partials/`). Gates stream queued partials —
+for `processing` or `done` events — ahead of the terminal reply. An
+outbox file whose frontmatter names another pending event
+(`event: <id>`) is delivered to *that* event's thread and marks it
+handled, so a quick request can be folded in without its own spawn.
+
+After the runner returns, the daemon also **captures the resident's
+dominion** (`.brr/dominion/`, the `brr-home` branch) with a serialized
+commit — on success and failure alike — so working-memory edits survive
+to the next wake without the agent committing by hand. The commit step is
+serialized across processes by a file lock so a concurrent ad-hoc session
+never races the shared git index.
 
 If the runner exits cleanly but stdout is empty, the daemon retries up
 to `response_retries` times before failing the task. Hard failures
@@ -79,18 +107,7 @@ to `response_retries` times before failing the task. Hard failures
 default 3600s) are surfaced to the gate immediately with the captured
 error rather than burning another expensive attempt.
 
-### 5. KB maintenance (preflight + optional LLM pass)
-
-After the response is released, `brr.kb_preflight.scan` runs over
-`kb/` and returns structured findings (orphan pages, broken links,
-index drift). When findings exist or the task modified `kb/`, a short
-LLM redundancy pass runs with the findings injected into the prompt;
-otherwise the LLM pass is skipped. The primary maintenance contract
-lives in AGENTS.md (the universal kb shape rules every tool follows);
-this hook is the brr-side safety net. See `brr-internals.md` for the
-preflight check list and trigger logic.
-
-### 6. Finalization
+### 5. Finalization
 
 For worktree tasks, the daemon inspects the worktree's git state. If
 the agent left commits on the original `brr/<task-id>` branch and the
@@ -113,6 +130,11 @@ files changed. Reload never interrupts a running worker.
 | Events        | `.brr/inbox/<event-id>.md`                  | Yes (until cleanup)                 |
 | Tasks         | `.brr/tasks/<task-id>.md`                   | Yes                                 |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
+| Interim queue | `.brr/responses/<event-id>.partials/`       | Until streamed + cleaned up         |
+| Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; removed at finalize |
+| Presence      | `.brr/presence/<id>.json`                   | While a thought/session is active; pruned on read |
+| Dominion      | `.brr/dominion/` (branch `brr-home`)        | Durable; committed at sleep, travels with the remote |
+| Schedule state | `.brr/schedule/state.json`                 | Machine-persistent (firing-state); specs live in dominion `schedule.md` |
 | Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Kept on `error` / `conflict`, removed on clean `done` |
 | Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
