@@ -162,6 +162,19 @@ def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
     assert "is genuinely yours to shape" in digest
 
 
+def test_dominion_block_surfaces_write_path_and_capture(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+
+    block = prompts._build_dominion_block(repo)
+
+    # The resident is given the absolute path so it can write to its
+    # dominion from a worktree/container whose cwd is elsewhere...
+    assert str(path) in block
+    # ...and told brr captures it at sleep, so it needn't commit by hand.
+    assert "commits whatever you leave" in block
+
+
 def test_resolve_self_inject_modes(tmp_path):
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
