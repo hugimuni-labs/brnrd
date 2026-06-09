@@ -16,16 +16,25 @@ self-inject index into a wake-time digest (:func:`resolve_self_inject`).
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import time
 from pathlib import Path
 
 from . import gitops
+
+try:
+    import fcntl  # POSIX-only; brr targets Linux/macOS hosts + containers.
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    fcntl = None
 
 
 DEFAULT_BRANCH = "brr-home"
 WORKTREE_DIRNAME = "dominion"
 SELF_INJECT_FILE = "self-inject"
 PLAYBOOK_FILE = "playbook.md"
+COMMIT_LOCK_FILE = "dominion.commit.lock"
 # Total UTF-8 budget for the wake-time self-inject digest. Sized to fit
 # the seed playbook in full with headroom for the agent's own entries
 # (recent pain, current focus); the agent can re-tune what it injects.
@@ -108,6 +117,94 @@ def ensure_dominion(
     if push and remote:
         gitops.push_branch(repo_root, remote, branch)
     return path
+
+
+@contextlib.contextmanager
+def _commit_lock(dominion_dir: Path, timeout: float):
+    """Hold an exclusive cross-process lock for the dominion commit step.
+
+    The lock file lives in the shared ``.brr/`` dir (the worktree's
+    parent), not inside the worktree, so it never lands in the dominion's
+    own history. ``fcntl.flock`` is advisory and per-open-file-description,
+    which is exactly what serializes two *separate processes* (a daemon
+    thought and an ad-hoc session) — a ``threading.Lock`` would only cover
+    threads of one process. Yields True when held, False when the lock
+    couldn't be acquired within *timeout* (caller skips rather than races)
+    or locking is unavailable on the platform (degrade to no-op lock).
+    """
+    if fcntl is None:  # pragma: no cover - non-POSIX
+        yield True
+        return
+    lock_path = dominion_dir.parent / COMMIT_LOCK_FILE
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError:
+        yield True  # can't make a lock file — proceed best-effort
+        return
+    acquired = False
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+        yield acquired
+    finally:
+        if acquired:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def commit(
+    dominion_dir: Path,
+    message: str,
+    *,
+    remote: str | None = None,
+    branch: str | None = None,
+    push: bool = False,
+    lock_timeout: float = 30.0,
+) -> bool:
+    """Capture the dominion's working-tree changes as one commit, serialized.
+
+    The persistence half of "the agent is its memory": whatever the
+    resident wrote into ``.brr/dominion/`` during a thought is captured
+    here, so it survives to the next wake without the agent having to
+    remember a commit dance. Called by the daemon after each thought, on
+    success *and* failure (a failed thought may still have recorded the
+    pain that caused it).
+
+    The commit step is serialized across processes by a file lock so an
+    overlapping daemon thought and an ad-hoc session never race the shared
+    worktree's git index — file *edits* stay free; only the index-touching
+    commit serializes (the Society-of-Mind model,
+    ``kb/design-agent-dominion.md`` §4). Returns True when a commit was
+    made. A clean worktree is a no-op (False) — most thoughts don't touch
+    the dominion. Every failure is swallowed to False: capturing memory
+    must never break the thought that produced it.
+    """
+    if not dominion_dir.is_dir():
+        return False
+    try:
+        with _commit_lock(dominion_dir, lock_timeout) as held:
+            if not held:
+                return False
+            if not gitops.worktree_dirty(dominion_dir):
+                return False
+            if not gitops.commit_all(dominion_dir, message):
+                return False
+        if push and remote:
+            target = branch or gitops.current_branch(dominion_dir)
+            if target and target != "HEAD":
+                gitops.push_branch(dominion_dir, remote, target)
+        return True
+    except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
+        return False
 
 
 def resolve_self_inject(
