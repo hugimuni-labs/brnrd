@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import subprocess
 
 from brr import daemon, dominion, gitops
 from brr.task import Task
@@ -24,6 +25,31 @@ def _repo(tmp_path, name="repo"):
     commit_files(repo, {"README.md": "main\n"}, message="init main")
     (repo / ".brr").mkdir()
     return repo
+
+
+def _clone(remote, dest, *, name):
+    subprocess.run(
+        ["git", "clone", str(remote), str(dest)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    subprocess.run(["git", "-C", str(dest), "config", "user.name", name], check=True)
+    subprocess.run(
+        ["git", "-C", str(dest), "config", "user.email", f"{name}@e.com"], check=True,
+    )
+    (dest / ".brr").mkdir()
+    return dest
+
+
+def _bare_remote(tmp_path):
+    seed = tmp_path / "seed"
+    init_git_repo(seed)
+    commit_files(seed, {"README.md": "main\n"}, message="init")
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "clone", "--bare", str(seed), str(remote)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return remote
 
 
 def test_commit_noop_on_clean_dominion(tmp_path):
@@ -101,3 +127,58 @@ def test_capture_dominion_helper_respects_disabled(tmp_path):
     # Disabled → left untouched for the operator to manage by hand.
     assert gitops.rev_parse(path, "HEAD") == head_before
     assert gitops.worktree_dirty(path)
+
+
+# ── Agent-owned sync: the needs-sync marker (slice 7b) ───────────────
+
+
+def test_sync_marker_round_trip(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    assert dominion.needs_sync(brr_dir) is None
+    dominion.mark_needs_sync(brr_dir, "remote diverged")
+    assert dominion.needs_sync(brr_dir) == "remote diverged"
+    dominion.clear_needs_sync(brr_dir)
+    assert dominion.needs_sync(brr_dir) is None
+
+
+def test_commit_clears_marker_on_successful_push(tmp_path):
+    remote = _bare_remote(tmp_path)
+    clone = _clone(remote, tmp_path / "a", name="A")
+    path = dominion.ensure_dominion(clone, push=True)
+    brr_dir = path.parent
+    dominion.mark_needs_sync(brr_dir, "stale flag from a past failure")
+
+    (path / "note.md").write_text("fresh\n", encoding="utf-8")
+    assert dominion.commit(
+        path, "capture", remote=gitops.default_remote(clone),
+        branch="brr-home", push=True,
+    ) is True
+    # A successful push means we're in sync — the stale marker is gone.
+    assert dominion.needs_sync(brr_dir) is None
+
+
+def test_commit_marks_needs_sync_on_rejected_push(tmp_path):
+    remote = _bare_remote(tmp_path)
+    # A publishes the dominion.
+    clone_a = _clone(remote, tmp_path / "a", name="A")
+    path_a = dominion.ensure_dominion(clone_a, push=True)
+    # B reconstitutes it and advances brr-home on the shared remote.
+    clone_b = _clone(remote, tmp_path / "b", name="B")
+    path_b = dominion.ensure_dominion(clone_b, push=False)
+    (path_b / "from-b.md").write_text("b was here\n", encoding="utf-8")
+    assert dominion.commit(
+        path_b, "B writes", remote=gitops.default_remote(clone_b),
+        branch="brr-home", push=True,
+    ) is True
+
+    # A now commits + pushes from a stale base — the push is rejected.
+    (path_a / "from-a.md").write_text("a was here\n", encoding="utf-8")
+    committed = dominion.commit(
+        path_a, "A writes", remote=gitops.default_remote(clone_a),
+        branch="brr-home", push=True,
+    )
+    assert committed is True  # the local commit (durability floor) still happens
+    reason = dominion.needs_sync(path_a.parent)
+    assert reason is not None
+    assert "diverged" in reason

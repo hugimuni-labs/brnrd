@@ -173,6 +173,21 @@ def test_dominion_block_surfaces_write_path_and_capture(tmp_path):
     assert str(path) in block
     # ...and told brr captures it at sleep, so it needn't commit by hand.
     assert "commits whatever you leave" in block
+    # No divergence by default → no dynamic reconcile signal.
+    assert "Reason on record" not in block
+
+
+def test_dominion_block_surfaces_divergence_when_marked(tmp_path):
+    repo = _repo(tmp_path)
+    path = dominion.ensure_dominion(repo, push=False)
+    dominion.mark_needs_sync(path.parent, "push of brr-home was rejected")
+
+    block = prompts._build_dominion_block(repo)
+
+    # The dynamic signal fires (distinct from the playbook's standing
+    # guidance) and carries the recorded reason.
+    assert "Reason on record" in block
+    assert "push of brr-home was rejected" in block
 
 
 def test_resolve_self_inject_modes(tmp_path):
