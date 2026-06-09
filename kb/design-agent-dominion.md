@@ -302,9 +302,26 @@ the one-resident-stream intuition), but note the system is **already
 multi-thought** through ad-hoc sessions running alongside the daemon — so the
 Society-of-Mind concurrency is present *for free*, and the daemon needn't
 multiplex to get it. Eventual consistency is the accepted cost (each thought sees
-memory as of its last read). The precise commit granularity, and when a coherence
-pass fires, are left to emerge with the playbook work — some structure only
-reveals itself there.
+memory as of its last read).
+
+**Shipped (2026-06-09, slice 5).** The mechanics that were "left to emerge"
+landed: the daemon captures the dominion **at sleep** — after each thought,
+on success and failure alike — via `dominion.commit`, whose commit step
+serializes across processes with an advisory `fcntl.flock` on
+`.brr/dominion.commit.lock` (file *edits* run free; only the index-touching
+commit serializes, so a daemon thought and an ad-hoc session never corrupt
+the shared index). Granularity is therefore one capture-commit per thought,
+not per write — the resident writes freely and need not commit. The
+**presence registry** is per-participant JSON under `.brr/presence/`
+(`presence.py`): lock-free because each participant owns one file, and
+self-healing because reads prune dead-pid and stale-heartbeat ghosts. The
+**coherence pass is judgement, not a scanner**: the playbook asks the
+resident to reconcile contradictions it meets (the inward salience loop),
+and the wake bundle surfaces who else is present so it knows when shared
+memory might diverge. There is deliberately no deterministic "dissonance
+detector" — that contradiction is exactly the synthesis a scanner can't do
+(cf. the kb preflight, which only flags structural facts). See
+[`subject-daemon.md`](subject-daemon.md).
 
 ## 5. The playbook — where it all converges
 
@@ -416,10 +433,12 @@ split ever grates — it just trades a sliver of human cringe for zero registers
 - **Self-inject index format.** The manifest grammar (`full` / `head` / `tail` /
   `grep` / `exec`), the budget-cap mechanics, and what the resident pins by
   default.
-- **Concurrent-write reconciliation.** With conflict *tolerated* and resolved by
-  a thought (§4), the open mechanics are: commit granularity for concurrent
-  writers, when a coherence / dissonance-resolution pass fires, and the
-  presence-registry format. Emerges with the playbook.
+- **Concurrent-write reconciliation.** *Resolved (slice 5, 2026-06-09).* Commit
+  granularity is one serialized capture-commit per thought at sleep
+  (`dominion.commit` + an `fcntl.flock`); the presence-registry format is
+  per-participant JSON under `.brr/presence/` (`presence.py`); the coherence pass
+  is the resident's own judgement (playbook), not a deterministic detector. See
+  §4 → *Shipped* and [`subject-daemon.md`](subject-daemon.md).
 - **The "felt" residue.** The consequence-and-record answer above resolves
   *detecting* improvement; whether anything is *experienced* in the editing
   remains genuinely open (and may be unnecessary to settle). Held honestly, not

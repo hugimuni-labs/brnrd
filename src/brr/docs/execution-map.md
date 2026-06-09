@@ -89,6 +89,13 @@ outbox file whose frontmatter names another pending event
 (`event: <id>`) is delivered to *that* event's thread and marks it
 handled, so a quick request can be folded in without its own spawn.
 
+After the runner returns, the daemon also **captures the resident's
+dominion** (`.brr/dominion/`, the `brr-home` branch) with a serialized
+commit — on success and failure alike — so working-memory edits survive
+to the next wake without the agent committing by hand. The commit step is
+serialized across processes by a file lock so a concurrent ad-hoc session
+never races the shared git index.
+
 If the runner exits cleanly but stdout is empty, the daemon retries up
 to `response_retries` times before failing the task. Hard failures
 (non-zero exit, timeout — controlled by `runner.timeout_seconds`,
@@ -120,6 +127,8 @@ files changed. Reload never interrupts a running worker.
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
 | Interim queue | `.brr/responses/<event-id>.partials/`       | Until streamed + cleaned up         |
 | Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; removed at finalize |
+| Presence      | `.brr/presence/<id>.json`                   | While a thought/session is active; pruned on read |
+| Dominion      | `.brr/dominion/` (branch `brr-home`)        | Durable; committed at sleep, travels with the remote |
 | Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Kept on `error` / `conflict`, removed on clean `done` |
 | Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
