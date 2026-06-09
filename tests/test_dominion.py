@@ -52,7 +52,10 @@ def test_fresh_bootstrap_creates_orphan_branch_and_worktree(tmp_path):
     # Seed files are present and committed.
     assert (path / "playbook.md").exists()
     assert (path / "self-inject").exists()
-    assert (path / "README.md").exists()
+    # The README carries the user-facing "don't delete this branch" guidance
+    # for a maintainer who notices brr-home in their branch list.
+    readme = (path / "README.md").read_text(encoding="utf-8")
+    assert "don't delete this branch" in readme.lower()
 
 
 def test_orphan_history_is_independent_of_main(tmp_path):
