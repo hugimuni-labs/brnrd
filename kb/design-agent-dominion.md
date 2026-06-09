@@ -263,9 +263,13 @@ Three mechanics this implies:
   handle interim + multiple responses — nudges the delivery work, #74.) The
   protocol contract — drop zone, partials queue, streaming delivery, interleaving,
   liveness — is specified in [`design-multi-response.md`](design-multi-response.md).
-- **Self-scheduled crons.** The agent schedules its own future wakes; the cron
+- **Self-scheduled thoughts.** The agent schedules its own future wakes; the
   specs live in the durable dominion (so they survive dormancy and reinstall),
-  and the daemon fires them as a reflex.
+  and the daemon fires them as a reflex. **Shipped 2026-06-09 (slice 7)** and
+  generalised away from cron syntax to declarative self-events (`at:` one-shot,
+  `every:` interval) — cron is just one shape; ambient initiative emerges as a
+  recurring self-thought. Full design:
+  [`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md).
 - **No pipeline stages.** The staged post-task machinery (a separate
   daemon-spawned kb-maintenance pass, etc.) is removed. The resident does such
   work either as a todo step in the current thought or by **writing itself an
@@ -329,6 +333,17 @@ memory might diverge. There is deliberately no deterministic "dissonance
 detector" — that contradiction is exactly the synthesis a scanner can't do
 (cf. the kb preflight, which only flags structural facts). See
 [`subject-daemon.md`](subject-daemon.md).
+
+**Sync refinement (2026-06-09, slice 7).** Capture's *push* is a durability
+floor, not a merge. The daemon commits locally and best-effort pushes
+`brr-home`; a **rejected** push (a second machine / failover host diverged the
+remote) is no longer swallowed — `dominion.commit` records a `needs_sync`
+marker, the wake bundle surfaces it, and the resident reconciles by hand
+(fetch / merge / resolve / push, gated on presence). Same principle as the
+coherence pass: a git merge of two divergent memories is judgement, not a
+reflex. A successful push (including a clean-tree no-op) clears the marker. See
+[`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md) → sync
+companion.
 
 ## 5. The playbook — where it all converges
 
@@ -440,12 +455,18 @@ split ever grates — it just trades a sliver of human cringe for zero registers
 - **Self-inject index format.** The manifest grammar (`full` / `head` / `tail` /
   `grep` / `exec`), the budget-cap mechanics, and what the resident pins by
   default.
-- **Concurrent-write reconciliation.** *Resolved (slice 5, 2026-06-09).* Commit
-  granularity is one serialized capture-commit per thought at sleep
-  (`dominion.commit` + an `fcntl.flock`); the presence-registry format is
+- **Concurrent-write reconciliation.** *Resolved (slice 5, 2026-06-09; remote
+  half slice 7).* Commit granularity is one serialized capture-commit per thought
+  at sleep (`dominion.commit` + an `fcntl.flock`); the presence-registry format is
   per-participant JSON under `.brr/presence/` (`presence.py`); the coherence pass
-  is the resident's own judgement (playbook), not a deterministic detector. See
-  §4 → *Shipped* and [`subject-daemon.md`](subject-daemon.md).
+  is the resident's own judgement (playbook), not a deterministic detector. The
+  *remote* divergence case (two machines on `brr-home`) is the same: daemon keeps
+  a local floor + best-effort push, a rejected push sets `needs_sync`, and the
+  resident reconciles by hand. See §4 → *Shipped* / *Sync refinement* and
+  [`subject-daemon.md`](subject-daemon.md).
+- **Self-scheduled wakes.** *Resolved (slice 7, 2026-06-09).* Declarative
+  self-events (`at:` / `every:`) in the dominion, fired by the reflex loop; see
+  [`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md).
 - **The "felt" residue.** The consequence-and-record answer above resolves
   *detecting* improvement; whether anything is *experienced* in the editing
   remains genuinely open (and may be unnecessary to settle). Held honestly, not
