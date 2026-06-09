@@ -145,9 +145,24 @@ own continuity.
 
 Two guards. The manifest carries a **budget cap** so the daemon
 prioritises/truncates and the agent can't bloat its own wake (the economy rule,
-self-applied). And `exec` entries are a **persistent-execution surface** — a
-poisoned `exec` script would run every wake — so the index and its scripts are
-the highest-integrity items in the dominion (see integrity, below).
+self-applied). The default cap is sized to fit the **seed playbook in full**
+with headroom for the resident's own pins; it was bumped 8192 → 12288 → 20480
+as the playbook grew, and a guard test (`tests/test_dominion.py`) now fails if
+the seed outgrows the cap again rather than silently clipping the playbook's
+closing on every wake (which it did, undetected, until 2026-06-09). And `exec`
+entries are a **persistent-execution surface** — a poisoned `exec` script would
+run every wake — so the index and its scripts are the highest-integrity items
+in the dominion (see integrity, below).
+
+**Provenance breadcrumbs.** Every block brr assembles into a wake — the
+dominion digest, the by-trigger pitfalls, the `kb/log.md` *Recent Activity*
+tail, the daemon's Task Context Bundle — opens with a one-line tag naming its
+source and how durable/ownable it is (your owned memory vs. the shared,
+governed `kb/` vs. per-thought runtime facts vs. brr's prompts). The layers
+aren't equal, and the resident uses them differently; the tags make the *shape*
+of the assembled context legible at point-of-use, which is also what the
+introspection mode (`design-context-introspection.md`) asks the resident to
+weigh as a whole.
 
 **Not secret, but not an audience.** "Public vs private" is the wrong axis, and
 it invites the wrong mode — performing for an audience, or self-censoring. The
