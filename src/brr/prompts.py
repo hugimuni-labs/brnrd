@@ -348,9 +348,9 @@ def _join_prompt_parts(
 def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
     """Return whether runner prompts should ask for a diffense review pack.
 
-    On by default now that the consuming surface ships: the publish kernel
-    projects the pack into the PR body (``diffense_create_pr_enabled``), so
-    a review-worthy change produces a richer PR for free. Opt out per repo
+    On by default now that the consuming surface ships: the resident
+    projects the pack into the PR body and sends it through the forge gate,
+    so a review-worthy change can produce a richer PR. Opt out per repo
     with ``diffense.emit_pack=false`` in ``.brr/config``. (Default was off
     through slices 1–2, before the projection consumed the pack.)
     """
@@ -359,13 +359,12 @@ def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
 
 
 def diffense_create_pr_enabled(cfg: dict[str, Any] | None) -> bool:
-    """Return whether the publish kernel should open/refresh a forge PR.
+    """Return whether the GitHub delivery gate should open/refresh a PR.
 
-    On by default (GitHub only for now): when a run leaves a review-worthy
-    pack, brr opens a PR whose body *is* the pack projection. It no-ops
-    naturally when no pack was emitted, so ``diffense.emit_pack=false``
-    also turns PR creation off. Opt out independently with
-    ``diffense.create_pr=false`` to keep packs local (review by hand).
+    On by default (GitHub only for now): when the resident sends a checked
+    diffense projection through ``gate: forge``, the GitHub gate opens or
+    refreshes the PR. Opt out independently with ``diffense.create_pr=false``
+    to keep packs local (review by hand).
     """
     cfg = cfg or {}
     return bool(cfg.get("diffense.create_pr", cfg.get("diffense_create_pr", True)))
@@ -553,8 +552,8 @@ def _build_task_context_bundle(
         # An absolute path in the *shared* runtime dir, not a cwd-relative
         # `.brr/...`: the runner works in a worktree whose own `.brr/` is
         # torn down at finalize, so a relative pack would die before the
-        # publish kernel could read it. This path is the one place the
-        # daemon looks for the emitted pack.
+        # resident can validate, project, and publish it through a forge
+        # gate send.
         from . import gitops
 
         base = Path(runtime_dir) if runtime_dir else gitops.shared_brr_dir(repo_root)
@@ -605,7 +604,9 @@ def _build_task_context_bundle(
             "that gate needs (omit them to use its configured default). The "
             "body is the message; brr delivers it once to that destination. "
             "It's a send, not a reply to this thread, and an unconfigured "
-            "gate is dropped."
+            "gate is dropped. For forge publishing, `gate: forge` uses the "
+            "GitHub gate and expects `head`, `base`, and `title` frontmatter; "
+            "the body is the pull-request body."
         )
         if budget_seconds:
             sections.append(
