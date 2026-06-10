@@ -6223,3 +6223,24 @@ deferred until the first partial-update views need it.
 
 Focused validation: `tests/test_brnrd_web.py` + `tests/test_brnrd_oauth.py`
 pass with the existing Starlette/FastAPI TestClient deprecation warning.
+
+## [2026-06-10] implement | Live inflight inbox completes mid-thought awareness
+
+Closed the live-awareness gap in the multi-response contract. During a daemon
+task, `_run_worker` now writes a reserved `inbox.json` control file in the
+task's outbox before invoking the runner and refreshes it on every heartbeat
+after draining agent-written replies. The file exposes the current event id and
+other still-pending events (id/source/status metadata, summary, and body), so a
+running resident can re-read it at plan / todo boundaries and fold in a quick
+event with the existing `event: <id>` outbox reply path. `_drain_outbox` skips
+`inbox.json` so the live inbox cannot be accidentally delivered as a chat
+partial.
+
+The prompt, bundled internals docs, and kb now distinguish shipped inflight
+awareness from the still-deferred agent-governed dispatch layer: idle selection
+remains FIFO, and long-running batching still needs a real claim protocol beyond
+today’s `pending` / `processing` / `done` states. Focused validation:
+`PYTHONPATH=src pytest tests/test_outbox.py tests/test_prompts.py
+tests/test_daemon.py tests/test_daemon_single_flight.py` passed; after
+`pip install -e ".[dev]"`, the full `pytest` suite passed (782 tests, with the
+existing Starlette/FastAPI deprecation warning).

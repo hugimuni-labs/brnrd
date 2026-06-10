@@ -236,10 +236,13 @@ across many.
 **The body (reflex — Python, ~free).** Poll gates, write events to the inbox,
 **spawn one thought when idle and work is pending**, deliver newly-arrived
 events into the running thought's view, and keep a **liveness backstop** so a
-wedged CLI subprocess can't hold the single-flight slot forever. No command
-layer: the reflex never parses `/cancel` or the like — every event either wakes
-the agent or waits for the living agent. Keeping the body this thin is
-deliberate — orchestration stays minimal; judgement lives in the mind.
+wedged CLI subprocess can't hold the single-flight slot forever. The live
+event view shipped 2026-06-10 as the daemon-refreshed `inbox.json` control file
+in the task outbox; next-event selection and long-running batch claims remain a
+separate claim-protocol follow-on. No command layer: the reflex never parses
+`/cancel` or the like — every event either wakes the agent or waits for the
+living agent. Keeping the body this thin is deliberate — orchestration stays
+minimal; judgement lives in the mind.
 
 **The mind (deliberation — the woken runner).** Work the task; at **plan / todo
 boundaries** (not on a wall-clock timer — natural seams where re-planning is

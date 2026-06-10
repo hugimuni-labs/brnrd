@@ -7,9 +7,12 @@ of the resident-agent reshape
 review §3), and the diffense PR finalization fold landed 2026-06-10 by
 using that gate-addressed path for forge publication. The
 streaming-delivery foundation, the agent outbox + daemon drain,
-cross-event interleaving, and gate-addressed sends are live; one follow-on
-is **deliberately deferred** (see "Deferred follow-ons" below): a finer
-*silence-based* idle-kill. This page is the protocol contract;
+cross-event interleaving, and gate-addressed sends are live; the remaining
+follow-ons are **deliberately deferred** (see "Deferred follow-ons" below).
+**Live inflight inbox awareness** landed
+2026-06-10: the daemon now refreshes a reserved `inbox.json` control file
+in the task outbox on each heartbeat, so newly arrived events are visible
+to the running thought at plan boundaries. This page is the protocol contract;
 [`subject-daemon.md`](subject-daemon.md) carries the daemon-pipeline
 synthesis and [`brr-internals.md`](../src/brr/docs/brr-internals.md)
 → Multi-response the user-facing reference.
@@ -47,7 +50,9 @@ Everything below is extra surface that no-ops when unused.
   is the same inode inside the sandbox and on the host for both the
   worktree and docker envs (the bind mount is the repo's absolute
   path), so the daemon sees the writes live — the same precedent the
-  diffense pack rides on. The agent owns this namespace.
+  diffense pack rides on. The agent owns the deliverable-message part of
+  this namespace; `inbox.json` is daemon-owned control state, and dotfiles
+  are reserved control channels. Neither is promoted as a message.
 - **Gate-side queue** — `.brr/responses/<eid>.partials/<seq>.md`,
   ordered, plus the terminal `responses/<eid>.md`. brr's namespace; the
   daemon promotes drop-zone files here, the gate consumes them.
@@ -56,6 +61,27 @@ Keeping the two regions separate preserves the existing seam: the agent
 *produces* (drop zone), brr *promotes to the gate-facing form* (queue) —
 exactly how stdout→`<eid>.md` works today. The agent never needs to know
 the gate wire format, sequencing, or which gate is delivering.
+
+### Live inflight inbox
+
+The wake bundle still includes a small snapshot of other pending events
+for immediate orientation, but it is no longer the only view. The daemon
+also writes `.brr/outbox/<eid>/inbox.json` before invoking the runner and
+refreshes it on every heartbeat after draining any outbox replies. The
+JSON contains the current event id and the currently pending events
+(id, source, status/created metadata, summary, and body), excluding the
+event already being processed. The resident re-reads this file at natural
+plan / todo boundaries, then decides whether to:
+
+- keep working on the current event;
+- fold in a quick pending event by writing an outbox reply with
+  `event: <id>`; or
+- leave cross-context work pending for its own future wake.
+
+This completes the interleaving contract for events that arrive
+mid-thought. It does **not** make the daemon parse agent commands or
+pre-claim work; the only state-changing fold-in remains a delivered
+`event: <id>` reply, which marks that target event `done`.
 
 ### Daemon drain (producer → queue)
 
@@ -70,7 +96,9 @@ finalize). Each drain:
    default, or another pending event when the file says so (interleaving);
 3. emits an `interim_response` progress packet and indexes the artifact
    on the conversation log;
-4. removes the consumed drop-zone file.
+4. removes the consumed drop-zone file;
+5. skips daemon-owned control files (`.keepalive`, `inbox.json`) and
+   `*.tmp` staging files.
 
 The drain is also the **liveness signal**: a drain that promotes a file
 is a check-in. The idle timer (later in the slice) resets on drain
@@ -102,8 +130,9 @@ body to that event's partials queue and marks that event `done` itself —
 the daemon owns inbox status, so the folded-in event gets delivered and
 cleaned up without ever being spawned as its own thought. A target that
 isn't a live pending event is dropped (don't misroute to a stale
-thread). The resident learns which events are pending from a
-**pending-events list** added to the Task Context Bundle.
+thread). The resident learns which events are pending from the wake-time
+pending-events list in the Task Context Bundle plus the live
+`inbox.json` refreshed in its outbox during the run.
 
 There is no separate "final" flag: one outbox file is one complete reply
 to its target event, so a cross-event reply is terminal for that event
@@ -163,10 +192,24 @@ projects it into a forge-shaped body.
 
 ## Deferred follow-ons
 
-One item from slice 4 remains deliberately deferred: a finer
-silence-based idle-kill. The delivery core ships without it because it
-still needs a stronger periodic check-in contract than opportunistic
-interim replies.
+Two items remain deliberately deferred. A finer silence-based idle-kill
+needs a stronger periodic check-in contract than opportunistic interim
+replies. Agent-selected next dispatch and long-running batch claims need
+a claim protocol distinct from `event: <id>` replies.
+
+### Agent-selected dispatch / batch claims — deferred
+
+Live `inbox.json` lets a running thought notice new events and fold in
+quick replies, but it does not solve idle dispatch selection or claiming
+work before a reply is ready. The current durable states are only
+`pending`, `processing`, and `done`; the interleaving path changes state
+only when the agent has produced a complete reply for a target event. A
+real "agent picks next" or "agent batches several waiting events for
+longer work" layer needs a separate claim signal plus daemon guard so the
+main loop will not spawn claimed events, and so abandoned claims can be
+released safely. Until that exists, the daemon remains FIFO when idle and
+batching is limited to events answered through the existing outbox
+`event: <id>` path.
 
 ### Finer idle-liveness timeout — deferred
 
