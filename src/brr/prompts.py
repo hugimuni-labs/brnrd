@@ -391,8 +391,17 @@ def build_daemon_prompt(
     Same as the run prompt but with event metadata, recent conversation
     context, and an explicit delivery contract assembled into a single
     ``Task Context Bundle``.
+
+    The daemon path also injects ``daemon-substrate.md`` — brr's driver's
+    manual for the daemon-specific machinery (single-flight, capture net,
+    self-scheduled wakes, the outbox/keepalive contract) that the
+    host-agnostic playbook deliberately leaves out. ``brr run`` skips it:
+    a one-shot has no daemon to fire schedules or drain an outbox.
     """
     preamble = read_prompt("run.md", repo_root)
+    substrate = read_prompt("daemon-substrate.md", repo_root)
+    if substrate.strip():
+        preamble = f"{preamble.rstrip()}\n\n{substrate.strip()}"
     bundle = _build_task_context_bundle(
         event_id=event_id,
         response_path=response_path,
