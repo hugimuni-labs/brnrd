@@ -50,28 +50,29 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> int:
     token = state.resolve_token(state_dict)
     repo = state_dict.get("repo")
     triggers = state_dict.get("triggers") or {}
-    if not token or not repo or not triggers:
+    if not token or not repo:
         return _POLL_INTERVAL
 
     cursor = state_dict.setdefault("cursor", {})
 
-    if triggers.get("any"):
-        polling._poll_any_activity(
-            token, repo, state_dict.get("bot_login", ""), cursor, inbox_dir,
-        )
-    else:
-        if "label" in triggers:
-            polling._poll_label_trigger(token, repo, triggers["label"], cursor, inbox_dir)
-        if "mention" in triggers:
-            polling._poll_mention_trigger(
-                token, repo, triggers["mention"], state_dict.get("bot_login", ""),
-                cursor, inbox_dir,
+    if triggers:
+        if triggers.get("any"):
+            polling._poll_any_activity(
+                token, repo, state_dict.get("bot_login", ""), cursor, inbox_dir,
             )
+        else:
+            if "label" in triggers:
+                polling._poll_label_trigger(token, repo, triggers["label"], cursor, inbox_dir)
+            if "mention" in triggers:
+                polling._poll_mention_trigger(
+                    token, repo, triggers["mention"], state_dict.get("bot_login", ""),
+                    cursor, inbox_dir,
+                )
 
     state_dict["cursor"] = cursor
     state._save_state(brr_dir, state_dict)
 
-    delivery._deliver_responses(brr_dir, inbox_dir, responses_dir, token)
+    delivery._deliver_responses(brr_dir, inbox_dir, responses_dir, token, repo)
     return _POLL_INTERVAL
 
 

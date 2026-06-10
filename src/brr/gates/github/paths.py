@@ -39,6 +39,11 @@ def pull(repo: str, number: int) -> str:
     return f"/repos/{repo}/pulls/{number}"
 
 
+def pulls(repo: str) -> str:
+    """``GET/POST /repos/{repo}/pulls`` — list or create pull requests."""
+    return f"/repos/{repo}/pulls"
+
+
 def pull_review(repo: str, number: int, review_id: int) -> str:
     """``GET /repos/{repo}/pulls/{n}/reviews/{review_id}`` — fetch one
     PR review (summary body + state). Used to check whether the review
