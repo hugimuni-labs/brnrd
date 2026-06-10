@@ -161,7 +161,7 @@ def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
     assert "Playbook — your standing orientation" in digest
     assert "self-inject: full playbook.md" in digest  # provenance marker
     # The rich seed (not the old stub) shipped and was injected in full.
-    assert "single-flight" in digest
+    assert "memory palace" in digest  # society-of-mind framing
     assert "is genuinely yours to shape" in digest
 
 
@@ -192,7 +192,7 @@ def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
     assert dominion.DEFAULT_INJECT_BUDGET_BYTES - seed_bytes >= 2048
 
 
-def test_dominion_block_surfaces_write_path_and_capture(tmp_path):
+def test_dominion_block_surfaces_write_path_and_commit(tmp_path):
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
 
@@ -201,8 +201,9 @@ def test_dominion_block_surfaces_write_path_and_capture(tmp_path):
     # The resident is given the absolute path so it can write to its
     # dominion from a worktree/container whose cwd is elsewhere...
     assert str(path) in block
-    # ...and told brr captures it at sleep, so it needn't commit by hand.
-    assert "commits whatever you leave" in block
+    # ...and told to commit its own memory (no capture-at-sleep reliance —
+    # an uncommitted note can vanish when a non-brr session ends).
+    assert "commit what you mean to keep" in block
     # No divergence by default → no dynamic reconcile signal.
     assert "Reason on record" not in block
 
