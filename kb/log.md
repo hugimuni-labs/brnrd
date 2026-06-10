@@ -6125,3 +6125,26 @@ the now-15.5 KiB seed with headroom for the resident's own pins) and added a
 guard test that fails if the seed outgrows the cap again, forcing a deliberate
 bump over silent loss. Recorded as a lineage breadcrumb in
 `design-agent-dominion.md`. Full suite green (773 passed; +1 guard).
+
+## [2026-06-10] decision | AGENTS.md Orientation points ad-hoc tools at the dominion playbook
+
+Gap noticed post-merge: the dominion playbook is injected only when **brr**
+assembles the prompt (`_build_dominion_block` runs for daemon *and* `brr run`),
+and on-disk `AGENTS.md` referenced it only in the daemon-task bullet — so a
+**pure ad-hoc** tool (a plain editor session with no brr in the loop) never read
+it. The universal Orientation list named `kb/index.md` and `kb/log.md` but not
+the playbook, leaving the resident's own standing self-orientation unread in
+exactly the sessions brr can't inject it. (Compounded by the known stale-cache
+drift: a tool's cached workspace-rule copy of `AGENTS.md` can lag disk, so the
+daemon-bullet reference may not even appear there.)
+
+Fix (minimal, chosen over a fuller "all tools are thoughts" framing): added an
+Orientation step pointing at `.brr/dominion/playbook.md`, conditional on the
+dominion existing, mirroring step 2's `kb/log.md` handling — "already injected
+as the *Your dominion (working memory)* block under brr; skip if brr hasn't
+bootstrapped a dominion here." Notes that its daemon mechanics (scheduling,
+delivery, liveness) only bind under brr while the ownership/memory stance always
+applies, so an ad-hoc reader isn't misled by resident-voiced machinery. Serves
+the north star of every agentic tool participating as a thought. Root `AGENTS.md`
+is a symlink to `src/brr/AGENTS.md`, so both surfaces and the `brr init` template
+pick it up.
