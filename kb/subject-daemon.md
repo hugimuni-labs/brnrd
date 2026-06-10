@@ -154,7 +154,10 @@ For each pending event, the daemon:
    dominion digest, any dominion pitfalls whose triggers the task text
    hits — the env-shaping loop's failure-memory affordance,
    [`pitfalls.py`](../src/brr/pitfalls.py) — other pending events, and who
-   else is present);
+   else is present), plus brr's **driver's manual** (`daemon-substrate.md`)
+   — the daemon-only machinery (single-flight, capture-at-sleep net,
+   self-scheduled wakes) the host-agnostic playbook deliberately leaves out
+   (see [`plan-playbook-generalization.md`](plan-playbook-generalization.md));
 7. invokes the configured runner headlessly;
 8. captures the runner's final stdout as the terminal response file, and
    drains the agent's outbox on each heartbeat and once after the runner
