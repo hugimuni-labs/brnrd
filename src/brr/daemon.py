@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import collections
 import concurrent.futures
-import json
 import os
 import shutil
 import signal
@@ -230,7 +229,6 @@ def publish(
         return
 
     brr_dir = gitops.shared_brr_dir(repo_root)
-    cfg = conf.load_config(repo_root)
     emit = _WorkerEmit(
         brr_dir, task.conversation_key or "", task.event_id or "",
     )
@@ -315,20 +313,11 @@ def publish(
                 push_cmd, cwd=repo_root,
                 capture_output=True, text=True, timeout=60,
             )
-        # On a clean push the remote head now equals our commits, so it's
-        # safe to open or refresh the change's PR. The PR url (when one is
-        # opened) becomes the delivered card's "view:" link, preferred over
-        # the bare branch url. Runs outside the branch lock; best-effort.
-        pr_url: str | None = None
-        if push.returncode == 0:
-            pr_url = _maybe_open_pr(
-                repo_root, task, brr_dir, cfg, remote, remote_branch,
-            )
         if task.conversation_key:
             done_payload = dict(push_payload)
             done_payload["ok"] = push.returncode == 0
             if push.returncode == 0:
-                view = pr_url or _forge_view_url(repo_root, remote, remote_branch)
+                view = _forge_view_url(repo_root, remote, remote_branch)
                 if view:
                     done_payload["view_url"] = view
             else:
@@ -407,149 +396,6 @@ def _forge_view_url(
         )
     except Exception:
         return None
-
-
-def _maybe_open_pr(
-    repo_root: Path,
-    task: Task,
-    brr_dir: Path,
-    cfg: dict,
-    remote: str,
-    remote_branch: str,
-) -> str | None:
-    """Open or refresh the change's PR, body = diffense pack projection.
-
-    The coherent slice of Thread D (``kb/design-diffense.md``): when a run
-    leaves a review pack at the bundle's ``Review pack path`` and
-    ``diffense.create_pr`` is on, the publish kernel opens a PR on the
-    forge whose body *is* the pack projection — so the pack is born as a
-    render target, not a throwaway format bolted on later.
-
-    Create-or-refresh keys off the push, not bespoke conflict logic. This
-    only runs after a *clean* push (remote head == our commits), so an open
-    PR on this head genuinely contains our work and its body is refreshed.
-    A diverged push never reaches here — it was rejected upstream and
-    flipped ``publish_status`` to ``conflict``. And different tasks get
-    different branches, so "keep both" falls out for free: two task
-    branches, two PRs, no collision.
-
-    GitHub only for now. Best-effort: any failure (no pack, not a GitHub
-    remote, ``gh`` missing or unauthed, head == base) returns ``None`` and
-    never fails the task — the branch is published regardless.
-    """
-    if not prompts.diffense_create_pr_enabled(cfg):
-        return None
-    pack_path = brr_dir / "diffense" / task.id / "pack.json"
-    if not pack_path.exists():
-        return None
-
-    from .gates.github.parse import parse_origin_url
-
-    url = gitops.remote_url(repo_root, remote)
-    if not url or parse_origin_url(url) is None:
-        return None  # GitHub only
-
-    base = gitops.default_branch(repo_root)
-    if base and base == remote_branch:
-        return None  # work landed on the base branch — nothing to PR
-
-    from .diffense import pack as diffense_pack
-    from .diffense import prbody
-
-    try:
-        pack = diffense_pack.load_pack(pack_path)
-    except diffense_pack.PackError as exc:
-        print(f"[brr] diffense: unreadable pack, skipping PR ({exc})")
-        return None
-
-    # In managed mode, relay the pack to brnrd for a transient rendered
-    # surface and link it from the body. Best-effort and self-hosted-safe:
-    # no cloud config → no relay → the body still carries the projection +
-    # the embedded pack (the local `brr review` fallback).
-    render_url: str | None = None
-    from .gates import cloud
-
-    if cloud.is_configured(brr_dir):
-        render_url = cloud.relay_pack(brr_dir, pack)
-
-    title = prbody.pr_title(pack, fallback=remote_branch)
-    body = prbody.project_pr_body(pack, render_url=render_url)
-    number = _existing_open_pr(repo_root, remote_branch)
-    try:
-        if number is not None:
-            proc = subprocess.run(
-                ["gh", "pr", "edit", str(number), "--body-file", "-"],
-                cwd=repo_root, input=body,
-                capture_output=True, text=True, timeout=60,
-            )
-            verb = "refreshed"
-        else:
-            cmd = [
-                "gh", "pr", "create",
-                "--head", remote_branch,
-                "--title", title,
-                "--body-file", "-",
-            ]
-            if base:
-                cmd += ["--base", base]
-            proc = subprocess.run(
-                cmd, cwd=repo_root, input=body,
-                capture_output=True, text=True, timeout=60,
-            )
-            verb = "opened"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()
-        print(f"[brr] diffense: gh pr {verb} failed ({detail[:200]})")
-        return None
-    pr_url = _pr_url_from_gh(proc.stdout, repo_root, number, remote_branch)
-    print(f"[brr] diffense: PR {verb} -> {pr_url or remote_branch}")
-    return pr_url
-
-
-def _existing_open_pr(repo_root: Path, head: str) -> int | None:
-    """Number of the open PR whose head branch is *head*, or ``None``."""
-    try:
-        proc = subprocess.run(
-            ["gh", "pr", "list", "--head", head, "--state", "open",
-             "--json", "number", "--limit", "1"],
-            cwd=repo_root, capture_output=True, text=True, timeout=30,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0:
-        return None
-    try:
-        rows = json.loads(proc.stdout or "[]")
-    except json.JSONDecodeError:
-        return None
-    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-        n = rows[0].get("number")
-        if isinstance(n, int):
-            return n
-    return None
-
-
-def _pr_url_from_gh(
-    stdout: str, repo_root: Path, number: int | None, head: str,
-) -> str | None:
-    """Pull the PR url from ``gh`` output, falling back to a view query."""
-    for line in reversed((stdout or "").splitlines()):
-        line = line.strip()
-        if line.startswith("https://") and "/pull/" in line:
-            return line
-    selector = str(number) if number is not None else head
-    try:
-        proc = subprocess.run(
-            ["gh", "pr", "view", selector, "--json", "url", "-q", ".url"],
-            cwd=repo_root, capture_output=True, text=True, timeout=30,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode == 0 and proc.stdout.strip().startswith("https://"):
-        return proc.stdout.strip()
-    return None
 
 
 def _commits_between(repo_root: Path, base_ref: str, branch: str) -> list[str]:
@@ -1370,22 +1216,28 @@ def _drain_outbox(
 
 
 def _gate_can_deliver(brr_dir: Path, gate: str) -> bool:
-    """True when *gate* is a builtin gate configured to deliver here.
+    """True when *gate* or its delivery alias is configured here.
 
     Guards out-of-bound delivery against typos and unconfigured gates: a
     synthesized event for a gate no thread is polling would sit undelivered
     forever, so an unknown/unconfigured target is dropped with a note
     instead.
     """
-    if gate not in _BUILTIN_GATES:
+    delivery_gate = _delivery_source_for_gate(gate)
+    if delivery_gate not in _BUILTIN_GATES:
         return False
     try:
         from .gates import import_gate
-        mod = import_gate(gate)
+        mod = import_gate(delivery_gate)
     except ImportError:
         return False
     is_configured = getattr(mod, "is_configured", None)
     return bool(is_configured) and bool(is_configured(brr_dir))
+
+
+def _delivery_source_for_gate(gate: str) -> str:
+    """Map agent-facing gate aliases to their delivery-loop source."""
+    return "github" if gate == "forge" else gate
 
 
 def _deliver_out_of_bound(
@@ -1400,7 +1252,8 @@ def _deliver_out_of_bound(
 ) -> bool:
     """Queue an agent-initiated message to a gate destination.
 
-    Synthesizes an already-`done` event for *gate* carrying the target
+    Synthesizes an already-`done` event for *gate* (or its delivery
+    source, e.g. `forge` -> `github`) carrying the target
     metadata the agent named (chat id, channel, thread — whatever that
     gate's deliver closure reads, falling back to its configured default),
     with *body* as the response. The gate's normal deliver loop sends it
@@ -1419,8 +1272,11 @@ def _deliver_out_of_bound(
     # stray thought).
     reserved = {"gate", "event", "id", "source", "status", "created"}
     target_meta = {k: v for k, v in fm.items() if k not in reserved}
+    event_source = _delivery_source_for_gate(gate)
+    if gate == "forge":
+        target_meta.setdefault("github_action", "pull_request")
     new_path = protocol.create_event(
-        inbox_dir, gate, "", status="done", **target_meta,
+        inbox_dir, event_source, "", status="done", **target_meta,
     )
     new_eid = new_path.stem
     protocol.write_response(responses_dir, new_eid, body)
