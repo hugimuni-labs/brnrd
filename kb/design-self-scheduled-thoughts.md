@@ -131,5 +131,10 @@ over divergence.
   (the sync companion refines it).
 - [`subject-daemon.md`](subject-daemon.md) — the reflex loop that fires due
   schedules; pipeline and Society-of-Mind concurrency.
+- [`plan-playbook-generalization.md`](plan-playbook-generalization.md) — the
+  agent-facing teaching of this mechanism (`schedule.md`, `at:`/`every:`,
+  `conversation_key`) moved out of the dominion playbook into brr's daemon
+  driver's manual (`daemon-substrate.md`) when the playbook was generalized
+  host-agnostic (2026-06-10); the firing mechanism here is unchanged.
 - [`design-environment-shaping.md`](design-environment-shaping.md) — a recurring
   self-thought is a natural carrier for the loop's periodic upkeep.
