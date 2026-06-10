@@ -171,14 +171,13 @@ def _build_dominion_block(repo_root: Path) -> str:
         "an absolute path, reachable from any working directory (your task "
         "may run in a worktree or container whose cwd is elsewhere). It's "
         "your durable memory: write notes, pain records, and your "
-        "`self-inject` index there freely. **brr commits whatever you leave "
-        "there when this thought ends and best-effort pushes `brr-home`** — a "
-        "durability floor, so your memory survives to your next wake (and "
-        "reaches the remote when it can) with no commit dance needed. What brr "
-        "*won't* do is reconcile a **diverged** remote: when a push is rejected "
-        "(another machine or session wrote `brr-home` too), fetch / merge / "
-        "resolve / push is yours to own — it's a merge, judgement not reflex, "
-        "and you'll see a note here when it's needed."
+        "`self-inject` index there freely, and **commit what you mean to "
+        "keep** — the diff is the receipt your next wake reads from. brr "
+        "best-effort pushes `brr-home` after a thought so your memory reaches "
+        "the remote; what it *won't* do is reconcile a **diverged** remote "
+        "(another machine or session wrote `brr-home` too) — fetch / merge / "
+        "resolve / push is yours to own, a merge is judgement not reflex, and "
+        "you'll see a note here when it's needed."
         f"{sync_note}\n\n"
         "Self-injected below per your `self-inject` index — yours to "
         "reshape:\n\n"
@@ -277,6 +276,50 @@ def _build_introspection_block(repo_root: Path) -> str:
     return read_prompt("introspection.md", repo_root).strip()
 
 
+def _build_injected_blocks(
+    repo_root: Path, *, task_text: str | None = None
+) -> list[str]:
+    """The dominion- and kb-sourced context blocks brr injects into every
+    wake: the dominion digest (playbook + ``self-inject``), any pitfalls
+    whose triggers match the task, the recent-activity log tail, and the kb
+    health note.
+
+    Shared by ``_join_prompt_parts`` (the runner path) and
+    ``build_injected_context`` / ``brr agent inject`` so a wrapper that
+    reuses the tool gets exactly the wake-context a runner receives —
+    whatever block we add here surfaces in both, with no drift. Mode toggles
+    layered on top (diffense, introspection) are the caller's, not part of
+    the resident's standing wake-context.
+    """
+    blocks: list[str] = []
+    dominion_block = _build_dominion_block(repo_root)
+    if dominion_block:
+        blocks.append(dominion_block)
+    if task_text:
+        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
+        if pitfalls_block:
+            blocks.append(pitfalls_block)
+    context = _build_context_block(repo_root)
+    if context:
+        blocks.append(context)
+    kb_health_block = _build_kb_health_block(repo_root)
+    if kb_health_block:
+        blocks.append(kb_health_block)
+    return blocks
+
+
+def build_injected_context(repo_root: Path, *, task_text: str | None = None) -> str:
+    """brr's assembled wake-context, for any agent wrapper to reuse.
+
+    Backs ``brr agent inject``: returns the same dominion/kb blocks a runner
+    receives (see ``_build_injected_blocks``), joined as text, so a harness
+    other than brr's daemon can orient the resident from its own dominion
+    with the identical ``self-inject`` semantic. ``task_text`` lets the
+    caller pull in pitfalls whose triggers match the work at hand.
+    """
+    return "\n\n".join(_build_injected_blocks(repo_root, task_text=task_text))
+
+
 def _join_prompt_parts(
     preamble: str,
     repo_root: Path,
@@ -287,19 +330,7 @@ def _join_prompt_parts(
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
     parts = [preamble]
-    dominion_block = _build_dominion_block(repo_root)
-    if dominion_block:
-        parts.append(dominion_block)
-    if task_text:
-        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
-        if pitfalls_block:
-            parts.append(pitfalls_block)
-    context = _build_context_block(repo_root)
-    if context:
-        parts.append(context)
-    kb_health_block = _build_kb_health_block(repo_root)
-    if kb_health_block:
-        parts.append(kb_health_block)
+    parts.extend(_build_injected_blocks(repo_root, task_text=task_text))
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
@@ -392,8 +423,17 @@ def build_daemon_prompt(
     Same as the run prompt but with event metadata, recent conversation
     context, and an explicit delivery contract assembled into a single
     ``Task Context Bundle``.
+
+    The daemon path also injects ``daemon-substrate.md`` — brr's driver's
+    manual for the daemon-specific machinery (single-flight, capture net,
+    self-scheduled wakes, the outbox/keepalive contract) that the
+    host-agnostic playbook deliberately leaves out. ``brr run`` skips it:
+    a one-shot has no daemon to fire schedules or drain an outbox.
     """
     preamble = read_prompt("run.md", repo_root)
+    substrate = read_prompt("daemon-substrate.md", repo_root)
+    if substrate.strip():
+        preamble = f"{preamble.rstrip()}\n\n{substrate.strip()}"
     bundle = _build_task_context_bundle(
         event_id=event_id,
         response_path=response_path,

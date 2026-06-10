@@ -62,6 +62,13 @@ Prompt assembly also injects the resident's dominion digest (per its
 `self-inject` index) and, when the deterministic kb preflight isn't
 clean, a `kb health` block of findings for the resident to fold into
 its work (see [`brr-internals.md`](brr-internals.md) → KB maintenance).
+The daemon path additionally injects `daemon-substrate.md` — brr's
+driver's manual for the daemon-only machinery (single-flight, the
+capture-at-sleep net, self-scheduled wakes) that the host-agnostic
+dominion playbook leaves out; `brr run` skips it. `brr agent inject`
+prints this assembled wake-context (dominion digest + matched pitfalls +
+recent log) so a non-brr wrapper can reuse the same `self-inject`
+semantic.
 
 ### 4. Response
 
