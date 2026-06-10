@@ -1342,8 +1342,11 @@ standalone story but the shallower pack, and it would ride the same
 GitHub App ingress managed mode needs anyway. Decision (2026-06-01):
 **B first** — it's the steak (real review lift, in-tree, no new ingress);
 A is a self-contained demo deferred until B and the pack format have
-earned their keep. Both emit the same pack into the same renderers, which
-is the whole point of the producer/pack split.
+earned their keep. Producer A's first substrate slice did land on
+2026-06-10: the OSS GitHub gate has a bounded `opened` trigger for newly
+created issues and PRs, so a future post-PR producer can wake on PR
+creation without opting into every comment. Both emit the same pack into
+the same renderers, which is the whole point of the producer/pack split.
 
 ## Open questions
 

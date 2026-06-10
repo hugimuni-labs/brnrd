@@ -36,12 +36,15 @@ behind `brr gate github setup`. Five concrete surfaces:
   users (see
   [`decision-runtime-dependencies.md`](decision-runtime-dependencies.md)).
   Token validation hits `GET /user` once at setup.
-- **Three-trigger polling.** `label-on-issue`, `mention-in-comment`,
-  and `any` (Watch-all). Polling cycle is 60s with conditional
-  requests (ETag / If-None-Match per endpoint), so the steady-state
-  cost on a quiet repo is roughly zero against the REST rate limit.
-  Includes inline PR review comments (`/pulls/comments`) and PR review
-  summaries (fetched lazily when a line comment surfaces a new
+- **Four-trigger polling.** `label-on-issue`, `mention-in-comment`,
+  `opened` (new issue / PR), and `any` (Watch-all). `opened` is the
+  bounded maintainer-inbox mode: it sees newly created issues and PRs
+  without subscribing to every comment, while `any` remains the explicit
+  high-volume mode for every new issue, PR, and comment. Polling cycle is
+  60s with conditional requests (ETag / If-None-Match per endpoint), so
+  the steady-state cost on a quiet repo is roughly zero against the REST
+  rate limit. Includes inline PR review comments (`/pulls/comments`) and
+  PR review summaries (fetched lazily when a line comment surfaces a new
   `pull_request_review_id`).
 - **Single-repo binding.** One repo per `.brr/`, set by
   `brr gate github setup` at adoption time. Multi-repo support would
