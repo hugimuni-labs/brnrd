@@ -1,8 +1,32 @@
 """Tests for CLI dispatch."""
 
+import json
+
 import pytest
 
 from brr.cli import main
+
+
+def _write_review_pack(path):
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1-test",
+                "metadata": {"pr": {"title": "Review pack title"}},
+                "reading_order": ["summary:x"],
+                "cards": [
+                    {
+                        "id": "summary:x",
+                        "kind": "summary",
+                        "identity": {"label": "the change in shape"},
+                        "lore": {"descriptive": "a small honest change"},
+                        "provenance": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_version(capsys):
@@ -22,6 +46,20 @@ def test_removed_diagnostic_commands_are_not_public(tmp_path, monkeypatch, comma
 def test_run_requires_instruction():
     with pytest.raises(SystemExit):
         main(["run"])
+
+
+def test_review_prints_pr_title_and_body(tmp_path, capsys):
+    pack = tmp_path / "pack.json"
+    _write_review_pack(pack)
+
+    assert main(["review", str(pack), "--pr-title", "--fallback-title", "fallback"]) == 0
+    assert "Review pack title" in capsys.readouterr().out
+
+    assert main(["review", str(pack), "--pr-body", "--render-url", "https://r.example"]) == 0
+    body = capsys.readouterr().out
+    assert "## Summary" in body
+    assert "https://r.example" in body
+    assert "diffense:pack:v1" in body
 
 
 def test_up_dev_reload_flag_passes_to_daemon(monkeypatch, tmp_path):

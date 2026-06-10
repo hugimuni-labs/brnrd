@@ -100,6 +100,9 @@ for `processing` or `done` events — ahead of the terminal reply. An
 outbox file whose frontmatter names another pending event
 (`event: <id>`) is delivered to *that* event's thread and marks it
 handled, so a quick request can be folded in without its own spawn.
+An outbox file with `gate: <name>` is an out-of-bound send; `gate: forge`
+uses the GitHub gate to open or refresh a PR from the file's `head`,
+`base`, and `title` frontmatter plus the body.
 
 After the runner returns, the daemon also **captures the resident's
 dominion** (`.brr/dominion/`, the `brr-home` branch) with a serialized

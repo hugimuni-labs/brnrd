@@ -110,6 +110,36 @@ class TestDrainOutbox:
         assert protocol.list_pending(inbox) == []
         assert not (outbox / "ping.md").exists()
 
+    def test_forge_gate_alias_queues_github_pull_request_event(
+        self, tmp_path, monkeypatch,
+    ):
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "pr.md").write_text(
+            "---\ngate: forge\nhead: brr/feat-x\nbase: main\n"
+            "title: Review feat-x\n---\n"
+            "projected body\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        done = protocol.list_done(inbox, "github")
+        assert len(done) == 1
+        ev = done[0]
+        assert ev["source"] == "github"
+        assert ev["github_action"] == "pull_request"
+        assert ev["head"] == "brr/feat-x"
+        assert protocol.read_response(responses, ev["id"]).strip() == "projected body"
+        assert protocol.list_done(inbox, "forge") == []
+
     def test_gate_addressed_unknown_gate_dropped(self, tmp_path, monkeypatch):
         brr_dir = tmp_path / ".brr"
         responses = brr_dir / "responses"

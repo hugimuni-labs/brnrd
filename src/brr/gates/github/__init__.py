@@ -36,13 +36,15 @@ time, in order:
 2. ``GITHUB_TOKEN`` / ``GH_TOKEN`` environment variable.
 3. Interactive paste, stored in the state file.
 
-The gate is built-in but ``is_configured`` returns false until setup
-runs — there is no surprise auto-enable. Webhooks are deliberately
-out of scope for the OSS path (require a public URL + signature
-verification + reverse-proxy setup); polling matches the rest of
-brr's gate model. The managed brnrd GitHub App owns the webhook side;
-see [`kb/design-github-gate-vs-brnrd-app.md`] for the OSS-vs-brnrd
-split and what code each side reuses.
+The gate is built-in but ``is_configured`` returns false until a token
+and repo are configured — there is no surprise auto-enable. Polling
+requires triggers; without them the gate is deliver-only, which is how
+agent-addressed forge sends open or refresh pull requests without also
+watching issues/comments. Webhooks are deliberately out of scope for the
+OSS path (require a public URL + signature verification + reverse-proxy
+setup); polling matches the rest of brr's gate model. The managed brnrd
+GitHub App owns the webhook side; see [`kb/design-github-gate-vs-brnrd-app.md`]
+for the OSS-vs-brnrd split and what code each side reuses.
 
 The module is structured as a package so the OSS daemon and the brnrd
 backend can share the transport-agnostic core. ``paths``, ``cache``
