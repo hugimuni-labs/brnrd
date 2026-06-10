@@ -1,6 +1,6 @@
 """Trigger pollers — turn new GitHub activity into inbox events.
 
-Three triggers:
+Four triggers:
 
 - ``label`` — labelled open issues become events (PRs excluded; they
   almost always carry ongoing back-and-forth that label-once doesn't
@@ -9,8 +9,10 @@ Three triggers:
   events. Covers both issue/PR timeline comments (``/issues/comments``)
   and inline PR review-line comments (``/pulls/comments``); the latter
   gets fetched on its own cursor.
+- ``opened`` — newly opened issues and PRs become events without also
+  subscribing to every comment. This is the low-volume maintainer inbox.
 - ``any`` — every new issue, PR, and comment fires an event. Overrides
-  label and mention; off by default because it's token-expensive.
+  opened, label, and mention; off by default because it's token-expensive.
 
 The pollers share ``_fetch_pr_head_branch`` to attach ``branch_target``
 to PR-anchored events, so the daemon's pre-task fetch+ff hook can
@@ -41,6 +43,80 @@ def _fetch_pr_head_branch(token: str, repo: str, pr_number: int) -> str | None:
     head = pr.get("head") or {}
     ref = head.get("ref")
     return str(ref) if isinstance(ref, str) and ref else None
+
+
+def _created_in_window(item: dict, since: str) -> bool:
+    created = item.get("created_at")
+    return isinstance(created, str) and created >= since
+
+
+def _poll_opened_items(
+    token: str,
+    repo: str,
+    *,
+    since: str,
+    seen: set[int],
+    etags: dict,
+    inbox_dir: Path,
+    trigger: str,
+) -> str:
+    items = client._api_get(
+        token,
+        repo_issues(repo),
+        params={
+            "state": "all",
+            "since": since,
+            "per_page": 100,
+            "sort": "updated",
+            "direction": "asc",
+        },
+        etag_store=etags,
+    ) or []
+
+    latest_seen = since
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        number = item.get("number")
+        if not isinstance(number, int):
+            continue
+        ts = item.get("updated_at") or item.get("created_at")
+        if isinstance(ts, str) and ts > latest_seen:
+            latest_seen = ts
+        if number in seen:
+            continue
+        if not _created_in_window(item, since):
+            continue
+
+        is_pr = "pull_request" in item
+        title = str(item.get("title") or "").strip()
+        body_text = str(item.get("body") or "").strip()
+        author = (item.get("user") or {}).get("login") or ""
+        meta: dict[str, Any] = {
+            "github_repo": repo,
+            "github_issue_number": number,
+            "github_author": author,
+            "github_html_url": item.get("html_url") or "",
+            "github_trigger": trigger,
+        }
+        if is_pr:
+            meta["github_kind"] = "pr"
+            meta["github_pr_number"] = number
+            branch = _fetch_pr_head_branch(token, repo, number)
+            if branch:
+                meta["branch_target"] = branch
+        else:
+            meta["github_kind"] = "issue"
+        protocol.create_event(
+            inbox_dir,
+            source="github",
+            body=parse._format_event_body(title, body_text),
+            title=title,
+            **meta,
+        )
+        seen.add(number)
+
+    return latest_seen
 
 
 # ── label trigger ──────────────────────────────────────────────────
@@ -108,6 +184,26 @@ def _poll_label_trigger(
 
     cursor["issues_since"] = latest_seen
     cursor["seen_issue_numbers"] = sorted(seen)[-_SEEN_CAP:]
+
+
+# ── opened trigger ─────────────────────────────────────────────────
+
+
+def _poll_opened_trigger(
+    token: str,
+    repo: str,
+    cursor: dict,
+    inbox_dir: Path,
+) -> None:
+    since = cursor.get("opened_since") or cache._initial_since()
+    seen = set(cursor.get("seen_opened_issue_numbers") or [])
+    etags = cursor.setdefault("etags", {})
+    latest_seen = _poll_opened_items(
+        token, repo, since=since, seen=seen, etags=etags,
+        inbox_dir=inbox_dir, trigger="opened",
+    )
+    cursor["opened_since"] = latest_seen
+    cursor["seen_opened_issue_numbers"] = sorted(seen)[-_SEEN_CAP:]
 
 
 # ── mention trigger ───────────────────────────────────────────────
@@ -411,61 +507,13 @@ def _poll_any_activity(
     are filtered to prevent self-triggering loops.
     """
     etags = cursor.setdefault("etags", {})
-    # --- Issues and PRs -----------------------------------------------
+    # --- Newly opened issues and PRs ----------------------------------
     since = cursor.get("any_issues_since") or cache._initial_since()
     seen = set(cursor.get("any_seen_issue_numbers") or [])
-    items = client._api_get(
-        token, repo_issues(repo),
-        params={
-            "state": "all",
-            "since": since,
-            "per_page": 100,
-            "sort": "updated",
-            "direction": "asc",
-        },
-        etag_store=etags,
-    ) or []
-
-    latest_seen = since
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        number = item.get("number")
-        if not isinstance(number, int):
-            continue
-        if number in seen:
-            continue
-
-        is_pr = "pull_request" in item
-        title = str(item.get("title") or "").strip()
-        body_text = str(item.get("body") or "").strip()
-        author = (item.get("user") or {}).get("login") or ""
-        meta: dict[str, Any] = {
-            "github_repo": repo,
-            "github_issue_number": number,
-            "github_author": author,
-            "github_html_url": item.get("html_url") or "",
-            "github_trigger": "any",
-        }
-        if is_pr:
-            meta["github_kind"] = "pr"
-            meta["github_pr_number"] = number
-            branch = _fetch_pr_head_branch(token, repo, number)
-            if branch:
-                meta["branch_target"] = branch
-        else:
-            meta["github_kind"] = "issue"
-        protocol.create_event(
-            inbox_dir,
-            source="github",
-            body=parse._format_event_body(title, body_text),
-            title=title,
-            **meta,
-        )
-        seen.add(number)
-        ts = item.get("updated_at") or item.get("created_at")
-        if isinstance(ts, str) and ts > latest_seen:
-            latest_seen = ts
+    latest_seen = _poll_opened_items(
+        token, repo, since=since, seen=seen, etags=etags,
+        inbox_dir=inbox_dir, trigger="any",
+    )
 
     cursor["any_issues_since"] = latest_seen
     cursor["any_seen_issue_numbers"] = sorted(seen)[-_SEEN_CAP:]
