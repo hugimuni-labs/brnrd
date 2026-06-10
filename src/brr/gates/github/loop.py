@@ -61,6 +61,8 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> int:
                 token, repo, state_dict.get("bot_login", ""), cursor, inbox_dir,
             )
         else:
+            if triggers.get("opened"):
+                polling._poll_opened_trigger(token, repo, cursor, inbox_dir)
             if "label" in triggers:
                 polling._poll_label_trigger(token, repo, triggers["label"], cursor, inbox_dir)
             if "mention" in triggers:
