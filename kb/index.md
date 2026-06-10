@@ -126,6 +126,14 @@ dive-in map) and are stable until something contradicts them.
   dialogue, not a silent edit. The interactivity-axis counterpart to the
   [environment-shaping](design-environment-shaping.md) loop's automatic
   remember → shape machinery.
+- [Generalize the playbook; brr becomes one driver](plan-playbook-generalization.md) —
+  *active (started 2026-06-10)*. Splits today's daemon-assuming playbook
+  into a host-agnostic **core** (the resident), brr's **driver's manual**
+  (daemon-owned substrate: scheduled-wakes, capture-net, the Task Context
+  Bundle), and a **`brr agent inject`** tool that hands any wrapper brr's
+  assembled wake-context via the runner's own path. Reframe: *the playbook
+  is the resident; brr is one driver of it.* Drops capture-at-sleep
+  reliance and single-flight-as-identity (→ society-of-mind).
 - [Runtime dependency stance](decision-runtime-dependencies.md) —
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native
