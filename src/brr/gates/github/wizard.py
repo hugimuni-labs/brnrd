@@ -141,6 +141,5 @@ def is_configured(brr_dir: Path) -> bool:
     state_dict = state._load_state(brr_dir)
     return (
         bool(state_dict.get("repo"))
-        and bool(state_dict.get("triggers"))
         and state.resolve_token(state_dict) is not None
     )
