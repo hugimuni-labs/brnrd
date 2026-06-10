@@ -597,6 +597,14 @@ def _build_task_context_bundle(
             "that wants its own branch wake as its own thought."
         )
         sections.append(
+            "- brr also refreshes a live inbox view at "
+            f"`{outbox_path}/inbox.json` on each heartbeat. At natural "
+            "plan / todo boundaries, re-read it before deciding whether to "
+            "continue, fold in a quick event via `event: <id>`, or leave "
+            "waiting work for its own wake. This file is daemon-owned "
+            "control state, not an outbox message to edit or remove."
+        )
+        sections.append(
             "- To send a message to a destination with *no* waiting event "
             "— ping a chat, post an out-of-bound note, deliver from a "
             "scheduled thought — start the outbox file with a frontmatter "
@@ -662,10 +670,11 @@ def _build_task_context_bundle(
         sections.append("")
         sections.append("### Inbox — other pending events")
         sections.append(
-            "Other events are waiting. You can fold a quick, related one in "
-            "now (answer it via the outbox `event: <id>` contract above) "
-            "instead of leaving it for its own spawn — your call. This is a "
-            "snapshot from when you woke; more may have arrived since."
+            "Other events were waiting when you woke. You can fold a quick, "
+            "related one in now (answer it via the outbox `event: <id>` "
+            "contract above) instead of leaving it for its own spawn — your "
+            "call. For the current list, read the live `inbox.json` in your "
+            "outbox at plan / todo boundaries."
         )
         sections.append("")
         sections.append(inbox_block)
