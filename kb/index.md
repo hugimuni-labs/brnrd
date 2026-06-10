@@ -482,7 +482,7 @@ dive-in map) and are stable until something contradicts them.
   webhook, fuller dashboard, caps/billing, failover.
 - [GitHub gate vs brnrd GitHub App design](design-github-gate-vs-brnrd-app.md) —
   *accepted 2026-05-27*. Boundary doc for the GitHub side: what the
-  OSS polling gate owns and keeps owning (PAT auth, three-trigger
+  OSS polling gate owns and keeps owning (PAT auth, four-trigger
   polling, single-repo binding, response posting, live progress
   card), what brnrd owns exclusively (GH App JWT minting, webhook
   receipt + signature verification, multi-project routing,

@@ -6209,6 +6209,22 @@ links the daemon-coherence review page, clearing the deterministic
 missing-from-index finding for that page. Full suite: 779 passed, with the
 existing Starlette/FastAPI deprecation warning.
 
+## [2026-06-10] implement | GitHub gate gains a bounded opened trigger
+
+Issue #75's Producer A follow-up exposed a real substrate gap: `any` already
+let the OSS GitHub gate watch every issue, PR, and comment, but that was too
+blunt for "the resident is the maintainer" on non-trivial repos. Added a
+separate `opened` trigger that emits events for newly created issues and PRs
+without subscribing to every comment; PR events still carry `branch_target`.
+`any` remains the explicit high-volume mode and now shares the opened-item
+emitter so old issues/PRs that are merely updated after the cursor don't
+masquerade as newly opened work.
+
+Setup now prompts for Watch-all first, then the bounded opened trigger, then
+label / mention. The GitHub gate boundary doc and diffense design were
+reconciled: Producer A remains deferred, but its first ingress substrate is now
+present. Full suite: 783 passed, with the existing Starlette/httpx deprecation
+warning.
 ## [2026-06-10] implement | brnrd login moves onto the dashboard UI substrate
 
 Retried the visible slice of issue #77 after the GitHub-OAuth identity pivot:
