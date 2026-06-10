@@ -127,7 +127,7 @@ dive-in map) and are stable until something contradicts them.
   [environment-shaping](design-environment-shaping.md) loop's automatic
   remember → shape machinery.
 - [Generalize the playbook; brr becomes one driver](plan-playbook-generalization.md) —
-  *active (started 2026-06-10)*. Splits today's daemon-assuming playbook
+  *shipped 2026-06-10*. Splits the daemon-assuming playbook
   into a host-agnostic **core** (the resident), brr's **driver's manual**
   (daemon-owned substrate: scheduled-wakes, capture-net, the Task Context
   Bundle), and a **`brr agent inject`** tool that hands any wrapper brr's

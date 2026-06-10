@@ -414,6 +414,20 @@ So the playbook is the resident self-orientation layer of
 five-layer model — fed by the dominion's self-inject index, the resident's
 standing self-orientation, not a block mechanically stamped onto every task.
 
+**Host-agnostic refinement (2026-06-10).** The "migrates *into* the
+playbook" above held until the playbook had absorbed enough brr-specific
+machinery to mislead a non-brr reader (most sharply: "brr captures your
+dominion at sleep," a footgun for an ad-hoc session whose writes nothing
+commits). The playbook was then generalized to describe the *resident*
+independent of host — brr is **one driver** among possible wrappers — and
+the daemon-specific mechanics moved back *out*: self-scheduled wakes, the
+capture-at-sleep net, and the delivery-contract framing now live in a
+brr-owned **driver's manual** (`daemon-substrate.md`, injected only on the
+daemon path) plus the Task Context Bundle; single-flight-as-identity became
+the society-of-mind framing in the core. `brr agent inject` hands that same
+assembled wake-context to any non-brr wrapper. See
+[`plan-playbook-generalization.md`](plan-playbook-generalization.md).
+
 ## 6. Naming
 
 - **brr** = the project-resident agent. Its memory is the dominion + kb; its
@@ -460,7 +474,7 @@ split ever grates — it just trades a sliver of human cringe for zero registers
 | [`subject-tasks-branching.md`](subject-tasks-branching.md) / [`design-publish-kernel.md`](design-publish-kernel.md) | **Mostly inherited.** Per-task branch → PR publish unchanged; the dominion branch is **never** PR'd or merged to `main` — it's pushed directly. |
 | [`subject-managed-mode.md`](subject-managed-mode.md) (failover) | **Orthogonal.** Managed failover stays stateless per-task; the dominion-in-git lets a failover agent inherit continuity. |
 | [#47](https://github.com/Gurio/brr/issues/47) (async + pooling) | **Rescope** to managed-side scale; the local daemon is single-flight by design. |
-| [#49](https://github.com/Gurio/brr/issues/49) (`brr agent` namespace) | **Expand** to host the resident-agent surface: memory branch, crons, dominion inspection ("what is brr thinking/queued"). |
+| [#49](https://github.com/Gurio/brr/issues/49) (`brr agent` namespace) | **Expand** to host the resident-agent surface: memory branch, crons, dominion inspection ("what is brr thinking/queued"). *`brr agent inject` shipped 2026-06-10 — the wake-context surface a non-brr wrapper reuses; the rest is pending.* |
 | [#23](https://github.com/Gurio/brr/issues/23) (release readiness) | This reshape is sequenced **first**, so it's a pre-release item, not the post-launch epic. Light on ticketing. |
 
 ## 8. Open threads (not resolved)
