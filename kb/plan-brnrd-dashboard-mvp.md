@@ -24,11 +24,12 @@ maintain), and
 ## Current implementation state
 
 The dashboard MVP plan is accepted, but the full dashboard is not
-implemented. The prototype web shell in `src/brnrd_web/routes.py`
-currently covers GitHub login plus the device-flow approve page; the
-projects, tasks, credentials, failover, audit, allowance, and billing
-views still depend on the remaining managed-gates / failover /
-billing backend slices.
+implemented. The prototype web shell in `src/brnrd_web/` currently
+covers GitHub login plus the device-flow approve page on the intended
+server-rendered substrate: Jinja templates plus packaged static CSS
+mounted from the brnrd FastAPI app. The projects, tasks, credentials,
+failover, audit, allowance, and billing views still depend on the
+remaining managed-gates / failover / billing backend slices.
 
 Ship order within this plan: bootstrap (slice 1) → core views
 (slice 2) → cost / audit (slice 3) → polish (slice 4). Each slice
@@ -232,9 +233,11 @@ can pick this up to confirm their backend is wired.
 
 Steps:
 
-1. `src/brnrd_web/` package layout:
+1. `src/brnrd_web/` package layout — **login / approve substrate shipped
+   2026-06-10**:
    - `templates/` Jinja2 templates (one per view + a base layout)
-   - `static/` HTMX asset, a small CSS, no JS-build pipeline
+   - `static/` small CSS today; add the HTMX asset when partial-update
+     views land; no JS-build pipeline
    - `__init__.py` registers the routes onto the brnrd FastAPI
      app (no separate web server).
 2. Auth flow: `/login` GET renders "Sign in with GitHub";

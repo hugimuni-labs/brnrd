@@ -19,6 +19,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 brr = ["AGENTS.md", "Dockerfile", "prompts/*.md", "docs/*.md", "gates/README.md"]
+brnrd_web = ["templates/*.html", "static/*.css"]
 
 [project.optional-dependencies]
 backend = [
@@ -26,6 +27,7 @@ backend = [
   "uvicorn>=0.27",
   "sqlalchemy>=2.0",
   "httpx>=0.27",
+  "jinja2>=3.1",
   "python-multipart>=0.0.9",
 ]
 # Postgres driver for deployment (Upsun/managed). psycopg3 ships
