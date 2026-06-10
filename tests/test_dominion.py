@@ -192,6 +192,23 @@ def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
     assert dominion.DEFAULT_INJECT_BUDGET_BYTES - seed_bytes >= 2048
 
 
+def test_build_injected_context_matches_runner_injection(tmp_path):
+    """`brr agent inject` (build_injected_context) hands a wrapper exactly
+    the wake-context the runner path injects — same blocks, so a non-brr
+    harness orients the resident with the identical self-inject semantic."""
+    repo = _repo(tmp_path)
+    dominion.ensure_dominion(repo, push=False)
+
+    context = prompts.build_injected_context(repo, task_text="fix the parser")
+
+    # It carries the dominion digest (playbook + self-inject)...
+    assert "Your dominion (working memory)" in context
+    assert "Playbook — your standing orientation" in context
+    # ...and is verbatim what the runner path embeds into a full prompt, so
+    # whatever blocks we add to the runner show up in the tool with no drift.
+    assert context in prompts.build_run_prompt("fix the parser", repo)
+
+
 def test_dominion_block_surfaces_write_path_and_commit(tmp_path):
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)

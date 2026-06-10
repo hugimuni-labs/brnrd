@@ -101,6 +101,42 @@ def test_daemon_status_does_not_require_repo(monkeypatch, tmp_path):
     assert calls == [tmp_path / ".brr"]
 
 
+def test_agent_inject_prints_wake_context(monkeypatch, tmp_path, capsys):
+    seen = {}
+
+    def fake_inject(repo_root, *, task_text=None):
+        seen["args"] = (repo_root, task_text)
+        return "WAKE-CONTEXT-DIGEST"
+
+    monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("brr.prompts.build_injected_context", fake_inject)
+
+    assert main(["agent", "inject", "--task", "fix the parser"]) == 0
+    assert seen["args"] == (tmp_path, "fix the parser")
+    assert "WAKE-CONTEXT-DIGEST" in capsys.readouterr().out
+
+
+def test_agent_inject_requires_repo(monkeypatch):
+    monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: None)
+    assert main(["agent", "inject"]) == 2
+
+
+def test_agent_inject_reports_empty_dominion(monkeypatch, tmp_path):
+    monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        "brr.prompts.build_injected_context",
+        lambda repo_root, *, task_text=None: "",
+    )
+    assert main(["agent", "inject"]) == 1
+
+
+def test_agent_requires_subcommand(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        main(["agent"])
+    assert exc.value.code == 2
+
+
 def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):
     calls = []
 
