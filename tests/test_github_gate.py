@@ -34,6 +34,7 @@ from brr.gates.github import (
     paths,
     polling,
     progress,
+    prs,
     state,
     wizard,
 )
@@ -67,6 +68,7 @@ def test_path_builders_match_documented_endpoints():
     assert paths.repo_issues("o/r") == "/repos/o/r/issues"
     assert paths.repo_issue_comments("o/r") == "/repos/o/r/issues/comments"
     assert paths.repo_pulls_comments("o/r") == "/repos/o/r/pulls/comments"
+    assert paths.pulls("o/r") == "/repos/o/r/pulls"
     assert paths.pull("o/r", 62) == "/repos/o/r/pulls/62"
     assert paths.issue_comments("o/r", 7) == "/repos/o/r/issues/7/comments"
     assert paths.issue_comment("o/r", 555) == "/repos/o/r/issues/comments/555"
@@ -74,6 +76,68 @@ def test_path_builders_match_documented_endpoints():
         paths.pull_comment_replies("o/r", 62, 999)
         == "/repos/o/r/pulls/62/comments/999/replies"
     )
+
+
+# ── pull-request delivery helper ─────────────────────────────────────
+
+
+def test_open_or_refresh_pr_creates_when_no_open_head(monkeypatch):
+    calls: list = []
+
+    def fake_get(token, path, params=None, **_kw):
+        calls.append(("get", token, path, params))
+        return []
+
+    def fake_post(token, path, body):
+        calls.append(("post", token, path, body))
+        return {"html_url": "https://github.com/o/r/pull/7"}
+
+    monkeypatch.setattr(client, "_api_get", fake_get)
+    monkeypatch.setattr(client, "_api_post", fake_post)
+
+    url = prs.open_or_refresh_pr(
+        "tok", "o/r",
+        head="brr/feat-x",
+        base="main",
+        title="Review feat-x",
+        body="body",
+    )
+
+    assert url == "https://github.com/o/r/pull/7"
+    assert calls == [
+        ("get", "tok", "/repos/o/r/pulls",
+         {"state": "open", "head": "o:brr/feat-x", "per_page": 1}),
+        ("post", "tok", "/repos/o/r/pulls",
+         {"title": "Review feat-x", "head": "brr/feat-x", "body": "body",
+          "base": "main"}),
+    ]
+
+
+def test_open_or_refresh_pr_updates_existing_head(monkeypatch):
+    calls: list = []
+
+    def fake_get(token, path, params=None, **_kw):
+        calls.append(("get", path, params))
+        return [{"number": 12, "html_url": "https://github.com/o/r/pull/12"}]
+
+    def fake_patch(token, path, body):
+        calls.append(("patch", path, body))
+        return {"html_url": "https://github.com/o/r/pull/12"}
+
+    monkeypatch.setattr(client, "_api_get", fake_get)
+    monkeypatch.setattr(client, "_api_patch", fake_patch)
+
+    url = prs.open_or_refresh_pr(
+        "tok", "o/r", head="brr/feat-x", title="New title", body="new body",
+    )
+
+    assert url == "https://github.com/o/r/pull/12"
+    assert calls == [
+        ("get", "/repos/o/r/pulls",
+         {"state": "open", "head": "o:brr/feat-x", "per_page": 1}),
+        ("patch", "/repos/o/r/pulls/12",
+         {"title": "New title", "body": "new body"}),
+    ]
 
 
 # ── token resolution ────────────────────────────────────────────────
@@ -382,15 +446,35 @@ def test_is_configured_requires_repo_triggers_and_token(tmp_path, monkeypatch):
     state._save_state(brr_dir, {"token": "x"})
     assert github.is_configured(brr_dir) is False
 
-    # Token + repo, no triggers — still not configured.
+    # Token + repo, no triggers — configured for deliver-only use.
     state._save_state(brr_dir, {"token": "x", "repo": "o/r"})
-    assert github.is_configured(brr_dir) is False
+    assert github.is_configured(brr_dir) is True
 
     # Token + repo + at least one trigger — configured.
     state._save_state(brr_dir, {
         "token": "x", "repo": "o/r", "triggers": {"label": "brr"},
     })
     assert github.is_configured(brr_dir) is True
+
+
+def test_loop_delivers_without_poll_triggers(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {"token": "tok", "repo": "owner/name"})
+    calls: list = []
+    monkeypatch.setattr(polling, "_poll_any_activity", lambda *a, **k: calls.append("any"))
+    monkeypatch.setattr(polling, "_poll_label_trigger", lambda *a, **k: calls.append("label"))
+    monkeypatch.setattr(polling, "_poll_mention_trigger", lambda *a, **k: calls.append("mention"))
+    monkeypatch.setattr(
+        delivery,
+        "_deliver_responses",
+        lambda b, i, r, token, repo=None, **kw: calls.append(("deliver", token, repo)),
+    )
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    assert calls == [("deliver", "tok", "owner/name")]
 
 
 # ── label trigger ───────────────────────────────────────────────────
@@ -1646,3 +1730,70 @@ def test_deliver_responses_appends_branch_footer(tmp_path, monkeypatch):
     assert "The work is done." in body_text
     assert "brr/task-deliver" in body_text
     assert "compare/brr/task-deliver?expand=1" in body_text
+
+
+def test_deliver_responses_opens_pull_request_event(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {"token": "tok", "repo": "owner/repo"})
+    protocol.create_event(
+        inbox, source="github", body="",
+        status="done",
+        github_action="pull_request",
+        head="brr/pr-delivery",
+        base="main",
+        title="Review PR delivery",
+    )
+    event = protocol.list_done(inbox, "github")[0]
+    protocol.write_response(responses, event["id"], "Projected body")
+    calls: list = []
+    monkeypatch.setattr(
+        prs,
+        "open_or_refresh_pr",
+        lambda token, repo, **kw: calls.append((token, repo, kw))
+        or "https://github.com/owner/repo/pull/9",
+    )
+
+    delivery._deliver_responses(brr_dir, inbox, responses, "tok", "owner/repo")
+
+    assert calls == [
+        ("tok", "owner/repo", {
+            "head": "brr/pr-delivery",
+            "base": "main",
+            "title": "Review PR delivery",
+            "body": "Projected body",
+        }),
+    ]
+    assert protocol.list_done(inbox, "github") == []
+    assert protocol.read_response(responses, event["id"]) is None
+
+
+def test_deliver_responses_skips_pull_request_when_diffense_disabled(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".brr" / "config").write_text("diffense.create_pr=false\n")
+    protocol.create_event(
+        inbox, source="github", body="",
+        status="done",
+        github_action="pull_request",
+        head="brr/pr-delivery",
+        base="main",
+        title="Review PR delivery",
+    )
+    event = protocol.list_done(inbox, "github")[0]
+    protocol.write_response(responses, event["id"], "Projected body")
+    calls: list = []
+    monkeypatch.setattr(
+        prs, "open_or_refresh_pr",
+        lambda *a, **kw: calls.append((a, kw)),
+    )
+
+    delivery._deliver_responses(brr_dir, inbox, responses, "tok", "owner/repo")
+
+    assert calls == []
+    assert protocol.list_done(inbox, "github") == []
