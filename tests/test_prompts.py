@@ -227,6 +227,8 @@ class TestPromptBuilding:
         )
         assert "/repo/.brr/outbox/evt-1" in prompt
         assert "mid-thought" in prompt
+        assert "/repo/.brr/outbox/evt-1/inbox.json" in prompt
+        assert "plan / todo boundaries" in prompt
         # interim replies are framed as optional extras, not the final reply
         assert "optional" in prompt.lower()
 
@@ -292,6 +294,8 @@ class TestPromptBuilding:
         assert "quick question about X" in prompt
         # The fold-in contract names the frontmatter handle.
         assert "event: <id>" in prompt
+        assert "inbox.json" in prompt
+        assert "snapshot from when you woke" not in prompt
 
     def test_daemon_prompt_omits_inbox_when_no_pending_events(self, tmp_path):
         prompt = build_daemon_prompt(
