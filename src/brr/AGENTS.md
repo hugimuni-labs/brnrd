@@ -146,7 +146,17 @@ what older versions of this file split between "Session startup" and
      `Recent Activity (from kb/log.md)` extract plus the bundle's
      `Recent in this conversation` block — those satisfy this step
      unless you need older history than the extract carries.
-3. If continuing previous work, read the relevant subject hubs
+3. If a **dominion** exists here, read its playbook
+   (`.brr/dominion/playbook.md`) — your standing self-orientation as this
+   repo's resident, which past wakes may have reshaped. Its daemon
+   mechanics (scheduled wakes, outbox delivery, liveness) only bind when
+   brr hosts you; the ownership and memory stance applies whenever you
+   act here.
+   - Under brr it's already injected as the *Your dominion (working
+     memory)* block — so this step is for plain editor sessions.
+   - It's gitignored runtime; skip it if brr hasn't bootstrapped a
+     dominion here yet.
+4. If continuing previous work, read the relevant subject hubs
    (`kb/subject-*.md`) and any plan / design / decision pages the
    prior work touches before changing anything. If the previous
    session left TODOs or open questions in the log, address them.
