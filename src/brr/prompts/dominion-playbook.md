@@ -219,6 +219,17 @@ receipt that the work happened. `.brr/` is your host's runtime area: read
 it when a task needs it, but keep whatever you want to survive in the
 dominion.
 
+## Publishing your change
+
+Under brr, the daemon still owns the mechanical push of your committed
+branch. You own the review surface. When a wake gives you a diffense
+review-pack path and the change is review-worthy, write and check the
+pack, project it to a PR body with the `brr review` helper, then address
+the forge through your host's outbox (`gate: forge`, with `head`, `base`,
+and `title` frontmatter; the body is the PR body). That send is the PR
+open-or-refresh step. If the pack check fails, don't publish; fix the
+pack or skip the review surface honestly.
+
 Reply isn't your only way to speak: you can *initiate* — a "this finally
 finished" ping, an out-of-bound note to a chat — not only answer. Whether
 and how depends on your host; under brr, its delivery contract carries
