@@ -131,6 +131,21 @@ def main(argv: list[str] | None = None) -> None:
                    help="YYYY-MM-DD; delete days strictly before this (default: all)")
     p.set_defaults(func=cmd_ergonomics_clear)
 
+    agent_p = sub.add_parser(
+        "agent", help="resident-agent helpers (wake-context, dominion)")
+    agent_sub = agent_p.add_subparsers(dest="agent_command", required=True)
+
+    p = agent_sub.add_parser(
+        "inject",
+        help="print the wake-context brr assembles for a runner — the "
+             "dominion digest + matched pitfalls + recent kb/log — so any "
+             "agent wrapper can orient the resident with the same semantic")
+    p.add_argument(
+        "--task", default=None,
+        help="task text to match pitfalls against (a pitfall's triggers key "
+             "off how a request is phrased)")
+    p.set_defaults(func=cmd_agent_inject)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -174,6 +189,24 @@ def cmd_run(args):
 
     from . import runner
     runner.run_task(args.instruction)
+
+
+def cmd_agent_inject(args):
+    import sys
+
+    from . import prompts
+
+    repo_root = _maybe_repo_root()
+    if repo_root is None:
+        print("[brr agent inject] not inside a git repo", file=sys.stderr)
+        return 2
+    text = prompts.build_injected_context(repo_root, task_text=args.task)
+    if not text.strip():
+        print("[brr agent inject] no dominion here yet — bootstrap one with "
+              "`brr init` or by starting the daemon", file=sys.stderr)
+        return 1
+    print(text)
+    return 0
 
 
 def cmd_review(args):

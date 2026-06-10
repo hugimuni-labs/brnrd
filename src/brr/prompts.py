@@ -276,6 +276,50 @@ def _build_introspection_block(repo_root: Path) -> str:
     return read_prompt("introspection.md", repo_root).strip()
 
 
+def _build_injected_blocks(
+    repo_root: Path, *, task_text: str | None = None
+) -> list[str]:
+    """The dominion- and kb-sourced context blocks brr injects into every
+    wake: the dominion digest (playbook + ``self-inject``), any pitfalls
+    whose triggers match the task, the recent-activity log tail, and the kb
+    health note.
+
+    Shared by ``_join_prompt_parts`` (the runner path) and
+    ``build_injected_context`` / ``brr agent inject`` so a wrapper that
+    reuses the tool gets exactly the wake-context a runner receives —
+    whatever block we add here surfaces in both, with no drift. Mode toggles
+    layered on top (diffense, introspection) are the caller's, not part of
+    the resident's standing wake-context.
+    """
+    blocks: list[str] = []
+    dominion_block = _build_dominion_block(repo_root)
+    if dominion_block:
+        blocks.append(dominion_block)
+    if task_text:
+        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
+        if pitfalls_block:
+            blocks.append(pitfalls_block)
+    context = _build_context_block(repo_root)
+    if context:
+        blocks.append(context)
+    kb_health_block = _build_kb_health_block(repo_root)
+    if kb_health_block:
+        blocks.append(kb_health_block)
+    return blocks
+
+
+def build_injected_context(repo_root: Path, *, task_text: str | None = None) -> str:
+    """brr's assembled wake-context, for any agent wrapper to reuse.
+
+    Backs ``brr agent inject``: returns the same dominion/kb blocks a runner
+    receives (see ``_build_injected_blocks``), joined as text, so a harness
+    other than brr's daemon can orient the resident from its own dominion
+    with the identical ``self-inject`` semantic. ``task_text`` lets the
+    caller pull in pitfalls whose triggers match the work at hand.
+    """
+    return "\n\n".join(_build_injected_blocks(repo_root, task_text=task_text))
+
+
 def _join_prompt_parts(
     preamble: str,
     repo_root: Path,
@@ -286,19 +330,7 @@ def _join_prompt_parts(
 ) -> str:
     """Stitch preamble, optional recent-context block, and trailer."""
     parts = [preamble]
-    dominion_block = _build_dominion_block(repo_root)
-    if dominion_block:
-        parts.append(dominion_block)
-    if task_text:
-        pitfalls_block = _build_pitfalls_block(repo_root, task_text)
-        if pitfalls_block:
-            parts.append(pitfalls_block)
-    context = _build_context_block(repo_root)
-    if context:
-        parts.append(context)
-    kb_health_block = _build_kb_health_block(repo_root)
-    if kb_health_block:
-        parts.append(kb_health_block)
+    parts.extend(_build_injected_blocks(repo_root, task_text=task_text))
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
