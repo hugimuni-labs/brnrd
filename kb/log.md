@@ -6148,3 +6148,41 @@ applies, so an ad-hoc reader isn't misled by resident-voiced machinery. Serves
 the north star of every agentic tool participating as a thought. Root `AGENTS.md`
 is a symlink to `src/brr/AGENTS.md`, so both surfaces and the `brr init` template
 pick it up.
+
+## [2026-06-10] refactor | Generalize the playbook; brr becomes one driver
+
+Followed the Orientation fix to its root: the dominion playbook was written
+assuming brr's daemon is always the host, so a non-brr reader met machinery that
+didn't apply or actively misled — sharpest being "brr captures your dominion at
+sleep," which silently loses an ad-hoc session's writes. Reframed: **the playbook
+is the resident; brr is one driver of it.** Three slices on branch
+`playbook-generalization` (plan in `plan-playbook-generalization.md`):
+
+1. *Core playbook → host-agnostic.* Added a "who's driving" frame; replaced
+   single-flight-as-identity with the society-of-mind framing (you are many
+   thoughts sharing one memory palace; a conflict surfaces as a memory
+   contradiction you reconcile, not a race); replaced capture-at-sleep with
+   commit-yourself (in the playbook *and* the injected `_build_dominion_block` —
+   the footgun lived in both); generalized the context map and delivery. Removed
+   the daemon-only sections. Playbook shrank 15.5 → 13.5 KiB (~7 KiB budget
+   headroom restored).
+2. *brr's driver's manual* (`prompts/daemon-substrate.md`, brr-owned): the
+   daemon-only machinery — single-flight, the capture-at-sleep net, self-scheduled
+   wakes — injected only on the daemon path (`build_daemon_prompt`), not `brr
+   run`. The per-task delivery contract (outbox/keepalive/budget) stays in the
+   Task Context Bundle.
+3. *`brr agent inject`*: factored `_build_injected_blocks` out of
+   `_join_prompt_parts` and exposed `build_injected_context` on top, so the tool
+   and the runner share one assembly (whatever we add to a runner's wake-context
+   surfaces in the tool — no drift). Prints the dominion digest + matched pitfalls
+   + recent `kb/log` tail; reserves `agent` as a verb group. End-to-end smoke
+   confirmed it emits brr's own resident's wake-context — whose dominion still
+   carries the *old* seed, the live proof that regenerating the seed never
+   rewrites an already-bootstrapped resident's owned copy.
+
+Learning: keep the playbook honest about its substrate. A capability framed as
+"the host does X for you" is a footgun the moment a different host doesn't — name
+the host, or move the mechanic to the host's own (injected) manual. Full suite
+780 passed (+7). kb reconciled: `design-agent-dominion.md` §5 (mechanics moved
+back *out* of the playbook), `subject-daemon.md` + `execution-map.md` (driver's
+manual injection), `design-self-scheduled-thoughts.md` (teaching relocated).

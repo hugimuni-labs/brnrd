@@ -1,6 +1,7 @@
 # Plan — generalize the dominion playbook; brr becomes one driver
 
-Status: active (started 2026-06-10)
+Status: shipped on 2026-06-10 (all three slices landed on branch
+`playbook-generalization`)
 
 ## Why
 
@@ -61,17 +62,21 @@ Three homes for what is today one over-loaded playbook:
   manual (daemon-owned). The agent doesn't own these.
 - **`agent` reserved as a CLI verb group**; first verb `inject`.
 
-## Slices
+## Slices (all shipped 2026-06-10)
 
 1. **Generalize the core playbook** + fix the injected `_build_dominion_block`
-   (it carries the same capture-at-sleep line). Update the tests that pin
-   the old text; re-measure the inject budget (the playbook should
-   *shrink* once the daemon mechanics leave, easing the budget we just
-   bumped). **Checkpoint with the user on voice before slices 2–3.**
-2. **Extract brr's driver's manual** into a bundled doc and inject it on
-   the daemon path (`build_daemon_prompt`), not `brr run`.
-3. **Factor `_build_injected_blocks`** out of `_join_prompt_parts`; add
-   the `brr agent inject` command + tests.
+   (it carried the same capture-at-sleep line). Society-of-mind replaced
+   single-flight-as-identity; commit-yourself replaced capture-at-sleep;
+   context map and delivery generalized. Playbook shrank 15.5 → 13.5 KiB,
+   restoring ~7 KiB of inject-budget headroom. ✅
+2. **Extract brr's driver's manual** (`prompts/daemon-substrate.md`):
+   single-flight, the capture-at-sleep net, and self-scheduled wakes.
+   Injected only on the daemon path (`build_daemon_prompt`), not `brr
+   run`; the per-task delivery contract stays in the Task Context Bundle. ✅
+3. **`brr agent inject`**: factored `_build_injected_blocks` out of
+   `_join_prompt_parts` and exposed `build_injected_context` on top, so the
+   tool and the runner share one assembly (no drift). The command prints
+   the dominion digest + matched pitfalls + recent `kb/log` tail. ✅
 
 ## Links
 
