@@ -9,6 +9,22 @@ human; the fuller dashboard (projects, tasks, vault) follows per
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from starlette.staticfiles import StaticFiles
+
 from .routes import router
 
-__all__ = ["router"]
+_STATIC_DIR = Path(__file__).with_name("static")
+
+
+def mount_static(app) -> None:
+    """Mount brnrd_web's packaged assets on the parent FastAPI app."""
+    app.mount(
+        "/static/brnrd_web",
+        StaticFiles(directory=_STATIC_DIR),
+        name="brnrd_static",
+    )
+
+
+__all__ = ["mount_static", "router"]
