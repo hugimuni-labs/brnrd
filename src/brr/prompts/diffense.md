@@ -31,8 +31,15 @@ raw diff.
 - **Validate before finishing**: run `brr review --check <Review pack
   path>` and fix every error it reports — a dead locator, a dangling card
   edge, a missing axis. A pack that fails `--check` is not done.
+- **Publish from the pack** when `diffense.create_pr` is on (the default):
+  project the checked pack yourself with `brr review <Review pack path>
+  --pr-body --relay` and derive the title with `brr review <Review pack
+  path> --pr-title --fallback-title <branch>`, then write a `gate: forge`
+  outbox file whose frontmatter names `head`, `base`, and `title`; the
+  body is the projected PR body. The GitHub gate opens or refreshes the
+  PR idempotently and refuses publication when diffense PR creation is
+  disabled.
 
 If the change isn't review-worthy, skip the pack: an honest absence beats
-a hollow pack. When `diffense.create_pr` is on (the default), brr opens or
-refreshes the change's PR with this pack projected into the body — so the
-pack you emit *is* the PR a reviewer reads.
+a hollow pack. When you do publish, the pack you emit and project *is* the
+PR a reviewer reads.

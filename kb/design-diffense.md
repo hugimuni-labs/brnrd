@@ -34,7 +34,7 @@ Companion to:
   against rather than re-implementing.
 - [`design-publish-kernel.md`](design-publish-kernel.md) — the publish
   step diffense's pack generation hangs off: the runner emits the pack
-  before publish; the daemon writes the body projection on publish.
+  before publish; the resident projects it and addresses the forge gate.
 - [`design-github-gate-vs-brnrd-app.md`](design-github-gate-vs-brnrd-app.md)
   — the gate-side review-event boundary; diffense's feedback loop rides
   the `pr-review-comment` handling described there.
@@ -207,7 +207,7 @@ flowchart TD
 | Renderer | Surface | Tenancy | Status |
 | --- | --- | --- | --- |
 | Responsive web | terminal-aesthetic HTML; `brr review` serves it locally | self-hosted (local; LAN/tunnel for phone) | **render model spiked** ([`src/brr/diffense/`](../src/brr/diffense)); local server + runner wiring next |
-| PR-body projection | humanized Markdown in the PR body | any forge reader | **ships** (2026-06-01) — [`prbody.py`](../src/brr/diffense/prbody.py), projected by `_maybe_open_pr` on publish; pack embedded in a marker, `extract_pack` recovers it |
+| PR-body projection | humanized Markdown in the PR body | any forge reader | **ships** (2026-06-01; ownership moved 2026-06-10) — [`prbody.py`](../src/brr/diffense/prbody.py), projected by the resident via `brr review --pr-body`; pack embedded in a marker, `extract_pack` recovers it |
 | CLI / TUI | `brr review` in the terminal | self-hosted | follow-up, same pack |
 | Hosted web | brnrd renders a relayed pack at `/r/{token}` (transient) | hosted (managed mode) | **relay ships** (2026-06-01) — `POST /v1/daemons/pack` + public `/r/{token}`, RAM-only; the brnrd-dashboard renderer is the richer follow-up |
 | Live agent | in-context Q&A over the pack | both | future |
@@ -1226,8 +1226,10 @@ to get buried under brnrd's complexity later.
 diffense hangs off the publish step
 ([`design-publish-kernel.md`](design-publish-kernel.md)): the runner
 emits the pack as the last step before publish, runs `brr review --check`
-on it, and the daemon writes the PR-body projection (and embeds/attaches
-the pack) on publish.
+on it, projects the checked pack with `brr review --pr-body`, and sends
+the resulting PR body through the forge-addressed outbox. The daemon still
+pushes the branch; the resident owns the review surface and the PR
+open-or-refresh send.
 
 **Producer B — runner emission — ships** (2026-06-01) as a gated prompt
 fragment ([`src/brr/prompts/diffense.md`](../src/brr/prompts/diffense.md)),
@@ -1238,59 +1240,59 @@ review-worthy committed change under the six clamps; give each card its
 gloss → ground-truth-leaf locator; open with a summary, surface
 uncertainty cards (assumption / concern / dilemma / out-of-scope /
 follow-up) first; ground demos in real test values; then `brr review
---check` it and fix every error before finishing.* Pack shape is taught
-by example ([the PR #64 prototype](diffense-prototype-pr64.md)) + this
+--check` it and fix every error before finishing.* When PR creation is
+enabled, the same fragment tells the resident to derive the title and
+body with `brr review --pr-title` / `--pr-body --relay` and write a
+`gate: forge` outbox file carrying `head`, `base`, and `title`
+frontmatter. Pack shape is taught by example ([the PR #64 prototype](diffense-prototype-pr64.md)) + this
 page, not a duplicated schema doc.
 
 The pack path is **handed to the runner, not assumed.** The runner works
 in a worktree whose own `.brr/` is torn down at finalize, so a
-cwd-relative `.brr/diffense/...` would die before `publish()` could read
-it. The daemon computes an absolute path in the *shared* runtime dir and
-puts it in the Task Context Bundle as `Review pack path`
-(`<shared .brr>/diffense/<task-id>/pack.json`); the fragment writes there,
-and `publish()` reads the same path. Same plumbing pattern as
-`response_path` — brr names the file, the agent fills it, brr consumes it.
+cwd-relative `.brr/diffense/...` would die before the resident could
+validate and project it. The daemon computes an absolute path in the
+*shared* runtime dir and puts it in the Task Context Bundle as `Review
+pack path` (`<shared .brr>/diffense/<task-id>/pack.json`); the fragment
+writes there, `brr review --check` validates it, and `brr review
+--pr-body` projects it. Same plumbing pattern as `response_path` — brr
+names the file, the agent fills and consumes it through explicit helper
+commands.
 
-**PR creation — slice 3 — ships** (2026-06-01), net-new. Before this the
-publish kernel only *pushed a branch* (`publish()` in
-[`src/brr/daemon.py`](../src/brr/daemon.py); the GitHub gate comments but
-never opened PRs — issue #68: a run always has a task id but not always a
-PR). Now, after a clean push, `_maybe_open_pr` opens a PR whose body *is*
-the projection ([`src/brr/diffense/prbody.py`](../src/brr/diffense/prbody.py)) —
-born as a pack render target, not a throwaway format. Policy:
+**PR creation — agent-owned gate send — ships** (2026-06-10; earlier
+daemon-owned creation shipped 2026-06-01 and was removed when the
+resident took ownership). Before this the publish kernel picked up the
+task-keyed pack after a clean push and `_maybe_open_pr` projected it
+inside `daemon.publish`. Now the resident writes a `gate: forge` (or
+`gate: github` + `github_action: pull_request`) outbox file whose body is
+already the projected PR body. `_deliver_out_of_bound` maps `forge` to
+the GitHub gate, and the GitHub delivery loop opens or refreshes the PR
+idempotently through the REST API. Policy:
 
-- **On by default** (`diffense.create_pr`, GitHub only via `gh`). No
-  pack emitted → it no-ops, so `diffense.emit_pack=false` turns it off
-  too; opt out independently to keep packs local and PR by hand.
-- **Create-if-absent, else refresh** keys off *the push, not bespoke
-  conflict logic.* The step only runs after a clean push, so the remote
-  head already equals our commits; an open PR on that head genuinely
-  contains our work and its body is refreshed (the "update this PR" /
-  "new commits on a PR'd branch" case). A *diverged* push never reaches
-  here — it was rejected upstream and flipped `publish_status` to
-  `conflict`, surfacing to the user with the work preserved on the task
-  branch. And because each task gets its own branch, "keep both" falls
-  out for free: a new task on an already-worked issue publishes a new
-  branch → a new PR, leaving the old one intact. So the publish kernel's
-  5-arm push (ff / lease / refspec / …) is the conflict adjudicator; the
-  PR step just rides its `publish_status`.
-- **PR url → the delivered card.** The url replaces the bare branch link
-  in the `view:` line (reusing `push_done`'s `view_url`, no new packet).
-- **The pack travels with the PR.** `project_pr_body` embeds the full
-  pack in a trailing `diffense:pack:v1` HTML-comment marker when it fits
-  the forge body budget (`extract_pack` is the inverse), so a reader can
+- **On by default** only when both `diffense.emit_pack` and
+  `diffense.create_pr` are enabled. Disabling emission removes the prompt
+  path that asks for a pack; disabling creation makes the GitHub delivery
+  closure refuse the PR send.
+- **Create-if-absent, else refresh** keys off the PR head branch. The
+  resident sends `head`, `base`, and `title`; the gate lists open PRs for
+  that head, creates when absent, and updates title/body when present.
+  The push remains the conflict adjudicator: if the daemon cannot push the
+  branch, the resident has no remote head worth publishing.
+- **The pack travels with the PR.** `project_pr_body` embeds the full pack
+  in a trailing `diffense:pack:v1` HTML-comment marker when it fits the
+  forge body budget (`extract_pack` is the inverse), so a reader can
   recover the exact pack from the body with no side channel.
 
-**Slice 4 — the transient brnrd relay — ships** (2026-06-01). In managed
-mode (cloud gate configured), `_maybe_open_pr` relays the pack to brnrd
-(`cloud.relay_pack` → `POST /v1/daemons/pack`) and prepends an
-**Interactive review** link to the body. brnrd holds the pack in a
-RAM-only TTL store behind a capability token and renders it on
+**Slice 4 — the transient brnrd relay — ships** (2026-06-01; ownership
+moved 2026-06-10). In managed mode (cloud gate configured), the resident
+passes `--relay` to `brr review --pr-body`; that calls
+`cloud.relay_pack` (`POST /v1/daemons/pack`) and prepends an
+**Interactive review** link to the projected body. brnrd holds the pack
+in a RAM-only TTL store behind a capability token and renders it on
 `GET /r/{token}` via `brr.diffense.render` (reused verbatim) — never
 persisting it (see "Where packs live" + `design-brnrd-protocol.md`).
 Best-effort and self-hosted-safe: no cloud config → no relay → the body
-still carries the projection + the embedded pack, and the local
-`brr review` is the rich surface.
+still carries the projection + the embedded pack, and local `brr review`
+is the rich surface.
 
 ## Adjacencies that ship-or-shipped already
 

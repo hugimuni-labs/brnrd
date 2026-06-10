@@ -53,7 +53,11 @@ executed in a container.
 ## Publishing and the publish kernel
 
 The agent leaves work on a branch. The daemon publishes that branch.
-That's the kernel — finalize classifies, `daemon.publish` ships.
+That's the kernel — finalize classifies, `daemon.publish` ships the
+branch. Pull-request open/refresh is now a separate agent-owned delivery
+step: for diffense-backed review, the resident projects the pack and
+sends `gate: forge`, which the GitHub gate turns into an idempotent PR
+create/update.
 Pull-side freshness (so a follow-up task seeds from the previous
 task's publish) lives in [`sync.py`](../src/brr/sync.py); publishing
 is one step.
