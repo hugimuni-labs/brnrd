@@ -675,13 +675,15 @@ dive-in map) and are stable until something contradicts them.
   data-ownership stance). The pack schema is **locked as the
   `brr review --check` contract**
   ([src/brr/diffense/pack.py](../src/brr/diffense/pack.py)); the runner
-  emits packs (Producer B, gated fragment) and the publish kernel opens a
-  PR with the body projected from the pack
-  ([prbody.py](../src/brr/diffense/prbody.py), `_maybe_open_pr`), both **on
-  by default**. In managed mode the pack is relayed to brnrd's transient
-  RAM-only renderer (`POST /v1/daemons/pack` + public `/r/{token}`,
-  [pack_relay.py](../src/brnrd/pack_relay.py)) and an interactive link
-  rides the PR body — never persisted. All shipped 2026-06-01.
+  emits packs (Producer B, gated fragment), validates them with `brr
+  review --check`, and projects them with
+  [prbody.py](../src/brr/diffense/prbody.py); since 2026-06-10 the
+  resident publishes by sending `gate: forge`, whose GitHub delivery
+  closure opens or refreshes the PR. In managed mode `brr review
+  --pr-body --relay` sends the pack to brnrd's transient RAM-only renderer
+  (`POST /v1/daemons/pack` + public `/r/{token}`,
+  [pack_relay.py](../src/brnrd/pack_relay.py)) and includes an interactive
+  link in the PR body — never persisted.
 - [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
   — *2026-05-29*. The first concrete pack
   ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that
@@ -698,6 +700,11 @@ dive-in map) and are stable until something contradicts them.
   (`render.py` inlines this pack into a self-contained HTML page); pass 10
   extended the pack to demonstrate the visual entry-stat distributions,
   the invariant axis, the data-trace walkthrough, and kb-native axes.
+- [Daemon-layer coherence + delivery generalization review](review-daemon-coherence-2026-06.md)
+  — *active*. Review that shipped generic `gate:` outbox delivery and
+  liveness-budget fixes, then recorded the daemon-vs-agent ownership
+  crossroads. The 2026-06-10 follow-up moved diffense PR finalization to
+  agent-owned `gate: forge`; push/reply ownership remains open.
 
 ## Research
 
