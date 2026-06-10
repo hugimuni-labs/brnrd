@@ -53,7 +53,8 @@ rule.
 The runner receives `run.md` + recent `kb/log.md` context + daemon
 metadata (task ID, event ID, execution root, seed ref, optional
 auto-land target, current branch, response path, interim-response outbox,
-other pending events, shared runtime dir, generated run context file).
+other pending events, live `inbox.json` path, shared runtime dir,
+generated run context file).
 The bundle's delivery contract is explicit: stdout is the user's chat
 reply, kb writes are optional — agents log only when there's something
 worth logging (see AGENTS.md → Knowledge base).
@@ -103,6 +104,10 @@ handled, so a quick request can be folded in without its own spawn.
 An outbox file with `gate: <name>` is an out-of-bound send; `gate: forge`
 uses the GitHub gate to open or refresh a PR from the file's `head`,
 `base`, and `title` frontmatter plus the body.
+The same outbox directory also carries a daemon-owned `inbox.json`
+control file refreshed on each heartbeat, so the running agent can see
+events that arrived after wake and decide at plan boundaries whether to
+fold them in or leave them queued.
 
 After the runner returns, the daemon also **captures the resident's
 dominion** (`.brr/dominion/`, the `brr-home` branch) with a serialized
@@ -141,7 +146,7 @@ files changed. Reload never interrupts a running worker.
 | Tasks         | `.brr/tasks/<task-id>.md`                   | Yes                                 |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
 | Interim queue | `.brr/responses/<event-id>.partials/`       | Until streamed + cleaned up         |
-| Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; removed at finalize |
+| Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; live `inbox.json`; removed at finalize |
 | Presence      | `.brr/presence/<id>.json`                   | While a thought/session is active; pruned on read |
 | Dominion      | `.brr/dominion/` (branch `brr-home`)        | Durable; committed at sleep, travels with the remote |
 | Schedule state | `.brr/schedule/state.json`                 | Machine-persistent (firing-state); specs live in dominion `schedule.md` |
