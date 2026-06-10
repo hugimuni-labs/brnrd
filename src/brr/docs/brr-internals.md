@@ -194,7 +194,8 @@ The default delivery contract is one event → one final stdout → one
 chat reply. On top of that, the resident can ship **interim** replies
 mid-thought and **fold in** other pending events without waiting for
 their own spawn. The mechanism is a file drop zone, mirroring the
-diffense precedent (agent writes a known path, daemon picks up):
+diffense precedent (agent writes a host-visible artifact, then addresses
+the delivery path explicitly):
 
 - **Drop zone** — `.brr/outbox/<event-id>/`. The resident writes a
   complete markdown reply per file (staging as `*.tmp` and renaming for
@@ -218,6 +219,12 @@ diffense precedent (agent writes a known path, daemon picks up):
   wakes as its own thought. The bundle lists other pending events so the
   resident knows what it can fold in. Unknown targets are dropped, not
   misrouted.
+- **Gate-addressed sends** — an outbox file whose frontmatter names
+  `gate: <name>` is an agent-initiated send with no waiting event. The
+  daemon creates an already-`done` event for that gate and the gate's
+  normal delivery loop sends it once. `gate: forge` is an alias for the
+  GitHub delivery path; it opens or refreshes a PR from `head`, `base`,
+  `title`, and the file body.
 
 This is additive and backward compatible: a thought that prints one
 final stdout and writes nothing to its outbox behaves exactly as before.
