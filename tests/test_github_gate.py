@@ -1297,8 +1297,9 @@ def test_bind_enter_accepts_label_and_mention_defaults(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "t", "bot_login": "brr-bot"})
     monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
-    # Inputs: repo, any-prompt (Enter=skip), label (Enter=brr), mention (Enter=@brr-bot)
-    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", ""))
+    # Inputs: repo, any-prompt (Enter=skip), opened (Enter=off),
+    # label (Enter=brr), mention (Enter=@brr-bot)
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "", ""))
 
     github.bind(brr_dir)
 
@@ -1311,8 +1312,8 @@ def test_bind_off_disables_label(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "t", "bot_login": "b", "triggers": {"label": "brr"}})
     monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
-    # repo, any-skip, label=off, mention=Enter
-    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "off", ""))
+    # repo, any-skip, opened-skip, label=off, mention=Enter
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "off", ""))
 
     github.bind(brr_dir)
 
@@ -1326,7 +1327,7 @@ def test_bind_typed_value_overrides_default(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "t", "bot_login": "b"})
     monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
-    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "my-label", "off"))
+    monkeypatch.setattr("builtins.input", _make_inputs("owner/repo", "", "", "my-label", "off"))
 
     github.bind(brr_dir)
 
@@ -1348,6 +1349,114 @@ def test_bind_any_trigger_saves_and_skips_label_mention_prompts(tmp_path, monkey
     saved = state._load_state(brr_dir)
     assert saved["triggers"] == {"any": True}
     assert "['any']" in capsys.readouterr().out
+
+
+def test_bind_opened_trigger_saves_with_label_and_mention_off(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    state._save_state(brr_dir, {"token": "t", "bot_login": "b"})
+    monkeypatch.setattr(wizard, "autodetect_repo", lambda _: None)
+    # repo, any=off, opened=on, label=off, mention=off
+    monkeypatch.setattr(
+        "builtins.input",
+        _make_inputs("owner/repo", "", "on", "off", "off"),
+    )
+
+    github.bind(brr_dir)
+
+    saved = state._load_state(brr_dir)
+    assert saved["triggers"] == {"opened": True}
+
+
+# ── opened trigger pollers ─────────────────────────────────────────
+
+
+def test_opened_trigger_emits_issue_and_pr_events(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"opened": True},
+        "cursor": {"opened_since": "2026-01-01T00:00:00Z"},
+    })
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/owner/name/issues":
+            return [
+                {
+                    "number": 5,
+                    "title": "A plain issue",
+                    "body": "details here",
+                    "user": {"login": "alice"},
+                    "html_url": "https://github.com/owner/name/issues/5",
+                    "created_at": "2026-05-15T09:00:00Z",
+                    "updated_at": "2026-05-15T10:00:00Z",
+                },
+                {
+                    "number": 10,
+                    "title": "My PR",
+                    "body": "a change",
+                    "user": {"login": "bob"},
+                    "html_url": "https://github.com/owner/name/pull/10",
+                    "pull_request": {"url": "https://api.github.com/repos/owner/name/pulls/10"},
+                    "created_at": "2026-05-15T09:30:00Z",
+                    "updated_at": "2026-05-15T11:00:00Z",
+                },
+            ]
+        if path == "/repos/owner/name/pulls/10":
+            return {"head": {"ref": "feature-y"}}
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    events = sorted(protocol.list_pending(inbox), key=lambda ev: ev["github_issue_number"])
+    assert len(events) == 2
+    assert events[0]["github_kind"] == "issue"
+    assert events[0]["github_trigger"] == "opened"
+    assert events[1]["github_kind"] == "pr"
+    assert events[1]["github_pr_number"] == 10
+    assert events[1]["branch_target"] == "feature-y"
+    assert events[1]["github_trigger"] == "opened"
+
+
+def test_opened_trigger_skips_old_item_updated_after_cursor(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"opened": True},
+        "cursor": {"opened_since": "2026-05-15T00:00:00Z"},
+    })
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/owner/name/issues":
+            return [
+                {
+                    "number": 5,
+                    "title": "Old issue",
+                    "body": "a newer comment updated it",
+                    "user": {"login": "alice"},
+                    "html_url": "https://github.com/owner/name/issues/5",
+                    "created_at": "2026-05-14T23:00:00Z",
+                    "updated_at": "2026-05-15T10:00:00Z",
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    assert protocol.list_pending(inbox) == []
+    saved = state._load_state(brr_dir)
+    assert saved["cursor"]["opened_since"] == "2026-05-15T10:00:00Z"
 
 
 # ── any trigger pollers ───────────────────────────────────────────
@@ -1374,6 +1483,7 @@ def test_any_trigger_emits_issue_event(tmp_path, monkeypatch):
                     "body": "details here",
                     "user": {"login": "alice"},
                     "html_url": "https://github.com/owner/name/issues/5",
+                    "created_at": "2026-05-15T09:00:00Z",
                     "updated_at": "2026-05-15T10:00:00Z",
                 },
             ]
@@ -1414,6 +1524,7 @@ def test_any_trigger_emits_pr_event_with_branch_target(tmp_path, monkeypatch):
                     "user": {"login": "bob"},
                     "html_url": "https://github.com/owner/name/pull/10",
                     "pull_request": {"url": "https://api.github.com/repos/owner/name/pulls/10"},
+                    "created_at": "2026-05-15T10:00:00Z",
                     "updated_at": "2026-05-15T11:00:00Z",
                 },
             ]
@@ -1432,6 +1543,42 @@ def test_any_trigger_emits_pr_event_with_branch_target(tmp_path, monkeypatch):
     assert ev["github_pr_number"] == 10
     assert ev["branch_target"] == "feature-y"
     assert ev["github_trigger"] == "any"
+
+
+def test_any_trigger_skips_old_item_updated_after_cursor(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"any": True},
+        "cursor": {"any_issues_since": "2026-05-15T00:00:00Z"},
+    })
+
+    def fake_api_get(token, path, params=None, **kwargs):
+        if path == "/repos/owner/name/issues":
+            return [
+                {
+                    "number": 5,
+                    "title": "Old issue",
+                    "body": "updated after the cursor",
+                    "user": {"login": "alice"},
+                    "html_url": "https://github.com/owner/name/issues/5",
+                    "created_at": "2026-05-14T23:00:00Z",
+                    "updated_at": "2026-05-15T10:00:00Z",
+                },
+            ]
+        return []
+
+    monkeypatch.setattr(client, "_api_get", fake_api_get)
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    assert protocol.list_pending(inbox) == []
+    saved = state._load_state(brr_dir)
+    assert saved["cursor"]["any_issues_since"] == "2026-05-15T10:00:00Z"
 
 
 def test_any_trigger_emits_comment_events_skipping_bot(tmp_path, monkeypatch):
@@ -1479,8 +1626,8 @@ def test_any_trigger_emits_comment_events_skipping_bot(tmp_path, monkeypatch):
     assert events[0]["github_trigger"] == "any"
 
 
-def test_any_trigger_overrides_label_and_mention_in_loop(tmp_path, monkeypatch):
-    """When 'any' is set, label/mention pollers must not run."""
+def test_any_trigger_overrides_other_pollers_in_loop(tmp_path, monkeypatch):
+    """When 'any' is set, opened/label/mention pollers must not run."""
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -1488,16 +1635,23 @@ def test_any_trigger_overrides_label_and_mention_in_loop(tmp_path, monkeypatch):
         "token": "secret",
         "bot_login": "brr-bot",
         "repo": "o/r",
-        "triggers": {"any": True, "label": "brr", "mention": "@brr-bot"},
+        "triggers": {
+            "any": True, "opened": True, "label": "brr", "mention": "@brr-bot",
+        },
     })
 
     poll_any_calls: list[str] = []
+    poll_opened_calls: list[str] = []
     poll_label_calls: list[str] = []
     poll_mention_calls: list[str] = []
 
     monkeypatch.setattr(
         polling, "_poll_any_activity",
         lambda *a, **kw: poll_any_calls.append("any"),
+    )
+    monkeypatch.setattr(
+        polling, "_poll_opened_trigger",
+        lambda *a, **kw: poll_opened_calls.append("opened"),
     )
     monkeypatch.setattr(
         polling, "_poll_label_trigger",
@@ -1512,6 +1666,7 @@ def test_any_trigger_overrides_label_and_mention_in_loop(tmp_path, monkeypatch):
     loop._loop_once(brr_dir, inbox, responses)
 
     assert poll_any_calls == ["any"]
+    assert poll_opened_calls == []
     assert poll_label_calls == []
     assert poll_mention_calls == []
 
