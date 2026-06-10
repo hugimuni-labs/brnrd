@@ -6186,3 +6186,25 @@ the host, or move the mechanic to the host's own (injected) manual. Full suite
 780 passed (+7). kb reconciled: `design-agent-dominion.md` §5 (mechanics moved
 back *out* of the playbook), `subject-daemon.md` + `execution-map.md` (driver's
 manual injection), `design-self-scheduled-thoughts.md` (teaching relocated).
+
+## [2026-06-10] implement | Diffense PR finalization becomes agent-owned forge delivery
+
+Moved the last PR-finalization slice out of the daemon and into the resident's
+delivery path. `daemon.publish` now only pushes the branch and emits the branch
+view URL; the old `_maybe_open_pr` / `gh pr create/edit` pack pickup path was
+deleted. The resident-facing path is: write/check the diffense pack, project it
+with `brr review --pr-body` (optionally `--relay` for the brnrd render URL),
+derive the title with `--pr-title`, then write a `gate: forge` outbox message
+whose frontmatter carries `head`, `base`, and `title` and whose body is the PR
+body. `_deliver_out_of_bound` maps `forge` to GitHub; the GitHub gate can now run
+deliver-only with token+repo and no poll triggers, and its PR delivery closure
+opens or refreshes by REST API while respecting `diffense.emit_pack` +
+`diffense.create_pr`.
+
+The kb was reconciled around that ownership change: `design-diffense.md`,
+`design-multi-response.md`, `design-publish-kernel.md`,
+`review-daemon-coherence-2026-06.md`, the daemon/tasks hubs, and bundled docs no
+longer describe daemon-side pack projection as current state. `kb/index.md` now
+links the daemon-coherence review page, clearing the deterministic
+missing-from-index finding for that page. Full suite: 779 passed, with the
+existing Starlette/FastAPI deprecation warning.

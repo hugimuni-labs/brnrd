@@ -4,10 +4,11 @@ Status: shipped (interim + interleaved delivery) on 2026-06-09 — slice 4
 of the resident-agent reshape
 ([`design-agent-dominion.md`](design-agent-dominion.md) §4);
 **gate-addressed out-of-bound delivery** added 2026-06-09 (coherence
-review §3). The streaming-delivery foundation, the agent outbox + daemon
-drain, cross-event interleaving, and gate-addressed sends are live; two
-follow-ons are **deliberately deferred** (see "Deferred follow-ons"
-below): folding the diffense pack into this drain, and a finer
+review §3), and the diffense PR finalization fold landed 2026-06-10 by
+using that gate-addressed path for forge publication. The
+streaming-delivery foundation, the agent outbox + daemon drain,
+cross-event interleaving, and gate-addressed sends are live; one follow-on
+is **deliberately deferred** (see "Deferred follow-ons" below): a finer
 *silence-based* idle-kill. This page is the protocol contract;
 [`subject-daemon.md`](subject-daemon.md) carries the daemon-pipeline
 synthesis and [`brr-internals.md`](../src/brr/docs/brr-internals.md)
@@ -143,30 +144,29 @@ and the first concrete step toward the agent-owned delivery flow weighed
 in [`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md)
 §4.
 
+## Folded follow-ons
+
+### Diffense PR finalization — shipped 2026-06-10
+
+The diffense review pack remains a task-keyed structured artifact
+(`.brr/diffense/<task-id>/pack.json`), not a chat partial. The fold landed
+at the delivery layer instead: the resident validates and projects the
+pack with `brr review`, then writes a `gate: forge` outbox message whose
+body is the PR body and whose frontmatter names `head`, `base`, and
+`title`. `_deliver_out_of_bound` maps that to the GitHub gate; the GitHub
+delivery closure opens or refreshes the PR idempotently.
+
+This preserves the earlier rejection of shoving pack JSON into the chat
+queue. The shared mechanism is only "agent writes a ready-to-deliver
+message to the outbox"; the pack stays structured until the resident
+projects it into a forge-shaped body.
+
 ## Deferred follow-ons
 
-Two items were scoped into slice 4 and then deliberately deferred — the
-core (interim + interleaved delivery) ships without them because each
-buys little today and carries real risk.
-
-### Diffense fold — deferred
-
-The diffense review pack is also an "agent writes a known shared path,
-daemon picks up" artifact (`.brr/diffense/<task-id>/pack.json`), so the
-tempting unification was to route it through this same drain. We didn't,
-because the two are different artifacts doing different jobs:
-
-- diffense is **task-keyed**, the chat queue is **event-keyed**;
-- diffense is consumed **once, at PR finalization**, to shape a PR
-  *body* — not streamed to a chat thread mid-thought;
-- it is structured JSON a forge step renders, not a ready-to-send
-  markdown message.
-
-Folding it in would mean reshaping it into a chat-reply at the exact
-moment it's least chat-shaped, to share a code path it doesn't actually
-want. The genuine commonality — "agent writes, daemon picks up" — is
-already the shared *pattern*; collapsing them into one *mechanism* is
-cosmetic and risks the load-bearing PR-body flow. Left as-is.
+One item from slice 4 remains deliberately deferred: a finer
+silence-based idle-kill. The delivery core ships without it because it
+still needs a stronger periodic check-in contract than opportunistic
+interim replies.
 
 ### Finer idle-liveness timeout — deferred
 

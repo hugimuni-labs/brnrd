@@ -108,7 +108,10 @@ sessions, and the managed multi-daemon case:
   publish racing an ad-hoc session that pushes the same branch, and
   stays cheap. Finalize no longer participates — the env layer never
   updates a non-task ref since the 2026-05-21 publish-kernel collapse
-  (see [`design-publish-kernel.md`](design-publish-kernel.md)).
+  (see [`design-publish-kernel.md`](design-publish-kernel.md)). PR
+  finalization no longer rides this step; the resident projects its
+  diffense pack and sends `gate: forge`, which the GitHub delivery loop
+  opens or refreshes.
 
 **No command layer; liveness is a heartbeat-enforced, agent-extensible
 budget.** The daemon never parses `/cancel` or any command — every event
@@ -162,7 +165,8 @@ For each pending event, the daemon:
 8. captures the runner's final stdout as the terminal response file, and
    drains the agent's outbox on each heartbeat and once after the runner
    returns — promoting any interim or interleaved replies to the
-   per-event partials queue (the multi-response protocol,
+   per-event partials queue or delivering gate-addressed sends such as
+   `gate: forge` PR publication (the multi-response protocol,
    [`design-multi-response.md`](design-multi-response.md));
 9. captures the resident's dominion edits via a serialized commit
    (`dominion.commit`; runs on success *and* failure — a failed thought
@@ -173,8 +177,9 @@ For each pending event, the daemon:
     interim partials, then the terminal reply, then cleans up;
 12. finalizes the environment, classifying the worktree's final state
     into a `publish_status` and recording the branch to publish;
-13. publishes that branch via `daemon.publish` under a per-branch lock,
-    and deregisters the thought from the presence registry.
+13. publishes that branch via `daemon.publish` under a per-branch lock
+    (push only; PR open/refresh is agent-owned forge delivery), and
+    deregisters the thought from the presence registry.
 
 The durable user response is plain stdout captured by
 [`runner.invoke_runner`](../src/brr/runner.py), not a file the agent

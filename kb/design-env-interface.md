@@ -233,7 +233,7 @@ Concrete rules every `EnvBackend.finalize()` must satisfy:
 |---------------------------------------------|----------------------------------------|------------------------------------------|
 | Git commits on `ctx.branch_name`            | reachable in host's `.git`             | `ctx.branch_name is not None`            |
 | Response file `<event-id>.md`               | `repo_root/.brr/responses/<id>.md`     | always (existing daemon contract)        |
-| diffense review pack                        | `repo_root/.brr/diffense/<task-id>/pack.json` (the `Review pack path` handed in the bundle) | when pack emission is on and the agent produced one — read by `daemon.publish` for the PR projection |
+| diffense review pack                        | `repo_root/.brr/diffense/<task-id>/pack.json` (the `Review pack path` handed in the bundle) | when pack emission is on and the agent produced one — validated/projected by the resident before a `gate: forge` PR send |
 | Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | always written; removed on clean `status=done`, kept on `error`/`conflict` |
 | Env-private scratch teardown                | n/a — removed from env's territory     | clean `status=done` with no uncommitted files |
 
