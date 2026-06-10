@@ -6208,3 +6208,18 @@ longer describe daemon-side pack projection as current state. `kb/index.md` now
 links the daemon-coherence review page, clearing the deterministic
 missing-from-index finding for that page. Full suite: 779 passed, with the
 existing Starlette/FastAPI deprecation warning.
+
+## [2026-06-10] implement | brnrd login moves onto the dashboard UI substrate
+
+Retried the visible slice of issue #77 after the GitHub-OAuth identity pivot:
+the auth mechanics stayed GitHub-only, but `src/brnrd_web/` no longer renders
+the login and approve pages as hand-built HTML strings. The brnrd app now mounts
+packaged dashboard assets at `/static/brnrd_web`, the web routes render Jinja2
+templates, and a small responsive CSS layer gives the login page a real product
+surface while sharing the same layout with login failure, no-projects, approve,
+and approved states. The stack matches the accepted dashboard MVP direction:
+server-rendered templates plus static assets, no SPA bundler; HTMX is still
+deferred until the first partial-update views need it.
+
+Focused validation: `tests/test_brnrd_web.py` + `tests/test_brnrd_oauth.py`
+pass with the existing Starlette/FastAPI TestClient deprecation warning.

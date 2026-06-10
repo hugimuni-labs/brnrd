@@ -1,19 +1,20 @@
 """Web routes for the brnrd dashboard (GitHub login + approve page).
 
-Hand-rolled HTML for this thin slice (no template engine dependency
-yet); the approve page reuses the same ``approve_core`` the API uses,
-so the device-flow connect handshake is human-completable end-to-end.
+This first web slice uses packaged Jinja templates and static CSS so the
+login/approve flow has the same substrate as the planned dashboard MVP:
+server-rendered HTML, no JS build pipeline, and HTMX-ready assets later.
 """
 
 from __future__ import annotations
 
-import html
 import hmac
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -30,27 +31,24 @@ from brnrd.security import hash_token
 
 router = APIRouter(tags=["web"])
 
-_STYLE = (
-    "body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;max-width:34rem;"
-    "margin:3rem auto;padding:0 1rem;background:#0b0e14;color:#cbd5e1;line-height:1.5}"
-    "a{color:#7dd3fc}code{color:#fbbf24}"
-    "input,select,button{font:inherit;padding:.55rem;margin:.35rem 0;width:100%;"
-    "box-sizing:border-box;background:#111827;color:#e5e7eb;border:1px solid #334155;"
-    "border-radius:6px}button{cursor:pointer;background:#1e293b}"
-    ".button{display:block;text-align:center;text-decoration:none;font:inherit;padding:.65rem;"
-    "margin:.6rem 0;width:100%;box-sizing:border-box;background:#1e293b;"
-    "color:#e5e7eb;border:1px solid #334155;border-radius:6px}"
-    ".card{border:1px solid #334155;border-radius:10px;padding:1.3rem}"
-    ".muted{color:#64748b}h2{margin-top:0}"
-)
+_TEMPLATES = Jinja2Templates(directory=Path(__file__).with_name("templates"))
 
 
-def _page(title: str, body: str) -> str:
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{html.escape(title)}</title><style>{_STYLE}</style></head>"
-        f"<body>{body}</body></html>"
+def _render(
+    request: Request,
+    template: str,
+    context: dict | None = None,
+    *,
+    status_code: int = 200,
+) -> HTMLResponse:
+    data = {"request": request}
+    if context:
+        data.update(context)
+    return _TEMPLATES.TemplateResponse(
+        request=request,
+        name=template,
+        context=data,
+        status_code=status_code,
     )
 
 
@@ -108,27 +106,36 @@ def _account_id(request: Request, db: Session) -> str | None:
 
 
 @router.get("/login", response_class=HTMLResponse)
-def login_form(next: str = "/"):
-    signin = f"/auth/github/start?next={quote(_safe_next(next), safe='/')}"
-    body = (
-        "<div class='card'><h2>brnrd login</h2>"
-        "<p class='muted'>Use your GitHub account to continue.</p>"
-        f"<a class='button' href='{html.escape(signin)}'>Sign in with GitHub</a>"
-        "</div>"
+def login_form(request: Request, next: str = "/"):
+    safe_next = _safe_next(next)
+    signin = f"/auth/github/start?next={quote(safe_next, safe='/')}"
+    return _render(
+        request,
+        "login.html",
+        {
+            "body_class": "auth-page",
+            "title": "Sign in to brnrd",
+            "signin_url": signin,
+            "oauth_ready": _github_oauth_ready(request),
+        },
     )
-    return _page("brnrd login", body)
 
 
 @router.get("/auth/github/start")
 def github_login_start(request: Request, next: str = "/"):
     if not _github_oauth_ready(request):
-        return HTMLResponse(
-            _page(
-                "login unavailable",
-                "<div class='card'><h2>GitHub login is not configured</h2>"
-                "<p class='muted'>Set the brnrd GitHub OAuth client id and secret.</p>"
-                "</div>",
-            ),
+        return _render(
+            request,
+            "message.html",
+            {
+                "title": "Login unavailable",
+                "eyebrow": "Configuration required",
+                "heading": "GitHub login is not configured",
+                "message": "Set the brnrd GitHub OAuth client id and secret.",
+                "action_url": "/login",
+                "action_label": "Back to login",
+                "severity": "warning",
+            },
             status_code=503,
         )
 
@@ -147,12 +154,30 @@ def github_login_start(request: Request, next: str = "/"):
     )
     max_age = settings.oauth_state_ttl_s
     secure = _cookie_secure(request)
-    resp.set_cookie(settings.oauth_state_cookie, state, httponly=True,
-                    samesite="lax", secure=secure, max_age=max_age)
-    resp.set_cookie(settings.oauth_pkce_cookie, verifier, httponly=True,
-                    samesite="lax", secure=secure, max_age=max_age)
-    resp.set_cookie(settings.oauth_next_cookie, _safe_next(next), httponly=True,
-                    samesite="lax", secure=secure, max_age=max_age)
+    resp.set_cookie(
+        settings.oauth_state_cookie,
+        state,
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+        max_age=max_age,
+    )
+    resp.set_cookie(
+        settings.oauth_pkce_cookie,
+        verifier,
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+        max_age=max_age,
+    )
+    resp.set_cookie(
+        settings.oauth_next_cookie,
+        _safe_next(next),
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+        max_age=max_age,
+    )
     return resp
 
 
@@ -174,12 +199,18 @@ def github_login_callback(
         or not verifier
         or not hmac.compare_digest(state, expected_state)
     ):
-        return HTMLResponse(
-            _page(
-                "login failed",
-                "<div class='card'><h2>Could not verify GitHub login</h2>"
-                "<a href='/login'>Try again</a></div>",
-            ),
+        return _render(
+            request,
+            "message.html",
+            {
+                "title": "Login failed",
+                "eyebrow": "GitHub verification",
+                "heading": "Could not verify GitHub login",
+                "message": "The browser session did not match the OAuth callback.",
+                "action_url": "/login",
+                "action_label": "Try again",
+                "severity": "error",
+            },
             status_code=400,
         )
 
@@ -191,13 +222,18 @@ def github_login_callback(
             code_verifier=verifier,
         )
     except oauth.OAuthError as exc:
-        return HTMLResponse(
-            _page(
-                "login failed",
-                "<div class='card'><h2>GitHub login failed</h2>"
-                f"<p>{html.escape(str(exc))}</p>"
-                "<a href='/login'>Try again</a></div>",
-            ),
+        return _render(
+            request,
+            "message.html",
+            {
+                "title": "Login failed",
+                "eyebrow": "GitHub provider",
+                "heading": "GitHub login failed",
+                "message": str(exc),
+                "action_url": "/login",
+                "action_label": "Try again",
+                "severity": "error",
+            },
             status_code=502,
         )
 
@@ -232,25 +268,27 @@ def connect_page(code: str, request: Request, db: Session = Depends(get_db)):
         .all()
     )
     if not projects:
-        return _page(
-            "connect",
-            "<div class='card'><h2>No projects yet</h2>"
-            "<p class='muted'>Create one first, then reload this page.</p></div>",
+        return _render(
+            request,
+            "message.html",
+            {
+                "title": "No projects",
+                "eyebrow": "Daemon approval",
+                "heading": "No projects yet",
+                "message": "Create a project first, then reload this approval page.",
+                "severity": "warning",
+            },
         )
 
-    options = "".join(
-        f"<option value='{html.escape(p.id)}'>{html.escape(p.name)}</option>"
-        for p in projects
+    return _render(
+        request,
+        "connect.html",
+        {
+            "title": "Approve daemon",
+            "code": code,
+            "projects": projects,
+        },
     )
-    body = (
-        "<div class='card'><h2>Approve daemon</h2>"
-        f"<p class='muted'>Pair code <code>{html.escape(code)}</code></p>"
-        f"<form method='post' action='/connect/{html.escape(code)}'>"
-        "<label>Bind this daemon to project</label>"
-        f"<select name='project_id'>{options}</select>"
-        "<button type='submit'>Approve</button></form></div>"
-    )
-    return _page("approve daemon", body)
 
 
 @router.post("/connect/{code}", response_class=HTMLResponse)
@@ -266,16 +304,26 @@ def connect_submit(
     try:
         approve_core(db, account_id, code, project_id)
     except HTTPException as exc:
-        return HTMLResponse(
-            _page(
-                "approve failed",
-                f"<div class='card'><h2>Could not approve</h2>"
-                f"<p>{html.escape(str(exc.detail))}</p></div>",
-            ),
+        return _render(
+            request,
+            "message.html",
+            {
+                "title": "Approve failed",
+                "eyebrow": "Daemon approval",
+                "heading": "Could not approve",
+                "message": str(exc.detail),
+                "severity": "error",
+            },
             status_code=exc.status_code,
         )
-    return _page(
-        "approved",
-        "<div class='card'><h2>Approved &#10003;</h2>"
-        "<p>Your daemon is connected. You can return to your terminal.</p></div>",
+    return _render(
+        request,
+        "message.html",
+        {
+            "title": "Approved",
+            "eyebrow": "Daemon approval",
+            "heading": "Approved",
+            "message": "Your daemon is connected. You can return to your terminal.",
+            "severity": "success",
+        },
     )
