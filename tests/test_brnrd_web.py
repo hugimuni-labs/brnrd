@@ -88,8 +88,19 @@ def _login_web(
 def test_login_page_uses_github_only(client):
     r = client.get("/login?next=/connect/BR-123")
     assert r.status_code == 200
+    assert '<meta name="viewport"' in r.text
+    assert "/static/brnrd_web/app.css" in r.text
+    assert "managed brr control plane" in r.text
+    assert "preview-frame" in r.text
     assert "Sign in with GitHub" in r.text
     assert "password" not in r.text.lower()
+
+
+def test_web_static_assets_are_served(client):
+    r = client.get("/static/brnrd_web/app.css")
+    assert r.status_code == 200
+    assert "text/css" in r.headers["content-type"]
+    assert ".auth-shell" in r.text
 
 
 def test_github_login_redirect_uses_state_and_pkce(client):
