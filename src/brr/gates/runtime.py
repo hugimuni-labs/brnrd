@@ -1,16 +1,9 @@
-"""Shared runtime for poll/deliver gates (telegram, slack, cloud).
+"""Shared runtime for gate state, progress cards, and response streaming.
 
-These gates differ only in *how* they talk to their platform; the
-plumbing around it is identical: a JSON state file under
-``.brr/gates/<gate>.json``, per-task progress-card state under
-``.brr/gates/<gate>/progress/<task>.json``, a crash-resilient
-backoff loop, and a streaming response-delivery skeleton that walks
-``protocol.list_active`` (interim responses then the terminal) and
-cleans up after a successful send.
-
-This module owns that plumbing so each gate is just its platform
-client plus a ``deliver`` closure. The webhook/PR-shaped GitHub
-gate (``gates/github/``) is a different protocol and stays out.
+Chat gates (telegram, slack, cloud) share the state-file, progress-card,
+backoff, and streaming response-delivery helpers directly. The GitHub gate
+has its own poller and progress transport, but reuses ``deliver_stream`` so
+interim, terminal, and out-of-bound sends follow the same queue semantics.
 """
 
 from __future__ import annotations

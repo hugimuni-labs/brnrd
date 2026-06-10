@@ -17,12 +17,16 @@ from pathlib import Path
 
 from requests.utils import quote
 
-from ... import protocol
+from ... import config as conf
+from ... import prompts, protocol
 from ...task import Task
 from .. import runtime
-from . import client
+from . import client, prs
 from .constants import _COMMENT_KINDS
 from .paths import issue_comments, pull_comment_replies
+
+
+_PR_ACTIONS = {"pull_request", "pull-request", "pr", "open_pr", "open-pr"}
 
 
 def _coerce_int(value: object) -> int | None:
@@ -120,26 +124,84 @@ def _post_comment(token: str, event: dict, body: str) -> None:
     client._api_post(token, post_path, body={"body": threaded_body})
 
 
+def _event_field(event: dict, *names: str) -> str:
+    for name in names:
+        value = event.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _is_pull_request_delivery(event: dict) -> bool:
+    action = _event_field(event, "github_action", "forge_action", "action").lower()
+    return action in _PR_ACTIONS
+
+
+def _pull_request_delivery_enabled(brr_dir: Path) -> bool:
+    """Return whether diffense-owned PR publication is enabled here."""
+    try:
+        cfg = conf.load_config(brr_dir.parent)
+    except Exception:
+        cfg = {}
+    return (
+        prompts.diffense_emit_enabled(cfg)
+        and prompts.diffense_create_pr_enabled(cfg)
+    )
+
+
+def _deliver_pull_request(
+    brr_dir: Path,
+    token: str,
+    event: dict,
+    body: str,
+    *,
+    default_repo: str | None = None,
+) -> None:
+    """Create or refresh a PR from a ``gate: github``/``gate: forge`` event."""
+    if not _pull_request_delivery_enabled(brr_dir):
+        print("[brr:github] pull-request delivery disabled by diffense config")
+        return
+    repo = _event_field(event, "github_repo", "repo") or (default_repo or "")
+    head = _event_field(event, "head", "github_head")
+    title = _event_field(event, "title", "github_title")
+    base = _event_field(event, "base", "github_base")
+    if not repo or not head or not base or not title or not body.strip():
+        print("[brr:github] pull-request delivery missing repo/head/base/title/body")
+        return
+    url = prs.open_or_refresh_pr(
+        token, repo, head=head, title=title, body=body, base=base,
+    )
+    print(f"[brr:github] pull request delivered -> {url or head}")
+
+
 def _deliver_responses(
     brr_dir: Path,
     inbox_dir: Path,
     responses_dir: Path,
     token: str,
+    repo: str | None = None,
+    *,
+    source: str = "github",
 ) -> None:
     def deliver_partial(event: dict, body: str) -> None:
+        if _is_pull_request_delivery(event):
+            return
         _post_comment(token, event, body)
 
     def deliver_terminal(event: dict, body: str) -> None:
+        if _is_pull_request_delivery(event):
+            _deliver_pull_request(brr_dir, token, event, body, default_repo=repo)
+            return
         # The branch footer (committed SHA + compare link) is the
         # thread's closing context, so it rides only the terminal reply.
-        repo = event.get("github_repo")
+        event_repo = event.get("github_repo")
         task = _find_task_for_event(brr_dir, event["id"])
-        if repo and task is not None:
-            footer = _branch_footer(repo, task)
+        if event_repo and task is not None:
+            footer = _branch_footer(event_repo, task)
             if footer:
                 body = body.rstrip() + footer + "\n"
         _post_comment(token, event, body)
 
     runtime.deliver_stream(
-        inbox_dir, responses_dir, "github", deliver_partial, deliver_terminal,
+        inbox_dir, responses_dir, source, deliver_partial, deliver_terminal,
     )
