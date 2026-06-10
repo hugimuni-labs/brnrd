@@ -73,6 +73,20 @@ def _prompt_trigger(label: str, default: str) -> str | None:
     return raw
 
 
+def _prompt_bool_trigger(label: str, default: bool = False) -> bool:
+    """Prompt for an on/off trigger."""
+    default_label = "on" if default else "off"
+    raw = input(f"{label} (on/off) [{default_label}]: ").strip().lower()
+    if not raw:
+        return default
+    if raw in ("on", "yes", "true", "enable", "enabled"):
+        return True
+    if raw in ("off", "no", "false", "none", "disable", "disabled"):
+        return False
+    print(f"[brr] Unrecognised value '{raw}' — keeping {default_label}.")
+    return default
+
+
 def bind(brr_dir: Path) -> None:
     state_dict = state._load_state(brr_dir)
     if state.resolve_token(state_dict) is None:
@@ -93,17 +107,25 @@ def bind(brr_dir: Path) -> None:
 
     triggers: dict[str, Any] = state_dict.get("triggers") or {}
 
-    # 'any' fires on every issue, PR, and comment — overrides label/mention.
+    # 'any' fires on every issue, PR, and comment — overrides other triggers.
     print("Watch all activity fires on every new issue, PR, and comment without")
     print("filtering. Token-expensive on busy repos. Off by default.")
-    any_raw = input("Enable? (on to enable, Enter to skip) [off]: ").strip().lower()
-    if any_raw in ("on", "yes", "true"):
+    if _prompt_bool_trigger("Watch all activity", bool(triggers.get("any"))):
         triggers = {"any": True}
         state_dict["triggers"] = triggers
         state._save_state(brr_dir, state_dict)
         print(f"[brr] GitHub gate bound: repo={repo} triggers=['any']")
         return
     triggers.pop("any", None)
+
+    opened = _prompt_bool_trigger(
+        "Watch newly opened issues and PRs",
+        bool(triggers.get("opened")),
+    )
+    if opened:
+        triggers["opened"] = True
+    else:
+        triggers.pop("opened", None)
 
     label = _prompt_trigger(
         "Label to watch on issues",
@@ -124,7 +146,10 @@ def bind(brr_dir: Path) -> None:
         triggers["mention"] = mention
 
     if not triggers:
-        print("[brr] No triggers configured — at least one of label / mention required.")
+        print(
+            "[brr] No triggers configured — at least one of opened / label / mention "
+            "required.",
+        )
         return
     state_dict["triggers"] = triggers
     state._save_state(brr_dir, state_dict)
