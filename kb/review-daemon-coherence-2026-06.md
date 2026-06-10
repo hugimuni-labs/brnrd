@@ -1,8 +1,9 @@
 # Review: daemon-layer coherence + delivery generalization (2026-06)
 
 Status: active — findings #1–#3 landed (2026-06-09) and are folded into the
-hubs; this page now primarily holds the open #4 ownership crossroads that the
-daemon/delivery hubs link to. Retire when #4 resolves.
+hubs; #4's PR-finalization subcase landed 2026-06-10 via agent-owned
+forge delivery. This page now holds the remaining push/reply ownership
+crossroads that the daemon/delivery hubs link to. Retire when #4 resolves.
 
 Prompted by two observations during the slice-7 work (self-scheduled
 thoughts + agent-owned dominion sync):
@@ -28,7 +29,7 @@ contradiction. Hubs: [`subject-daemon.md`](subject-daemon.md),
 | 1 | docs/comments | Stale references to retired machinery (kb-maintenance step, superseded design citations, "roadmap to parallel" framing) | fixed this pass |
 | 2 | daemon liveness | No prompt-kill on shutdown; `_active_proc` unused; agent has no budget awareness or way to ask for more time | shipped 2026-06-09 |
 | 3 | delivery | Reply-shaped delivery blocks out-of-bound + scheduled delivery; schedule thoughts are threadless | shipped 2026-06-09 |
-| 4 | ownership | Daemon-owned push/delivery vs a simpler agent-owned generic flow | open question — framing tightened, behavior unchanged |
+| 4 | ownership | Daemon-owned push/delivery vs a simpler agent-owned generic flow | partially resolved — PR finalization moved to agent-owned forge delivery; push/reply ownership remains open |
 
 ## 1. Stale references (fixed this pass)
 
@@ -170,12 +171,14 @@ commit, push, and reply-shaped delivery; the agent works within that.
   today, and it trades away the real concurrency that single-flight +
   interleaving only partially replaces — which users may yet ask for.
 
-**Stance for now:** keep the working behavior; fix only the *framing* that
-undersells it (the daemon does best-effort push / remote fast-forward and
-hands the agent the wheel on divergence — it is not a pure "local
-durability floor"). Revisit the larger bet when the CLI tooling lands.
-The #3 `gate:` primitive lets us drift toward the agent-owned flow
-incrementally instead of via a big-bang rewrite.
+**Stance now:** keep the daemon-owned push and reply plumbing, but move
+publish-adjacent delivery that is already agent-authored into the
+agent-owned `gate:` path. The 2026-06-10 PR-finalization slice did that
+for diffense: the resident projects its pack, writes `gate: forge`, and
+the GitHub gate opens or refreshes the PR. The broader push/reply
+ownership question remains open; the #3 `gate:` primitive lets us drift
+toward the agent-owned flow incrementally instead of via a big-bang
+rewrite.
 
 *Framing tightened 2026-06-09.* The agent-facing dominion block
 (`prompts.py` `_build_dominion_block`) used to read "a local durability

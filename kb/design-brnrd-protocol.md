@@ -578,8 +578,8 @@ so an unchanged card is never re-POSTed.
 
 ### Transient review-pack relay
 
-The daemon publishes its own PR (body = the diffense pack projection;
-see [`design-diffense.md`](design-diffense.md)). This pair of endpoints
+The resident publishes its PR body from the diffense pack projection
+(see [`design-diffense.md`](design-diffense.md)). This pair of endpoints
 backs the **rich** rendered view linked from that body, for oversized
 packs or remote reviewers who want the zoomable surface:
 
