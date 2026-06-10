@@ -8,6 +8,7 @@ the check-in. See ``kb/design-multi-response.md``.
 
 from __future__ import annotations
 
+import json
 import types
 
 from brr import conversations, daemon, protocol, run_context, run_progress, updates
@@ -78,6 +79,17 @@ class TestDrainOutbox:
         # The keepalive control file is left in place — the heartbeat reads
         # it; it is never delivered as a message or consumed by the drain.
         assert (outbox / ".keepalive").exists()
+
+    def test_skips_live_inbox_control_file(self, tmp_path, monkeypatch):
+        n, responses, outbox, _ = self._drain(
+            tmp_path, monkeypatch,
+            [("inbox.json", '{"events": []}\n'), ("real.md", "hi\n")],
+        )
+        assert n == 1
+        bodies = [protocol.read_partial(p)
+                  for p in protocol.list_partials(responses, "evt-1")]
+        assert bodies == ["hi"]
+        assert (outbox / "inbox.json").exists()
 
     def test_gate_addressed_message_synthesizes_done_event(self, tmp_path, monkeypatch):
         brr_dir = tmp_path / ".brr"
@@ -231,6 +243,42 @@ def test_remove_outbox_is_best_effort(tmp_path):
     # tolerates a missing dir / None
     daemon._remove_outbox(outbox)
     daemon._remove_outbox(None)
+
+
+def test_live_inbox_file_lists_other_pending_events(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-A"
+    outbox.mkdir(parents=True)
+    current_path = protocol.create_event(inbox, source="github", body="current")
+    current = protocol.list_pending(inbox)[0]
+    protocol.set_status(current, "processing")
+    protocol.create_event(
+        inbox,
+        source="telegram",
+        body="quick question\nwith detail",
+        telegram_chat_id="123",
+    )
+    protocol.create_event(inbox, source="slack", body="already running")
+    other_processing = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev["_path"] != current_path and ev["source"] == "slack"
+    ][0]
+    protocol.set_status(other_processing, "processing")
+
+    path = daemon._write_live_inbox(outbox, inbox, current["id"])
+
+    assert path == outbox / "inbox.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["version"] == 1
+    assert payload["current_event"] == current["id"]
+    assert len(payload["events"]) == 1
+    ev = payload["events"][0]
+    assert ev["source"] == "telegram"
+    assert ev["summary"] == "quick question with detail"
+    assert ev["body"] == "quick question\nwith detail"
+    assert ev["telegram_chat_id"] == 123
+    assert "_path" not in ev
 
 
 def test_interim_response_packet_updates_card(tmp_path):
