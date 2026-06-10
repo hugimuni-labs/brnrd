@@ -2,8 +2,8 @@
 
 Three reply shapes:
 
-- Label-triggered issues: a plain top-level comment on the issue. No
-  quote pointer; the issue *is* the source.
+- Label-triggered and opened issues/PRs: a plain top-level comment on
+  the issue or PR. No quote pointer; the issue/PR itself is the source.
 - Mention-triggered timeline comments (issue or PR): top-level comment
   on the issue/PR, prefixed with a blockquote linking back at the
   triggering comment (mirrors what GitHub's "Quote reply" button does).
