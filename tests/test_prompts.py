@@ -181,7 +181,7 @@ class TestPromptBuilding:
         assert "kb health" not in prompt
 
     def test_diffense_emit_enabled_defaults_on(self):
-        # On by default now that the publish kernel consumes the pack;
+        # On by default now that the resident consumes the pack for PR delivery;
         # opt out explicitly.
         assert diffense_emit_enabled({})
         assert diffense_emit_enabled(None)
@@ -205,6 +205,7 @@ class TestPromptBuilding:
         )
         assert "Review pack (diffense)" in prompt
         assert "brr review --check" in prompt
+        assert "gate: forge" in prompt
         # The pack path is explicit and absolute in the shared runtime dir
         # so it survives worktree teardown.
         assert "Review pack path: /repo/.brr/diffense/task-9/pack.json" in prompt
