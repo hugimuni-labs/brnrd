@@ -1,6 +1,6 @@
 """GitHub gate — turns GitHub activity into events.
 
-The gate polls the GitHub REST API for three configurable triggers:
+The gate polls the GitHub REST API for four configurable triggers:
 
 - ``label-on-issue``: a new (or updated) open issue carrying the
   configured label becomes one inbox event.
@@ -13,10 +13,14 @@ The gate polls the GitHub REST API for three configurable triggers:
   comments authored by ``handle`` are filtered so the named account
   cannot self-loop; the PAT holder can still @-mention that account
   from their own comments.
+- ``opened``: newly opened issues and PRs become events without also
+  subscribing to every comment. This is the bounded maintainer-inbox
+  mode for low-to-moderate activity repos. PR events include
+  ``branch_target``.
 - ``any``: every new issue, PR, and comment fires an event. Overrides
-  label and mention when set. Token-expensive on busy repos; off by
-  default. PR events include ``branch_target``; bot's own comments are
-  still filtered.
+  opened, label, and mention when set. Token-expensive on busy repos;
+  off by default. PR events include ``branch_target``; bot's own comments
+  are still filtered.
 
 Replies are posted as comments on the originating issue or PR; inline
 PR review-comment events reply in-thread via the review-replies API.
