@@ -42,8 +42,9 @@ def create_app(
         app.include_router(dev.router)
 
     # The dashboard (src/brnrd_web) is part of the brr[backend] extra.
-    from brnrd_web import router as web_router
+    from brnrd_web import mount_static, router as web_router
 
+    mount_static(app)
     app.include_router(web_router)
 
     @app.get("/healthz")
