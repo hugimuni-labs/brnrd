@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main class="state-shell" aria-labelledby="state-title">
+  <section class="panel state-panel state-{{ severity|default('neutral') }}">
+    {% if eyebrow %}
+      <p class="eyebrow">{{ eyebrow }}</p>
+    {% endif %}
+    <h1 id="state-title">{{ heading }}</h1>
+    <p class="panel-copy">{{ message }}</p>
+    {% if action_url and action_label %}
+      <a class="button button-secondary" href="{{ action_url }}">{{ action_label }}</a>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}
