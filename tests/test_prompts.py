@@ -258,6 +258,24 @@ class TestPromptBuilding:
         assert "Budget:" not in prompt
         assert ".keepalive" not in prompt
 
+    def test_daemon_prompt_includes_driver_manual(self, tmp_path):
+        """The daemon path injects brr's driver's manual — the daemon-only
+        machinery (single-flight, capture net, self-scheduled wakes) the
+        host-agnostic playbook deliberately leaves out."""
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, task_id="task-9",
+        )
+        assert "How brr drives you" in prompt
+        assert "single-flight" in prompt
+        assert "schedule.md" in prompt  # self-scheduled wakes live here now
+
+    def test_run_prompt_omits_driver_manual(self, tmp_path):
+        """`brr run` is a one-shot: no daemon to fire schedules or drain an
+        outbox, so it doesn't carry the driver's manual."""
+        prompt = build_run_prompt("ship it", tmp_path)
+        assert "How brr drives you" not in prompt
+        assert "schedule.md" not in prompt
+
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
