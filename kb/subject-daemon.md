@@ -64,6 +64,16 @@ the superseded
 [`design-concurrent-execution.md`](design-concurrent-execution.md)
 holds the prior reasoning.)
 
+Events that arrive while a thought is running are no longer invisible
+until the next spawn. The worker writes an initial pending-events view to
+the task outbox and refreshes `inbox.json` there on every heartbeat after
+draining any agent-written replies. The resident checks that file at
+natural plan / todo boundaries and may fold in quick replies with the
+multi-response `event: <id>` path. Idle dispatch is still FIFO: true
+agent-selected next-event ordering or long-running batch claims need a
+separate claim protocol beyond today's `pending` / `processing` / `done`
+states.
+
 ### Self-scheduled thoughts (the resident's own clock)
 
 The resident isn't only summoned — it wakes itself. Each reflex tick,
@@ -156,17 +166,19 @@ For each pending event, the daemon:
 6. builds the daemon prompt with the Task Context Bundle (including the
    dominion digest, any dominion pitfalls whose triggers the task text
    hits — the env-shaping loop's failure-memory affordance,
-   [`pitfalls.py`](../src/brr/pitfalls.py) — other pending events, and who
-   else is present), plus brr's **driver's manual** (`daemon-substrate.md`)
+   [`pitfalls.py`](../src/brr/pitfalls.py) — the wake-time pending-events
+   snapshot plus live `inbox.json` path, and who else is present), plus
+   brr's **driver's manual** (`daemon-substrate.md`)
    — the daemon-only machinery (single-flight, capture-at-sleep net,
    self-scheduled wakes) the host-agnostic playbook deliberately leaves out
    (see [`plan-playbook-generalization.md`](plan-playbook-generalization.md));
 7. invokes the configured runner headlessly;
 8. captures the runner's final stdout as the terminal response file, and
-   drains the agent's outbox on each heartbeat and once after the runner
-   returns — promoting any interim or interleaved replies to the
-   per-event partials queue or delivering gate-addressed sends such as
-   `gate: forge` PR publication (the multi-response protocol,
+   on each heartbeat drains the agent's outbox, then refreshes the live
+   inbox view (plus one final drain after the runner returns) — promoting
+   any interim or interleaved replies to the per-event partials queue or
+   delivering gate-addressed sends such as `gate: forge` PR publication
+   (the multi-response protocol,
    [`design-multi-response.md`](design-multi-response.md));
 9. captures the resident's dominion edits via a serialized commit
    (`dominion.commit`; runs on success *and* failure — a failed thought

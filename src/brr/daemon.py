@@ -7,11 +7,12 @@ leaves judgement to the agent it wakes. It:
 1. Starts configured gate threads (each gate polls its own channel).
 2. Scans ``.brr/inbox/`` for pending events on a timer.
 3. Runs **single-flight** — one *thought* at a time. When idle and work
-   is pending it spawns one worker; new events that arrive mid-thought
-   simply wait (the living agent reconsiders its inbox at plan
-   boundaries, or the next spawn handles them). Concurrency within one
-   resident is cooperative, not parallel across workers. See
-   ``kb/design-agent-dominion.md`` §4 and ``kb/subject-daemon.md``.
+   is pending it spawns one worker; new events that arrive mid-thought are
+   surfaced to the living agent through ``outbox/<event>/inbox.json`` and
+   either get folded in at plan boundaries or wait for the next spawn.
+   Concurrency within one resident is cooperative, not parallel across
+   workers. See ``kb/design-agent-dominion.md`` §4 and
+   ``kb/subject-daemon.md``.
 4. The worker owns the full pipeline for its event: runner invocation,
    retries, response capture, response release to gates, env finalize,
    and branch push.
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import collections
 import concurrent.futures
+import json
 import os
 import shutil
 import signal
@@ -70,6 +72,7 @@ _HEARTBEAT_INTERVAL = 30.0
 # ``_recent_conversation_for_prompt`` strips before formatting, so the
 # rendered tail stays at ``prompts.RECENT_CONVERSATION_MAX``.
 _RECENT_READ_HEADROOM = 12
+_LIVE_INBOX_NAME = "inbox.json"
 
 
 # ── Per-branch locks ────────────────────────────────────────────────
@@ -642,18 +645,11 @@ def _run_worker(
         if conv_key else []
     )
 
-    # Snapshot of other waiting events so the resident can fold a quick
-    # one in mid-thought (the multi-response interleaving contract). Taken
-    # at wake; more may arrive after. Excludes this event (now processing).
-    pending_events_snapshot = [
-        {
-            "id": ev.get("id"),
-            "source": ev.get("source"),
-            "summary": ev.get("body") or "",
-        }
-        for ev in protocol.list_pending(inbox_dir)
-        if ev.get("id") != eid
-    ]
+    # Snapshot of other waiting events so the resident has immediate
+    # orientation at wake. A live copy is also refreshed in the outbox
+    # below and on every heartbeat.
+    pending_events_snapshot = _pending_events_for_agent(inbox_dir, eid)
+    _write_live_inbox(outbox_dir, inbox_dir, eid)
 
     # Other thoughts awake right now (presence registry), excluding this
     # one — so the resident knows it may share the dominion with a
@@ -749,6 +745,7 @@ def _run_worker(
             # mid-run check-in, and the partial should reach the gate as
             # promptly as the heartbeat that observed the agent is alive.
             _drain_outbox(emit, task, responses_dir, eid, outbox_dir, inbox_dir)
+            _write_live_inbox(outbox_dir, inbox_dir, eid)
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
             elapsed = int(time.monotonic() - attempt_started_monotonic)
@@ -1095,6 +1092,69 @@ def _emit_preserved_containers(
     emit("container_preserved", task_id=task.id, containers=containers)
 
 
+def _pending_event_record(ev: dict) -> dict[str, object]:
+    """Return the agent-facing JSON shape for one pending event."""
+    body = str(ev.get("body") or "")
+    summary = " ".join(body.split())
+    if len(summary) > 240:
+        summary = summary[:237].rstrip() + "..."
+    out: dict[str, object] = {}
+    for key, value in ev.items():
+        if key.startswith("_") or key == "body":
+            continue
+        out[key] = value
+    out["summary"] = summary
+    out["body"] = body
+    return out
+
+
+def _pending_events_for_agent(
+    inbox_dir: Path,
+    current_event_id: str,
+) -> list[dict[str, object]]:
+    """Return other waiting events the resident may fold in."""
+    events: list[dict[str, object]] = []
+    for ev in protocol.list_pending(inbox_dir):
+        if ev.get("id") == current_event_id:
+            continue
+        if ev.get("status") != "pending":
+            continue
+        events.append(_pending_event_record(ev))
+    return events
+
+
+def _write_live_inbox(
+    outbox_dir: Path | None,
+    inbox_dir: Path,
+    current_event_id: str,
+) -> Path | None:
+    """Refresh the live inbox view exposed to the running resident.
+
+    The file sits in the task outbox because that directory is already
+    mounted into every daemon-run environment. It is daemon-owned control
+    state, not a deliverable outbox message.
+    """
+    if not outbox_dir:
+        return None
+    try:
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "generated_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "current_event": current_event_id,
+            "events": _pending_events_for_agent(inbox_dir, current_event_id),
+        }
+        path = outbox_dir / _LIVE_INBOX_NAME
+        protocol._atomic_write(
+            path,
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        )
+        return path
+    except OSError:
+        return None
+
+
 def _find_pending_event(inbox_dir: Path | None, event_id: str) -> dict | None:
     """Return the inbox event with *event_id* if it's still pending/processing."""
     if not inbox_dir:
@@ -1158,8 +1218,13 @@ def _drain_outbox(
     for fpath in entries:
         # ``.tmp`` is the agent's atomic-write staging name; dotfiles are
         # reserved as control channels (e.g. ``.keepalive`` for the
-        # liveness budget) and must never be delivered as a message.
-        if fpath.suffix == ".tmp" or fpath.name.startswith("."):
+        # liveness budget), and inbox.json is the daemon-owned live-inbox
+        # view. None are deliverable messages.
+        if (
+            fpath.suffix == ".tmp"
+            or fpath.name.startswith(".")
+            or fpath.name == _LIVE_INBOX_NAME
+        ):
             continue
         try:
             text = fpath.read_text(encoding="utf-8")

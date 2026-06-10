@@ -200,14 +200,17 @@ the delivery path explicitly):
 - **Drop zone** — `.brr/outbox/<event-id>/`. The resident writes a
   complete markdown reply per file (staging as `*.tmp` and renaming for
   an atomic write). The path rides the Task Context Bundle's delivery
-  contract.
+  contract. The daemon also reserves `inbox.json` in this directory as a
+  live view of other pending events; it is control state for the agent to
+  read at plan boundaries, not a deliverable message.
 - **Drain** — on every heartbeat tick and once right after the runner
   returns, the daemon (`daemon._drain_outbox`) scans the drop zone
   oldest-first, promotes each file to a per-event partials queue
   (`protocol.write_partial` → `.brr/responses/<id>.partials/<seq>.md`),
   emits an `interim_response` packet, indexes the artifact on the
-  conversation log, and removes the consumed file. A promoting drain is
-  a positive liveness check-in.
+  conversation log, and removes the consumed file. The same heartbeat
+  refreshes `inbox.json`. A promoting drain is a positive liveness
+  check-in.
 - **Streaming delivery** — `runtime.deliver_stream` walks **active**
   events (`processing` *or* `done`): it delivers queued partials in
   order, deleting each after a successful send (so delivery is
@@ -216,9 +219,9 @@ the delivery path explicitly):
 - **Interleaving** — an outbox file whose frontmatter names another
   pending event (`event: <id>`) is routed to *that* event's queue and
   that event is marked `done`, so its thread gets the reply and it never
-  wakes as its own thought. The bundle lists other pending events so the
-  resident knows what it can fold in. Unknown targets are dropped, not
-  misrouted.
+  wakes as its own thought. The bundle lists the wake-time pending events,
+  and `inbox.json` keeps that view fresh while the thought runs. Unknown
+  targets are dropped, not misrouted.
 - **Gate-addressed sends** — an outbox file whose frontmatter names
   `gate: <name>` is an agent-initiated send with no waiting event. The
   daemon creates an already-`done` event for that gate and the gate's
