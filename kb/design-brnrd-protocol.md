@@ -372,7 +372,7 @@ per-source:
 | Source | Resolution |
 |--------|-----------|
 | GitHub App webhook | `(installation_id, repo_full_name) → project_id` via `project_bindings` table. Naturally per-repo; no UX needed. |
-| Telegram message | `(account_id, chat_id) → sticky_project_id` from `chat_project_bindings`, with per-message `@project ...` or `/project <name> <task>` prefix override. |
+| Telegram message | `(account_id, chat_id) → sticky_project_id` from `chat_project_bindings`, with `/project <name>` sticky selection and per-message `@project ...` or `/project <name> <task>` prefix override. |
 | Slack message | Same shape as Telegram (`(account_id, channel_id) → sticky_project_id` + prefix override). |
 | Discord message | Same shape as Telegram. |
 | GitLab MR comment (future) | Same shape as GH (`(installation_id, project_path) → project_id`). |
@@ -382,6 +382,7 @@ TG / Slack / Discord command surface for managing bindings:
 | Command | Behaviour |
 |---------|-----------|
 | `/connect <project-name>` | Bind current chat to project. Replaces any previous binding for that chat. |
+| `/project <name>` | Select the sticky project for subsequent messages in this chat. |
 | `/project <name> <task>` | Per-message override; routes this task to a different project without changing the sticky binding. |
 | `@project-name <task>` | Same as above, terse form. |
 | `/projects` | List the account's projects with their bound chats and daemon status. |
