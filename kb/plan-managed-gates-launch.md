@@ -75,7 +75,8 @@ covers the dashboard view of all of this.
     bound on install, re-bindable from CLI / dashboard.
   - Telegram bot resolves `(account_id, chat_id) → project_id`
     via `chat_project_bindings`; `/connect <project>` binds the
-    current chat; `/project <name> <task>` overrides for one
+    current chat; `/project <name>` selects the current chat's
+    sticky project; `/project <name> <task>` overrides for one
     message; `@<name> <task>` terse form; `/projects` and
     `/status` for introspection.
 - Permission-prompt API live end-to-end:
@@ -151,8 +152,9 @@ response formatter, and the chat-binding flow.
    from the design).
 4. Telegram-specific command grammar: `/start <code>` for
    pairing, `/connect <project>` for chat-to-project binding,
-   `/project <name> <task>` per-message override, `@<name>
-   <task>` terse form, `/projects` and `/status` for
+   `/project <name>` sticky selection, `/project <name>
+   <task>` per-message override, `@<name> <task>` terse form,
+   `/projects` and `/status` for
    introspection.
 5. Daemon-side: no new code — the cloud gate adapter handles TG
    events the same as GH events; the event shape is uniform.

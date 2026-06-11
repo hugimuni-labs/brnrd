@@ -6260,3 +6260,18 @@ today’s `pending` / `processing` / `done` states. Focused validation:
 tests/test_daemon.py tests/test_daemon_single_flight.py` passed; after
 `pip install -e ".[dev]"`, the full `pytest` suite passed (782 tests, with the
 existing Starlette/FastAPI deprecation warning).
+
+## [2026-06-11] implement | Managed Telegram chat gains project selection
+
+Closed the first executable slice of brnrd chat multi-project routing. The
+managed Telegram webhook now answers unpaired chats with a setup error instead
+of silently dropping text, and paired chats can select a sticky project with
+`/project <name>` (or `/connect <name>`), list choices with `/projects`, and
+route one task elsewhere with `/project <name> <task>` without changing the
+sticky binding. Pairing remains the account authorization step; forge gates stay
+outside this selector path because their repo/app binding already resolves the
+project.
+
+Focused validation: `python -m pytest tests/test_brnrd_telegram.py
+tests/test_brnrd_inbox.py tests/test_cloud_gate.py` passed (38 tests, with the
+existing Starlette/FastAPI TestClient deprecation warning).

@@ -332,6 +332,7 @@ Two resolution mechanisms:
   plus an in-message override:
   - `/connect <project-name>` binds the current chat to a
     project.
+  - `/project <name>` selects the current chat's sticky project.
   - `/project <name> <task>` or `@<name> <task>` routes a single
     message elsewhere without changing the binding.
   - `/projects` lists projects + their daemon status + their
