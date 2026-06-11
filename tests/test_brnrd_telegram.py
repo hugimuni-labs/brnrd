@@ -163,14 +163,160 @@ def test_bound_chat_message_enqueues_with_reply_to(env):
     }
 
 
-def test_unbound_chat_is_ignored(env):
-    app, client, _ = env
+def test_unbound_chat_gets_setup_error(env):
+    app, client, sends = env
     r = client.post(
         "/v1/webhooks/telegram", json=_message(404, "stranger danger"), headers=_HDR
     )
     assert r.status_code == 200
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event)).scalars().all() == []
+    assert len(sends) == 1
+    assert sends[0]["chat_id"] == "404"
+    assert "not paired" in sends[0]["text"]
+
+
+def test_project_command_switches_bound_chat(env):
+    app, client, sends = env
+    acc = _account(client)
+    pid_a = _project(client, acc, name="alpha")
+    pid_b = _project(client, acc, name="beta")
+    code = _tg_pair_code(client, acc, pid_a)
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, f"/start {code}"),
+        headers=_HDR,
+    )
+    sends.clear()
+
+    r = client.post(
+        "/v1/webhooks/telegram", json=_message(555, "/project beta"), headers=_HDR
+    )
+    assert r.status_code == 200
+    with app.state.SessionLocal() as db:
+        binding = db.execute(
+            select(ChatBinding).where(ChatBinding.chat_id == "555")
+        ).scalar_one()
+        assert binding.project_id == pid_b
+        assert db.execute(select(Event)).scalars().all() == []
+    assert len(sends) == 1
+    assert "Selected project 'beta'" in sends[0]["text"]
+
+    client.post(
+        "/v1/webhooks/telegram", json=_message(555, "ship it"), headers=_HDR
+    )
+    with app.state.SessionLocal() as db:
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert event.project_id == pid_b
+        assert event.body == "ship it"
+
+
+def test_connect_command_switches_bound_chat(env):
+    app, client, sends = env
+    acc = _account(client)
+    pid_a = _project(client, acc, name="alpha")
+    pid_b = _project(client, acc, name="beta project")
+    code = _tg_pair_code(client, acc, pid_a)
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, f"/start {code}"),
+        headers=_HDR,
+    )
+    sends.clear()
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "/connect beta project"),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        binding = db.execute(
+            select(ChatBinding).where(ChatBinding.chat_id == "555")
+        ).scalar_one()
+        assert binding.project_id == pid_b
+    assert len(sends) == 1
+    assert "Selected project 'beta project'" in sends[0]["text"]
+
+
+def test_project_command_routes_one_task_without_switching(env):
+    app, client, sends = env
+    acc = _account(client)
+    pid_a = _project(client, acc, name="alpha")
+    pid_b = _project(client, acc, name="beta")
+    code = _tg_pair_code(client, acc, pid_a)
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, f"/start {code}"),
+        headers=_HDR,
+    )
+    sends.clear()
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "/project beta do the other thing", message_id=42),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        binding = db.execute(
+            select(ChatBinding).where(ChatBinding.chat_id == "555")
+        ).scalar_one()
+        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
+        assert binding.project_id == pid_a
+        assert event.project_id == pid_b
+        assert event.body == "do the other thing"
+    assert sends == []
+
+
+def test_project_command_unknown_project_replies_without_enqueue(env):
+    app, client, sends = env
+    acc = _account(client)
+    pid = _project(client, acc, name="alpha")
+    code = _tg_pair_code(client, acc, pid)
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, f"/start {code}"),
+        headers=_HDR,
+    )
+    sends.clear()
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "/project missing do the thing"),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert len(sends) == 1
+    assert "No project matched" in sends[0]["text"]
+
+
+def test_projects_command_lists_current_project(env):
+    _, client, sends = env
+    acc = _account(client)
+    pid = _project(client, acc, name="alpha")
+    _project(client, acc, name="beta")
+    code = _tg_pair_code(client, acc, pid)
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, f"/start {code}"),
+        headers=_HDR,
+    )
+    sends.clear()
+
+    r = client.post(
+        "/v1/webhooks/telegram", json=_message(555, "/projects"), headers=_HDR
+    )
+    assert r.status_code == 200
+
+    assert len(sends) == 1
+    assert "- alpha (current)" in sends[0]["text"]
+    assert "- beta" in sends[0]["text"]
 
 
 def test_split_message_prefers_newlines_and_loses_nothing():
