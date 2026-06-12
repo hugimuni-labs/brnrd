@@ -105,10 +105,12 @@ The research dimension of this design: shapes weighed and set aside.
   and the feedback loop on the table and risks the full shape never
   forming. The PR body is a projection of the pack, not the thing we
   design around.
-- **Forge-hosted artifact (a generated PR comment or gist).** Hosting a
-  generated artifact on the forge means PR-comment-shaped UX: no
-  interactivity, no zoom, drift the moment it is written, and a hard
-  coupling to one forge's comment semantics.
+- **Forge-hosted rendered artifact (a generated PR comment or static
+  HTML gist).** Hosting the *rendered surface* on the forge means
+  PR-comment-shaped UX: no interactivity, no zoom, drift the moment it is
+  written, and a hard coupling to one forge's comment semantics. This no
+  longer rejects a user-owned gist as the durable **pack JSON** backing a
+  browser-rendered interactive view (accepted 2026-06-12).
 - **TUI-only viewer.** Power-user-friendly, but it locks out peers
   without brr installed and is the wrong surface for phone review (see
   "Surfaces and what to build first").
@@ -209,7 +211,7 @@ flowchart TD
 | Responsive web | terminal-aesthetic HTML; `brr review` serves it locally | self-hosted (local; LAN/tunnel for phone) | **render model spiked** ([`src/brr/diffense/`](../src/brr/diffense)); local server + runner wiring next |
 | PR-body projection | humanized Markdown in the PR body | any forge reader | **ships** (2026-06-01; ownership moved 2026-06-10) — [`prbody.py`](../src/brr/diffense/prbody.py), projected by the resident via `brr review --pr-body`; pack embedded in a marker, `extract_pack` recovers it |
 | CLI / TUI | `brr review` in the terminal | self-hosted | follow-up, same pack |
-| Hosted web | brnrd renders a relayed pack at `/r/{token}` (transient) | hosted (managed mode) | **relay ships** (2026-06-01) — `POST /v1/daemons/pack` + public `/r/{token}`, RAM-only; the brnrd-dashboard renderer is the richer follow-up |
+| Hosted web | brnrd serves a static renderer shell at `/r?pack=<raw gist url>`; `/r/{token}` remains the RAM-only relay fallback | hosted (managed mode) | **gist-backed shell ships** (2026-06-12) after the transient relay slice (2026-06-01) — pack JSON lives in the user's secret gist; brnrd serves code or a short-lived fallback, never durable pack storage |
 | Live agent | in-context Q&A over the pack | both | future |
 
 The payoff of the split: the hardest, most valuable work (assembling the
@@ -1104,11 +1106,21 @@ reviewer's surface.
   (reusing the ergo proxy's invisible `<!-- … -->` technique), size
   permitting. This is the user publishing their own data to their own PR —
   not a third party storing it.
-- **brnrd is a transient relay, never a pack store** (opt-in,
-  config-gated; **shipped 2026-06-01**). In managed mode the daemon relays
-  the pack to brnrd (`POST /v1/daemons/pack`), which holds it in a RAM-only
-  TTL store behind an unguessable token and renders it on `GET /r/{token}`
-  via `brr.diffense.render` — it does **not** persist it, mirroring brnrd's
+- **User-owned gist for durable rich review** (**shipped 2026-06-12**).
+  `brr review --pr-body --relay` first writes the pack JSON to a secret
+  gist in the user's own GitHub account and links brnrd's static renderer
+  shell as `/r?pack=<raw gist url>`. The browser fetches the raw gist
+  directly; brnrd serves the renderer code and never receives or stores
+  the durable pack bytes. A secret gist is an unlisted capability URL, so
+  brr declines this durable path when GitHub reports the target repo as
+  private or internal.
+- **brnrd is a transient relay fallback, never a pack store**
+  (config-gated; **shipped 2026-06-01**, demoted to fallback
+  2026-06-12). When gist publication is unavailable or the pack should not
+  leave a private repo as a public capability URL, the daemon can relay the
+  pack to brnrd (`POST /v1/daemons/pack`), which holds it in a RAM-only TTL
+  store behind an unguessable token and renders it on `GET /r/{token}` via
+  `brr.diffense.render` — it does **not** persist it, mirroring brnrd's
   event-content-transient, "data ownership stays at the metadata-graph
   level" stance ([`design-brnrd-protocol.md`](design-brnrd-protocol.md)).
   Persisting the pack server-side would break that stance, since the pack
@@ -1119,9 +1131,9 @@ reviewer's surface.
   machine closes the remote case with no brnrd at all.
 
 This keeps generation in one place; every renderer reads the same bytes
-from the producer — locally, embedded in the user's own PR body, or
-transiently relayed — and nothing about the pack is persisted off the
-producer's machine.
+from the producer — locally, embedded in the user's own PR body, from the
+user's own gist, or transiently relayed — and no third-party brr service
+persists the pack.
 
 ## Where the live agent fits
 
@@ -1282,17 +1294,18 @@ idempotently through the REST API. Policy:
   forge body budget (`extract_pack` is the inverse), so a reader can
   recover the exact pack from the body with no side channel.
 
-**Slice 4 — the transient brnrd relay — ships** (2026-06-01; ownership
-moved 2026-06-10). In managed mode (cloud gate configured), the resident
-passes `--relay` to `brr review --pr-body`; that calls
-`cloud.relay_pack` (`POST /v1/daemons/pack`) and prepends an
-**Interactive review** link to the projected body. brnrd holds the pack
-in a RAM-only TTL store behind a capability token and renders it on
-`GET /r/{token}` via `brr.diffense.render` (reused verbatim) — never
-persisting it (see "Where packs live" + `design-brnrd-protocol.md`).
-Best-effort and self-hosted-safe: no cloud config → no relay → the body
-still carries the projection + the embedded pack, and local `brr review`
-is the rich surface.
+**Slice 4 — durable gist-backed renderer with transient fallback — ships**
+(transient relay 2026-06-01; gist-first ownership moved 2026-06-12). The
+resident still passes `--relay` to `brr review --pr-body`, but that flag
+now means "publish a rich review link": create a secret gist containing
+the pack JSON, compose brnrd's static shell URL
+`/r?pack=<raw gist url>`, and prepend the **Interactive review** link plus
+the gist source to the projected body. If gist publication is unavailable
+or the repo is private/internal, the old `cloud.relay_pack`
+(`POST /v1/daemons/pack` → `GET /r/{token}`) remains the RAM-only
+fallback. Best-effort and self-hosted-safe: no gist and no cloud config →
+no rich link → the body still carries the projection + embedded pack, and
+local `brr review` is the rich surface.
 
 ## Adjacencies that ship-or-shipped already
 
