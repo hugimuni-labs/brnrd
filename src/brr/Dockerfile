@@ -2,11 +2,11 @@
 # practical baseline toolbox for daemon-launched development work. node:22-slim
 # is the base because all three runner CLIs are distributed via npm.
 #
-# This is still a runner image, not a project image: it does not preinstall
-# repo dependencies, databases, cloud CLIs, or language SDKs beyond Node and
-# Python. Repos that need those should layer on top with their own Dockerfile
-# FROM this image, or use the `devcontainer` env which reuses the repo's own
-# .devcontainer recipe.
+# This is still a runner image, not a project image: it preinstalls brr's own
+# CLI/runtime deps and the runner toolbox, but not arbitrary repo dependencies,
+# databases, cloud CLIs, or language SDKs beyond Node and Python. Repos that
+# need those should layer on top with their own Dockerfile FROM this image, or
+# use the `devcontainer` env which reuses the repo's own .devcontainer recipe.
 #
 # The image is designed to run as the *host* user's UID (passed via
 # ``docker run -u``) so files written into the bind-mounted repo are owned
@@ -41,7 +41,10 @@ RUN apt-get update \
         wget \
         zip \
     && ln -sf /usr/bin/pip3 /usr/local/bin/pip \
-    && pip install --no-cache-dir 'pytest>=7.0' \
+    && pip install --no-cache-dir \
+        'pytest>=7.0' \
+        'requests>=2.31,<3' \
+        'brr>=0.1.0' \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI via the official upstream APT source. Debian's own ``gh``
