@@ -12,7 +12,7 @@ by dropping a file at `.brr/docs/envs.md`.
 | ----------- | ------------------------------------------- | ----------------- | ----------------------------- | ------------------------------------ |
 | `host`      | Main repo checkout, current process         | Inherited         | None                          | Default for trivial / Q&A tasks      |
 | `worktree`  | `.brr/worktrees/<task-id>/` (`brr/<task-id>` branch) | Inherited | Working dir + branch | Default for code work |
-| `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | Bundled image includes common dev tools |
+| `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | Bundled image includes brr + common dev tools |
 
 Other envs (`devcontainer`, `ssh`) are planned but not yet shipped. See
 `kb/design-env-interface.md` if you want to follow that work.
@@ -180,7 +180,8 @@ The image must:
   `gemini`, or whatever you set `runner=` to).
 - Have `git` available — the agent commits inside the container.
 - Have the shell and repo tools your agents are expected to use. brr's
-  bundled runner image includes `bash`, `git`, `ssh`/`scp`, Python
+  bundled runner image includes the `brr` CLI and its small runtime
+  dependency set (`requests`), plus `bash`, `git`, `ssh`/`scp`, Python
   (`python`, `python3`, `pip`, venv support), `rg`, `curl`, `wget`,
   `jq`, `rsync`, `zip`/`unzip`, and a small native build toolchain
   (`build-essential`, `pkg-config`) because those are common enough
@@ -289,9 +290,10 @@ regardless of status, so a human can recover work.
   the corresponding `*_API_KEY` is exported in the daemon's
   environment. Both paths surface in the `docker run` argv visible in
   trace mode.
-- **`python`, `ssh`, or `rg` is missing** — rebuild the local image
-  from the current bundled Dockerfile (`brr init -i` can do this during
-  setup). Older `brr-runner:*` images predate the baseline dev toolbox.
+- **`brr`, `requests`, `python`, `ssh`, or `rg` is missing** — rebuild the
+  local image from the current bundled Dockerfile (`brr init -i` can do this
+  during setup). Older `brr-runner:*` images predate the baseline dev toolbox
+  and brr's self-tooling install.
 - **File ownership leaked to root on host** — should not happen with
   a recent brr-runner image, which runs as the host UID. If you see
   it, you're likely on a stale image — rebuild from the current
