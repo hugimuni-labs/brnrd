@@ -6275,3 +6275,36 @@ project.
 Focused validation: `python -m pytest tests/test_brnrd_telegram.py
 tests/test_brnrd_inbox.py tests/test_cloud_gate.py` passed (38 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning).
+
+## [2026-06-12] implement | diffense packs move to user-owned gist retention
+
+Closed issue #76's pack-lifecycle gap by making `brr review --pr-body --relay`
+prefer a user-owned secret gist for the durable pack JSON, then link brnrd's
+static `/r?pack=<raw gist url>` renderer shell from the PR body. The old
+`POST /v1/daemons/pack` RAM relay remains as the private/no-gist fallback, and
+gist publication is skipped when GitHub reports the target repo as private or
+internal. The diffense prompt and design page now describe the gist-first
+contract instead of teaching agents to publish durable PR links to 1h RAM.
+
+Focused validation: `python -m pytest tests/test_diffense_gist.py
+tests/test_diffense_prbody.py tests/test_cli.py tests/test_brnrd_pack_relay.py
+tests/test_cloud_gate.py` passed (57 tests). Full suite: `python -m pytest`
+passed (801 tests, with the existing Starlette/FastAPI TestClient
+deprecation warning).
+
+## [2026-06-12] fix | diffense rich links guard renderer deployment
+
+Dogfooding PR #100 exposed a rollout-order footgun: the branch generated
+`https://brnrd.dev/r?pack=<raw gist>` before that new `/r` shell route was
+deployed to brnrd, while the raw gist itself was reachable. `brr review
+--pr-body --relay` now probes the configured renderer shell before creating a
+gist-backed link and falls back to the already-deployed `/r/{token}` RAM relay
+when the shell is absent. Testing the fallback also exposed why the old deployed
+relay returned 500 for valid tokens: the mainline package data did not include
+`diffense/*.html`, so `brr.diffense.render` could not load its template in the
+deployed app. The branch already adds that package-data entry, and a regression
+test now pins it. Candidate relay URLs are also verified before being added to
+the PR body; if both rich surfaces are unavailable, the PR keeps the Markdown
+projection plus embedded pack rather than advertising a broken link. The kb
+records the invariant: durable pack storage is useful only if the
+reviewer-facing renderer and its packaged template are live.
