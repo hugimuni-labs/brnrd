@@ -467,11 +467,16 @@ def build_daemon_prompt(
 
 # ── Task Context Bundle internals ────────────────────────────────────
 
-# How many prior conversation records the prompt renders. The daemon reads
-# a slightly larger window from the log so that records belonging to the
-# in-flight event/task (filtered out before formatting) don't starve the
-# tail. Keep the daemon's read cap = RECENT_CONVERSATION_MAX + headroom.
-RECENT_CONVERSATION_MAX = 8
+# The agent-facing conversation tail (see
+# conversations.render_conversation_tail). Messages (user turns + the agent's
+# own replies) render in their own block so a long run's lifecycle/heartbeat
+# records can't evict them; lifecycle is a compact secondary block. The daemon
+# reads RECENT_READ_WINDOW raw records from the log — generous, because
+# lifecycle records vastly outnumber messages, so the last few message turns
+# can sit far back in the raw stream.
+RECENT_MESSAGES_MAX = 8
+RECENT_LIFECYCLE_MAX = 3
+RECENT_READ_WINDOW = 400
 
 
 def _build_task_context_bundle(
@@ -764,51 +769,16 @@ def _format_presence(
 def _format_recent_conversation(
     records: list[dict[str, Any]] | None,
 ) -> str:
-    """Render the last few conversation records as human-readable bullets.
+    """Render prior conversation records for the Task Context Bundle.
 
     Callers pass only prior records; the current event body is rendered
-    separately in the Task Context Bundle. Returns an empty string when
-    nothing useful is available.
+    separately. Delegates to the shared renderer so the daemon prompt and
+    the run-context file never drift (see
+    conversations.render_conversation_tail).
     """
-    if not records:
-        return ""
-    bullets: list[str] = []
-    for record in records[-RECENT_CONVERSATION_MAX:]:
-        kind = record.get("kind")
-        ts = record.get("ts", "")
-        line: str | None = None
-        if kind == "event":
-            summary = (record.get("summary") or "").strip()
-            source = record.get("source") or ""
-            line = f"- {ts} event ({source}): {summary}".rstrip()
-        elif kind == "task":
-            tid = record.get("task_id", "")
-            status = record.get("status") or "pending"
-            branch = (
-                record.get("publish_branch")
-                or record.get("target_branch")
-                or record.get("expected_publish_branch")  # compat: old records
-                or record.get("branch_name")
-                or ""
-            )
-            line = f"- {ts} task {tid} status={status} branch={branch}"
-        elif kind == "update":
-            ptype = record.get("type") or ""
-            tid = record.get("task_id") or ""
-            stage = record.get("stage") or ""
-            err = record.get("error") or ""
-            bits = [f"- {ts} update {ptype}"]
-            if tid:
-                bits.append(f"task={tid}")
-            if stage:
-                bits.append(f"stage={stage}")
-            if err:
-                bits.append(f"error={err}")
-            line = " ".join(bits)
-        elif kind == "artifact":
-            label = record.get("label") or record.get("artifact_kind") or ""
-            path = record.get("path") or ""
-            line = f"- {ts} artifact {label} {path}".rstrip()
-        if line:
-            bullets.append(line)
-    return "\n".join(bullets)
+    from . import conversations
+    return conversations.render_conversation_tail(
+        records,
+        messages_max=RECENT_MESSAGES_MAX,
+        lifecycle_max=RECENT_LIFECYCLE_MAX,
+    )

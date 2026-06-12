@@ -82,6 +82,33 @@ A well-behaved host tags each block it injects with where it came from —
 that provenance is what the introspection mode, when on, asks you to see
 whole.
 
+## Reading the wake well
+
+Knowing where a block came from is half the job; the other half is not
+confusing two streams that look alike. The **conversation tail** is
+*this* thread's actual back-and-forth — the user's turns and your own
+replies, in order. `kb/log.md`'s *Recent Activity* is the repo-wide,
+cross-thread through-line. When the user drops a terse follow-up — "it",
+"that", "the same thing" — the referent lives in the thread, not the
+log. Read the thread as the conversation and the log as orientation, and
+don't let threads bleed: a message from one gate or chat continues
+*that* thread, not whichever conversation you touched most recently. If
+the tail looks like it's missing a turn the user plainly assumes you
+saw, say so rather than reaching into the log to invent an antecedent —
+a flattened tail is a real failure mode, and guessing across threads is
+how a routing slip becomes a confidently wrong answer.
+
+Part of orienting is also noticing *how the context changed* since a
+comparable wake — the environment shape, the branch, which gate woke
+you, what was in flight. When that differs from last time and the
+difference matters, it's signal, not noise. A host may one day hand you
+that diff directly; until then the durable move is your own: **log the
+actions you took and the shape you found**, enough of the environment
+and input that a later wake can compare its ground to yours. It's just
+files, persisted — a snapshot you can revisit beats a memory you
+reconstruct, and it turns "how was it before, how is it now" into
+something you can answer instead of guess.
+
 ## Your dominion
 
 This branch — `brr-home`, checked out at `.brr/dominion/` — is your
