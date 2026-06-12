@@ -246,19 +246,25 @@ def cmd_review(args):
         pack_url = None
         if args.relay and not render_url:
             from .diffense import gist
-            published = gist.create_pack_gist(loaded, repo=_diffense_current_repo())
-            if published is not None:
-                render_url = gist.render_url(
-                    published.raw_url,
-                    base_url=args.render_base_url or _diffense_render_base_url(),
+            render_base_url = args.render_base_url or _diffense_render_base_url()
+            if gist.renderer_shell_available(render_base_url):
+                published = gist.create_pack_gist(
+                    loaded, repo=_diffense_current_repo()
                 )
-                pack_url = published.html_url
-            else:
+                if published is not None:
+                    render_url = gist.render_url(
+                        published.raw_url,
+                        base_url=render_base_url,
+                    )
+                    pack_url = published.html_url
+            if not render_url:
                 brr_dir = _maybe_brr_dir()
                 if brr_dir is not None:
                     from .gates import cloud
                     if cloud.is_configured(brr_dir):
-                        render_url = cloud.relay_pack(brr_dir, loaded)
+                        candidate = cloud.relay_pack(brr_dir, loaded)
+                        if candidate and gist.review_url_available(candidate):
+                            render_url = candidate
         print(prbody.project_pr_body(loaded, render_url=render_url, pack_url=pack_url))
         return 0
 

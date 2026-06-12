@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from brr.diffense import gist
 
 
@@ -18,12 +20,70 @@ class _Result:
         self.stdout = stdout
 
 
+class _Response:
+    def __init__(self, body: str, status: int = 200) -> None:
+        self._body = body.encode("utf-8")
+        self.status = status
+        self.closed = False
+
+    def read(self, _limit: int = -1) -> bytes:
+        return self._body
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_render_url_points_shell_at_raw_pack():
     url = gist.render_url(
         "https://gist.githubusercontent.com/u/abc/raw/sha/diffense-pack.json"
     )
     assert url.startswith("https://brnrd.dev/r?pack=")
     assert "gist.githubusercontent.com" in url
+
+
+def test_renderer_shell_available_requires_gist_loader():
+    calls = []
+
+    def fetch(request, **_kwargs):
+        calls.append(request.full_url)
+        return _Response('new URLSearchParams(location.search).get("pack")')
+
+    assert gist.renderer_shell_available("https://brnrd.example/r", fetch=fetch)
+    assert calls == [
+        "https://brnrd.example/r?pack=https%3A%2F%2Fexample.invalid%2F"
+        "diffense-pack-probe.json"
+    ]
+
+
+def test_renderer_shell_unavailable_without_loader_marker():
+    def fetch(_request, **_kwargs):
+        return _Response('{"detail":"Not Found"}', status=404)
+
+    assert not gist.renderer_shell_available("https://brnrd.example/r", fetch=fetch)
+
+
+def test_review_url_available_requires_rendered_diffense_page():
+    def fetch(_request, **_kwargs):
+        return _Response('<script id="diffense-pack" type="application/json">')
+
+    assert gist.review_url_available("https://brnrd.example/r/tok", fetch=fetch)
+
+
+def test_review_url_unavailable_for_server_error():
+    def fetch(_request, **_kwargs):
+        return _Response("Internal Server Error", status=500)
+
+    assert not gist.review_url_available("https://brnrd.example/r/tok", fetch=fetch)
+
+
+def test_diffense_renderer_template_is_packaged():
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    package_data = text.split("[tool.setuptools.package-data]", 1)[1].split(
+        "\n[", 1
+    )[0]
+
+    assert '"diffense/*.html"' in package_data
 
 
 def test_create_pack_gist_uses_secret_gist_and_fetches_raw_url(monkeypatch):
