@@ -42,6 +42,15 @@ path removed 2026-05-27; resolver promoted to universal-scope in the
 same change. See the log entry on that date for the agent-report
 review that prompted the rework.)
 
+The bundled runner image is part of that product surface, not only an
+example Dockerfile. It carries the runner CLIs, the baseline developer
+toolbox, and brr's own CLI/runtime dependency set (`brr` plus `requests`)
+so agents can run local brr tooling such as `brr review` without
+recovering through `PYTHONPATH=src python -m brr` or ad-hoc package
+installs. Project-specific dependencies still belong in a derived image;
+the stale-image ergonomics probe tells users to rebuild when their local
+image predates the bundled Dockerfile.
+
 ## Durability contract
 
 Tasks running in an isolated env run in an **ephemeral** location.

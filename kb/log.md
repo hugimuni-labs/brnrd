@@ -6276,6 +6276,26 @@ Focused validation: `python -m pytest tests/test_brnrd_telegram.py
 tests/test_brnrd_inbox.py tests/test_cloud_gate.py` passed (38 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning).
 
+## [2026-06-11] plan | Financial growth plan proposed (no-investor, duo-run)
+
+Holistic review of the tracker (release readiness #23 + open issues) and the
+business substrate (pricing, billing, licensing, websites, managed-mode state)
+produced kb/plan-financial-growth.md, proposed for operator acceptance. Core
+synthesis: the OSS daemon is launch-ready while brnrd's revenue path
+(managed gates, Stripe, dashboard) is accepted-but-not-started, so the plan
+stacks three revenue streams by time constant — bridge revenue immediately
+(concierge resident installs, Sponsors, founding pre-orders of the $50 annual
+supporter pass), the accepted $5/$7 subscription engine over months 2–4, and a
+premium solo/power-user layer above the floor price afterwards. Surfaced the
+stewardship tension explicitly: the base price is adjustable but should remain
+adoption-sensitive because users may already pay for an agent CLI; "greedy
+growth" should come from a future premium tier once solo value is proven, not
+from smuggling a vague team product into the launch. The plan also fixes the
+duo-programming division of labour (operator: Stripe/Qonto filings, demos,
+daily merge cadence; operations: invoicing, VAT OSS, trademark triggers;
+resident: critical-path slices, launch artifacts, weekly metrics wake) and a
+90-day sequence targeting €2–4K cumulative by day 90 with the MRR engine on.
+
 ## [2026-06-12] implement | diffense packs move to user-owned gist retention
 
 Closed issue #76's pack-lifecycle gap by making `brr review --pr-body --relay`
@@ -6326,3 +6346,14 @@ canonical tier policy and billing mechanics back to the two compacted pages.
 Focused validation: the deterministic preflight no longer reports
 `decision-pricing-shape.md` or `design-billing.md` as oversized; focused kb
 tests passed (40 tests).
+## [2026-06-12] fix | bundled Docker runner preinstalls brr self-tooling
+
+Dogfooding Docker-mode tasks exposed that the bundled runner image had the
+agent CLIs and baseline shell toolbox, but not brr's own CLI/runtime deps:
+agents had to recover with `PYTHONPATH=src python -m brr` and ad-hoc
+`pip install requests` before using review tooling. The image contract now
+treats brr itself as part of the product surface: `src/brr/Dockerfile`
+installs the `brr` package and `requests` alongside `pytest`, the bundled
+env docs and environment hub name that baseline explicitly, and the stale-image
+ergonomics hint tells users to rebuild when the local image predates this
+tooling.
