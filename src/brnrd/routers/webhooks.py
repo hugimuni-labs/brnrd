@@ -1,7 +1,8 @@
 """Platform webhook ingress.
 
-``POST /v1/webhooks/telegram`` is the real producer side of the spine
-(superseding ``_dev/enqueue``). It is authenticated by the
+``POST /v1/webhooks/telegram`` and ``POST /v1/webhooks/github`` are the
+real producer side of the spine (superseding ``_dev/enqueue``).
+Telegram is authenticated by the
 secret-token header Telegram echoes from ``setWebhook`` — not a bearer
 — and multiplexes a single managed bot across accounts by chat_id:
 
@@ -12,20 +13,34 @@ secret-token header Telegram echoes from ``setWebhook`` — not a bearer
 - a message from a bound chat is enqueued for that project's daemon,
   carrying an opaque ``reply_to`` so the response routes home.
 - a message from an unbound chat gets a friendly setup error.
+
+GitHub is authenticated by ``X-Hub-Signature-256`` and routes an
+addressed issue comment through a repo binding:
+
+- an unbound but addressed repo gets a setup comment instead of a silent
+  drop.
+- a bound repo comment is enqueued for that project's daemon, carrying
+  GitHub reply metadata in ``reply_to`` so the managed response posts
+  back to the issue/PR thread.
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from brr.gates.github import parse as gh_parse
+
 from .. import ids
 from .. import inbox as inbox_service
-from ..models import ChatBinding, Project, TgPairCode
+from ..models import ChatBinding, Project, RepoBinding, TgPairCode
+from ..platforms import github as gh
 from ..platforms import telegram as tg
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
@@ -33,6 +48,10 @@ router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 _UNPAIRED_TEXT = (
     "This chat is not paired to a brnrd account yet. Pair it from brnrd, "
     "then send /projects or /project <name>."
+)
+_UNBOUND_REPO_TEXT = (
+    "This repository is not connected to a brnrd project yet. "
+    "Connect it from brnrd, then mention the bot again."
 )
 
 
@@ -150,6 +169,158 @@ def _enqueue_telegram_event(
             "topic_id": parsed.topic_id,
             "message_id": parsed.message_id,
         },
+    )
+
+
+def _github_mention(settings) -> str:
+    login = settings.github_bot_login.strip().lstrip("@")
+    return f"@{login}" if login else ""
+
+
+def _github_signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
+    if not secret or not signature:
+        return False
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    expected = f"sha256={digest}"
+    return hmac.compare_digest(signature, expected)
+
+
+def _github_repo(payload: dict[str, Any]) -> tuple[str, str]:
+    repo = ((payload.get("repository") or {}).get("full_name") or "").strip()
+    installation = payload.get("installation") or {}
+    installation_id = str(installation.get("id") or "").strip()
+    return repo, installation_id
+
+
+def _repo_binding(
+    db: Session, repo_full_name: str, installation_id: str
+) -> RepoBinding | None:
+    binding = db.execute(
+        select(RepoBinding).where(RepoBinding.repo_full_name == repo_full_name)
+    ).scalar_one_or_none()
+    if binding is None:
+        return None
+    if binding.installation_id and installation_id \
+            and binding.installation_id != installation_id:
+        return None
+    return binding
+
+
+def _coerce_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _github_reply(settings, reply_to: dict[str, Any], text: str) -> None:
+    if not settings.github_bot_token:
+        return
+    repo = str(reply_to.get("repo") or "")
+    issue_number = _coerce_int(reply_to.get("issue_number"))
+    if not repo or issue_number is None:
+        return
+    try:
+        gh.post_issue_comment(
+            settings.github_bot_token,
+            settings.github_api_base_url,
+            settings.github_api_version,
+            repo,
+            issue_number,
+            text,
+        )
+    except Exception as e:  # noqa: BLE001 - a failed reply must not 500 webhook
+        print(f"[brnrd] github reply failed: {e}")
+
+
+def _maybe_pr_branch(settings, repo: str, pr_number: int | None) -> str | None:
+    if pr_number is None or not settings.github_bot_token:
+        return None
+    try:
+        return gh.fetch_pull_head_ref(
+            settings.github_bot_token,
+            settings.github_api_base_url,
+            settings.github_api_version,
+            repo,
+            pr_number,
+        )
+    except Exception as e:  # noqa: BLE001 - branch hint is helpful, not required
+        print(f"[brnrd] github branch lookup failed: {e}")
+        return None
+
+
+def _enqueue_github_event(
+    db: Session,
+    *,
+    project_id: str,
+    body: str,
+    reply_to: dict[str, Any],
+) -> None:
+    inbox_service.enqueue(
+        db,
+        project_id=project_id,
+        body=body,
+        source="github",
+        reply_to=reply_to,
+    )
+
+
+def _handle_github_issue_comment(
+    db: Session, settings, payload: dict[str, Any]
+) -> None:
+    if payload.get("action") not in {"created", "edited"}:
+        return
+
+    repo, installation_id = _github_repo(payload)
+    issue = payload.get("issue") or {}
+    comment = payload.get("comment") or {}
+    issue_number = _coerce_int(issue.get("number"))
+    comment_id = _coerce_int(comment.get("id"))
+    body = str(comment.get("body") or "")
+    mention = _github_mention(settings)
+    if not repo or issue_number is None or comment_id is None:
+        return
+    if mention and mention not in body:
+        return
+
+    author = str(((comment.get("user") or {}).get("login") or "")).strip()
+    if gh_parse._skip_mention_comment_author(author, mention, settings.github_bot_login):
+        return
+
+    is_pr = bool(issue.get("pull_request")) or "/pull/" in str(
+        comment.get("html_url") or ""
+    )
+    pr_number = issue_number if is_pr else None
+    kind = "pr-comment" if is_pr else "issue-comment"
+    reply_to: dict[str, Any] = {
+        "platform": "github",
+        "repo": repo,
+        "issue_number": issue_number,
+        "comment_id": comment_id,
+        "kind": kind,
+        "author": author,
+        "html_url": str(comment.get("html_url") or ""),
+        "trigger": "mention",
+        "mention": mention,
+    }
+    binding = _repo_binding(db, repo, installation_id)
+    if binding is None:
+        _github_reply(settings, reply_to, _UNBOUND_REPO_TEXT)
+        return
+
+    if pr_number is not None:
+        reply_to["pr_number"] = pr_number
+        branch = _maybe_pr_branch(settings, repo, pr_number)
+        if branch:
+            reply_to["branch_target"] = branch
+
+    _enqueue_github_event(
+        db,
+        project_id=binding.project_id,
+        body=gh_parse._format_event_body("", body),
+        reply_to=reply_to,
     )
 
 
@@ -337,4 +508,35 @@ def telegram_webhook(
         _enqueue_telegram_event(
             db, parsed, project_id=binding.project_id, body=parsed.text
         )
+    return {"ok": True}
+
+
+@router.post("/github")
+async def github_webhook(
+    request: Request,
+    x_hub_signature_256: str | None = Header(default=None),
+    x_github_event: str | None = Header(default=None),
+):
+    settings = request.app.state.settings
+    raw = await request.body()
+    if not _github_signature_ok(
+        settings.github_webhook_secret, raw, x_hub_signature_256
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad secret")
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 - malformed webhook body is a no-op
+        return {"ok": True}
+    if not isinstance(payload, dict):
+        return {"ok": True}
+
+    if x_github_event == "ping":
+        return {"ok": True}
+    if x_github_event != "issue_comment":
+        return {"ok": True}
+
+    session_factory = request.app.state.SessionLocal
+    with session_factory() as db:
+        _handle_github_issue_comment(db, settings, payload)
     return {"ok": True}

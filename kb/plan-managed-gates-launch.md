@@ -118,14 +118,24 @@ The bigger pain-relief slice. Ship first.
 4. brnrd-side webhook receiver for `installation`,
    `installation_repositories`, `issue_comment`,
    `pull_request_review_comment` events; normalisation to the
-   event shape from the design.
+   event shape from the design. **Partial shipped 2026-06-12:**
+   `issue_comment` ingress verifies `X-Hub-Signature-256`, ignores
+   unaddressed comments, replies with setup guidance for addressed but
+   unbound repos, and enqueues bound repo comments with GitHub reply
+   metadata. Install, repository-list, inline review-comment, and review
+   summary webhooks remain pending.
 5. brnrd-side response forwarder: post comment / review reply
-   on the originating PR / issue.
+   on the originating PR / issue. **Partial shipped 2026-06-12:**
+   issue/PR timeline comment forwarding works via the configured GitHub
+   bot token seam; inline review-thread replies are wired in the
+   forwarder but still wait on `pull_request_review_comment` ingress.
 6. Repo-project binding: auto-bind on `installation` and
    `installation_repositories` events (one repo → one project,
    defaulting to a project named after the repo); re-bindable
    via `brr brnrd bind-repo <installation_id> <repo>
-   <project>`.
+   <project>`. **Partial shipped 2026-06-12:** account API endpoints can
+   create/list/rebind repo bindings; auto-bind install webhooks and the
+   CLI/dashboard UX remain pending.
 7. End-to-end smoke test: install brnrd GitHub App on a test
    repo → comment `@brr <task>` → event resolves to project →
    task lands in daemon inbox → daemon completes task →

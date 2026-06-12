@@ -12,9 +12,13 @@ keep co-existing post-launch:
   a polling adapter that turns GitHub activity into inbox events on a
   laptop-resident `brr` daemon. PAT-authenticated, single-repo, byo-setup.
 - The **managed GitHub App**, hosted by brnrd ([`src/brnrd/`](../src/brnrd/)
-  per [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md) Slice 1
-  — not started). Webhook-driven, multi-tenant, installation-scoped,
-  one-click setup via OAuth + App install.
+  per [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md) Slice 1).
+  The first executable slice is in place: repo bindings, signed
+  `issue_comment` webhook ingress, unbound-repo setup comments, response
+  forwarding, and cloud-gate metadata propagation for GitHub-origin events.
+  Full App installation/JWT token minting, auto-bind install webhooks,
+  inline review-comment webhooks, and dashboard/CLI binding UX remain
+  pending.
 
 They are not redundant. Different identity model, different setup cost,
 different latency, different blast radius — see "Why both survive launch."
@@ -79,20 +83,22 @@ None of the surfaces below land in `src/brr/`:
   from the per-user vault — this is brnrd's own infrastructure
   credential, not a user's PAT). JWT crypto runs server-side, so the
   `cryptography` / `pyjwt[crypto]` stack stays out of the OSS daemon's
-  install footprint.
+  install footprint. The current prototype uses a configured
+  `BRNRD_GITHUB_BOT_TOKEN` transport seam for posting and branch lookup;
+  replacing that with per-installation tokens is still pending.
 - **Webhook receipt + signature verification + payload normalisation.**
-  brnrd's FastAPI app accepts `installation`,
-  `installation_repositories`, `issue_comment`,
-  `pull_request_review_comment`, and (Slice 1+) `pull_request_review`
-  webhooks, verifies the `X-Hub-Signature-256` HMAC against the
-  per-installation secret, and normalises payloads to the event shape
-  daemons receive via the `cloud` gate adapter (see
-  [`design-brnrd-protocol.md`](design-brnrd-protocol.md) → Gates).
+  brnrd's FastAPI app currently accepts `issue_comment` webhooks, verifies
+  the `X-Hub-Signature-256` HMAC, ignores unaddressed comments, and
+  normalises addressed comments to the event shape daemons receive via the
+  `cloud` gate adapter (see [`design-brnrd-protocol.md`](design-brnrd-protocol.md)
+  → Gates). `installation`, `installation_repositories`,
+  `pull_request_review_comment`, and `pull_request_review` webhooks are
+  still pending.
 - **Multi-project routing.** Resolves
-  `(installation_id, repo_full_name) → project_id` via
-  `repo_project_bindings`; auto-binds on install,
-  re-bindable from CLI / dashboard. One brnrd-hosted bot serves a
-  user's N repos with no per-repo configuration.
+  `(installation_id, repo_full_name) → project_id` via repo bindings.
+  The account API can create/list/rebind repo bindings today; auto-bind on
+  install and the CLI/dashboard binding UX remain pending. One brnrd-hosted
+  bot serves a user's N repos with no per-repo daemon configuration.
 - **Permission-prompt comment UX.** When the daemon raises a
   permission prompt (managed-compute spawn cost approval per
   [`plan-failover-compute.md`](plan-failover-compute.md)), brnrd
@@ -141,10 +147,11 @@ will import them*, and stay transport-agnostic:
 
 The reusable-core illusion is the obvious failure mode here: easy to
 declare modules "reusable" without ever testing that brnrd can actually
-use them. The discipline that closes that gap is brnrd's first commit:
-it imports `paths` / `cache` / `parse` from `brr.gates.github`. If the
-import doesn't take, the modules get refactored at that point, not
-left as documentation theatre.
+use them. The first managed GitHub slice closed the gap for `paths` and
+`parse`: `src/brnrd/platforms/github.py` imports the shared REST path
+builders, and `src/brnrd/routers/webhooks.py` imports the shared mention
+and body-formatting parsers. `cache` remains polling/replay support, not
+part of the current webhook hot path.
 
 What brnrd does **not** import from `brr.gates.github`:
 
