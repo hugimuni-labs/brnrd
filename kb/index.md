@@ -266,6 +266,16 @@ dive-in map) and are stable until something contradicts them.
   relays the live progress card — over **U** (brnrd a formatting-free
   pipe). Keeps gists daemon-side and generalises to remote-env (Fly)
   daemon-equivalents.
+- [Financial growth plan](plan-financial-growth.md) —
+  *proposed, not yet accepted*. No-investor, duo-run growth plan stacking
+  three revenue streams by time constant: bridge revenue now (concierge
+  installs, Sponsors, founding pre-orders of the supporter cohort), the
+  accepted $5/$7 launch subscription engine as brnrd ships, and a
+  premium solo/power-user layer above the floor price later (with
+  Duo/team pricing deferred until the architecture and UX actually carry
+  it). Names the operator /
+  operations / resident division of labour, the meta-story marketing
+  engine ("brr is built by its own resident"), and a 90-day sequence.
 - [Pricing shape decision](decision-pricing-shape.md) —
   *accepted 2026-05-26*. **Subscription for the platform + metered credits
   for compute.** Two tiers at launch: Free (3 projects, 100
