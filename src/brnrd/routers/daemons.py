@@ -186,10 +186,10 @@ def post_pack(
     payload: schemas.PackRelayPost,
     principal: Principal = Depends(require_daemon),
 ):
-    """Relay a diffense review pack for a transient rendered surface.
+    """Relay a diffense review pack for a transient rendered fallback.
 
-    The daemon publishes its own PR (body = the pack projection); this
-    relay backs the *rich* view linked from that body. brnrd stashes the
+    The primary rich view is a user-owned gist plus ``GET /r?pack=...``.
+    This endpoint remains for private / no-gist cases: brnrd stashes the
     pack in a RAM-only, TTL-bounded store behind an unguessable token and
     renders it on ``GET /r/{token}`` — it is **never** written to the
     database or disk (``kb/design-diffense.md`` → "Where packs live": the

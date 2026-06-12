@@ -256,30 +256,37 @@ def _footer(pack: dict, body_so_far: str, embed_pack: bool) -> str:
     return f"{note}\n\n{PACK_MARKER_BEGIN}\n{blob}\n{PACK_MARKER_END}"
 
 
-def _render_banner(render_url: str | None) -> str:
+def _render_banner(render_url: str | None, pack_url: str | None) -> str:
     if not render_url:
         return ""
-    return (
-        f"**Interactive review:** {render_url}\n\n"
-        "_Zoomable cards, code/kb locators, and the agent's flagged "
-        "doubts. (Transient link — rendered live, not stored.)_"
-    )
+    lines = [
+        f"**Interactive review:** {render_url}",
+        "",
+        "_Zoomable cards, code/kb locators, and the agent's flagged doubts._",
+    ]
+    if pack_url:
+        lines += ["", f"_Pack source: {pack_url} (user-owned gist)._"]
+    else:
+        lines += ["", "_Transient link — rendered live, not stored._"]
+    return "\n".join(lines)
 
 
 def project_pr_body(
-    pack: dict, *, render_url: str | None = None, embed_pack: bool = True,
+    pack: dict, *, render_url: str | None = None, pack_url: str | None = None,
+    embed_pack: bool = True,
 ) -> str:
     """Render *pack* as a Markdown PR body (the lossy, forge-readable surface).
 
     Sections appear only when the pack has material for them: an optional
-    rich-view banner (``render_url``, from the brnrd relay), Summary,
-    ⚠ Concerns, Narrative (a walkthrough card), Touched, Reading order,
-    Deferred / open. The full pack is embedded in a trailing HTML-comment
-    marker when it fits ``_BODY_BUDGET``.
+    rich-view banner (``render_url``, from a gist-backed renderer shell
+    or the brnrd relay fallback), Summary, ⚠ Concerns, Narrative (a
+    walkthrough card), Touched, Reading order, Deferred / open. The full
+    pack is embedded in a trailing HTML-comment marker when it fits
+    ``_BODY_BUDGET``.
     """
     concerns, deferred = _split_uncertainties(pack)
     sections = [
-        _render_banner(render_url),
+        _render_banner(render_url, pack_url),
         _summary_section(pack, concerns),
         _concerns_section(concerns),
         _narrative_section(pack),
