@@ -132,7 +132,8 @@ def probe_stale_image(p: ProbeContext) -> list[Finding]:
                     "the runner image predates brr's current bundled "
                     "Dockerfile; rebuild it (`brr init -i`, or docker build "
                     "from the bundled Dockerfile) so the container carries "
-                    "the tooling this brr version expects."
+                    "the brr CLI/runtime deps and tooling this brr version "
+                    "expects."
                 ),
             },
         )
