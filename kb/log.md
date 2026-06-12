@@ -6276,6 +6276,26 @@ Focused validation: `python -m pytest tests/test_brnrd_telegram.py
 tests/test_brnrd_inbox.py tests/test_cloud_gate.py` passed (38 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning).
 
+## [2026-06-11] plan | Financial growth plan proposed (no-investor, duo-run)
+
+Holistic review of the tracker (release readiness #23 + open issues) and the
+business substrate (pricing, billing, licensing, websites, managed-mode state)
+produced kb/plan-financial-growth.md, proposed for operator acceptance. Core
+synthesis: the OSS daemon is launch-ready while brnrd's revenue path
+(managed gates, Stripe, dashboard) is accepted-but-not-started, so the plan
+stacks three revenue streams by time constant — bridge revenue immediately
+(concierge resident installs, Sponsors, founding pre-orders of the $50 annual
+supporter pass), the accepted $5/$7 subscription engine over months 2–4, and a
+premium solo/power-user layer above the floor price afterwards. Surfaced the
+stewardship tension explicitly: the base price is adjustable but should remain
+adoption-sensitive because users may already pay for an agent CLI; "greedy
+growth" should come from a future premium tier once solo value is proven, not
+from smuggling a vague team product into the launch. The plan also fixes the
+duo-programming division of labour (operator: Stripe/Qonto filings, demos,
+daily merge cadence; operations: invoicing, VAT OSS, trademark triggers;
+resident: critical-path slices, launch artifacts, weekly metrics wake) and a
+90-day sequence targeting €2–4K cumulative by day 90 with the MRR engine on.
+
 ## [2026-06-12] implement | diffense packs move to user-owned gist retention
 
 Closed issue #76's pack-lifecycle gap by making `brr review --pr-body --relay`
