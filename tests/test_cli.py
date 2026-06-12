@@ -1,6 +1,8 @@
 """Tests for CLI dispatch."""
 
 import json
+import sys
+import types
 
 import pytest
 
@@ -60,6 +62,54 @@ def test_review_prints_pr_title_and_body(tmp_path, capsys):
     assert "## Summary" in body
     assert "https://r.example" in body
     assert "diffense:pack:v1" in body
+
+
+def test_review_relay_prefers_gist_owned_pack(tmp_path, capsys, monkeypatch):
+    pack = tmp_path / "pack.json"
+    _write_review_pack(pack)
+
+    from brr.diffense import gist
+
+    monkeypatch.setattr(
+        gist,
+        "create_pack_gist",
+        lambda _pack, **_kwargs: gist.GistPack(
+            html_url="https://gist.github.com/octo/abc",
+            raw_url="https://gist.githubusercontent.com/octo/abc/raw/sha/diffense-pack.json",
+        ),
+    )
+    monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: None)
+
+    assert main(["review", str(pack), "--pr-body", "--relay"]) == 0
+
+    body = capsys.readouterr().out
+    assert "https://brnrd.dev/r?pack=" in body
+    assert "Pack source: https://gist.github.com/octo/abc" in body
+
+
+def test_review_relay_falls_back_to_transient_cloud_relay(
+    tmp_path, capsys, monkeypatch,
+):
+    pack = tmp_path / "pack.json"
+    _write_review_pack(pack)
+    brr_dir = tmp_path / ".brr"
+
+    from brr.diffense import gist
+    import brr.gates as gates
+
+    cloud = types.ModuleType("brr.gates.cloud")
+    cloud.is_configured = lambda _brr_dir: True
+    cloud.relay_pack = lambda _brr_dir, _pack: "https://brnrd.example/r/tok"
+    monkeypatch.setattr(gist, "create_pack_gist", lambda _pack, **_kwargs: None)
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: brr_dir)
+    monkeypatch.setitem(sys.modules, "brr.gates.cloud", cloud)
+    monkeypatch.setattr(gates, "cloud", cloud, raising=False)
+
+    assert main(["review", str(pack), "--pr-body", "--relay"]) == 0
+
+    body = capsys.readouterr().out
+    assert "https://brnrd.example/r/tok" in body
+    assert "Transient link" in body
 
 
 def test_up_dev_reload_flag_passes_to_daemon(monkeypatch, tmp_path):
