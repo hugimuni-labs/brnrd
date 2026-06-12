@@ -86,6 +86,12 @@ class Settings:
     github_api_version: str = os.environ.get(
         "BRNRD_GITHUB_API_VERSION", "2026-03-10"
     )
+    # Managed GitHub App webhook / posting settings. ``github_bot_token``
+    # is the narrow transport seam for this prototype slice; production
+    # replaces it with an installation token minted from the App private key.
+    github_webhook_secret: str = os.environ.get("BRNRD_GITHUB_WEBHOOK_SECRET", "")
+    github_bot_login: str = os.environ.get("BRNRD_GITHUB_BOT_LOGIN", "brr-bot")
+    github_bot_token: str = os.environ.get("BRNRD_GITHUB_BOT_TOKEN", "")
     oauth_state_cookie: str = os.environ.get(
         "BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state"
     )
