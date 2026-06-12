@@ -147,6 +147,28 @@ class ChatBinding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class RepoBinding(Base):
+    """A GitHub repository bound to a project.
+
+    GitHub routing is naturally repo-scoped rather than chat-scoped:
+    one repository resolves to one project. The repo identity is kept
+    globally unique so two accounts cannot bind the same incoming webhook
+    target and race responses.
+    """
+
+    __tablename__ = "repo_bindings"
+    __table_args__ = (
+        UniqueConstraint("repo_full_name", name="uq_repo_binding"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    installation_id: Mapped[str] = mapped_column(String(64), index=True)
+    repo_full_name: Mapped[str] = mapped_column(String(255), index=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class TgPairCode(Base):
     """A one-time code issued by an account to bind a Telegram chat to
     a project. Consumed when the user sends ``/start <code>`` to the bot.
