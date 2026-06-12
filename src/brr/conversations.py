@@ -406,7 +406,7 @@ def append_event(brr_dir: Path, key: str, event: dict[str, Any]) -> None:
     pipeline produces lands in the same ``<event-id>.jsonl``.
     """
     body = (event.get("body") or "").strip()
-    summary = body.splitlines()[0] if body else ""
+    summary = summarize_text(body)
     eid = str(event.get("id") or "")
     record = {
         "kind": "event",
@@ -525,3 +525,124 @@ def records_for_task(
         record for record in read_records(brr_dir, key)
         if record.get("task_id") == task_id
     ]
+
+
+# ── Agent-facing rendering ───────────────────────────────────────────
+# The log interleaves *message* records (user events + the agent's own
+# replies) with *lifecycle* records (task / update / heartbeat /
+# artifact). A flat "last N records" tail lets one long, chatty run's
+# lifecycle evict the very message a short follow-up refers to — so the
+# agent-facing tail renders messages in their own block (the actual
+# back-and-forth) and demotes lifecycle to a compact secondary block.
+# Both the daemon prompt and the run-context file render through here so
+# the two surfaces can't drift. See kb/design-conversation-continuity.md.
+
+_REPLY_ARTIFACT_KINDS = {"response", "interim_response", "outbound_message"}
+
+
+def summarize_text(text: str, *, limit: int = 240) -> str:
+    """Whitespace-collapsed, length-bounded one-line summary of a body."""
+    collapsed = " ".join((text or "").split())
+    if len(collapsed) > limit:
+        collapsed = collapsed[: limit - 3].rstrip() + "..."
+    return collapsed
+
+
+def _is_reply_artifact(record: dict[str, Any]) -> bool:
+    return (
+        record.get("kind") == "artifact"
+        and record.get("artifact_kind") in _REPLY_ARTIFACT_KINDS
+    )
+
+
+def _message_bullet(record: dict[str, Any]) -> str | None:
+    ts = record.get("ts", "")
+    if record.get("kind") == "event":
+        summary = (record.get("summary") or "").strip()
+        source = record.get("source") or ""
+        return f"- {ts} user ({source}): {summary}".rstrip()
+    if _is_reply_artifact(record):
+        summary = (record.get("summary") or "").strip()
+        if not summary:
+            # Legacy reply records carried only a path, not the text; they
+            # add no dialogue value, so leave them out of the message view.
+            return None
+        return f"- {ts} you: {summary}".rstrip()
+    return None
+
+
+def _lifecycle_bullet(record: dict[str, Any]) -> str | None:
+    ts = record.get("ts", "")
+    kind = record.get("kind")
+    if kind == "task":
+        tid = record.get("task_id", "")
+        status = record.get("status") or "pending"
+        branch = (
+            record.get("publish_branch")
+            or record.get("target_branch")
+            or record.get("expected_publish_branch")  # compat: old records
+            or record.get("branch_name")
+            or ""
+        )
+        return f"- {ts} task {tid} status={status} branch={branch}".rstrip()
+    if kind == "update":
+        ptype = record.get("type") or ""
+        tid = record.get("task_id") or ""
+        stage = record.get("stage") or ""
+        err = record.get("error") or ""
+        bits = [f"- {ts} update {ptype}"]
+        if tid:
+            bits.append(f"task={tid}")
+        if stage:
+            bits.append(f"stage={stage}")
+        if err:
+            bits.append(f"error={err}")
+        return " ".join(bits)
+    if kind == "artifact":  # non-reply artifact (review pack, trace, ...)
+        label = record.get("label") or record.get("artifact_kind") or ""
+        path = record.get("path") or ""
+        return f"- {ts} artifact {label} {path}".rstrip()
+    return None
+
+
+def render_conversation_tail(
+    records: list[dict[str, Any]] | None,
+    *,
+    messages_max: int = 8,
+    lifecycle_max: int = 3,
+) -> str:
+    """Render the agent-facing tail: a messages block + a lifecycle block.
+
+    Keeps the most recent *messages_max* user turns and *messages_max*
+    agent replies, merged chronologically, so a flood of one kind can't
+    evict the other — then a compact *lifecycle_max* tail of task/update
+    rows for operational orientation. Returns "" when nothing renders.
+    """
+    if not records:
+        return ""
+    user_events = [r for r in records if r.get("kind") == "event"]
+    replies = [r for r in records if _is_reply_artifact(r)]
+    lifecycle = [
+        r for r in records
+        if r.get("kind") in ("task", "update")
+        or (r.get("kind") == "artifact" and not _is_reply_artifact(r))
+    ]
+    selected = user_events[-messages_max:] + replies[-messages_max:]
+    selected.sort(key=lambda r: r.get("ts") or "")
+    message_lines = [b for b in (_message_bullet(r) for r in selected) if b]
+
+    blocks: list[str] = []
+    if message_lines:
+        blocks.append("Messages (oldest first):")
+        blocks.extend(message_lines)
+    if lifecycle_max > 0:
+        life_lines = [
+            b for b in (_lifecycle_bullet(r) for r in lifecycle[-lifecycle_max:])
+            if b
+        ]
+        if life_lines:
+            if blocks:
+                blocks.append("")
+            blocks.append("Task lifecycle (oldest first):")
+            blocks.extend(life_lines)
+    return "\n".join(blocks)

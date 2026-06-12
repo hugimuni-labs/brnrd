@@ -261,7 +261,9 @@ def test_append_event_records_summary(tmp_path):
         "kind": "event",
         "event_id": "evt-1",
         "source": "telegram",
-        "summary": "first line",
+        # Whitespace-collapsed full summary, not just the first line, so a
+        # multi-line message keeps its referent for a later follow-up.
+        "summary": "first line second line",
         "ts": records[-1]["ts"],
     }, rel=0)
 
@@ -389,3 +391,69 @@ def test_concurrent_appends_for_different_events_dont_lose_records(tmp_path):
     # Merged read across both files returns every record exactly once.
     all_records = conversations.read_records(tmp_path, "k")
     assert len(all_records) == 100
+
+
+# ── agent-facing rendering ───────────────────────────────────────────
+
+
+def test_summarize_text_collapses_and_bounds():
+    assert conversations.summarize_text("  a\n b  \tc ") == "a b c"
+    assert conversations.summarize_text("") == ""
+    out = conversations.summarize_text("x " * 300, limit=40)
+    assert len(out) <= 40
+    assert out.endswith("...")
+
+
+def test_render_conversation_tail_keeps_messages_through_lifecycle_flood():
+    # The regression this fix targets: a long, chatty run writes one event
+    # plus a flood of heartbeat/update records. The user's earlier turn must
+    # survive in the messages block instead of being evicted by lifecycle.
+    records = [
+        {"ts": "2026-06-12T20:00:00.000000Z", "kind": "event",
+         "event_id": "evt-1", "source": "telegram",
+         "summary": "can we use union merge on github"},
+    ]
+    for i in range(40):
+        records.append({
+            "ts": f"2026-06-12T20:01:{i:02d}.000000Z", "kind": "update",
+            "type": "heartbeat", "task_id": "task-a", "stage": "running",
+        })
+    records.append({
+        "ts": "2026-06-12T20:10:00.000000Z", "kind": "artifact",
+        "artifact_kind": "response", "task_id": "task-a", "event_id": "evt-1",
+        "label": "response:evt-1",
+        "summary": "union merge is a local git driver, not the github button",
+    })
+    records.append({
+        "ts": "2026-06-12T20:11:00.000000Z", "kind": "event",
+        "event_id": "evt-2", "source": "telegram",
+        "summary": "can we make it behave the same on github",
+    })
+
+    out = conversations.render_conversation_tail(
+        records, messages_max=8, lifecycle_max=3,
+    )
+    assert "can we use union merge on github" in out
+    assert "can we make it behave the same on github" in out
+    # The agent's own reply renders as dialogue, not a bare path.
+    assert "union merge is a local git driver" in out
+    assert "you:" in out
+    # Messages come before lifecycle, and lifecycle stays compact.
+    assert out.index("Messages") < out.index("Task lifecycle")
+    assert out.count("update heartbeat") <= 3
+
+
+def test_render_conversation_tail_empty():
+    assert conversations.render_conversation_tail([]) == ""
+    assert conversations.render_conversation_tail(None) == ""
+
+
+def test_render_conversation_tail_skips_legacy_reply_without_summary():
+    # Reply artifacts written before this change carried only a path; they
+    # must not render as a blank "you:" line.
+    records = [
+        {"ts": "2026-06-12T20:00:00.000000Z", "kind": "artifact",
+         "artifact_kind": "response", "task_id": "t", "label": "response:e",
+         "path": "/abs/x.md"},
+    ]
+    assert conversations.render_conversation_tail(records) == ""
