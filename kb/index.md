@@ -680,10 +680,15 @@ dive-in map) and are stable until something contradicts them.
   [prbody.py](../src/brr/diffense/prbody.py); since 2026-06-10 the
   resident publishes by sending `gate: forge`, whose GitHub delivery
   closure opens or refreshes the PR. In managed mode `brr review
-  --pr-body --relay` sends the pack to brnrd's transient RAM-only renderer
+  --pr-body --relay` is gist-first for public repos: it publishes the pack
+  JSON to the user's secret gist, probes brnrd's `/r?pack=...` renderer
+  shell before linking it, and falls back to the transient RAM-only relay
   (`POST /v1/daemons/pack` + public `/r/{token}`,
-  [pack_relay.py](../src/brnrd/pack_relay.py)) and includes an interactive
-  link in the PR body — never persisted.
+  [pack_relay.py](../src/brnrd/pack_relay.py)) when the shell is not live,
+  gist publication is unavailable, or the repo is private/internal. The
+  publisher verifies the returned relay URL before adding it to the PR body;
+  if both rich surfaces are unavailable, the Markdown projection and embedded
+  pack remain the review surface.
 - [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
   — *2026-05-29*. The first concrete pack
   ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that

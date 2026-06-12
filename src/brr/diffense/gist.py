@@ -12,12 +12,18 @@ import json
 import subprocess
 from dataclasses import dataclass
 from typing import Callable
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 DEFAULT_FILENAME = "diffense-pack.json"
 DEFAULT_RENDER_BASE_URL = "https://brnrd.dev/r"
 _DEFAULT_DESCRIPTION = "brr diffense review pack"
 _GH_TIMEOUT_S = 30
+_RENDER_PROBE_TIMEOUT_S = 5
+_RENDER_PROBE_PACK_URL = "https://example.invalid/diffense-pack-probe.json"
+_RENDER_SHELL_MARKER = 'URLSearchParams(location.search).get("pack")'
+_REVIEW_PAGE_MARKER = 'id="diffense-pack"'
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,71 @@ def render_url(raw_url: str, *, base_url: str = DEFAULT_RENDER_BASE_URL) -> str:
     """Build a brnrd renderer-shell URL for a raw pack URL."""
     sep = "&" if "?" in base_url else "?"
     return f"{base_url.rstrip('/')}{sep}{urlencode({'pack': raw_url})}"
+
+
+def renderer_shell_available(
+    base_url: str = DEFAULT_RENDER_BASE_URL,
+    *,
+    timeout_s: int = _RENDER_PROBE_TIMEOUT_S,
+    fetch: Callable | None = None,
+) -> bool:
+    """Return whether *base_url* serves the gist-backed renderer shell.
+
+    The gist path only works after brnrd has deployed ``GET /r``. During a
+    rollout, older deployments still serve ``/r/{token}`` but return 404 for
+    ``/r?pack=...``; probing first keeps PR bodies from publishing dead
+    links and lets the caller fall back to the transient relay.
+    """
+    fetch = fetch or urlopen
+    request = Request(
+        render_url(_RENDER_PROBE_PACK_URL, base_url=base_url),
+        headers={"User-Agent": "brr-diffense/0.1"},
+    )
+    try:
+        response = fetch(request, timeout=timeout_s)
+        try:
+            status = getattr(response, "status", None)
+            if status is None and hasattr(response, "getcode"):
+                status = response.getcode()
+            if status is not None and not 200 <= int(status) < 300:
+                return False
+            body = response.read(256_000)
+        finally:
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        return False
+    text = body.decode("utf-8", errors="ignore")
+    return _RENDER_SHELL_MARKER in text
+
+
+def review_url_available(
+    url: str,
+    *,
+    timeout_s: int = _RENDER_PROBE_TIMEOUT_S,
+    fetch: Callable | None = None,
+) -> bool:
+    """Return whether an already-built rich review URL renders."""
+    fetch = fetch or urlopen
+    request = Request(url, headers={"User-Agent": "brr-diffense/0.1"})
+    try:
+        response = fetch(request, timeout=timeout_s)
+        try:
+            status = getattr(response, "status", None)
+            if status is None and hasattr(response, "getcode"):
+                status = response.getcode()
+            if status is not None and not 200 <= int(status) < 300:
+                return False
+            body = response.read(256_000)
+        finally:
+            close = getattr(response, "close", None)
+            if close is not None:
+                close()
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        return False
+    text = body.decode("utf-8", errors="ignore")
+    return _REVIEW_PAGE_MARKER in text
 
 
 def create_pack_gist(

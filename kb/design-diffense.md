@@ -211,7 +211,7 @@ flowchart TD
 | Responsive web | terminal-aesthetic HTML; `brr review` serves it locally | self-hosted (local; LAN/tunnel for phone) | **render model spiked** ([`src/brr/diffense/`](../src/brr/diffense)); local server + runner wiring next |
 | PR-body projection | humanized Markdown in the PR body | any forge reader | **ships** (2026-06-01; ownership moved 2026-06-10) — [`prbody.py`](../src/brr/diffense/prbody.py), projected by the resident via `brr review --pr-body`; pack embedded in a marker, `extract_pack` recovers it |
 | CLI / TUI | `brr review` in the terminal | self-hosted | follow-up, same pack |
-| Hosted web | brnrd serves a static renderer shell at `/r?pack=<raw gist url>`; `/r/{token}` remains the RAM-only relay fallback | hosted (managed mode) | **gist-backed shell ships** (2026-06-12) after the transient relay slice (2026-06-01) — pack JSON lives in the user's secret gist; brnrd serves code or a short-lived fallback, never durable pack storage |
+| Hosted web | brnrd serves a static renderer shell at `/r?pack=<raw gist url>`; `/r/{token}` remains the RAM-only relay fallback | hosted (managed mode) | **gist-backed shell ships** (2026-06-12) after the transient relay slice (2026-06-01) — pack JSON lives in the user's secret gist; publication probes the shell before emitting the gist link, verifies any token-relay URL before adding it, and otherwise leaves the PR body without a rich banner; brnrd serves code or a short-lived fallback, never durable pack storage |
 | Live agent | in-context Q&A over the pack | both | future |
 
 The payoff of the split: the hardest, most valuable work (assembling the
@@ -1107,22 +1107,28 @@ reviewer's surface.
   permitting. This is the user publishing their own data to their own PR —
   not a third party storing it.
 - **User-owned gist for durable rich review** (**shipped 2026-06-12**).
-  `brr review --pr-body --relay` first writes the pack JSON to a secret
-  gist in the user's own GitHub account and links brnrd's static renderer
-  shell as `/r?pack=<raw gist url>`. The browser fetches the raw gist
-  directly; brnrd serves the renderer code and never receives or stores
-  the durable pack bytes. A secret gist is an unlisted capability URL, so
-  brr declines this durable path when GitHub reports the target repo as
-  private or internal.
+  `brr review --pr-body --relay` first probes brnrd's static renderer
+  shell; when `/r?pack=...` is live, it writes the pack JSON to a secret
+  gist in the user's own GitHub account and links that shell as
+  `/r?pack=<raw gist url>`. The browser fetches the raw gist directly;
+  brnrd serves the renderer code and never receives or stores the durable
+  pack bytes. The probe matters during self-dogfooding rollouts: a branch
+  that introduces the shell can still generate a PR body before production
+  has deployed it, so publishing the gist link blindly would create a 404.
+  A secret gist is an unlisted capability URL, so brr declines this durable
+  path when GitHub reports the target repo as private or internal.
 - **brnrd is a transient relay fallback, never a pack store**
   (config-gated; **shipped 2026-06-01**, demoted to fallback
   2026-06-12). When gist publication is unavailable or the pack should not
   leave a private repo as a public capability URL, the daemon can relay the
   pack to brnrd (`POST /v1/daemons/pack`), which holds it in a RAM-only TTL
   store behind an unguessable token and renders it on `GET /r/{token}` via
-  `brr.diffense.render` — it does **not** persist it, mirroring brnrd's
-  event-content-transient, "data ownership stays at the metadata-graph
-  level" stance ([`design-brnrd-protocol.md`](design-brnrd-protocol.md)).
+  `brr.diffense.render` and the packaged `diffense/*.html` template. The
+  publisher verifies the returned URL before putting it in the PR body; if
+  the relay renders 500 / 404, the PR body omits the rich banner rather
+  than advertising a broken link. brnrd does **not** persist the pack,
+  mirroring its event-content-transient, "data ownership stays at the
+  metadata-graph level" stance ([`design-brnrd-protocol.md`](design-brnrd-protocol.md)).
   Persisting the pack server-side would break that stance, since the pack
   is derived from the conversation and the diff. (Earlier drafts said brnrd
   *stored* the pack keyed by PR / conversation id; corrected 2026-05-31 —
