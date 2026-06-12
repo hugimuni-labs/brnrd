@@ -50,6 +50,19 @@ def test_bundled_runner_image_has_baseline_dev_tools():
     assert "ln -sf /usr/bin/pip3 /usr/local/bin/pip" in text
 
 
+def test_bundled_runner_image_installs_brr_cli_and_runtime_deps():
+    """The default agent image should carry brr's own CLI surface.
+
+    Docker tasks often need ``brr review`` or other local tooling while
+    dogfooding brr itself. Baking the package and its small runtime HTTP
+    dependency avoids mid-task ``PYTHONPATH=src python -m brr`` and
+    ad-hoc ``pip install requests`` recovery.
+    """
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "'brr>=0.1.0'" in text
+    assert "'requests>=2.31,<3'" in text
+
+
 def test_bundled_runner_image_installs_github_cli():
     """``gh`` is part of the runner toolbox so agents can open PRs when
     a task lacks an auto-land target. We pull from GitHub's upstream APT
