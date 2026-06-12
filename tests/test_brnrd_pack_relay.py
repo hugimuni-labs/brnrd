@@ -118,6 +118,17 @@ def test_relay_then_render_roundtrip(client):
     assert "the change in shape" in page.text
 
 
+def test_renderer_shell_serves_without_pack_touching_server(client):
+    page = client.get(
+        "/r",
+        params={"pack": "https://gist.githubusercontent.com/octo/abc/raw/pack.json"},
+    )
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert "__DIFFENSE_PACK__" not in page.text
+    assert 'new URLSearchParams(location.search).get("pack")' in page.text
+
+
 def test_render_unknown_token_is_404(client):
     assert client.get("/r/does-not-exist").status_code == 404
 
