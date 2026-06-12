@@ -6308,3 +6308,15 @@ the PR body; if both rich surfaces are unavailable, the PR keeps the Markdown
 projection plus embedded pack rather than advertising a broken link. The kb
 records the invariant: durable pack storage is useful only if the
 reviewer-facing renderer and its packaged template are live.
+
+## [2026-06-12] fix | bundled Docker runner preinstalls brr self-tooling
+
+Dogfooding Docker-mode tasks exposed that the bundled runner image had the
+agent CLIs and baseline shell toolbox, but not brr's own CLI/runtime deps:
+agents had to recover with `PYTHONPATH=src python -m brr` and ad-hoc
+`pip install requests` before using review tooling. The image contract now
+treats brr itself as part of the product surface: `src/brr/Dockerfile`
+installs the `brr` package and `requests` alongside `pytest`, the bundled
+env docs and environment hub name that baseline explicitly, and the stale-image
+ergonomics hint tells users to rebuild when the local image predates this
+tooling.
