@@ -150,8 +150,21 @@ def test_sections_absent_when_pack_lacks_material():
 def test_render_banner_present_when_url_given():
     body = prbody.project_pr_body(_pack(), render_url="https://brnrd.example/r/abc")
     assert "**Interactive review:** https://brnrd.example/r/abc" in body
+    assert "Transient link" in body
     # The banner sits above the Summary so it's the first thing a reviewer sees.
     assert body.index("Interactive review") < body.index("## Summary")
+
+
+def test_render_banner_names_user_owned_pack_when_url_given():
+    body = prbody.project_pr_body(
+        _pack(),
+        render_url="https://brnrd.example/r?pack=raw",
+        pack_url="https://gist.github.com/octo/abc",
+    )
+    assert "**Interactive review:** https://brnrd.example/r?pack=raw" in body
+    assert "Pack source: https://gist.github.com/octo/abc" in body
+    assert "user-owned gist" in body
+    assert "Transient link" not in body
 
 
 def test_render_banner_absent_without_url():
