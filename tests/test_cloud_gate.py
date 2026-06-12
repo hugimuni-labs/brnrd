@@ -190,6 +190,60 @@ def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
     assert protocol.list_pending(inbox_dir) == []
 
 
+def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "project_id": pid,
+            "body": "@brr-bot fix this",
+            "source": "github",
+            "reply_to": {
+                "platform": "github",
+                "repo": "owner/repo",
+                "issue_number": 17,
+                "comment_id": 100,
+                "kind": "pr-comment",
+                "author": "alice",
+                "html_url": "https://github.com/owner/repo/pull/17#issuecomment-100",
+                "trigger": "mention",
+                "mention": "@brr-bot",
+                "pr_number": 17,
+                "branch_target": "feature-x",
+            },
+        },
+        headers=acc,
+    )
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    pending = protocol.list_pending(inbox_dir)
+    assert len(pending) == 1
+    ev = pending[0]
+    assert ev["source"] == "cloud"
+    assert ev["cloud_platform"] == "github"
+    assert ev["cloud_chat_id"] == "owner/repo#17"
+    assert ev["github_repo"] == "owner/repo"
+    assert ev["github_kind"] == "pr-comment"
+    assert ev["github_issue_number"] == 17
+    assert ev["github_comment_id"] == 100
+    assert ev["github_author"] == "alice"
+    assert ev["github_trigger"] == "mention"
+    assert ev["github_mention"] == "@brr-bot"
+    assert ev["github_pr_number"] == 17
+    assert ev["branch_target"] == "feature-x"
+
+
 def test_loop_skips_delivery_without_cloud_event_id(tmp_path, monkeypatch):
     # A foreign event (no cloud_event_id) must not be posted to brnrd;
     # it is logged + skipped, leaving its files in place for triage.
