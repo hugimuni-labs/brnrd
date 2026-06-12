@@ -31,6 +31,14 @@ def render(pack: dict, template: str | None = None) -> str:
     return tmpl.replace(_PLACEHOLDER, payload)
 
 
+def render_shell(template: str | None = None) -> str:
+    """Return the renderer shell; the browser loads ``?pack=<url>`` itself."""
+    tmpl = template if template is not None else _TEMPLATE.read_text(encoding="utf-8")
+    if _PLACEHOLDER not in tmpl:
+        raise ValueError(f"template is missing the {_PLACEHOLDER} placeholder")
+    return tmpl.replace(_PLACEHOLDER, "")
+
+
 def render_file(pack_path: Path, out_path: Path | None) -> str:
     pack = json.loads(Path(pack_path).read_text(encoding="utf-8"))
     html = render(pack)

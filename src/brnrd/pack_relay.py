@@ -1,4 +1,4 @@
-"""In-memory, TTL-bounded relay for diffense review packs.
+"""In-memory, TTL-bounded fallback relay for diffense review packs.
 
 brnrd is a **transient relay** for packs, never a store
 ([`kb/design-diffense.md`](../../kb/design-diffense.md) → "Where packs
@@ -9,10 +9,13 @@ lives only here — in process memory, behind an unguessable token, dropped
 on TTL expiry or process restart. It is never written to the database or
 to disk.
 
-Single-process by construction. A horizontally-scaled deployment would
-need a shared *ephemeral* store (e.g. Redis with a TTL) — but it must stay
-non-durable to preserve the stance. A durable pack table is exactly what
-this design refuses.
+The primary durable path is user-owned gist storage plus the static
+``/r?pack=...`` renderer shell. This relay remains for private packs and
+for environments where ``gh gist create`` is unavailable. Single-process
+by construction. A horizontally-scaled deployment would need a shared
+*ephemeral* store (e.g. Redis with a TTL) — but it must stay non-durable
+to preserve the stance. A durable pack table is exactly what this design
+refuses.
 """
 
 from __future__ import annotations
