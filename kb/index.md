@@ -483,11 +483,14 @@ dive-in map) and are stable until something contradicts them.
   per the locking pass; other clouds parallel-ship managed +
   BYO when added).
 - [Managed gates launch plan](plan-managed-gates-launch.md) —
-  *accepted 2026-05-26; not started*. Surface A. Three slices: GH App adapter +
-  backend skeleton + auto-binding (first, largest pain relief);
-  TG bot adapter + multi-project routing UX (fast-follow);
-  permission-prompt API + gate-side integration (third). Backend
-  lives at `src/brnrd/` in the monorepo.
+  *accepted 2026-05-26; partially in flight*. Surface A. Three
+  slices: GH App adapter + backend skeleton + auto-binding (first,
+  largest pain relief; issue-comment ingress, repo binding API, and
+  GitHub response forwarding have shipped, while App install/JWT,
+  auto-binding, and review-comment webhooks remain pending); TG bot
+  adapter + multi-project routing UX (fast-follow); permission-prompt
+  API + gate-side integration (third). Backend lives at `src/brnrd/`
+  in the monorepo.
 - [brnrd inbox-as-service prototype](plan-brnrd-inbox-prototype.md) —
   *in flight (started 2026-05-27)*. The executable `src/brnrd/`
   prototype unblocking the managed-gates launch. FastAPI +
