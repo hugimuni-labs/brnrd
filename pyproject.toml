@@ -18,7 +18,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-brr = ["AGENTS.md", "Dockerfile", "prompts/*.md", "docs/*.md", "gates/README.md"]
+brr = ["AGENTS.md", "Dockerfile", "prompts/*.md", "docs/*.md", "gates/README.md", "diffense/*.html"]
 brnrd_web = ["templates/*.html", "static/*.css"]
 
 [project.optional-dependencies]

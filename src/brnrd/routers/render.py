@@ -1,4 +1,4 @@
-"""Public render surface for transiently-relayed diffense packs.
+"""Public render surface for diffense packs.
 
 ``GET /r/{token}`` serves the self-contained diffense HTML for a pack the
 producer's daemon relayed (see ``POST /v1/daemons/pack``). The pack lives
@@ -12,9 +12,10 @@ TTL bounds exposure. (A future tightening could gate private-repo packs
 behind the reviewer's brnrd session; for now the model matches the user
 publishing their own data to their own PR.)
 
-The renderer itself is reused verbatim from ``brr.diffense.render`` — one
-render model, whether served locally by ``brr review``, embedded in the
-PR body, or relayed here.
+``GET /r?pack=<raw-gist-url>`` serves only the renderer shell. The
+browser fetches the pack from the user's GitHub gist, so brnrd never sees
+or stores those durable pack bytes. The token relay remains the private /
+no-gist fallback.
 """
 
 from __future__ import annotations
@@ -35,3 +36,11 @@ def render_pack(token: str, request: Request) -> HTMLResponse:
     from brr.diffense.render import render
 
     return HTMLResponse(render(pack))
+
+
+@router.get("/r", response_class=HTMLResponse)
+def render_pack_shell() -> HTMLResponse:
+    """Serve the static renderer shell; the browser loads ``?pack=...``."""
+    from brr.diffense.render import render_shell
+
+    return HTMLResponse(render_shell())

@@ -38,8 +38,10 @@ def main(argv: list[str] | None = None) -> None:
                    help="fallback title when the pack has no better title")
     p.add_argument("--render-url", default=None,
                    help="interactive review URL to include in the PR body")
+    p.add_argument("--render-base-url", default=None,
+                   help="renderer shell base URL for gist-backed review links")
     p.add_argument("--relay", action="store_true",
-                   help="relay the pack to brnrd, when configured, and include its render URL")
+                   help="publish a rich review link: secret gist first, brnrd relay fallback")
     p.add_argument("--json", action="store_true",
                    help="emit machine-readable JSON instead of text")
     p.set_defaults(func=cmd_review)
@@ -241,13 +243,29 @@ def cmd_review(args):
 
     if args.pr_body:
         render_url = args.render_url
+        pack_url = None
         if args.relay and not render_url:
-            brr_dir = _maybe_brr_dir()
-            if brr_dir is not None:
-                from .gates import cloud
-                if cloud.is_configured(brr_dir):
-                    render_url = cloud.relay_pack(brr_dir, loaded)
-        print(prbody.project_pr_body(loaded, render_url=render_url))
+            from .diffense import gist
+            render_base_url = args.render_base_url or _diffense_render_base_url()
+            if gist.renderer_shell_available(render_base_url):
+                published = gist.create_pack_gist(
+                    loaded, repo=_diffense_current_repo()
+                )
+                if published is not None:
+                    render_url = gist.render_url(
+                        published.raw_url,
+                        base_url=render_base_url,
+                    )
+                    pack_url = published.html_url
+            if not render_url:
+                brr_dir = _maybe_brr_dir()
+                if brr_dir is not None:
+                    from .gates import cloud
+                    if cloud.is_configured(brr_dir):
+                        candidate = cloud.relay_pack(brr_dir, loaded)
+                        if candidate and gist.review_url_available(candidate):
+                            render_url = candidate
+        print(prbody.project_pr_body(loaded, render_url=render_url, pack_url=pack_url))
         return 0
 
     if not args.check:
@@ -278,6 +296,34 @@ def cmd_review(args):
         print(f"[brr review] {path.name}: {n_cards} cards, "
               f"{len(errors)} error(s), {len(warnings)} warning(s) — {scope}")
     return 1 if errors else 0
+
+
+def _diffense_render_base_url() -> str:
+    from .diffense import gist
+
+    repo_root = _maybe_repo_root()
+    if repo_root is not None:
+        from . import config as conf
+
+        cfg = conf.load_config(repo_root)
+        value = cfg.get("diffense.render_base_url", cfg.get("diffense_render_base_url"))
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return gist.DEFAULT_RENDER_BASE_URL
+
+
+def _diffense_current_repo() -> str | None:
+    repo_root = _maybe_repo_root()
+    if repo_root is None:
+        return None
+    from . import gitops
+    from .gates.github import parse_origin_url
+
+    remote = gitops.default_remote(repo_root)
+    if not remote:
+        return None
+    url = gitops.remote_url(repo_root, remote)
+    return parse_origin_url(url or "")
 
 
 def cmd_auth(args):
