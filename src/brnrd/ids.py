@@ -47,6 +47,10 @@ def chat_binding_id() -> str:
     return _rid("chat")
 
 
+def repo_binding_id() -> str:
+    return _rid("repo")
+
+
 def tg_pair_code_id() -> str:
     return _rid("tgpair")
 

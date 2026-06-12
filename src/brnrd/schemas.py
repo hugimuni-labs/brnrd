@@ -30,6 +30,23 @@ class ProjectList(BaseModel):
     projects: list[ProjectOut]
 
 
+class RepoBindingCreate(BaseModel):
+    installation_id: str = Field(min_length=1, max_length=64)
+    repo_full_name: str = Field(min_length=1, max_length=255)
+    project_id: str
+
+
+class RepoBindingOut(BaseModel):
+    binding_id: str
+    installation_id: str
+    repo_full_name: str
+    project_id: str
+
+
+class RepoBindingList(BaseModel):
+    bindings: list[RepoBindingOut]
+
+
 # ── Device-flow connect ─────────────────────────────────────────────
 
 
