@@ -66,12 +66,6 @@ _BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
 _HEARTBEAT_INTERVAL = 30.0
-# Extra rows pulled from the conversation log on top of what the prompt
-# actually renders. Absorbs the in-flight event + task records (and any
-# pre-runner update packets for the same event) that
-# ``_recent_conversation_for_prompt`` strips before formatting, so the
-# rendered tail stays at ``prompts.RECENT_CONVERSATION_MAX``.
-_RECENT_READ_HEADROOM = 12
 _LIVE_INBOX_NAME = "inbox.json"
 
 
@@ -632,13 +626,16 @@ def _run_worker(
             host_context_branch=branch_plan.host_context_branch,
         )
 
-    # Read a window larger than the prompt renders so the in-flight
-    # event/task records (stripped by _recent_conversation_for_prompt)
-    # don't shrink the tail below RECENT_CONVERSATION_MAX.
-    recent_read_limit = prompts.RECENT_CONVERSATION_MAX + _RECENT_READ_HEADROOM
+    # Read a generous window so the agent-facing tail keeps the recent
+    # messages even when lifecycle/heartbeat records (which vastly
+    # outnumber them) sit between the user's turns. The renderer splits
+    # messages from lifecycle; the in-flight task's own records are
+    # stripped here. See conversations.render_conversation_tail.
     recent_conversation = (
         _recent_conversation_for_prompt(
-            conversations.read_recent(brr_dir, conv_key, limit=recent_read_limit),
+            conversations.read_recent(
+                brr_dir, conv_key, limit=prompts.RECENT_READ_WINDOW,
+            ),
             event_id=eid,
             task_id=task.id,
         )
@@ -1269,6 +1266,7 @@ def _drain_outbox(
                 task_id=task.id,
                 event_id=event_id,
                 label=(f"reply:{target}" if cross else f"interim:{event_id}"),
+                extra={"summary": conversations.summarize_text(body)},
             )
         emit(
             "interim_response",
@@ -1354,6 +1352,7 @@ def _deliver_out_of_bound(
             task_id=task.id,
             event_id=event_id,
             label=f"outbound:{gate}",
+            extra={"summary": conversations.summarize_text(body)},
         )
     return True
 
@@ -1486,6 +1485,12 @@ def _record_response_artifact(
     """Index the response artifact on the conversation log."""
     label = f"response:{task.event_id}" if task.event_id else f"response:{task.id}"
     if emit.conversation_key:
+        try:
+            summary = conversations.summarize_text(
+                response_path.read_text(encoding="utf-8")
+            )
+        except OSError:
+            summary = ""
         conversations.append_artifact(
             emit.brr_dir, emit.conversation_key,
             kind="response",
@@ -1493,6 +1498,7 @@ def _record_response_artifact(
             task_id=task.id,
             event_id=emit.event_id,
             label=label,
+            extra={"summary": summary} if summary else None,
         )
     emit(
         "artifact_created",
