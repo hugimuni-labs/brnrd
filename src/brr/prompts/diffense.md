@@ -34,10 +34,14 @@ raw diff.
 - **Publish from the pack** when `diffense.create_pr` is on (the default):
   project the checked pack yourself with `brr review <Review pack path>
   --pr-body --relay` and derive the title with `brr review <Review pack
-  path> --pr-title --fallback-title <branch>`, then write a `gate: forge`
-  outbox file whose frontmatter names `head`, `base`, and `title`; the
-  body is the projected PR body. The GitHub gate opens or refreshes the
-  PR idempotently and refuses publication when diffense PR creation is
+  path> --pr-title --fallback-title <branch>`. `--relay` now means "make a
+  rich review link": it first writes the pack JSON to a secret gist owned
+  by the user's GitHub account and links brnrd's `/r?pack=<raw gist url>`
+  renderer shell; if gist publication is unavailable, it falls back to
+  the transient brnrd RAM relay. Then write a `gate: forge` outbox file
+  whose frontmatter names `head`, `base`, and `title`; the body is the
+  projected PR body. The GitHub gate opens or refreshes the PR
+  idempotently and refuses publication when diffense PR creation is
   disabled.
 
 If the change isn't review-worthy, skip the pack: an honest absence beats
