@@ -452,41 +452,27 @@ verb taxonomy is in
 
 ### Billing — subscription + credit wallet
 
-Two billing legs, each matched to its cost shape:
+Two billing legs match the two cost shapes:
 
-- **Subscription** ($5/month or $50/year via Stripe recurring)
-  covers the platform — bigger project headroom (25 vs 3 on
-  Free, unlimited after $10 cumulative top-ups), full
-  dashboard, 10K events/month, 300 spawn-credits/month
-  included, 90-day audit retention, email support.
-  Cancel-anytime via the Stripe Customer Portal (`brr brnrd
-  subscription portal`).
-- **Credit wallet** (1 credit = $0.01) covers compute over the
-  included subscriber grant (or the Free tier's 5 monthly
-  credits). One-shot Stripe Checkout top-ups; no card-on-file
-  unless the user opts into auto-topup. Paid credits never
-  expire; refunds on unused paid credits within 30 days,
-  pro-rata.
+- **Subscription** covers the hosted platform: dispatcher,
+  managed gates, dashboard, project/event headroom, audit
+  retention, support, and the monthly managed-compute grant
+  for subscribers.
+- **Credit wallet** covers variable managed-compute spend:
+  one-shot Stripe Checkout top-ups at $0.01/credit, no
+  card-on-file unless auto-topup is enabled, debit at spawn
+  finalize.
 
-Spawns debit at finalize from the appropriate sub-bucket
-(grant first, then purchased credits). The Free signup bonus
-draws first for Free users; the subscriber monthly grant
-draws first for
-subscribers; paid credits draw only after the included grant
-is exhausted.
-
-This shape matches each leg's cost (sub for fixed platform
-cost, metered for variable compute cost), aligns with the
-data-minimization pitch (no recurring identity-mapping for
-wallet top-ups), and gives subscribers predictable monthly
-cost while preserving pay-only-for-what-you-use for casual /
-power compute users.
-
-Full mechanics — subscription flow, wallet top-up flow,
-debit-at-finalize, zero-balance UX (event enqueued + gate
-notify, not dropped), refund policy (per-leg), auto-topup,
-Stripe + HugiMuni SAS + Qonto integration, audit-log entries —
-in [`design-billing.md`](design-billing.md).
+The canonical tier policy lives in
+[`decision-pricing-shape.md`](decision-pricing-shape.md): Free
+has 3 projects, 100 events/month, and a 10-credit one-time
+signup bonus; Subscribed is $5 supporter / $7 public with 25
+projects, a $10 cumulative-top-up unlock to unlimited projects,
+10K events/month, and 300 credits/month included. The canonical
+implementation details — subscription flow, wallet top-up,
+bucketed ledger, overdraft envelope, refunds, Stripe + HugiMuni
+SAS + Qonto setup, accounting, and audit entries — live in
+[`design-billing.md`](design-billing.md).
 
 ### Cost transparency
 

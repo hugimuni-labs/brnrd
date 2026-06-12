@@ -6308,3 +6308,21 @@ the PR body; if both rich surfaces are unavailable, the PR keeps the Markdown
 projection plus embedded pack rather than advertising a broken link. The kb
 records the invariant: durable pack storage is useful only if the
 reviewer-facing renderer and its packaged template are live.
+
+## [2026-06-12] implement | Launch business kb pages compact to current state
+
+Compacted the two launch-critical business kb pages before they turned into
+preflight wallpaper: `decision-pricing-shape.md` now reads as the accepted
+pricing contract (Free, Subscribed supporter/public, BYO, soft throttles,
+credit buckets, knobs, trust signals) with short lineage breadcrumbs, and
+`design-billing.md` now reads as the accepted Stripe subscription + wallet
+implementation design (bucketed ledger, overdraft envelope, refunds,
+Stripe/VAT/accounting, API surface) instead of accumulated proposal history.
+Both pages dropped below the deterministic oversized-page threshold.
+
+While inspecting the managed-mode hub for duplicated pricing/billing prose, a
+stale Free "5 monthly credits" mention was removed and the hub now delegates the
+canonical tier policy and billing mechanics back to the two compacted pages.
+Focused validation: the deterministic preflight no longer reports
+`decision-pricing-shape.md` or `design-billing.md` as oversized; focused kb
+tests passed (40 tests).
