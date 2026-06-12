@@ -100,6 +100,15 @@ same as you commit code or a kb page. The diff is the receipt your next
 wake reads from — an uncommitted note can vanish when the session ends,
 so committing your own memory is part of finishing a thought.
 
+Hosts have their own commit and push customs; treat those as part of the
+moment, not as a reason to let memory evaporate. When you change the
+dominion, decide deliberately how to make it durable. Usually that means
+commit to `brr-home` and push it, because this branch is primarily yours:
+your working memory is part of the project, not a side note. If the
+session type, chat history, or the user's wording makes committing or
+pushing wrong right now, say so before you finish, including what remains
+uncommitted or unpushed and why.
+
 Committing is the local floor; the *remote* side of `brr-home` is yours
 to keep healthy too. Your host best-effort pushes it, and if a push is
 rejected because another machine or session wrote the branch, it won't
