@@ -6357,3 +6357,35 @@ installs the `brr` package and `requests` alongside `pytest`, the bundled
 env docs and environment hub name that baseline explicitly, and the stale-image
 ergonomics hint tells users to rebuild when the local image predates this
 tooling.
+
+## [2026-06-12] fix | Dialogue-faithful conversation tail + reading-the-wake playbook seed
+
+A resident wake answered the wrong question — a git union-merge follow-up read
+as if it were about cross-project message routing. Root cause was a
+context-shape bug, not a model lapse: the wake rendered a flat "last N records"
+conversation tail, and lifecycle records (a heartbeat every 30s plus phase/task
+rows) vastly outnumber messages, so one long run's noise evicted the actual
+user turns. Two aggravators — reply artifacts stored only a file path (not the
+reply text) and event summaries kept only the first line — meant the surviving
+rows carried little dialogue. With the thread's messages gone, the wake leaned
+on `kb/log.md`'s Recent Activity, which is the repo-wide *cross-thread*
+through-line, and misread a thread-local "it" against another thread's work.
+
+Fix: a shared `conversations.render_conversation_tail` that the daemon prompt
+and the run-context file both delegate to (so they can't drift). It floors user
+turns and agent replies *independently* into a messages block, demotes
+lifecycle to a compact secondary block, captures reply text in artifact
+summaries, keeps whole (collapsed) event summaries, and reads a generous
+400-record window. Companion seed: a "Reading the wake well" section in
+`dominion-playbook.md` — the conversation tail is this thread's dialogue, the
+log is cross-thread orientation, threads don't bleed, name a missing turn
+instead of inventing one, and notice/log how this wake differs from the last.
+
+Learned + deferred: the misread had a second, independent half — the same
+human reached the resident through a hosted `cloud` gate and a self-hosted
+`telegram` gate, which derive *different* conversation keys, so the histories
+never thread together. That cross-gate key split is real but deferred (it wants
+the actual incident events and ties into brnrd's existing cross-gate-continuity
+plan). Full design, continuity reasoning, and the multi-maintainer attribution
+angle: `kb/design-conversation-continuity.md`. Full suite green (813 + new
+regression tests for the renderer).

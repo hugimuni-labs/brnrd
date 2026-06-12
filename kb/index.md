@@ -194,6 +194,18 @@ dive-in map) and are stable until something contradicts them.
 
 ## Conversations & responses
 
+- [Conversation continuity — the dialogue-faithful wake](design-conversation-continuity.md) —
+  *active (tail fix + playbook seed shipping; cross-gate keying +
+  multi-maintainer attribution deferred)*. Fixes a wake that answered the
+  wrong question: a kind-blind "last N records" tail let one long run's
+  heartbeats/lifecycle evict the actual messages, so the agent leaned on the
+  cross-thread `kb/log.md` and misread a thread-local follow-up. Ships a
+  shared dialogue-faithful renderer (messages floored independently of a
+  compact lifecycle block; reply text captured; full event summaries;
+  generous read window) plus a "Reading the wake well" playbook seed. Names
+  the independent **cross-gate key split** (same human via hosted `cloud`
+  vs self-hosted `telegram` → different keys) as deferred work tied to
+  brnrd's cross-gate continuity, and the multi-maintainer attribution angle.
 - [Drop streams; conversations are routing+history, not identity](decision-drop-streams.md) —
   why the workstream layer was removed and replaced with a thin
   per-conversation log; lessons from the 2026-05-05 frozen-intent

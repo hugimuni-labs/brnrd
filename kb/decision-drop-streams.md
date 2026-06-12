@@ -99,9 +99,11 @@ layout was superseded on 2026-05-16 by the per-event partitioning
 above.
 
 For agent context, prompts now carry a `## Recent in this conversation`
-block fed by tailing the conversation log. No frozen identity, just
-recent facts. Existing `kb/log.md` continues to provide cross-session
-context.
+block fed by tailing the conversation log — rendered dialogue-first
+(messages floored independently of lifecycle noise) since 2026-06-12, see
+[`design-conversation-continuity.md`](design-conversation-continuity.md).
+No frozen identity, just recent facts. Existing `kb/log.md` continues to
+provide cross-session context — the through-line, not a thread referent.
 
 For deliberate tracking of an ongoing line of work, write a `kb/`
 page. The agent already reads and writes `kb/` on every run; lines of
@@ -130,7 +132,11 @@ once the only importers were tests and stale docs.
 - A "line of work" abstraction that spans multiple conversations or
   multiple gates. Not needed today; if pain emerges, add it as an
   explicit `kb/work-<slug>.md` convention or a small new module —
-  do not revive the stream manifest.
+  do not revive the stream manifest. (A 2026-06-12 incident made the
+  multi-gate case concrete: the same human via a hosted `cloud` gate and a
+  self-hosted `telegram` gate gets two keys, so a follow-up to one can't see
+  the other's turns — analysed in
+  [`design-conversation-continuity.md`](design-conversation-continuity.md).)
 - A migration of pre-existing `.brr/streams/` data. The directory is
   gitignored runtime scratch; it is harmless and can be deleted by
   hand. Daemon will not read from it.
