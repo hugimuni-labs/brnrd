@@ -14,8 +14,10 @@ from brr.runner import (
     RunnerInvocation,
     RunnerResult,
     _build_cmd,
+    detect_all_runners,
     detect_runner,
     invoke_runner,
+    resolve_runner,
     runner_timeout,
 )
 
@@ -23,6 +25,49 @@ from brr.runner import (
 def test_detect_runner_returns_string_or_none():
     result = detect_runner()
     assert result is None or isinstance(result, str)
+
+
+def test_detect_runner_skips_binary_alias_profiles(monkeypatch):
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-bare-api-only": {
+                "binary": "claude",
+                "cmd": "claude --print",
+            },
+            "codex": {"cmd": "codex exec"},
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/codex" if name == "codex" else None,
+    )
+    assert detect_runner() == "codex"
+
+
+def test_resolve_runner_accepts_binary_alias(tmp_path, monkeypatch):
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "runner=claude-bare-api-only\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-bare-api-only": {
+                "binary": "claude",
+                "cmd": "claude --print --bare",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    assert resolve_runner(tmp_path) == "claude-bare-api-only"
 
 
 class TestCommandBuilding:
@@ -51,6 +96,21 @@ class TestCommandBuilding:
             "claude",
             "--print",
             "--dangerously-skip-permissions",
+            "--safe-mode",
+            "--system-prompt",
+            "You are brr agent. Find your orientation in AGENTS.md",
+            "fix it",
+        ]
+
+    def test_build_cmd_claude_bare_api_only_headless(self):
+        cmd = _build_cmd("claude-bare-api-only", "fix it", {})
+        assert cmd == [
+            "claude",
+            "--print",
+            "--dangerously-skip-permissions",
+            "--bare",
+            "--system-prompt",
+            "You are brr agent. Find your orientation in AGENTS.md",
             "fix it",
         ]
 
