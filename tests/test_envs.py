@@ -188,13 +188,52 @@ def test_worktree_prepare_auto_switches_to_target_branch(tmp_path):
     response_path = repo / ".brr" / "responses" / "evt-auto.md"
     backend = envs.get_env("worktree")
 
-    ctx = backend.prepare(task, repo, {}, branch_plan=plan, response_path=response_path)
+    ctx = backend.prepare(
+        task, repo, {}, branch_plan=plan, response_path=response_path,
+    )
 
     assert ctx.branch_name == "feature/auto"
     assert ctx.task_branch == "brr/task-auto"
     assert task.meta["branch_name"] == "feature/auto"
     # Worktree HEAD is on feature/auto, not on the task placeholder.
     assert envs.worktree.current_branch(ctx.cwd) == "feature/auto"
+
+
+def test_worktree_prepare_falls_back_when_target_checked_out_elsewhere(
+    tmp_path, capsys,
+):
+    """A target branch held by another worktree does not fail env setup."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    subprocess.run(
+        ["git", "branch", "feature/held", "main"],
+        cwd=repo, check=True, stdout=subprocess.PIPE,
+    )
+    held_path = tmp_path / "held"
+    subprocess.run(
+        ["git", "worktree", "add", str(held_path), "feature/held"],
+        cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    plan = _plan(seed="feature/held", target="feature/held")
+    task = Task(id="task-held", event_id="evt-held", body="do work")
+    response_path = repo / ".brr" / "responses" / "evt-held.md"
+    backend = envs.get_env("worktree")
+
+    ctx = backend.prepare(task, repo, {}, branch_plan=plan, response_path=response_path)
+
+    assert ctx.branch_name == "brr/task-held"
+    assert ctx.task_branch == "brr/task-held"
+    assert task.meta["branch_name"] == "brr/task-held"
+    assert task.meta["target_branch"] == "feature/held"
+    assert task.meta["branch_setup"] == "target-checked-out-elsewhere"
+    assert task.meta["target_branch_checkout_path"] == str(held_path)
+    assert "starting on 'brr/task-held'" in task.meta["branch_setup_notice"]
+    assert envs.worktree.current_branch(ctx.cwd) == "brr/task-held"
+    assert (
+        "target branch 'feature/held' is checked out"
+        in capsys.readouterr().out
+    )
 
 
 def test_worktree_finalize_nothing_preserves_target_branch(tmp_path):
