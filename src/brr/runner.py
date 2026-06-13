@@ -12,6 +12,7 @@ execution in a background thread.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -290,11 +291,11 @@ def _build_cmd(
     if custom:
         if isinstance(custom, list):
             return _replace_placeholders(custom)
-        return _replace_placeholders(str(custom).split())
+        return _replace_placeholders(shlex.split(str(custom)))
 
     profile = _load_profiles().get(runner_name)
     if profile:
-        cmd = str(profile.get("cmd", runner_name)).split()
+        cmd = shlex.split(str(profile.get("cmd", runner_name)))
         cmd.append(prompt)
         return cmd
 
