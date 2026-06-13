@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import daemon, envs, presence
+from brr import daemon, envs, presence, protocol
 from brr.task import Task
 from brr.runner import RunnerResult
 
@@ -128,6 +128,10 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
 
     assert task.status == "error"
+    assert event["status"] == "done"
+    response = protocol.read_response(tmp_path / ".brr" / "responses", "evt-2")
+    assert response is not None
+    assert "environment setup failed: boom" in response
     persisted = Task.from_file(tmp_path / ".brr" / "tasks" / f"{task.id}.md")
     assert persisted is not None
     assert persisted.status == "error"
@@ -227,6 +231,135 @@ def test_run_worker_retries_on_empty_stdout(tmp_path, monkeypatch):
 
     assert task.status == "done"
     assert attempts == ["evt-3-attempt-1", "evt-3-attempt-2"]
+
+
+def test_run_worker_accepts_current_outbox_reply_without_stdout(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-outbox-only")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, ctx, runner_name, invocation, cfg=None, *, trace=False):
+        assert ctx.outbox_host is not None
+        ctx.outbox_host.mkdir(parents=True, exist_ok=True)
+        (ctx.outbox_host / "reply.md").write_text(
+            "handled through outbox\n", encoding="utf-8",
+        )
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 1,
+    )
+
+    assert task.status == "done"
+    assert event["status"] == "done"
+    responses = tmp_path / ".brr" / "responses"
+    assert protocol.read_response(responses, "evt-outbox-only") is None
+    assert [
+        protocol.read_partial(p)
+        for p in protocol.list_partials(responses, "evt-outbox-only")
+    ] == ["handled through outbox"]
+
+
+def test_run_worker_writes_terminal_failure_response_on_runner_error(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-run-fail")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="",
+            stderr="connection dropped",
+            returncode=1,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker_and_finalize(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "error"
+    assert event["status"] == "done"
+    response = protocol.read_response(tmp_path / ".brr" / "responses", "evt-run-fail")
+    assert response is not None
+    assert "runner failed after 1 attempt(s): connection dropped" in response
+
+
+def test_run_worker_writes_terminal_failure_response_after_empty_stdout(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-empty-final")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "error"
+    assert event["status"] == "done"
+    response = protocol.read_response(tmp_path / ".brr" / "responses", "evt-empty-final")
+    assert response is not None
+    assert "runner produced no reply after 1 attempt(s)" in response
 
 
 def test_run_worker_calls_sync_before_resolving_branch_plan(
