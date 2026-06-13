@@ -204,6 +204,46 @@ def _register(state: dict) -> None:
     )
 
 
+def _origin_meta(reply_to: dict) -> dict:
+    """Return local inbox frontmatter for a brnrd origin routing blob."""
+    platform = reply_to.get("platform") or ""
+    meta: dict[str, object] = {
+        "cloud_platform": platform,
+        "cloud_chat_id": "",
+        "cloud_topic_id": "",
+    }
+    if platform == "telegram":
+        chat_id = reply_to.get("chat_id")
+        topic_id = reply_to.get("topic_id")
+        meta["cloud_chat_id"] = "" if chat_id is None else chat_id
+        meta["cloud_topic_id"] = "" if topic_id is None else topic_id
+        return meta
+
+    if platform == "github":
+        repo = str(reply_to.get("repo") or "")
+        issue_number = reply_to.get("issue_number")
+        meta["cloud_chat_id"] = (
+            f"{repo}#{issue_number}" if repo and issue_number not in (None, "") else ""
+        )
+        copies = {
+            "repo": "github_repo",
+            "kind": "github_kind",
+            "issue_number": "github_issue_number",
+            "comment_id": "github_comment_id",
+            "author": "github_author",
+            "html_url": "github_html_url",
+            "trigger": "github_trigger",
+            "mention": "github_mention",
+            "pr_number": "github_pr_number",
+            "branch_target": "branch_target",
+        }
+        for src, dst in copies.items():
+            value = reply_to.get(src)
+            if value not in (None, ""):
+                meta[dst] = value
+    return meta
+
+
 def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     since = state.get("since", 0)
@@ -219,20 +259,17 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     for ev in events:
         # Carry the origin platform's routing as discrete fields: the
         # final response only needs cloud_event_id (brnrd derives the
-        # target from its own event row), but the live card needs the
-        # origin platform (to pick presentation) and chat (to thread the
-        # conversation). brnrd never receives these back — they stay local.
+        # target from its own event row), but the live card/conversation
+        # layer needs the origin platform and thread fingerprint. brnrd
+        # never receives these back — they stay local.
         rt = ev.get("reply_to") or {}
-        chat_id = rt.get("chat_id")
-        topic_id = rt.get("topic_id")
+        origin_meta = _origin_meta(rt)
         protocol.create_event(
             inbox_dir,
             source="cloud",
             body=ev.get("body") or "",
             cloud_event_id=ev["event_id"],
-            cloud_platform=rt.get("platform") or "",
-            cloud_chat_id="" if chat_id is None else chat_id,
-            cloud_topic_id="" if topic_id is None else topic_id,
+            **origin_meta,
         )
     cursor = result.get("cursor", since)
     if cursor > since:
