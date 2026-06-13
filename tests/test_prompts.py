@@ -535,6 +535,38 @@ class TestPromptBuilding:
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
 
+    def test_daemon_prompt_renders_woven_dialogue_bodies(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        recent = [
+            {
+                "ts": "2026-05-05T20:00:00Z",
+                "kind": "event",
+                "source": "telegram",
+                "body": "first line\nsecond line",
+                "summary": "first line second line",
+            },
+            {
+                "ts": "2026-05-05T20:01:00Z",
+                "kind": "artifact",
+                "artifact_kind": "response",
+                "label": "response:evt-prev",
+                "body": "agent reply\nwith detail",
+                "path": "/tmp/evt-prev.md",
+            },
+        ]
+
+        prompt = build_daemon_prompt(
+            "next thing", "evt-2", "/tmp/resp.md", tmp_path,
+            recent_conversation=recent,
+        )
+
+        assert "user (telegram):\n  first line\n  second line" in prompt
+        assert "agent (response:evt-prev):\n  agent reply\n  with detail" in prompt
+        assert "/tmp/evt-prev.md" not in prompt
+
     def test_daemon_prompt_does_not_repeat_identical_event_body(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
