@@ -77,6 +77,9 @@ def render_context(
             lines.append(f"- Host context branch: {ctx.branch_plan.host_context_branch}")
     if ctx.branch_name:
         lines.append(f"- Current branch: {ctx.branch_name}")
+    branch_setup_notice = task.meta.get("branch_setup_notice") or ""
+    if branch_setup_notice:
+        lines.append(f"- Branch setup: {branch_setup_notice}")
     if task.conversation_key:
         lines.append(f"- Conversation: {task.conversation_key}")
 
