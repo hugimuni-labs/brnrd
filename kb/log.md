@@ -6452,3 +6452,19 @@ target branch without updating the checked-out local ref.
 Focused validation: `PYTHONPATH=src python -m pytest tests/test_envs.py
 tests/test_branching.py tests/test_daemon.py tests/test_prompts.py
 tests/test_run_progress.py` passed (134 tests).
+
+## [2026-06-13] implement | Conversation persistence keeps woven turns
+
+Closed the Co-maintainer conversation-persistence slice. Conversation event
+records now keep the full inbound message body alongside a summary preview,
+response/interim/outbound artifacts store inline reply bodies so prior agent
+turns are readable as chat, and `read_recent` defaults to a kind-aware dialogue
+tail that drops task/update rows unless callers ask for raw lifecycle records.
+Heartbeats are daemon/card liveness only: they still dispatch to gate renderers
+for elapsed-card refreshes, but `append_update` no longer writes them into
+conversation memory.
+
+Validation: `PYTHONPATH=src python -m pytest` passed (819 tests, with the
+existing Starlette/FastAPI TestClient deprecation warning). The run also
+updated the stale Codex runner command assertion to match the bundled
+`runners.md` profile.
