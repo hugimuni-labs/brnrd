@@ -783,9 +783,10 @@ def _format_recent_conversation(
         ts = record.get("ts", "")
         line: str | None = None
         if kind == "event":
-            summary = (record.get("summary") or "").strip()
+            body = _conversation_body(record)
+            summary = body or (record.get("summary") or "").strip()
             source = record.get("source") or ""
-            line = f"- {ts} event ({source}): {summary}".rstrip()
+            line = _format_turn(f"{ts} user ({source})", summary)
         elif kind == "task":
             tid = record.get("task_id", "")
             status = record.get("status") or "pending"
@@ -812,8 +813,24 @@ def _format_recent_conversation(
             line = " ".join(bits)
         elif kind == "artifact":
             label = record.get("label") or record.get("artifact_kind") or ""
-            path = record.get("path") or ""
-            line = f"- {ts} artifact {label} {path}".rstrip()
+            body = _conversation_body(record)
+            if body:
+                line = _format_turn(f"{ts} agent ({label})", body)
+            else:
+                path = record.get("path") or ""
+                line = f"- {ts} artifact {label} {path}".rstrip()
         if line:
             bullets.append(line)
     return "\n".join(bullets)
+
+
+def _conversation_body(record: dict[str, Any]) -> str:
+    body = record.get("body")
+    return body.strip() if isinstance(body, str) else ""
+
+
+def _format_turn(prefix: str, body: str) -> str:
+    if "\n" not in body:
+        return f"- {prefix}: {body}".rstrip()
+    indented = "\n".join(f"  {line}" if line else "" for line in body.splitlines())
+    return f"- {prefix}:\n{indented}".rstrip()

@@ -21,11 +21,13 @@ second daemon) contention-free without per-shared-file locks — see
 
 Each record carries ``ts`` (microsecond-precision UTC ISO 8601) plus a
 ``kind`` discriminator (``event``, ``task``, ``artifact``, ``update``)
-plus type-specific fields. Reading projects one task's lifecycle by
-opening just its ``<event-id>.jsonl``; reading the full conversation
-context merges every file in the directory by ``ts``. Tailing only the
-latest rows uses ``read_recent``, which avoids loading whole files
-when *limit* is small (see that function's docstring).
+plus type-specific fields. Dialogue records carry inline ``body`` text
+so the resident can read the prior chat without chasing response files.
+Reading projects one task's lifecycle by opening just its
+``<event-id>.jsonl``; reading the full conversation context merges every
+file in the directory by ``ts``. Tailing only the latest rows uses
+``read_recent``, which avoids loading whole files when *limit* is small
+(see that function's docstring).
 
 Single-line ``O_APPEND`` writes in binary mode rely on the kernel's
 guarantee that the offset advance and the write happen atomically
@@ -136,6 +138,8 @@ def conversation_key_for_event(event: dict[str, Any]) -> str | None:
 
 
 _SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_LIFECYCLE_KINDS = {"task", "update"}
+_DIALOGUE_ARTIFACT_KINDS = {"response", "interim_response", "outbound_message"}
 # Anchor for records that arrive on a conversation without an
 # associated event id (mis-emitted packets or orphan tests). The
 # daemon never produces these, but keeping a deterministic fallback
@@ -324,6 +328,48 @@ def _ts_key(record: dict[str, Any]) -> str:
     return ts if isinstance(ts, str) else ""
 
 
+def _summary_for_body(body: str, *, limit: int = 240) -> str:
+    """One-line preview for UI surfaces; ``body`` keeps the full text."""
+    summary = " ".join(body.split())
+    if len(summary) > limit:
+        summary = summary[: limit - 3].rstrip() + "..."
+    return summary
+
+
+def _is_dialogue_record(record: dict[str, Any]) -> bool:
+    """True for records that represent human/agent turns.
+
+    ``read_recent`` is prompt-facing by default, so lifecycle records do
+    not compete with dialogue. Unknown custom kinds remain visible for
+    backwards compatibility with callers using the low-level append API.
+    """
+    kind = record.get("kind")
+    if kind == "event":
+        return True
+    if kind == "artifact":
+        artifact_kind = record.get("artifact_kind")
+        body = record.get("body")
+        return (
+            artifact_kind in _DIALOGUE_ARTIFACT_KINDS
+            and isinstance(body, str)
+            and bool(body.strip())
+        )
+    if kind in _LIFECYCLE_KINDS:
+        return False
+    return True
+
+
+def _next_recent_record(
+    iterator: Iterator[dict[str, Any]],
+    *,
+    include_lifecycle: bool,
+) -> dict[str, Any] | None:
+    for record in iterator:
+        if include_lifecycle or _is_dialogue_record(record):
+            return record
+    return None
+
+
 def read_records(brr_dir: Path, key: str) -> list[dict[str, Any]]:
     """Return all records from every event-log file under the conversation.
 
@@ -343,22 +389,33 @@ def read_records(brr_dir: Path, key: str) -> list[dict[str, Any]]:
 
 
 def read_recent(
-    brr_dir: Path, key: str, limit: int = 10,
+    brr_dir: Path,
+    key: str,
+    limit: int = 10,
+    *,
+    include_lifecycle: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return the last *limit* records from the conversation log, oldest first.
+    """Return the recent prompt-facing tail, oldest first.
 
-    Merges globally by ``ts`` without building the full sorted history when
-    *limit* > 0: each ``<event-id>.jsonl`` is scanned from the end in
-    fixed-size chunks, and a small heap selects the newest *limit* rows.
-    This matches :func:`read_records` as long as ``ts`` is non-decreasing
-    within each file (single writer, monotonic clock — see
-    ``kb/subject-daemon.md``).
+    By default the tail is kind-aware: dialogue records are selected and
+    lifecycle ``task``/``update`` rows are dropped, so bursts of progress
+    packets cannot evict user/agent turns from the next prompt. Pass
+    ``include_lifecycle=True`` for the raw historical tail.
 
-    *limit* <= 0 means no cap — same as :func:`read_records` (full merge
-    and sort).
+    Merges globally by ``ts`` without building the full sorted history
+    when *limit* > 0: each ``<event-id>.jsonl`` is scanned from the end
+    in fixed-size chunks, and a small heap selects the newest *limit*
+    matching rows. This matches :func:`read_records` as long as ``ts`` is
+    non-decreasing within each file (single writer, monotonic clock —
+    see ``kb/subject-daemon.md``).
+
+    *limit* <= 0 means no cap over the selected kind set.
     """
     if limit <= 0:
-        return read_records(brr_dir, key)
+        records = read_records(brr_dir, key)
+        if include_lifecycle:
+            return records
+        return [r for r in records if _is_dialogue_record(r)]
     files = _iter_log_files(brr_dir, key)
     if not files:
         return []
@@ -366,7 +423,7 @@ def read_recent(
     heap: list[tuple[float, int, int, dict[str, Any]]] = []
     seq = 0
     for i, it in enumerate(rev_iters):
-        rec = next(it, None)
+        rec = _next_recent_record(it, include_lifecycle=include_lifecycle)
         if rec is not None:
             heapq.heappush(heap, (-_ts_epoch(rec), seq, i, rec))
             seq += 1
@@ -374,7 +431,10 @@ def read_recent(
     while heap and len(picked) < limit:
         _, _, fi, rec = heapq.heappop(heap)
         picked.append(rec)
-        nxt = next(rev_iters[fi], None)
+        nxt = _next_recent_record(
+            rev_iters[fi],
+            include_lifecycle=include_lifecycle,
+        )
         if nxt is not None:
             heapq.heappush(heap, (-_ts_epoch(nxt), seq, fi, nxt))
             seq += 1
@@ -405,14 +465,14 @@ def append_event(brr_dir: Path, key: str, event: dict[str, Any]) -> None:
     The event's own id is the file routing key — every record this
     pipeline produces lands in the same ``<event-id>.jsonl``.
     """
-    body = (event.get("body") or "").strip()
-    summary = body.splitlines()[0] if body else ""
+    body = str(event.get("body") or "")
     eid = str(event.get("id") or "")
     record = {
         "kind": "event",
         "event_id": eid,
         "source": event.get("source", ""),
-        "summary": summary,
+        "summary": _summary_for_body(body),
+        "body": body,
     }
     append_record(brr_dir, key, record, event_id=eid)
 
@@ -460,6 +520,7 @@ def append_artifact(
     task_id: str | None = None,
     event_id: str = "",
     label: str | None = None,
+    body: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> None:
     """Record an artifact creation on the conversation log."""
@@ -476,6 +537,10 @@ def append_artifact(
         record["label"] = label
     if extra:
         record.update(extra)
+    if body is not None:
+        record["body"] = body
+        if "summary" not in record:
+            record["summary"] = _summary_for_body(body)
     append_record(brr_dir, key, record, event_id=event_id)
 
 
@@ -488,6 +553,8 @@ def append_update(
     event_id: str = "",
 ) -> None:
     """Record a lifecycle update packet on the conversation log."""
+    if type == "heartbeat":
+        return
     record = {
         "kind": "update",
         "type": type,
