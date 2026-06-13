@@ -32,6 +32,16 @@ class TestCommandBuilding:
             "codex",
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
+            "-c",
+            "base_instructions=You are an autonomous agent. Follow the user message exactly.",
+            "-c",
+            "include_permissions_instructions=false",
+            "-c",
+            "include_apps_instructions=false",
+            "-c",
+            "include_collaboration_mode_instructions=false",
+            "-c",
+            "include_skill_instructions=false",
             "fix it",
         ]
 
