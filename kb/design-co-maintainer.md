@@ -1,10 +1,11 @@
 # Co-maintainer — one perceived continuity, many runner actors
 
-Status: accepted (2026-06-13) — north-star synthesis from a close-loop
-design session. Not yet accepted. Sequences the next milestone and is the
-umbrella for the tracking issues it names. Supersedes the approach taken in
-the closed PR #107 (which tried to fit all gate history into the wake
-context; see §4).
+Status: accepted on 2026-06-13 — north-star synthesis from a close-loop
+design session, accepted with refinements folded back in (see §4.4, §5, §6,
+§8, §11). Sequences the next milestone (GitHub milestone "Co-maintainer")
+and is the umbrella for the tracking issues it names. Supersedes the
+approach taken in the closed PR #107 (which tried to fit all gate history
+into the wake context; see §4).
 
 ## 1. The entity we're building
 
@@ -155,16 +156,25 @@ The user framed two poles and asked for the middle:
    interfaces, so the resident can pull "all of GitHub PR #N" or "all of
    this Telegram chat" exactly when it needs more than the snapshot shows.
    Retrieval cost is paid only on demand.
-3. **A resident-maintained thread of record (optional, durable).** The
-   project-level narrative the resident curates in its dominion — like a
-   peer's running notes or a forge thread — anchored to git/forge. The
-   durable "what we're doing together" that survives across wakes and
-   channels and is the resident's own, not brr's.
+3. **A resident-maintained thread of record (durable).** The
+   project-level narrative the resident curates **in its dominion** —
+   like a peer's running notes — the durable "what we're doing together"
+   that survives across wakes and channels and is the resident's own, not
+   brr's. Decided 2026-06-13: resident-curated working memory, not a
+   human-facing forge artifact.
 
 This honours the robustness=retrieval-cost hierarchy from
 [`design-environment-shaping.md`](design-environment-shaping.md): cheap,
 high-signal at wake; full fidelity one read away; durable synthesis where
 the resident chose to write it.
+
+**kb optional → collapse into the dominion.** In theme with this: the
+shared `kb/` may become optional (a `brr init` toggle / setup choice — see
+issue #105). When it's off, the semantic + decisional layer has nowhere
+committed to live but the dominion, so it **collapses into the dominion** —
+the thread of record and any durable synthesis become dominion-only, and
+the wake snapshot draws from there. The tiers above are unchanged; only
+*where the durable layer lives* moves.
 
 ### 4.3 Persistence refactor
 
@@ -187,16 +197,24 @@ interfaces" the user asked for):
   records by input type" — distinct from the append path, so callers don't
   re-derive shape.
 
-### 4.4 One perceived continuity across gates
+### 4.4 Per-correspondent identity (multi-user) and channel redundancy
 
-Unify identity so the same human/forge-thread is one continuity regardless
-of which gate carried a given message: either canonicalize keys (map
-`cloud:<platform>:…` to its native `<platform>:…` equivalent) or layer a
-**correspondent identity** above conversation keys. This is daemon-side and
-respects brnrd's data-minimization stance — brnrd holds the metadata graph,
-not the content (see [`plan-conversation-id-propagation.md`](plan-conversation-id-propagation.md)
-and [`subject-managed-mode.md`](subject-managed-mode.md)). Open question in
-§11 on how aggressively to merge.
+A conversation key answers "which thread," not "which person." The
+co-maintainer must work on **multi-user projects**, so identity is a layer
+*above* conversation keys: each turn carries a **correspondent identity**
+(username / usertag / user id — for cloud users especially), so the resident
+knows *who* it's talking to and several people can share one project. This
+is daemon-side and respects brnrd's data-minimization stance — brnrd holds
+the metadata graph, not the content (see
+[`plan-conversation-id-propagation.md`](plan-conversation-id-propagation.md)
+and [`subject-managed-mode.md`](subject-managed-mode.md)).
+
+The same human reaching the project through *two* gates on one platform
+(local Telegram **and** brnrd-relayed Telegram) is an unusual case. Rather
+than forcibly canonicalize the keys, treat it as a **redundancy channel**:
+recognise the duplicate correspondent, deliver once, and don't double-act —
+one perceived continuity, regardless of how many pipes reach it. (Decided
+2026-06-13: a correspondent-identity layer over silent key-canonicalization.)
 
 ### 4.5 Heartbeats are daemon-only
 
@@ -227,6 +245,24 @@ and branch publication via the publish kernel
 ([`design-publish-kernel.md`](design-publish-kernel.md)); forge-awareness
 gives it the picture to do so without surprises.
 
+**From awareness to action — forge grooming** (issue #117). Awareness is the
+input; grooming is what a co-maintainer *does* with it, on its own
+initiative (self-scheduled wakes are the natural trigger):
+
+- **Detect PRs/MRs that need a rebase and do it** — behind the base,
+  conflicting, or claiming a state the base has moved past — then resolve,
+  validate, and force-with-lease, exactly as `AGENTS.md` → *Pushing,
+  rebasing, and open PRs* already prescribes for a human-grade collaborator.
+- **Clean up stale PRs** — close or refresh ones the work has overtaken;
+  update titles/bodies that drifted from HEAD.
+- **Produce a grooming digest** — a periodic summary / proposals to the user
+  (what's open, what's stuck, what it suggests doing) on a chat thread.
+
+This turns `AGENTS.md`'s open-PR judgement into real behaviour, fed by the
+snapshot's forge facet. (PR #106 is a live example: it sits `CONFLICTING`
+against main and wants exactly this rebase-and-validate treatment before it
+can land.)
+
 ## 6. Delivery robustness & run↔reply decoupling
 
 Today a run is effectively coupled to one terminal reply: terminal delivery
@@ -240,9 +276,26 @@ Targets, extending the shipped partials path
 push/reply-ownership thread in
 [`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md):
 
-- **No silent drop.** Every addressed event ends with *something* on its
-  thread — an answer, an interim, or an honest failure note — even on an
-  empty/failed run.
+- **The agent decides where, how, and how much to reply.** Reply
+  composition is the resident's judgement — which thread(s), how long, and
+  **formatted for the destination gate** (a Telegram message and a GitHub
+  comment are not the same shape), surfacing the useful forge links and,
+  when the input names a GitHub issue, referencing it in the PR so it
+  auto-closes. (Absorbs the closed #104.)
+- **A run's success signal is its output, not its stdout.** A run must
+  produce **at least one output event (a delivery / gate event), or a new
+  commit/push, or an explicit noop event** — or a combination. The daemon
+  determines success/failure from the *presence* of one of these, replacing
+  the brittle `status==done` + non-empty-stdout coupling. Silence is the
+  failure signal.
+- **What counts as failure, and what to surface.** An agent that *replied*
+  has not failed, even if it didn't finish the task — that's a normal
+  partial. The real failures are **operational / runner errors**: a token
+  limit, a connection drop, a runner crash. The user owns the runner — a
+  critical piece of infrastructure brr doesn't control — so these are
+  surfaced to them **unambiguously**, distinct from "task incomplete but I
+  spoke." (This is the back-channel's vantage rule;
+  [`design-agent-ergonomics.md`](design-agent-ergonomics.md).)
 - **Decouple thought from stdout.** A wake may produce zero, one, or many
   deliveries on possibly several threads; stdout is one path, not the
   definition of "the reply."
@@ -276,6 +329,16 @@ via new packet types or a control file in the task outbox (already mounted
 into every run env), with the daemon still the sender and brnrd still a
 transient relay — data-minimization intact. Additive to the existing card
 lifecycle.
+
+**Re-align the card with the new arch.** Today the card binds to one
+session and infers "delivered / done" from terminal stdout delivery — which
+§6 dissolves. With agent-decided, possibly multi-thread delivery and a
+success signal of "events / commit / noop," the card must take its success
+and delivery state from *that* signal (not stdout-non-empty), reflect that a
+single run may have answered on several threads, and show an **operational
+failure** distinctly from a normal partial. The card isn't wrong, it's
+coupled to assumptions §6 removes: agent-owned composition sits on top of a
+daemon-owned lifecycle that tracks the new signal. (So §8 depends on §6.)
 
 ## 9. Daemon responsiveness
 
@@ -315,32 +378,41 @@ prompt — so "what did this wake see?" has an honest answer. Folds into
 [`design-context-introspection.md`](design-context-introspection.md) and
 the inject tool in [`plan-playbook-generalization.md`](plan-playbook-generalization.md).
 
-## 11. Sequencing & open questions
+## 11. Execution order & decisions
 
-Ordered by leverage; each maps to a tracking issue under this doc:
+The leverage order and the dependency order mostly agree. Recommended
+sequence (each maps to a milestone issue):
 
-1. **Continuity persistence refactor** (§4.3) + **heartbeat demotion**
-   (§4.5) — foundational; everything else reads cleaner history.
-2. **One perceived continuity across gates** (§4.4).
-3. **Communication snapshot + on-demand grouped history + thread of
-   record** (§4.2).
-4. **Delivery robustness & run↔reply decoupling** (§6).
-5. **Worktree branch-collision guard** (§7) — small, ship early.
-6. **Forge-awareness in the snapshot** (§5) — builds on PR #106.
-7. **Agent-owned card composition** (§8).
-8. **Daemon responsiveness** (§9).
-9. **Faithful context view** (§10).
+1. **Worktree branch-collision guard** (§7, #112) — tiny, independent,
+   removes a live task-failure; ship first so dogfooding on topic branches
+   is reliable.
+2. **Conversation persistence refactor + heartbeat demotion** (§4.3 / §4.5,
+   #108, with #93) — foundational; everything downstream reads cleaner
+   history.
+3. **Delivery robustness + the run success signal** (§6, #111) —
+   co-foundational; the events/commit/noop signal is a prerequisite for the
+   card re-alignment and for honest failure surfacing.
+4. **Per-correspondent identity + redundancy channels** (§4.4, #109) —
+   needed before the snapshot can group multi-user / cross-gate correctly.
+5. **Communication snapshot + on-demand grouped history + thread of record**
+   (§4.2, #110) — the centerpiece; needs #108 and #109.
+6. **Card re-alignment + agent-owned composition** (§8, #114) — needs #111.
+7. **Forge-awareness in the snapshot** (§5, #113) + **forge grooming**
+   (§5, #117) — need #110 and PR #106's metadata.
+8. **Daemon responsiveness** (§9, #115) and **faithful context view**
+   (§10, #116) — independent; slot in opportunistically.
 
-Open questions for the close-loop session:
+### Decisions (close-loop, 2026-06-13)
 
-- **Identity merge aggressiveness (§4.4):** canonicalize cloud↔native keys
-  silently, or keep them distinct with a correspondent-identity layer above
-  (safer for "is this really the same person?")?
-- **Thread of record placement (§4.2 tier 3):** purely resident-curated in
-  the dominion (private working memory), or also surfaced to the human as a
-  forge artifact (a pinned issue / a project log)?
-- **Snapshot budget:** what token budget does the snapshot get, and what is
-  the eviction order when channels are busy (recency, unanswered-first,
-  active-thread-first)?
-- **Delivery floor (§6):** what is the minimal "no silent drop" message on
-  a failed run — a fixed daemon note, or a resident-authored one?
+- **Identity (§4.4):** a correspondent-identity layer over silent
+  key-canonicalization; carry per-user identity (username / usertag /
+  userid) for multi-user projects; treat a same-platform local+cloud
+  duplicate as a redundancy channel (deliver once).
+- **Thread of record (§4.2):** resident-curated in the dominion, not a
+  human-facing forge artifact. In theme, `kb/` may become optional (#105);
+  when off, the durable layer collapses into the dominion.
+- **Snapshot eviction (§4.2):** recency is the primary importance metric for
+  a correspondent's events, with **unanswered** as a strong boost.
+- **Delivery floor (§6):** an agent reply is not a failure; operational /
+  runner errors are, and are surfaced to the user unambiguously (they own
+  the runner — critical infra brr doesn't control).
