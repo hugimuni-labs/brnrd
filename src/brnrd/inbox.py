@@ -65,10 +65,29 @@ def default_forwarder(item: ForwardItem) -> None:
 def make_default_forwarder(settings) -> Forwarder:
     """Build the production forwarder for the configured platforms.
 
-    Dispatches by ``reply_to['platform']``. Today only Telegram is
-    wired; an unknown / unconfigured platform falls back to a no-op so
-    a response is never lost in a crash (it's just not delivered).
+    Dispatches by ``reply_to['platform']``. An unknown / unconfigured
+    platform falls back to a no-op so a response is never lost in a crash
+    (it's just not delivered).
     """
+
+    def coerce_int(value: object) -> int | None:
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def github_body(reply_to: dict, body: str) -> str:
+        url = str(reply_to.get("html_url") or "").strip()
+        if not url:
+            return body
+        author = str(reply_to.get("author") or "").strip()
+        if author:
+            preface = f"> Replying to [@{author}'s comment]({url})\n\n"
+        else:
+            preface = f"> Replying to [the source comment]({url})\n\n"
+        return preface + body
 
     def forward(item: ForwardItem) -> None:
         reply_to = item.reply_to or {}
@@ -82,6 +101,40 @@ def make_default_forwarder(settings) -> Forwarder:
                 topic_id=reply_to.get("topic_id") or None,
                 reply_to_message_id=reply_to.get("message_id") or None,
             )
+            return
+
+        if reply_to.get("platform") == "github" and settings.github_bot_token:
+            from .platforms import github
+
+            repo = str(reply_to.get("repo") or "")
+            issue_number = coerce_int(reply_to.get("issue_number"))
+            if not repo or issue_number is None:
+                return
+            kind = str(reply_to.get("kind") or "")
+            comment_id = coerce_int(reply_to.get("comment_id"))
+            pr_number = coerce_int(
+                reply_to.get("pr_number") or reply_to.get("issue_number")
+            )
+            body = github_body(reply_to, item.body)
+            if kind == "pr-review-comment" and comment_id and pr_number:
+                github.post_review_reply(
+                    settings.github_bot_token,
+                    settings.github_api_base_url,
+                    settings.github_api_version,
+                    repo,
+                    pr_number,
+                    comment_id,
+                    body,
+                )
+            else:
+                github.post_issue_comment(
+                    settings.github_bot_token,
+                    settings.github_api_base_url,
+                    settings.github_api_version,
+                    repo,
+                    issue_number,
+                    body,
+                )
 
     return forward
 
