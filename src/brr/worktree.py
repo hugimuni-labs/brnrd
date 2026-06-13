@@ -40,6 +40,15 @@ class WorktreeInfo:
     branch: str
 
 
+class BranchCheckedOutError(RuntimeError):
+    """Raised when a branch is already checked out in another worktree."""
+
+    def __init__(self, branch: str, checkout_path: Path):
+        self.branch = branch
+        self.checkout_path = checkout_path
+        super().__init__(f"{branch} is checked out at {checkout_path}")
+
+
 def task_branch_name(task_id: str) -> str:
     """Return the standard task branch name brr creates for a worktree."""
     return f"brr/{task_id}"
@@ -135,7 +144,20 @@ def switch_to(worktree_path: Path, branch: str) -> None:
     Called by ``WorktreeEnv.prepare`` to move the agent's starting point
     from the throwaway ``brr/<task-id>`` placeholder to the event's named
     target branch before the agent runs.
+
+    Raises ``BranchCheckedOutError`` before invoking git when the branch is
+    already checked out in another worktree. Git refuses that checkout anyway;
+    the typed error lets callers keep the unique task branch instead.
     """
+    from . import gitops
+
+    checkout_path = gitops.branch_checkout_path(worktree_path, branch)
+    if (
+        checkout_path is not None
+        and checkout_path.resolve() != worktree_path.resolve()
+    ):
+        raise BranchCheckedOutError(branch, checkout_path)
+
     result = subprocess.run(
         ["git", "switch", branch],
         cwd=worktree_path,
@@ -153,6 +175,12 @@ def switch_to(worktree_path: Path, branch: str) -> None:
         check=False,
     )
     if result.returncode != 0:
+        checkout_path = gitops.branch_checkout_path(worktree_path, branch)
+        if (
+            checkout_path is not None
+            and checkout_path.resolve() != worktree_path.resolve()
+        ):
+            raise BranchCheckedOutError(branch, checkout_path)
         detail = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(
             detail or f"failed to switch worktree to branch {branch!r}"
