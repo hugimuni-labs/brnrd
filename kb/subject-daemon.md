@@ -173,32 +173,41 @@ For each pending event, the daemon:
    self-scheduled wakes) the host-agnostic playbook deliberately leaves out
    (see [`plan-playbook-generalization.md`](plan-playbook-generalization.md));
 7. invokes the configured runner headlessly;
-8. captures the runner's final stdout as the terminal response file, and
-   on each heartbeat drains the agent's outbox, then refreshes the live
-   inbox view (plus one final drain after the runner returns) — promoting
-   any interim or interleaved replies to the per-event partials queue or
-   delivering gate-addressed sends such as `gate: forge` PR publication
-   (the multi-response protocol,
+8. treats stdout as the default terminal reply while also accepting a
+   current-thread outbox reply as a valid closeout; on each heartbeat it
+   drains the agent's outbox, then refreshes the live inbox view (plus one
+   final drain after the runner returns) — promoting interim or
+   interleaved replies to per-event partial queues, delivering
+   gate-addressed sends such as `gate: forge` PR publication, and routing
+   cross-event conversation records to the target thread (the
+   multi-response protocol,
    [`design-multi-response.md`](design-multi-response.md));
 9. captures the resident's dominion edits via a serialized commit
    (`dominion.commit`; runs on success *and* failure — a failed thought
    may still have recorded pain), best-effort pushing the `brr-home`
    branch so the memory travels;
-10. retries if no terminal response was produced;
-11. marks the inbox event `done`; the originating gate streams any queued
-    interim partials, then the terminal reply, then cleans up;
+10. retries only when the addressed thread has no output yet; if the
+    runner/env path ultimately fails or stays silent, writes an explicit
+    terminal failure note for addressed events while keeping the task record
+    `error`;
+11. marks the inbox event `done` once it has something deliverable; the
+    originating gate streams any queued interim partials, then the terminal
+    reply if present, then cleans up;
 12. finalizes the environment, classifying the worktree's final state
     into a `publish_status` and recording the branch to publish;
 13. publishes that branch via `daemon.publish` under a per-branch lock
     (push only; PR open/refresh is agent-owned forge delivery), and
     deregisters the thought from the presence registry.
 
-The durable user response is plain stdout captured by
-[`runner.invoke_runner`](../src/brr/runner.py), not a file the agent
-writes manually — though the agent may *additionally* stream interim
-replies through its outbox (step 8). This contract is documented in
-[`execution-map.md`](../src/brr/docs/execution-map.md) and enforced by
-the daemon prompt assembled in [`prompts.py`](../src/brr/prompts.py).
+The durable user response is a delivery artifact, not synonymous with
+stdout. Plain stdout captured by
+[`runner.invoke_runner`](../src/brr/runner.py) remains the common terminal
+reply, but the agent may satisfy the current thread through its outbox, fold
+in another pending thread with `event: <id>`, or send a `gate:` message; brr
+synthesizes an explicit failure note when an addressed event would otherwise
+go silent. This contract is documented in
+[`execution-map.md`](../src/brr/docs/execution-map.md) and enforced by the
+daemon prompt assembled in [`prompts.py`](../src/brr/prompts.py).
 Response delivery is intentionally released before environment
 finalization and push: those stages are post-response housekeeping and
 should not delay the operator seeing the result. The progress card can

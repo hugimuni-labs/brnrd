@@ -12,7 +12,12 @@ follow-ons are **deliberately deferred** (see "Deferred follow-ons" below).
 **Live inflight inbox awareness** landed
 2026-06-10: the daemon now refreshes a reserved `inbox.json` control file
 in the task outbox on each heartbeat, so newly arrived events are visible
-to the running thought at plan boundaries. This page is the protocol contract;
+to the running thought at plan boundaries. **Delivery robustness** landed
+2026-06-13 as the Co-maintainer §6 slice: a current-thread outbox reply now
+satisfies the addressed event even with empty stdout, cross-event dialogue is
+recorded on the target thread, and runner/env failures that would otherwise
+go silent get an explicit terminal failure response while the task record
+remains `error`. This page is the protocol contract;
 [`subject-daemon.md`](subject-daemon.md) carries the daemon-pipeline
 synthesis and [`brr-internals.md`](../src/brr/docs/brr-internals.md)
 → Multi-response the user-facing reference.
@@ -118,8 +123,10 @@ reuses the control flow with its own per-message callbacks) replaces the
 2. **only when `done`**, deliver the terminal `<eid>.md` and clean up
    the event, the terminal file, and the partials dir.
 
-A `processing` event with no partials is a no-op — exactly today's
-behaviour. The terminal always lands last and closes the thread.
+A `processing` event with no partials is a no-op. When the event is `done`,
+the terminal response lands last if one exists; a current-thread outbox-only
+reply is also valid, so `done` with drained partials and no terminal response
+cleans up without sending an extra duplicate closeout.
 
 ## Interleaving (cross-event)
 
@@ -128,11 +135,13 @@ minimal frontmatter naming it (`event: <eid>`). When the daemon drains a
 file whose target is **not** the current task's event, it routes the
 body to that event's partials queue and marks that event `done` itself —
 the daemon owns inbox status, so the folded-in event gets delivered and
-cleaned up without ever being spawned as its own thought. A target that
-isn't a live pending event is dropped (don't misroute to a stale
-thread). The resident learns which events are pending from the wake-time
-pending-events list in the Task Context Bundle plus the live
-`inbox.json` refreshed in its outbox during the run.
+cleaned up without ever being spawned as its own thought. The dialogue
+artifact is indexed on the target event's conversation key so future wakes
+read the answer in the thread that received it. A target that isn't a live
+pending event is dropped (don't misroute to a stale thread). The resident
+learns which events are pending from the wake-time pending-events list in
+the Task Context Bundle plus the live `inbox.json` refreshed in its outbox
+during the run.
 
 There is no separate "final" flag: one outbox file is one complete reply
 to its target event, so a cross-event reply is terminal for that event

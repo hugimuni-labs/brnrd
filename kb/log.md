@@ -6468,3 +6468,17 @@ Validation: `PYTHONPATH=src python -m pytest` passed (819 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning). The run also
 updated the stale Codex runner command assertion to match the bundled
 `runners.md` profile.
+
+## [2026-06-13] implement | Addressed runs no longer silently drop replies
+
+Closed the Co-maintainer delivery-robustness slice. The daemon now treats a
+current-thread outbox reply as satisfying an addressed event even when stdout is
+empty, writes explicit terminal failure notes for env/runner failures and
+retry-exhausted silent runs while keeping the task record `error`, and records
+cross-event folded replies on the target conversation thread instead of the
+currently running thread. The daemon prompt and shipped docs now describe
+stdout as the default terminal path, not the definition of delivery.
+
+Focused validation: `PYTHONPATH=src python -m pytest tests/test_daemon.py
+tests/test_outbox.py tests/test_deliver_stream.py tests/test_prompts.py`
+passed (93 tests).
