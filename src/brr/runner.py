@@ -237,17 +237,30 @@ def _load_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
     return _profiles_cache
 
 
+def _profile_binary(name: str, profiles: dict[str, dict[str, Any]]) -> str:
+    profile = profiles.get(name) or {}
+    return str(profile.get("binary") or name)
+
+
+def _runner_available(name: str, profiles: dict[str, dict[str, Any]]) -> bool:
+    return shutil.which(_profile_binary(name, profiles)) is not None
+
+
 def detect_runner(repo_root: Path | None = None) -> str | None:
     """Return the first available built-in runner CLI name, or None."""
-    for name in _load_profiles(repo_root):
-        if shutil.which(name):
+    profiles = _load_profiles(repo_root)
+    for name in profiles:
+        if profiles.get(name, {}).get("binary"):
+            continue
+        if _runner_available(name, profiles):
             return name
     return None
 
 
 def detect_all_runners(repo_root: Path | None = None) -> list[str]:
     """Return all available runner CLI names found on PATH."""
-    return [name for name in _load_profiles(repo_root) if shutil.which(name)]
+    profiles = _load_profiles(repo_root)
+    return [name for name in profiles if _runner_available(name, profiles)]
 
 
 def resolve_runner(repo_root: Path) -> str:
@@ -258,9 +271,10 @@ def resolve_runner(repo_root: Path) -> str:
     """
     from . import config as conf
     cfg = conf.load_config(repo_root)
+    profiles = _load_profiles(repo_root)
     configured = cfg.get("runner", "auto")
     if configured != "auto":
-        if shutil.which(configured):
+        if _runner_available(configured, profiles):
             return configured
         raise RuntimeError(f"Runner '{configured}' not found on PATH.")
     detected = detect_runner(repo_root)
