@@ -570,15 +570,17 @@ def _build_task_context_bundle(
     sections.append("")
     sections.append("### Delivery contract")
     sections.append(
-        "- Your stdout is the user's chat reply. Print the exact intended "
-        "content as your final stdout message — no preamble, no meta "
-        "acknowledgment, no commentary outside it. Stream progress, debug, "
-        "and tool output to stderr."
+        "- Stdout is the default terminal reply for the current thread. "
+        "Print the exact intended content as your final stdout message — "
+        "no preamble, no meta acknowledgment, no commentary outside it. "
+        "Stream progress, debug, and tool output to stderr."
     )
     sections.append(
         f"- brr captures stdout and stores it at {response_path}. Don't "
         "write that file yourself, and don't substitute a file path for "
-        "the answer."
+        "the answer. If the runner fails or stays silent on an addressed "
+        "event, brr sends an explicit failure note instead of dropping the "
+        "thread."
     )
     if outbox_path:
         sections.append(
@@ -586,12 +588,13 @@ def _build_task_context_bundle(
             "long stretch, to share trajectory, or to answer a quick thing "
             "right away — by writing a markdown file into your outbox "
             f"directory `{outbox_path}`. brr delivers each file as its own "
-            "chat message, in order, while you keep working, then your final "
-            "stdout closes the thread. One file is one message; write the "
-            "complete reply (stage as `*.tmp` and rename if you want an "
-            "atomic write). Interim replies are extra messages, not a "
-            "substitute for the final stdout — don't repeat yourself. This "
-            "is optional: a single final stdout is a complete, healthy run."
+            "chat message, in order, while you keep working. A wake may "
+            "produce zero, one, or many deliveries; for an addressed event, "
+            "make sure the current thread receives either stdout, an outbox "
+            "reply, or an honest noop/failure explanation. One file is one "
+            "message; write the complete reply (stage as `*.tmp` and rename "
+            "if you want an atomic write). This is optional: a single final "
+            "stdout is still a complete, healthy run."
         )
         sections.append(
             "- To answer a *different* pending event inline (see Inbox "
