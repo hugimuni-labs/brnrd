@@ -2,7 +2,7 @@
 claude:
   cmd: claude --print --dangerously-skip-permissions
 codex:
-  cmd: codex exec --dangerously-bypass-approvals-and-sandbox
+  cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox -c base_instructions="You are brr agent. Find your orientation in AGENTS.md" -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
 gemini:
   cmd: gemini -p --yolo
 ---
