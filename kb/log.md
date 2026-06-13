@@ -6389,3 +6389,34 @@ omits the mode toggles and that successful runs' full prompt traces are cleaned
 up by `_cleanup_traces_on_success` — so there's no faithful record of what a
 wake received. Created GitHub tracking issues for the milestone's slices,
 each pointing back at the doc.
+
+## [2026-06-13] decision | Co-maintainer doc accepted + close-loop refinements
+
+User accepted [`design-co-maintainer.md`](design-co-maintainer.md). A second
+close-loop pass resolved the four open questions into decisions and folded
+new scope back into the doc and the milestone issues:
+
+- **Identity** is a correspondent-identity layer above conversation keys
+  (not silent key-canonicalization), carrying per-user identity for
+  **multi-user projects**; a same-platform local+cloud duplicate is a
+  **redundancy channel** (deliver once). (#109)
+- **Thread of record** is resident-curated in the dominion, not a
+  human-facing forge artifact. In theme, `kb/` may become optional (#105);
+  when off, the durable layer **collapses into the dominion**. (#110)
+- **Snapshot eviction**: recency primary, unanswered a strong boost. (#110)
+- **Run success signal**: a run must produce >=1 output event, or a
+  commit/push, or an explicit **noop** event — the daemon detects failure by
+  their absence, replacing status==done + non-empty-stdout. An agent reply is
+  not a failure; **operational/runner errors** are, and are surfaced to the
+  user unambiguously (they own the runner). The agent decides where/how/how
+  much to reply, gate-formatted, with forge links + issue refs. (#111,
+  absorbing the now-closed #104)
+- **Cards** must re-align to the new success/delivery model (events/commit/
+  noop, multi-thread, operational-failure-distinct); #114 depends on #111.
+- New slice: **forge grooming** — detect PRs needing rebase and do it, clean
+  up stale PRs, produce grooming digests (#117); operationalises AGENTS.md's
+  open-PR judgement. PR #106 is a live example (sits CONFLICTING).
+
+Recorded a dependency-aware execution order in the doc (§11). Closed #104
+into #111; added #105 and #117 to the Co-maintainer milestone (now 12
+issues).
