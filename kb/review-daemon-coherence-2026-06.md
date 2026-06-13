@@ -178,7 +178,10 @@ for diffense: the resident projects its pack, writes `gate: forge`, and
 the GitHub gate opens or refreshes the PR. The broader push/reply
 ownership question remains open; the #3 `gate:` primitive lets us drift
 toward the agent-owned flow incrementally instead of via a big-bang
-rewrite.
+rewrite. The broader delivery-robustness work this open thread feeds —
+no-silent-drop on failed/empty runs, run↔reply decoupling, and inbox
+fairness/keying — is sequenced in
+[`design-co-maintainer.md`](design-co-maintainer.md) §6.
 
 *Framing tightened 2026-06-09.* The agent-facing dominion block
 (`prompts.py` `_build_dominion_block`) used to read "a local durability

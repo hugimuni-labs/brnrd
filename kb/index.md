@@ -134,7 +134,20 @@ dive-in map) and are stable until something contradicts them.
   assembled wake-context via the runner's own path. Reframe: *the playbook
   is the resident; brr is one driver of it.* Drops capture-at-sleep
   reliance and single-flight-as-identity (→ society-of-mind).
-- [Runtime dependency stance](decision-runtime-dependencies.md) —
+- [Co-maintainer — one perceived continuity, many runner actors](design-co-maintainer.md) —
+  *proposed (2026-06-13)*. North-star synthesis: turn the resident self into
+  a co-maintainer a human works alongside across every channel at once. The
+  connective tissue over the shipped substrate (dominion, playbook layers,
+  multi-response, self-scheduled) plus the concrete gaps that, closed
+  together, make it real — a **between-the-poles continuity model**
+  (curated wake-time communication snapshot + on-demand history grouped by
+  input type + a resident-maintained thread of record), cross-gate identity
+  unification, heartbeats demoted to daemon-only liveness, delivery
+  robustness / run↔reply decoupling, the worktree branch-collision guard,
+  forge-awareness (builds on PR #106), agent-owned card composition, daemon
+  responsiveness, and a faithful "what this wake received" view. Umbrella
+  for the milestone's tracking issues. Supersedes the closed PR #107
+  approach.
   *accepted on 2026-05-22*. Drops zero runtime dependencies as a
   project value, allows small runtime deps that do not require native
   compilation when they pay for themselves, and accepts `requests` for

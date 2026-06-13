@@ -6357,3 +6357,35 @@ installs the `brr` package and `requests` alongside `pytest`, the bundled
 env docs and environment hub name that baseline explicitly, and the stale-image
 ergonomics hint tells users to rebuild when the local image predates this
 tooling.
+
+## [2026-06-13] plan | Co-maintainer north-star design + milestone tracking
+
+Wrote [`design-co-maintainer.md`](design-co-maintainer.md): the coherent
+synthesis of turning the resident self into a co-maintainer a human works
+alongside across every channel at once — "one perceived continuity, many
+runner actors, like a peer on a shared forge project." It's connective
+tissue over shipped substrate (dominion, playbook layers, multi-response,
+self-scheduled) plus the concrete gaps, and supersedes the closed PR #107
+approach (which tried to fit all gate history into the wake context).
+
+The continuity model landed between the two poles the user named: a curated
+wake-time **communication snapshot** + **on-demand history grouped by input
+type** + an optional **resident-maintained thread of record** — not a
+firehose, not a forced per-wake synthesis.
+
+Findings anchored against current code while writing it: the conversation
+log is lossy at the data layer (`append_event` keeps only the first line of
+each message; `append_artifact` stores a path, not reply text), `read_recent`
+is kind-blind so heartbeat/lifecycle bursts evict real turns, the same human
+keys as two threads across `telegram:` vs `cloud:telegram:`, `WorktreeEnv.prepare`
+unconditionally `switch_to`s a target branch that may be checked out elsewhere
+(the "branch already exists" task failure), and the 30s heartbeat is persisted
+into conversation memory though it exists only for liveness + the chat card.
+
+Verified the user's introspection suspicion: `introspection.md` **is** injected
+into real wakes (`introspect.enabled` parses True; both run and daemon prompts
+route through `_join_prompt_parts`). What hides it is that `brr agent inject`
+omits the mode toggles and that successful runs' full prompt traces are cleaned
+up by `_cleanup_traces_on_success` — so there's no faithful record of what a
+wake received. Created GitHub tracking issues for the milestone's slices,
+each pointing back at the doc.
