@@ -55,9 +55,10 @@ metadata (task ID, event ID, execution root, seed ref, optional
 auto-land target, current branch, response path, interim-response outbox,
 other pending events, live `inbox.json` path, shared runtime dir,
 generated run context file).
-The bundle's delivery contract is explicit: stdout is the user's chat
-reply, kb writes are optional — agents log only when there's something
-worth logging (see AGENTS.md → Knowledge base).
+The bundle's delivery contract is explicit: stdout is the default terminal
+reply for the current thread, the task outbox can carry additional or
+replacement deliveries, and kb writes are optional — agents log only when
+there's something worth logging (see AGENTS.md → Knowledge base).
 
 Prompt assembly also injects the resident's dominion digest (per its
 `self-inject` index) and, when the deterministic kb preflight isn't
@@ -73,11 +74,11 @@ semantic.
 
 ### 4. Response
 
-The agent's final reply is its last stdout message. brr captures stdout
-and writes it to `.brr/responses/<event-id>.md`. Runners are invoked
+The agent's default terminal reply is its last stdout message. brr captures
+stdout and writes it to `.brr/responses/<event-id>.md`. Runners are invoked
 headless (`claude --print`, `codex exec`, `gemini -p --yolo`); progress
-goes to stderr and only the final reply is on stdout, so no per-runner
-output flag is needed.
+goes to stderr and only the final stdout reply is captured in the terminal
+response file, so no per-runner output flag is needed for the common case.
 
 Responses are plain text — there is no frontmatter contract. If the
 agent cannot complete the task (missing context, ambiguous request,
@@ -85,11 +86,11 @@ unreachable service), it should say so plainly in the response and
 stop. The operator sees the reply in the gate thread and follows up
 with another event.
 
-Once the response file is validated, the daemon marks the inbox event
-`done` before environment finalization or branch push. Gates deliver
-`done` events and clean up the inbox and response files after a
-successful send, while the progress card can continue to show
-post-response housekeeping.
+Once the addressed thread has a deliverable response, the daemon marks the
+inbox event `done` before environment finalization or branch push. Gates
+deliver `done` events and clean up the inbox and response files after a
+successful send, while the progress card can continue to show post-response
+housekeeping.
 
 The agent may *also* stream replies mid-thought (the multi-response
 protocol; see [`brr-internals.md`](brr-internals.md) → Multi-response).
@@ -100,7 +101,8 @@ returns, promoting each to a per-event partials queue
 for `processing` or `done` events — ahead of the terminal reply. An
 outbox file whose frontmatter names another pending event
 (`event: <id>`) is delivered to *that* event's thread and marks it
-handled, so a quick request can be folded in without its own spawn.
+handled, so a quick request can be folded in without its own spawn; the
+conversation artifact is recorded on the target event's thread.
 An outbox file with `gate: <name>` is an out-of-bound send; `gate: forge`
 uses the GitHub gate to open or refresh a PR from the file's `head`,
 `base`, and `title` frontmatter plus the body.
@@ -116,11 +118,14 @@ to the next wake without the agent committing by hand. The commit step is
 serialized across processes by a file lock so a concurrent ad-hoc session
 never races the shared git index.
 
-If the runner exits cleanly but stdout is empty, the daemon retries up
-to `response_retries` times before failing the task. Hard failures
-(non-zero exit, timeout — controlled by `runner.timeout_seconds`,
-default 3600s) are surfaced to the gate immediately with the captured
-error rather than burning another expensive attempt.
+If the runner exits cleanly but stdout is empty and no current-thread
+outbox reply has been produced, the daemon retries up to
+`response_retries` times before failing the task. Hard failures (non-zero
+exit, timeout — controlled by `runner.timeout_seconds`, default 3600s) are
+not retried. In both cases, an addressed event that would otherwise go
+silent receives an explicit terminal failure note; the task record remains
+`error`, while the inbox event is marked `done` so the gate can deliver and
+clean up.
 
 ### 5. Finalization
 
