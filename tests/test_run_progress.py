@@ -195,8 +195,7 @@ def test_projection_captures_runner_name_from_run_started(tmp_path):
 
 
 def test_projection_treats_heartbeat_as_no_op(tmp_path):
-    """Heartbeats must not push new phase entries — they only exist to
-    re-trigger gate renders so the live elapsed counter ticks."""
+    """Heartbeats stay out of memory and only re-trigger gate renders."""
     brr_dir = tmp_path / ".brr"
     key = "telegram:hb:"
     _emit(brr_dir, key, "task_created", task_id="task-hb", env="docker")
@@ -209,6 +208,12 @@ def test_projection_treats_heartbeat_as_no_op(tmp_path):
           attempt=1, elapsed_seconds=30)
     _emit(brr_dir, key, "heartbeat", task_id="task-hb",
           attempt=1, elapsed_seconds=60)
+
+    records = conversations.read_records(brr_dir, key)
+    assert [r.get("type") for r in records if r.get("kind") == "update"] == [
+        "task_created",
+        "attempt_started",
+    ]
 
     after = run_progress.project_task(brr_dir, key, "task-hb")
     assert after is not None

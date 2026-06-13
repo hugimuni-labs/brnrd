@@ -1272,6 +1272,7 @@ def _drain_outbox(
                 task_id=task.id,
                 event_id=event_id,
                 label=(f"reply:{target}" if cross else f"interim:{event_id}"),
+                body=body,
             )
         emit(
             "interim_response",
@@ -1357,6 +1358,7 @@ def _deliver_out_of_bound(
             task_id=task.id,
             event_id=event_id,
             label=f"outbound:{gate}",
+            body=body,
         )
     return True
 
@@ -1488,6 +1490,12 @@ def _record_response_artifact(
 ) -> None:
     """Index the response artifact on the conversation log."""
     label = f"response:{task.event_id}" if task.event_id else f"response:{task.id}"
+    try:
+        body = protocol.frontmatter_body(
+            response_path.read_text(encoding="utf-8"),
+        ).strip()
+    except OSError:
+        body = None
     if emit.conversation_key:
         conversations.append_artifact(
             emit.brr_dir, emit.conversation_key,
@@ -1496,6 +1504,7 @@ def _record_response_artifact(
             task_id=task.id,
             event_id=emit.event_id,
             label=label,
+            body=body,
         )
     emit(
         "artifact_created",
