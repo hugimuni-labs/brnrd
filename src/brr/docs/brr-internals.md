@@ -14,8 +14,9 @@ You can tell you are running under a brr-driven invocation by the
 following signals in your prompt:
 
 - An `Event:` and/or `Task ID:` line in the metadata block.
-- A `### Delivery contract` block telling you stdout is the chat reply
-  and pointing at a specific `.brr/responses/<event-id>.md` path.
+- A `### Delivery contract` block telling you how stdout and the task
+  outbox map to user-visible deliveries, plus the specific
+  `.brr/responses/<event-id>.md` path used for captured stdout.
 - A `Shared runtime dir:` pointing at the main checkout's `.brr/`.
 - A generated `.brr/runs/<task-id>/context.md` file named in the
   Task Context Bundle.
@@ -188,14 +189,15 @@ In `.brr/config`:
   whenever the scan isn't clean.
 - `kb_maintenance=never` — never inject; do kb hygiene by hand.
 
-## Multi-response: interim + interleaved replies
+## Multi-response: terminal, interim + interleaved replies
 
-The default delivery contract is one event → one final stdout → one
-chat reply. On top of that, the resident can ship **interim** replies
-mid-thought and **fold in** other pending events without waiting for
-their own spawn. The mechanism is a file drop zone, mirroring the
-diffense precedent (agent writes a host-visible artifact, then addresses
-the delivery path explicitly):
+Stdout is the default terminal reply for the current event, but delivery is
+not defined by stdout alone. The resident can satisfy the current thread by
+printing stdout or by writing a current-thread outbox reply, can ship
+**interim** replies mid-thought, and can **fold in** other pending events
+without waiting for their own spawn. The mechanism is a file drop zone,
+mirroring the diffense precedent (agent writes a host-visible artifact, then
+addresses the delivery path explicitly):
 
 - **Drop zone** — `.brr/outbox/<event-id>/`. The resident writes a
   complete markdown reply per file (staging as `*.tmp` and renaming for
@@ -216,12 +218,18 @@ the delivery path explicitly):
   order, deleting each after a successful send (so delivery is
   resumable), and only on `done` delivers the terminal `<id>.md` and
   cleans up the event, terminal file, and partials dir.
+- **Silent-run fallback** — when an addressed event reaches the end of the
+  runner/env path without stdout or a current-thread outbox reply, the
+  daemon writes an explicit terminal failure note and marks the inbox event
+  `done` so the gate closes the thread. The task record still stays
+  `error`, preserving the operational truth.
 - **Interleaving** — an outbox file whose frontmatter names another
   pending event (`event: <id>`) is routed to *that* event's queue and
   that event is marked `done`, so its thread gets the reply and it never
-  wakes as its own thought. The bundle lists the wake-time pending events,
-  and `inbox.json` keeps that view fresh while the thought runs. Unknown
-  targets are dropped, not misrouted.
+  wakes as its own thought. The conversation record is written to the
+  target event's thread, not the current event's thread. The bundle lists
+  the wake-time pending events, and `inbox.json` keeps that view fresh while
+  the thought runs. Unknown targets are dropped, not misrouted.
 - **Gate-addressed sends** — an outbox file whose frontmatter names
   `gate: <name>` is an agent-initiated send with no waiting event. The
   daemon creates an already-`done` event for that gate and the gate's
@@ -229,8 +237,9 @@ the delivery path explicitly):
   GitHub delivery path; it opens or refreshes a PR from `head`, `base`,
   `title`, and the file body.
 
-This is additive and backward compatible: a thought that prints one
-final stdout and writes nothing to its outbox behaves exactly as before.
+This is additive and backward compatible: a thought that prints one final
+stdout and writes nothing to its outbox behaves as before, while failed or
+silent addressed runs now produce an honest closeout instead of disappearing.
 A finer *silence-based* idle-kill is *not* built on this — interim
 check-ins are opportunistic, so their absence doesn't reliably mean
 wedged. The liveness budget itself (`runner.timeout_seconds`) is now
