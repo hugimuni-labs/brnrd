@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from .. import ids, schemas
 from ..auth import Principal, get_db, require_account
-from ..models import Account, Project, Token
+from ..models import Account, Project, RepoBinding, Token
 from ..oauth import GitHubIdentity
 from ..security import hash_token
 
@@ -126,5 +126,79 @@ def list_projects(
         projects=[
             schemas.ProjectOut(project_id=p.id, name=p.name, created_at=p.created_at)
             for p in rows
+        ]
+    )
+
+
+@router.post(
+    "/bindings/repo",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.RepoBindingOut,
+)
+def bind_repo(
+    payload: schemas.RepoBindingCreate,
+    principal: Principal = Depends(require_account),
+    db: Session = Depends(get_db),
+):
+    repo_full_name = payload.repo_full_name.strip()
+    installation_id = payload.installation_id.strip()
+    project = db.execute(
+        select(Project).where(
+            Project.id == payload.project_id,
+            Project.account_id == principal.account_id,
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    existing = db.execute(
+        select(RepoBinding).where(RepoBinding.repo_full_name == repo_full_name)
+    ).scalar_one_or_none()
+    if existing is not None and existing.account_id != principal.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="repository is already bound to another account",
+        )
+    if existing is None:
+        existing = RepoBinding(
+            id=ids.repo_binding_id(),
+            installation_id=installation_id,
+            repo_full_name=repo_full_name,
+            account_id=principal.account_id,
+            project_id=project.id,
+        )
+        db.add(existing)
+    else:
+        existing.installation_id = installation_id
+        existing.project_id = project.id
+    db.commit()
+    db.refresh(existing)
+    return schemas.RepoBindingOut(
+        binding_id=existing.id,
+        installation_id=existing.installation_id,
+        repo_full_name=existing.repo_full_name,
+        project_id=existing.project_id,
+    )
+
+
+@router.get("/bindings/repo", response_model=schemas.RepoBindingList)
+def list_repo_bindings(
+    principal: Principal = Depends(require_account),
+    db: Session = Depends(get_db),
+):
+    rows = db.execute(
+        select(RepoBinding)
+        .where(RepoBinding.account_id == principal.account_id)
+        .order_by(RepoBinding.created_at)
+    ).scalars()
+    return schemas.RepoBindingList(
+        bindings=[
+            schemas.RepoBindingOut(
+                binding_id=b.id,
+                installation_id=b.installation_id,
+                repo_full_name=b.repo_full_name,
+                project_id=b.project_id,
+            )
+            for b in rows
         ]
     )
