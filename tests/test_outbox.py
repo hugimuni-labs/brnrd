@@ -214,6 +214,39 @@ class TestDrainOutbox:
         assert protocol.list_pending(inbox) == []
         assert emitted[0].payload.get("target_event") == bid
 
+    def test_cross_event_records_dialogue_on_target_conversation(
+        self, tmp_path, monkeypatch,
+    ):
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(
+            inbox,
+            source="telegram",
+            body="quick q",
+            telegram_chat_id=222,
+        )
+        evB = protocol.list_pending(inbox)[0]
+        bid = evB["id"]
+        (outbox / "reply.md").write_text(
+            f"---\nevent: {bid}\n---\nthread-specific answer\n")
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="telegram:111:", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+
+        daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        target_records = conversations.read_records(brr_dir, "telegram:222:")
+        assert [r.get("kind") for r in target_records] == ["event", "artifact"]
+        assert target_records[0]["event_id"] == bid
+        assert target_records[1]["event_id"] == bid
+        assert target_records[1]["body"] == "thread-specific answer"
+        current_records = conversations.read_records(brr_dir, "telegram:111:")
+        assert current_records == []
+
     def test_cross_event_unknown_target_is_dropped(self, tmp_path, monkeypatch):
         brr_dir = tmp_path / ".brr"
         responses = brr_dir / "responses"
