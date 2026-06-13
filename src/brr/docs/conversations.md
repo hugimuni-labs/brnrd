@@ -2,10 +2,11 @@
 
 A conversation is the running history of one gate thread — Telegram
 chat+topic, Slack channel+thread, or GitHub repo+issue/PR (other forges
-mirror the same idea). brr appends
-events, task lifecycle rows, artifact records, and lifecycle update
-packets under a per-thread directory. That history is the recent-
-activity context the next agent in the same thread sees.
+mirror the same idea). brr appends incoming events, task lifecycle rows,
+artifact records, and non-heartbeat lifecycle update packets under a
+per-thread directory. Dialogue records carry inline body text, so that
+history is the recent-activity context the next agent in the same thread
+can actually read.
 
 The model is intentionally small. Conversations have **no manifest,
 no title, no intent, no status**. They exist only to thread events
@@ -34,19 +35,19 @@ second daemon) from sharing mutable state across pipelines. Every record carries
 
 | `kind`   | What it captures                                          |
 |----------|-----------------------------------------------------------|
-| `event`  | An incoming event from the gate (with `event_id`, `summary`) |
+| `event`  | An incoming event from the gate (with `event_id`, `body`, `summary`) |
 | `task`   | A task row (`task_id`, `env`, `status`, plus runtime branch info) |
 | `update` | A lifecycle update packet for a task (typed via `type:`)  |
-| `artifact` | A produced artifact (response file, durable kb page, etc.) |
+| `artifact` | A produced artifact (response file, durable kb page, etc.; response/interim/outbound artifacts include inline `body`) |
 
 Tail any one event's jsonl to see that pipeline's lifecycle. Reading
 the whole directory and sorting by `ts` reconstructs the full
 conversation history (`brr.conversations.read_records`). For prompt
-tails and other “last *N* rows” use cases, `read_recent` merges the
-newest *N* records by `ts` without loading every line of every file
-(assumes `ts` is non-decreasing within each jsonl — the normal
-single-writer append contract). The run-progress projection reads the
-full merged timeline for a task via `read_records`.
+tails and other “last *N* turns” use cases, `read_recent` is kind-aware:
+by default it selects dialogue records and drops task/update rows so
+lifecycle bursts cannot evict real turns. Pass `include_lifecycle=True`
+when a caller needs the raw historical tail. The run-progress projection
+reads the full merged timeline for a task via `read_records`.
 
 ## Lifecycle
 
@@ -63,9 +64,9 @@ runs don't need threading context.
 
 ## Lifecycle update packets
 
-The daemon emits typed packets through `brr.updates` and persists them
-on the conversation log. Packet types are stable identifiers gates can
-branch on:
+The daemon emits typed packets through `brr.updates`; non-heartbeat
+packets are persisted on the conversation log. Packet types are stable
+identifiers gates can branch on:
 
 ```
 event_received task_created env_prepared container_started
@@ -74,12 +75,11 @@ heartbeat finalizing container_preserved push_started push_done
 done failed conflict
 ```
 
-`heartbeat` is a no-op for the projection — the daemon emits one every
-30 seconds while a runner subprocess is alive (see
-`daemon._invoke_with_heartbeat`). Its only job is to re-trigger a gate
-render so the live elapsed counter on the chat card visibly bumps
-during silent runs (codex with deep reasoning routinely sits quiet
-for many minutes).
+`heartbeat` is daemon-only liveness/card state — the daemon emits one
+every 30 seconds while a runner subprocess is alive (see
+`daemon._invoke_with_heartbeat`). It is dispatched to gate renderers so
+the live elapsed counter on the chat card visibly bumps during silent
+runs, but it is not written to conversation memory.
 
 Gates may opt in to a `render_update(brr_dir, packet)` hook. The
 Telegram and Slack gates render a live progress card per task and
