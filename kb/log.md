@@ -6420,3 +6420,20 @@ new scope back into the doc and the milestone issues:
 Recorded a dependency-aware execution order in the doc (§11). Closed #104
 into #111; added #105 and #117 to the Co-maintainer milestone (now 12
 issues).
+## [2026-06-12] implement | Managed GitHub issue comments gain repo-bound routing
+
+Closed the first managed-GitHub parity slice after Telegram project selection:
+GitHub stays repo-bound (not chat-sticky), but addressed comments now behave
+like managed chat ingress instead of disappearing. brnrd has a repo binding API,
+signed `/v1/webhooks/github` `issue_comment` ingress, setup comments for
+addressed but unbound repos, event enqueue for bound repos, GitHub response
+forwarding with a source-comment pointer, and cloud-gate metadata propagation so
+managed GitHub tasks retain repo/issue/comment/branch hints locally. The kb now
+marks the managed GitHub App adapter as partially in flight: App install/JWT
+minting, auto-bind install webhooks, inline review-comment ingress, and the
+CLI/dashboard binding UX remain pending.
+
+Focused validation: `python -m pytest tests/test_brnrd_github.py
+tests/test_cloud_gate.py tests/test_brnrd_telegram.py tests/test_brnrd_inbox.py`
+passed (44 tests, with the existing Starlette/FastAPI TestClient deprecation
+warning).
