@@ -377,6 +377,7 @@ class TestPromptBuilding:
             branch_name="feat/task-abstraction",
             seed_ref="feat/task-abstraction",
             branch_source="event:target_branch",
+            branch_setup_notice="target branch held elsewhere; using task branch",
             runtime_dir="/repo/.brr",
             context_path="/repo/.brr/runs/task-123/context.md",
         )
@@ -384,6 +385,10 @@ class TestPromptBuilding:
         assert f"Execution root: {tmp_path}" in prompt
         assert "Seed ref: feat/task-abstraction" in prompt
         assert "Current branch: feat/task-abstraction" in prompt
+        assert (
+            "Branch setup: target branch held elsewhere; using task branch"
+            in prompt
+        )
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "Run context file: /repo/.brr/runs/task-123/context.md" in prompt
         assert "brr captures stdout and stores it at /tmp/resp.md" in prompt

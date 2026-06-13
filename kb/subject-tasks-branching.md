@@ -40,6 +40,18 @@ from the seed ref. The agent owns the runtime branching choice:
   plan;
 - make no commits for read-only work.
 
+When a structured event names a target branch, env prep normally
+switches the new worktree onto that local branch before the agent
+starts. If Git reports that the target is already checked out in
+another worktree, env prep deliberately keeps the collision-free
+`brr/<task-id>` branch instead, records a branch-setup notice on the
+task, and prints the fallback. Because the task branch was sprouted
+from the resolved seed ref (preferring `origin/<target>` when present,
+otherwise the local target), the agent still starts at the target tip;
+if it commits there, the publish kernel's refspec arm pushes the unique
+local branch to the event's target without touching the checked-out
+local ref.
+
 On success, `WorktreeEnv.finalize` reads the worktree's final git
 state, classifies it into a `publish_status`, and records the branch
 to publish. Finalize never touches a non-task ref. Worktree teardown

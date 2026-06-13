@@ -591,6 +591,7 @@ def _run_worker(
     branch_name = env_ctx.branch_name
     if branch_name:
         task.meta["branch_name"] = branch_name
+    branch_setup_notice = task.meta.get("branch_setup_notice") or None
 
     # Deterministic ergonomics probes run once the env is prepared (so
     # the resolved image/token/worktree state is visible). Routing is
@@ -701,6 +702,7 @@ def _run_worker(
                 branch_name=branch_name,
                 seed_ref=branch_plan.seed_ref,
                 branch_source=branch_plan.source,
+                branch_setup_notice=branch_setup_notice,
                 host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
@@ -724,6 +726,7 @@ def _run_worker(
                 branch_name=branch_name,
                 seed_ref=branch_plan.seed_ref,
                 branch_source=branch_plan.source,
+                branch_setup_notice=branch_setup_notice,
                 host_context_branch=branch_plan.host_context_branch,
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
