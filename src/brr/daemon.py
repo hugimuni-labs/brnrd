@@ -73,6 +73,7 @@ _HEARTBEAT_INTERVAL = 30.0
 # rendered tail stays at ``prompts.RECENT_CONVERSATION_MAX``.
 _RECENT_READ_HEADROOM = 12
 _LIVE_INBOX_NAME = "inbox.json"
+_INTERNAL_EVENT_SOURCES = {"schedule"}
 
 
 # ── Per-branch locks ────────────────────────────────────────────────
@@ -584,6 +585,14 @@ def _run_worker(
     except RuntimeError as e:
         print(f"[brr] task {task.id}: env setup failed: {e}")
         task.update_status("error", tasks_dir)
+        _write_terminal_failure_response(
+            emit,
+            task,
+            event,
+            responses_dir,
+            resp_path,
+            f"environment setup failed: {e}",
+        )
         emit("failed", task_id=task.id, stage="env", error=str(e))
         return task
 
@@ -683,6 +692,7 @@ def _run_worker(
     )
     seen_containers: set[str] = set()
     last_failure: dict[str, object] | None = None
+    output_stats = {"current": 0, "other": 0, "outbound": 0}
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
     # Liveness budget: the heartbeat enforces this soft, agent-extensible
     # deadline; the runner's communicate() backstops at the hard cap. The
@@ -747,7 +757,10 @@ def _run_worker(
             # Drain first: promoting an interim response is the resident's
             # mid-run check-in, and the partial should reach the gate as
             # promptly as the heartbeat that observed the agent is alive.
-            _drain_outbox(emit, task, responses_dir, eid, outbox_dir, inbox_dir)
+            _drain_outbox(
+                emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+                stats=output_stats,
+            )
             _write_live_inbox(outbox_dir, inbox_dir, eid)
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
@@ -783,7 +796,10 @@ def _run_worker(
         _emit_new_containers(emit, task.id, env_ctx, seen_containers)
         # Final drain after the runner returns: catch interim responses
         # written between the last heartbeat and exit, before finalize.
-        _drain_outbox(emit, task, responses_dir, eid, outbox_dir, inbox_dir)
+        _drain_outbox(
+            emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+            stats=output_stats,
+        )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
         # dominion no-ops, and on retry the next pass just re-captures any
@@ -810,11 +826,12 @@ def _run_worker(
                         "timed_out": False,
                     }
 
-        if result.validation_ok:
+        if _result_satisfied_delivery(result, output_stats, event):
             print(f"[brr] worker {eid}: response ready")
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
-            _record_response_artifact(emit, task, resp_path)
+            if _response_has_body(resp_path):
+                _record_response_artifact(emit, task, resp_path)
             task.update_status("done", tasks_dir)
             _set_event_status_if_present(event, "done")
             emit("finalizing", task_id=task.id, stage="done")
@@ -875,6 +892,15 @@ def _run_worker(
     if trace_dirs:
         task.meta["trace_dirs"] = ", ".join(trace_dirs)
     task.update_status("error", tasks_dir)
+    failure_reason = _failure_reason(last_failure, attempt)
+    _write_terminal_failure_response(
+        emit,
+        task,
+        event,
+        responses_dir,
+        resp_path,
+        failure_reason,
+    )
     # finalize first so any preserved branches / containers are recorded
     # on the task before the failure packet renders — the failure packet
     # is what gates see last, so its payload must be the canonical
@@ -1175,6 +1201,8 @@ def _drain_outbox(
     event_id: str,
     outbox_dir: Path | None,
     inbox_dir: Path | None = None,
+    *,
+    stats: dict[str, int] | None = None,
 ) -> int:
     """Promote interim/interleaved responses the resident dropped in its outbox.
 
@@ -1245,6 +1273,8 @@ def _drain_outbox(
                 emit, task, responses_dir, inbox_dir, event_id, gate, fm, body,
             ):
                 promoted += 1
+                if stats is not None:
+                    stats["outbound"] = stats.get("outbound", 0) + 1
             fpath.unlink(missing_ok=True)
             continue
         target = str(fm.get("event") or "").strip()
@@ -1262,15 +1292,25 @@ def _drain_outbox(
         if not ppath:
             continue
         promoted += 1
+        if stats is not None:
+            key = "other" if cross else "current"
+            stats[key] = stats.get(key, 0) + 1
         if cross and target_event is not None:
             _set_event_status_if_present(target_event, "done")
-        if emit.conversation_key:
+        artifact_key = emit.conversation_key
+        artifact_event_id = event_id
+        if cross and target_event is not None:
+            artifact_key = conversations.conversation_key_for_event(target_event) or ""
+            artifact_event_id = target
+            if artifact_key:
+                conversations.append_event(emit.brr_dir, artifact_key, target_event)
+        if artifact_key:
             conversations.append_artifact(
-                emit.brr_dir, emit.conversation_key,
+                emit.brr_dir, artifact_key,
                 kind="interim_response",
                 path=str(ppath),
                 task_id=task.id,
-                event_id=event_id,
+                event_id=artifact_event_id,
                 label=(f"reply:{target}" if cross else f"interim:{event_id}"),
                 body=body,
             )
@@ -1512,6 +1552,88 @@ def _record_response_artifact(
         kind="response",
         path=str(response_path),
     )
+
+
+def _event_requires_thread_delivery(event: dict) -> bool:
+    """True when the originating event has a user-facing thread to close."""
+    return str(event.get("source") or "") not in _INTERNAL_EVENT_SOURCES
+
+
+def _response_has_body(path: Path) -> bool:
+    try:
+        return bool(protocol.frontmatter_body(
+            path.read_text(encoding="utf-8"),
+        ).strip())
+    except OSError:
+        return False
+
+
+def _result_satisfied_delivery(
+    result: "runner.RunnerResult",
+    output_stats: dict[str, int],
+    event: dict,
+) -> bool:
+    """Return whether this attempt produced enough output to finish.
+
+    Stdout remains the common terminal-reply path, but the resident can
+    also satisfy an addressed event by sending a current-thread outbox
+    reply. Internal schedule events have no gate thread to close.
+    """
+    if not result.ok or result.missing_artifacts:
+        return False
+    if result.has_response:
+        return True
+    if output_stats.get("current", 0) > 0:
+        return True
+    return not _event_requires_thread_delivery(event)
+
+
+def _failure_reason(
+    last_failure: dict[str, object] | None,
+    attempts: int,
+) -> str:
+    if last_failure:
+        detail = str(last_failure.get("error") or "").strip()
+        exit_code = last_failure.get("exit_code")
+        if last_failure.get("timed_out"):
+            if detail:
+                return f"runner timed out after {attempts} attempt(s): {detail}"
+            return f"runner timed out after {attempts} attempt(s)"
+        if detail:
+            return f"runner failed after {attempts} attempt(s): {detail}"
+        if exit_code is not None:
+            return f"runner failed after {attempts} attempt(s) with exit code {exit_code}"
+    return f"runner produced no reply after {attempts} attempt(s)"
+
+
+def _terminal_failure_body(reason: str) -> str:
+    return (
+        "I couldn't complete this run.\n\n"
+        f"brr is surfacing this because {reason}."
+    )
+
+
+def _write_terminal_failure_response(
+    emit: _WorkerEmit,
+    task: Task,
+    event: dict,
+    responses_dir: Path,
+    response_path: Path,
+    reason: str,
+) -> bool:
+    """Queue a terminal failure note for addressed events.
+
+    The task record still stays ``error``; only the inbox event moves to
+    ``done`` so the gate has a message to deliver and a cleanup signal.
+    """
+    if not _event_requires_thread_delivery(event):
+        return False
+    if _response_has_body(response_path):
+        return False
+    protocol.write_response(responses_dir, event["id"], _terminal_failure_body(reason))
+    _record_response_artifact(emit, task, response_path)
+    _set_event_status_if_present(event, "done")
+    return True
 
 
 def _set_event_status_if_present(event: dict, status: str) -> bool:
