@@ -6437,3 +6437,18 @@ Focused validation: `python -m pytest tests/test_brnrd_github.py
 tests/test_cloud_gate.py tests/test_brnrd_telegram.py tests/test_brnrd_inbox.py`
 passed (44 tests, with the existing Starlette/FastAPI TestClient deprecation
 warning).
+
+## [2026-06-13] fix | Worktree target-branch collisions fall back to task branch
+
+Closed the Co-maintainer worktree branch-collision slice. `WorktreeEnv.prepare`
+now treats a target branch checked out in another worktree as a recoverable
+setup condition: `worktree.switch_to` raises a typed
+`BranchCheckedOutError`, prepare keeps the collision-free `brr/<task-id>`
+branch sprouted from the target seed, records a branch-setup notice, and
+threads that notice into the daemon prompt / run context. If the agent commits
+on the task branch, the existing publish refspec arm pushes it to the event's
+target branch without updating the checked-out local ref.
+
+Focused validation: `PYTHONPATH=src python -m pytest tests/test_envs.py
+tests/test_branching.py tests/test_daemon.py tests/test_prompts.py
+tests/test_run_progress.py` passed (134 tests).
