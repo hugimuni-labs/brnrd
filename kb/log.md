@@ -6482,3 +6482,15 @@ stdout as the default terminal path, not the definition of delivery.
 Focused validation: `PYTHONPATH=src python -m pytest tests/test_daemon.py
 tests/test_outbox.py tests/test_deliver_stream.py tests/test_prompts.py`
 passed (93 tests).
+
+## [2026-06-14] implement | Introspection prompt always emits a short ergonomics note
+
+`src/brr/prompts/introspection.md` (the dev-mode wake block) now asks every wake
+to close its reply to the user with a brief ergonomics note even when nothing is
+wrong — explicitly not manufactured filler or an owed verdict, but channel
+liveness. The point is to disambiguate silence: an absent note now reads as the
+mode having failed to reach the agent, not as "nothing worth saying," which made
+introspection impossible to verify end-to-end. The block was already injected
+into real wakes (the visibility gap tracked by #116 is the `brr agent inject`
+command + success-trace cleanup, not injection); this is the complementary
+behavioural lever. Output rides the gate reply, not the PR body.
