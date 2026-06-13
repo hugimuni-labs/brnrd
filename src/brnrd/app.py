@@ -8,7 +8,7 @@ from .config import Settings, get_settings
 from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
 from .pack_relay import PackRelayStore
-from .routers import accounts, daemons, dev, pairing, render, webhooks
+from .routers import accounts, daemons, dev, github_app, pairing, render, webhooks
 
 
 def create_app(
@@ -38,6 +38,7 @@ def create_app(
     app.include_router(daemons.router)
     app.include_router(render.router)
     app.include_router(webhooks.router)
+    app.include_router(github_app.router)
     if settings.enable_dev_endpoints:
         app.include_router(dev.router)
 
