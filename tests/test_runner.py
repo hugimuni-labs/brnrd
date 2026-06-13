@@ -33,7 +33,7 @@ class TestCommandBuilding:
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "-c",
-            "base_instructions=You are an autonomous agent. Follow the user message exactly.",
+            "base_instructions=You are brr agent. Find your orientation in AGENTS.md",
             "-c",
             "include_permissions_instructions=false",
             "-c",
