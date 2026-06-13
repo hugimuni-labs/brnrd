@@ -407,6 +407,7 @@ def build_daemon_prompt(
     branch_name: str | None = None,
     seed_ref: str | None = None,
     branch_source: str | None = None,
+    branch_setup_notice: str | None = None,
     host_context_branch: str | None = None,
     runtime_dir: str | None = None,
     context_path: str | None = None,
@@ -445,6 +446,7 @@ def build_daemon_prompt(
         branch_name=branch_name,
         seed_ref=seed_ref,
         branch_source=branch_source,
+        branch_setup_notice=branch_setup_notice,
         host_context_branch=host_context_branch,
         runtime_dir=runtime_dir,
         context_path=context_path,
@@ -487,6 +489,7 @@ def _build_task_context_bundle(
     branch_name: str | None,
     seed_ref: str | None,
     branch_source: str | None,
+    branch_setup_notice: str | None,
     host_context_branch: str | None,
     runtime_dir: str | None,
     context_path: str | None,
@@ -546,6 +549,8 @@ def _build_task_context_bundle(
         sections.append(f"- Host context branch: {host_context_branch}")
     if branch_name:
         sections.append(f"- Current branch: {branch_name}")
+    if branch_setup_notice:
+        sections.append(f"- Branch setup: {branch_setup_notice}")
     if runtime_dir:
         sections.append(f"- Shared runtime dir: {runtime_dir}")
     if diffense and task_id:

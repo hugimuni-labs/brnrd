@@ -165,8 +165,21 @@ class WorktreeEnv(HostEnv):
         # without any prompt instruction. The throwaway brr/<task-id>
         # placeholder stays as a local ref and is cleaned up at finalize.
         if branch_plan.target_branch:
-            worktree.switch_to(run_root, branch_plan.target_branch)
-            starting_branch = branch_plan.target_branch
+            try:
+                worktree.switch_to(run_root, branch_plan.target_branch)
+            except worktree.BranchCheckedOutError as exc:
+                starting_branch = task_branch_name
+                notice = (
+                    f"target branch {branch_plan.target_branch!r} is checked out "
+                    f"at {exc.checkout_path}; starting on {task_branch_name!r} "
+                    f"from {branch_plan.seed_ref!r} instead"
+                )
+                print(f"[brr] task {task.id}: {notice}")
+                task.meta["branch_setup"] = "target-checked-out-elsewhere"
+                task.meta["branch_setup_notice"] = notice
+                task.meta["target_branch_checkout_path"] = str(exc.checkout_path)
+            else:
+                starting_branch = branch_plan.target_branch
         else:
             starting_branch = task_branch_name
         task.meta["worktree_path"] = str(run_root)
