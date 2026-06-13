@@ -1,10 +1,12 @@
 """Lifecycle update packets — gate-agnostic task progress events.
 
-The daemon emits typed packets for task lifecycle moments. They are
-persisted to the conversation log (``.brr/conversations/<safe-key>/
+The daemon emits typed packets for task lifecycle moments. Most packets
+are persisted to the conversation log (``.brr/conversations/<safe-key>/
 <event-id>.jsonl``) and optionally rendered by gates (Telegram, Slack,
-GitHub, CLI). The core stays gate-agnostic; gates may
-opt in to a ``render_update(brr_dir, packet)`` hook.
+GitHub, CLI). Heartbeats are the exception: they are daemon/card
+liveness only and never become conversation records. The core stays
+gate-agnostic; gates may opt in to a ``render_update(brr_dir, packet)``
+hook.
 
 Packet types are stable identifiers — gates branch on them to decide
 how (or whether) to surface the event to a human.
@@ -85,13 +87,15 @@ _QUIET_TYPES = {
 
 
 def emit(brr_dir: Path, packet: UpdatePacket) -> None:
-    """Persist *packet* to its conversation log and notify gates.
+    """Persist *packet* when appropriate and notify gates.
 
-    The packet is appended to the gate thread's append-only log,
-    rendered to the daemon console for operator visibility, and then
-    offered to any gate that exposes a ``render_update`` hook.
-    Failures inside renderers are swallowed — lifecycle persistence
-    must succeed even if a gate is misconfigured.
+    Non-heartbeat packets are appended to the gate thread's append-only
+    log, rendered to the daemon console for operator visibility, and
+    then offered to any gate that exposes a ``render_update`` hook.
+    Heartbeats skip persistence but still reach gate renderers so live
+    cards can refresh their elapsed counter.
+    Failures inside renderers are swallowed — packet emission must not
+    be broken by a misconfigured gate.
     """
     if packet.type not in PACKET_TYPES:
         return

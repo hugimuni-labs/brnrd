@@ -2,8 +2,6 @@
 
 import json
 
-import pytest
-
 from brr import conversations
 
 
@@ -246,24 +244,55 @@ def test_read_recent_limit_zero_returns_all(tmp_path):
     assert len(conversations.read_recent(tmp_path, "k", limit=0)) == 3
 
 
+def test_read_recent_prefers_dialogue_over_lifecycle_noise(tmp_path):
+    conversations.append_event(
+        tmp_path,
+        "k",
+        {"id": "evt-1", "source": "telegram", "body": "first message"},
+    )
+    for i in range(20):
+        conversations.append_update(
+            tmp_path,
+            "k",
+            type="attempt_started",
+            payload={"task_id": "task-1", "attempt": i},
+            event_id="evt-1",
+        )
+    conversations.append_artifact(
+        tmp_path,
+        "k",
+        kind="response",
+        path="/tmp/evt-1.md",
+        event_id="evt-1",
+        body="agent answer",
+    )
+
+    recent = conversations.read_recent(tmp_path, "k", limit=2)
+    assert [r["kind"] for r in recent] == ["event", "artifact"]
+    assert [r["body"] for r in recent] == ["first message", "agent answer"]
+
+    raw_recent = conversations.read_recent(tmp_path, "k", limit=2, include_lifecycle=True)
+    assert raw_recent[-1]["kind"] == "artifact"
+    assert any(r["kind"] == "update" for r in raw_recent)
+
+
 # ── specialised appenders ────────────────────────────────────────────
 
 
-def test_append_event_records_summary(tmp_path):
+def test_append_event_records_full_body_and_summary(tmp_path):
     event = {
         "id": "evt-1",
         "source": "telegram",
-        "body": "first line\nsecond line",
+        "body": "  first line\nsecond line\n",
     }
     conversations.append_event(tmp_path, "k", event)
     records = conversations.read_records(tmp_path, "k")
-    assert records[-1] == pytest.approx({
-        "kind": "event",
-        "event_id": "evt-1",
-        "source": "telegram",
-        "summary": "first line",
-        "ts": records[-1]["ts"],
-    }, rel=0)
+    assert records[-1]["kind"] == "event"
+    assert records[-1]["event_id"] == "evt-1"
+    assert records[-1]["source"] == "telegram"
+    assert records[-1]["body"] == "  first line\nsecond line\n"
+    assert records[-1]["summary"] == "first line second line"
+    assert "ts" in records[-1]
 
 
 def test_append_task_includes_env_and_branch_name(tmp_path):
@@ -292,6 +321,7 @@ def test_append_artifact_records_kind_and_path(tmp_path):
         kind="response", path="/abs/x.md",
         task_id="t-1", event_id="evt-1",
         label="response:evt-1",
+        body="agent reply\nsecond line",
     )
     record = conversations.read_records(tmp_path, "k")[-1]
     assert record["kind"] == "artifact"
@@ -299,6 +329,8 @@ def test_append_artifact_records_kind_and_path(tmp_path):
     assert record["task_id"] == "t-1"
     assert record["event_id"] == "evt-1"
     assert record["label"] == "response:evt-1"
+    assert record["body"] == "agent reply\nsecond line"
+    assert record["summary"] == "agent reply second line"
 
 
 def test_append_update_records_type_and_payload(tmp_path):
@@ -314,6 +346,17 @@ def test_append_update_records_type_and_payload(tmp_path):
     assert record["task_id"] == "t-1"
     assert record["branch"] == "auto"
     assert record["event_id"] == "evt-1"
+
+
+def test_append_update_skips_heartbeat_memory(tmp_path):
+    conversations.append_update(
+        tmp_path, "k",
+        type="heartbeat",
+        payload={"task_id": "t-1", "elapsed_seconds": 30},
+        event_id="evt-1",
+    )
+
+    assert conversations.read_records(tmp_path, "k") == []
 
 
 # ── listing ──────────────────────────────────────────────────────────
