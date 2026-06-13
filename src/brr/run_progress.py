@@ -1,9 +1,9 @@
 """Run progress — gate-agnostic projection over conversation log records.
 
 Conversation logs (under ``.brr/conversations/<safe-key>/``, one
-``<event-id>.jsonl`` per pipeline) capture every fact the daemon emits
-about an event/task: the event arrival, the task row, lifecycle update
-packets, and artifact records. This module
+``<event-id>.jsonl`` per pipeline) capture durable facts the daemon
+emits about an event/task: the event arrival, the task row, non-heartbeat
+lifecycle update packets, and artifact records. This module
 folds those records into a compact ``RunProgressView`` that gates and
 local diagnostics can render the same way.
 
@@ -317,10 +317,9 @@ def _project(
             else:
                 view.detail = f"shipped interim reply (#{view.interim_count})"
         elif ptype == "heartbeat":
-            # Heartbeats only bump updated_at — they don't move state.
-            # The render reads the current wall clock to compute elapsed,
-            # so the live "running · X" line will tick on its own once
-            # the gate re-renders in response to this packet.
+            # Compatibility for older logs that persisted heartbeat
+            # records. New heartbeats are daemon-only liveness/card
+            # packets and do not enter conversation memory.
             pass
         elif ptype == "finalizing":
             stage = record.get("stage")
