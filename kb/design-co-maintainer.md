@@ -366,21 +366,27 @@ remains the open piece: surfacing the events/commit/noop signal on the
 card itself, distinguishing operational failure from a normal partial,
 and reflecting multi-thread delivery.)
 
-## 9. Daemon responsiveness
+## 9. Daemon responsiveness — shipped 2026-06-14 (#115)
 
 Lower priority than continuity, but the co-maintainer should feel present.
-Today (see [`subject-daemon.md`](subject-daemon.md)):
+Both halves of this slice shipped 2026-06-14 (see
+[`subject-daemon.md`](subject-daemon.md) → *Loop cadence & gate
+responsiveness*):
 
-- Gates make **fresh `requests` calls** per poll (no connection reuse).
-- The loop is **pure sleep-polling** (`_SCAN_INTERVAL = 3s`); a new local
-  event waits up to a scan tick with no event-driven wakeup.
+- **Connection reuse.** Each gate module (telegram, slack, cloud, github)
+  holds one `requests.Session` (`_SESSION`) used through its existing HTTP
+  chokepoint, so keep-alive reuses the connection across polls instead of
+  dialing fresh. One session per single loop thread → no locking. The
+  brnrd backend keeps its own async `httpx` client.
+- **Event-driven wakeup.** A process-local `threading.Event`
+  (`protocol.inbox_wake()`) the daemon loop blocks on; `create_event`
+  sets it for in-process `pending` writes (gate enqueue, schedule fire),
+  so a fresh event is picked up at once. The 3s tick stays as the
+  backstop for cross-process `brr run` writes and time-based schedules.
 
-Clean improvements within the accepted dependency stance
-([`decision-runtime-dependencies.md`](decision-runtime-dependencies.md);
-`httpx` is already an optional dep): connection reuse (`requests.Session`
-or an `httpx.Client`), and a `threading.Event` to wake the loop promptly on
-a fresh local event. Keep single-flight as the resident-identity reflex —
-this is about idle latency, not concurrency.
+Single-flight is unchanged — this was idle latency, not concurrency, per
+the accepted dependency stance
+([`decision-runtime-dependencies.md`](decision-runtime-dependencies.md)).
 
 ## 10. Faithful "what this wake received"
 
@@ -431,8 +437,10 @@ sequence (each maps to a milestone issue):
    card re-alignment to the events/commit/noop signal remains open.
 7. **Forge-awareness in the snapshot** (§5, #113) + **forge grooming**
    (§5, #117) — need #110 and PR #106's metadata.
-8. **Daemon responsiveness** (§9, #115) and **faithful context view**
-   (§10, #116) — independent; slot in opportunistically.
+8. **Daemon responsiveness** (§9, #115) — *shipped 2026-06-14*
+   (per-gate `requests.Session` connection reuse + `inbox_wake`
+   event-driven loop wakeup). **Faithful context view** (§10, #116) —
+   independent; slot in opportunistically.
 
 ### Decisions (close-loop, 2026-06-13)
 

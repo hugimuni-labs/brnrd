@@ -74,6 +74,33 @@ agent-selected next-event ordering or long-running batch claims need a
 separate claim protocol beyond today's `pending` / `processing` / `done`
 states.
 
+### Loop cadence & gate responsiveness
+
+The reflex loop is **event-driven with a poll backstop**, not pure
+sleep-polling. Each idle iteration blocks on a process-local
+`threading.Event` (`protocol.inbox_wake()`) for at most `_SCAN_INTERVAL`
+(3s). `protocol.create_event` sets that signal whenever it writes a
+`pending` event *in the daemon process* — a gate thread enqueuing a
+message, a self-scheduled thought firing — so the loop reacts at once
+instead of waiting out the tick. The loop clears the signal at the top of
+each iteration *before* reading the inbox, so a set that lands mid-pass
+keeps the flag raised and the next pass picks it up; no event is missed
+and a busy iteration can't spin. The 3s tick still bounds latency for the
+paths that can't raise the in-process signal: cross-process writers (the
+`brr run` CLI writing an event file from another process) and time-based
+work (due `schedule.md` entries). Outbound-only (`done`) events don't set
+the signal — they're delivered by gate threads, not the spawn loop.
+
+Each gate also reuses one `requests.Session` per gate module
+(`_SESSION`), so keep-alive reuses the TCP/TLS connection across
+long-poll cycles instead of dialing the platform fresh every poll. Each
+gate runs its network calls from a single loop thread, so the per-gate
+session needs no locking. The managed brnrd backend plugs its own async
+`httpx` client and never touches the OSS sync transport. (Both landed
+2026-06-14 for the Co-maintainer "daemon responsiveness" slice, #115 →
+[`design-co-maintainer.md`](design-co-maintainer.md) §9; this is idle
+latency, not added concurrency — single-flight is unchanged.)
+
 ### Self-scheduled thoughts (the resident's own clock)
 
 The resident isn't only summoned — it wakes itself. Each reflex tick,
