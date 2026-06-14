@@ -48,6 +48,7 @@ from . import conversations
 from . import dev_reload as reload_mod
 from . import dominion
 from . import envs
+from . import forge_state
 from . import forges
 from . import gitops
 from . import presence
@@ -705,6 +706,19 @@ def _run_worker(
         )
         if conv_key else None
     )
+    if communication_snapshot is not None:
+        # Forge-state facet (co-maintainer §5, #113): the resident's
+        # in-flight worktrees/branches and the issues/PRs in play, built
+        # network-free from local git + conversation keys.
+        forge_facet = forge_state.build_forge_state(
+            repo_root,
+            related_threads=communication_snapshot.get("related_threads"),
+            current_thread=conv_key,
+            current_task_id=task.id,
+            current_event_meta=event,
+        )
+        if forge_facet:
+            communication_snapshot["forge"] = forge_facet
     recent_conversation = (
         communication_snapshot.get("recent_turns", [])
         if communication_snapshot else []
