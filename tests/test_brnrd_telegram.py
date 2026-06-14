@@ -64,9 +64,22 @@ def _tg_pair_code(client, headers, project_id):
     ).json()["pair_code"]
 
 
-def _message(chat_id, text, *, message_id=1, thread_id=None, name="Ada"):
-    msg = {"chat": {"id": chat_id}, "from": {"first_name": name},
-           "message_id": message_id, "text": text}
+def _message(
+    chat_id,
+    text,
+    *,
+    message_id=1,
+    thread_id=None,
+    name="Ada",
+    user_id=42,
+    username="ada_l",
+):
+    msg = {
+        "chat": {"id": chat_id},
+        "from": {"id": user_id, "first_name": name, "username": username},
+        "message_id": message_id,
+        "text": text,
+    }
     if thread_id is not None:
         msg["message_thread_id"] = thread_id
     return {"update_id": message_id, "message": msg}
@@ -160,6 +173,9 @@ def test_bound_chat_message_enqueues_with_reply_to(env):
         "chat_id": "555",
         "topic_id": 9,
         "message_id": 42,
+        "user": "Ada",
+        "user_id": 42,
+        "username": "ada_l",
     }
 
 

@@ -217,6 +217,16 @@ def _origin_meta(reply_to: dict) -> dict:
         topic_id = reply_to.get("topic_id")
         meta["cloud_chat_id"] = "" if chat_id is None else chat_id
         meta["cloud_topic_id"] = "" if topic_id is None else topic_id
+        copies = {
+            "message_id": "cloud_message_id",
+            "user": "cloud_user",
+            "user_id": "cloud_user_id",
+            "username": "cloud_username",
+        }
+        for src, dst in copies.items():
+            value = reply_to.get(src)
+            if value not in (None, ""):
+                meta[dst] = value
         return meta
 
     if platform == "github":
