@@ -30,6 +30,8 @@ class ParsedMessage:
     message_id: int | None
     topic_id: int | None
     user: str
+    user_id: int | None
+    username: str
 
 
 def parse_update(payload: dict) -> ParsedMessage | None:
@@ -43,12 +45,15 @@ def parse_update(payload: dict) -> ParsedMessage | None:
     text = (msg.get("text") or "").strip()
     if chat_id is None or not text:
         return None
+    sender = msg.get("from") or {}
     return ParsedMessage(
         chat_id=str(chat_id),
         text=text,
         message_id=msg.get("message_id"),
         topic_id=msg.get("message_thread_id"),
-        user=(msg.get("from") or {}).get("first_name", "?"),
+        user=sender.get("first_name", "?"),
+        user_id=sender.get("id"),
+        username=sender.get("username") or "",
     )
 
 

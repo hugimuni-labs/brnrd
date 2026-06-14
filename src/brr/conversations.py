@@ -69,7 +69,7 @@ def _now_iso() -> str:
     return f"{base}.{micros:06d}Z"
 
 
-# ── Gate thread → conversation key ───────────────────────────────────
+# ── Gate thread / correspondent identity ─────────────────────────────
 
 
 def gate_thread_key(meta: dict[str, Any]) -> str | None:
@@ -117,6 +117,137 @@ def gate_thread_key(meta: dict[str, Any]) -> str | None:
         return "cloud:default"
     if source:
         return f"{source}:default"
+    return None
+
+
+def _clean_identity(value: Any) -> str:
+    text = str(value or "").strip()
+    return " ".join(text.split())
+
+
+def _identity_value(meta: dict[str, Any], *keys: str) -> tuple[str, str] | None:
+    for key in keys:
+        value = _clean_identity(meta.get(key))
+        if value:
+            return key, value
+    return None
+
+
+def _identity_component(value: str, *, fold: bool = False) -> str:
+    text = value.casefold() if fold else value
+    return _SAFE_RE.sub("_", text.replace(":", "_"))
+
+
+def correspondent_key_for_event(meta: dict[str, Any]) -> str | None:
+    """Return the per-human identity key for *meta*, when known.
+
+    A conversation key answers "which thread should receive the reply".
+    The correspondent key answers "who is talking" and deliberately sits
+    above gate-thread keys, so a local Telegram gate and a brnrd-relayed
+    Telegram gate can be recognised as the same person without merging
+    their delivery channels.
+    """
+    explicit = _clean_identity(meta.get("correspondent_key"))
+    if explicit:
+        return explicit
+
+    source = _clean_identity(meta.get("source"))
+    if source == "cloud":
+        platform = _clean_identity(meta.get("cloud_platform"))
+        if platform == "telegram":
+            ident = _identity_value(
+                meta, "cloud_user_id", "cloud_username", "cloud_user",
+            )
+            if ident is None:
+                return None
+            field, value = ident
+            if field == "cloud_username":
+                return f"telegram:username:{_identity_component(value, fold=True)}"
+            if field == "cloud_user_id":
+                return f"telegram:user-id:{_identity_component(value)}"
+            return f"telegram:user:{_identity_component(value, fold=True)}"
+        if platform == "github":
+            ident = _identity_value(meta, "github_author", "cloud_user")
+            if ident is None:
+                return None
+            return f"github:login:{_identity_component(ident[1], fold=True)}"
+        if platform:
+            ident = _identity_value(
+                meta, "cloud_user_id", "cloud_username", "cloud_user",
+            )
+            if ident is None:
+                return None
+            return (
+                f"{_identity_component(platform, fold=True)}:"
+                f"user:{_identity_component(ident[1], fold=True)}"
+            )
+        return None
+
+    if source == "telegram":
+        ident = _identity_value(
+            meta, "telegram_user_id", "telegram_username", "telegram_user",
+        )
+        if ident is None:
+            return None
+        field, value = ident
+        if field == "telegram_username":
+            return f"telegram:username:{_identity_component(value, fold=True)}"
+        if field == "telegram_user_id":
+            return f"telegram:user-id:{_identity_component(value)}"
+        return f"telegram:user:{_identity_component(value, fold=True)}"
+
+    if source == "slack":
+        ident = _identity_value(meta, "slack_user")
+        if ident is None:
+            return None
+        return f"slack:user:{_identity_component(ident[1], fold=True)}"
+
+    if source == "github":
+        ident = _identity_value(meta, "github_author")
+        if ident is None:
+            return None
+        return f"github:login:{_identity_component(ident[1], fold=True)}"
+
+    return None
+
+
+def origin_message_key_for_event(meta: dict[str, Any]) -> str | None:
+    """Return a canonical source-message key for exact duplicate detection."""
+    source = _clean_identity(meta.get("source"))
+    if source == "telegram":
+        chat = _clean_identity(meta.get("telegram_chat_id"))
+        topic = _clean_identity(meta.get("telegram_topic_id"))
+        message = _clean_identity(meta.get("telegram_message_id"))
+        if chat and message:
+            return (
+                f"telegram:{_identity_component(chat)}:"
+                f"{_identity_component(topic)}:{_identity_component(message)}"
+            )
+        return None
+    if source == "cloud" and _clean_identity(meta.get("cloud_platform")) == "telegram":
+        chat = _clean_identity(meta.get("cloud_chat_id"))
+        topic = _clean_identity(meta.get("cloud_topic_id"))
+        message = _clean_identity(meta.get("cloud_message_id"))
+        if chat and message:
+            return (
+                f"telegram:{_identity_component(chat)}:"
+                f"{_identity_component(topic)}:{_identity_component(message)}"
+            )
+        return None
+    if source in {"github", "cloud"}:
+        platform = (
+            _clean_identity(meta.get("cloud_platform"))
+            if source == "cloud" else "github"
+        )
+        if platform != "github":
+            return None
+        repo = _clean_identity(meta.get("github_repo"))
+        comment_id = _clean_identity(meta.get("github_comment_id"))
+        if repo and comment_id:
+            return (
+                f"github:{_identity_component(repo, fold=True)}:"
+                f"{_identity_component(comment_id)}"
+            )
     return None
 
 
@@ -240,6 +371,12 @@ def _iter_log_files(brr_dir: Path, key: str) -> list[Path]:
         if entry.is_file() and entry.suffix == ".jsonl":
             files.append(entry)
     return files
+
+
+def _tag_record(record: dict[str, Any], key: str) -> dict[str, Any]:
+    if record.get("conversation_key") == key:
+        return record
+    return {"conversation_key": key, **record}
 
 
 def _records_from_file(path: Path) -> list[dict[str, Any]]:
@@ -388,6 +525,94 @@ def read_records(brr_dir: Path, key: str) -> list[dict[str, Any]]:
     return out
 
 
+def conversation_keys_for_correspondent(
+    brr_dir: Path,
+    correspondent_key: str | None,
+    *,
+    include_key: str | None = None,
+) -> list[str]:
+    """Return conversation keys with event records for *correspondent_key*.
+
+    ``include_key`` keeps the active thread in the set even before any
+    prior event in that thread has been written with the identity tag.
+    """
+    keys: set[str] = set()
+    if include_key:
+        keys.add(include_key)
+    if not correspondent_key:
+        return sorted(keys)
+    for key in list_conversations(brr_dir):
+        for record in read_records(brr_dir, key):
+            if (
+                record.get("kind") == "event"
+                and record.get("correspondent_key") == correspondent_key
+            ):
+                keys.add(key)
+                break
+    return sorted(keys)
+
+
+def find_event_by_origin_message(
+    brr_dir: Path,
+    origin_message_key: str | None,
+    *,
+    exclude_event_id: str = "",
+) -> dict[str, Any] | None:
+    """Return a prior event record for the same source message, if any."""
+    if not origin_message_key:
+        return None
+    for key in list_conversations(brr_dir):
+        for record in read_records(brr_dir, key):
+            if record.get("kind") != "event":
+                continue
+            if record.get("event_id") == exclude_event_id:
+                continue
+            if record.get("origin_message_key") == origin_message_key:
+                return _tag_record(record, key)
+    return None
+
+
+def read_records_for_correspondent(
+    brr_dir: Path,
+    key: str,
+    correspondent_key: str | None,
+) -> list[dict[str, Any]]:
+    """Return merged records for the current thread's correspondent.
+
+    The active *key* is always included. When the correspondent is known,
+    sibling conversation directories that have carried the same
+    ``correspondent_key`` are merged too, with ``conversation_key`` added
+    to returned records so prompt renderers can show which pipe a turn
+    came through.
+    """
+    if not correspondent_key:
+        return [_tag_record(r, key) for r in read_records(brr_dir, key)]
+    out: list[dict[str, Any]] = []
+    for related in conversation_keys_for_correspondent(
+        brr_dir, correspondent_key, include_key=key,
+    ):
+        out.extend(_tag_record(r, related) for r in read_records(brr_dir, related))
+    out.sort(key=_ts_key)
+    return out
+
+
+def read_recent_for_correspondent(
+    brr_dir: Path,
+    key: str,
+    correspondent_key: str | None,
+    limit: int = 10,
+    *,
+    include_lifecycle: bool = False,
+) -> list[dict[str, Any]]:
+    """Return the recent tail for a thread plus its known sibling channels."""
+    records = read_records_for_correspondent(brr_dir, key, correspondent_key)
+    if not include_lifecycle:
+        records = [r for r in records if _is_dialogue_record(r)]
+    if limit <= 0:
+        return records
+    return records[-limit:]
+
+
 def read_recent(
     brr_dir: Path,
     key: str,
@@ -471,9 +696,16 @@ def append_event(brr_dir: Path, key: str, event: dict[str, Any]) -> None:
         "kind": "event",
         "event_id": eid,
         "source": event.get("source", ""),
+        "conversation_key": key,
         "summary": _summary_for_body(body),
         "body": body,
     }
+    correspondent_key = correspondent_key_for_event(event)
+    if correspondent_key:
+        record["correspondent_key"] = correspondent_key
+    origin_message_key = origin_message_key_for_event(event)
+    if origin_message_key:
+        record["origin_message_key"] = origin_message_key
     append_record(brr_dir, key, record, event_id=eid)
 
 
