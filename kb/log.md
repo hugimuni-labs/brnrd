@@ -6547,3 +6547,39 @@ remains open — flagged in `kb/design-co-maintainer.md`.
 
 Validation: `PYTHONPATH=src python -m pytest` passed (787 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning).
+
+## [2026-06-14] implement | Daemon responsiveness: connection reuse + event-driven wakeup
+
+Closed the Co-maintainer "daemon responsiveness" slice (#115 →
+`kb/design-co-maintainer.md` §9). Two independent latency wins, single-flight
+untouched (this was idle latency, not concurrency).
+
+**Connection reuse.** Each gate module (telegram, slack, cloud, github/client)
+now holds one module-level `requests.Session` (`_SESSION`) used through its
+existing HTTP chokepoint (`_api_call` / `_slack_api` / `_request`), so keep-alive
+reuses the TCP/TLS connection across long-poll cycles instead of dialing the
+platform fresh each poll. Each gate runs its network calls from a single loop
+thread, so the per-gate session needs no locking; the managed brnrd backend keeps
+its own async `httpx` client and never touches the OSS sync transport.
+
+**Event-driven wakeup.** Added a process-local `threading.Event`,
+`protocol.inbox_wake()`. `create_event` sets it whenever it writes a `pending`
+event in-process (a gate enqueuing a message, a self-scheduled thought firing);
+the daemon loop now blocks on `wake.wait(_SCAN_INTERVAL)` instead of a bare
+`time.sleep`, so a fresh in-process event is picked up at once. The loop clears
+the signal at the top of each iteration *before* reading the inbox, so a set that
+lands mid-pass keeps the flag raised and the next pass catches it — no miss, no
+busy-spin. The 3s tick stays as the backstop for paths that can't raise the
+in-process signal: cross-process `brr run` CLI writes and time-based schedules.
+Outbound-only (`done`) events don't set the signal (gate threads deliver those,
+not the spawn loop).
+
+Tests: transport tests that patched `requests.post` / `requests.request` directly
+were repointed at `_SESSION`; added `TestInboxWake` (pending sets, done doesn't,
+singleton). `kb/subject-daemon.md` gained a "Loop cadence & gate responsiveness"
+subsection; §9 of the design doc marked shipped.
+
+Note: `requests` is not preinstalled in this sandbox runner — `pip install
+requests` worked (network was up), after which the gate suites run. Validation:
+`PYTHONPATH=src python -m pytest` passed (790 tests, 7 skipped, with the existing
+Starlette/FastAPI TestClient deprecation warning).

@@ -22,13 +22,18 @@ from . import runtime
 
 _POLL_INTERVAL = 5
 
+# One Session for the gate's single loop thread: keep-alive reuses the
+# connection across polls instead of dialing fresh each call. See
+# ``kb/subject-daemon.md`` → gate responsiveness.
+_SESSION = requests.Session()
+
 
 # ── Slack API helpers ────────────────────────────────────────────────
 
 
 def _slack_api(token: str, method: str, params: dict | None = None) -> dict:
     url = f"https://slack.com/api/{method}"
-    response = requests.post(
+    response = _SESSION.post(
         url,
         json=params or {},
         headers={
