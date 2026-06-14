@@ -168,6 +168,15 @@ This honours the robustness=retrieval-cost hierarchy from
 high-signal at wake; full fidelity one read away; durable synthesis where
 the resident chose to write it.
 
+Shipped 2026-06-14: the daemon now builds a structured
+`CommunicationSnapshot` from the current thread plus sibling threads for the
+same correspondent, writes untruncated per-gate/per-forge-thread JSONL files
+under the run directory with a manifest, and points the prompt/context at the
+resident's dominion `thread-of-record.md` slot. The snapshot's recent-turn
+selection is still budgeted, but unanswered user events get a strong boost
+over pure recency. The forge-state facet remains §5 / #113, not part of this
+slice.
+
 **kb optional → collapse into the dominion.** In theme with this: the
 shared `kb/` may become optional (a `brr init` toggle / setup choice — see
 issue #105). When it's off, the semantic + decisional layer has nowhere
@@ -402,7 +411,9 @@ sequence (each maps to a milestone issue):
    shipped 2026-06-14 for daemon-side identity tags, sibling-channel prompt
    history, and exact source-message deduplication.
 5. **Communication snapshot + on-demand grouped history + thread of record**
-   (§4.2, #110) — the centerpiece; needs #108 and #109.
+   (§4.2, #110) — shipped 2026-06-14 for the structured wake snapshot,
+   grouped run-directory JSONL history files, and dominion thread-of-record
+   prompt/context hint.
 6. **Card re-alignment + agent-owned composition** (§8, #114) — needs #111.
 7. **Forge-awareness in the snapshot** (§5, #113) + **forge grooming**
    (§5, #117) — need #110 and PR #106's metadata.
