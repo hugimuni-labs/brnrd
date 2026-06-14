@@ -602,6 +602,36 @@ class TestPromptBuilding:
         assert "prior ask" in prompt
         assert "prior answer" in prompt
 
+    def test_daemon_prompt_renders_prior_failure_facet(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        prompt = build_daemon_prompt(
+            "any update?",
+            "evt-2",
+            "/tmp/resp.md",
+            tmp_path,
+            communication_snapshot={
+                "current_thread": "telegram:10:",
+                "prior_failure": {
+                    "reason": "Credit balance is too low",
+                    "stage": "run",
+                    "attempts": 3,
+                    "exit_code": 1,
+                    "ts": "2026-06-14T16:00:00Z",
+                    "event_id": "evt-old",
+                },
+                "related_threads": [],
+                "recent_turns": [],
+            },
+        )
+
+        assert "Prior run on this thread failed (operational)" in prompt
+        assert "Credit balance is too low" in prompt
+        assert "3 attempt(s)" in prompt
+        assert "This wake lands after that interruption" in prompt
+
     def test_daemon_prompt_renders_woven_dialogue_bodies(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
