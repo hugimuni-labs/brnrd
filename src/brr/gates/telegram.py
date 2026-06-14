@@ -26,6 +26,11 @@ _API = "https://api.telegram.org/bot{token}/{method}"
 _MAX_TG_LEN = 3900
 _POLL_TIMEOUT = 30
 
+# One Session for the gate's single loop thread: keep-alive reuses the
+# TCP/TLS connection across long-poll cycles instead of dialing fresh
+# each getUpdates. See ``kb/subject-daemon.md`` → gate responsiveness.
+_SESSION = requests.Session()
+
 
 # ── Bot API helpers ──────────────────────────────────────────────────
 
@@ -41,7 +46,7 @@ class _TelegramNotModified(Exception):
 def _api_call(token: str, method: str, params: dict | None = None) -> dict:
     url = _API.format(token=token, method=method)
     try:
-        response = requests.post(url, json=params or {}, timeout=90)
+        response = _SESSION.post(url, json=params or {}, timeout=90)
     except requests.RequestException as exc:
         message = str(exc).replace(token, "<token>")
         raise RuntimeError(f"Telegram API request failed: {message}") from exc
