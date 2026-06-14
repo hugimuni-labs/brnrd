@@ -260,6 +260,24 @@ and branch publication via the publish kernel
 ([`design-publish-kernel.md`](design-publish-kernel.md)); forge-awareness
 gives it the picture to do so without surprises.
 
+Shipped 2026-06-14 (#113): the wake snapshot's `CommunicationSnapshot`
+gains a `forge` facet, built **network-free** by a new
+[`../src/brr/forge_state.py`](../src/brr/forge_state.py) and attached in
+the daemon beside the snapshot. It carries two local views: **worktrees**
+(every `.brr/worktrees/*` via `worktree.list_worktrees`, each with its
+branch, an unpushed-commit count from `worktree.unpushed_commit_count` —
+`git rev-list --count HEAD --not --remotes`, no upstream needed — a dirty
+flag, the "this run" marker, and a `forges.view_branch_url` link) and
+**threads** (the GitHub issues/PRs in play, parsed from the current and
+sibling conversation keys into `repo`/`number`/clickable `forges.thread_url`
+cross-references; the waking thread is enriched with the live event's
+`github_kind` / `branch_target` / `github_pr_number` / `github_html_url`
+from PR #106's metadata). Rendered in both the daemon prompt
+(`_format_forge_state`) and the run-context file. **Live** PR/issue status
+(open/closed/merged, behind-base, CI) is deliberately out of scope — it
+needs a token-bearing API call on the hot wake path and is the input to
+forge grooming (#117) below, not this observational facet.
+
 **From awareness to action — forge grooming** (issue #117). Awareness is the
 input; grooming is what a co-maintainer *does* with it, on its own
 initiative (self-scheduled wakes are the natural trigger):
@@ -447,8 +465,11 @@ sequence (each maps to a milestone issue):
    *Composition seam shipped 2026-06-14* (`.card` control dotfile +
    `card_composed` packet + `agent_card_text` on the projection); the
    card re-alignment to the events/commit/noop signal remains open.
-7. **Forge-awareness in the snapshot** (§5, #113) + **forge grooming**
-   (§5, #117) — need #110 and PR #106's metadata.
+7. **Forge-awareness in the snapshot** (§5, #113) — *shipped 2026-06-14*
+   (network-free `forge` facet on the snapshot: worktrees + unpushed work +
+   issue/PR cross-references, via `forge_state.py`). **Forge grooming**
+   (§5, #117) — the action layer on top, still open; needs the live PR
+   status this facet deliberately leaves out.
 8. **Daemon responsiveness** (§9, #115) — *shipped 2026-06-14*
    (per-gate `requests.Session` connection reuse + `inbox_wake`
    event-driven loop wakeup). **Faithful context view** (§10, #116) —
