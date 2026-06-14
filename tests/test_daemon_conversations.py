@@ -99,6 +99,82 @@ def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeyp
     assert not any(r.get("event_id") == "evt-thread-2" for r in daemon_records)
 
 
+def test_run_worker_threads_recent_correspondent_across_gate_channels(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    native = make_event(
+        tmp_path, eid="evt-native", body="local telegram turn",
+        telegram_chat_id=77, telegram_user_id=42,
+    )
+    cloud = make_event(
+        tmp_path, eid="evt-cloud", body="cloud relay turn",
+        source="cloud",
+        cloud_platform="telegram",
+        cloud_chat_id=77,
+        cloud_user_id=42,
+        cloud_event_id="brnrd-evt-cloud",
+    )
+
+    captured: list = []
+    _patch_runner_minimal(monkeypatch, captured)
+    _stub_env(monkeypatch)
+
+    daemon._run_worker(
+        native, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+    daemon._run_worker(
+        cloud, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    daemon_records = [
+        c[2] for c in captured if c[0] == "daemon" and c[1] == "evt-cloud"
+    ][0]
+    assert daemon_records is not None
+    assert any(r.get("event_id") == "evt-native" for r in daemon_records)
+    assert not any(r.get("event_id") == "evt-cloud" for r in daemon_records)
+    assert {
+        r.get("conversation_key") for r in daemon_records
+        if r.get("event_id") == "evt-native"
+    } == {"telegram:77:"}
+
+
+def test_run_worker_deduplicates_same_origin_message_across_channels(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    responses_dir = tmp_path / ".brr" / "responses"
+    native = make_event(
+        tmp_path, eid="evt-native", body="same source message",
+        telegram_chat_id=77, telegram_user_id=42, telegram_message_id=100,
+    )
+    cloud = make_event(
+        tmp_path, eid="evt-cloud", body="same source message",
+        source="cloud",
+        cloud_platform="telegram",
+        cloud_chat_id=77,
+        cloud_user_id=42,
+        cloud_message_id=100,
+        cloud_event_id="brnrd-evt-cloud",
+    )
+
+    captured: list = []
+    _patch_runner_minimal(monkeypatch, captured)
+    _stub_env(monkeypatch)
+
+    first = daemon._run_worker(native, tmp_path, responses_dir, {}, 0)
+    second = daemon._run_worker(cloud, tmp_path, responses_dir, {}, 0)
+
+    assert first.status == "done"
+    assert second.status == "done"
+    assert second.meta["deduplicated_by_event_id"] == "evt-native"
+    protocol_body = (responses_dir / "evt-cloud.md").read_text(
+        encoding="utf-8",
+    )
+    assert "No second run was started" in protocol_body
+    assert [c[1] for c in captured] == ["evt-native"]
+
+
 def test_run_worker_followup_in_same_thread_reuses_conversation(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     _patch_runner_minimal(monkeypatch)
