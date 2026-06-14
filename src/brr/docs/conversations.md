@@ -8,6 +8,13 @@ per-thread directory. Dialogue records carry inline body text, so that
 history is the recent-activity context the next agent in the same thread
 can actually read.
 
+Conversation keys route replies; they are not person identity. When a
+gate event carries a stable sender handle, brr also stamps event records
+with a `correspondent_key`. The daemon uses that key to include recent
+turns from sibling channels for the same person, such as local Telegram
+and brnrd-relayed Telegram, while leaving each delivery channel on its
+own conversation key.
+
 The model is intentionally small. Conversations have **no manifest,
 no title, no intent, no status**. They exist only to thread events
 and to give agents a recent-history block in their prompts. Durable
@@ -35,7 +42,7 @@ second daemon) from sharing mutable state across pipelines. Every record carries
 
 | `kind`   | What it captures                                          |
 |----------|-----------------------------------------------------------|
-| `event`  | An incoming event from the gate (with `event_id`, `body`, `summary`) |
+| `event`  | An incoming event from the gate (with `event_id`, `body`, `summary`, and optional `correspondent_key` / `origin_message_key`) |
 | `task`   | A task row (`task_id`, `env`, `status`, plus runtime branch info) |
 | `update` | A lifecycle update packet for a task (typed via `type:`)  |
 | `artifact` | A produced artifact (response file, durable kb page, etc.; response/interim/outbound artifacts include inline `body`) |
@@ -61,6 +68,16 @@ worker runs:
 If neither resolves, the event still gets a task and a response, but
 no conversation log is written. This is by design — orphan or local
 runs don't need threading context.
+
+Separately, `correspondent_key_for_event` derives a per-person key from
+stable gate metadata where available (`telegram:user-id:<id>`,
+`telegram:username:<handle>`, `slack:user:<id>`,
+`github:login:<login>`). Prompt history uses
+`read_recent_for_correspondent` so a cloud-relayed turn can see recent
+local turns by the same correspondent. Exact source-message duplicates
+also get an `origin_message_key`; if a second channel enqueues the same
+Telegram message or GitHub comment, the daemon records a done task and a
+small dedup response instead of starting a second runner.
 
 ## Lifecycle update packets
 
