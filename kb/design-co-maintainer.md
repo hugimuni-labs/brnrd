@@ -260,6 +260,24 @@ and branch publication via the publish kernel
 ([`design-publish-kernel.md`](design-publish-kernel.md)); forge-awareness
 gives it the picture to do so without surprises.
 
+Shipped 2026-06-14 (#113): the wake snapshot's `CommunicationSnapshot`
+gains a `forge` facet, built **network-free** by a new
+[`../src/brr/forge_state.py`](../src/brr/forge_state.py) and attached in
+the daemon beside the snapshot. It carries two local views: **worktrees**
+(every `.brr/worktrees/*` via `worktree.list_worktrees`, each with its
+branch, an unpushed-commit count from `worktree.unpushed_commit_count` —
+`git rev-list --count HEAD --not --remotes`, no upstream needed — a dirty
+flag, the "this run" marker, and a `forges.view_branch_url` link) and
+**threads** (the GitHub issues/PRs in play, parsed from the current and
+sibling conversation keys into `repo`/`number`/clickable `forges.thread_url`
+cross-references; the waking thread is enriched with the live event's
+`github_kind` / `branch_target` / `github_pr_number` / `github_html_url`
+from PR #106's metadata). Rendered in both the daemon prompt
+(`_format_forge_state`) and the run-context file. **Live** PR/issue status
+(open/closed/merged, behind-base, CI) is deliberately out of scope — it
+needs a token-bearing API call on the hot wake path and is the input to
+forge grooming (#117) below, not this observational facet.
+
 **From awareness to action — forge grooming** (issue #117). Awareness is the
 input; grooming is what a co-maintainer *does* with it, on its own
 initiative (self-scheduled wakes are the natural trigger):
@@ -285,6 +303,14 @@ requires `status==done` plus non-empty stdout, so a failed or empty run
 **delivers nothing** — a silent drop the user experienced. Combined with
 the global-FIFO/per-gate-key mismatch (§4.1), a missed delivery can be
 followed by a reply that reads the wrong queue.
+
+The deeper version of this decoupling — retiring the per-event `task`
+concept entirely so a run reads the whole inbox and decides what to tackle
+/ fold / postpone — is its own design slice:
+[`design-run-event-model.md`](design-run-event-model.md) (#128). It owns
+the daemon's serial-re-spawn half of the "three wakes on #114" symptom
+(the self-author-trigger half is #129); this section's success-signal
+floor is the substrate it builds on.
 
 Targets, extending the shipped partials path
 ([`design-multi-response.md`](design-multi-response.md)) and the open
@@ -366,21 +392,31 @@ remains the open piece: surfacing the events/commit/noop signal on the
 card itself, distinguishing operational failure from a normal partial,
 and reflecting multi-thread delivery.)
 
-## 9. Daemon responsiveness
+## 9. Daemon responsiveness — shipped 2026-06-14 (#115)
 
 Lower priority than continuity, but the co-maintainer should feel present.
-Today (see [`subject-daemon.md`](subject-daemon.md)):
+Both halves of this slice shipped 2026-06-14 (see
+[`subject-daemon.md`](subject-daemon.md) → *Loop cadence & gate
+responsiveness*):
 
-- Gates make **fresh `requests` calls** per poll (no connection reuse).
-- The loop is **pure sleep-polling** (`_SCAN_INTERVAL = 3s`); a new local
-  event waits up to a scan tick with no event-driven wakeup.
+- **Connection reuse.** Each gate module (telegram, slack, cloud, github)
+  holds one `requests.Session` (`_SESSION`) used through its existing HTTP
+  chokepoint, so keep-alive reuses the connection across polls instead of
+  dialing fresh. One session per single loop thread → no locking. The
+  brnrd backend keeps its own async `httpx` client.
+- **Event-driven wakeup.** A process-local `threading.Event`
+  (`protocol.inbox_wake()`) the daemon loop blocks on; `create_event`
+  sets it for in-process `pending` writes (gate enqueue, schedule fire),
+  so a fresh event is picked up at once. The 3s tick stays as the
+  backstop for cross-process `brr run` writes and time-based schedules.
 
-Clean improvements within the accepted dependency stance
-([`decision-runtime-dependencies.md`](decision-runtime-dependencies.md);
-`httpx` is already an optional dep): connection reuse (`requests.Session`
-or an `httpx.Client`), and a `threading.Event` to wake the loop promptly on
-a fresh local event. Keep single-flight as the resident-identity reflex —
-this is about idle latency, not concurrency.
+Single-flight is unchanged — this was idle latency, not concurrency, per
+the accepted dependency stance
+([`decision-runtime-dependencies.md`](decision-runtime-dependencies.md)).
+The same dispatch loop is where
+[`design-run-event-model.md`](design-run-event-model.md) (#128) changes
+*what a run sees* (the whole inbox, not `pending[0]`) — the event-driven
+wake here and the inbox-reading run there are the same loop from two angles.
 
 ## 10. Faithful "what this wake received"
 
@@ -429,10 +465,22 @@ sequence (each maps to a milestone issue):
    *Composition seam shipped 2026-06-14* (`.card` control dotfile +
    `card_composed` packet + `agent_card_text` on the projection); the
    card re-alignment to the events/commit/noop signal remains open.
-7. **Forge-awareness in the snapshot** (§5, #113) + **forge grooming**
-   (§5, #117) — need #110 and PR #106's metadata.
-8. **Daemon responsiveness** (§9, #115) and **faithful context view**
-   (§10, #116) — independent; slot in opportunistically.
+7. **Forge-awareness in the snapshot** (§5, #113) — *shipped 2026-06-14*
+   (network-free `forge` facet on the snapshot: worktrees + unpushed work +
+   issue/PR cross-references, via `forge_state.py`). **Forge grooming**
+   (§5, #117) — the action layer on top, still open; needs the live PR
+   status this facet deliberately leaves out.
+8. **Daemon responsiveness** (§9, #115) — *shipped 2026-06-14*
+   (per-gate `requests.Session` connection reuse + `inbox_wake`
+   event-driven loop wakeup). **Faithful context view** (§10, #116) —
+   independent; slot in opportunistically.
+9. **Run / event model** (§6/§9, #128) — retire the per-event `task`; a
+   run reads the whole inbox and decides. Design page proposed 2026-06-14
+   ([`design-run-event-model.md`](design-run-event-model.md)); wants the
+   user's nod on its open decisions (per-run claim + `defer_until`
+   debounce, run-id keying, run-granularity billing coupled to #130, and
+   phasing the rename) before code. Subsumes the narrower batch-events
+   idea; substrate for the resumable-tasks work.
 
 ### Decisions (close-loop, 2026-06-13)
 

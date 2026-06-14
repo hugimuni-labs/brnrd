@@ -6586,3 +6586,100 @@ Co-maintainer milestone every other issue in the set carries.
 Deferred-with-reason: the snapshot-bridge code (#131) touches the
 failure-handling path; filed as a scoped issue rather than rushed as a
 third under-tested PR.
+## [2026-06-14] implement | Daemon responsiveness: connection reuse + event-driven wakeup
+
+Closed the Co-maintainer "daemon responsiveness" slice (#115 →
+`kb/design-co-maintainer.md` §9). Two independent latency wins, single-flight
+untouched (this was idle latency, not concurrency).
+
+**Connection reuse.** Each gate module (telegram, slack, cloud, github/client)
+now holds one module-level `requests.Session` (`_SESSION`) used through its
+existing HTTP chokepoint (`_api_call` / `_slack_api` / `_request`), so keep-alive
+reuses the TCP/TLS connection across long-poll cycles instead of dialing the
+platform fresh each poll. Each gate runs its network calls from a single loop
+thread, so the per-gate session needs no locking; the managed brnrd backend keeps
+its own async `httpx` client and never touches the OSS sync transport.
+
+**Event-driven wakeup.** Added a process-local `threading.Event`,
+`protocol.inbox_wake()`. `create_event` sets it whenever it writes a `pending`
+event in-process (a gate enqueuing a message, a self-scheduled thought firing);
+the daemon loop now blocks on `wake.wait(_SCAN_INTERVAL)` instead of a bare
+`time.sleep`, so a fresh in-process event is picked up at once. The loop clears
+the signal at the top of each iteration *before* reading the inbox, so a set that
+lands mid-pass keeps the flag raised and the next pass catches it — no miss, no
+busy-spin. The 3s tick stays as the backstop for paths that can't raise the
+in-process signal: cross-process `brr run` CLI writes and time-based schedules.
+Outbound-only (`done`) events don't set the signal (gate threads deliver those,
+not the spawn loop).
+
+Tests: transport tests that patched `requests.post` / `requests.request` directly
+were repointed at `_SESSION`; added `TestInboxWake` (pending sets, done doesn't,
+singleton). `kb/subject-daemon.md` gained a "Loop cadence & gate responsiveness"
+subsection; §9 of the design doc marked shipped.
+
+Note: `requests` is not preinstalled in this sandbox runner — `pip install
+requests` worked (network was up), after which the gate suites run. Validation:
+`PYTHONPATH=src python -m pytest` passed (790 tests, 7 skipped, with the existing
+Starlette/FastAPI TestClient deprecation warning).
+## [2026-06-14] design | Run/event model — retire the per-event "task"
+
+Drafted `design-run-event-model.md` (proposed) for #128, the design page the
+issue asks for before code. The `task` concept is a leftover of the
+spawn-per-event arch — one event → one Task → one runner invocation → one
+reply — and the resident reshape already broke that 1:1 in pieces
+(multi-response, folded-in events via `event:` frontmatter, `gate:` sends,
+the §6 events/commit/noop delivery floor). The bundle already hands the run
+the whole pending set and the affordances to act on all of it; the only
+places still thinking one-event-one-task are the **daemon dispatch**
+(`event = pending[0]` in the scan loop) and the **naming**.
+
+The page reframes the two real entities (event = immutable signal
+consumed/produced by runs; run = a runner invocation that reads the whole
+inbox and decides what to tackle / fold / postpone) and — the point of a
+design-first page — settles the hard questions: a per-run **claim**
+(`claimed_by: <run-id>`) distinct from event resolution so postponed and
+crashed events both converge to *pending for the next run*; a **`defer_until`**
+debounce so postponing isn't a re-spawn in disguise; **run-id** response
+keying with per-event resolution always explicit; **run-granularity** cost
+attribution with "folding is the consent point" (coupled to #130 pricing —
+the strongest argument for landing that decision first); and **phasing** the
+wide task→run rename behind the model change for review legibility.
+`run_context.py` already names the dir `runs/<id>/` — evidence the run
+concept won at the directory layer and only the object is still `Task`.
+
+It owns the serial-re-spawn half of the "three wakes on #114" symptom (the
+self-author-trigger half is #129) and is the substrate for the
+resumable-tasks / interruption-resilience work. Cross-linked from
+`design-co-maintainer.md` §6/§9/§11 and the index. Chat-only deliverable
+pending the user's nod on five open decisions; no code yet, by design.
+
+## [2026-06-14] feature | Forge-awareness facet in the wake snapshot (#113)
+
+Shipped the §5 slice of the Co-maintainer milestone: the wake
+`CommunicationSnapshot` gains a network-free `forge` facet so the resident
+sees the project like a human peer — its own in-flight branches and what's
+unpushed, and the issues/PRs its conversations are about.
+
+New `forge_state.py` builds it beside the snapshot in `_run_worker`, from
+two local views. **Worktrees**: every `.brr/worktrees/*` via
+`worktree.list_worktrees`, each with branch, an unpushed-commit count
+(new `worktree.unpushed_commit_count` = `git rev-list --count HEAD --not
+--remotes`, so a fresh task branch with no upstream still reports
+honestly), a dirty flag, a "this run" marker, and a `forges.view_branch_url`
+link. **Threads**: GitHub issues/PRs parsed from the current + sibling
+conversation keys (`parse_forge_thread` handles `github:owner/repo:N` and
+the `cloud:github:owner/repo#N:` relay shape) into `repo`/`number`/clickable
+cross-references via a new `forges.thread_url` (host+kind from origin,
+owner/repo from the *thread*, so multi-repo links stay correct). The waking
+thread is enriched with the live event's `github_kind` / `branch_target` /
+`github_pr_number` / `github_html_url` — the PR #106 metadata — preferring
+the exact comment URL over the template one. Rendered in both the daemon
+prompt (`prompts._format_forge_state`) and the run-context file.
+
+Deliberate scope line: **live** PR/issue status (open/closed/merged,
+behind-base, CI) is left out — it needs a token-bearing API call on the hot
+wake path and is the input to forge grooming (#117), not this observational
+facet. Recorded in `design-co-maintainer.md` §5/§11. Tests:
+`tests/test_forge_state.py` (27 cases — key parsing, thread_url, unpushed
+counting with a github-`origin`/local-`store` two-remote fixture, the
+builder, and prompt rendering). Full suite 817 passed, 7 skipped.
