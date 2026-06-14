@@ -27,7 +27,12 @@ def _patch_runner_minimal(monkeypatch, captured_prompts=None):
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
 
     def _build_daemon(task, eid, rp, _root, **kw):
-        captured_prompts.append(("daemon", eid, kw.get("recent_conversation")))
+        captured_prompts.append((
+            "daemon",
+            eid,
+            kw.get("recent_conversation"),
+            kw.get("communication_snapshot"),
+        ))
         return f"RUN {eid}: {task} -> {rp}"
 
     monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", _build_daemon)
@@ -97,6 +102,45 @@ def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeyp
     assert daemon_records is not None
     assert any(r.get("event_id") == "evt-thread-1" for r in daemon_records)
     assert not any(r.get("event_id") == "evt-thread-2" for r in daemon_records)
+
+
+def test_run_worker_builds_communication_snapshot_and_history_files(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    first = make_event(
+        tmp_path, eid="evt-snap-1", body="first",
+        telegram_chat_id=77, telegram_user_id=42,
+    )
+    second = make_event(
+        tmp_path, eid="evt-snap-2", body="second",
+        telegram_chat_id=77, telegram_user_id=42,
+    )
+
+    captured: list = []
+    _patch_runner_minimal(monkeypatch, captured)
+    _stub_env(monkeypatch)
+
+    daemon._run_worker(
+        first, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+    task = daemon._run_worker(
+        second, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    snapshot = [
+        c[3] for c in captured if c[0] == "daemon" and c[1] == "evt-snap-2"
+    ][0]
+    assert snapshot["current_thread"] == "telegram:77:"
+    assert snapshot["correspondent_key"] == "telegram:user-id:42"
+    assert [r.get("body") for r in snapshot["recent_turns"] if r.get("kind") == "event"] == [
+        "first",
+    ]
+    group = snapshot["history_groups"][0]
+    assert group["conversation_key"] == "telegram:77:"
+    history_path = tmp_path / ".brr" / "runs" / task.id / "history"
+    assert (history_path / "manifest.json").exists()
+    assert (history_path / "gate_thread-telegram__77__.jsonl").exists()
 
 
 def test_run_worker_threads_recent_correspondent_across_gate_channels(

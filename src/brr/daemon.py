@@ -66,12 +66,6 @@ _BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
 _HEARTBEAT_INTERVAL = 30.0
-# Extra rows pulled from the conversation log on top of what the prompt
-# actually renders. Absorbs the in-flight event + task records (and any
-# pre-runner update packets for the same event) that
-# ``_recent_conversation_for_prompt`` strips before formatting, so the
-# rendered tail stays at ``prompts.RECENT_CONVERSATION_MAX``.
-_RECENT_READ_HEADROOM = 12
 _LIVE_INBOX_NAME = "inbox.json"
 _INTERNAL_EVENT_SOURCES = {"schedule"}
 
@@ -681,19 +675,28 @@ def _run_worker(
             host_context_branch=branch_plan.host_context_branch,
         )
 
-    # Read a window larger than the prompt renders so the in-flight
-    # event/task records (stripped by _recent_conversation_for_prompt)
-    # don't shrink the tail below RECENT_CONVERSATION_MAX.
-    recent_read_limit = prompts.RECENT_CONVERSATION_MAX + _RECENT_READ_HEADROOM
-    recent_conversation = (
-        _recent_conversation_for_prompt(
-            conversations.read_recent_for_correspondent(
-                brr_dir, conv_key, correspondent_key, limit=recent_read_limit,
-            ),
-            event_id=eid,
-            task_id=task.id,
+    history_groups = (
+        conversations.write_grouped_history_files(
+            brr_dir, brr_dir / "runs" / task.id / "history",
+            conv_key, correspondent_key,
         )
         if conv_key else []
+    )
+    communication_snapshot = (
+        conversations.build_communication_snapshot(
+            brr_dir,
+            conv_key,
+            correspondent_key,
+            event_id=eid,
+            task_id=task.id,
+            recent_limit=prompts.RECENT_CONVERSATION_MAX,
+            history_groups=history_groups,
+        )
+        if conv_key else None
+    )
+    recent_conversation = (
+        communication_snapshot.get("recent_turns", [])
+        if communication_snapshot else []
     )
 
     # Snapshot of other waiting events so the resident has immediate
@@ -716,6 +719,8 @@ def _run_worker(
         event,
         env_ctx,
         recent_conversation=recent_conversation,
+        communication_snapshot=communication_snapshot,
+        history_groups=history_groups,
         event_body=event_body_for_prompt,
     )
     task.meta["context_path"] = str(context_path)
@@ -758,6 +763,7 @@ def _run_worker(
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
+                communication_snapshot=communication_snapshot,
                 pending_events=pending_events_snapshot,
                 present=present_snapshot,
                 event_body=event_body_for_prompt,
@@ -782,6 +788,7 @@ def _run_worker(
                 runtime_dir=str(env_ctx.runtime_dir),
                 context_path=str(context_path),
                 recent_conversation=recent_conversation,
+                communication_snapshot=communication_snapshot,
                 pending_events=pending_events_snapshot,
                 present=present_snapshot,
                 event_body=event_body_for_prompt,
@@ -1124,23 +1131,6 @@ def _emit_new_containers(
             env=env_ctx.name,
             container=cid,
         )
-
-
-def _recent_conversation_for_prompt(
-    records: list[dict],
-    *,
-    event_id: str,
-    task_id: str,
-) -> list[dict]:
-    """Return prior conversation records, excluding the in-flight task."""
-    out: list[dict] = []
-    for record in records:
-        if record.get("event_id") == event_id:
-            continue
-        if record.get("task_id") == task_id:
-            continue
-        out.append(record)
-    return out
 
 
 def _emit_preserved_containers(
