@@ -216,6 +216,12 @@ recognise the duplicate correspondent, deliver once, and don't double-act —
 one perceived continuity, regardless of how many pipes reach it. (Decided
 2026-06-13: a correspondent-identity layer over silent key-canonicalization.)
 
+Shipped 2026-06-14: event records now carry `correspondent_key` and, when
+available, `origin_message_key`. The daemon prompt reads recent history across
+sibling conversation directories for the same correspondent, and exact
+same-source duplicates (local/cloud Telegram message or GitHub comment) finish
+as deduplicated tasks instead of starting a second runner.
+
 ### 4.5 Heartbeats are daemon-only
 
 The 30-second heartbeat reverts to what it is: a daemon mechanism to detect
@@ -393,7 +399,8 @@ sequence (each maps to a milestone issue):
    co-foundational; the events/commit/noop signal is a prerequisite for the
    card re-alignment and for honest failure surfacing.
 4. **Per-correspondent identity + redundancy channels** (§4.4, #109) —
-   needed before the snapshot can group multi-user / cross-gate correctly.
+   shipped 2026-06-14 for daemon-side identity tags, sibling-channel prompt
+   history, and exact source-message deduplication.
 5. **Communication snapshot + on-demand grouped history + thread of record**
    (§4.2, #110) — the centerpiece; needs #108 and #109.
 6. **Card re-alignment + agent-owned composition** (§8, #114) — needs #111.

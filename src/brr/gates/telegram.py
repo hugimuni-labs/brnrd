@@ -283,7 +283,10 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         if not text:
             continue
 
-        user = msg.get("from", {}).get("first_name", "?")
+        sender = msg.get("from") or {}
+        user = sender.get("first_name", "?")
+        user_id = sender.get("id")
+        username = sender.get("username") or ""
         message_id = msg.get("message_id")
         protocol.create_event(
             inbox_dir,
@@ -292,6 +295,8 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             telegram_chat_id=chat_id,
             telegram_topic_id=topic_id or "",
             telegram_user=user,
+            telegram_user_id=user_id if user_id is not None else "",
+            telegram_username=username,
             telegram_message_id=message_id if message_id is not None else "",
         )
 
