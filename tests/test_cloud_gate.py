@@ -244,6 +244,52 @@ def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
     assert ev["branch_target"] == "feature-x"
 
 
+def test_drain_preserves_telegram_origin_identity(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    client.post(
+        "/v1/_dev/enqueue",
+        json={
+            "project_id": pid,
+            "body": "fix from telegram",
+            "source": "telegram",
+            "reply_to": {
+                "platform": "telegram",
+                "chat_id": 555,
+                "topic_id": 9,
+                "message_id": 100,
+                "user": "Ada",
+                "user_id": 42,
+                "username": "ada_l",
+            },
+        },
+        headers=acc,
+    )
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    pending = protocol.list_pending(inbox_dir)
+    assert len(pending) == 1
+    ev = pending[0]
+    assert ev["source"] == "cloud"
+    assert ev["cloud_platform"] == "telegram"
+    assert ev["cloud_chat_id"] == 555
+    assert ev["cloud_topic_id"] == 9
+    assert ev["cloud_message_id"] == 100
+    assert ev["cloud_user"] == "Ada"
+    assert ev["cloud_user_id"] == 42
+    assert ev["cloud_username"] == "ada_l"
+
+
 def test_loop_skips_delivery_without_cloud_event_id(tmp_path, monkeypatch):
     # A foreign event (no cloud_event_id) must not be posted to brnrd;
     # it is logged + skipped, leaving its files in place for triage.
