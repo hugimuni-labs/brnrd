@@ -250,14 +250,27 @@ shutdown kills the in-flight runner to reclaim the slot. The full
 protocol contract lives in `kb/design-multi-response.md`; the liveness
 contract in `kb/review-daemon-coherence-2026-06.md` §2.
 
+The resident may also **compose what its live progress card says** by
+writing a `.card` control dotfile in the same outbox directory. The
+daemon drains it on each heartbeat (and once more after the runner
+returns), emits a `card_composed` packet only when the content has
+changed, and the renderer surfaces the text as a `note: …` tail line
+under the live phase. Rewrite the file to update; empty or delete it
+to withdraw. The daemon stays the renderer (header, sync line,
+phase log, terminal state); brnrd stays a transient relay. See
+`kb/design-co-maintainer.md` §8 and `kb/design-managed-delivery.md`.
+
 ## Run progress UX
 
 The daemon emits typed lifecycle packets through `brr.updates` for
 every task: `task_created`, `env_prepared`, `container_started`,
 `attempt_started`, `attempt_failed`, `retrying`, `run_started`,
-`artifact_created`, `interim_response`, `finalizing`,
+`artifact_created`, `interim_response`, `card_composed`, `finalizing`,
 `container_preserved`, `push_started`, `push_done`, plus the terminal
-`done` / `failed` / `conflict`.
+`done` / `failed` / `conflict`. `card_composed` is the resident's
+narration of its own progress (see the outbox `.card` seam above):
+it lands on `RunProgressView.agent_card_text` and the renderer surfaces
+it as a `note:` tail line.
 
 Gates may opt in to a `render_update(brr_dir, packet)` hook to surface
 progress to a human:

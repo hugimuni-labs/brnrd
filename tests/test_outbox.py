@@ -267,6 +267,141 @@ class TestDrainOutbox:
         assert protocol.list_partials(responses, "evt-ghost") == []
 
 
+class TestDrainAgentCard:
+    """The agent-owned card composition seam (issue #114).
+
+    The resident writes ``outbox/<eid>/.card`` with its preferred card
+    narration; the daemon reads it on each heartbeat tick (and once
+    more after the runner returns) and emits a ``card_composed`` packet
+    when the content changes. The file is a control dotfile — the
+    regular outbox drain leaves it alone (see TestDrainOutbox above).
+    """
+
+    def _drain(self, tmp_path, monkeypatch, body, state=None):
+        brr_dir = tmp_path / ".brr"
+        outbox = brr_dir / "outbox" / "evt-1"
+        outbox.mkdir(parents=True)
+        card = outbox / ".card"
+        if body is not None:
+            card.write_text(body, encoding="utf-8")
+        emitted = []
+        monkeypatch.setattr(daemon.updates, "emit",
+                            lambda brr, pkt: emitted.append(pkt))
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="k", event_id="evt-1")
+        task = types.SimpleNamespace(id="task-1")
+        st = state if state is not None else {}
+        result = daemon._drain_agent_card(emit, task, "evt-1", card, st)
+        return result, emitted, card, st
+
+    def test_first_read_emits_card_composed(self, tmp_path, monkeypatch):
+        ok, emitted, card, state = self._drain(
+            tmp_path, monkeypatch, "scanning packet types\n",
+        )
+        assert ok is True
+        assert len(emitted) == 1
+        assert emitted[0].type == "card_composed"
+        assert emitted[0].payload["text"] == "scanning packet types"
+        assert emitted[0].payload["event_id"] == "evt-1"
+        assert state["last"] == "scanning packet types"
+        # The file stays in place — the resident owns the canonical copy.
+        assert card.exists()
+
+    def test_unchanged_content_is_noop(self, tmp_path, monkeypatch):
+        ok1, emitted1, card, state = self._drain(
+            tmp_path, monkeypatch, "narration\n",
+        )
+        assert ok1 is True
+        # Second pass with the same content must not re-emit a packet.
+        emitted2 = []
+        monkeypatch.setattr(daemon.updates, "emit",
+                            lambda brr, pkt: emitted2.append(pkt))
+        emit = daemon._WorkerEmit(
+            brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
+        task = types.SimpleNamespace(id="task-1")
+        ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
+        assert ok2 is False
+        assert emitted2 == []
+
+    def test_rewritten_content_emits_again(self, tmp_path, monkeypatch):
+        ok1, _, card, state = self._drain(
+            tmp_path, monkeypatch, "first pass\n",
+        )
+        assert ok1 is True
+        # The resident rewrites the card — a new packet must fire.
+        card.write_text("second pass\n", encoding="utf-8")
+        emitted = []
+        monkeypatch.setattr(daemon.updates, "emit",
+                            lambda brr, pkt: emitted.append(pkt))
+        emit = daemon._WorkerEmit(
+            brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
+        task = types.SimpleNamespace(id="task-1")
+        ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
+        assert ok2 is True
+        assert len(emitted) == 1
+        assert emitted[0].payload["text"] == "second pass"
+
+    def test_deleted_card_emits_empty_withdrawal(self, tmp_path, monkeypatch):
+        ok1, _, card, state = self._drain(
+            tmp_path, monkeypatch, "narration\n",
+        )
+        assert ok1 is True
+        # Resident deletes the file to retract its narration.
+        card.unlink()
+        emitted = []
+        monkeypatch.setattr(daemon.updates, "emit",
+                            lambda brr, pkt: emitted.append(pkt))
+        emit = daemon._WorkerEmit(
+            brr_dir=tmp_path / ".brr", conversation_key="k", event_id="evt-1")
+        task = types.SimpleNamespace(id="task-1")
+        ok2 = daemon._drain_agent_card(emit, task, "evt-1", card, state)
+        assert ok2 is True
+        assert len(emitted) == 1
+        assert emitted[0].payload["text"] == ""
+
+    def test_missing_card_with_no_prior_state_is_noop(self, tmp_path, monkeypatch):
+        ok, emitted, _, state = self._drain(tmp_path, monkeypatch, None)
+        assert ok is False
+        assert emitted == []
+        assert "last" not in state
+
+    def test_oversized_card_is_truncated(self, tmp_path, monkeypatch):
+        big = "x" * (daemon._CARD_CONTROL_MAX_BYTES + 500)
+        ok, emitted, _, _ = self._drain(tmp_path, monkeypatch, big)
+        assert ok is True
+        text = emitted[0].payload["text"]
+        # Daemon side caps the read at _CARD_CONTROL_MAX_BYTES; the
+        # renderer caps the displayed text again. We assert the daemon
+        # half here.
+        assert len(text) == daemon._CARD_CONTROL_MAX_BYTES
+
+    def test_drain_outbox_leaves_card_control_file_alone(
+        self, tmp_path, monkeypatch,
+    ):
+        """The agent card lives at ``.card`` (a dotfile). The regular
+        outbox drain — which delivers real outbox messages — must not
+        consume it as a chat reply."""
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        outbox = brr_dir / "outbox" / "evt-1"
+        outbox.mkdir(parents=True)
+        (outbox / ".card").write_text("narration\n", encoding="utf-8")
+        (outbox / "real.md").write_text("real interim\n", encoding="utf-8")
+        emitted = []
+        monkeypatch.setattr(daemon.updates, "emit",
+                            lambda brr, pkt: emitted.append(pkt))
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="k", event_id="evt-1")
+        task = types.SimpleNamespace(id="task-1")
+        n = daemon._drain_outbox(emit, task, responses, "evt-1", outbox)
+
+        assert n == 1
+        assert (outbox / ".card").exists()
+        bodies = [protocol.read_partial(p)
+                  for p in protocol.list_partials(responses, "evt-1")]
+        assert bodies == ["real interim"]
+
+
 def test_remove_outbox_is_best_effort(tmp_path):
     outbox = tmp_path / ".brr" / "outbox" / "evt-1"
     outbox.mkdir(parents=True)

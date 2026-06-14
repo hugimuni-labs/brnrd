@@ -67,6 +67,17 @@ _BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
 _HEARTBEAT_INTERVAL = 30.0
 _LIVE_INBOX_NAME = "inbox.json"
+# Agent-owned card narration: the resident writes this control dotfile
+# in its outbox; the daemon drains it on each heartbeat into a
+# ``card_composed`` packet and the gate re-renders the live card. See
+# ``kb/design-managed-delivery.md`` for the relay-not-store stance the
+# seam preserves (the daemon stays the renderer; brnrd still only edits
+# a card it does not author or store).
+_CARD_CONTROL_NAME = ".card"
+# Soft cap on the agent narration the daemon will accept from ``.card``.
+# Same intent as ``_format_agent_note``'s render cap: keep a runaway
+# resident from flooding a thread. Excess bytes are truncated.
+_CARD_CONTROL_MAX_BYTES = 4096
 _INTERNAL_EVENT_SOURCES = {"schedule"}
 
 
@@ -747,6 +758,8 @@ def _run_worker(
     budget_seconds = runner.runner_timeout(cfg)
     hard_cap_seconds = max(budget_seconds * 4, budget_seconds + 3600)
     keepalive_path = outbox_dir / ".keepalive"
+    card_path = outbox_dir / _CARD_CONTROL_NAME
+    card_state: dict[str, str] = {}
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = prompts.build_daemon_prompt(
@@ -809,6 +822,7 @@ def _run_worker(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
                 stats=output_stats,
             )
+            _drain_agent_card(emit, task, eid, card_path, card_state)
             _write_live_inbox(outbox_dir, inbox_dir, eid)
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
@@ -848,6 +862,7 @@ def _run_worker(
             emit, task, responses_dir, eid, outbox_dir, inbox_dir,
             stats=output_stats,
         )
+        _drain_agent_card(emit, task, eid, card_path, card_state)
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
         # dominion no-ops, and on retry the next pass just re-captures any
@@ -1431,6 +1446,70 @@ def _deliver_out_of_bound(
             label=f"outbound:{gate}",
             body=body,
         )
+    return True
+
+
+def _drain_agent_card(
+    emit: _WorkerEmit,
+    task: Task,
+    event_id: str,
+    card_path: Path | None,
+    state: dict[str, str],
+) -> bool:
+    """Promote the agent-composed card narration into a ``card_composed`` packet.
+
+    The resident owns its progress card's body via a single control file
+    (``outbox/<eid>/.card``) — a dotfile, so it never enters the outbox
+    drain as a deliverable message. On each heartbeat tick (and once more
+    after the runner returns) the daemon reads the file; when its content
+    has changed since the last emit, a ``card_composed`` packet is sent so
+    the gate re-renders the live card with the agent's text. Removing or
+    emptying the file emits one final empty packet so the narration
+    cleanly withdraws.
+
+    *state* is a tiny dict the worker owns for the life of the attempt; we
+    stash the last-seen text under ``"last"`` so re-reading the same body
+    is a no-op (no packet spam every 30s). Returns True when a packet was
+    emitted, False on a no-op or unreadable file.
+
+    The cap (``_CARD_CONTROL_MAX_BYTES``) bounds the daemon-side read;
+    the gate's renderer applies a render-time cap of its own. Errors are
+    swallowed — a card-control bug must never break a run.
+    """
+    if card_path is None:
+        return False
+    has_last = "last" in state
+    if not card_path.exists():
+        if not has_last or state["last"] == "":
+            return False
+        state["last"] = ""
+        emit(
+            "card_composed",
+            task_id=task.id,
+            event_id=event_id,
+            text="",
+        )
+        return True
+    try:
+        raw = card_path.read_bytes()
+    except OSError:
+        return False
+    if len(raw) > _CARD_CONTROL_MAX_BYTES:
+        raw = raw[:_CARD_CONTROL_MAX_BYTES]
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    body = text.strip()
+    if has_last and state["last"] == body:
+        return False
+    state["last"] = body
+    emit(
+        "card_composed",
+        task_id=task.id,
+        event_id=event_id,
+        text=body,
+    )
     return True
 
 
