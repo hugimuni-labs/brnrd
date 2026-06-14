@@ -207,7 +207,7 @@ def test_api_call_uses_requests_json_and_typed_not_modified(monkeypatch):
         calls.append((url, kwargs))
         return FakeResponse()
 
-    monkeypatch.setattr(telegram.requests, "post", fake_post)
+    monkeypatch.setattr(telegram._SESSION, "post", fake_post)
 
     with pytest.raises(telegram._TelegramNotModified):
         telegram._api_call("secret", "editMessageText", {"chat_id": 1})
@@ -224,7 +224,7 @@ def test_api_call_redacts_token_from_request_errors(monkeypatch):
     def fake_post(url, **kwargs):
         raise telegram.requests.RequestException(f"failed for {url}")
 
-    monkeypatch.setattr(telegram.requests, "post", fake_post)
+    monkeypatch.setattr(telegram._SESSION, "post", fake_post)
 
     with pytest.raises(RuntimeError) as caught:
         telegram._api_call("secret-token", "getMe")
