@@ -85,6 +85,59 @@ def test_conversation_key_cloud_without_routing_falls_back_to_default():
     )
 
 
+def test_correspondent_key_telegram_user_id_matches_cloud_relay():
+    native = {
+        "source": "telegram",
+        "telegram_user_id": 42,
+        "telegram_username": "AdaL",
+        "telegram_user": "Ada",
+    }
+    cloud = {
+        "source": "cloud",
+        "cloud_platform": "telegram",
+        "cloud_user_id": 42,
+        "cloud_username": "AdaL",
+        "cloud_user": "Ada",
+    }
+    assert conversations.correspondent_key_for_event(native) == (
+        "telegram:user-id:42"
+    )
+    assert conversations.correspondent_key_for_event(cloud) == (
+        "telegram:user-id:42"
+    )
+
+
+def test_correspondent_key_uses_stable_handles():
+    assert conversations.correspondent_key_for_event(
+        {"source": "github", "github_author": "OctoCat"},
+    ) == "github:login:octocat"
+    assert conversations.correspondent_key_for_event(
+        {"source": "slack", "slack_user": "U123"},
+    ) == "slack:user:u123"
+
+
+def test_origin_message_key_matches_native_and_cloud_telegram():
+    native = {
+        "source": "telegram",
+        "telegram_chat_id": 10,
+        "telegram_topic_id": 3,
+        "telegram_message_id": 99,
+    }
+    cloud = {
+        "source": "cloud",
+        "cloud_platform": "telegram",
+        "cloud_chat_id": 10,
+        "cloud_topic_id": 3,
+        "cloud_message_id": 99,
+    }
+    assert conversations.origin_message_key_for_event(native) == (
+        "telegram:10:3:99"
+    )
+    assert conversations.origin_message_key_for_event(cloud) == (
+        "telegram:10:3:99"
+    )
+
+
 def test_conversation_key_explicit_wins():
     event = {
         "source": "telegram",
@@ -242,6 +295,38 @@ def test_read_recent_limit_zero_returns_all(tmp_path):
             tmp_path, "k", {"kind": "n", "i": i}, event_id="evt-a",
         )
     assert len(conversations.read_recent(tmp_path, "k", limit=0)) == 3
+
+
+def test_read_recent_for_correspondent_merges_sibling_channels(tmp_path):
+    native = {
+        "id": "evt-native",
+        "source": "telegram",
+        "body": "from native",
+        "telegram_chat_id": 10,
+        "telegram_user_id": 42,
+    }
+    cloud = {
+        "id": "evt-cloud",
+        "source": "cloud",
+        "body": "from cloud",
+        "cloud_platform": "telegram",
+        "cloud_chat_id": 10,
+        "cloud_user_id": 42,
+    }
+    native_key = conversations.conversation_key_for_event(native)
+    cloud_key = conversations.conversation_key_for_event(cloud)
+    assert native_key == "telegram:10:"
+    assert cloud_key == "cloud:telegram:10:"
+
+    conversations.append_event(tmp_path, native_key, native)
+    conversations.append_event(tmp_path, cloud_key, cloud)
+
+    records = conversations.read_recent_for_correspondent(
+        tmp_path, cloud_key, "telegram:user-id:42", limit=5,
+    )
+    bodies = [r.get("body") for r in records]
+    assert bodies == ["from native", "from cloud"]
+    assert [r.get("conversation_key") for r in records] == [native_key, cloud_key]
 
 
 def test_read_recent_prefers_dialogue_over_lifecycle_noise(tmp_path):
