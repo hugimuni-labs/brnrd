@@ -161,3 +161,24 @@ class TestPartials:
         protocol.cleanup(path, rpath, pdir)
         assert not pdir.exists()
         assert not rpath.exists()
+
+
+class TestInboxWake:
+    """The process-local wake signal create_event raises for the daemon loop."""
+
+    def test_pending_event_sets_wake(self, tmp_path):
+        protocol.inbox_wake().clear()
+        protocol.create_event(tmp_path / "inbox", source="x", body="hi")
+        assert protocol.inbox_wake().is_set()
+
+    def test_done_event_does_not_set_wake(self, tmp_path):
+        # Outbound-only events are delivered by gate threads, not the
+        # spawn loop, so they must not wake it.
+        protocol.inbox_wake().clear()
+        protocol.create_event(
+            tmp_path / "inbox", source="x", body="hi", status="done",
+        )
+        assert not protocol.inbox_wake().is_set()
+
+    def test_wake_is_a_stable_singleton(self):
+        assert protocol.inbox_wake() is protocol.inbox_wake()
