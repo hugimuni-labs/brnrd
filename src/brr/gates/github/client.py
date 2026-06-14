@@ -14,6 +14,13 @@ import requests
 
 from .constants import _API_ROOT, _API_VERSION, _HTTP_TIMEOUT, _USER_AGENT
 
+# One Session for the gate's single loop thread: keep-alive reuses the
+# TCP/TLS connection across polls (and conditional ETag requests) instead
+# of dialing api.github.com fresh each call. The managed brnrd backend
+# plugs its own async httpx client and never touches this module. See
+# ``kb/subject-daemon.md`` → gate responsiveness.
+_SESSION = requests.Session()
+
 
 class GitHubAPIError(RuntimeError):
     """Raised on any non-2xx GitHub API response."""
@@ -81,7 +88,7 @@ def _request(
         cached_etag = etag_store.get(cache_key)
         if cached_etag:
             headers["If-None-Match"] = cached_etag
-    response = requests.request(
+    response = _SESSION.request(
         method,
         url,
         params=clean_params,
