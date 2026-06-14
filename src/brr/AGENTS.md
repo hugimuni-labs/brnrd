@@ -185,6 +185,15 @@ If you wrote files, commit them. The diff is the receipt that the work
 happened. Read-only tasks (Q&A, review, verify) are the only
 commit-free case, and only because nothing changed.
 
+### Issue and PR descriptions
+
+The same instinct as a commit message, turned outward: lead with the
+*why* (the problem or the goal), state the *want* (the change or
+outcome), then point at the code and the neighbouring kb pages or issues
+so a reader can pick up the thread. Match depth to size — a one-line
+tracking issue earns a sentence, not three headings; a cross-cutting
+proposal earns the full shape.
+
 ### Pushing, rebasing, and open PRs
 
 When you've pushed work on a feature branch and the branch has an
