@@ -34,6 +34,7 @@ PACKET_TYPES = (
     "retrying",
     "artifact_created",
     "interim_response",
+    "card_composed",
     "heartbeat",
     "finalizing",
     "container_preserved",
@@ -83,6 +84,12 @@ _QUIET_TYPES = {
     # bury the meaningful packets. They still flow through the gate
     # renderer (which folds them into the live elapsed counter).
     "heartbeat",
+    # ``card_composed`` is the agent narrating its own progress: it can
+    # fire as often as the resident rewrites its ``.card`` file. The
+    # packet still reaches gates (so the card re-renders) and is
+    # persisted as a record of what the agent said, but it doesn't earn
+    # a daemon-console line each time.
+    "card_composed",
 }
 
 
