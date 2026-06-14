@@ -409,6 +409,102 @@ def test_build_communication_snapshot_boosts_unanswered_turns(tmp_path):
     ]
 
 
+def test_build_communication_snapshot_surfaces_prior_run_failure(tmp_path):
+    key = "telegram:10:"
+    # A prior run on the thread that died operationally (credit-low).
+    conversations.append_event(
+        tmp_path,
+        key,
+        {"id": "evt-old", "source": "telegram", "body": "do the thing"},
+    )
+    conversations.append_update(
+        tmp_path,
+        key,
+        type="failed",
+        payload={
+            "task_id": "task-old",
+            "event_id": "evt-old",
+            "stage": "run",
+            "attempts": 3,
+            "exit_code": 1,
+            "error": "Credit balance is too low",
+        },
+        event_id="evt-old",
+    )
+    # A fresh wake on the same thread.
+    conversations.append_event(
+        tmp_path,
+        key,
+        {"id": "evt-new", "source": "telegram", "body": "any update?"},
+    )
+
+    snapshot = conversations.build_communication_snapshot(
+        tmp_path, key, event_id="evt-new", task_id="task-new", recent_limit=5,
+    )
+
+    failure = snapshot["prior_failure"]
+    assert failure["reason"] == "Credit balance is too low"
+    assert failure["stage"] == "run"
+    assert failure["attempts"] == 3
+    assert failure["exit_code"] == 1
+    assert failure["event_id"] == "evt-old"
+    assert "ts" in failure
+
+
+def test_build_communication_snapshot_prior_failure_cleared_by_success(tmp_path):
+    key = "telegram:10:"
+    conversations.append_update(
+        tmp_path,
+        key,
+        type="failed",
+        payload={"event_id": "evt-old", "stage": "run", "error": "OOM"},
+        event_id="evt-old",
+    )
+    # A later run on the thread succeeded — the stale failure must not surface.
+    conversations.append_update(
+        tmp_path,
+        key,
+        type="done",
+        payload={"event_id": "evt-mid"},
+        event_id="evt-mid",
+    )
+    conversations.append_event(
+        tmp_path,
+        key,
+        {"id": "evt-new", "source": "telegram", "body": "hello"},
+    )
+
+    snapshot = conversations.build_communication_snapshot(
+        tmp_path, key, event_id="evt-new", task_id="task-new", recent_limit=5,
+    )
+
+    assert "prior_failure" not in snapshot
+
+
+def test_build_communication_snapshot_no_failure_on_clean_thread(tmp_path):
+    key = "telegram:10:"
+    conversations.append_event(
+        tmp_path,
+        key,
+        {"id": "evt-old", "source": "telegram", "body": "earlier"},
+    )
+    conversations.append_artifact(
+        tmp_path, key, kind="response", path="/tmp/evt-old.md",
+        event_id="evt-old", body="all done",
+    )
+    conversations.append_event(
+        tmp_path,
+        key,
+        {"id": "evt-new", "source": "telegram", "body": "again"},
+    )
+
+    snapshot = conversations.build_communication_snapshot(
+        tmp_path, key, event_id="evt-new", task_id="task-new", recent_limit=5,
+    )
+
+    assert "prior_failure" not in snapshot
+
+
 def test_write_grouped_history_files_writes_untruncated_thread_jsonl(tmp_path):
     event = {
         "id": "evt-1",
