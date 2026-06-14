@@ -16,6 +16,8 @@ def write_context_file(
     ctx: RunContext,
     *,
     recent_conversation: list[dict[str, Any]] | None = None,
+    communication_snapshot: dict[str, Any] | None = None,
+    history_groups: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
 ) -> Path:
     """Write `.brr/runs/<task-id>/context.md` and return its path."""
@@ -26,6 +28,8 @@ def write_context_file(
         render_context(
             task, event, ctx,
             recent_conversation=recent_conversation,
+            communication_snapshot=communication_snapshot,
+            history_groups=history_groups,
             event_body=event_body,
         ),
         encoding="utf-8",
@@ -39,6 +43,8 @@ def render_context(
     ctx: RunContext,
     *,
     recent_conversation: list[dict[str, Any]] | None = None,
+    communication_snapshot: dict[str, Any] | None = None,
+    history_groups: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
 ) -> str:
     lines: list[str] = [
@@ -96,10 +102,28 @@ def render_context(
             f"mid-thought): {ctx.outbox_env}"
         )
 
-    if recent_conversation:
+    if communication_snapshot:
+        rendered = _render_communication_snapshot(communication_snapshot)
+        if rendered:
+            lines.extend(["", "## Communication Snapshot", "", rendered])
+    elif recent_conversation:
         rendered = _render_recent_conversation(recent_conversation)
         if rendered:
             lines.extend(["", "## Recent in this conversation", "", rendered])
+
+    rendered_groups = _render_history_groups(
+        history_groups
+        or (
+            communication_snapshot.get("history_groups", [])
+            if communication_snapshot else []
+        )
+    )
+    if rendered_groups and not communication_snapshot:
+        lines.extend(["", "## On-Demand Grouped History", "", rendered_groups])
+
+    thread_record = _thread_of_record_line(ctx.repo_root)
+    if thread_record:
+        lines.extend(["", "## Thread of Record", "", thread_record])
 
     body = (
         event_body if event_body is not None else event.get("body", "") or ""
@@ -139,7 +163,11 @@ def _render_recent_conversation(records: list[dict[str, Any]]) -> str:
         kind = record.get("kind")
         ts = record.get("ts", "")
         if kind == "event":
-            summary = (record.get("summary") or "").strip()
+            body = record.get("body")
+            summary = (
+                body.strip() if isinstance(body, str)
+                else (record.get("summary") or "").strip()
+            )
             source = record.get("source") or ""
             bullets.append(f"- {ts} event ({source}): {summary}".rstrip())
         elif kind == "task":
@@ -167,6 +195,83 @@ def _render_recent_conversation(records: list[dict[str, Any]]) -> str:
             bullets.append(" ".join(bits))
         elif kind == "artifact":
             label = record.get("label") or record.get("artifact_kind") or ""
-            path = record.get("path") or ""
-            bullets.append(f"- {ts} artifact {label} {path}".rstrip())
+            body = record.get("body")
+            if isinstance(body, str) and body.strip():
+                bullets.append(f"- {ts} artifact {label}: {body.strip()}".rstrip())
+            else:
+                path = record.get("path") or ""
+                bullets.append(f"- {ts} artifact {label} {path}".rstrip())
     return "\n".join(bullets)
+
+
+def _render_communication_snapshot(snapshot: dict[str, Any]) -> str:
+    lines: list[str] = []
+    current = str(snapshot.get("current_thread") or "").strip()
+    if current:
+        lines.append(f"- Current thread: {current}")
+    correspondent = str(snapshot.get("correspondent_key") or "").strip()
+    if correspondent:
+        lines.append(f"- Correspondent: {correspondent}")
+    related = snapshot.get("related_threads")
+    if isinstance(related, list) and related:
+        lines.append("- Related input threads:")
+        for thread in related:
+            if not isinstance(thread, dict):
+                continue
+            key = str(thread.get("conversation_key") or "").strip()
+            if not key:
+                continue
+            source = str(thread.get("source") or "").strip()
+            records = thread.get("record_count", 0)
+            dialogue = thread.get("dialogue_count", 0)
+            latest = str(thread.get("latest_ts") or "").strip()
+            detail = f"{dialogue} dialogue / {records} records"
+            if source:
+                detail = f"{source}; {detail}"
+            if latest:
+                detail = f"{detail}; latest {latest}"
+            lines.append(f"  - {key} ({detail})")
+    groups = _render_history_groups(snapshot.get("history_groups", []))
+    if groups:
+        lines.extend(["- On-demand grouped history:", groups])
+    recent = snapshot.get("recent_turns")
+    if isinstance(recent, list) and recent:
+        rendered = _render_recent_conversation(recent)
+        if rendered:
+            lines.extend(["", "Recent turns:", rendered])
+    return "\n".join(lines)
+
+
+def _render_history_groups(groups: Any) -> str:
+    if not isinstance(groups, list) or not groups:
+        return ""
+    bullets: list[str] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        label = str(group.get("label") or group.get("id") or "").strip()
+        path = str(group.get("path") or "").strip()
+        if not label or not path:
+            continue
+        count = group.get("record_count", 0)
+        bullets.append(f"  - {label}: {path} ({count} records)")
+    return "\n".join(bullets)
+
+
+def _thread_of_record_line(repo_root: Path) -> str:
+    from . import config as conf
+    from . import dominion
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    path = dominion.dominion_path(repo_root)
+    if not path.is_dir():
+        return ""
+    record_path = path / "thread-of-record.md"
+    state = "exists" if record_path.exists() else "not created yet"
+    return (
+        f"- Resident-maintained note: {record_path} ({state}).\n"
+        "- Use it for durable cross-channel project narrative when the "
+        "current work produces something worth carrying forward."
+    )

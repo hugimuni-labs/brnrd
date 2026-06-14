@@ -45,10 +45,11 @@ import heapq
 import json
 import os
 import re
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, TypedDict
 
 
 # ── Time helpers ─────────────────────────────────────────────────────
@@ -277,6 +278,30 @@ _DIALOGUE_ARTIFACT_KINDS = {"response", "interim_response", "outbound_message"}
 # file means a buggy emitter shows up as visible noise on the next
 # read rather than a silent drop.
 _ORPHAN_BASENAME = "_orphan"
+
+
+class HistoryGroup(TypedDict, total=False):
+    """Agent-facing descriptor for one grouped deep-history jsonl file."""
+
+    id: str
+    kind: str
+    source: str
+    conversation_key: str
+    label: str
+    path: str
+    record_count: int
+    dialogue_count: int
+    latest_ts: str
+
+
+class CommunicationSnapshot(TypedDict, total=False):
+    """Wake-time, curated view over conversation history."""
+
+    current_thread: str
+    correspondent_key: str
+    related_threads: list[dict[str, Any]]
+    recent_turns: list[dict[str, Any]]
+    history_groups: list[HistoryGroup]
 
 
 def safe_dir_name(key: str) -> str:
@@ -536,20 +561,26 @@ def conversation_keys_for_correspondent(
     ``include_key`` keeps the active thread in the set even before any
     prior event in that thread has been written with the identity tag.
     """
-    keys: set[str] = set()
+    keys_by_dir: dict[str, str] = {}
+
+    def add_key(value: str, *, prefer: bool = False) -> None:
+        safe = safe_dir_name(value)
+        if prefer or safe not in keys_by_dir:
+            keys_by_dir[safe] = value
+
     if include_key:
-        keys.add(include_key)
+        add_key(include_key, prefer=True)
     if not correspondent_key:
-        return sorted(keys)
+        return sorted(keys_by_dir.values())
     for key in list_conversations(brr_dir):
         for record in read_records(brr_dir, key):
             if (
                 record.get("kind") == "event"
                 and record.get("correspondent_key") == correspondent_key
             ):
-                keys.add(key)
+                add_key(key)
                 break
-    return sorted(keys)
+    return sorted(keys_by_dir.values())
 
 
 def find_event_by_origin_message(
@@ -611,6 +642,205 @@ def read_recent_for_correspondent(
     if limit <= 0:
         return records
     return records[-limit:]
+
+
+def _conversation_source_from_key(key: str) -> str:
+    """Best-effort source label from a conversation key."""
+    if key.startswith("cloud:"):
+        parts = key.split(":", 2)
+        if len(parts) >= 2 and parts[1]:
+            return f"cloud/{parts[1]}"
+        return "cloud"
+    return key.split(":", 1)[0] if ":" in key else key
+
+
+def _history_group_kind(source: str) -> str:
+    return "forge_thread" if source in {"github", "cloud/github"} else "gate_thread"
+
+
+def _history_group_label(source: str, key: str) -> str:
+    if source in {"github", "cloud/github"}:
+        return f"GitHub thread {key}"
+    if source.startswith("cloud/"):
+        return f"{source} thread {key}"
+    return f"{source or 'conversation'} thread {key}"
+
+
+def _thread_summary(
+    key: str,
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    source = _conversation_source_from_key(key)
+    latest = _ts_key(records[-1]) if records else ""
+    return {
+        "conversation_key": key,
+        "source": source,
+        "kind": _history_group_kind(source),
+        "record_count": len(records),
+        "dialogue_count": sum(1 for r in records if _is_dialogue_record(r)),
+        "latest_ts": latest,
+    }
+
+
+def _without_current_records(
+    records: list[dict[str, Any]],
+    *,
+    event_id: str = "",
+    task_id: str = "",
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for record in records:
+        if event_id and record.get("event_id") == event_id:
+            continue
+        if task_id and record.get("task_id") == task_id:
+            continue
+        out.append(record)
+    return out
+
+
+def _select_snapshot_turns(
+    records: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Select dialogue turns for the wake snapshot.
+
+    Recency is the main signal, but unanswered user events get a strong
+    boost so an older pending ask is less likely to disappear behind a
+    more recent answered exchange. The selected rows are returned in
+    chronological order so the prompt still reads like a chat.
+    """
+    dialogue = [r for r in records if _is_dialogue_record(r)]
+    if limit <= 0 or len(dialogue) <= limit:
+        return dialogue
+
+    answered_event_ids = {
+        str(r.get("event_id") or "")
+        for r in dialogue
+        if (
+            r.get("kind") == "artifact"
+            and r.get("artifact_kind") in _DIALOGUE_ARTIFACT_KINDS
+            and r.get("event_id")
+        )
+    }
+    total = len(dialogue)
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    for index, record in enumerate(dialogue):
+        score = index
+        if (
+            record.get("kind") == "event"
+            and record.get("event_id")
+            and str(record.get("event_id")) not in answered_event_ids
+        ):
+            score += total
+        scored.append((score, index, record))
+
+    picked = sorted(scored, key=lambda item: (item[0], item[1]))[-limit:]
+    picked.sort(key=lambda item: item[1])
+    return [record for _score, _index, record in picked]
+
+
+def build_communication_snapshot(
+    brr_dir: Path,
+    key: str,
+    correspondent_key: str | None = None,
+    *,
+    event_id: str = "",
+    task_id: str = "",
+    recent_limit: int = 8,
+    history_groups: list[HistoryGroup] | None = None,
+) -> CommunicationSnapshot:
+    """Return the curated wake-time communication snapshot.
+
+    The snapshot is prompt-facing: it shows which thread is active,
+    sibling channels for the same correspondent, and recent dialogue
+    turns woven across those channels. The full untruncated history stays
+    behind separate JSONL files produced by
+    :func:`write_grouped_history_files`.
+    """
+    records_by_key: dict[str, list[dict[str, Any]]] = {}
+    related_keys = conversation_keys_for_correspondent(
+        brr_dir, correspondent_key, include_key=key,
+    )
+    for related in related_keys:
+        records_by_key[related] = [
+            _tag_record(r, related) for r in read_records(brr_dir, related)
+        ]
+
+    merged: list[dict[str, Any]] = []
+    for records in records_by_key.values():
+        merged.extend(records)
+    merged.sort(key=_ts_key)
+    prior = _without_current_records(
+        merged, event_id=event_id, task_id=task_id,
+    )
+    recent_turns = _select_snapshot_turns(prior, limit=recent_limit)
+
+    snapshot: CommunicationSnapshot = {
+        "current_thread": key,
+        "related_threads": [
+            _thread_summary(related, records_by_key.get(related, []))
+            for related in related_keys
+        ],
+        "recent_turns": recent_turns,
+    }
+    if correspondent_key:
+        snapshot["correspondent_key"] = correspondent_key
+    if history_groups:
+        snapshot["history_groups"] = history_groups
+    return snapshot
+
+
+def write_grouped_history_files(
+    brr_dir: Path,
+    output_dir: Path,
+    key: str,
+    correspondent_key: str | None = None,
+) -> list[HistoryGroup]:
+    """Write untruncated per-thread JSONL history files for a wake.
+
+    Each file groups records by the input thread that produced them:
+    native gate threads (Telegram / Slack / cloud relay channels) or
+    forge threads (GitHub issue / PR conversations). A manifest JSON is
+    written beside the JSONL files for machine consumers, while callers
+    use the returned group descriptors for prompt/context rendering.
+    """
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    groups: list[HistoryGroup] = []
+    for related in conversation_keys_for_correspondent(
+        brr_dir, correspondent_key, include_key=key,
+    ):
+        records = [_tag_record(r, related) for r in read_records(brr_dir, related)]
+        if not records:
+            continue
+        source = _conversation_source_from_key(related)
+        kind = _history_group_kind(source)
+        filename = f"{kind}-{safe_dir_name(related)}.jsonl"
+        path = output_dir / filename
+        payload = "\n".join(json.dumps(r, sort_keys=True) for r in records)
+        path.write_text(payload + "\n", encoding="utf-8")
+        group: HistoryGroup = {
+            "id": f"{kind}:{related}",
+            "kind": kind,
+            "source": source,
+            "conversation_key": related,
+            "label": _history_group_label(source, related),
+            "path": str(path),
+            "record_count": len(records),
+            "dialogue_count": sum(1 for r in records if _is_dialogue_record(r)),
+            "latest_ts": _ts_key(records[-1]),
+        }
+        groups.append(group)
+
+    manifest = output_dir / "manifest.json"
+    manifest.write_text(
+        json.dumps({"groups": groups}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return groups
 
 
 def read_recent(

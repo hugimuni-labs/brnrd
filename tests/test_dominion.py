@@ -322,6 +322,20 @@ def test_daemon_prompt_injects_dominion_digest(tmp_path):
     assert "Your dominion (working memory)" in prompt
 
 
+def test_daemon_prompt_names_thread_of_record_slot(tmp_path):
+    repo = _repo(tmp_path)
+    dom = dominion.ensure_dominion(repo, push=False)
+    (dom / "thread-of-record.md").write_text("Current arc\n", encoding="utf-8")
+
+    prompt = prompts.build_daemon_prompt(
+        "do the thing", "evt-1", "/tmp/resp.md", repo,
+    )
+
+    assert "Thread of record" in prompt
+    assert "thread-of-record.md" in prompt
+    assert "brr points at the slot but does not synthesize" in prompt
+
+
 def test_prompt_without_dominion_has_no_block(tmp_path):
     repo = _repo(tmp_path)  # .brr exists, but no dominion materialized
 
