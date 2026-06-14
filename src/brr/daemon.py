@@ -59,6 +59,7 @@ from . import runner
 from . import schedule as schedule_mod
 from . import sync
 from . import updates
+from . import worktree
 from .task import Task
 
 _SCAN_INTERVAL = 3
@@ -903,8 +904,22 @@ def _run_worker(
                         "timed_out": False,
                     }
 
-        if _result_satisfied_delivery(result, output_stats, event):
-            print(f"[brr] worker {eid}: response ready")
+        # Detect a fresh commit on the worktree branch before finalize runs
+        # — finalize tears the worktree down on success, so this read has
+        # to happen here. ``has_commits_beyond(seed_ref)`` follows HEAD,
+        # which is what the agent ended on (initial branch or a switched
+        # branch); both count as "the agent committed real work".
+        try:
+            has_new_commit = worktree.has_commits_beyond(
+                run_root, branch_plan.seed_ref,
+            )
+        except Exception:
+            has_new_commit = False
+        satisfied, signal = _result_satisfied_delivery(
+            result, output_stats, event, has_new_commit=has_new_commit,
+        )
+        if satisfied:
+            print(f"[brr] worker {eid}: response ready ({signal})")
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             if _response_has_body(resp_path):
@@ -922,12 +937,21 @@ def _run_worker(
             _cleanup_traces_on_success(brr_dir, tasks_dir, task)
             _remove_outbox(outbox_dir)
             _emit_preserved_containers(emit, task)
+            # Payload carries the multi-thread delivery shape so the card
+            # can reflect "delivered to N threads" / "sent N out-of-bound"
+            # / "no reply — committed work" instead of collapsing
+            # everything to a single current-thread reply (§8 re-alignment).
             emit(
                 "done",
                 task_id=task.id,
                 event_id=eid,
                 publish_branch=task.meta.get("publish_branch"),
                 publish_status=task.meta.get("publish_status"),
+                success_signal=signal,
+                replies_current=output_stats.get("current", 0),
+                replies_other=output_stats.get("other", 0),
+                outbound_messages=output_stats.get("outbound", 0),
+                committed=has_new_commit,
             )
             return task
 
@@ -987,11 +1011,30 @@ def _run_worker(
         task = env_backend.finalize(env_ctx, task, tasks_dir)
     _remove_outbox(outbox_dir)
     _emit_preserved_containers(emit, task)
+    # Classify the failure for the card: §6 says the user owns the runner
+    # (critical infra brr doesn't control) so an operational failure
+    # — runner timeout, non-zero exit, env/setup error — renders distinctly
+    # from a "I ran out of attempts" silent partial. ``failure_kind`` reads:
+    #   timed_out → "timed_out"  (runner.communicate hit the hard cap)
+    #   exit_code → "runner_error" (subprocess returned non-zero)
+    #   ok but no signal → "no_output" (runner ran clean but emitted
+    #     nothing on any thread, didn't commit, can't declare noop —
+    #     should be rare once #126's full noop affordance lands)
+    #   no_output is the clean-exit-but-no-signal case: ``last_failure`` is
+    #   None (the runner never recorded a failure), yet the run produced no
+    #   reply on any thread and no commit. Any recorded ``last_failure``
+    #   that isn't a timeout is a non-zero / artifact-missing runner error.
+    failure_kind = "no_output"
+    if last_failure:
+        failure_kind = (
+            "timed_out" if last_failure.get("timed_out") else "runner_error"
+        )
     failed_payload: dict[str, object] = {
         "task_id": task.id,
         "event_id": eid,
         "stage": "run",
         "attempts": attempt,
+        "failure_kind": failure_kind,
     }
     if last_failure:
         failed_payload["exit_code"] = last_failure["exit_code"]
@@ -1696,20 +1739,38 @@ def _result_satisfied_delivery(
     result: "runner.RunnerResult",
     output_stats: dict[str, int],
     event: dict,
-) -> bool:
-    """Return whether this attempt produced enough output to finish.
+    *,
+    has_new_commit: bool = False,
+) -> tuple[bool, str]:
+    """Return ``(satisfied, signal)`` — the success-signal kind that caught it.
 
-    Stdout remains the common terminal-reply path, but the resident can
-    also satisfy an addressed event by sending a current-thread outbox
-    reply. Internal schedule events have no gate thread to close.
+    Aligns with the §6 co-maintainer model: a run succeeds when it produced
+    an output event (a current-thread reply, a folded-in reply, or an
+    out-of-bound gate send), or a new commit on the worktree branch, or the
+    event is internal (schedule fire / dedup retire) and no thread reply is
+    required. Stdout remains the common ``current_reply`` path, but it is no
+    longer the *only* success signal — a run that committed work or
+    answered a sibling thread is a successful run too.
+
+    *signal* is one of ``current_reply | other_reply | outbound | commit |
+    internal | ""`` (empty when not satisfied). The string surfaces on the
+    ``done`` packet so renderers can name what the success was.
     """
     if not result.ok or result.missing_artifacts:
-        return False
+        return False, ""
     if result.has_response:
-        return True
+        return True, "current_reply"
     if output_stats.get("current", 0) > 0:
-        return True
-    return not _event_requires_thread_delivery(event)
+        return True, "current_reply"
+    if output_stats.get("other", 0) > 0:
+        return True, "other_reply"
+    if output_stats.get("outbound", 0) > 0:
+        return True, "outbound"
+    if has_new_commit:
+        return True, "commit"
+    if not _event_requires_thread_delivery(event):
+        return True, "internal"
+    return False, ""
 
 
 def _failure_reason(
