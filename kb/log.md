@@ -6494,3 +6494,18 @@ introspection impossible to verify end-to-end. The block was already injected
 into real wakes (the visibility gap tracked by #116 is the `brr agent inject`
 command + success-trace cleanup, not injection); this is the complementary
 behavioural lever. Output rides the gate reply, not the PR body.
+
+## [2026-06-14] implement | Correspondent identity threads sibling channels
+
+Closed the Co-maintainer correspondent-identity slice. Conversation event records
+now carry a `correspondent_key` derived from gate sender metadata and, for exact
+platform-source deduplication, an `origin_message_key`. The daemon prompt reads
+recent history across conversation directories for the same correspondent, so a
+brnrd-relayed Telegram turn can see recent local Telegram turns by the same
+person without merging delivery keys. Local Telegram, brnrd Telegram ingress,
+and the cloud adapter now preserve user id / username / display-name metadata;
+same Telegram message or GitHub comment duplicates finish as deduplicated tasks
+instead of invoking a second runner.
+
+Validation: `PYTHONPATH=src python -m pytest` passed (833 tests, with the
+existing Starlette/FastAPI TestClient deprecation warning).

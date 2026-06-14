@@ -507,7 +507,46 @@ def _run_worker(
     runner_name = runner.resolve_runner(repo_root)
 
     conv_key = conversations.conversation_key_for_event(event) or ""
+    correspondent_key = conversations.correspondent_key_for_event(event) or ""
+    origin_message_key = conversations.origin_message_key_for_event(event) or ""
+    duplicate_event = conversations.find_event_by_origin_message(
+        brr_dir, origin_message_key, exclude_event_id=eid,
+    )
     emit = _WorkerEmit(brr_dir, conv_key, eid)
+
+    if conv_key:
+        conversations.append_event(brr_dir, conv_key, event)
+        emit("event_received", event_id=eid, source=event.get("source", ""))
+
+    if duplicate_event:
+        task = Task.from_event(event, cfg)
+        task.conversation_key = conv_key
+        task.status = "done"
+        if correspondent_key:
+            task.meta["correspondent_key"] = correspondent_key
+        task.meta["deduplicated_origin_message_key"] = origin_message_key
+        prior_event_id = str(duplicate_event.get("event_id") or "").strip()
+        prior_conversation = str(duplicate_event.get("conversation_key") or "").strip()
+        if prior_event_id:
+            task.meta["deduplicated_by_event_id"] = prior_event_id
+        if prior_conversation:
+            task.meta["deduplicated_by_conversation_key"] = prior_conversation
+        task.save(tasks_dir)
+        emit("task_created", task_id=task.id, event_id=eid, env=task.env)
+        if conv_key:
+            conversations.append_task(
+                brr_dir, conv_key,
+                task_id=task.id, event_id=eid,
+                env=task.env, status=task.status,
+            )
+        body = _deduplicated_event_body()
+        resp_path = protocol.response_path(responses_dir, eid)
+        protocol.write_response(responses_dir, eid, body)
+        _record_response_artifact(emit, task, resp_path)
+        _set_event_status_if_present(event, "done")
+        emit("finalizing", task_id=task.id, stage="deduplicated")
+        emit("done", task_id=task.id, event_id=eid, publish_status="deduplicated")
+        return task
 
     # Refresh local refs before resolving the branch plan so the task
     # seeds from a current view of the world. Computing target_branches
@@ -522,8 +561,6 @@ def _run_worker(
     branch_plan = branching.resolve_publish_plan(repo_root, event, cfg)
 
     if conv_key:
-        conversations.append_event(brr_dir, conv_key, event)
-        emit("event_received", event_id=eid, source=event.get("source", ""))
         sync_summary = sync.render_summary(sync_result)
         if sync_summary or sync_result.error:
             emit(
@@ -537,6 +574,8 @@ def _run_worker(
 
     task = Task.from_event(event, cfg)
     task.conversation_key = conv_key
+    if correspondent_key:
+        task.meta["correspondent_key"] = correspondent_key
     task.save(tasks_dir)
 
     emit("task_created", task_id=task.id, event_id=eid, env=task.env)
@@ -648,7 +687,9 @@ def _run_worker(
     recent_read_limit = prompts.RECENT_CONVERSATION_MAX + _RECENT_READ_HEADROOM
     recent_conversation = (
         _recent_conversation_for_prompt(
-            conversations.read_recent(brr_dir, conv_key, limit=recent_read_limit),
+            conversations.read_recent_for_correspondent(
+                brr_dir, conv_key, correspondent_key, limit=recent_read_limit,
+            ),
             event_id=eid,
             task_id=task.id,
         )
@@ -1610,6 +1651,13 @@ def _terminal_failure_body(reason: str) -> str:
     return (
         "I couldn't complete this run.\n\n"
         f"brr is surfacing this because {reason}."
+    )
+
+
+def _deduplicated_event_body() -> str:
+    return (
+        "I already received this source message on another configured channel. "
+        "No second run was started."
     )
 
 
