@@ -1901,8 +1901,16 @@ def start(
     current: concurrent.futures.Future | None = None
     reload_requested = False
 
+    wake = protocol.inbox_wake()
     try:
         while running:
+            # Consume any pending wake signal up front, before we read the
+            # inbox below: a set that lands after this clear (a gate
+            # enqueuing mid-iteration) keeps the flag set, so the wait at
+            # the bottom returns promptly and the next pass picks it up —
+            # no event is missed, and a busy iteration can't spin.
+            wake.clear()
+
             # Poll the dev-reload watcher exactly once per iteration —
             # the main thread is its only caller, so the changed()
             # bookkeeping stays consistent.
@@ -1949,7 +1957,12 @@ def start(
                         event, repo_root, responses_dir, cfg, max_retries,
                     )
 
-            time.sleep(_SCAN_INTERVAL)
+            # Event-driven idle wait: block until a fresh in-process event
+            # wakes us or the poll tick elapses, whichever comes first.
+            # The tick still bounds latency for cross-process writers (the
+            # ``brr run`` CLI) and time-based work (due schedules), which
+            # don't set the signal.
+            wake.wait(_SCAN_INTERVAL)
 
             for t in gate_threads:
                 if not t.is_alive():
