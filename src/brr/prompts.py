@@ -412,6 +412,7 @@ def build_daemon_prompt(
     runtime_dir: str | None = None,
     context_path: str | None = None,
     recent_conversation: list[dict[str, Any]] | None = None,
+    communication_snapshot: dict[str, Any] | None = None,
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
@@ -451,6 +452,7 @@ def build_daemon_prompt(
         runtime_dir=runtime_dir,
         context_path=context_path,
         recent_conversation=recent_conversation,
+        communication_snapshot=communication_snapshot,
         pending_events=pending_events,
         present=present,
         event_body=event_body,
@@ -494,6 +496,7 @@ def _build_task_context_bundle(
     runtime_dir: str | None,
     context_path: str | None,
     recent_conversation: list[dict[str, Any]] | None,
+    communication_snapshot: dict[str, Any] | None = None,
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None,
@@ -701,12 +704,26 @@ def _build_task_context_bundle(
         sections.append("")
         sections.append(presence_block)
 
-    recent_block = _format_recent_conversation(recent_conversation)
-    if recent_block:
+    snapshot_block = _format_communication_snapshot(communication_snapshot)
+    if snapshot_block:
         sections.append("")
-        sections.append("### Recent in this conversation")
+        sections.append("### Communication snapshot")
         sections.append("")
-        sections.append(recent_block)
+        sections.append(snapshot_block)
+    else:
+        recent_block = _format_recent_conversation(recent_conversation)
+        if recent_block:
+            sections.append("")
+            sections.append("### Recent in this conversation")
+            sections.append("")
+            sections.append(recent_block)
+
+    thread_record_block = _format_thread_of_record(repo_root)
+    if thread_record_block:
+        sections.append("")
+        sections.append("### Thread of record")
+        sections.append("")
+        sections.append(thread_record_block)
 
     if event_body is not None:
         body = event_body.strip()
@@ -767,6 +784,96 @@ def _format_presence(
         tag = f" (task {tid})" if tid else ""
         bullets.append(f"- {kind}{where}{tag}")
     return "\n".join(bullets)
+
+
+def _format_communication_snapshot(
+    snapshot: dict[str, Any] | None,
+) -> str:
+    """Render the curated cross-channel wake snapshot.
+
+    This is the prompt-facing tier in the co-maintainer continuity model:
+    compact enough to ride every wake, with untruncated grouped history
+    one file read away when the resident needs more.
+    """
+    if not snapshot:
+        return ""
+    lines: list[str] = []
+    current = str(snapshot.get("current_thread") or "").strip()
+    if current:
+        lines.append(f"- Current thread: `{current}`")
+    correspondent = str(snapshot.get("correspondent_key") or "").strip()
+    if correspondent:
+        lines.append(f"- Correspondent: `{correspondent}`")
+
+    related = snapshot.get("related_threads")
+    if isinstance(related, list) and related:
+        lines.append("- Related input threads:")
+        for thread in related:
+            if not isinstance(thread, dict):
+                continue
+            key = str(thread.get("conversation_key") or "").strip()
+            if not key:
+                continue
+            source = str(thread.get("source") or "").strip()
+            kind = str(thread.get("kind") or "").replace("_", " ").strip()
+            records = thread.get("record_count", 0)
+            dialogue = thread.get("dialogue_count", 0)
+            latest = str(thread.get("latest_ts") or "").strip()
+            detail = f"{dialogue} dialogue / {records} records"
+            if source:
+                detail = f"{source}; {detail}"
+            if kind:
+                detail = f"{kind}; {detail}"
+            if latest:
+                detail = f"{detail}; latest {latest}"
+            lines.append(f"  - `{key}` ({detail})")
+
+    groups = snapshot.get("history_groups")
+    if isinstance(groups, list) and groups:
+        lines.append("- On-demand grouped history:")
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            label = str(group.get("label") or group.get("id") or "").strip()
+            path = str(group.get("path") or "").strip()
+            if not label or not path:
+                continue
+            count = group.get("record_count", 0)
+            lines.append(f"  - {label}: `{path}` ({count} records)")
+        lines.append(
+            "  Read these JSONL files only when the snapshot is too thin; "
+            "they are untruncated runtime records grouped by gate/forge "
+            "thread."
+        )
+
+    turns = _format_recent_conversation(snapshot.get("recent_turns"))
+    if turns:
+        if lines:
+            lines.append("")
+        lines.append("Recent turns (woven, oldest first):")
+        lines.append(turns)
+    return "\n".join(lines)
+
+
+def _format_thread_of_record(repo_root: Path) -> str:
+    """Return the dominion thread-of-record hint, when a dominion exists."""
+    from . import config as conf
+    from . import dominion
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    path = dominion.dominion_path(repo_root)
+    if not path.is_dir():
+        return ""
+    record_path = path / "thread-of-record.md"
+    state = "exists" if record_path.exists() else "not created yet"
+    return (
+        f"- Resident-maintained note: `{record_path}` ({state}).\n"
+        "- Use it only for durable project-level narrative that should "
+        "survive across channels; brr points at the slot but does not "
+        "synthesize or mutate it for you."
+    )
 
 
 def _format_recent_conversation(
