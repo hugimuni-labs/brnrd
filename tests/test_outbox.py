@@ -565,6 +565,39 @@ def test_run_context_includes_communication_snapshot_and_history(tmp_path):
     assert "agent prior" in text
 
 
+def test_run_context_renders_prior_failure_facet(tmp_path):
+    task = Task(id="task-2", event_id="evt-2", body="again", source="telegram")
+    ctx = RunContext(
+        name="worktree",
+        cwd=tmp_path,
+        repo_root=tmp_path,
+        runtime_dir=tmp_path / ".brr",
+        response_path_host=tmp_path / ".brr/responses/evt-2.md",
+        response_path_env=tmp_path / ".brr/responses/evt-2.md",
+    )
+
+    text = run_context.render_context(
+        task,
+        {"_path": "x", "source": "telegram"},
+        ctx,
+        communication_snapshot={
+            "current_thread": "telegram:1:",
+            "prior_failure": {
+                "reason": "Credit balance is too low",
+                "stage": "run",
+                "attempts": 3,
+                "ts": "2026-06-14T16:00:00Z",
+            },
+            "related_threads": [],
+            "recent_turns": [],
+        },
+    )
+
+    assert "Prior run on this thread failed (operational)" in text
+    assert "Credit balance is too low" in text
+    assert "3 attempt(s)" in text
+
+
 def test_run_context_omits_outbox_when_absent(tmp_path):
     task = Task(id="task-1", event_id="evt-1", body="do it")
     ctx = RunContext(
