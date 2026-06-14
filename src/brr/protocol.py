@@ -10,11 +10,28 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import threading
 import time
 import random
 import string
 from pathlib import Path
 from typing import Any
+
+
+# ── Inbox wake signal ────────────────────────────────────────────────
+
+# A process-local edge-trigger the daemon loop waits on so a fresh
+# in-process event (a gate thread enqueuing a message, a self-scheduled
+# thought firing) is picked up promptly instead of sleeping out a full
+# poll tick. ``create_event`` sets it whenever it writes a ``pending``
+# event in this process; cross-process writers (the ``brr run`` CLI) can't
+# reach it, so the daemon's periodic poll stays the backstop for those.
+_inbox_wake = threading.Event()
+
+
+def inbox_wake() -> threading.Event:
+    """Return the process-local inbox wake signal (see module note)."""
+    return _inbox_wake
 
 
 # ── Frontmatter parsing ─────────────────────────────────────────────
@@ -153,6 +170,12 @@ def create_event(
     lines.append(body)
     path = inbox_dir / f"{eid}.md"
     _atomic_write(path, "\n".join(lines) + "\n")
+    if status == "pending":
+        # Nudge a waiting daemon loop so it reacts to this event without
+        # waiting out a full poll tick. Outbound-only (``done``) events
+        # are delivered by gate threads, not the spawn loop, so they
+        # don't wake it. Harmless no-op outside the daemon process.
+        _inbox_wake.set()
     return path
 
 
