@@ -788,7 +788,7 @@ def _format_recent_conversation(
         if kind == "event":
             body = _conversation_body(record)
             summary = body or (record.get("summary") or "").strip()
-            source = record.get("source") or ""
+            source = _conversation_source_label(record)
             line = _format_turn(f"{ts} user ({source})", summary)
         elif kind == "task":
             tid = record.get("task_id", "")
@@ -830,6 +830,17 @@ def _format_recent_conversation(
 def _conversation_body(record: dict[str, Any]) -> str:
     body = record.get("body")
     return body.strip() if isinstance(body, str) else ""
+
+
+def _conversation_source_label(record: dict[str, Any]) -> str:
+    parts = [str(record.get("source") or "").strip()]
+    correspondent = str(record.get("correspondent_key") or "").strip()
+    if correspondent:
+        parts.append(f"correspondent={correspondent}")
+    thread = str(record.get("conversation_key") or "").strip()
+    if thread:
+        parts.append(f"thread={thread}")
+    return "; ".join(p for p in parts if p)
 
 
 def _format_turn(prefix: str, body: str) -> str:
