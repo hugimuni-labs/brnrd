@@ -204,6 +204,18 @@ dive-in map) and are stable until something contradicts them.
   LLM-driven triage step and the frontmatter-as-stdout contract were
   removed in favour of mechanical task construction, agent-decided
   branching, and plain-text responses.
+- [Run / event model — retire the per-event "task"](design-run-event-model.md) —
+  *proposed (2026-06-14, #128)*. The `task` concept is a leftover of the
+  spawn-per-event arch (one event → one task → one run → one reply); the
+  resident reshape already broke that 1:1 (multi-response, folded-in
+  events, `gate:` sends, the §6 delivery floor). Reframes the two real
+  entities — **event** (immutable signal, consumed/produced by runs) and
+  **run** (a runner invocation that reads the whole inbox and decides what
+  to tackle / fold / postpone) — and settles the design questions before
+  code: per-run claim + `defer_until` debounce, run-id response keying,
+  run-granularity cost attribution (coupled to #130), and phasing the
+  task→run rename behind the model change. Slice of
+  [`design-co-maintainer.md`](design-co-maintainer.md) §6/§9/§11.
 
 ## Conversations & responses
 

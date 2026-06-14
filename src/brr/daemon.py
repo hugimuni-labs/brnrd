@@ -48,6 +48,7 @@ from . import conversations
 from . import dev_reload as reload_mod
 from . import dominion
 from . import envs
+from . import forge_state
 from . import forges
 from . import gitops
 from . import presence
@@ -705,6 +706,19 @@ def _run_worker(
         )
         if conv_key else None
     )
+    if communication_snapshot is not None:
+        # Forge-state facet (co-maintainer §5, #113): the resident's
+        # in-flight worktrees/branches and the issues/PRs in play, built
+        # network-free from local git + conversation keys.
+        forge_facet = forge_state.build_forge_state(
+            repo_root,
+            related_threads=communication_snapshot.get("related_threads"),
+            current_thread=conv_key,
+            current_task_id=task.id,
+            current_event_meta=event,
+        )
+        if forge_facet:
+            communication_snapshot["forge"] = forge_facet
     recent_conversation = (
         communication_snapshot.get("recent_turns", [])
         if communication_snapshot else []
@@ -1901,8 +1915,16 @@ def start(
     current: concurrent.futures.Future | None = None
     reload_requested = False
 
+    wake = protocol.inbox_wake()
     try:
         while running:
+            # Consume any pending wake signal up front, before we read the
+            # inbox below: a set that lands after this clear (a gate
+            # enqueuing mid-iteration) keeps the flag set, so the wait at
+            # the bottom returns promptly and the next pass picks it up —
+            # no event is missed, and a busy iteration can't spin.
+            wake.clear()
+
             # Poll the dev-reload watcher exactly once per iteration —
             # the main thread is its only caller, so the changed()
             # bookkeeping stays consistent.
@@ -1949,7 +1971,12 @@ def start(
                         event, repo_root, responses_dir, cfg, max_retries,
                     )
 
-            time.sleep(_SCAN_INTERVAL)
+            # Event-driven idle wait: block until a fresh in-process event
+            # wakes us or the poll tick elapses, whichever comes first.
+            # The tick still bounds latency for cross-process writers (the
+            # ``brr run`` CLI) and time-based work (due schedules), which
+            # don't set the signal.
+            wake.wait(_SCAN_INTERVAL)
 
             for t in gate_threads:
                 if not t.is_alive():

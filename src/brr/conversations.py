@@ -302,6 +302,7 @@ class CommunicationSnapshot(TypedDict, total=False):
     related_threads: list[dict[str, Any]]
     recent_turns: list[dict[str, Any]]
     history_groups: list[HistoryGroup]
+    forge: dict[str, Any]
 
 
 def safe_dir_name(key: str) -> str:
