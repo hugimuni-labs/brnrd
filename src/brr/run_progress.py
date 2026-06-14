@@ -131,6 +131,18 @@ class RunProgressView:
     # a card it does not author or store.
     agent_card_text: str | None = None
     agent_card_updated_at: str | None = None
+    # Success-signal axis (§8 re-alignment): which signal closed the run
+    # — current_reply | other_reply | outbound | commit | internal —
+    # and the delivery shape so the card can reflect multi-thread answers.
+    success_signal: str | None = None
+    replies_current: int = 0
+    replies_other: int = 0
+    outbound_messages: int = 0
+    committed: bool = False
+    # Failure-kind axis (§8 re-alignment): operational failures render
+    # distinctly from a hypothetical agent partial. Values:
+    # timed_out | runner_error | no_output. None until a ``failed`` packet.
+    failure_kind: str | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -377,6 +389,15 @@ def _project(
             err = record.get("error")
             exit_code = record.get("exit_code")
             timed_out = bool(record.get("timed_out"))
+            failure_kind = record.get("failure_kind")
+            if isinstance(failure_kind, str) and failure_kind:
+                view.failure_kind = failure_kind
+            elif timed_out:
+                view.failure_kind = "timed_out"
+            elif exit_code not in (None, "", 0):
+                view.failure_kind = "runner_error"
+            else:
+                view.failure_kind = view.failure_kind or "no_output"
             bits: list[str] = []
             if timed_out:
                 bits.append("timed out")
@@ -428,6 +449,15 @@ def _project(
             )
             view.state = "succeeded"
             view.detail = view.detail or "done"
+            signal = record.get("success_signal")
+            if isinstance(signal, str) and signal:
+                view.success_signal = signal
+            for key in ("replies_current", "replies_other", "outbound_messages"):
+                val = record.get(key)
+                if isinstance(val, int):
+                    setattr(view, key, val)
+            if "committed" in record:
+                view.committed = bool(record["committed"])
             _close_open_phase(view, ts)
             view.phase_history.append(PhaseEntry(
                 name="delivered", started_at=ts,
@@ -576,7 +606,7 @@ def _render_compact(
             and entry.ended_at is None
             and not is_terminal
         )
-        label = _phase_label(entry, multi_attempt)
+        label = _phase_label(entry, multi_attempt, view)
 
         if is_terminal:
             total_elapsed = _elapsed_seconds(task_started_at, entry.started_at)
@@ -706,26 +736,80 @@ def _compact_header(view: RunProgressView) -> str:
     return " · ".join(bits)
 
 
-def _phase_label(entry: PhaseEntry, multi_attempt: bool) -> str:
+def _phase_label(entry: PhaseEntry, multi_attempt: bool,
+                 view: RunProgressView | None = None) -> str:
     """Display label for a phase entry.
 
     Running entries get an attempt suffix only when the run actually had
     multiple attempts — single-attempt runs read as plain ``running``.
+    Failed entries get an operational-failure rename when the daemon
+    classified the failure: ``timed out`` (runner timeout), ``runner
+    failed`` (non-zero exit), ``no reply`` (clean exit with no output of
+    any kind). §8 re-alignment: distinct from a normal partial.
     """
     if entry.name == "running" and multi_attempt and entry.attempt:
         return f"running (attempt {entry.attempt})"
+    if entry.name == "failed" and view is not None and view.failure_kind:
+        return {
+            "timed_out": "timed out",
+            "runner_error": "runner failed",
+            "no_output": "no reply",
+        }.get(view.failure_kind, entry.name)
     return entry.name
 
 
 def _terminal_extra(view: RunProgressView, entry: PhaseEntry) -> str:
-    """Extra suffix for the terminal entry (delivered/failed/conflict)."""
+    """Extra suffix for the terminal entry (delivered/failed/conflict).
+
+    Surfaces the §8 re-alignment: a single run that answered multiple
+    threads or sent out-of-bound messages is reflected here, not
+    collapsed to the current-thread reply. Push status remains on its
+    own segment, joined with ``·``.
+    """
     parts: list[str] = []
-    if entry.name == "delivered" and view.push_commits and view.push_ok:
-        plural = "" if view.push_commits == 1 else "s"
-        parts.append(f"pushed {view.push_commits} commit{plural}")
-    elif entry.name == "delivered" and not view.push_ok:
-        parts.append("push failed")
+    if entry.name == "delivered":
+        # Multi-thread / out-of-bound delivery count first — what the
+        # user most needs to know about a co-maintainer wake.
+        thread_extra = _delivery_summary(view)
+        if thread_extra:
+            parts.append(thread_extra)
+        if view.push_commits and view.push_ok:
+            plural = "" if view.push_commits == 1 else "s"
+            parts.append(f"pushed {view.push_commits} commit{plural}")
+        elif not view.push_ok:
+            parts.append("push failed")
     return " · ".join(parts)
+
+
+def _delivery_summary(view: RunProgressView) -> str:
+    """Compact reflection of where this run delivered to.
+
+    Honest about the multi-thread shape the §8 re-alignment introduces:
+    a wake that answered the current thread *and* folded in another, or
+    sent a `gate:` message, or committed without replying, no longer
+    reads as a single "delivered" line that hides the rest.
+
+    Returns the empty string for the common one-thread case so the
+    terminal line stays uncluttered.
+    """
+    extra_threads = view.replies_other
+    outbound = view.outbound_messages
+    current = view.replies_current
+    if view.success_signal == "internal":
+        return ""
+    if view.success_signal == "commit" and not (current or extra_threads or outbound):
+        # Pure commit-success on an addressed event is rare today (we
+        # still emit a synthesized terminal note for non-internal events
+        # without a body), but when it does happen the card should say so.
+        return "committed; no reply"
+    bits: list[str] = []
+    threads = (1 if current else 0) + extra_threads
+    if threads > 1:
+        bits.append(f"delivered to {threads} threads")
+    if outbound > 0:
+        plural = "" if outbound == 1 else "s"
+        bits.append(f"sent {outbound} out-of-bound message{plural}")
+    return " · ".join(bits)
 
 
 def _legacy_header(view: RunProgressView) -> str:
