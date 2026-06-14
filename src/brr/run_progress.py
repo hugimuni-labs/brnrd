@@ -57,6 +57,9 @@ _PHASE_BY_PACKET: dict[str, str] = {
     "done": "delivered",
     "failed": "failed",
     "conflict": "conflict",
+    # ``card_composed`` annotates the card body but does not advance the
+    # phase — it can land in any phase (preparing, running, finalizing)
+    # while the resident narrates what it is doing.
 }
 
 
@@ -119,6 +122,15 @@ class RunProgressView:
     push_error: str | None = None
     view_url: str | None = None
     sync_summary: str | None = None
+    # Agent-composed card note. When set, ``render_text`` surfaces this
+    # under the live phase line (or, on a terminal phase, just above the
+    # terminal entry) so the resident can narrate what its progress
+    # actually is — daemon owns the lifecycle scaffolding, agent owns
+    # the narration. See ``kb/design-managed-delivery.md`` for the
+    # relay-not-store stance the seam preserves: brnrd still only edits
+    # a card it does not author or store.
+    agent_card_text: str | None = None
+    agent_card_updated_at: str | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -316,6 +328,16 @@ def _project(
                 view.detail = f"answered a folded-in event ({target})"
             else:
                 view.detail = f"shipped interim reply (#{view.interim_count})"
+        elif ptype == "card_composed":
+            # The resident rewrote its ``.card`` narration. We keep the
+            # latest text only (rewrites replace previous text — the
+            # agent's own notion of "what's happening now"). An empty
+            # body clears the note so the agent can withdraw it.
+            text = record.get("text")
+            if isinstance(text, str):
+                stripped = text.strip()
+                view.agent_card_text = stripped or None
+                view.agent_card_updated_at = ts
         elif ptype == "heartbeat":
             # Compatibility for older logs that persisted heartbeat
             # records. New heartbeats are daemon-only liveness/card
@@ -470,6 +492,10 @@ CARD_PACKETS = frozenset({
     "retrying",
     "artifact_created",
     "heartbeat",
+    # Agent-composed narration: when the resident updates its ``.card``
+    # control file, the daemon emits this packet so the gate re-renders
+    # the live card with the new note (see ``_render_compact``).
+    "card_composed",
     "finalizing",
     "push_started",
     "push_done",
@@ -582,7 +608,40 @@ def _render_compact(
                 text += f" · {_format_duration(duration)}"
             lines.append(f"{style.done_open}{text}{style.done_close}")
 
+    note = _format_agent_note(view.agent_card_text)
+    if note:
+        lines.append(note)
+
     return "\n".join(lines).rstrip() + "\n"
+
+
+# Soft cap on the agent's card narration. Keeps a runaway resident from
+# flooding a single chat card; the gate's own overflow guard catches
+# anything that still slips through. 1024 chars is enough for a paragraph
+# or two — the same order of magnitude as a typical interim reply.
+_AGENT_CARD_MAX_CHARS = 1024
+
+
+def _format_agent_note(text: str | None) -> str:
+    """Render the agent's ``.card`` narration as the live card's tail.
+
+    Empty / whitespace-only notes return an empty string so the card
+    silently drops back to the daemon-rendered phase log. The first line
+    is prefixed ``note: `` so the chat reader sees who is talking;
+    subsequent lines keep the agent's own line breaks.
+    """
+    if not text:
+        return ""
+    body = text.strip()
+    if not body:
+        return ""
+    if len(body) > _AGENT_CARD_MAX_CHARS:
+        body = body[:_AGENT_CARD_MAX_CHARS].rstrip() + "…"
+    parts = body.splitlines()
+    head, *rest = parts
+    rendered = [f"note: {head}"]
+    rendered.extend(rest)
+    return "\n".join(rendered)
 
 
 def _render_verbose(view: RunProgressView) -> str:
@@ -599,6 +658,13 @@ def _render_verbose(view: RunProgressView) -> str:
         rows.append(("attempt", str(view.attempt)))
     if view.detail:
         rows.append(("last", view.detail))
+    if view.agent_card_text:
+        # First line only — the verbose form is one row per key, and
+        # the agent's narration is best read on the compact card. This
+        # row is the dev-side breadcrumb that a narration was set.
+        head = view.agent_card_text.splitlines()[0] if view.agent_card_text else ""
+        if head:
+            rows.append(("note", head))
     if view.error:
         rows.append(("error", view.error))
     if view.container_ids:
