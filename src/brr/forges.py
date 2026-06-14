@@ -80,6 +80,20 @@ _BRANCH_TEMPLATES: dict[str, str] = {
 }
 
 
+# Issue / PR thread templates. The ``issues`` path is the durable common
+# denominator: GitHub redirects ``/issues/N`` to ``/pull/N`` when N is a
+# pull request, so a single template covers both without us knowing the
+# kind. GitLab keeps issues and merge requests on separate paths and does
+# not redirect, so its template targets ``/-/issues/`` only — the forge
+# gate that produces these keys today is GitHub.
+_ISSUE_TEMPLATES: dict[str, str] = {
+    _KIND_GITHUB:    "https://{host}/{owner}/{repo}/issues/{number}",
+    _KIND_GITLAB:    "https://{host}/{owner}/{repo}/-/issues/{number}",
+    _KIND_BITBUCKET: "https://{host}/{owner}/{repo}/issues/{number}",
+    _KIND_GITEA:     "https://{host}/{owner}/{repo}/issues/{number}",
+}
+
+
 # Remote-URL parsers. Order matters: SSH form before HTTPS form
 # because both can start with ``git@`` if someone mis-types.
 # SSH path-style: ``[user@]host:owner/repo[.git]``. The path is
@@ -207,6 +221,48 @@ def view_branch_url(
         repo=match.repo,
         branch=branch,
     )
+
+
+def thread_url(
+    remote_url: str,
+    repo_path: str,
+    number: int | str,
+    *,
+    override_kind: str | None = None,
+    override_url_base: str | None = None,
+) -> str | None:
+    """Return a clickable URL for issue/PR *number* on *repo_path*, or ``None``.
+
+    The forge *kind* and web *host* come from the configured ``origin``
+    remote (so self-hosted overrides apply), but the ``owner/repo`` comes
+    from *repo_path* — the repo the conversation thread is actually about,
+    which may differ from origin on a multi-repo project. Returns ``None``
+    for a non-numeric *number*, an unparseable ``owner/repo`` shape, an
+    unknown forge kind, or an undetectable remote.
+    """
+    try:
+        num = int(str(number).strip())
+    except (TypeError, ValueError):
+        return None
+    if num <= 0:
+        return None
+    path = (repo_path or "").strip().strip("/")
+    if "/" not in path:
+        return None
+    owner, _, repo = path.rpartition("/")
+    if not owner or not repo:
+        return None
+    match = detect_forge(
+        remote_url,
+        override_kind=override_kind,
+        override_url_base=override_url_base,
+    )
+    if match is None:
+        return None
+    template = _ISSUE_TEMPLATES.get(match.kind)
+    if template is None:
+        return None
+    return template.format(host=match.host, owner=owner, repo=repo, number=num)
 
 
 # ── Internals ────────────────────────────────────────────────────────
