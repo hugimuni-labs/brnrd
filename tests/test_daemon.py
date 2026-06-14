@@ -900,3 +900,122 @@ def test_forge_view_url_swallows_exceptions(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon.gitops, "remote_url", _boom)
 
     assert daemon._forge_view_url(tmp_path, "origin", "main") is None
+
+
+# ── §8 re-alignment: success-signal axis on _result_satisfied_delivery ──
+
+
+def _result(ok=True, has_response=False, missing=()):
+    """Tiny stand-in for runner.RunnerResult covering the fields read by
+    ``_result_satisfied_delivery``."""
+    class _R:
+        pass
+    r = _R()
+    r.ok = ok
+    r.has_response = has_response
+    r.missing_artifacts = list(missing)
+    return r
+
+
+def test_result_satisfied_delivery_picks_current_reply_signal():
+    """A stdout reply on the current thread is the canonical signal —
+    it wins over commit/outbound and identifies as ``current_reply``."""
+    event = {"source": "telegram"}
+    stats = {"current": 1, "other": 0, "outbound": 0}
+    ok, signal = daemon._result_satisfied_delivery(
+        _result(has_response=True), stats, event,
+    )
+    assert ok is True
+    assert signal == "current_reply"
+
+
+def test_result_satisfied_delivery_picks_outbox_current_reply_signal():
+    """An outbox-only current-thread interim counts as success even
+    without stdout. Preserves the existing shipped behavior, now with
+    the named signal so the card can reflect it."""
+    event = {"source": "telegram"}
+    stats = {"current": 1, "other": 0, "outbound": 0}
+    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
+    assert ok is True
+    assert signal == "current_reply"
+
+
+def test_result_satisfied_delivery_recognises_other_thread_reply():
+    """A folded-in reply to a sibling event (no current-thread reply)
+    is a successful delivery — §6 says events go to threads, not stdout.
+    Previously this read as a silent drop."""
+    event = {"source": "telegram"}
+    stats = {"current": 0, "other": 1, "outbound": 0}
+    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
+    assert ok is True
+    assert signal == "other_reply"
+
+
+def test_result_satisfied_delivery_recognises_outbound_gate_send():
+    """A `gate:` out-of-bound message is a delivery event — a co-maintainer
+    that pinged a forge or chat from a scheduled wake didn't fail just
+    because the current thread had no reply."""
+    event = {"source": "schedule"}
+    stats = {"current": 0, "other": 0, "outbound": 1}
+    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
+    assert ok is True
+    assert signal == "outbound"
+
+
+def test_result_satisfied_delivery_recognises_commit_signal():
+    """A run that committed new work on the worktree branch is a
+    successful run, even without any reply event — §6's commit signal."""
+    event = {"source": "telegram"}
+    stats = {"current": 0, "other": 0, "outbound": 0}
+    ok, signal = daemon._result_satisfied_delivery(
+        _result(), stats, event, has_new_commit=True,
+    )
+    assert ok is True
+    assert signal == "commit"
+
+
+def test_result_satisfied_delivery_internal_event_passes_without_reply():
+    """Internal-source events (schedule fires) have no user thread to
+    close, so a clean exit with no signal still resolves as ``internal``
+    success. Preserves the shipped behavior with the named signal."""
+    event = {"source": "schedule"}
+    stats = {"current": 0, "other": 0, "outbound": 0}
+    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
+    assert ok is True
+    assert signal == "internal"
+
+
+def test_result_satisfied_delivery_user_event_without_signal_fails():
+    """The §6 invariant: silence on a user-addressed event is failure.
+    No reply, no commit, no internal-event exemption → satisfied=False
+    so the failure-path writes a terminal note instead of swallowing
+    the request."""
+    event = {"source": "telegram"}
+    stats = {"current": 0, "other": 0, "outbound": 0}
+    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
+    assert ok is False
+    assert signal == ""
+
+
+def test_result_satisfied_delivery_runner_error_fails():
+    """A runner.ok=False result is operational failure regardless of
+    any output stats — those didn't come from the failed attempt."""
+    event = {"source": "telegram"}
+    stats = {"current": 5, "other": 5, "outbound": 5}
+    ok, signal = daemon._result_satisfied_delivery(
+        _result(ok=False), stats, event, has_new_commit=True,
+    )
+    assert ok is False
+    assert signal == ""
+
+
+def test_result_satisfied_delivery_missing_artifact_fails():
+    """A missing required artifact means the runner didn't validate —
+    treat as failure even if other output paths fired."""
+    event = {"source": "telegram"}
+    stats = {"current": 1, "other": 0, "outbound": 0}
+    ok, signal = daemon._result_satisfied_delivery(
+        _result(missing=["foo"]), stats, event,
+    )
+    assert ok is False
+    assert signal == ""
