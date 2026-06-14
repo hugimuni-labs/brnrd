@@ -286,6 +286,14 @@ requires `status==done` plus non-empty stdout, so a failed or empty run
 the global-FIFO/per-gate-key mismatch (§4.1), a missed delivery can be
 followed by a reply that reads the wrong queue.
 
+The deeper version of this decoupling — retiring the per-event `task`
+concept entirely so a run reads the whole inbox and decides what to tackle
+/ fold / postpone — is its own design slice:
+[`design-run-event-model.md`](design-run-event-model.md) (#128). It owns
+the daemon's serial-re-spawn half of the "three wakes on #114" symptom
+(the self-author-trigger half is #129); this section's success-signal
+floor is the substrate it builds on.
+
 Targets, extending the shipped partials path
 ([`design-multi-response.md`](design-multi-response.md)) and the open
 push/reply-ownership thread in
@@ -387,6 +395,10 @@ responsiveness*):
 Single-flight is unchanged — this was idle latency, not concurrency, per
 the accepted dependency stance
 ([`decision-runtime-dependencies.md`](decision-runtime-dependencies.md)).
+The same dispatch loop is where
+[`design-run-event-model.md`](design-run-event-model.md) (#128) changes
+*what a run sees* (the whole inbox, not `pending[0]`) — the event-driven
+wake here and the inbox-reading run there are the same loop from two angles.
 
 ## 10. Faithful "what this wake received"
 
@@ -441,6 +453,13 @@ sequence (each maps to a milestone issue):
    (per-gate `requests.Session` connection reuse + `inbox_wake`
    event-driven loop wakeup). **Faithful context view** (§10, #116) —
    independent; slot in opportunistically.
+9. **Run / event model** (§6/§9, #128) — retire the per-event `task`; a
+   run reads the whole inbox and decides. Design page proposed 2026-06-14
+   ([`design-run-event-model.md`](design-run-event-model.md)); wants the
+   user's nod on its open decisions (per-run claim + `defer_until`
+   debounce, run-id keying, run-granularity billing coupled to #130, and
+   phasing the rename) before code. Subsumes the narrower batch-events
+   idea; substrate for the resumable-tasks work.
 
 ### Decisions (close-loop, 2026-06-13)
 

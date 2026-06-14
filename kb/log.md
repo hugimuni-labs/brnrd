@@ -6583,3 +6583,34 @@ Note: `requests` is not preinstalled in this sandbox runner — `pip install
 requests` worked (network was up), after which the gate suites run. Validation:
 `PYTHONPATH=src python -m pytest` passed (790 tests, 7 skipped, with the existing
 Starlette/FastAPI TestClient deprecation warning).
+## [2026-06-14] design | Run/event model — retire the per-event "task"
+
+Drafted `design-run-event-model.md` (proposed) for #128, the design page the
+issue asks for before code. The `task` concept is a leftover of the
+spawn-per-event arch — one event → one Task → one runner invocation → one
+reply — and the resident reshape already broke that 1:1 in pieces
+(multi-response, folded-in events via `event:` frontmatter, `gate:` sends,
+the §6 events/commit/noop delivery floor). The bundle already hands the run
+the whole pending set and the affordances to act on all of it; the only
+places still thinking one-event-one-task are the **daemon dispatch**
+(`event = pending[0]` in the scan loop) and the **naming**.
+
+The page reframes the two real entities (event = immutable signal
+consumed/produced by runs; run = a runner invocation that reads the whole
+inbox and decides what to tackle / fold / postpone) and — the point of a
+design-first page — settles the hard questions: a per-run **claim**
+(`claimed_by: <run-id>`) distinct from event resolution so postponed and
+crashed events both converge to *pending for the next run*; a **`defer_until`**
+debounce so postponing isn't a re-spawn in disguise; **run-id** response
+keying with per-event resolution always explicit; **run-granularity** cost
+attribution with "folding is the consent point" (coupled to #130 pricing —
+the strongest argument for landing that decision first); and **phasing** the
+wide task→run rename behind the model change for review legibility.
+`run_context.py` already names the dir `runs/<id>/` — evidence the run
+concept won at the directory layer and only the object is still `Task`.
+
+It owns the serial-re-spawn half of the "three wakes on #114" symptom (the
+self-author-trigger half is #129) and is the substrate for the
+resumable-tasks / interruption-resilience work. Cross-linked from
+`design-co-maintainer.md` §6/§9/§11 and the index. Chat-only deliverable
+pending the user's nod on five open decisions; no code yet, by design.
