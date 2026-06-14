@@ -637,6 +637,18 @@ def _build_task_context_bundle(
                 "and holds the slot until then; rewrite it to extend again. "
                 "It's a control file, not a message — brr never delivers it."
             )
+        sections.append(
+            "- Want to narrate what the live progress card says? Write a "
+            f"line or two into `{outbox_path}/.card` and the gate's card "
+            "re-renders with your text as a `note:` line under the live "
+            "phase. Rewrite it as your context shifts; deleting or "
+            "emptying the file withdraws the note. The daemon still owns "
+            "the lifecycle scaffolding (header, sync line, phase log, "
+            "terminal state) — this is the seam where the resident gets to "
+            "say what's actually happening, not just which packet last "
+            "fired. It's a control file, not a message — brr never "
+            "delivers it as a chat reply."
+        )
     sections.append(
         "- The user reads your reply remotely (Telegram / Slack / etc.). "
         "Refer to files by basename only — `subject-envs.md`, "
