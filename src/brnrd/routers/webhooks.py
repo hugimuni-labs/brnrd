@@ -168,6 +168,9 @@ def _enqueue_telegram_event(
             "chat_id": parsed.chat_id,
             "topic_id": parsed.topic_id,
             "message_id": parsed.message_id,
+            "user": parsed.user,
+            "user_id": parsed.user_id,
+            "username": parsed.username,
         },
     )
 
