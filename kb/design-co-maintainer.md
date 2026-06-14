@@ -177,6 +177,18 @@ selection is still budgeted, but unanswered user events get a strong boost
 over pure recency. The forge-state facet remains §5 / #113, not part of this
 slice.
 
+Extended 2026-06-14 (#131): the snapshot gained a **prior-failure facet**. When
+the most recent terminal run outcome on the current thread was an *operational*
+failure (runner crash / env setup / retry exhaustion — the daemon's `failed`
+packet, never a normal noop or a push `conflict`), `prior_failure` carries its
+structured reason (error detail, attempts, exit code, timeout flag, stage,
+timestamp) and the bundle renders it as one prominent `⚠ Prior run on this
+thread failed` line near the top — so a wake landing after an interruption opens
+knowing it. No new persistence: the terminal `failed` update packet already lands
+in the per-thread conversation jsonl; the builder walks back to the first
+terminal outcome and surfaces it only when it was a failure, so a later success
+clears a stale one.
+
 **kb optional → collapse into the dominion.** In theme with this: the
 shared `kb/` may become optional (a `brr init` toggle / setup choice — see
 issue #105). When it's off, the semantic + decisional layer has nowhere

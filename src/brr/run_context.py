@@ -212,6 +212,28 @@ def _render_communication_snapshot(snapshot: dict[str, Any]) -> str:
     correspondent = str(snapshot.get("correspondent_key") or "").strip()
     if correspondent:
         lines.append(f"- Correspondent: {correspondent}")
+    failure = snapshot.get("prior_failure")
+    if isinstance(failure, dict) and failure:
+        reason = str(failure.get("reason") or "").strip() or "no reply produced"
+        bits: list[str] = []
+        stage = str(failure.get("stage") or "").strip()
+        if stage:
+            bits.append(f"stage={stage}")
+        attempts = failure.get("attempts")
+        if isinstance(attempts, int):
+            bits.append(f"{attempts} attempt(s)")
+        if failure.get("timed_out"):
+            bits.append("timed out")
+        exit_code = failure.get("exit_code")
+        if isinstance(exit_code, int):
+            bits.append(f"exit {exit_code}")
+        ts = str(failure.get("ts") or "").strip()
+        if ts:
+            bits.append(ts)
+        detail = f" [{'; '.join(bits)}]" if bits else ""
+        lines.append(
+            f"- Prior run on this thread failed (operational): {reason}{detail}"
+        )
     related = snapshot.get("related_threads")
     if isinstance(related, list) and related:
         lines.append("- Related input threads:")
