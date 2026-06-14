@@ -27,7 +27,7 @@ def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
                     "message": {
                         "message_id": 501,
                         "chat": {"id": 111},
-                        "from": {"first_name": "Ada"},
+                        "from": {"id": 41, "first_name": "Ada", "username": "ada_l"},
                         "text": "first task",
                     },
                 },
@@ -37,7 +37,11 @@ def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
                         "message_id": 502,
                         "chat": {"id": 222},
                         "message_thread_id": 7,
-                        "from": {"first_name": "Grace"},
+                        "from": {
+                            "id": 42,
+                            "first_name": "Grace",
+                            "username": "grace_h",
+                        },
                         "text": "second task",
                     },
                 },
@@ -55,6 +59,8 @@ def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
     assert events[1]["telegram_topic_id"] == 7
     # Source message id is captured so deliveries can reply-to it.
     assert [event["telegram_message_id"] for event in events] == [501, 502]
+    assert [event["telegram_user_id"] for event in events] == [41, 42]
+    assert [event["telegram_username"] for event in events] == ["ada_l", "grace_h"]
 
 
 def test_replies_are_sent_to_originating_chat(tmp_path, monkeypatch):
