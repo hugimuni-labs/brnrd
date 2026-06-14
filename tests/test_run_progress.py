@@ -520,9 +520,12 @@ def test_render_text_compact_reports_push_failure(tmp_path):
 
 
 def test_render_text_compact_failed_keeps_error_below_struck_log(tmp_path):
-    """On hard failure the strike-through log ends with ``failed`` and
+    """On hard failure the strike-through log ends with the operational
+    failure category (``timed out``/``runner failed``/``no reply``) and
     the actual error sits on the next line so the chat reader sees the
-    problem without having to parse markup."""
+    problem without having to parse markup. §8 re-alignment: ``failed``
+    on its own is too generic — the card names the runner-side category
+    so the operator owning the runner sees it unambiguously."""
     brr_dir = tmp_path / ".brr"
     key = "telegram:8f:"
     _emit(brr_dir, key, "task_created", task_id="task-fail", env="docker")
@@ -530,13 +533,14 @@ def test_render_text_compact_failed_keeps_error_below_struck_log(tmp_path):
     _emit(brr_dir, key, "finalizing", task_id="task-fail", stage="failed")
     _emit(brr_dir, key, "failed", task_id="task-fail", event_id="evt-fail",
           stage="run", attempts=1, exit_code=124, timed_out=True,
+          failure_kind="timed_out",
           error="runner timed out after 3600s")
 
     view = run_progress.project_task(brr_dir, key, "task-fail")
     assert view is not None
     text = run_progress.render_text(view, compact=True)
     lines = text.rstrip().splitlines()
-    assert any(line.startswith("failed · ") for line in lines)
+    assert any(line.startswith("timed out · ") for line in lines)
     assert lines[-1] == "runner timed out after 3600s"
 
 
@@ -704,3 +708,200 @@ def test_card_composed_is_in_card_packets_so_gates_rerender():
     """The packet must be in ``CARD_PACKETS`` so every gate that drives
     the live card re-renders when the resident rewrites its narration."""
     assert "card_composed" in run_progress.CARD_PACKETS
+
+
+# ── §8 re-alignment: success-signal axis & multi-thread delivery ────
+
+
+def test_done_packet_carries_success_signal_and_delivery_counts(tmp_path):
+    """The §8 re-alignment lands the success-signal axis on the ``done``
+    packet, so the projection knows *what kind* of success closed the run
+    (current_reply / other_reply / outbound / commit / internal) and the
+    multi-thread delivery shape (replies_current / replies_other /
+    outbound_messages / committed)."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:11:"
+    _emit(brr_dir, key, "task_created", task_id="task-multi")
+    _emit(brr_dir, key, "attempt_started", task_id="task-multi", attempt=1)
+    _emit(brr_dir, key, "done", task_id="task-multi", event_id="evt-x",
+          success_signal="current_reply",
+          replies_current=1, replies_other=2, outbound_messages=1,
+          committed=True)
+
+    view = run_progress.project_task(brr_dir, key, "task-multi")
+    assert view is not None
+    assert view.success_signal == "current_reply"
+    assert view.replies_current == 1
+    assert view.replies_other == 2
+    assert view.outbound_messages == 1
+    assert view.committed is True
+
+
+def test_render_multi_thread_delivery_on_terminal_line(tmp_path):
+    """A run that answered the current thread plus one folded-in event
+    plus an out-of-bound gate send reads as ``delivered to 2 threads ·
+    sent 1 out-of-bound message`` on the terminal line — not collapsed
+    to a single-thread ``delivered``. §8 want #3."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:12:"
+    _emit(brr_dir, key, "task_created", task_id="task-T",
+          env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-T", attempt=1)
+    _emit(brr_dir, key, "done", task_id="task-T", event_id="evt-T",
+          success_signal="current_reply",
+          replies_current=1, replies_other=1, outbound_messages=1)
+
+    view = run_progress.project_task(brr_dir, key, "task-T")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    assert "delivered to 2 threads" in text
+    assert "sent 1 out-of-bound message" in text
+
+
+def test_render_single_thread_delivery_stays_uncluttered(tmp_path):
+    """The common single-thread case (current_reply only) doesn't get a
+    multi-thread suffix — the card stays as terse as before for the
+    overwhelming majority of runs."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:13:"
+    _emit(brr_dir, key, "task_created", task_id="task-S")
+    _emit(brr_dir, key, "attempt_started", task_id="task-S", attempt=1)
+    _emit(brr_dir, key, "done", task_id="task-S", event_id="evt-S",
+          success_signal="current_reply",
+          replies_current=1, replies_other=0, outbound_messages=0)
+
+    view = run_progress.project_task(brr_dir, key, "task-S")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    assert "delivered to" not in text
+    assert "out-of-bound" not in text
+
+
+def test_render_commit_only_success_says_committed_no_reply(tmp_path):
+    """A run that closed via the ``commit`` success signal (the agent
+    pushed work without replying on the addressed thread) renders as
+    ``delivered · committed; no reply`` so the user understands the
+    silence is intentional, not a drop. §8 want #1 (commit signal)."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:14:"
+    _emit(brr_dir, key, "task_created", task_id="task-C")
+    _emit(brr_dir, key, "attempt_started", task_id="task-C", attempt=1)
+    _emit(brr_dir, key, "done", task_id="task-C", event_id="evt-C",
+          success_signal="commit",
+          replies_current=0, replies_other=0, outbound_messages=0,
+          committed=True)
+
+    view = run_progress.project_task(brr_dir, key, "task-C")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    assert "committed; no reply" in text
+
+
+def test_render_internal_event_success_stays_terse(tmp_path):
+    """Internal-event success (e.g. schedule fire that didn't deliver to
+    a user thread) doesn't decorate the terminal line — there is no
+    'where' to surface. §8 want #1 (internal signal)."""
+    brr_dir = tmp_path / ".brr"
+    key = "schedule:reconcile:"
+    _emit(brr_dir, key, "task_created", task_id="task-I")
+    _emit(brr_dir, key, "attempt_started", task_id="task-I", attempt=1)
+    _emit(brr_dir, key, "done", task_id="task-I", event_id="evt-I",
+          success_signal="internal",
+          replies_current=0, replies_other=0, outbound_messages=0)
+
+    view = run_progress.project_task(brr_dir, key, "task-I")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    assert "delivered to" not in text
+    assert "committed; no reply" not in text
+
+
+# ── §8 re-alignment: operational-failure distinction ───────────────
+
+
+def test_render_timed_out_renames_the_failed_terminal_line(tmp_path):
+    """A timed-out runner renders as ``timed out · 4m 02s`` on the
+    terminal line — operationally distinct from a generic ``failed``
+    so the operator (who owns the runner) sees the category at a
+    glance. §8 want #2."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:21:"
+    _emit(brr_dir, key, "task_created", task_id="task-To")
+    _emit(brr_dir, key, "attempt_started", task_id="task-To", attempt=1)
+    _emit(brr_dir, key, "failed", task_id="task-To", event_id="evt-To",
+          stage="run", attempts=1, exit_code=124,
+          timed_out=True, failure_kind="timed_out",
+          error="runner timed out after 3600s")
+
+    view = run_progress.project_task(brr_dir, key, "task-To")
+    assert view is not None
+    assert view.failure_kind == "timed_out"
+    text = run_progress.render_text(view, compact=True)
+    lines = text.rstrip().splitlines()
+    assert any(line.startswith("timed out · ") for line in lines)
+    assert "runner timed out after 3600s" in text
+
+
+def test_render_runner_error_renames_the_failed_terminal_line(tmp_path):
+    """A non-zero exit renders as ``runner failed · …`` — calling out
+    that the runner process (the operator's owned infra) died, not the
+    daemon or the agent's reasoning. §8 want #2."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:22:"
+    _emit(brr_dir, key, "task_created", task_id="task-R")
+    _emit(brr_dir, key, "attempt_started", task_id="task-R", attempt=1)
+    _emit(brr_dir, key, "failed", task_id="task-R", event_id="evt-R",
+          stage="run", attempts=1, exit_code=1,
+          failure_kind="runner_error",
+          error="connection dropped")
+
+    view = run_progress.project_task(brr_dir, key, "task-R")
+    assert view is not None
+    assert view.failure_kind == "runner_error"
+    text = run_progress.render_text(view, compact=True)
+    lines = text.rstrip().splitlines()
+    assert any(line.startswith("runner failed · ") for line in lines)
+
+
+def test_render_no_output_failure_renames_the_failed_terminal_line(tmp_path):
+    """A clean exit with no signal renders as ``no reply · …`` — distinct
+    from an operational failure so the user can tell apart 'the runner
+    died' from 'the runner ran but produced nothing'. §8 want #2."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:23:"
+    _emit(brr_dir, key, "task_created", task_id="task-N")
+    _emit(brr_dir, key, "attempt_started", task_id="task-N", attempt=1)
+    _emit(brr_dir, key, "failed", task_id="task-N", event_id="evt-N",
+          stage="run", attempts=1, failure_kind="no_output")
+
+    view = run_progress.project_task(brr_dir, key, "task-N")
+    assert view is not None
+    assert view.failure_kind == "no_output"
+    text = run_progress.render_text(view, compact=True)
+    lines = text.rstrip().splitlines()
+    assert any(line.startswith("no reply · ") for line in lines)
+
+
+def test_failure_kind_inferred_from_legacy_payloads(tmp_path):
+    """Older logs may carry ``timed_out=True`` without the explicit
+    ``failure_kind`` field — the projection infers it so existing
+    conversations still render the new category labels."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:24:"
+    _emit(brr_dir, key, "task_created", task_id="task-L")
+    _emit(brr_dir, key, "attempt_started", task_id="task-L", attempt=1)
+    # Legacy: no failure_kind, but timed_out=True
+    _emit(brr_dir, key, "failed", task_id="task-L", event_id="evt-L",
+          stage="run", attempts=1, exit_code=124, timed_out=True,
+          error="…")
+    view = run_progress.project_task(brr_dir, key, "task-L")
+    assert view is not None
+    assert view.failure_kind == "timed_out"
+
+
+def test_failed_packet_is_in_card_packets():
+    """Re-aligned ``failed`` rendering must trigger a card re-render —
+    the operational-failure category change is exactly what the gate
+    needs to redraw to surface."""
+    assert "failed" in run_progress.CARD_PACKETS
+    assert "done" in run_progress.CARD_PACKETS
