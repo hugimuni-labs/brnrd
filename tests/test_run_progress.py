@@ -588,3 +588,119 @@ def test_task_id_from_packet():
 
     empty = updates.UpdatePacket(type="event_received", conversation_key="k")
     assert run_progress.task_id_from_packet(empty) is None
+
+
+# ── Agent-composed card narration (issue #114) ──────────────────────
+
+
+def test_card_composed_packet_lands_on_view_and_renders_as_note(tmp_path):
+    """``card_composed`` updates flow into ``RunProgressView.agent_card_text``
+    and the compact card surfaces them as a ``note:`` tail line under the
+    live phase. The agent's narration is additive — the daemon's
+    lifecycle scaffolding (header, phase log) is unchanged."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:agent-card:"
+    _emit(brr_dir, key, "task_created", task_id="task-ac", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-ac", attempt=1)
+    _emit(brr_dir, key, "card_composed", task_id="task-ac",
+          text="scanning packet types and wiring the new seam")
+
+    view = run_progress.project_task(brr_dir, key, "task-ac")
+    assert view is not None
+    assert view.agent_card_text == "scanning packet types and wiring the new seam"
+
+    text = run_progress.render_text(view, compact=True)
+    lines = text.rstrip().splitlines()
+    # Live "running" line still present (daemon-owned lifecycle), the
+    # agent narration follows as the card's tail.
+    assert any(line.startswith("running") for line in lines)
+    assert lines[-1] == "note: scanning packet types and wiring the new seam"
+
+
+def test_card_composed_latest_replaces_earlier_text(tmp_path):
+    """The agent's narration is single-source: a fresh ``card_composed``
+    replaces the previous text (the resident rewrites the file as its
+    context shifts; the projection keeps only the latest)."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:agent-card-rewrite:"
+    _emit(brr_dir, key, "task_created", task_id="task-ar", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-ar", attempt=1)
+    _emit(brr_dir, key, "card_composed", task_id="task-ar", text="first pass")
+    _emit(brr_dir, key, "card_composed", task_id="task-ar", text="second pass")
+
+    view = run_progress.project_task(brr_dir, key, "task-ar")
+    assert view is not None
+    assert view.agent_card_text == "second pass"
+
+    text = run_progress.render_text(view, compact=True)
+    assert "second pass" in text
+    assert "first pass" not in text
+
+
+def test_card_composed_empty_text_withdraws_note(tmp_path):
+    """An empty/whitespace-only ``card_composed`` text clears the note so
+    the agent can pull its narration back. The card falls cleanly back
+    to the daemon-rendered phase log."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:agent-card-clear:"
+    _emit(brr_dir, key, "task_created", task_id="task-cl", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-cl", attempt=1)
+    _emit(brr_dir, key, "card_composed", task_id="task-cl", text="narration")
+    _emit(brr_dir, key, "card_composed", task_id="task-cl", text="")
+
+    view = run_progress.project_task(brr_dir, key, "task-cl")
+    assert view is not None
+    assert view.agent_card_text is None
+    text = run_progress.render_text(view, compact=True)
+    assert "note:" not in text
+
+
+def test_card_composed_truncates_overlong_text(tmp_path):
+    """The renderer caps the note at ``_AGENT_CARD_MAX_CHARS`` so a
+    runaway narration can't flood a single chat card. The daemon side
+    applies a similar byte cap on read."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:agent-card-long:"
+    _emit(brr_dir, key, "task_created", task_id="task-lg", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-lg", attempt=1)
+    long_text = "x" * (run_progress._AGENT_CARD_MAX_CHARS + 200)
+    _emit(brr_dir, key, "card_composed", task_id="task-lg", text=long_text)
+
+    view = run_progress.project_task(brr_dir, key, "task-lg")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+    last_line = text.rstrip().splitlines()[-1]
+    assert last_line.startswith("note: ")
+    # +1 for the ellipsis appended on truncation, minus the "note: " prefix.
+    payload = last_line[len("note: "):]
+    assert len(payload) <= run_progress._AGENT_CARD_MAX_CHARS + 1
+    assert payload.endswith("…")
+
+
+def test_card_composed_survives_terminal_state(tmp_path):
+    """The agent's last narration is preserved on the terminal card so
+    a reader sees what the resident said it was doing when it finished."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:agent-card-terminal:"
+    _emit(brr_dir, key, "task_created", task_id="task-tm", env="docker")
+    _emit(brr_dir, key, "attempt_started", task_id="task-tm", attempt=1)
+    _emit(brr_dir, key, "card_composed", task_id="task-tm",
+          text="wrote the agent card seam and tests")
+    _emit(brr_dir, key, "finalizing", task_id="task-tm", stage="done")
+    _emit(brr_dir, key, "done", task_id="task-tm", event_id="evt-tm")
+
+    view = run_progress.project_task(brr_dir, key, "task-tm")
+    assert view is not None
+    assert view.state == "succeeded"
+    assert view.agent_card_text == "wrote the agent card seam and tests"
+
+    text = run_progress.render_text(view, compact=True)
+    lines = text.rstrip().splitlines()
+    assert any(line.startswith("delivered") for line in lines)
+    assert lines[-1] == "note: wrote the agent card seam and tests"
+
+
+def test_card_composed_is_in_card_packets_so_gates_rerender():
+    """The packet must be in ``CARD_PACKETS`` so every gate that drives
+    the live card re-renders when the resident rewrites its narration."""
+    assert "card_composed" in run_progress.CARD_PACKETS
