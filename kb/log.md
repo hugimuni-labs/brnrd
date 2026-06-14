@@ -6524,3 +6524,26 @@ Bundle and run context also point at the resident-owned dominion
 
 Validation: `PYTHONPATH=src python -m pytest` passed (840 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning).
+
+## [2026-06-14] implement | Resident composes its own progress-card narration
+
+Closed the composition half of the Co-maintainer agent-owned status-card
+slice. The resident writes a `.card` control dotfile in its per-task outbox
+with the narration it would like the live card to carry; the daemon drains
+it on each heartbeat (and once more after the runner returns) and emits a
+new `card_composed` update packet only when the content has changed —
+so rewriting the file as context shifts is the resident's seam, and a
+runaway rewrite loop is still bounded (no packet spam). The packet lands
+on `RunProgressView.agent_card_text`; the compact renderer surfaces it as
+a `note: …` tail line under the live phase, with a soft cap on length.
+`card_composed` joins `CARD_PACKETS` so every gate (telegram, slack,
+github, cloud) re-renders the card automatically. The daemon still owns
+the lifecycle scaffolding (header, sync line, phase log, terminal state)
+and brnrd remains a transient relay holding only the card `message_id`;
+the relay-not-store invariant is preserved. The Delivery contract prompt
+block describes the seam to the resident. The card re-alignment half of
+§8 (taking success/delivery state from the events/commit/noop signal)
+remains open — flagged in `kb/design-co-maintainer.md`.
+
+Validation: `PYTHONPATH=src python -m pytest` passed (787 tests, with the
+existing Starlette/FastAPI TestClient deprecation warning).

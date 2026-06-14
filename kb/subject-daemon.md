@@ -181,7 +181,11 @@ For each pending event, the daemon:
    gate-addressed sends such as `gate: forge` PR publication, and routing
    cross-event conversation records to the target thread (the
    multi-response protocol,
-   [`design-multi-response.md`](design-multi-response.md));
+   [`design-multi-response.md`](design-multi-response.md)). The same
+   heartbeat tick also drains the agent's `.card` control dotfile into
+   a `card_composed` packet when its content has changed, so the resident
+   can narrate what its live progress card says (see
+   [`design-co-maintainer.md`](design-co-maintainer.md) §8);
 9. captures the resident's dominion edits via a serialized commit
    (`dominion.commit`; runs on success *and* failure — a failed thought
    may still have recorded pain), best-effort pushing the `brr-home`

@@ -76,6 +76,25 @@ that already factored out gate state / loop / response-delivery):
   unchanged, fall through to a fresh post if the original was deleted.
   This is today's `telegram.render_update` body, made transport-agnostic.
 
+### Agent-owned card narration
+
+The card body is **daemon-rendered + agent-narrated**. The lifecycle
+scaffolding (header, sync line, vertical phase log, terminal state) stays
+daemon-owned. On top of it, the resident can compose a short narration
+of what it is actually doing by writing the `.card` control dotfile in
+its per-task outbox; the daemon promotes it on each heartbeat into a
+`card_composed` packet, which lands on
+`RunProgressView.agent_card_text` and renders as a `note: …` tail line
+under the live phase. Rewrite the file to update; empty/delete it to
+withdraw. The seam is single-source (the latest `card_composed` wins)
+and additive (gates that drive `CARD_PACKETS` re-render automatically).
+
+The relay-not-store invariant is intact: the agent's narration travels
+the same daemon-rendered → transport path as the rest of the card body;
+brnrd still holds only the `message_id` it needs to edit. See
+[`design-co-maintainer.md`](design-co-maintainer.md) §8 for the
+larger card re-alignment context this slice fits into.
+
 ## What varies (the Transport)
 
 A small interface — roughly `send(text, reply_to) -> message_ref` and

@@ -339,11 +339,18 @@ task. See [`subject-tasks-branching.md`](subject-tasks-branching.md).
 Cards are daemon-rendered from `UpdatePacket`s via `run_progress`, under
 brnrd's relay-not-store stance ([`design-managed-delivery.md`](design-managed-delivery.md)).
 The co-maintainer should be able to **compose what its card says** — a
-collaborator narrates its own progress. The seam: agent-owned card content
-via new packet types or a control file in the task outbox (already mounted
-into every run env), with the daemon still the sender and brnrd still a
-transient relay — data-minimization intact. Additive to the existing card
-lifecycle.
+collaborator narrates its own progress.
+
+**Composition seam (shipped 2026-06-14, slice #114).** The resident writes
+its preferred narration into a `.card` control dotfile in the per-task
+outbox (already mounted into every run env). The daemon drains it on
+each heartbeat (and once more after the runner returns), emits a
+`card_composed` packet only when the content changes, and the gates'
+existing `CARD_PACKETS` rerender loop picks it up. The view gains
+`agent_card_text` and the compact renderer surfaces it as a `note: …`
+tail line; the daemon still owns the lifecycle scaffolding (header, sync
+line, phase log, terminal state). brnrd remains a transient relay
+holding only `message_id` — data-minimization intact.
 
 **Re-align the card with the new arch.** Today the card binds to one
 session and infers "delivered / done" from terminal stdout delivery — which
@@ -353,7 +360,11 @@ and delivery state from *that* signal (not stdout-non-empty), reflect that a
 single run may have answered on several threads, and show an **operational
 failure** distinctly from a normal partial. The card isn't wrong, it's
 coupled to assumptions §6 removes: agent-owned composition sits on top of a
-daemon-owned lifecycle that tracks the new signal. (So §8 depends on §6.)
+daemon-owned lifecycle that tracks the new signal. (So §8's re-alignment
+half depends on §6 — the delivery-robustness work shipped 2026-06-13 — and
+remains the open piece: surfacing the events/commit/noop signal on the
+card itself, distinguishing operational failure from a normal partial,
+and reflecting multi-thread delivery.)
 
 ## 9. Daemon responsiveness
 
@@ -415,6 +426,9 @@ sequence (each maps to a milestone issue):
    grouped run-directory JSONL history files, and dominion thread-of-record
    prompt/context hint.
 6. **Card re-alignment + agent-owned composition** (§8, #114) — needs #111.
+   *Composition seam shipped 2026-06-14* (`.card` control dotfile +
+   `card_composed` packet + `agent_card_text` on the projection); the
+   card re-alignment to the events/commit/noop signal remains open.
 7. **Forge-awareness in the snapshot** (§5, #113) + **forge grooming**
    (§5, #117) — need #110 and PR #106's metadata.
 8. **Daemon responsiveness** (§9, #115) and **faithful context view**
