@@ -6509,3 +6509,18 @@ instead of invoking a second runner.
 
 Validation: `PYTHONPATH=src python -m pytest` passed (833 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning).
+
+## [2026-06-14] implement | Wake snapshots gain grouped history on demand
+
+Closed the Co-maintainer communication-snapshot slice. The daemon now builds a
+structured `CommunicationSnapshot` before each runner wake: current thread,
+correspondent, related input threads, recent woven dialogue with unanswered
+user turns boosted over pure recency, and pointers to deep-history files. Each
+wake with a conversation writes untruncated grouped JSONL history under the run
+directory, one file per gate/forge thread plus a manifest, so the resident can
+pull exact history only when the compact snapshot is too thin. The Task Context
+Bundle and run context also point at the resident-owned dominion
+`thread-of-record.md` slot without synthesizing that durable narrative for it.
+
+Validation: `PYTHONPATH=src python -m pytest` passed (840 tests, with the
+existing Starlette/FastAPI TestClient deprecation warning).
