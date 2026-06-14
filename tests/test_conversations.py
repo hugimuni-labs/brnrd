@@ -329,6 +329,122 @@ def test_read_recent_for_correspondent_merges_sibling_channels(tmp_path):
     assert [r.get("conversation_key") for r in records] == [native_key, cloud_key]
 
 
+def test_build_communication_snapshot_groups_related_threads(tmp_path):
+    native = {
+        "id": "evt-native",
+        "source": "telegram",
+        "body": "from native",
+        "telegram_chat_id": 10,
+        "telegram_user_id": 42,
+    }
+    cloud = {
+        "id": "evt-cloud",
+        "source": "cloud",
+        "body": "from cloud",
+        "cloud_platform": "telegram",
+        "cloud_chat_id": 10,
+        "cloud_user_id": 42,
+    }
+    native_key = conversations.conversation_key_for_event(native)
+    cloud_key = conversations.conversation_key_for_event(cloud)
+    conversations.append_event(tmp_path, native_key, native)
+    conversations.append_artifact(
+        tmp_path,
+        native_key,
+        kind="response",
+        path="/tmp/evt-native.md",
+        event_id="evt-native",
+        body="agent reply",
+    )
+    conversations.append_event(tmp_path, cloud_key, cloud)
+
+    snapshot = conversations.build_communication_snapshot(
+        tmp_path,
+        cloud_key,
+        "telegram:user-id:42",
+        event_id="evt-cloud",
+        task_id="task-cloud",
+        recent_limit=5,
+    )
+
+    assert snapshot["current_thread"] == cloud_key
+    assert snapshot["correspondent_key"] == "telegram:user-id:42"
+    assert {
+        t["conversation_key"] for t in snapshot["related_threads"]
+    } == {native_key, cloud_key}
+    assert [r.get("body") for r in snapshot["recent_turns"]] == [
+        "from native",
+        "agent reply",
+    ]
+
+
+def test_build_communication_snapshot_boosts_unanswered_turns(tmp_path):
+    key = "telegram:10:"
+    conversations.append_event(
+        tmp_path,
+        key,
+        {"id": "evt-old", "source": "telegram", "body": "still unanswered"},
+    )
+    conversations.append_event(
+        tmp_path,
+        key,
+        {"id": "evt-new", "source": "telegram", "body": "answered"},
+    )
+    conversations.append_artifact(
+        tmp_path,
+        key,
+        kind="response",
+        path="/tmp/evt-new.md",
+        event_id="evt-new",
+        body="answer",
+    )
+
+    snapshot = conversations.build_communication_snapshot(
+        tmp_path, key, recent_limit=2,
+    )
+
+    assert [r.get("body") for r in snapshot["recent_turns"]] == [
+        "still unanswered",
+        "answer",
+    ]
+
+
+def test_write_grouped_history_files_writes_untruncated_thread_jsonl(tmp_path):
+    event = {
+        "id": "evt-1",
+        "source": "github",
+        "body": "review comment",
+        "github_repo": "acme/widget",
+        "github_issue_number": 9,
+        "github_author": "octo",
+    }
+    key = conversations.conversation_key_for_event(event)
+    conversations.append_event(tmp_path, key, event)
+    conversations.append_task(
+        tmp_path, key,
+        task_id="task-1", event_id="evt-1",
+        env="docker", status="running",
+    )
+
+    groups = conversations.write_grouped_history_files(
+        tmp_path, tmp_path / "runs" / "task-1" / "history",
+        key, "github:login:octo",
+    )
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group["kind"] == "forge_thread"
+    assert group["conversation_key"] == key
+    records = [
+        json.loads(line)
+        for line in (tmp_path / group["path"]).read_text(encoding="utf-8").splitlines()
+    ]
+    assert [r["kind"] for r in records] == ["event", "task"]
+    assert records[0]["conversation_key"] == key
+    manifest = tmp_path / "runs" / "task-1" / "history" / "manifest.json"
+    assert manifest.exists()
+
+
 def test_read_recent_prefers_dialogue_over_lifecycle_noise(tmp_path):
     conversations.append_event(
         tmp_path,
