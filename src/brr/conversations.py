@@ -303,6 +303,7 @@ class CommunicationSnapshot(TypedDict, total=False):
     recent_turns: list[dict[str, Any]]
     history_groups: list[HistoryGroup]
     forge: dict[str, Any]
+    prior_failure: dict[str, Any]
 
 
 def safe_dir_name(key: str) -> str:
@@ -683,6 +684,62 @@ def _thread_summary(
     }
 
 
+# Terminal run outcomes on a thread. ``done`` is a clean success; ``failed``
+# is an operational failure (runner crash / env setup / retry exhaustion) —
+# the daemon only emits it on those paths, never on a normal agent noop. A
+# push ``conflict`` is a delivery outcome, not a run outcome, so it is not in
+# this set: it never masks or stands in for a prior run failure.
+_RUN_TERMINAL_TYPES = {"done", "failed"}
+
+
+def _select_prior_failure(
+    records: list[dict[str, Any]],
+    *,
+    key: str,
+) -> dict[str, Any] | None:
+    """Return a failure facet iff this thread's last run failed operationally.
+
+    Walks *records* (already excludes the current run) newest-first,
+    restricted to the current thread *key*, and stops at the first terminal
+    run outcome. Surfaces a facet only when that outcome was a ``failed``
+    packet — so a later success clears a stale failure, and a normal
+    "agent chose to noop" (which leaves no ``failed`` record) never reads
+    as one. The facet carries the structured reason from the persisted
+    packet (error detail, attempt count, exit code, timeout flag, timestamp)
+    so a wake landing after an interruption opens knowing it.
+    """
+    for record in reversed(records):
+        if record.get("conversation_key") != key:
+            continue
+        if record.get("kind") != "update":
+            continue
+        rtype = record.get("type")
+        if rtype not in _RUN_TERMINAL_TYPES:
+            continue
+        if rtype == "done":
+            return None
+        facet: dict[str, Any] = {"stage": str(record.get("stage") or "run")}
+        reason = str(record.get("error") or "").strip()
+        if reason:
+            facet["reason"] = reason
+        attempts = record.get("attempts")
+        if isinstance(attempts, int):
+            facet["attempts"] = attempts
+        exit_code = record.get("exit_code")
+        if isinstance(exit_code, int):
+            facet["exit_code"] = exit_code
+        if record.get("timed_out"):
+            facet["timed_out"] = True
+        ts = _ts_key(record)
+        if ts:
+            facet["ts"] = ts
+        event_id = str(record.get("event_id") or "").strip()
+        if event_id:
+            facet["event_id"] = event_id
+        return facet
+    return None
+
+
 def _without_current_records(
     records: list[dict[str, Any]],
     *,
@@ -787,6 +844,9 @@ def build_communication_snapshot(
     }
     if correspondent_key:
         snapshot["correspondent_key"] = correspondent_key
+    prior_failure = _select_prior_failure(prior, key=key)
+    if prior_failure:
+        snapshot["prior_failure"] = prior_failure
     if history_groups:
         snapshot["history_groups"] = history_groups
     return snapshot
