@@ -234,11 +234,69 @@ def _render_communication_snapshot(snapshot: dict[str, Any]) -> str:
     groups = _render_history_groups(snapshot.get("history_groups", []))
     if groups:
         lines.extend(["- On-demand grouped history:", groups])
+    forge = _render_forge_state(snapshot.get("forge"))
+    if forge:
+        lines.extend(["", forge])
     recent = snapshot.get("recent_turns")
     if isinstance(recent, list) and recent:
         rendered = _render_recent_conversation(recent)
         if rendered:
             lines.extend(["", "Recent turns:", rendered])
+    return "\n".join(lines)
+
+
+def _render_forge_state(forge: Any) -> str:
+    """Render the forge-state facet for the context file (plain, no backticks)."""
+    if not isinstance(forge, dict) or not forge:
+        return ""
+    lines: list[str] = ["Forge state (local, network-free):"]
+    worktrees = forge.get("worktrees")
+    if isinstance(worktrees, list) and worktrees:
+        lines.append("- Worktrees / branches:")
+        for wt in worktrees:
+            if not isinstance(wt, dict):
+                continue
+            branch = str(wt.get("branch") or "").strip() or "(detached)"
+            tid = str(wt.get("task_id") or "").strip()
+            bits: list[str] = []
+            unpushed = wt.get("unpushed", 0)
+            if isinstance(unpushed, int) and unpushed > 0:
+                bits.append(f"{unpushed} unpushed")
+            if wt.get("dirty"):
+                bits.append("uncommitted changes")
+            if wt.get("current"):
+                bits.append("this run")
+            detail = f" ({'; '.join(bits)})" if bits else ""
+            tag = f" [{tid}]" if tid else ""
+            url = str(wt.get("branch_url") or "").strip()
+            link = f" — {url}" if url else ""
+            lines.append(f"  - {branch}{tag}{detail}{link}")
+    threads = forge.get("threads")
+    if isinstance(threads, list) and threads:
+        lines.append("- Issues / PRs in play:")
+        for th in threads:
+            if not isinstance(th, dict):
+                continue
+            repo = str(th.get("repo") or "").strip()
+            number = th.get("number")
+            ref = f"{repo}#{number}" if repo and number is not None else ""
+            if not ref:
+                continue
+            bits = []
+            kind = str(th.get("kind") or "").strip()
+            if kind:
+                bits.append(kind)
+            branch_target = str(th.get("branch_target") or "").strip()
+            if branch_target:
+                bits.append(f"branch {branch_target}")
+            if th.get("current"):
+                bits.append("this thread")
+            detail = f" ({'; '.join(bits)})" if bits else ""
+            url = str(th.get("url") or "").strip()
+            link = f" — {url}" if url else ""
+            lines.append(f"  - {ref}{detail}{link}")
+    if len(lines) == 1:
+        return ""
     return "\n".join(lines)
 
 

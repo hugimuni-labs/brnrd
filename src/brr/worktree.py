@@ -223,6 +223,31 @@ def has_commits_beyond(worktree_path: Path, base_ref: str) -> bool:
         return False
 
 
+def unpushed_commit_count(worktree_path: Path) -> int:
+    """Return the number of HEAD commits not present on any remote-tracking ref.
+
+    ``git rev-list --count HEAD --not --remotes`` counts commits reachable
+    from HEAD but from no ``refs/remotes/*`` ref — i.e. local work not yet
+    pushed anywhere. It needs no configured upstream, so a fresh task
+    branch (which has none) still reports honestly. Any git failure
+    (detached/empty repo, command error) yields ``0`` rather than raising:
+    the forge facet this feeds is observational and must never fail a run.
+    """
+    result = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD", "--not", "--remotes"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return 0
+    try:
+        return int(result.stdout.strip() or "0")
+    except ValueError:
+        return 0
+
+
 def has_uncommitted_changes(worktree_path: Path) -> bool:
     """Return True when the worktree has untracked, unstaged, or staged changes.
 
