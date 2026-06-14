@@ -371,6 +371,65 @@ def test_run_context_includes_outbox_paths(tmp_path):
     assert "mid-thought" in text
 
 
+def test_run_context_includes_communication_snapshot_and_history(tmp_path):
+    task = Task(id="task-1", event_id="evt-1", body="do it", source="telegram")
+    ctx = RunContext(
+        name="worktree",
+        cwd=tmp_path,
+        repo_root=tmp_path,
+        runtime_dir=tmp_path / ".brr",
+        response_path_host=tmp_path / ".brr/responses/evt-1.md",
+        response_path_env=tmp_path / ".brr/responses/evt-1.md",
+    )
+
+    text = run_context.render_context(
+        task,
+        {"_path": "x", "source": "telegram"},
+        ctx,
+        communication_snapshot={
+            "current_thread": "telegram:1:",
+            "related_threads": [
+                {
+                    "conversation_key": "telegram:1:",
+                    "source": "telegram",
+                    "record_count": 2,
+                    "dialogue_count": 1,
+                    "latest_ts": "2026-05-05T20:00:00Z",
+                },
+            ],
+            "history_groups": [
+                {
+                    "label": "telegram thread telegram:1:",
+                    "path": str(tmp_path / ".brr/runs/task-1/history/gate.jsonl"),
+                    "record_count": 2,
+                },
+            ],
+            "recent_turns": [
+                {
+                    "ts": "2026-05-05T20:00:00Z",
+                    "kind": "event",
+                    "source": "telegram",
+                    "body": "prior",
+                },
+                {
+                    "ts": "2026-05-05T20:01:00Z",
+                    "kind": "artifact",
+                    "artifact_kind": "response",
+                    "label": "response:evt-prior",
+                    "body": "agent prior",
+                },
+            ],
+        },
+    )
+
+    assert "Communication Snapshot" in text
+    assert "Current thread: telegram:1:" in text
+    assert "On-demand grouped history" in text
+    assert "gate.jsonl" in text
+    assert "prior" in text
+    assert "agent prior" in text
+
+
 def test_run_context_omits_outbox_when_absent(tmp_path):
     task = Task(id="task-1", event_id="evt-1", body="do it")
     ctx = RunContext(

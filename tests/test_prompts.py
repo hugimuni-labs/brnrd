@@ -535,6 +535,73 @@ class TestPromptBuilding:
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
 
+    def test_daemon_prompt_with_communication_snapshot(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        prompt = build_daemon_prompt(
+            "follow up",
+            "evt-2",
+            "/tmp/resp.md",
+            tmp_path,
+            communication_snapshot={
+                "current_thread": "cloud:telegram:77:",
+                "correspondent_key": "telegram:user-id:42",
+                "related_threads": [
+                    {
+                        "conversation_key": "telegram:77:",
+                        "source": "telegram",
+                        "kind": "gate_thread",
+                        "record_count": 4,
+                        "dialogue_count": 2,
+                        "latest_ts": "2026-05-05T20:01:00Z",
+                    },
+                    {
+                        "conversation_key": "cloud:telegram:77:",
+                        "source": "cloud/telegram",
+                        "kind": "gate_thread",
+                        "record_count": 1,
+                        "dialogue_count": 1,
+                        "latest_ts": "2026-05-05T20:02:00Z",
+                    },
+                ],
+                "history_groups": [
+                    {
+                        "label": "telegram thread telegram:77:",
+                        "path": "/repo/.brr/runs/task/history/gate.jsonl",
+                        "record_count": 4,
+                    },
+                ],
+                "recent_turns": [
+                    {
+                        "ts": "2026-05-05T20:00:00Z",
+                        "kind": "event",
+                        "source": "telegram",
+                        "conversation_key": "telegram:77:",
+                        "body": "prior ask",
+                    },
+                    {
+                        "ts": "2026-05-05T20:01:00Z",
+                        "kind": "artifact",
+                        "artifact_kind": "response",
+                        "label": "response:evt-prev",
+                        "body": "prior answer",
+                    },
+                ],
+            },
+        )
+
+        assert "Communication snapshot" in prompt
+        assert "Current thread: `cloud:telegram:77:`" in prompt
+        assert "Correspondent: `telegram:user-id:42`" in prompt
+        assert "Related input threads" in prompt
+        assert "On-demand grouped history" in prompt
+        assert "/repo/.brr/runs/task/history/gate.jsonl" in prompt
+        assert "Recent turns (woven, oldest first)" in prompt
+        assert "prior ask" in prompt
+        assert "prior answer" in prompt
+
     def test_daemon_prompt_renders_woven_dialogue_bodies(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
