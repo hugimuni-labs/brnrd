@@ -6645,3 +6645,27 @@ facet. Recorded in `design-co-maintainer.md` §5/§11. Tests:
 `tests/test_forge_state.py` (27 cases — key parsing, thread_url, unpushed
 counting with a github-`origin`/local-`store` two-remote fixture, the
 builder, and prompt rendering). Full suite 817 passed, 7 skipped.
+## [2026-06-14] implement | Wake snapshot surfaces the prior run's operational failure
+
+Closed the #131 slice of the Co-maintainer milestone (refines #110). When a wake
+lands after the previous run on the same thread *failed* operationally, the
+`CommunicationSnapshot` now carries a `prior_failure` facet and the Task Context
+Bundle renders it as one prominent `⚠ Prior run on this thread failed
+(operational): …` line near the top — so a wake picking up after an interruption
+opens knowing it, instead of reconstructing "the last run died on credits" from
+timestamps and woven dialogue turns.
+
+No new persistence: the daemon's terminal `failed` update packet already lands in
+the per-thread conversation jsonl with the structured reason (error detail,
+attempt count, exit code, timeout flag, stage, timestamp). `_select_prior_failure`
+walks the prior records newest-first, restricted to the current thread, stops at
+the first terminal run outcome (`done`/`failed`), and surfaces a facet only when
+it was a `failed` — so a later success clears a stale failure and a normal agent
+noop (which leaves no `failed` record) never reads as one. A push `conflict` is a
+delivery outcome, not a run outcome, so it stays out of the terminal set and never
+masks a prior run failure — keeping the facet honest to operational failures only
+(runner crash / env setup / retry exhaustion), per the issue's scope.
+
+Validation: targeted + full suite green (683 passed, 7 skipped) once the 5
+gate-test collection errors from the sandbox's missing `requests` are ignored —
+pre-existing env friction, not this change (dominion pitfall filed).
