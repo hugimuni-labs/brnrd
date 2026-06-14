@@ -238,7 +238,7 @@ def test_request_uses_requests_params_json_and_headers(monkeypatch):
         calls.append((method, url, kwargs))
         return _FakeGitHubResponse(200, {"ok": True}, headers={"X-RateLimit-Remaining": "1"})
 
-    monkeypatch.setattr(client.requests, "request", fake_request)
+    monkeypatch.setattr(client._SESSION, "request", fake_request)
 
     payload, headers = client._request(
         "secret",
@@ -271,7 +271,7 @@ def test_request_sends_if_none_match_when_etag_cached(monkeypatch):
             200, [{"ok": True}], headers={"ETag": "W/\"new-etag\""},
         )
 
-    monkeypatch.setattr(client.requests, "request", fake_request)
+    monkeypatch.setattr(client._SESSION, "request", fake_request)
 
     store: dict[str, str] = {"GET /repos/o/r/issues/comments": "W/\"old-etag\""}
     payload, headers = client._request(
@@ -291,7 +291,7 @@ def test_request_304_returns_none_and_preserves_cached_etag(monkeypatch):
     def fake_request(method, url, **kwargs):
         return _FakeGitHubResponse(304, None, headers={"ETag": "W/\"old-etag\""})
 
-    monkeypatch.setattr(client.requests, "request", fake_request)
+    monkeypatch.setattr(client._SESSION, "request", fake_request)
 
     store = {"GET /repos/o/r/issues/comments": "W/\"old-etag\""}
     payload, headers = client._request(
@@ -309,7 +309,7 @@ def test_request_without_etag_store_does_not_send_if_none_match(monkeypatch):
         seen_headers.append(dict(kwargs["headers"]))
         return _FakeGitHubResponse(200, [], headers={"ETag": "W/\"x\""})
 
-    monkeypatch.setattr(client.requests, "request", fake_request)
+    monkeypatch.setattr(client._SESSION, "request", fake_request)
 
     client._request("tok", "GET", "/repos/o/r/issues/comments")
 
@@ -347,7 +347,7 @@ def test_polling_threads_etag_through_cursor(tmp_path, monkeypatch):
         # Second call returns 304 — nothing changed since the cached ETag.
         return _FakeGitHubResponse(304, None, headers={"ETag": "W/\"e-comments\""})
 
-    monkeypatch.setattr(client.requests, "request", fake_request)
+    monkeypatch.setattr(client._SESSION, "request", fake_request)
 
     loop._loop_once(brr_dir, inbox, responses)
     saved = state._load_state(brr_dir)
@@ -377,7 +377,7 @@ def test_request_error_uses_github_json_message(monkeypatch):
             text='{"message":"API rate limit exceeded"}',
         )
 
-    monkeypatch.setattr(client.requests, "request", fake_request)
+    monkeypatch.setattr(client._SESSION, "request", fake_request)
 
     with pytest.raises(github.GitHubAPIError) as caught:
         client._request("secret", "GET", "/rate_limit")
