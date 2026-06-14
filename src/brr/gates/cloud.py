@@ -37,6 +37,11 @@ _DEFAULT_DAEMON_NAME = "daemon"
 # matching the OSS telegram gate. Unlisted platforms skip daemon overflow.
 _RESPONSE_LIMITS = {"telegram": 3900}
 
+# One Session for the gate's single loop thread: keep-alive reuses the
+# connection to brnrd across long-poll cycles instead of dialing fresh
+# each call. See ``kb/subject-daemon.md`` → gate responsiveness.
+_SESSION = requests.Session()
+
 
 # ── HTTP seam ────────────────────────────────────────────────────────
 
@@ -53,7 +58,7 @@ def _request(
 ) -> dict:
     """Single chokepoint for brnrd HTTP. Tests monkeypatch this."""
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    resp = requests.request(
+    resp = _SESSION.request(
         method,
         base_url.rstrip("/") + path,
         json=json,
