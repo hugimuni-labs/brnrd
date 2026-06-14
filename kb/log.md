@@ -6614,3 +6614,34 @@ self-author-trigger half is #129) and is the substrate for the
 resumable-tasks / interruption-resilience work. Cross-linked from
 `design-co-maintainer.md` §6/§9/§11 and the index. Chat-only deliverable
 pending the user's nod on five open decisions; no code yet, by design.
+
+## [2026-06-14] feature | Forge-awareness facet in the wake snapshot (#113)
+
+Shipped the §5 slice of the Co-maintainer milestone: the wake
+`CommunicationSnapshot` gains a network-free `forge` facet so the resident
+sees the project like a human peer — its own in-flight branches and what's
+unpushed, and the issues/PRs its conversations are about.
+
+New `forge_state.py` builds it beside the snapshot in `_run_worker`, from
+two local views. **Worktrees**: every `.brr/worktrees/*` via
+`worktree.list_worktrees`, each with branch, an unpushed-commit count
+(new `worktree.unpushed_commit_count` = `git rev-list --count HEAD --not
+--remotes`, so a fresh task branch with no upstream still reports
+honestly), a dirty flag, a "this run" marker, and a `forges.view_branch_url`
+link. **Threads**: GitHub issues/PRs parsed from the current + sibling
+conversation keys (`parse_forge_thread` handles `github:owner/repo:N` and
+the `cloud:github:owner/repo#N:` relay shape) into `repo`/`number`/clickable
+cross-references via a new `forges.thread_url` (host+kind from origin,
+owner/repo from the *thread*, so multi-repo links stay correct). The waking
+thread is enriched with the live event's `github_kind` / `branch_target` /
+`github_pr_number` / `github_html_url` — the PR #106 metadata — preferring
+the exact comment URL over the template one. Rendered in both the daemon
+prompt (`prompts._format_forge_state`) and the run-context file.
+
+Deliberate scope line: **live** PR/issue status (open/closed/merged,
+behind-base, CI) is left out — it needs a token-bearing API call on the hot
+wake path and is the input to forge grooming (#117), not this observational
+facet. Recorded in `design-co-maintainer.md` §5/§11. Tests:
+`tests/test_forge_state.py` (27 cases — key parsing, thread_url, unpushed
+counting with a github-`origin`/local-`store` two-remote fixture, the
+builder, and prompt rendering). Full suite 817 passed, 7 skipped.
