@@ -817,6 +817,10 @@ def _format_communication_snapshot(
     if correspondent:
         lines.append(f"- Correspondent: `{correspondent}`")
 
+    failure = snapshot.get("prior_failure")
+    if isinstance(failure, dict) and failure:
+        lines.append(_format_prior_failure(failure))
+
     related = snapshot.get("related_threads")
     if isinstance(related, list) and related:
         lines.append("- Related input threads:")
@@ -934,6 +938,36 @@ def _format_forge_state(forge: Any) -> str:
     if len(lines) == 1:
         return ""
     return "\n".join(lines)
+
+
+def _format_prior_failure(facet: dict[str, Any]) -> str:
+    """Render the prior-run-failure facet as one prominent bundle line.
+
+    Surfaced near the top of the snapshot so a wake landing after an
+    interrupted run opens knowing the last run on this thread failed
+    operationally, rather than reconstructing it from the woven turns.
+    """
+    reason = str(facet.get("reason") or "").strip() or "no reply produced"
+    detail_bits: list[str] = []
+    stage = str(facet.get("stage") or "").strip()
+    if stage:
+        detail_bits.append(f"stage={stage}")
+    attempts = facet.get("attempts")
+    if isinstance(attempts, int):
+        detail_bits.append(f"{attempts} attempt(s)")
+    if facet.get("timed_out"):
+        detail_bits.append("timed out")
+    exit_code = facet.get("exit_code")
+    if isinstance(exit_code, int):
+        detail_bits.append(f"exit {exit_code}")
+    ts = str(facet.get("ts") or "").strip()
+    if ts:
+        detail_bits.append(ts)
+    detail = f" [{'; '.join(detail_bits)}]" if detail_bits else ""
+    return (
+        f"- ⚠ Prior run on this thread failed (operational): "
+        f"{reason}{detail}. This wake lands after that interruption."
+    )
 
 
 def _format_thread_of_record(repo_root: Path) -> str:
