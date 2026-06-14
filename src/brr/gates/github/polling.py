@@ -59,6 +59,7 @@ def _poll_opened_items(
     etags: dict,
     inbox_dir: Path,
     trigger: str,
+    bot_login: str = "",
 ) -> str:
     items = client._api_get(
         token,
@@ -92,6 +93,13 @@ def _poll_opened_items(
         title = str(item.get("title") or "").strip()
         body_text = str(item.get("body") or "").strip()
         author = (item.get("user") or {}).get("login") or ""
+        # Skip items the token owner authored: the resident opens its own
+        # issues/PRs as part of its work (e.g. carving a follow-up ticket),
+        # and a self-authored event would wake it on its own action. Mirrors
+        # the mention-trigger self-skip; keyed on the authenticated login.
+        if author and bot_login and author == bot_login:
+            seen.add(number)
+            continue
         meta: dict[str, Any] = {
             "github_repo": repo,
             "github_issue_number": number,
@@ -128,6 +136,7 @@ def _poll_label_trigger(
     label: str,
     cursor: dict,
     inbox_dir: Path,
+    bot_login: str = "",
 ) -> None:
     since = cursor.get("issues_since") or cache._initial_since()
     seen = set(cursor.get("seen_issue_numbers") or [])
@@ -164,6 +173,16 @@ def _poll_label_trigger(
         title = str(issue.get("title") or "").strip()
         body = str(issue.get("body") or "").strip()
         author = (issue.get("user") or {}).get("login") or ""
+        # Skip issues the token owner authored. The resident labels its own
+        # carve-out issues (e.g. `gh issue create --label co-maintainer`),
+        # which would otherwise fire the label trigger on its own action —
+        # the self-loop that produced the duplicate wakes on #114.
+        if author and bot_login and author == bot_login:
+            seen.add(number)
+            ts = issue.get("updated_at") or issue.get("created_at")
+            if isinstance(ts, str) and ts > latest_seen:
+                latest_seen = ts
+            continue
         protocol.create_event(
             inbox_dir,
             source="github",
@@ -194,13 +213,14 @@ def _poll_opened_trigger(
     repo: str,
     cursor: dict,
     inbox_dir: Path,
+    bot_login: str = "",
 ) -> None:
     since = cursor.get("opened_since") or cache._initial_since()
     seen = set(cursor.get("seen_opened_issue_numbers") or [])
     etags = cursor.setdefault("etags", {})
     latest_seen = _poll_opened_items(
         token, repo, since=since, seen=seen, etags=etags,
-        inbox_dir=inbox_dir, trigger="opened",
+        inbox_dir=inbox_dir, trigger="opened", bot_login=bot_login,
     )
     cursor["opened_since"] = latest_seen
     cursor["seen_opened_issue_numbers"] = sorted(seen)[-_SEEN_CAP:]
