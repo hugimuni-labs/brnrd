@@ -323,6 +323,16 @@ dive-in map) and are stable until something contradicts them.
   supporter/public price step, BYO-for-subscribers rule,
   per-source credit expiry, one-time Free signup bonus, and
   soft-throttle event overage defaults.
+- [LLM passthrough credits decision](decision-llm-passthrough-credits.md) —
+  *proposed 2026-06-14*. **Sell LLM token passthrough (Codex first) billed
+  from the existing credit wallet, plus bundled-Codex-on-our-token as a
+  quota-exhaustion fallback.** Partially supersedes the pricing decision's
+  "we do not charge for AI usage" clause (BYO stays free; passthrough is
+  opt-in). Folds in the **model selector**: promote `model` to a
+  first-class config key, change it by talking to the resident (no
+  laptop + restart), and let the resident self-select on quota failure
+  via the same fallback chain. Reframes which fallback is likelier (LLM
+  quota, not compute). Code surface: `runner.py`, `config.py`.
 - [Billing design](design-billing.md) — *accepted 2026-05-26*. **Two
   billing legs**: subscription (Stripe recurring,
   monthly/annual, Customer Portal for self-service) and credit

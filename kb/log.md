@@ -6547,3 +6547,42 @@ remains open — flagged in `kb/design-co-maintainer.md`.
 
 Validation: `PYTHONPATH=src python -m pytest` passed (787 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning).
+
+## [2026-06-14] implement | Self-author trigger skip + LLM-passthrough pricing pivot, from the #114 thread
+
+Worked a multi-thread co-maintainer follow-up from #114. Shipped two PRs
+and synced the issue tracker.
+
+**#129 (code):** the GitHub gate's `label`/`opened` triggers had no
+self-author guard (only the mention trigger did), so when the resident
+opened its own carve-out issue with a label, the label trigger woke it on
+its own action — the self-loop behind the three runner invocations on one
+user message on #114. Threaded `bot_login` into `_poll_label_trigger`,
+`_poll_opened_trigger`, `_poll_opened_items`; skip items the token owner
+authored, marking them seen so the cursor advances. The re-engage path for
+a self-authored thread stays the @mention (not skipped). +2 regression
+tests; full suite 789 passed.
+
+**#130 (kb, proposed):** `decision-llm-passthrough-credits.md` partially
+supersedes the pricing decision's "we don't charge for AI usage" clause.
+The #114 ticket cost ~$15 in Claude credits after the operator's monthly
+Codex+Claude quotas ran out — so the likeliest interruption is LLM-quota
+exhaustion, not a compute failover. Proposes selling Codex/OpenAI token
+passthrough billed from the existing wallet, bundled-Codex-on-our-token as
+the quota fallback, BYO free + default, cloud-hosted-but-overridable.
+Folds in the **model selector** ("one PR for both things"): promote
+`model` to a first-class config key, change it by talking to the resident
+(no laptop edit + restart), self-select on failure via the fallback chain.
+Marked proposed — it reverses an accepted decision.
+
+**Issues:** extended #126 with the per-thread rolling-card story (card
+lifecycle is per-thread not per-event); filed #128 (retire the per-event
+`task` concept — model a run as a runner that consumes/produces events,
+generalising the event-folding ask + the operator's "task is the wrong
+abstraction" point); filed #131 (bridge run-failure record into the wake
+snapshot). Fixed milestone drift — #126/#128/#131 were missing the
+Co-maintainer milestone every other issue in the set carries.
+
+Deferred-with-reason: the snapshot-bridge code (#131) touches the
+failure-handling path; filed as a scoped issue rather than rushed as a
+third under-tested PR.

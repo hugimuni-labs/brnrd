@@ -2,6 +2,14 @@
 
 **Status: accepted 2026-05-26** (locked in PR #40 MR review).
 
+> **Partial supersession (proposed 2026-06-14):** the clause below that
+> brnrd does *not* charge for AI usage — that Anthropic / OpenAI / Google
+> bills always belong directly to the user — is challenged by
+> [`decision-llm-passthrough-credits.md`](decision-llm-passthrough-credits.md),
+> which proposes selling LLM passthrough credits (Codex first) billed from
+> this page's wallet. BYO stays free; passthrough is the opt-in path. The
+> rest of this page (subscription tiers, compute credits) is unaffected.
+
 Hosted brnrd launches with a small platform subscription plus metered
 compute credits. Free stays genuinely usable for lightweight hosted
 dispatch. Subscribed accounts buy the operational surface that costs
