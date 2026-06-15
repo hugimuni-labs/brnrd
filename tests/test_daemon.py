@@ -1019,3 +1019,54 @@ def test_result_satisfied_delivery_missing_artifact_fails():
     )
     assert ok is False
     assert signal == ""
+
+
+def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
+    """The daemon persists the assembled prompt in .brr/runs/<task-id>/prompt.md.
+
+    On successful runs the trace directories are cleaned up, but the run dir
+    is not, so prompt.md survives — giving a faithful "what did this wake
+    see?" answer.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-prompt")
+    worktree_path, _finalized = _stub_env_isolated(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+
+    captured_prompts: list[str] = []
+
+    def fake_build_prompt(task, eid, rp, root, **kw):
+        p = f"PROMPT task={kw.get('task_id')} evt={eid}"
+        captured_prompts.append(p)
+        return p
+
+    monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", fake_build_prompt)
+
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="done\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(event, tmp_path, tmp_path / ".brr" / "responses", {}, 0)
+
+    assert task.status == "done"
+    prompt_path = tmp_path / ".brr" / "runs" / task.id / "prompt.md"
+    assert prompt_path.exists(), f"prompt.md not found at {prompt_path}"
+    content = prompt_path.read_text(encoding="utf-8")
+    # The first attempt's prompt (not a retry prompt) is what's persisted.
+    assert "evt=evt-prompt" in content
