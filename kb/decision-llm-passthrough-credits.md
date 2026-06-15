@@ -1,145 +1,172 @@
-# Decision: sell LLM passthrough credits (and where the model lives)
+# Decision: compute cost relay
 
-**Status: proposed 2026-06-14.** Supersedes the "we do **not** charge for
+**Status: proposed 2026-06-15.** Supersedes the "we do **not** charge for
 AI usage" clause of
 [`decision-pricing-shape.md`](decision-pricing-shape.md) (accepted
-2026-05-26). That page stands as written for the subscription + compute-
-credit shape; this page changes one thing it asserted — that Anthropic /
-OpenAI / Google bills always belong directly to the user — and adds a
-sellable LLM-access resource plus the configuration surface that makes it
-usable. Drafted from the #114 thread; needs a decision before the code in
-`runner.py` / `config.py` moves.
+2026-05-26). That page stands as written for the subscription +
+compute-credit shape; this page changes one thing it asserted — that
+Anthropic / OpenAI / Google bills always belong directly to the user — and
+replaces it with a relay-at-cost model for LLM traffic and a small ops
+margin for managed compute infrastructure.
 
-## Why (the data point and the pivot)
+Replaces `decision-llm-passthrough-credits.md` (proposed 2026-06-14),
+which framed passthrough as a revenue product rather than a cost relay.
+The page has been renamed accordingly.
 
-The closed-loop trigger: one co-maintainer ticket on #114 cost ~$15 in
-Claude credits because the operator had exhausted both their Codex and
-Claude monthly subscriptions that week — each a ~$20/month limit-based
-plan that most users would actually run on. The likeliest failure mode is
-**not** "the runner's compute environment died and needs a cloud
-failover" (the case
-[`plan-failover-compute.md`](plan-failover-compute.md) sells against). It
-is **"the user ran out of their monthly LLM quota mid-week."** That is the
-resource worth selling.
+## The pivot in one sentence
 
-The accepted pricing decision deliberately said brnrd does not touch AI
-billing — keep it clean, let the user's keys bill the user. That framing
-is right for BYO and should stay the free default. But it leaves the most
-common interruption unaddressed and forecloses a real, simple revenue
-surface: brr already runs the user's LLM CLI; passing through tokens on
-**our** account and billing the existing credit wallet is just charging
-for a relay we are one config line away from offering.
+The subscription is the only margin-bearing revenue line. Compute costs —
+LLM tokens and managed cloud infrastructure — are **relayed through the
+wallet**, not marked up for profit. The value is in the coordination
+platform; brr does not profit on the AI relay.
 
-## Identity constraint (what shapes the offer)
+## Why
 
-The product identity, in the operator's words: *a very simple,
-using-what-you-have setup and a forge-centred, AI-co-maintained
-workflow.* That cuts two ways here:
+The $15-ticket data point from #114 still motivates the relay: a user
+ran out of their monthly Codex and Claude quotas mid-week and the work
+stalled. That interruption is the resource worth solving for — not by
+selling AI access as a product line, but by providing a transparent relay
+that lets the work continue on metered spend the user controls.
 
-- **Sell broadly, gate lightly.** There is no reason to limit what we sell
-  as long as users can self-service it easily. Passthrough LLM credits,
-  bundled Codex, managed compute — all fair game as purchasable resources.
-- **Do not bury the product under conflicting toggles.** Every knob we add
-  (model, runner, passthrough-on/off, cloud-vs-local LLM) is a tax on the
-  "using-what-you-have" promise. The shape below leans on **good
-  defaults + one override surface**, not a matrix of switches.
+The key framing shift: the interruption is a *continuity* failure, not a
+*feature* gap. "Pass tokens on our account and charge the wallet" is the
+smallest fix — a convenience relay that removes a wall, not a new product
+that replaces the user's own subscription.
+
+## What "relay at cost" means (and one nuance)
+
+**LLM relay: no margin.** When brr passes tokens through brnrd's
+Anthropic / OpenAI / Google account, the wallet is charged at provider
+cost — input/output per-M-token rates, no markup. brr is not in the
+business of profiting on AI traffic; the wallet charge is a cost relay,
+not a revenue line. Transparent billing — "you spent $0.47 on Claude
+sonnet this run at Anthropic's current rate" — is the mechanism that makes
+this trustworthy.
+
+**Managed compute: small ops margin.** A Fly Machine managed by brnrd has
+operational overhead not in the cloud bill: setup, monitoring, credential
+management, failure handling. A modest ops margin on managed infra
+(separate from the LLM relay) covers this overhead explicitly rather than
+hiding it in an opaque credit multiplier. The distinction matters: "we
+don't profit on AI; we charge a small ops margin on managed compute" is
+honest. The current `$0.01/credit` rate in
+[`decision-pricing-shape.md`](decision-pricing-shape.md) should be
+annotated as an ops-margin rate for managed compute, not a general "AI
+credits" rate.
 
 ## Decision
 
-1. **LLM passthrough is a purchasable resource billed from the existing
-   credit wallet** — the same wallet `decision-pricing-shape.md` already
-   defines for compute overage. No second currency. Start with **Codex /
-   OpenAI passthrough** (the CLI is already in the bundled image), then
-   widen to other providers as demand appears.
+1. **LLM relay is a cost-pass-through resource, not a product.** When a
+   user has no usable credential (no key, or quota exhausted), brr relays
+   tokens on brnrd's account and bills the wallet at provider cost, no
+   markup. Start with **Codex / OpenAI** (the CLI is already in the
+   bundled image), then widen to other providers as demand appears.
 
-2. **Bundled Codex is the fallback on our token.** When a run finds no
-   usable user credential (no key, or quota exhausted), brr can fall back
-   to a brnrd-hosted Codex on our account, **billing the user's credits**
-   for the tokens — opt-in, surfaced through the consent/projection layer,
-   never silent. This is the direct answer to the $15-ticket interruption:
-   the work continues on metered credits instead of stalling.
+2. **BYO stays free and is the default.** A user who brings their own key
+   pays brnrd nothing for AI usage — the original clause holds. The relay
+   is opt-in and only activates when BYO is unavailable.
 
-3. **BYO stays free.** A user who brings their own key (or runs a local
-   model) pays brnrd nothing for AI usage — the original clause holds for
-   them. Passthrough is the opt-in path for users *without* their own
-   subscription, which is exactly the TAM the BYO-only model excluded.
+3. **Bundled Codex on brnrd's token is the managed fallback.** When a run
+   finds no usable credential, the fallback chain is: own key → brnrd
+   relay → bundled-on-brnrd-token. Each step is surfaced through the
+   spending-plan / consent checkpoint (§ below) — never silent.
 
-4. **If brnrd supplies the LLM, brnrd hosts it in the cloud** — the
-   passthrough endpoint runs on our infrastructure on our account. But the
-   behaviour is **overridable**: a user can always point the runner back
-   at their own key / endpoint / local model. Cloud-hosted is the managed
-   default, not a lock-in.
+4. **Managed compute carries an explicit ops margin.** Fly Machines run on
+   brnrd's account include a small margin to cover ops overhead.
+   The rate is distinct from the LLM relay rate and should be labelled as
+   such in the billing UI ("managed compute ops") rather than rolled into
+   an opaque credits rate.
 
-5. **Docker + the current runner shape is the starting point, not a
-   rebuild.** The bundled image already installs the Codex CLI and mounts
-   `~/.codex`; the passthrough path is an env-var/credential fallback in
-   that existing block plus a billing hook, not new architecture.
+5. **Docker + current runner shape is the starting point.** The bundled
+   image already installs the Codex CLI; the relay path is a credential
+   fallback plus a billing hook, not new architecture.
 
 ### What this does NOT change
 
-- The subscription + compute-credit tiers in `decision-pricing-shape.md`.
+- Subscription tiers and compute-credit wallet mechanics in
+  [`decision-pricing-shape.md`](decision-pricing-shape.md).
 - The relay-not-store / data-minimisation stance.
 - BYO remaining free and the default.
 
-## The model selector (the "where it lives" half)
+## Spending plan: the consent mechanism
 
-Today the LLM is selected by editing `runner` / `runner_cmd` in
-`.brr/config` (`runner.py:resolve_runner` / `_build_cmd`) and **restarting
-the daemon** — `config.py` has no hot-reload. The operator's lived pain:
-*"each time a runner has an issue I have to go change the setting on the
-laptop and restart."* Once we sell model access, the model also becomes a
-billing-relevant product surface, so it should not be buried in a static
-file that needs a laptop and a restart.
+Relay-at-cost is trustworthy only when the user can see what they are
+about to spend before they spend it. The spending plan is the mechanism:
 
-Proposed shape (one surface, not a matrix):
+A run that is about to consume significant tokens (relay or managed
+compute) emits a structured **spend projection** before committing — what
+it intends to do, which runner/model, estimated cost at relay rates — and
+pauses for user approval. User approves, cancels, or reshapes the task.
+Then the run continues.
 
-- **Promote `model` to a first-class config key**, distinct from `runner`
-  (the CLI) and `runner_cmd` (the full argv escape hatch). Today the model
-  is smuggled inside `runner_cmd`; a named `model` key the runner maps to
-  the active CLI's `--model` flag is what a selector can target.
-- **Make it changeable without a restart, from where the user already
-  is** — i.e. as a message to the resident (a chat/forge command like
-  `@brr-bot use model gpt-5.5`), which rewrites the dominion/config value
-  and takes effect on the next wake. This fits the co-maintainer identity:
-  you talk to your colleague, you don't SSH to its laptop. (Requires
-  config hot-reload or a per-wake read, which the resident loop already
-  does on each thought.)
-- **Let the resident self-select on failure** as the strongest rung:
-  when a run hits quota exhaustion / credit-low on the configured model,
-  the fallback chain (own key → passthrough → bundled-on-our-token) is the
-  same chain decision #2 defines. The "model selector" then becomes a
-  *preference + a fallback policy*, not a thing the human edits mid-incident.
-- **Managed dashboard** exposes the same setting for hosted users; it is
-  the brnrd-side projection of the one config key, not a separate model.
+This is not a multi-step orchestrator or a dependency graph. It is a
+single consent checkpoint that sits one layer earlier than it does today —
+before spending, not just before spawning a Fly Machine.
+
+The connection to `design-run-event-model.md` Q4: that page recommends
+keeping cost attribution at the **run** granularity and making the run's
+*decision to fold* the consent point — "the resident defers folding an
+expensive stuck event if cost/consent says so." The spending plan is what
+the resident shows the user before that decision is made. These two form
+one coherent model: the run projects its spend; the user approves (or
+doesn't); the run then decides what to fold in and what to postpone.
+
+Implementation design for the spending plan belongs in a dedicated design
+page (or in `design-run-event-model.md` as the Q4 implementation slice),
+not here. This page records the decision that the mechanism must exist and
+that it is the precondition for relay-at-cost being trustworthy at all.
+
+## Runner type vs. model (out of scope here)
+
+The previous draft of this page included a "model selector" section. That
+section conflated two distinct concerns:
+
+- **Runner type** (which execution environment — Docker+Codex, local
+  Claude Code, managed cloud, brnrd passthrough): a project/account-level
+  infrastructure setting changed infrequently.
+- **Model** (which LLM within a runner): a task preference changeable per
+  conversation.
+
+These are not a pricing decision. They belong in a UX/config design page
+alongside the `runner` / `model` config key design. The runner-type
+fallback chain in Decision point 3 above is the only runner-relevant thing
+this page needs to say.
 
 ## Sequencing
 
-1. This decision accepted (or amended) — the supersession is the gate.
-2. `model` config key + chat-command/hot-reload override (model selector).
-3. Codex passthrough endpoint + wallet billing hook; bundled-on-our-token
-   fallback in the docker credential block.
-4. Consent/projection layer learns "passthrough tokens" as a spend source
-   (chains into the self-spend-tracking work flagged on #114).
+1. This decision accepted — supersedes the BYO-only clause.
+2. Spending plan / consent-checkpoint design page (Q4 implementation slice
+   from `design-run-event-model.md`).
+3. Codex relay endpoint + wallet billing hook; bundled-on-brnrd-token
+   fallback in the Docker credential block.
+4. Consent/projection layer learns "relay tokens" + "managed compute ops"
+   as spend sources — chains into the self-spend-tracking work flagged
+   on #114.
+5. Billing UI separates LLM relay rate from managed compute ops rate.
 
 ## Open questions
 
-- Per-M-token pricing vs. a credit multiplier on provider cost — needs a
-  margin model in [`design-billing.md`](design-billing.md).
-- Whether bundled-on-our-token needs an explicit per-run consent prompt or
-  rides a standing wallet authorisation with a projection cap.
-- Abuse surface: a hosted Codex on our token is a resource to rate-limit
-  and attribute carefully; ties to the consent-as-projection redesign.
+- Exact managed-compute ops margin rate — should be specified in
+  [`design-billing.md`](design-billing.md) with the ledger mechanics.
+- Whether relay opt-in requires an explicit one-time consent flow (click
+  "enable relay") or activates automatically when credentials are absent
+  (with the spending plan as the per-run gate). Lean toward the latter —
+  it removes a setup step while still gating each spend.
+- Abuse surface for the brnrd-hosted relay: rate limiting and attribution
+  per run; ties to the consent-as-projection redesign.
 
 ## Companions
 
 - [`decision-pricing-shape.md`](decision-pricing-shape.md) — the page this
-  supersedes one clause of.
+  supersedes one clause of; wallet and credit mechanics.
 - [`design-billing.md`](design-billing.md) — wallet / ledger / Stripe the
-  credit charge rides on.
-- [`subject-managed-mode.md`](subject-managed-mode.md) — the hosted
-  surfaces, including the dashboard model setting.
-- [`plan-failover-compute.md`](plan-failover-compute.md) — the *other*
-  fallback (compute, not LLM); this reframes which failure is likelier.
-- `runner.py` (`resolve_runner`, `_build_cmd`, `runner`/`runner_cmd`),
-  `config.py` (`load_config`/`write_config`, no hot-reload today) — the
-  model-selector code surface.
+  relay charge rides on; managed-compute ops margin rate should be defined
+  here.
+- [`design-run-event-model.md`](design-run-event-model.md) — Q4 is the
+  billing/retry interaction; the spending-plan implementation slice.
+- [`design-co-maintainer.md`](design-co-maintainer.md) — §6 delivery
+  floor, §9 the consent surface.
+- [`subject-managed-mode.md`](subject-managed-mode.md) — hosted surfaces.
+- [`plan-failover-compute.md`](plan-failover-compute.md) — compute
+  failover; this page reframes which failure (LLM quota) is likelier than
+  compute env failure.
