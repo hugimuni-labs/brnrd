@@ -156,6 +156,7 @@ files changed. Reload never interrupts a running worker.
 | Dominion      | `.brr/dominion/` (branch `brr-home`)        | Durable; committed at sleep, travels with the remote |
 | Schedule state | `.brr/schedule/state.json`                 | Machine-persistent (firing-state); specs live in dominion `schedule.md` |
 | Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
+| Wake prompt   | `.brr/runs/<task-id>/prompt.md`             | Yes — persists through success so "what did this wake see?" is always answerable |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Kept on `error` / `conflict`, removed on clean `done` |
 | Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
 | Worktrees     | `.brr/worktrees/<task-id>/`                 | Removed on clean success; kept on failure / conflict / uncommitted leftovers |

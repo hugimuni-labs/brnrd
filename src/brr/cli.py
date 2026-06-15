@@ -149,9 +149,9 @@ def main(argv: list[str] | None = None) -> None:
 
     p = agent_sub.add_parser(
         "inject",
-        help="print the wake-context brr assembles for a runner — the "
-             "dominion digest + matched pitfalls + recent kb/log — so any "
-             "agent wrapper can orient the resident with the same semantic")
+        help="print the full wake-context a daemon task receives — dominion "
+             "digest + pitfalls + recent kb/log + mode-toggle blocks "
+             "(diffense, introspection) when their config toggles are on")
     p.add_argument(
         "--task", default=None,
         help="task text to match pitfalls against (a pitfall's triggers key "
