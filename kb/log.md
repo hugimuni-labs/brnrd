@@ -6717,3 +6717,26 @@ section stays in this decision page. Wake was triggered by a self-trigger
 rewrite since the direction was clearly established in the prior exchange
 and the questions were alignment checks rather than blockers. Branch:
 `brr/llm-passthrough-pricing`.
+
+## [2026-06-15] fix | GitHub gate self-author skip — label/opened triggers (#129)
+
+Rebased and shipped `brr/github-self-author-skip` (PR #129): threads
+`bot_login` into `_poll_label_trigger` and `_poll_opened_items` (via
+`_poll_opened_trigger`) so the GitHub gate skips issues and PRs the token
+owner authored, mirroring the guard already on the mention trigger.
+
+Root cause: when the resident opened a carve-out issue with a label
+(`gh issue create --label co-maintainer`), the label trigger fired on its
+own action — producing the triple-wake on #114. The mention trigger had a
+`bot_login` guard; label and opened did not.
+
+The guard is keyed on `author and bot_login and author == bot_login` so a
+missing `bot_login` config doesn't silently swallow real events. Skipped
+items are still marked seen so the cursor advances past them. +2 regression
+tests (`test_label_trigger_skips_issue_authored_by_token_owner`,
+`test_opened_trigger_skips_item_authored_by_token_owner`); 843 passed total.
+
+A second commit also reverts the `claude-bare-api-only-sonnet`/`-opus`
+rename from `b357c17` which broke `test_build_cmd_claude_bare_api_only_headless`
+without a test update — pre-existing failure unrelated to the self-author
+fix, bundled here to keep the suite green. Branch: `brr/github-self-author-skip`.
