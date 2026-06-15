@@ -1,6 +1,15 @@
-# Decision: compute cost relay
+# Decision: compute cost relay (retired)
 
-**Status: proposed 2026-06-15.** Supersedes the "we do **not** charge for
+**Status: retired 2026-06-15.** This page is superseded by
+[`decision-llm-relay.md`](decision-llm-relay.md), which updates the
+"relay at cost, no margin" framing to "provider cost plus a transparent
+relay service fee (10–15%)". All references should point to that page.
+
+---
+
+<!-- retained for history; content below reflects the relay-at-cost stance -->
+
+**Original status (proposed 2026-06-15):** Supersedes the "we do **not** charge for
 AI usage" clause of
 [`decision-pricing-shape.md`](decision-pricing-shape.md) (accepted
 2026-05-26). That page stands as written for the subscription +
