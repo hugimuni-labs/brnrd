@@ -6805,3 +6805,41 @@ layer — left as the remaining open piece of #126, recorded in
 `tests/test_daemon.py` (73 passed); full suite 733 passed, 7 skipped (5 gate-test
 collection errors from the sandbox's missing `requests` excluded — pre-existing
 env friction).
+
+## [2026-06-15] decision | LLM relay pricing revised: service fee replaces relay-at-cost (#130 follow-up)
+
+The relay-at-cost framing shipped in PR #130 was too idealistic for a
+bootstrapped, self-funded product. This PR revises it to a **transparent
+service fee model (10–15% of provider cost)** and retires the
+"passthrough" naming that implied zero markup.
+
+**What changed:**
+
+- **New page: `decision-llm-relay.md`** — replaces
+  `decision-llm-passthrough-credits.md` as the live decision. Key
+  changes from the prior version:
+  - "LLM relay: no margin" → "LLM relay: transparent service fee (10–15%)"
+  - Explicit rationale: real infrastructure overhead (endpoint, billing
+    hooks, rate limiting, abuse prevention, key rotation, monitoring) that
+    "relay at cost" would have hidden. A bootstrapped product cannot absorb
+    heavy relay usage at zero margin.
+  - Distinction from the rejected "Resell AI" shape: this is a transparent
+    admin fee, not a product line selling AI access.
+  - Service fee shown as a separate line item from provider cost ("Provider
+    cost: $0.47 · Relay service fee: $0.05 · Total: $0.52").
+  - Status promoted from proposed → accepted.
+
+- **Old page: `decision-llm-passthrough-credits.md`** — marked retired,
+  redirects to the new page, content preserved for history.
+
+- **`decision-pricing-shape.md`** — partial supersession note updated to
+  reference new page and new framing (provider cost + service fee, not no
+  markup).
+
+- **`kb/index.md`** — entry updated to reflect accepted status and service
+  fee framing.
+
+**Naming rationale:** "passthrough" implies cost passes through with no
+markup; "credits" implies a product. Both are wrong now. "relay" is clean:
+it describes the mechanism (we relay tokens) without implying the fee
+structure.
