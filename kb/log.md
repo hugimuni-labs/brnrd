@@ -6683,3 +6683,37 @@ facet. Recorded in `design-co-maintainer.md` §5/§11. Tests:
 `tests/test_forge_state.py` (27 cases — key parsing, thread_url, unpushed
 counting with a github-`origin`/local-`store` two-remote fixture, the
 builder, and prompt rendering). Full suite 817 passed, 7 skipped.
+
+## [2026-06-15] design | Compute cost relay decision — rewrite (#130)
+
+Rewrote `decision-llm-passthrough-credits.md` from "sell LLM passthrough
+credits" to "relay compute costs at provider cost." The earlier draft framed
+passthrough as a revenue product; the user's comment on #130 clarified the
+right model: subscription is the only margin-bearing revenue line, compute
+costs are relayed through the wallet.
+
+Key changes:
+- **LLM relay at cost, no markup.** Wallet charged at provider per-M-token
+  rates. "We don't profit on AI traffic" is the defining stance.
+- **Managed compute: explicit ops margin.** Fly Machine management has
+  overhead not in the cloud bill; a small margin covers it and should be
+  labelled separately in the billing UI (not rolled into an opaque credit
+  rate).
+- **Spending plan / consent checkpoint.** New section records that
+  relay-at-cost requires a pre-spend projection visible to the user before
+  tokens are consumed. Connects to `design-run-event-model.md` Q4 (run-
+  granularity attribution + folding as the consent point). Implementation
+  design deferred to a dedicated slice.
+- **Model selector moved out.** Runner-type vs. model is UX/config design,
+  not a pricing decision. The section has been removed; a brief note says
+  where it belongs.
+- `decision-pricing-shape.md` partial-supersession note updated to match.
+- `kb/index.md` entry updated with new description and date.
+
+Two assumptions baked in (surfaced in the diffense pack): (1) the LLM-at-
+cost vs. managed-compute-ops-margin split, (2) whether the spending-plan
+section stays in this decision page. Wake was triggered by a self-trigger
+(#129 — agent's own PR comment echoed back as an event); proceeded with the
+rewrite since the direction was clearly established in the prior exchange
+and the questions were alignment checks rather than blockers. Branch:
+`brr/llm-passthrough-pricing`.
