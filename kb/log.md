@@ -6740,3 +6740,68 @@ A second commit also reverts the `claude-bare-api-only-sonnet`/`-opus`
 rename from `b357c17` which broke `test_build_cmd_claude_bare_api_only_headless`
 without a test update — pre-existing failure unrelated to the self-author
 fix, bundled here to keep the suite green. Branch: `brr/github-self-author-skip`.
+## [2026-06-14] implement | Wake snapshot surfaces the prior run's operational failure
+
+Closed the #131 slice of the Co-maintainer milestone (refines #110). When a wake
+lands after the previous run on the same thread *failed* operationally, the
+`CommunicationSnapshot` now carries a `prior_failure` facet and the Task Context
+Bundle renders it as one prominent `⚠ Prior run on this thread failed
+(operational): …` line near the top — so a wake picking up after an interruption
+opens knowing it, instead of reconstructing "the last run died on credits" from
+timestamps and woven dialogue turns.
+
+No new persistence: the daemon's terminal `failed` update packet already lands in
+the per-thread conversation jsonl with the structured reason (error detail,
+attempt count, exit code, timeout flag, stage, timestamp). `_select_prior_failure`
+walks the prior records newest-first, restricted to the current thread, stops at
+the first terminal run outcome (`done`/`failed`), and surfaces a facet only when
+it was a `failed` — so a later success clears a stale failure and a normal agent
+noop (which leaves no `failed` record) never reads as one. A push `conflict` is a
+delivery outcome, not a run outcome, so it stays out of the terminal set and never
+masks a prior run failure — keeping the facet honest to operational failures only
+(runner crash / env setup / retry exhaustion), per the issue's scope.
+
+Validation: targeted + full suite green (683 passed, 7 skipped) once the 5
+gate-test collection errors from the sandbox's missing `requests` are ignored —
+pre-existing env friction, not this change (dominion pitfall filed).
+
+## [2026-06-14] feature | Status card re-aligned to the events/commit/noop success signal (#126)
+
+Finished the in-flight §8 projection-layer re-alignment a prior run (task
+`brr/card-re-alignment`) left uncommitted when it died on credits. The daemon-owned
+card lifecycle now reads the §6 success signal instead of "stdout was non-empty",
+in three pieces, all in `daemon.py` + `run_progress.py`:
+
+- **Success from the signal.** `_result_satisfied_delivery` now returns
+  `(satisfied, signal)` where `signal` ∈ `current_reply | other_reply | outbound |
+  commit | internal`. A run succeeds when it answered any thread, sent an
+  out-of-bound `gate:` message, made a new commit on the worktree branch (detected
+  via `worktree.has_commits_beyond(seed_ref)` *before* finalize tears the worktree
+  down), or is an internal event needing no reply. Stdout stays the common
+  `current_reply` path, no longer the only one. Signal rides the `done` packet onto
+  `RunProgressView.success_signal`.
+- **Operational failure renders distinctly.** The `failed` packet carries a
+  `failure_kind` (`timed_out` / `runner_error` / `no_output`); the compact card
+  renames the terminal `failed` entry to `timed out` / `runner failed` / `no reply`,
+  so an operational failure (user owns the runner per §6) reads differently from a
+  hypothetical agent partial. `no_output` is the clean-exit-but-no-signal case
+  (`last_failure` is None yet nothing was delivered and nothing committed).
+- **Multi-thread delivery reflected.** The `done` packet carries `replies_current`
+  / `replies_other` / `outbound_messages` / `committed`; `_delivery_summary`
+  surfaces "delivered to N threads" / "sent N out-of-bound message(s)" /
+  "committed; no reply" on the terminal line, so a wake that answered several
+  threads isn't collapsed to the current-thread reply.
+
+Brought onto current `main` via 3-way apply (base was 10 commits behind);
+conflicts were purely additive — the #125 `agent_card_text` field and the #114
+card-narration tests sit beside the new success-signal axes. Simplified one dead
+redundant branch in the failure classifier (both arms returned `runner_error`).
+
+**Deliberate scope line:** the folded-in *per-thread rolling card* (gate keeps one
+`message_id` keyed on `(thread, correspondent)` and edits it in place so failed
+runs don't stack dead cards) is brnrd/gate-side state, not this daemon projection
+layer — left as the remaining open piece of #126, recorded in
+`design-co-maintainer.md` §8/§11.6. Tests: `tests/test_run_progress.py` +
+`tests/test_daemon.py` (73 passed); full suite 733 passed, 7 skipped (5 gate-test
+collection errors from the sandbox's missing `requests` excluded — pre-existing
+env friction).

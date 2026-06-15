@@ -177,6 +177,18 @@ selection is still budgeted, but unanswered user events get a strong boost
 over pure recency. The forge-state facet remains §5 / #113, not part of this
 slice.
 
+Extended 2026-06-14 (#131): the snapshot gained a **prior-failure facet**. When
+the most recent terminal run outcome on the current thread was an *operational*
+failure (runner crash / env setup / retry exhaustion — the daemon's `failed`
+packet, never a normal noop or a push `conflict`), `prior_failure` carries its
+structured reason (error detail, attempts, exit code, timeout flag, stage,
+timestamp) and the bundle renders it as one prominent `⚠ Prior run on this
+thread failed` line near the top — so a wake landing after an interruption opens
+knowing it. No new persistence: the terminal `failed` update packet already lands
+in the per-thread conversation jsonl; the builder walks back to the first
+terminal outcome and surfaces it only when it was a failure, so a later success
+clears a stale one.
+
 **kb optional → collapse into the dominion.** In theme with this: the
 shared `kb/` may become optional (a `brr init` toggle / setup choice — see
 issue #105). When it's off, the semantic + decisional layer has nowhere
@@ -386,11 +398,41 @@ and delivery state from *that* signal (not stdout-non-empty), reflect that a
 single run may have answered on several threads, and show an **operational
 failure** distinctly from a normal partial. The card isn't wrong, it's
 coupled to assumptions §6 removes: agent-owned composition sits on top of a
-daemon-owned lifecycle that tracks the new signal. (So §8's re-alignment
-half depends on §6 — the delivery-robustness work shipped 2026-06-13 — and
-remains the open piece: surfacing the events/commit/noop signal on the
-card itself, distinguishing operational failure from a normal partial,
-and reflecting multi-thread delivery.)
+daemon-owned lifecycle that tracks the new signal.
+
+*Projection-layer re-alignment shipped 2026-06-14 (#126).* The
+daemon-owned lifecycle now reads the §6 success signal instead of
+stdout-non-empty, in three pieces:
+
+- **Success from the signal.** `_result_satisfied_delivery` returns
+  `(satisfied, signal)` where `signal` is one of `current_reply |
+  other_reply | outbound | commit | internal` — a run is successful when
+  it answered *any* thread, sent an out-of-bound `gate:` message, made a
+  new commit on the worktree branch (detected via
+  `worktree.has_commits_beyond(seed_ref)` *before* finalize tears the
+  worktree down), or is an internal event needing no thread reply. Stdout
+  is still the common `current_reply` path, no longer the only one. The
+  signal rides the `done` packet onto `RunProgressView.success_signal`.
+- **Operational failure renders distinctly.** The `failed` packet carries
+  a `failure_kind` (`timed_out` / `runner_error` / `no_output`); the
+  compact card renames the terminal `failed` entry to `timed out` /
+  `runner failed` / `no reply` so an operational failure (the user owns
+  the runner per §6) reads differently from a hypothetical agent partial.
+- **Multi-thread delivery reflected.** The `done` packet carries
+  `replies_current` / `replies_other` / `outbound_messages` / `committed`;
+  `_delivery_summary` surfaces "delivered to N threads" / "sent N
+  out-of-bound message(s)" / "committed; no reply" on the terminal line,
+  so a wake that answered several threads isn't collapsed to the
+  current-thread reply.
+
+*Open piece — the per-thread rolling card (gate-side).* The folded-in
+legibility fix (gate keeps one card `message_id` keyed on
+`(thread, correspondent)` and edits it in place across runs, so three
+failed runs no longer stack three dead cards) is brnrd/gate-side state,
+not the daemon projection layer this slice re-aligned. It's the remaining
+work on #126: preserve the relay-not-store invariant (brnrd still holds
+only the `message_id`, now per-thread not per-task) while rolling prior
+outcomes into a short status header rather than a fresh comment per run.
 
 ## 9. Daemon responsiveness — shipped 2026-06-14 (#115)
 
@@ -461,10 +503,14 @@ sequence (each maps to a milestone issue):
    (§4.2, #110) — shipped 2026-06-14 for the structured wake snapshot,
    grouped run-directory JSONL history files, and dominion thread-of-record
    prompt/context hint.
-6. **Card re-alignment + agent-owned composition** (§8, #114) — needs #111.
+6. **Card re-alignment + agent-owned composition** (§8, #114/#126) — needs #111.
    *Composition seam shipped 2026-06-14* (`.card` control dotfile +
-   `card_composed` packet + `agent_card_text` on the projection); the
-   card re-alignment to the events/commit/noop signal remains open.
+   `card_composed` packet + `agent_card_text` on the projection).
+   *Projection-layer re-alignment shipped 2026-06-14 (#126)* — success
+   from the events/commit/noop signal, distinct operational-failure
+   rendering, and multi-thread delivery on the terminal line. The
+   per-thread rolling card (gate-side `message_id` keyed on
+   `(thread, correspondent)`) remains the open piece of #126.
 7. **Forge-awareness in the snapshot** (§5, #113) — *shipped 2026-06-14*
    (network-free `forge` facet on the snapshot: worktrees + unpushed work +
    issue/PR cross-references, via `forge_state.py`). **Forge grooming**
