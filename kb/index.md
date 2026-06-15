@@ -335,6 +335,15 @@ dive-in map) and are stable until something contradicts them.
   supporter/public price step, BYO-for-subscribers rule,
   per-source credit expiry, one-time Free signup bonus, and
   soft-throttle event overage defaults.
+- [Compute cost relay decision](decision-llm-passthrough-credits.md) —
+  *proposed 2026-06-15* (rewritten from 2026-06-14 draft). **LLM relay at
+  provider cost (no markup), managed compute with a small ops margin.**
+  The subscription is the only margin-bearing revenue line; brr does not
+  profit on AI traffic. Bundled-Codex-on-brnrd-token is the quota-
+  exhaustion fallback, gated behind the spending-plan consent checkpoint.
+  Supersedes the pricing decision's "we do not charge for AI usage" clause
+  (BYO stays free). Runner-type vs. model selection moved out to a UX
+  design page.
 - [Billing design](design-billing.md) — *accepted 2026-05-26*. **Two
   billing legs**: subscription (Stripe recurring,
   monthly/annual, Customer Portal for self-service) and credit
