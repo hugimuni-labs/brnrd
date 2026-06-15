@@ -17,6 +17,7 @@ runtime (Python looks up module globals at call time):
 
 from __future__ import annotations
 
+import datetime as _dt
 from pathlib import Path
 
 import pytest
@@ -548,6 +549,75 @@ def test_label_trigger_skips_pull_requests(tmp_path, monkeypatch):
             "updated_at": "2026-05-15T10:00:00Z",
         },
     ])
+
+    loop._loop_once(brr_dir, inbox, responses)
+    assert protocol.list_pending(inbox) == []
+
+
+def test_label_trigger_skips_issue_authored_by_token_owner(tmp_path, monkeypatch):
+    """The resident labels its own carve-out issues; that must not self-wake.
+
+    Regression for the duplicate wakes on #114: the bot opened #126 with
+    ``--label co-maintainer`` and the label trigger fired on its own action.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"label": "brr"},
+    })
+
+    monkeypatch.setattr(
+        client, "_api_get",
+        lambda token, path, params=None, **kwargs: [
+            {
+                "number": 126,
+                "title": "self-authored carve-out",
+                "body": "filed by the resident",
+                "user": {"login": "brr-bot"},
+                "html_url": "https://github.com/owner/name/issues/126",
+                "updated_at": "2026-06-14T10:00:00Z",
+            },
+        ] if path == "/repos/owner/name/issues" else [],
+    )
+
+    loop._loop_once(brr_dir, inbox, responses)
+    assert protocol.list_pending(inbox) == []
+
+    # Cursor still advanced — a re-poll does not resurrect the skipped issue.
+    state_dict = state._load_state(brr_dir)
+    assert 126 in (state_dict.get("cursor", {}).get("seen_issue_numbers") or [])
+
+
+def test_opened_trigger_skips_item_authored_by_token_owner(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"opened": True},
+    })
+
+    now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    monkeypatch.setattr(
+        client, "_api_get",
+        lambda token, path, params=None, **kwargs: [
+            {
+                "number": 99,
+                "title": "resident-opened issue",
+                "body": "opened by the bot itself",
+                "user": {"login": "brr-bot"},
+                "html_url": "https://github.com/owner/name/issues/99",
+                "created_at": now,
+                "updated_at": now,
+            },
+        ] if path == "/repos/owner/name/issues" else [],
+    )
 
     loop._loop_once(brr_dir, inbox, responses)
     assert protocol.list_pending(inbox) == []
