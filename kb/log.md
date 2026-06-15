@@ -6710,3 +6710,38 @@ layer — left as the remaining open piece of #126, recorded in
 `tests/test_daemon.py` (73 passed); full suite 733 passed, 7 skipped (5 gate-test
 collection errors from the sandbox's missing `requests` excluded — pre-existing
 env friction).
+
+## [2026-06-15] fix | Faithful wake context: brr agent inject mode-aware + prompt.md retention (#116)
+
+Two gaps closed between `brr agent inject` and what a real daemon wake
+actually receives, per co-maintainer §10 (`design-co-maintainer.md`):
+
+**1. `brr agent inject` was not mode-aware.** `build_injected_context` (its
+backend) returned only the base injected blocks — dominion, pitfalls, recent
+log, kb health — and omitted the diffense review-pack prompt and introspection
+invitation that `_join_prompt_parts` adds when `diffense.emit_pack` / 
+`introspect.enabled` are on. Fixed: `build_injected_context` now reads the
+config and appends both blocks when their toggles are on, so the inject tool
+is a faithful mirror of the injected portion of a real wake. The function
+docstring and `_build_injected_blocks` docstring updated to reflect the new
+shape; `brr agent inject` CLI help text updated. The mode-toggle blocks are
+kept in the same order as `_join_prompt_parts` uses them (diffense then
+introspection) so the inject output is a verbatim substring of the daemon
+prompt — verified by a new test `test_build_injected_context_includes_mode_toggles`
+which also guards against future drift.
+
+**2. Successful runs deleted their prompt.** Trace directories (which hold
+`prompt.md` per runner invocation) are cleaned by `_cleanup_traces_on_success`;
+only failed runs kept a prompt to inspect. Fixed: `run_context.write_prompt_file`
+writes `.brr/runs/<task-id>/prompt.md` right after the daemon builds the
+prompt for attempt 1. The run directory is never cleaned (only traces are),
+so the prompt survives. The path is pre-announced in `context.md`'s Runtime
+Files section so agents know where to look. Docs updated in
+`brr-internals.md` and `execution-map.md`. `design-context-introspection.md`
+updated with a "Faithful 'what did this wake see?'" section.
+
+Changed: `prompts.py`, `run_context.py`, `daemon.py`, `cli.py`, docs.
+Tests: existing suite 764 passed (3 new: `test_build_injected_context_includes_mode_toggles`,
+`test_run_context_includes_prompt_file_path`, `test_write_prompt_file_creates_file_in_run_dir`,
+`test_run_worker_writes_prompt_to_run_dir`). Pre-existing `test_build_cmd_claude_bare_api_only_headless`
+failure unchanged (unrelated `b357c17` rename on main).
