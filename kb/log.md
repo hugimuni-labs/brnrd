@@ -6548,6 +6548,44 @@ remains open — flagged in `kb/design-co-maintainer.md`.
 Validation: `PYTHONPATH=src python -m pytest` passed (787 tests, with the
 existing Starlette/FastAPI TestClient deprecation warning).
 
+## [2026-06-14] implement | Self-author trigger skip + LLM-passthrough pricing pivot, from the #114 thread
+
+Worked a multi-thread co-maintainer follow-up from #114. Shipped two PRs
+and synced the issue tracker.
+
+**#129 (code):** the GitHub gate's `label`/`opened` triggers had no
+self-author guard (only the mention trigger did), so when the resident
+opened its own carve-out issue with a label, the label trigger woke it on
+its own action — the self-loop behind the three runner invocations on one
+user message on #114. Threaded `bot_login` into `_poll_label_trigger`,
+`_poll_opened_trigger`, `_poll_opened_items`; skip items the token owner
+authored, marking them seen so the cursor advances. The re-engage path for
+a self-authored thread stays the @mention (not skipped). +2 regression
+tests; full suite 789 passed.
+
+**#130 (kb, proposed):** `decision-llm-passthrough-credits.md` partially
+supersedes the pricing decision's "we don't charge for AI usage" clause.
+The #114 ticket cost ~$15 in Claude credits after the operator's monthly
+Codex+Claude quotas ran out — so the likeliest interruption is LLM-quota
+exhaustion, not a compute failover. Proposes selling Codex/OpenAI token
+passthrough billed from the existing wallet, bundled-Codex-on-our-token as
+the quota fallback, BYO free + default, cloud-hosted-but-overridable.
+Folds in the **model selector** ("one PR for both things"): promote
+`model` to a first-class config key, change it by talking to the resident
+(no laptop edit + restart), self-select on failure via the fallback chain.
+Marked proposed — it reverses an accepted decision.
+
+**Issues:** extended #126 with the per-thread rolling-card story (card
+lifecycle is per-thread not per-event); filed #128 (retire the per-event
+`task` concept — model a run as a runner that consumes/produces events,
+generalising the event-folding ask + the operator's "task is the wrong
+abstraction" point); filed #131 (bridge run-failure record into the wake
+snapshot). Fixed milestone drift — #126/#128/#131 were missing the
+Co-maintainer milestone every other issue in the set carries.
+
+Deferred-with-reason: the snapshot-bridge code (#131) touches the
+failure-handling path; filed as a scoped issue rather than rushed as a
+third under-tested PR.
 ## [2026-06-14] implement | Daemon responsiveness: connection reuse + event-driven wakeup
 
 Closed the Co-maintainer "daemon responsiveness" slice (#115 →
@@ -6645,6 +6683,63 @@ facet. Recorded in `design-co-maintainer.md` §5/§11. Tests:
 `tests/test_forge_state.py` (27 cases — key parsing, thread_url, unpushed
 counting with a github-`origin`/local-`store` two-remote fixture, the
 builder, and prompt rendering). Full suite 817 passed, 7 skipped.
+
+## [2026-06-15] design | Compute cost relay decision — rewrite (#130)
+
+Rewrote `decision-llm-passthrough-credits.md` from "sell LLM passthrough
+credits" to "relay compute costs at provider cost." The earlier draft framed
+passthrough as a revenue product; the user's comment on #130 clarified the
+right model: subscription is the only margin-bearing revenue line, compute
+costs are relayed through the wallet.
+
+Key changes:
+- **LLM relay at cost, no markup.** Wallet charged at provider per-M-token
+  rates. "We don't profit on AI traffic" is the defining stance.
+- **Managed compute: explicit ops margin.** Fly Machine management has
+  overhead not in the cloud bill; a small margin covers it and should be
+  labelled separately in the billing UI (not rolled into an opaque credit
+  rate).
+- **Spending plan / consent checkpoint.** New section records that
+  relay-at-cost requires a pre-spend projection visible to the user before
+  tokens are consumed. Connects to `design-run-event-model.md` Q4 (run-
+  granularity attribution + folding as the consent point). Implementation
+  design deferred to a dedicated slice.
+- **Model selector moved out.** Runner-type vs. model is UX/config design,
+  not a pricing decision. The section has been removed; a brief note says
+  where it belongs.
+- `decision-pricing-shape.md` partial-supersession note updated to match.
+- `kb/index.md` entry updated with new description and date.
+
+Two assumptions baked in (surfaced in the diffense pack): (1) the LLM-at-
+cost vs. managed-compute-ops-margin split, (2) whether the spending-plan
+section stays in this decision page. Wake was triggered by a self-trigger
+(#129 — agent's own PR comment echoed back as an event); proceeded with the
+rewrite since the direction was clearly established in the prior exchange
+and the questions were alignment checks rather than blockers. Branch:
+`brr/llm-passthrough-pricing`.
+
+## [2026-06-15] fix | GitHub gate self-author skip — label/opened triggers (#129)
+
+Rebased and shipped `brr/github-self-author-skip` (PR #129): threads
+`bot_login` into `_poll_label_trigger` and `_poll_opened_items` (via
+`_poll_opened_trigger`) so the GitHub gate skips issues and PRs the token
+owner authored, mirroring the guard already on the mention trigger.
+
+Root cause: when the resident opened a carve-out issue with a label
+(`gh issue create --label co-maintainer`), the label trigger fired on its
+own action — producing the triple-wake on #114. The mention trigger had a
+`bot_login` guard; label and opened did not.
+
+The guard is keyed on `author and bot_login and author == bot_login` so a
+missing `bot_login` config doesn't silently swallow real events. Skipped
+items are still marked seen so the cursor advances past them. +2 regression
+tests (`test_label_trigger_skips_issue_authored_by_token_owner`,
+`test_opened_trigger_skips_item_authored_by_token_owner`); 843 passed total.
+
+A second commit also reverts the `claude-bare-api-only-sonnet`/`-opus`
+rename from `b357c17` which broke `test_build_cmd_claude_bare_api_only_headless`
+without a test update — pre-existing failure unrelated to the self-author
+fix, bundled here to keep the suite green. Branch: `brr/github-self-author-skip`.
 ## [2026-06-14] implement | Wake snapshot surfaces the prior run's operational failure
 
 Closed the #131 slice of the Co-maintainer milestone (refines #110). When a wake
