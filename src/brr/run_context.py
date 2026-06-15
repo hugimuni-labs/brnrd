@@ -9,6 +9,24 @@ from .envs import RunContext
 from .task import Task
 
 
+def write_prompt_file(brr_dir: Path, task: Task, prompt: str) -> Path | None:
+    """Write the assembled wake prompt to `.brr/runs/<task-id>/prompt.md`.
+
+    Unlike the ephemeral trace-dir prompt (cleaned up on successful runs),
+    this copy persists so "what did this wake see?" has an honest answer
+    after any run — success or failure.  Returns the path written, or ``None``
+    on error (non-fatal; the task continues regardless).
+    """
+    context_dir = brr_dir / "runs" / task.id
+    context_dir.mkdir(parents=True, exist_ok=True)
+    path = context_dir / "prompt.md"
+    try:
+        path.write_text(prompt, encoding="utf-8")
+        return path
+    except OSError:
+        return None
+
+
 def write_context_file(
     brr_dir: Path,
     task: Task,
@@ -132,6 +150,7 @@ def render_context(
         lines.extend(["", "## Original Event Body", "", body])
 
     task_file = ctx.runtime_dir / "tasks" / f"{task.id}.md"
+    prompt_file = ctx.runtime_dir / "runs" / task.id / "prompt.md"
     lines.extend([
         "",
         "## Runtime Files",
@@ -139,6 +158,7 @@ def render_context(
         f"- Event file: {event.get('_path', '')}",
         f"- Task file: {task_file}",
         f"- Response file: {ctx.response_path_host}",
+        f"- Assembled wake prompt: {prompt_file} (written once the task starts)",
     ])
     if ctx.outbox_host:
         lines.append(f"- Interim-response outbox: {ctx.outbox_host}")

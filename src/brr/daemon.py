@@ -798,6 +798,10 @@ def _run_worker(
                 budget_seconds=budget_seconds,
                 diffense=prompt_diffense,
             )
+            # Persist the assembled prompt so "what did this wake see?" has
+            # an honest answer even on successful runs (traces are cleaned up
+            # on success; the run directory persists).
+            run_context.write_prompt_file(brr_dir, task, prompt)
         else:
             prompt = prompts.build_daemon_prompt(
                 f"Previous attempt printed no final reply on stdout. "
