@@ -15,6 +15,11 @@
 # into it at runtime. GitHub auth is wired separately via an injected
 # ``GITHUB_TOKEN`` env var rather than a bind mount, because gh's keyring
 # backend isn't reachable from inside the container.
+#
+# ``brr init -i`` copies ``pyproject.toml``, ``README.md``, and ``src/`` into
+# the build context and installs this checkout with ``pip install /opt/brr``.
+# Do **not** ``pip install brr`` from PyPI here — that name is an unrelated
+# terminal image renderer.
 
 FROM node:22-slim
 
@@ -44,8 +49,12 @@ RUN apt-get update \
     && pip install --no-cache-dir \
         'pytest>=7.0' \
         'requests>=2.31,<3' \
-        'brr>=0.1.0' \
     && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md /opt/brr/
+COPY src /opt/brr/src
+RUN pip install --no-cache-dir /opt/brr \
+    && python3 -m brr review --help >/dev/null
 
 # GitHub CLI via the official upstream APT source. Debian's own ``gh``
 # package is sometimes years out of date (e.g. 2.46.x), and ``gh pr
