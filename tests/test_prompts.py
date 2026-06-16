@@ -693,7 +693,7 @@ class TestPromptBuilding:
         assert "Recent in this conversation" not in prompt
         assert "Original event body" not in prompt
 
-    def test_bundled_daemon_prompt_is_command_free(self, tmp_path):
+    def test_bundled_daemon_prompt_points_at_cockpit_not_dead_commands(self, tmp_path):
         prompt = build_daemon_prompt(
             "do thing",
             "evt-9",
@@ -705,7 +705,10 @@ class TestPromptBuilding:
         assert "Run context file: /repo/.brr/runs/task-9/context.md" in prompt
         assert "brr inspect" not in prompt
         assert "brr stream" not in prompt
-        assert "brr docs" not in prompt
+        # The cockpit manual is inspected, not injected: the daemon prompt
+        # carries a one-line pointer to it (the protocol choreography lives
+        # there, not re-narrated in full on every wake).
+        assert "brr docs cockpit" in prompt
 
 
 # ── Phase 3 guardrails: revisit-signal handling ──────────────────────
