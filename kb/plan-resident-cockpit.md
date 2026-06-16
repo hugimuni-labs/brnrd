@@ -126,13 +126,97 @@ The fix is less "new feature," more **habit + legibility**: (a) compose
 the `.card` as a matter of course so the human always sees a live,
 self-authored status; (b) keep a richer dominion surface I read and write
 each wake (a standing "what I'm carrying" note); (c) a one-screen
-**cockpit cheatsheet** in the dominion so the control protocol is
-*looked up*, not *memorized* — pushing it down the robustness ladder from
-"remember the dotfile names" to "glance at the panel."
+**cockpit cheatsheet** so the control protocol is *looked up*, not
+*memorized* — pushing it down the robustness ladder from "remember the
+dotfile names" to "glance at the panel."
+
+> **Correction (2026-06-16):** the cheatsheet's home is the **repo**, not
+> the dominion (where this section first put it). See §G5 — generic
+> cockpit knowledge belongs in a bundled prompt doc every adopter
+> inherits; only *per-resident* state (the "what I'm carrying" note, my
+> own habits) stays in the dominion.
 
 **Home:** [`design-agent-dominion.md`](design-agent-dominion.md),
 [`design-agent-ergonomics.md`](design-agent-ergonomics.md),
 [`design-co-maintainer.md`](design-co-maintainer.md) §8.
+
+## G5 — Unify the injection layer; ship the manuals as bundled, *inspected* docs
+
+**Source.** Maintainer, 2026-06-16, on merging the cockpit framing:
+"some things we should move out of your dominion to the repo, so that
+other brr-managed repos can follow through this environment… we need some
+actual how-to manuals of an average task execution workflow… maybe not
+injected but inspected, maybe injected, it is your call… a braided
+framing that makes everything meaningful." This is the cockpit's *prompt
+side* — what gets folded into a wake and how — as opposed to G1–G4's
+runtime and dashboard sides.
+
+**The shape today.** A daemon wake is already assembled from layers
+(`prompts.py` → `build_daemon_prompt` / `_join_prompt_parts`):
+`run.md` + `daemon-substrate.md` (preamble) → dominion digest
+(playbook + self-inject) → matched pitfalls → recent-log tail → kb-health
+→ mode toggles (diffense, introspection) → the Task Context Bundle (the
+per-task delivery contract). The layering is real and mostly clean
+(`plan-agent-orientation-layering.md` did the first pass). Two problems
+remain:
+
+1. **The same mechanics are re-explained in three voices.** The
+   outbox / keepalive / `.card` / `gate:` / `schedule.md` protocol is
+   narrated in `daemon-substrate.md`, again in the Task Context Bundle's
+   delivery contract, and gestured at in the playbook. Each wake pays for
+   all three. That's the "layer to unify."
+2. **There is no average-workflow manual at all.** Nothing tells a wake
+   the *shape of a normal task run* — receive an event → orient → decide
+   plan-vs-execute → (if plan) emit a PLAN and schedule the approval
+   wake → (if execute) do the work, narrate via `.card`, deliver →
+   decompose / defer the rest via `schedule.md`. The protocol primitives
+   exist; the *choreography* is folk knowledge re-derived each wake.
+
+**Direction (the calls I'd make, pending the nod):**
+
+- **Generic cockpit knowledge → the repo, not the dominion.** A new
+  bundled prompt doc — working name `prompts/cockpit.md` — is the
+  one-screen cheatsheet + the average-workflow choreography, written
+  laconic and agent-facing. Because it's bundled, every adopter's
+  resident inherits it on `brr init`; a fresh dominion no longer has to
+  re-grow the same habits. The dominion keeps only what is *this
+  resident's*: the "what I'm carrying" note, accreted pitfalls, personal
+  habits.
+- **Inspected, not injected — with a one-line pointer injected.** The
+  manual must *not* ride into every wake in full; that is exactly the
+  firehose G4 cuts. Instead: surface it the way tool docs already are
+  (`brr docs` / a `brr agent …` view), and inject a single pointer line
+  ("the cockpit manual is at `brr docs cockpit` / `prompts/cockpit.md`;
+  read it when the task's shape is unfamiliar"). Glance at the panel;
+  don't memorize it. This keeps the robustness ladder honest: the *live
+  state* (medium, quota, this task's branches) is injected; the *manual*
+  is one glance away.
+- **Deduplicate the protocol to one canonical home.** The delivery
+  mechanics get *one* authoritative description — the Task Context Bundle
+  stays the per-task *values* (paths, budget, this event's ids), and the
+  *protocol prose* collapses into the cockpit doc that the bundle points
+  at. `daemon-substrate.md` keeps only the substrate facts that aren't
+  per-task (single-flight, capture net, schedule semantics). The win is
+  fewer tokens and one voice instead of three.
+
+**Why bundled-and-inspected is the braided answer.** The maintainer's
+"neuromancer in ascii" / Talos-Principle instinct is that the wrapping
+layers should feel like *instrument panels of one cockpit*, each
+meaningful, none a wall of noise. A manual you inject in full is a wall;
+a manual you can *summon* is a panel. Bundling it in the repo is what
+makes the cockpit a shared environment other brr-managed repos inhabit,
+not a private apartment each resident furnishes alone.
+
+**Home:** `prompts/cockpit.md` (new bundled doc),
+`prompts/daemon-substrate.md` + `prompts.py` (dedup + pointer injection),
+[`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md)
+(the layering this extends),
+[`design-co-maintainer.md`](design-co-maintainer.md) §4.2 (firehose vs.
+synthesis — the same principle, applied to the manual).
+
+**Status:** direction proposed this wake; awaits the maintainer's nod
+before the doc + dedup land (a chat-only direction-set is a complete
+turn; the build is the follow-up event).
 
 ## Prioritized sequence (token- and pain-aware)
 
@@ -146,8 +230,15 @@ each wake (a standing "what I'm carrying" note); (c) a one-screen
 4. **G2 — plan→approve loop.** Convention-light; unlocks the duo cadence
    the maintainer wants. Wants #128's run/event threading.
 5. **G3 — decomposition via child events.** Defer behind #128.
-6. **G4 dwelling habits.** Continuous, not a milestone — start now (this
-   wake composes a `.card`; the cockpit cheatsheet lands in the dominion).
+6. **G5 — `prompts/cockpit.md` + protocol dedup.** Cheap, high-leverage,
+   adopter-facing: one bundled doc holds the cheatsheet + average-workflow
+   choreography (inspected, with a one-line injected pointer), and the
+   outbox/keepalive/`.card` prose collapses to one canonical home. Pairs
+   naturally with the G4 firehose cut (both are token-side wins). Awaits
+   the nod.
+7. **G4 dwelling habits.** Continuous, not a milestone — start now (this
+   wake composes a `.card`; the cockpit cheatsheet now lands in the repo
+   per G5, with per-resident state staying in the dominion).
 
 ## Read next
 

@@ -6947,3 +6947,42 @@ Prioritized token/pain-aware: surface-the-medium → forge-firehose-cut →
 fallback+deferral → plan-loop → decomposition → dwelling habits.
 Chat-only direction-setting + the plan page; awaits the maintainer's nod
 before any implementation diff. Branch `brr/resident-cockpit`.
+
+## [2026-06-16] plan | Cockpit, prompt-side: manuals as bundled+inspected docs, unify the injection layer
+
+Maintainer merged the cockpit framing (and the earlier
+`design-runner-management.md`) and steered toward the *prompt side* of the
+cockpit: move generic cockpit knowledge **out of the dominion into the
+repo** so other brr-managed repos inherit it; write **laconic,
+agent-facing how-to manuals** of an average task run (receive → orient →
+plan-vs-execute → schedule/defer); "maybe injected, maybe inspected —
+your call"; a **braided** framing where the wrapping layers feel like
+instrument panels, not a wall ("neuromancer in ascii" / Talos Principle).
+
+Two edits, both committed:
+
+- **Deprecated `design-runner-management.md`** (explicitly invited — "a
+  much poorer framing"). Marked *superseded by* `plan-resident-cockpit.md`
+  §G1; kept as a **reference mine** because its mechanics (capacity
+  tracker, reactive/proactive `work_class`, backoff/fallback chain, tier
+  headroom table, `brnrd_managed` consent gate) are the raw material a
+  future `design-runner-media.md` will draw on. Framing → cockpit;
+  how → this page.
+- **`plan-resident-cockpit.md` §G5** (new): unify the injection layer.
+  Read the actual assembly (`prompts.py` → `build_daemon_prompt` /
+  `_join_prompt_parts`): preamble (`run.md`+`daemon-substrate.md`) →
+  dominion digest → pitfalls → recent-log → kb-health → mode toggles →
+  Task Context Bundle. Two findings: (1) the outbox/keepalive/`.card`/
+  `gate:`/`schedule.md` protocol is re-narrated in **three** voices
+  (substrate doc, bundle delivery contract, playbook) — the "layer to
+  unify"; (2) there is **no** average-workflow manual at all — the
+  choreography is folk knowledge re-derived each wake. Calls made: a new
+  bundled `prompts/cockpit.md` (cheatsheet + choreography), **inspected**
+  via `brr docs`/`brr agent` with only a one-line *pointer* injected (full
+  injection would be the firehose G4 cuts), and the protocol prose
+  deduped to one canonical home. Also fixed a now-contradiction: G4 had
+  the cheatsheet living *in the dominion*; corrected to the repo
+  (generic→repo, per-resident state→dominion).
+
+Chat-only direction-set + the two kb edits; awaits the maintainer's nod
+before the bundled doc + dedup land. Branch `brr/cockpit-injection-direction`.
