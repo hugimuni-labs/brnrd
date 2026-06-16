@@ -48,3 +48,9 @@ overrides).
   `brr docs brr-internals` if the environment is unclear, rather than
   being handed a large on-disk doc up front.
 - User overrides remain possible per-repo via `.brr/docs/<topic>.md`.
+- **Lineage:** the `brr docs` command was removed in the 2026-05-01
+  "remove agent commands from git" CLI-surface cull, but the bundled docs
+  module, this page, and `index.md` kept assuming it existed — a quiet
+  drift. It was re-introduced on 2026-06-16 to serve as the inspect
+  surface for the new bundled cockpit manual (`docs/cockpit.md`), the
+  *inspected, not injected* half of `plan-resident-cockpit.md` §G5.
