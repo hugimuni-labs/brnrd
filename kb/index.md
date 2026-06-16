@@ -256,6 +256,16 @@ dive-in map) and are stable until something contradicts them.
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) on
   2026-05-22, then locked on 2026-05-26 after pricing, BYO,
   naming, monorepo, and dashboard decisions converged.
+- [Runner management — capacity-aware dispatch and proactive headroom](design-runner-management.md) —
+  *proposed 2026-06-15*. Clean architecture for managing one or multiple LLM runner
+  subscriptions (basic, Plus, Pro, api_key, brnrd-managed): a three-layer model
+  (runner registry → capacity tracker → dispatch policy) that gates proactive
+  self-scheduled work behind available headroom without scattering subscription
+  conditionals. Unified capacity language for BYO subscription runners (rate-limit
+  counters) and brnrd-managed runners (credit wallet), with a cost-estimation and
+  consent gate for the brnrd-managed path. Enables `#117` forge grooming and
+  ambient initiative safely; Phase 4 integrates with the failover-compute
+  permission-prompt flow.
 - [brnrd protocol design](design-brnrd-protocol.md) —
   *accepted 2026-05-26*. The wire format between brr daemons and `brnrd`.
   Covers gates (managed-gates path), failover dispatch (decision
