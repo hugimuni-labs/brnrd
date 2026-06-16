@@ -593,6 +593,11 @@ def _build_task_context_bundle(
     sections.append("")
     sections.append("### Delivery contract")
     sections.append(
+        "These are the per-task *values* and the operative rules. The full "
+        "control-file protocol and the shape of an average task run live in "
+        "the cockpit manual — run `brr docs cockpit` when a step is unfamiliar."
+    )
+    sections.append(
         "- Stdout is the default terminal reply for the current thread. "
         "Print the exact intended content as your final stdout message — "
         "no preamble, no meta acknowledgment, no commentary outside it. "
@@ -607,67 +612,40 @@ def _build_task_context_bundle(
     )
     if outbox_path:
         sections.append(
-            "- You can also send the user a reply *mid-thought* — before a "
-            "long stretch, to share trajectory, or to answer a quick thing "
-            "right away — by writing a markdown file into your outbox "
-            f"directory `{outbox_path}`. brr delivers each file as its own "
-            "chat message, in order, while you keep working. A wake may "
-            "produce zero, one, or many deliveries; for an addressed event, "
-            "make sure the current thread receives either stdout, an outbox "
-            "reply, or an honest noop/failure explanation. One file is one "
-            "message; write the complete reply (stage as `*.tmp` and rename "
-            "if you want an atomic write). This is optional: a single final "
-            "stdout is still a complete, healthy run."
+            f"- Your outbox directory is `{outbox_path}`. Write a markdown "
+            "file into it to send the user a reply *mid-thought*; brr "
+            "delivers each as its own chat message, in order, while you keep "
+            "working. One file is one message (stage `*.tmp` and rename for "
+            "an atomic write). For an addressed event, make sure this thread "
+            "gets stdout, an outbox reply, or an honest noop/failure note — "
+            "but a single final stdout is already a complete, healthy run."
         )
         sections.append(
-            "- To answer a *different* pending event inline (see Inbox "
-            "below), start the outbox file with a frontmatter `event: <id>` "
-            "naming that event. brr delivers it to that event's thread and "
-            "marks the event handled, so it won't wake again. Use one "
-            "complete reply per folded-in event; prefer letting anything "
-            "that wants its own branch wake as its own thought."
+            "- Outbox frontmatter routes a file elsewhere: `event: <id>` "
+            "delivers to a *different* pending event's thread and marks it "
+            "handled (one complete reply per folded-in event); `gate: <name>` "
+            "(e.g. `gate: telegram`) sends to a destination with no waiting "
+            "event. `gate: forge` opens/refreshes a PR — it expects `head`, "
+            "`base`, `title` frontmatter and the body is the PR body."
         )
         sections.append(
-            "- brr also refreshes a live inbox view at "
-            f"`{outbox_path}/inbox.json` on each heartbeat. At natural "
-            "plan / todo boundaries, re-read it before deciding whether to "
-            "continue, fold in a quick event via `event: <id>`, or leave "
-            "waiting work for its own wake. This file is daemon-owned "
-            "control state, not an outbox message to edit or remove."
-        )
-        sections.append(
-            "- To send a message to a destination with *no* waiting event "
-            "— ping a chat, post an out-of-bound note, deliver from a "
-            "scheduled thought — start the outbox file with a frontmatter "
-            "`gate: <name>` (e.g. `gate: telegram`) plus any target fields "
-            "that gate needs (omit them to use its configured default). The "
-            "body is the message; brr delivers it once to that destination. "
-            "It's a send, not a reply to this thread, and an unconfigured "
-            "gate is dropped. For forge publishing, `gate: forge` uses the "
-            "GitHub gate and expects `head`, `base`, and `title` frontmatter; "
-            "the body is the pull-request body."
+            f"- A live inbox view at `{outbox_path}/inbox.json` is refreshed "
+            "each heartbeat: at plan / todo boundaries, re-read it before "
+            "deciding whether to continue, fold in a quick event, or leave "
+            "waiting work for its own wake. Daemon-owned — don't edit it."
         )
         if budget_seconds:
             sections.append(
-                "- Running something that will outlast your budget? Don't get "
-                f"killed mid-run: write `{outbox_path}/.keepalive` whose first "
-                "line is either an ISO-8601 time (\"busy until T\") or "
-                "`+<duration>` like `+30m` (\"busy this much longer\", measured "
-                "from when you write it). brr honours it on its next heartbeat "
-                "and holds the slot until then; rewrite it to extend again. "
-                "It's a control file, not a message — brr never delivers it."
+                f"- To outlast your budget without getting killed mid-run, "
+                f"write `{outbox_path}/.keepalive` — first line an ISO-8601 "
+                "time or `+<duration>` like `+30m`; rewrite to extend. A "
+                "control file, never delivered."
             )
         sections.append(
-            "- Want to narrate what the live progress card says? Write a "
-            f"line or two into `{outbox_path}/.card` and the gate's card "
-            "re-renders with your text as a `note:` line under the live "
-            "phase. Rewrite it as your context shifts; deleting or "
-            "emptying the file withdraws the note. The daemon still owns "
-            "the lifecycle scaffolding (header, sync line, phase log, "
-            "terminal state) — this is the seam where the resident gets to "
-            "say what's actually happening, not just which packet last "
-            "fired. It's a control file, not a message — brr never "
-            "delivers it as a chat reply."
+            f"- To narrate the live progress card, write a line or two into "
+            f"`{outbox_path}/.card`; it renders as a `note:` under the live "
+            "phase. Rewrite as context shifts; empty/delete to withdraw. A "
+            "control file, never delivered as a chat reply."
         )
     sections.append(
         "- The user reads your reply remotely (Telegram / Slack / etc.). "
