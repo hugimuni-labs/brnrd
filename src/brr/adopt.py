@@ -178,6 +178,8 @@ def _configure_environment() -> dict:
         _DEFAULT_DOCKER_IMAGE,
         timeout=10,
     )
+    if image.strip().lower() in {"y", "yes", "n", "no"}:
+        image = _DEFAULT_DOCKER_IMAGE
     overrides: dict = {"environment": "docker", "docker.image": image}
 
     if image == _DEFAULT_DOCKER_IMAGE and _BUNDLED_DOCKERFILE.exists():
@@ -198,13 +200,21 @@ def _configure_environment() -> dict:
 def _build_default_docker_image() -> bool:
     """Build brr's bundled runner image into ``brr-runner:local``.
 
-    The bundled Dockerfile only uses ``RUN`` steps (no ``COPY``/``ADD``),
-    so any directory works as the build context. Using a temp dir
-    avoids uploading the package install dir to the docker daemon and
-    keeps the build hermetic. Returns True iff the build succeeded.
+    Copies the current checkout's packaging tree into a temp build context
+    so the Dockerfile can ``pip install /opt/brr`` from source. Never
+    ``pip install brr`` from PyPI — that name is an unrelated terminal
+    image renderer. Returns True iff the build succeeded.
     """
     if not _BUNDLED_DOCKERFILE.exists():
         print("  [brr] bundled Dockerfile not found; cannot build")
+        return False
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    pyproject = repo_root / "pyproject.toml"
+    readme = repo_root / "README.md"
+    src = repo_root / "src"
+    if not pyproject.is_file() or not readme.is_file() or not src.is_dir():
+        print("  [brr] checkout layout incomplete; cannot build runner image")
         return False
 
     print(
@@ -214,6 +224,9 @@ def _build_default_docker_image() -> bool:
     with tempfile.TemporaryDirectory(prefix="brr-build-") as ctx:
         ctx_path = Path(ctx)
         shutil.copy(_BUNDLED_DOCKERFILE, ctx_path / "Dockerfile")
+        shutil.copy(pyproject, ctx_path / "pyproject.toml")
+        shutil.copy(readme, ctx_path / "README.md")
+        shutil.copytree(src, ctx_path / "src")
         result = subprocess.run(
             ["docker", "build", "-t", _DEFAULT_DOCKER_IMAGE, str(ctx_path)],
             check=False,

@@ -54,13 +54,17 @@ def test_bundled_runner_image_installs_brr_cli_and_runtime_deps():
     """The default agent image should carry brr's own CLI surface.
 
     Docker tasks often need ``brr review`` or other local tooling while
-    dogfooding brr itself. Baking the package and its small runtime HTTP
-    dependency avoids mid-task ``PYTHONPATH=src python -m brr`` and
-    ad-hoc ``pip install requests`` recovery.
+    dogfooding brr itself. The image installs this checkout from the build
+    context — never ``pip install brr`` from PyPI (name taken by an unrelated
+    terminal image renderer).
     """
     text = DOCKERFILE.read_text(encoding="utf-8")
-    assert "'brr>=0.1.0'" in text
+    assert "COPY pyproject.toml README.md /opt/brr/" in text
+    assert "COPY src /opt/brr/src" in text
+    assert "pip install --no-cache-dir /opt/brr" in text
     assert "'requests>=2.31,<3'" in text
+    assert "python3 -m brr review --help" in text
+    assert "'brr>=0.1.0'" not in text
 
 
 def test_bundled_runner_image_installs_github_cli():
