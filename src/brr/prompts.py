@@ -279,17 +279,17 @@ def _build_introspection_block(repo_root: Path) -> str:
 def _build_injected_blocks(
     repo_root: Path, *, task_text: str | None = None
 ) -> list[str]:
-    """The dominion- and kb-sourced context blocks brr injects into every
-    wake: the dominion digest (playbook + ``self-inject``), any pitfalls
-    whose triggers match the task, the recent-activity log tail, and the kb
-    health note.
+    """The standing, always-on context blocks brr injects into every wake.
 
-    Shared by ``_join_prompt_parts`` (the runner path) and
-    ``build_injected_context`` / ``brr agent inject`` so a wrapper that
-    reuses the tool gets exactly the wake-context a runner receives —
-    whatever block we add here surfaces in both, with no drift. Mode toggles
-    layered on top (diffense, introspection) are the caller's, not part of
-    the resident's standing wake-context.
+    Returns the *base* blocks: dominion digest (playbook + ``self-inject``),
+    pitfalls matching the task, recent-activity log tail, and kb health note.
+    These are the blocks that appear regardless of mode toggles.
+
+    Shared by ``_join_prompt_parts`` and ``build_injected_context``; whatever
+    block is added here surfaces in both paths with no drift.  Mode-toggle
+    blocks (diffense, introspection) sit on top of these; they are added by
+    ``_join_prompt_parts`` (for the full runner prompt) and by
+    ``build_injected_context`` (for the faithful inject-tool view).
     """
     blocks: list[str] = []
     dominion_block = _build_dominion_block(repo_root)
@@ -309,15 +309,35 @@ def _build_injected_blocks(
 
 
 def build_injected_context(repo_root: Path, *, task_text: str | None = None) -> str:
-    """brr's assembled wake-context, for any agent wrapper to reuse.
+    """brr's assembled wake-context, for ``brr agent inject`` and agent wrappers.
 
-    Backs ``brr agent inject``: returns the same dominion/kb blocks a runner
-    receives (see ``_build_injected_blocks``), joined as text, so a harness
-    other than brr's daemon can orient the resident from its own dominion
-    with the identical ``self-inject`` semantic. ``task_text`` lets the
-    caller pull in pitfalls whose triggers match the work at hand.
+    Returns the **full** injected context a daemon task wake receives: the
+    base blocks (dominion digest, pitfalls, recent-activity log, kb health)
+    **plus** the mode-toggle blocks (diffense review-pack prompt,
+    introspection invitation) when their config toggles are on.  The result
+    mirrors what ``_join_prompt_parts`` embeds minus the preamble (AGENTS.md
+    / runner template) and the trailing task bundle, giving a faithful
+    "what did this wake see?" answer via ``brr agent inject``.
+
+    ``task_text`` lets the caller pull in pitfalls whose triggers match the
+    work at hand.
+
+    Wrappers that want *only* the base blocks (e.g. ``build_run_prompt`` for
+    ad-hoc tasks, or test helpers asserting block content) call
+    ``_build_injected_blocks`` directly.
     """
-    return "\n\n".join(_build_injected_blocks(repo_root, task_text=task_text))
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    parts = list(_build_injected_blocks(repo_root, task_text=task_text))
+    if diffense_emit_enabled(cfg):
+        pack_step = read_prompt("diffense.md", repo_root)
+        if pack_step:
+            parts.append(pack_step)  # keep as-is to match _join_prompt_parts
+    introspection = _build_introspection_block(repo_root)
+    if introspection:
+        parts.append(introspection)
+    return "\n\n".join(parts)
 
 
 def _join_prompt_parts(

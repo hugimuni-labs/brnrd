@@ -198,6 +198,10 @@ def test_build_injected_context_matches_runner_injection(tmp_path):
     harness orients the resident with the identical self-inject semantic."""
     repo = _repo(tmp_path)
     dominion.ensure_dominion(repo, push=False)
+    # Disable mode toggles so only base blocks are emitted; allows the
+    # substring check against build_run_prompt (which never includes toggles).
+    from brr import config as conf
+    conf.write_config(repo, {"diffense.emit_pack": False, "introspect.enabled": False})
 
     context = prompts.build_injected_context(repo, task_text="fix the parser")
 
@@ -207,6 +211,31 @@ def test_build_injected_context_matches_runner_injection(tmp_path):
     # ...and is verbatim what the runner path embeds into a full prompt, so
     # whatever blocks we add to the runner show up in the tool with no drift.
     assert context in prompts.build_run_prompt("fix the parser", repo)
+
+
+def test_build_injected_context_includes_mode_toggles(tmp_path):
+    """build_injected_context honors the diffense + introspect config toggles.
+
+    When enabled, the context it returns matches what a real daemon wake
+    receives: it is a substring of the corresponding daemon prompt (which
+    includes all the same blocks plus the task bundle preamble/trailer).
+    """
+    repo = _repo(tmp_path)
+    dominion.ensure_dominion(repo, push=False)
+    from brr import config as conf
+    conf.write_config(repo, {"diffense.emit_pack": True, "introspect.enabled": True})
+
+    context = prompts.build_injected_context(repo, task_text="fix the parser")
+
+    # Diffense and introspection blocks are present...
+    assert "## Review pack (diffense)" in context
+    assert "## Look at it" in context
+    # ...and the inject context is a subset of the full daemon prompt, so
+    # there is no drift between what the tool shows and what the wake sees.
+    daemon_prompt = prompts.build_daemon_prompt(
+        "fix the parser", "evt-1", "/tmp/resp.md", repo, diffense=True,
+    )
+    assert context in daemon_prompt
 
 
 def test_dominion_block_surfaces_write_path_and_commit(tmp_path):
