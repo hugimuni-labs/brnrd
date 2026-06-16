@@ -177,6 +177,20 @@ class TestConfigureEnvironment:
         }
         assert built == [1]
 
+    def test_docker_image_yes_means_default_not_literal_tag(self, monkeypatch):
+        """Typing ``y`` at the image prompt is a common mistake after Y/n."""
+        monkeypatch.setattr(adopt.shutil, "which", lambda _name: "/usr/bin/docker")
+        confirms = iter([True, False])
+        monkeypatch.setattr(adopt, "_confirm", lambda *_a, **_kw: next(confirms))
+        monkeypatch.setattr(
+            adopt, "_timed_input",
+            lambda prompt, default, timeout=10: "y",
+        )
+        monkeypatch.setattr(adopt, "_build_default_docker_image", lambda: True)
+
+        cfg = adopt._configure_environment()
+        assert cfg["docker.image"] == adopt._DEFAULT_DOCKER_IMAGE
+
 
 class TestBuildDefaultDockerImage:
     def test_returns_false_when_dockerfile_missing(self, monkeypatch, tmp_path):
