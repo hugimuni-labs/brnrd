@@ -608,3 +608,47 @@ def test_run_context_omits_outbox_when_absent(tmp_path):
     )
     text = run_context.render_context(task, {}, ctx)
     assert "Interim-response outbox" not in text
+
+
+# ── Prompt retention ─────────────────────────────────────────────────
+
+
+def test_run_context_includes_prompt_file_path(tmp_path):
+    """render_context lists the prompt.md path in Runtime Files.
+
+    The file may not exist yet when context.md is written (the prompt is
+    built after the context file); the path is pre-announced so the agent
+    knows where to look once it exists.
+    """
+    task = Task(id="task-abc", event_id="evt-1", body="do it")
+    ctx = RunContext(
+        name="worktree",
+        cwd=tmp_path,
+        repo_root=tmp_path,
+        runtime_dir=tmp_path / ".brr",
+        response_path_host=tmp_path / ".brr/responses/evt-1.md",
+        response_path_env=tmp_path / ".brr/responses/evt-1.md",
+    )
+    text = run_context.render_context(task, {}, ctx)
+
+    assert "prompt.md" in text
+    assert "Assembled wake prompt" in text
+    # Points at the correct run-dir path (not the trace dir).
+    assert str(tmp_path / ".brr" / "runs" / "task-abc" / "prompt.md") in text
+
+
+def test_write_prompt_file_creates_file_in_run_dir(tmp_path):
+    """write_prompt_file persists the prompt alongside context.md."""
+    from brr import run_context
+    from brr.task import Task
+
+    brr_dir = tmp_path / ".brr"
+    task = Task(id="task-xyz", event_id="evt-1", body="fix it")
+    prompt_text = "# My assembled prompt\n\nsome content"
+
+    path = run_context.write_prompt_file(brr_dir, task, prompt_text)
+
+    assert path is not None
+    assert path == brr_dir / "runs" / "task-xyz" / "prompt.md"
+    assert path.exists()
+    assert path.read_text(encoding="utf-8") == prompt_text
