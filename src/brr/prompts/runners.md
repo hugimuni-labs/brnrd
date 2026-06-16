@@ -1,9 +1,12 @@
 ---
 claude:
   cmd: 'claude --print --dangerously-skip-permissions --safe-mode --system-prompt "You are brr agent. Find your orientation in AGENTS.md"'
-claude-bare-api-only:
+claude-bare-api-only-sonnet:
   binary: claude
-  cmd: 'claude --print --dangerously-skip-permissions --bare --system-prompt "You are brr agent. Find your orientation in AGENTS.md"'
+  cmd: 'claude --model "claude-sonnet-4-6" --print --dangerously-skip-permissions --bare --system-prompt "You are brr agent. Find your orientation in AGENTS.md"'
+claude-bare-api-only-opus:
+  binary: claude
+  cmd: 'claude --model "claude-opus-4-8" --print --dangerously-skip-permissions --bare --system-prompt "You are brr agent. Find your orientation in AGENTS.md"'
 codex:
   cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox -c base_instructions="You are brr agent. Find your orientation in AGENTS.md" -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
 gemini:
