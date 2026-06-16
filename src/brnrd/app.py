@@ -3,12 +3,39 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
 from .config import Settings, get_settings
 from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
+from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
 from .routers import accounts, daemons, dev, github_app, pairing, render, webhooks
+
+
+_INDEX_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>brnrd</title>
+  <link rel="stylesheet" href="/static/brnrd_web/app.css">
+</head>
+<body class="auth-page">
+  <main class="auth-shell">
+    <section class="auth-card">
+      <p class="eyebrow">brnrd</p>
+      <h1>brnrd is running</h1>
+      <p class="lede">
+        The managed control plane is online. Sign in with GitHub to approve
+        daemon connections and manage project bindings.
+      </p>
+      <p><a class="button" href="/login">Open login</a></p>
+    </section>
+  </main>
+</body>
+</html>
+"""
 
 
 def create_app(
@@ -21,6 +48,7 @@ def create_app(
 
     engine = make_engine(settings.database_url)
     Base.metadata.create_all(engine)
+    run_startup_migrations(engine)
 
     app.state.settings = settings
     app.state.engine = engine
@@ -47,6 +75,10 @@ def create_app(
 
     mount_static(app)
     app.include_router(web_router)
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def index() -> str:
+        return _INDEX_HTML
 
     @app.get("/healthz")
     def healthz() -> dict:
