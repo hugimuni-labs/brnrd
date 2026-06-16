@@ -6877,3 +6877,44 @@ service fee model (10–15% of provider cost)** and retires the
 markup; "credits" implies a product. Both are wrong now. "relay" is clean:
 it describes the mechanism (we relay tokens) without implying the fee
 structure.
+
+## [2026-06-16] plan | The resident's cockpit — runner control & a live dwelling
+
+Written from a tight, token-budgeted wake that landed *after* two
+predecessor runs on this thread died operationally: Codex's weekly
+agentic quota hit 0% (the 5-hour bucket is a sub-quota of the weekly, not
+additive — so a near-empty weekly bucket blocks even with a full 5-hour
+one), the human manually rerouted to Claude, and that returned its own
+provider error. The pain *is* the finding: the daemon had no medium
+awareness, no fallback, no quota-aware deferral, so a human paid the
+latency of noticing and rerouting by hand.
+
+New page `plan-resident-cockpit.md` — deliberately **not** a competing
+roadmap to `design-co-maintainer.md` §11 (which owns the continuity spine
+and has mostly shipped). It adds the four dimensions the maintainer
+raised that §11 doesn't cover, each grounded in a lived symptom + the
+smallest fix + its design home:
+
+- **G1 Runner-medium selection & quota-aware fallback** — the live wound.
+  Explicitly a *different axis* from `plan-failover-compute.md` (that's
+  compute-*host* failover for laptop-down; this is *medium* failover for
+  quota-exhausted-but-daemon-up — no design home yet). Smallest fix:
+  (1) surface the medium + quota in the wake bundle, (2) a `runner_media`
+  fallback chain on operational failure, (3) defer to the known reset
+  window instead of burning a retry. Leans on #128's `defer_until`.
+- **G2 Plan→approve→execute** — the duo loop; convention-light (a PLAN
+  outbox shape + an approval reply that wakes a plan-scoped run, so
+  execution doesn't rebuild context from cold).
+- **G3 Task decomposition / delayed execution** — a run enqueuing child
+  events for itself; thin extension of dominion `schedule.md`, deferred
+  behind the #128 run/event rename.
+- **G4 The cockpit** — cut the firehose (the ~38-branch forge-state dump
+  in the bundle is the biggest per-wake token offender for near-zero
+  signal; collapse to a synthesis line) and weave the
+  dominion/`.card`/outbox into one legible dwelling, mostly via habit +
+  a cockpit cheatsheet looked-up not memorized.
+
+Prioritized token/pain-aware: surface-the-medium → forge-firehose-cut →
+fallback+deferral → plan-loop → decomposition → dwelling habits.
+Chat-only direction-setting + the plan page; awaits the maintainer's nod
+before any implementation diff. Branch `brr/resident-cockpit`.
