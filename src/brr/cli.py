@@ -143,6 +143,12 @@ def main(argv: list[str] | None = None) -> None:
                    help="YYYY-MM-DD; delete days strictly before this (default: all)")
     p.set_defaults(func=cmd_ergonomics_clear)
 
+    p = sub.add_parser(
+        "docs", help="read bundled tool docs (omit topic to list)")
+    p.add_argument("topic", nargs="?", default=None,
+                   help="doc topic to print (e.g. cockpit, execution-map)")
+    p.set_defaults(func=cmd_docs)
+
     agent_p = sub.add_parser(
         "agent", help="resident-agent helpers (wake-context, dominion)")
     agent_sub = agent_p.add_subparsers(dest="agent_command", required=True)
@@ -216,6 +222,24 @@ def cmd_agent_inject(args):
     if not text.strip():
         print("[brr agent inject] no dominion here yet — bootstrap one with "
               "`brr init` or by starting the daemon", file=sys.stderr)
+        return 1
+    print(text)
+    return 0
+
+
+def cmd_docs(args):
+    import sys
+
+    from . import docs
+
+    repo_root = _maybe_repo_root()
+    if args.topic is None:
+        print(docs.format_listing(repo_root))
+        return 0
+    text = docs.read_topic(args.topic, repo_root=repo_root)
+    if text is None:
+        print(f"[brr docs] unknown topic: {args.topic}", file=sys.stderr)
+        print(docs.format_listing(repo_root), file=sys.stderr)
         return 1
     print(text)
     return 0
