@@ -6710,3 +6710,33 @@ layer — left as the remaining open piece of #126, recorded in
 `tests/test_daemon.py` (73 passed); full suite 733 passed, 7 skipped (5 gate-test
 collection errors from the sandbox's missing `requests` excluded — pre-existing
 env friction).
+
+## [2026-06-15] design | Runner management — capacity-aware dispatch and proactive headroom (#139)
+
+Designed the runner management layer: how brr should handle multiple LLM runner
+subscriptions (Codex basic, ChatGPT Pro, Claude, brnrd-managed) cleanly, without
+scattering subscription conditionals. Wrote [`kb/design-runner-management.md`](design-runner-management.md)
+and opened GitHub issue #139.
+
+**The shape:** a three-layer model where all subscription awareness is encapsulated:
+
+1. **Runner registry** — `[[runner]]` tables in `.brr/config` declaring `subscription_tier`
+   (basic/plus/pro/api_key/brnrd_managed). Current PATH-detection is the unchanged fallback.
+2. **Capacity tracker** — per-runner runtime state in `.brr/runner-capacity.json`: request
+   counters, 429-backoff, `has_proactive_headroom()` predicate.
+3. **Dispatch policy** — `choose_runner(work_class, registry, state)`: reactive events routed
+   to best-available runner (never dropped); proactive events deferred when no runner has
+   headroom (reschedule to next interval, not an error).
+
+**Work classification** is a first-class field on events and schedule entries (`reactive` /
+`proactive`). A forge-grooming schedule entry just says `work_class: proactive`; the
+dispatcher gates it. No per-subscription conditionals near the grooming code.
+
+**brnrd-managed runner**: the `brnrd_managed` tier uses the credit wallet as capacity envelope
+(same language as BYO subscription runners). Cost estimation + consent gate fires before
+dispatch, reusing the `plan-failover-compute.md` permission-prompt flow but applied daemon-side
+(daemon online) rather than only at brnrd failover (daemon offline). Reactive-reserve config
+(default: 50 credits) keeps reactive work safe when the wallet is low.
+
+Phased: 1–3 are self-hostable/daemon-only; Phase 4 (brnrd-managed tier + consent gate)
+requires managed-mode infrastructure.
