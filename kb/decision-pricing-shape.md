@@ -2,6 +2,18 @@
 
 **Status: accepted 2026-05-26** (locked in PR #40 MR review).
 
+> **Partial supersession (accepted 2026-06-15):** the clause below that
+> brnrd does *not* charge for AI usage is superseded by
+> [`decision-llm-relay.md`](decision-llm-relay.md)
+> (the LLM relay pricing decision). That page establishes: LLM traffic is
+> relayed at provider cost plus a transparent relay service fee (10–15%);
+> managed compute carries a small ops margin; BYO stays free and is the
+> default; the relay activates only when user credentials are unavailable.
+> The subscription tiers, wallet mechanics, and `$0.01/credit` compute
+> rate on this page are unaffected, though the billing UI should
+> distinguish "LLM relay provider cost", "relay service fee", and
+> "managed compute ops" as separate line items.
+
 Hosted brnrd launches with a small platform subscription plus metered
 compute credits. Free stays genuinely usable for lightweight hosted
 dispatch. Subscribed accounts buy the operational surface that costs
