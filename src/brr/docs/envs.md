@@ -290,6 +290,13 @@ regardless of status, so a human can recover work.
   the corresponding `*_API_KEY` is exported in the daemon's
   environment. Both paths surface in the `docker run` argv visible in
   trace mode.
+- **`brr review` runs the wrong tool (image-renderer help)** — PyPI's
+  ``brr`` package is an unrelated terminal image renderer. Older bundled
+  Dockerfiles ``pip install 'brr>=0.1.0'`` pulled that by mistake.
+  Rebuild from the current bundled Dockerfile (`brr init -i`): it copies
+  this checkout into the build context and ``pip install /opt/brr``.
+  Custom images: never ``pip install brr`` from PyPI; install from a git
+  URL or ``COPY`` + ``pip install .`` instead.
 - **`brr`, `requests`, `python`, `ssh`, or `rg` is missing** — rebuild the
   local image from the current bundled Dockerfile (`brr init -i` can do this
   during setup). Older `brr-runner:*` images predate the baseline dev toolbox
