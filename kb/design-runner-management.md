@@ -1,6 +1,22 @@
 # Design: runner management — capacity-aware dispatch and proactive headroom
 
-**Status: proposed (2026-06-15)**
+**Status: superseded on 2026-06-16 by the cockpit framing —
+[`plan-resident-cockpit.md`](plan-resident-cockpit.md) §G1
+(runner-medium selection & quota-aware fallback).** The maintainer called
+this page "a much poorer framing": it treats runner choice as a
+standalone *capacity-management subsystem* (registry → tracker →
+dispatcher) bolted beside the daemon, when the live wound is narrower and
+the right home is the **cockpit** — the wake's own control surface, where
+the medium and its quota are one panel the resident reads and the daemon
+falls back / defers along. The reframe is in §G1 there.
+
+This page is kept as a **reference mine**, not a live plan: the
+mechanics below — the capacity tracker, the reactive/proactive
+`work_class` split, the backoff/fallback chain, the subscription-tier
+headroom table, and the `brnrd_managed` consent gate — are the most
+detailed treatment we have and are the raw material a future
+`design-runner-media.md` (the §G1 "no design home yet" gap) will draw on.
+Read it for the *how*; take the *framing* from the cockpit plan.
 
 Companions: [`subject-managed-mode.md`](subject-managed-mode.md) (brnrd compute
 and credential vault); [`plan-failover-compute.md`](plan-failover-compute.md)
