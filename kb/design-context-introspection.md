@@ -68,6 +68,24 @@ shape settles. (If a lighter always-on form ever proves valuable, the natural
 move is a salience-gated nudge per the env-shaping loop, not an always-injected
 block.)
 
+## Faithful "what did this wake see?" view
+
+Two gaps existed between `brr agent inject` and what a real wake received:
+
+1. **Mode toggles omitted.** `build_injected_context` (the CLI's backend) only
+   returned the *base* injected blocks (dominion, pitfalls, log, kb health),
+   not the diffense/introspection blocks that `_join_prompt_parts` adds when
+   their config toggles are on. Fixed: `build_injected_context` now reads the
+   config and appends those blocks when enabled, so `brr agent inject` is a
+   faithful mirror of what a daemon wake gets.
+
+2. **Successful runs left no prompt.** Traces (which contain `prompt.md`) are
+   cleaned on success; only failed runs kept a prompt to inspect. Fixed: the
+   daemon now writes `.brr/runs/<task-id>/prompt.md` after assembling the
+   prompt for attempt 1. The run directory is never cleaned, so the prompt
+   survives success.  The path is pre-announced in `context.md`'s Runtime
+   Files section.
+
 ## See also
 
 - [`design-environment-shaping.md`](design-environment-shaping.md) — the loop
