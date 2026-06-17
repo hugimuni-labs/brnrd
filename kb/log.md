@@ -7022,3 +7022,21 @@ protocol — is the resident's own `brr-home` follow-up, not this branch.
 Full suite green except one pre-existing, unrelated
 `test_runner.py::...claude_bare_api_only` failure (config mismatch on
 main, confirmed by stashing my edits). Branch `brr/cockpit-manual`.
+
+## [2026-06-17] implement | Cockpit firehose cut: forge-state branch dump summarized
+
+Shipped the G4 "dump waste" slice from `plan-resident-cockpit.md`.
+The wake prompt and generated run context now render the forge-state
+worktree facet as a compact inventory line — total branches, branches
+with unpushed commits, dirty branches, current branches — then list only
+branches that need attention (`current`, dirty, or unpushed). Clean
+pushed branches are counted and omitted instead of printed one per line,
+which cuts the stale branch/worktree firehose that was dominating this
+wake's Task Context Bundle.
+
+The code keeps the issue/PR thread facet separate and uncompressed for
+now: it is already small, and this local network-free facet cannot claim
+live open/closed PR status. Updated the cockpit plan to mark the G4
+firehose half shipped and leave G1 runner-medium fallback, G2
+plan→approve, G3 decomposition, and G4 dwelling habits as the next
+unshipped cockpit work. Focused prompt/context tests pass.
