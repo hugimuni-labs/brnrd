@@ -31,7 +31,7 @@ raw diff.
 - **Validate before finishing**: run `brr review --check <Review pack
   path>` and fix every error it reports — a dead locator, a dangling card
   edge, a missing axis. A pack that fails `--check` is not done.
-- **Publish from the pack** when `diffense.create_pr` is on (the default):
+- **Publish from the pack** only when `diffense.create_pr` is explicitly on:
   validate, project the PR body/title from the checked pack, and open or
   refresh the PR with a `gate: forge` outbox send. The full publish
   procedure — the `brr review --pr-body --relay` / `--pr-title`

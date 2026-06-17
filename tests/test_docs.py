@@ -22,6 +22,7 @@ def test_review_pack_topic_carries_publish_plumbing():
     assert "--pr-body --relay" in text
     assert "gate: forge" in text
     assert "diffense.create_pr" in text
+    assert "default off" in text
 
 
 def test_cockpit_topic_covers_protocol_and_choreography():
@@ -34,6 +35,7 @@ def test_cockpit_topic_covers_protocol_and_choreography():
     # …and the average-task choreography.
     assert "schedule.md" in text
     assert "plan or execute" in text.lower() or "plan-vs-execute" in text.lower()
+    assert "Stay in the conversation" in text
 
 
 def test_read_topic_bundled_returns_content():
@@ -109,4 +111,3 @@ def test_read_topic_uses_shared_runtime_override_for_worktree(tmp_path):
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=repo, check=True)
         subprocess.run(["git", "branch", "-D", "brr/task-1"], cwd=repo, check=True, stdout=subprocess.PIPE)
-
