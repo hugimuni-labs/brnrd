@@ -37,12 +37,32 @@ def test_version(capsys):
     assert exc.value.code == 0
 
 
-@pytest.mark.parametrize("command", ["status", "inspect", "docs", "streams", "stream", "eject"])
+@pytest.mark.parametrize("command", ["status", "inspect", "streams", "stream", "eject"])
 def test_removed_diagnostic_commands_are_not_public(tmp_path, monkeypatch, command):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:
         main([command])
     assert exc.value.code == 2
+
+
+def test_docs_lists_topics(capsys):
+    # `brr docs` (no topic) lists the bundled topics. Re-introduced as the
+    # inspect surface for the cockpit manual (G5) — the docs module and
+    # decision-bundled-docs.md always assumed this command existed.
+    assert main(["docs"]) == 0
+    out = capsys.readouterr().out
+    assert "cockpit" in out
+    assert "execution-map" in out
+
+
+def test_docs_prints_topic(capsys):
+    assert main(["docs", "cockpit"]) == 0
+    out = capsys.readouterr().out
+    assert "control-file" in out.lower() or "cockpit" in out.lower()
+
+
+def test_docs_unknown_topic_errors(capsys):
+    assert main(["docs", "does-not-exist"]) == 1
 
 
 def test_run_requires_instruction():

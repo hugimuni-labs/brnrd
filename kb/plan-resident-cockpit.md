@@ -1,5 +1,7 @@
 # Plan: the resident's cockpit — runner control & a dwelling that feels live
 
+Status: active on 2026-06-16 (G5 shipped; G1–G4 still proposed)
+
 > Status: proposed (2026-06-16). Written from a tight, token-budgeted
 > wake that landed *after* its predecessor died on runner-medium
 > exhaustion (Codex weekly quota empty → manual reroute to Claude → that
@@ -214,9 +216,33 @@ not a private apartment each resident furnishes alone.
 [`design-co-maintainer.md`](design-co-maintainer.md) §4.2 (firehose vs.
 synthesis — the same principle, applied to the manual).
 
-**Status:** direction proposed this wake; awaits the maintainer's nod
-before the doc + dedup land (a chat-only direction-set is a complete
-turn; the build is the follow-up event).
+**Status:** shipped on 2026-06-16 (maintainer nod: "implement the whole
+5"). What landed, all three calls:
+
+- **`docs/cockpit.md`** — the bundled, agent-facing cockpit manual: a
+  control-file cheatsheet (outbox replies, `event:` / `gate:` sends,
+  `.keepalive`, `.card`, `inbox.json`, `schedule.md`) plus the
+  average-task choreography (receive → orient → decide plan-vs-execute →
+  narrate → deliver → decompose/defer). It lives in **`docs/`, not
+  `prompts/`** — the page's "working name `prompts/cockpit.md`" was
+  tentative; *inspected, not injected* means the docs system, which
+  already exists for exactly this (bundled + per-repo overridable).
+- **`brr docs` CLI re-introduced.** Implementing "inspected via `brr
+  docs`" surfaced standing drift: the command was swept away in the
+  2026-05-01 "remove agent commands from git" batch, yet
+  `decision-bundled-docs.md`, `index.md` ("Run `brr docs` to list it"),
+  and the docs module all still assumed it existed. Re-added `cmd_docs`
+  (list + read a topic); the docs module needed no change.
+- **One-line pointer injected; protocol deduped.** `daemon-substrate.md`
+  now closes with a pointer to `brr docs cockpit` instead of the
+  protocol being re-narrated; the Task Context Bundle's delivery contract
+  was compressed to its per-task *values* + operative rules with a single
+  "full protocol lives in `brr docs cockpit`" line. The bundle stays the
+  per-task authority; the manual is the one conceptual home.
+
+Remaining third voice: the **dominion playbook** still re-narrates the
+same protocol (it's the resident's own memory, a `brr-home` commit, not
+this repo branch) — trimming it to a pointer is the resident's follow-up.
 
 ## Prioritized sequence (token- and pain-aware)
 
