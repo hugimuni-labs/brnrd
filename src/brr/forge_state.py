@@ -181,6 +181,49 @@ def _enrich_current(entry: dict[str, Any], meta: dict[str, Any]) -> None:
         entry["url"] = html_url
 
 
+def _unpushed_commits(worktree_entry: dict[str, Any]) -> int:
+    unpushed = worktree_entry.get("unpushed", 0)
+    if isinstance(unpushed, int) and unpushed > 0:
+        return unpushed
+    return 0
+
+
+def summarize_worktrees(worktrees: Any) -> dict[str, Any]:
+    """Summarize worktree facet entries for compact wake rendering.
+
+    The wake prompt should keep attention on branches that need action:
+    this run, uncommitted work, or unpushed commits. Clean pushed branches
+    still matter as inventory, but listing every one makes the forge facet
+    a firehose.
+    """
+    if not isinstance(worktrees, list):
+        return {
+            "total": 0,
+            "dirty_branches": 0,
+            "unpushed_branches": 0,
+            "unpushed_commits": 0,
+            "current_branches": 0,
+            "attention": [],
+            "omitted": 0,
+        }
+
+    entries = [wt for wt in worktrees if isinstance(wt, dict)]
+    attention = [
+        wt for wt in entries
+        if wt.get("current") or wt.get("dirty") or _unpushed_commits(wt) > 0
+    ]
+    unpushed_commits = sum(_unpushed_commits(wt) for wt in entries)
+    return {
+        "total": len(entries),
+        "dirty_branches": sum(1 for wt in entries if wt.get("dirty")),
+        "unpushed_branches": sum(1 for wt in entries if _unpushed_commits(wt) > 0),
+        "unpushed_commits": unpushed_commits,
+        "current_branches": sum(1 for wt in entries if wt.get("current")),
+        "attention": attention,
+        "omitted": len(entries) - len(attention),
+    }
+
+
 def build_forge_state(
     repo_root: Path,
     *,
