@@ -1962,6 +1962,12 @@ def test_deliver_responses_opens_pull_request_event(tmp_path, monkeypatch):
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
     state._save_state(brr_dir, {"token": "tok", "repo": "owner/repo"})
+    brr_dir.mkdir(parents=True, exist_ok=True)
+    (brr_dir / "config").write_text(
+        "diffense.emit_pack=true\n"
+        "diffense.create_pr=true\n",
+        encoding="utf-8",
+    )
     protocol.create_event(
         inbox, source="github", body="",
         status="done",
@@ -2002,6 +2008,33 @@ def test_deliver_responses_skips_pull_request_when_diffense_disabled(
     responses = brr_dir / "responses"
     (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".brr" / "config").write_text("diffense.create_pr=false\n")
+    protocol.create_event(
+        inbox, source="github", body="",
+        status="done",
+        github_action="pull_request",
+        head="brr/pr-delivery",
+        base="main",
+        title="Review PR delivery",
+    )
+    event = protocol.list_done(inbox, "github")[0]
+    protocol.write_response(responses, event["id"], "Projected body")
+    calls: list = []
+    monkeypatch.setattr(
+        prs, "open_or_refresh_pr",
+        lambda *a, **kw: calls.append((a, kw)),
+    )
+
+    delivery._deliver_responses(brr_dir, inbox, responses, "tok", "owner/repo")
+
+    assert calls == []
+    assert protocol.list_done(inbox, "github") == []
+
+
+def test_deliver_responses_skips_pull_request_by_default(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {"token": "tok", "repo": "owner/repo"})
     protocol.create_event(
         inbox, source="github", body="",
         status="done",
