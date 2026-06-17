@@ -1,6 +1,9 @@
 ---
 claude:
   cmd: 'claude --print --dangerously-skip-permissions --safe-mode --system-prompt "You are brr agent. Find your orientation in AGENTS.md"'
+claude-bare-api-only:
+  binary: claude
+  cmd: 'claude --print --dangerously-skip-permissions --bare --system-prompt "You are brr agent. Find your orientation in AGENTS.md"'
 claude-bare-api-only-sonnet:
   binary: claude
   cmd: 'claude --model "claude-sonnet-4-6" --print --dangerously-skip-permissions --bare --system-prompt "You are brr agent. Find your orientation in AGENTS.md"'

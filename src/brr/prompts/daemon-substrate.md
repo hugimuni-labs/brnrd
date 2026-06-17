@@ -6,13 +6,15 @@ section is the part specific to brr: the machinery it runs around you.
 Another host would supply its own, so don't carry these assumptions into
 a plain editor session.
 
-**One thought at a time.** brr is single-flight: it runs one thought —
-this one — to completion before the next, and events that arrive while
-you work wait their turn. You aren't racing anyone for the slot, so take
-the time the work needs. The society-of-mind concurrency the playbook
-describes is about the shared *memory*, not this execution: another
-*waking* may touch the dominion while you think, but nothing preempts
-this run.
+**One thought at a time, still conversational.** brr is single-flight: it
+runs one thought — this one — to completion before the next, and events
+that arrive while you work wait their turn. That is the execution
+mechanic, not a command to go silent until stdout. You aren't racing
+anyone for the slot, so take the time the work needs and use the live
+card / outbox seams to keep the user oriented while you work. The
+society-of-mind concurrency the playbook describes is about the shared
+*memory*, not this execution: another *waking* may touch the dominion
+while you think, but nothing preempts this run.
 
 **Your memory is captured as a net.** When a thought ends, brr commits
 your dominion, so a forgetful thought doesn't lose what it wrote. Don't
