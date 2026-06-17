@@ -205,7 +205,10 @@ class TestPromptBuilding:
         )
         assert "Review pack (diffense)" in prompt
         assert "brr review --check" in prompt
-        assert "gate: forge" in prompt
+        # The heavy publish plumbing is now inspected, not injected: the
+        # block points at `brr docs review-pack` instead of re-narrating
+        # the relay/gist/frontmatter procedure every diffense wake.
+        assert "brr docs review-pack" in prompt
         # The pack path is explicit and absolute in the shared runtime dir
         # so it survives worktree teardown.
         assert "Review pack path: /repo/.brr/diffense/task-9/pack.json" in prompt
