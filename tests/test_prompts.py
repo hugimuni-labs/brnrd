@@ -180,20 +180,22 @@ class TestPromptBuilding:
         prompt = build_run_prompt("do something", tmp_path)
         assert "kb health" not in prompt
 
-    def test_diffense_emit_enabled_defaults_on(self):
-        # On by default now that the resident consumes the pack for PR delivery;
-        # opt out explicitly.
-        assert diffense_emit_enabled({})
-        assert diffense_emit_enabled(None)
+    def test_diffense_emit_enabled_defaults_off(self):
+        # Off by default so routine or chat-only wakes do not pay the prompt
+        # and review-pack tax; opt in explicitly when the surface is wanted.
+        assert not diffense_emit_enabled({})
+        assert not diffense_emit_enabled(None)
         assert diffense_emit_enabled({"diffense.emit_pack": True})
         assert not diffense_emit_enabled({"diffense.emit_pack": False})
+        assert diffense_emit_enabled({"diffense_emit_pack": True})
         assert not diffense_emit_enabled({"diffense_emit_pack": False})
 
-    def test_diffense_create_pr_enabled_defaults_on(self):
-        assert diffense_create_pr_enabled({})
-        assert diffense_create_pr_enabled(None)
+    def test_diffense_create_pr_enabled_defaults_off(self):
+        assert not diffense_create_pr_enabled({})
+        assert not diffense_create_pr_enabled(None)
         assert diffense_create_pr_enabled({"diffense.create_pr": True})
         assert not diffense_create_pr_enabled({"diffense.create_pr": False})
+        assert diffense_create_pr_enabled({"diffense_create_pr": True})
         assert not diffense_create_pr_enabled({"diffense_create_pr": False})
 
     def test_daemon_prompt_includes_diffense_pack_when_enabled(self, tmp_path):
@@ -727,6 +729,19 @@ class TestPromptBuilding:
         # carries a one-line pointer to it (the protocol choreography lives
         # there, not re-narrated in full on every wake).
         assert "brr docs cockpit" in prompt
+
+    def test_daemon_prompt_frames_delivery_as_conversational(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it",
+            "evt-1",
+            "/tmp/resp.md",
+            tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            task_id="task-9",
+        )
+        assert "stay in the conversation" in prompt
+        assert "substantial work should use the card" in prompt
+        assert "not waiting in the dark" in prompt
 
 
 # ── Phase 3 guardrails: revisit-signal handling ──────────────────────
