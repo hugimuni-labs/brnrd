@@ -439,6 +439,7 @@ def build_daemon_prompt(
     present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
     budget_seconds: int | None = None,
+    runner_medium: str | None = None,
     diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
@@ -462,6 +463,7 @@ def build_daemon_prompt(
         response_path=response_path,
         outbox_path=outbox_path,
         budget_seconds=budget_seconds,
+        runner_medium=runner_medium,
         repo_root=repo_root,
         task_id=task_id,
         source=source,
@@ -506,6 +508,7 @@ def _build_task_context_bundle(
     response_path: str,
     outbox_path: str | None = None,
     budget_seconds: int | None = None,
+    runner_medium: str | None = None,
     repo_root: Path,
     task_id: str | None,
     source: str | None,
@@ -545,6 +548,13 @@ def _build_task_context_bundle(
         sections.append(f"- Source: {source}")
     if environment:
         sections.append(f"- Environment: {environment}")
+    if runner_medium:
+        sections.append(
+            f"- Runner: {runner_medium} — the compute medium this thought runs "
+            "on. A failure here (quota exhausted, provider error) costs the user "
+            "a manual reroute, so chunk work and commit early when the budget is "
+            "tight; see plan-cost-aware-cockpit.md."
+        )
     sections.append("- Delivery: stdout captured by brr (see Delivery contract below)")
     if budget_seconds:
         sections.append(

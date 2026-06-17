@@ -796,6 +796,7 @@ def _run_worker(
                 present=present_snapshot,
                 event_body=event_body_for_prompt,
                 budget_seconds=budget_seconds,
+                runner_medium=runner_name,
                 diffense=prompt_diffense,
             )
             # Persist the assembled prompt so "what did this wake see?" has
@@ -825,6 +826,7 @@ def _run_worker(
                 present=present_snapshot,
                 event_body=event_body_for_prompt,
                 budget_seconds=budget_seconds,
+                runner_medium=runner_name,
                 diffense=prompt_diffense,
             )
 
