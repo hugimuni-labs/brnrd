@@ -227,6 +227,15 @@ dive-in map) and are stable until something contradicts them.
   execution** atop [`design-run-event-model.md`](design-run-event-model.md),
   and the **cockpit reframe** — cut the forge-state firehose, weave the
   dominion/`.card`/outbox into one legible control surface.
+- [Cost-aware execution & an operator-legible control loop](plan-cost-aware-cockpit.md) —
+  *active (2026-06-17; first slices shipping)*. The **cost/notification
+  braid** of the cockpit plan: three coupled loops — the resident
+  *seeing* its own medium/quota/spend (Loop A), runs surviving
+  exhaustion via fallback + quota-aware deferral (Loop B), and the user
+  holding operational control through a live cost `.card`, a
+  plan→approve handshake, and a documented inbox/acknowledge contract
+  (Loop C) — plus a budget-aware self-chunking discipline. Ships A1
+  (medium in the wake bundle) and the diffense de-firehose first.
 
 ## Conversations & responses
 
