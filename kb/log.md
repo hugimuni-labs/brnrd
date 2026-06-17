@@ -7040,3 +7040,45 @@ live open/closed PR status. Updated the cockpit plan to mark the G4
 firehose half shipped and leave G1 runner-medium fallback, G2
 plan→approve, G3 decomposition, and G4 dwelling habits as the next
 unshipped cockpit work. Focused prompt/context tests pass.
+
+## [2026-06-17] plan+implement | Cost-aware cockpit: plan spine + runner medium surfaced + review-pack de-firehose
+
+Maintainer's 2026-06-17 ask (credit-tight): keep the user aware of
+plan/flow/cost, give operational control, and teach the resident to
+chunk work under a hard budget — framed as enablement of the resident's
+inner constitution, not a feature bolt-on. Worked it budget-aware:
+committed the durable spine first, then shipped two reversible slices,
+pushing after each so a mid-run kill stays resumable.
+
+- **`plan-cost-aware-cockpit.md`** (new, committed first) — the
+  cost/notification braid of `plan-resident-cockpit.md`. Three coupled
+  loops on the existing run/event + self-schedule + outbox substrate:
+  **Loop A** the resident *seeing* its medium/quota/spend, **Loop B**
+  runs surviving exhaustion via fallback + quota-aware deferral, **Loop
+  C** operator legibility (a live cost `.card`, a plan→approve handshake
+  with a cost estimate, and a documented inbox/acknowledge contract —
+  the missing user-facing manual). Plus a budget-aware self-chunking
+  discipline (read the cost frame first, commit-early-push-early,
+  decompose into resumable slices, defer the rest explicitly, narrate
+  the staging). Carries a pickup list so a future wake resumes.
+- **A1 / G1.1 — runner medium in the wake bundle.** Threaded the
+  already-resolved `runner_name` into `build_daemon_prompt`; the Mode
+  block now carries a read-only `Runner: <medium>` line pointing at the
+  chunking discipline. The resident was blind to its own compute medium
+  mid-run; this is the smallest enabling step for the quota probe and
+  fallback work.
+- **Review-pack de-firehose** — the maintainer's named irritant ("my
+  delivery contract still carries the full Publish-from-the-pack
+  plumbing block"). Moved the heavy publish procedure (relay/gist
+  mechanics, `gate: forge` frontmatter, idempotent refresh) out of the
+  always-injected diffense block into a summoned `brr docs review-pack`
+  topic, leaving a compact operative summary + pointer. Same G5
+  inspect-not-inject medicine as the cockpit manual; cuts choreography
+  paid for on every diffense wake regardless of review-worthiness.
+
+Tests: added runner-medium prompt cases + a `review-pack` docs-topic
+case; updated the diffense prompt test (now asserts the pointer, not the
+moved-out plumbing). `test_daemon/test_cli/test_docs/test_prompts` green
+(121 passed). Branch `brr/cost-aware-cockpit`. Pickup: A2 quota probe,
+C1 `.card` cost frame, C3 operator notification doc, then B1/B2 + C2
+behind #128.

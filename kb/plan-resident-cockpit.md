@@ -1,7 +1,9 @@
 # Plan: the resident's cockpit — runner control & a dwelling that feels live
 
-Status: active on 2026-06-17 (G4 firehose cut + G5 shipped; G1–G3
-and the G4 dwelling habits still proposed)
+Status: active on 2026-06-17 (G4 firehose cut + G5 shipped; G1.1 medium
+surfacing shipped via the cost braid; G1.2–G3 and the G4 dwelling habits
+still proposed). The cost/notification braid is split out into
+[`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md).
 
 > This page began on 2026-06-16 from a tight, token-budgeted wake that
 > landed *after* its predecessor died on runner-medium
@@ -39,10 +41,12 @@ but the chosen model/runner is out of quota or erroring. Different axis,
 no design home yet. That gap is itself the finding.
 
 **Smallest fix, in order of leverage:**
-1. **Surface the medium in the wake context.** I should be able to see
-   which runner/model this thought is running on (and ideally its
-   remaining quota if the provider exposes it). Today the bundle never
-   says. One line in the Mode block.
+1. **Surface the medium in the wake context.** *(G1.1 shipped 2026-06-17
+   on `brr/cost-aware-cockpit`.)* The Mode block now carries a read-only
+   `Runner: <medium>` line so a thought can see which runner/model it
+   runs on; the quota/reset half (A2) is the pickup. The cost lens this
+   enables is detailed in
+   [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md).
 2. **A fallback chain.** Config a `runner_media: [codex, claude, …]`
    order; on an *operational* failure (the §6 `failed` signal with
    `runner_error`/quota class), the daemon retries the same event on the
