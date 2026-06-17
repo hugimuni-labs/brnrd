@@ -660,9 +660,10 @@ def _build_task_context_bundle(
             )
         sections.append(
             f"- To narrate the live progress card, write a line or two into "
-            f"`{outbox_path}/.card`; it renders as a `note:` under the live "
-            "phase. Rewrite as context shifts; empty/delete to withdraw. A "
-            "control file, never delivered as a chat reply."
+            f"`{outbox_path}/.card`; write only the note body, because brr "
+            "adds the `note:` label when it renders the live phase. Rewrite "
+            "as context shifts; empty/delete to withdraw. A control file, "
+            "never delivered as a chat reply."
         )
     sections.append(
         "- The user reads your reply remotely (Telegram / Slack / etc.). "
