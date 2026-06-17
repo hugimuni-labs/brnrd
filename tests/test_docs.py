@@ -11,6 +11,17 @@ def test_list_topics_includes_bundled():
     assert "execution-map" in topics
     assert "brr-internals" in topics
     assert "cockpit" in topics
+    assert "review-pack" in topics
+
+
+def test_review_pack_topic_carries_publish_plumbing():
+    # The heavy publish procedure moved out of the injected diffense block
+    # into this inspected topic (cost-aware-cockpit de-firehose).
+    text = docs.read_topic("review-pack")
+    assert text is not None
+    assert "--pr-body --relay" in text
+    assert "gate: forge" in text
+    assert "diffense.create_pr" in text
 
 
 def test_cockpit_topic_covers_protocol_and_choreography():
