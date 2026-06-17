@@ -43,6 +43,13 @@ _RESPONSE_LIMITS = {"telegram": 3900}
 _SESSION = requests.Session()
 
 
+class BrnrdAuthError(RuntimeError):
+    """brnrd rejected the daemon credential (401)."""
+
+
+_AUTH_HINT = "Re-run `brr brnrd connect` to link this daemon to your brnrd project."
+
+
 # ── HTTP seam ────────────────────────────────────────────────────────
 
 
@@ -66,6 +73,11 @@ def _request(
         headers=headers,
         timeout=timeout,
     )
+    if resp.status_code == 401:
+        detail = resp.text[:200]
+        raise BrnrdAuthError(
+            f"brnrd {method} {path} -> 401: {detail} — {_AUTH_HINT}"
+        )
     if not 200 <= resp.status_code < 300:
         raise RuntimeError(
             f"brnrd {method} {path} -> {resp.status_code}: {resp.text[:200]}"
@@ -191,12 +203,24 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     try:
         _register(state)
+    except BrnrdAuthError as e:
+        print(f"[brr:cloud] auth failed: {e}")
+        return
     except Exception as e:  # noqa: BLE001 - registration is best-effort
         print(f"[brr:cloud] register failed: {e}")
-    runtime.run_loop(
-        lambda: _loop_once(brr_dir, inbox_dir, responses_dir),
-        label="cloud",
-    )
+
+    backoff = 1
+    while True:
+        try:
+            _loop_once(brr_dir, inbox_dir, responses_dir)
+            backoff = 1
+        except BrnrdAuthError as e:
+            print(f"[brr:cloud] auth failed: {e}")
+            return
+        except Exception as e:  # noqa: BLE001 - gate threads must not die
+            print(f"[brr:cloud] error: {e}, retrying in {backoff}s")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 120)
 
 
 def _register(state: dict) -> None:
