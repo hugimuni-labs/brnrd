@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from brr import forge_state, forges, prompts, worktree
+from brr import forge_state, forges, prompts, run_context, worktree
 
 from _helpers import commit_files, init_git_repo
 
@@ -240,6 +240,71 @@ def test_format_forge_state_renders_sections():
     assert "uncommitted changes" in rendered
     assert "Gurio/brr#113" in rendered
     assert "this thread" in rendered
+
+
+def test_format_forge_state_collapses_clean_pushed_branches():
+    facet = {
+        "worktrees": [
+            {
+                "task_id": "task-current",
+                "branch": "brr/current",
+                "unpushed": 0,
+                "dirty": False,
+                "current": True,
+            },
+            {
+                "task_id": "task-clean-a",
+                "branch": "brr/clean-a",
+                "unpushed": 0,
+                "dirty": False,
+                "current": False,
+            },
+            {
+                "task_id": "task-clean-b",
+                "branch": "brr/clean-b",
+                "unpushed": 0,
+                "dirty": False,
+                "current": False,
+            },
+            {
+                "task_id": "task-wip",
+                "branch": "brr/wip",
+                "unpushed": 3,
+                "dirty": True,
+                "current": False,
+            },
+        ],
+        "threads": [],
+    }
+
+    rendered = prompts._format_forge_state(facet)
+
+    assert "Worktrees / branches: 4 total" in rendered
+    assert "1 with unpushed commits (3 commits)" in rendered
+    assert "1 dirty" in rendered
+    assert "1 current" in rendered
+    assert "brr/current" in rendered
+    assert "brr/wip" in rendered
+    assert "brr/clean-a" not in rendered
+    assert "brr/clean-b" not in rendered
+    assert "2 clean pushed branches omitted" in rendered
+
+
+def test_run_context_forge_state_collapses_clean_pushed_branches():
+    facet = {
+        "worktrees": [
+            {"branch": "brr/current", "current": True},
+            {"branch": "brr/clean", "current": False},
+        ],
+        "threads": [],
+    }
+
+    rendered = run_context._render_forge_state(facet)
+
+    assert "Worktrees / branches: 2 total" in rendered
+    assert "brr/current" in rendered
+    assert "brr/clean" not in rendered
+    assert "1 clean pushed branch omitted" in rendered
 
 
 def test_format_forge_state_empty():

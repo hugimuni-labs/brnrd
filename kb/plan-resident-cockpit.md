@@ -1,9 +1,10 @@
 # Plan: the resident's cockpit — runner control & a dwelling that feels live
 
-Status: active on 2026-06-16 (G5 shipped; G1–G4 still proposed)
+Status: active on 2026-06-17 (G4 firehose cut + G5 shipped; G1–G3
+and the G4 dwelling habits still proposed)
 
-> Status: proposed (2026-06-16). Written from a tight, token-budgeted
-> wake that landed *after* its predecessor died on runner-medium
+> This page began on 2026-06-16 from a tight, token-budgeted wake that
+> landed *after* its predecessor died on runner-medium
 > exhaustion (Codex weekly quota empty → manual reroute to Claude → that
 > too returned an operational error). The pain is the source: this page
 > names what would have stopped the predecessor from dying silently, and
@@ -109,11 +110,19 @@ injected runner state. Two halves.
 injected-state offender in *this* wake's bundle is the **forge-state
 branch dump**: ~38 worktrees/branches printed in full, almost all stale,
 costing tokens on every wake for near-zero signal. Collapse it to a
-synthesis line — "N branches, M with unpushed work, K with open PRs" —
-and surface only the few that are *this task's* or have unpushed work.
-This is the §4.2 firehose-vs-synthesis principle applied to the forge
-facet; §5 shipped the facet but not its compression. Same medicine the
-kb-health and recent-log blocks already take.
+synthesis line — total branches, branches with unpushed commits, dirty
+branches, current branches — and surface only the branches that are
+*this run*, dirty, or have unpushed commits. This is the §4.2
+firehose-vs-synthesis principle applied to the forge facet; §5 shipped
+the facet but not its compression. Same medicine the kb-health and
+recent-log blocks already take.
+
+**Status:** the worktree half shipped on 2026-06-17. The wake prompt and
+generated run context now summarize branch inventory and omit clean
+pushed branches, while still listing the current/dirty/unpushed branches
+that need attention. The issue/PR thread half remains uncompressed
+because it is already small and the facet is network-free, so it does
+not know live open/closed PR status.
 
 **Weave the dwelling (the "living" piece).** The pieces of a cockpit all
 exist but are disconnected:
@@ -246,25 +255,28 @@ this repo branch) — trimming it to a pointer is the resident's follow-up.
 
 ## Prioritized sequence (token- and pain-aware)
 
+Shipped:
+
+- **G5 — `brr docs cockpit` + protocol dedup.** Cheap, high-leverage,
+  adopter-facing: one bundled doc holds the cheatsheet + average-workflow
+  choreography, inspected instead of injected.
+- **G4 firehose cut — collapse the forge-state branch dump.** Saves
+  tokens on every wake by replacing stale clean-branch listings with a
+  summary plus only attention-worthy branches.
+
+Next:
+
 1. **G1.1 — surface the medium + quota in the wake bundle.** One line,
-   read-only, enables everything else in G1. Ship first.
-2. **G4 firehose cut — collapse the forge-state dump.** Cheap, saves
-   tokens on *every* wake including this class of reflection. Pure win.
-3. **G1.2/1.3 — fallback chain + quota-aware deferral.** The fix that
+   read-only, enables everything else in G1.
+2. **G1.2/1.3 — fallback chain + quota-aware deferral.** The fix that
    stops live runs from dying on exhaustion. Highest *pain* leverage;
    slightly more machinery, so second.
-4. **G2 — plan→approve loop.** Convention-light; unlocks the duo cadence
+3. **G2 — plan→approve loop.** Convention-light; unlocks the duo cadence
    the maintainer wants. Wants #128's run/event threading.
-5. **G3 — decomposition via child events.** Defer behind #128.
-6. **G5 — `prompts/cockpit.md` + protocol dedup.** Cheap, high-leverage,
-   adopter-facing: one bundled doc holds the cheatsheet + average-workflow
-   choreography (inspected, with a one-line injected pointer), and the
-   outbox/keepalive/`.card` prose collapses to one canonical home. Pairs
-   naturally with the G4 firehose cut (both are token-side wins). Awaits
-   the nod.
-7. **G4 dwelling habits.** Continuous, not a milestone — start now (this
-   wake composes a `.card`; the cockpit cheatsheet now lands in the repo
-   per G5, with per-resident state staying in the dominion).
+4. **G3 — decomposition via child events.** Defer behind #128.
+5. **G4 dwelling habits — compose `.card`, keep a richer dominion
+   surface, and make the outbox feel like a terminal rather than a
+   convention stack.**
 
 ## Read next
 
