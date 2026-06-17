@@ -10,6 +10,19 @@ def test_list_topics_includes_bundled():
     assert "active-task" in topics
     assert "execution-map" in topics
     assert "brr-internals" in topics
+    assert "cockpit" in topics
+
+
+def test_cockpit_topic_covers_protocol_and_choreography():
+    text = docs.read_topic("cockpit")
+    assert text is not None
+    # The control-file cheatsheet…
+    assert ".keepalive" in text
+    assert ".card" in text
+    assert "gate: forge" in text
+    # …and the average-task choreography.
+    assert "schedule.md" in text
+    assert "plan or execute" in text.lower() or "plan-vs-execute" in text.lower()
 
 
 def test_read_topic_bundled_returns_content():
