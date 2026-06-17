@@ -47,8 +47,11 @@ example Dockerfile. It carries the runner CLIs, the baseline developer
 toolbox, and brr's own CLI/runtime dependency set (`brr` plus `requests`)
 so agents can run local brr tooling such as `brr review` without
 recovering through `PYTHONPATH=src python -m brr` or ad-hoc package
-installs. Project-specific dependencies still belong in a derived image;
-the stale-image ergonomics probe tells users to rebuild when their local
+installs. In docker, when the mounted repo is a brr checkout itself,
+the env injects `PYTHONPATH=<repo>/src` so the live source wins over
+the image-baked install — rebuild alone cannot keep dogfood runs current.
+Project-specific dependencies still belong in a derived image; the
+stale-image ergonomics probe tells users to rebuild when their local
 image predates the bundled Dockerfile.
 
 ## Durability contract
