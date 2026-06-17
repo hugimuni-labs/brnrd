@@ -50,3 +50,11 @@ Your per-task **delivery contract** — how to message the user while you
 work, the time budget for this thought, and how to extend it — rides in
 that bundle, conditionally on what this task allows. Read it there; it's
 the operational detail behind the playbook's "how depends on your host."
+
+**The cockpit manual.** The full control-file protocol (outbox replies,
+`event:` / `gate:` sends, liveness, progress-card narration, scheduling)
+and the shape of an average task run — receive → orient → decide
+plan-vs-execute → narrate → deliver → decompose/defer — live in one
+place: run `brr docs cockpit`. The bundle carries the live per-task
+*values*; the manual carries the *choreography*. Glance at the panel when
+a task's shape is unfamiliar; don't carry it all in working memory.
