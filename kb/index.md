@@ -767,6 +767,14 @@ dive-in map) and are stable until something contradicts them.
   publisher verifies the returned relay URL before adding it to the PR body;
   if both rich surfaces are unavailable, the Markdown projection and embedded
   pack remain the review surface.
+- [diffense dogfood reshape](plan-diffense-dogfood-reshape.md) —
+  *active*. 2026-06-17 dogfood correction from 10 recent linked PR packs:
+  the model is still worth keeping, but current generated packs are
+  schema-clean while failing the review job (serial composition,
+  paragraph-sized gloss rows, file-first cards, mostly local-only hosted
+  locators, zero zoom ladders in the sample). Keeps diffense opt-in and
+  proposes a decision-first review board with verdict, change-map, and
+  ground-truth lanes before defaults come back. Tracked as #152.
 - [diffense prototype — hand-authored pack for PR #64](diffense-prototype-pr64.md)
   — *2026-05-29*. The first concrete pack
   ([JSON](diffense-prototype-pr64-pack.json)), rendered as cards, that

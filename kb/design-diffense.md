@@ -7,6 +7,13 @@ validated by a working renderer spike
 lock, transport, runner wiring) is implementation-plan detail, not
 design-blocking. (Drafted 2026-05-28; reshaped 2026-05-29, passes 6–9.)
 
+Dogfood correction (2026-06-17): the accepted model remains the target,
+but recent generated packs do not realize it well enough for default
+review flow. They are schema-clean yet too serial, prose-heavy, and
+file-centric; hosted code locators are often local-only. Keep emission
+and PR creation opt-in while the decision-first board reshape lands; see
+[`plan-diffense-dogfood-reshape.md`](plan-diffense-dogfood-reshape.md).
+
 diffense (a working name: *diff* + *sense*, the surface that helps a
 reviewer make sense of a diff; and *diff* + *defense*, what guards the
 merge against shallow review) is brr's answer to a problem the project
@@ -46,6 +53,10 @@ Companion to:
   product channel (the agent's understanding of its own change → the
   human reviewer). Shared source, split audience — see "Relationship to
   the ergo proxy."
+- [`plan-diffense-dogfood-reshape.md`](plan-diffense-dogfood-reshape.md)
+  — the active dogfood correction from recent generated packs: reshape
+  the product from a tasteful card transcript into a decision-first review
+  board before turning defaults back on.
 
 ## Problem
 

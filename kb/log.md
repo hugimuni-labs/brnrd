@@ -7139,3 +7139,30 @@ proactivity. Shipped the clear, low-risk slices:
   aliases so existing configs keep working.
 
 Tests: `pytest -q` (860 passed, 7 skipped).
+
+## [2026-06-17] plan | Diffense dogfood review finds schema-clean packs still slow review
+
+Reviewed the 10 newest PRs with diffense links from the latest 30 GitHub
+PRs (#149, #147, #144, #143, #140, #137, #135, #134, #129, #127) after
+the maintainer reported the rich packs looked nice but slowed fast review.
+Wrote `plan-diffense-dogfood-reshape.md` and cross-linked it from the
+Reviews index and `design-diffense.md`; opened #152 as the implementation
+tracker.
+
+Finding: the current failure is not mostly broken JSON. Nine of the ten
+packs passed `brr review --check` with 0 warnings; #140 had 5 warnings
+for unknown `walk` kinds. The experience still fails because the generated
+surface is serial, prose-heavy, and file-first: average glosses ranged
+from 152 to 439 characters, all sampled packs had zero `zoom` ladders,
+four had zero lateral edges, and 61 of 69 locators were local-only in a
+hosted context. The strongest material is the uncertainty capture, but it
+is not yet turned into a verdict lane or review checklist.
+
+Direction: keep `diffense.emit_pack` and `diffense.create_pr` off by
+default, but do not abandon the idea. Reshape diffense into a
+decision-first review board with verdict, change-map, and ground-truth
+lanes; add review-utility lints so schema-clean but review-useless packs
+are caught before publish. Also fixed the cockpit/manual wording for the
+user-reported live-card wrinkle: `.card` content is the note body only;
+brr adds the rendered `note:` label, so agents should not prefix the
+content with `note:` themselves.
