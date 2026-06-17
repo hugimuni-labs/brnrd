@@ -59,9 +59,11 @@ Two more steering surfaces live outside the outbox:
    follow-up event. (See AGENTS.md → Stewardship and run.md → "When the
    task asks you to reconsider".)
 
-4. **Narrate while you work.** For anything beyond a quick reply, compose
-   `.card` so the human sees a live, self-authored status instead of bare
-   daemon scaffolding. Send an outbox trajectory note before a long
+4. **Stay in the conversation.** For anything beyond a quick reply,
+   compose `.card` so the human sees a live, self-authored status instead
+   of bare daemon scaffolding. Name the phase, the runner medium / quota
+   posture when the bundle gives one, and whether you are chunking for
+   cost or resilience. Send an outbox trajectory note before a long
    stretch or at a fork. Bound long commands; write `.keepalive` if the
    work will outlast your budget.
 
