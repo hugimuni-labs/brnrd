@@ -7082,3 +7082,35 @@ moved-out plumbing). `test_daemon/test_cli/test_docs/test_prompts` green
 (121 passed). Branch `brr/cost-aware-cockpit`. Pickup: A2 quota probe,
 C1 `.card` cost frame, C3 operator notification doc, then B1/B2 + C2
 behind #128.
+
+## [2026-06-17] plan | Cost-aware cockpit refined by maintainer steer: historical-not-estimate, situational PR, conversational framing, Temporal verdict
+
+Budget-tight (~$1) follow-up on the cost-aware-cockpit thread. The
+maintainer merged the prior slice and sent five steers; folded them all
+into `plan-cost-aware-cockpit.md` (chat-and-plan task, so honoured the
+no-PR-default steer — no PR, no review pack this run).
+
+- **Historical pre-analysis, never a forward cost estimate.** The sharp
+  correction: quoting a projected dollar cost is dangerous (false
+  promise, eroded trust); *historical* spend is a safe fact about the
+  past. Reframed A3/C1/C2 from "cost estimate" to "historical cost
+  pre-analysis" and added it as a hard product guardrail at the top.
+- **No PR by default; cost-awareness situational, not boilerplate.**
+  `diffense.create_pr`-on and other token-ignorant defaults spend
+  regardless of warrant; flip to opt-in/situational.
+- **Conversational & concurrent, not one-shot.** Single-flight execution
+  stays (mechanical truth) but the *framing* should stop implying "one
+  task → one reply → silence"; soften delivery-contract + dwelling-habit
+  + playbook wording toward "stay in the conversation." New pickup item.
+- **Temporal — borrow the patterns, not the engine.** Honest verdict:
+  durable-execution is genuinely adjacent to Loop B / #128's run-event
+  model, but the server-cluster dependency cuts against brr's
+  no-investor, dependency-light, single-flight ethos; design #128 as a
+  minimal durable log instead, re-evaluate only at fleet scale.
+- **Runner quota/pricing feasibility — confirmed plausible**, with a
+  concrete per-provider data map (Codex buckets/429 headers,
+  Anthropic `anthropic-ratelimit-*` headers + usage endpoint, Gemini
+  Cloud quotas/billing): live quota off response headers, historical
+  spend off usage endpoints. Feeds the historical pre-analysis.
+
+Branch `brr/cost-aware-steer`. No code, no tests — kb-only.

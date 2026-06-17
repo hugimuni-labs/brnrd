@@ -21,6 +21,115 @@ while the resident learns to chunk its own work under a hard budget.*
 > seeing cost the way the maintainer sees it, and structuring work to
 > survive a tight budget without compromising the work itself.
 
+## Maintainer steer — 2026-06-17 (refines this plan)
+
+A follow-up on the same thread, sent on a deliberately tight (~$1) budget,
+sharpened the direction. Five points, each folded into the slices below.
+
+1. **Historical pre-analysis, never a forward cost *estimate*.** Quoting a
+   projected dollar cost to a user is dangerous — a wrong money number
+   erodes trust and reads as a promise the run never made. *Historical*
+   data is categorically different and safe: "runs of this shape have
+   cost ≈ X / consumed ≈ Y tokens" is a fact about the past, not a
+   guarantee about this run. So everywhere this plan said "cost estimate"
+   (A3, C1, C2), read **historical cost pre-analysis**: surface what
+   comparable past runs actually consumed, framed explicitly as history,
+   with no projected total presented as if it were owed. This is a hard
+   product guardrail, not a presentation preference.
+
+2. **No PR by default; cost-awareness is situational, not boilerplate.**
+   `diffense.create_pr` defaulting on — and other *token-ignorant*
+   defaults (always emit a review pack, always run the full publish
+   choreography) — spend tokens regardless of whether the run warrants
+   them. Flip the posture: PR / review-pack emission is opt-in or
+   situational, decided from the run's shape and the cost frame, not done
+   reflexively. More broadly the resident's cost-awareness should be
+   *obvious and situational* — surfaced when it bites, not carried as
+   standing ceremony on every wake. (This run honours it: a chat-and-plan
+   task, so no PR, no review pack.)
+
+3. **Conversational & concurrent, not one-shot.** The single-flight
+   *execution* model stays — it's mechanical truth — but the *framing*
+   the resident reads should stop implying "one task → one terminal reply
+   → silence." Lean into proactive, frequent communication: live
+   status-card updates, mid-thought outbox sends, folding in queued
+   events at plan boundaries, more than one message per wake. The aim is
+   duo-programming texture, not a request/response servant. Concretely
+   this means *softening* the "aim at one task execution" wording in the
+   delivery contract and dwelling habits toward "stay in the
+   conversation." → amends Loop C and the cockpit dwelling habits.
+
+4. **Temporal — evaluated, borrow the patterns not the engine** (below).
+
+5. **Runner quota/pricing feasibility — confirmed plausible.** The
+   maintainer reads these stats off the provider billing/usage pages, so
+   A2/A3 have a real data source; the open question is API/CLI access,
+   not existence. Concrete per-provider shape below.
+
+### Temporal — durable-execution patterns, not the engine
+
+The maintainer asked whether [Temporal](https://github.com/temporalio/temporal)
+fits brr's IO layer — the gates (chat + the terraform-esque forge/GitHub
+access) — and could reconcile them under one model.
+
+What Temporal is: a *durable-execution* engine. You write workflows +
+activities as ordinary code; Temporal persists every step, so a workflow
+survives process death, retries failed activities with backoff, runs
+durable timers (sleep for days), and resumes exactly where it left off.
+It is, essentially, **the run/event model (#128) plus Loop B's
+fallback/deferral, sold as a managed product.**
+
+Where it's genuinely adjacent: Loop B (quota-aware retry / fallback /
+deferral), `defer_until`, the per-run claim, surviving a kill mid-run —
+all textbook durable execution. The conceptual fit is real and worth
+learning from.
+
+Where it does *not* fit brr's constraints:
+- **Operational weight.** Temporal needs a server cluster (or Temporal
+  Cloud — a paid third-party dependency). brr's ethos is no-investor,
+  full-control, dependency-light, runs-on-a-laptop-or-one-fly-machine.
+  Adopting it trades that for a stateful service to run, secure, and pay
+  for.
+- **Wrong layer / granularity.** brr's gates are thin IO adapters (poll
+  Telegram, poll GitHub, write files). Temporal orchestrates long,
+  multi-step *business workflows*; a gate poll isn't one. The
+  "terraform-esque" forge reconcile is closer to a small control loop
+  than a workflow DAG.
+- **Single-flight is deliberate.** brr is intentionally serial per
+  dominion (society-of-mind on shared memory). Temporal's value shines
+  with high-concurrency orchestration — not brr's bottleneck.
+
+Verdict: **borrow the patterns, not the dependency.** When #128's
+run/event model needs durable retries, timers, and resumable state,
+design it *as* a minimal durable-execution log (it already resembles
+one) rather than importing Temporal. Re-evaluate only if brr ever runs a
+fleet large enough that hand-rolled durability becomes the bottleneck —
+then Temporal (or a lighter SQLite-backed state machine) re-enters as a
+build-vs-buy question. Filed as a note, not a plan.
+
+### Runner quota/pricing — where the data lives
+
+A2/A3 need per-provider quota + spend; the maintainer confirms it's
+visible on billing/usage pages, so this is about API/CLI access:
+- **Codex / OpenAI** — the agentic weekly + 5h buckets the runner already
+  hits; rate-limit state surfaces on 429s, and a usage endpoint holds
+  historicals. Probe: parse the runner's own rate-limit error/headers
+  (already in the §6 `failed` signal) for live quota; the usage endpoint
+  for history.
+- **Claude / Anthropic** — responses carry `anthropic-ratelimit-*`
+  headers (requests/tokens remaining + reset); the Console exposes
+  usage/cost. Probe: read headers off each call for live quota; the
+  usage/cost endpoint for historical spend.
+- **Gemini** — live quota via the Cloud quotas API; usage via Cloud
+  billing.
+
+Common shape: **live quota** comes cheap off response headers / error
+bodies the runner already sees (Loop A2, vantage-clean as a host fact);
+**historical spend** comes from each provider's usage/billing endpoint,
+polled out-of-band and cached (this is the data behind the *historical
+pre-analysis* of point 1). Neither needs a forward estimate. Next step is
+a small per-provider spike to confirm the endpoints — not a design change.
+
 ## The shape: three coupled loops
 
 The ask decomposes into three loops that share one substrate (the
@@ -45,10 +154,12 @@ compute medium or its quota/spend**. Slices:
   host fact the sandboxed agent can't see) adds
   `Runner: codex (weekly 0% — resets 2026-06-17T01:29Z)`. When a bucket
   is near-empty, that line *is* the signal to chunk smaller or defer.
-- **A3 — a per-run spend estimate.** Even coarse (tokens in/out × the
-  medium's published rate, or the runner's own usage line if it emits
-  one) lets the resident reason about cost, not just time. Feeds Loop C
-  and the user-facing card.
+- **A3 — a per-run *historical* spend analysis** (not a forward
+  estimate; see the maintainer steer above). Coarse is fine — tokens
+  in/out × the medium's published rate, or the runner's own usage line —
+  but it is surfaced as *what this run actually consumed* and *what runs
+  of this shape have historically cost*, never as a projected total. Lets
+  the resident reason about cost, not just time. Feeds Loop C.
 
 ### Loop B — Quota-aware survival (runs stop dying on exhaustion)
 
@@ -77,13 +188,14 @@ seams, all already present, under-used:
 
 - **C1 — the `.card` as a standing cost+plan dashboard.** Compose it as
   a matter of course (plan-resident-cockpit G4 dwelling habit), and
-  include the **cost frame**: which medium, rough spend/quota posture,
-  and what phase. The user sees a live, self-authored status instead of
+  include the **cost frame**: which medium, rough spend-so-far / quota
+  posture (historical, not a forward promise), and what phase. The user sees a live, self-authored status instead of
   daemon scaffolding. Cheapest, highest-frequency win.
-- **C2 — a plan→approve handshake (G2) with a cost estimate.** Before a
-  big or budget-risky run, emit a structured PLAN to the outbox:
-  decomposition, chosen medium, **cost estimate**, and what each child
-  run will do. The human approves/edits with a short reply; the approval
+- **C2 — a plan→approve handshake (G2) with a historical cost
+  pre-analysis.** Before a big or budget-risky run, emit a structured
+  PLAN to the outbox: decomposition, chosen medium, **what comparable
+  past runs have cost** (history, never a forward dollar promise — see
+  the steer above), and what each child run will do. The human approves/edits with a short reply; the approval
   wakes a run scoped to that plan (no cold-rebuild). This is the
   operational-control primitive — the human gates spend *before* it
   happens.
@@ -147,9 +259,14 @@ least I can get away with."
    user-facing acknowledge contract; the maintainer's explicit ask).
 4. **B1/B2 — fallback chain + quota deferral** (highest reliability
    leverage; wants #128's run/event substrate).
-5. **C2 — plan→approve with cost estimate** (the duo-loop primitive;
-   wants #128 threading).
-6. **A3 — per-run spend estimate** (feeds C1/C2; coarse first).
+5. **C2 — plan→approve with a historical cost pre-analysis** (the
+   duo-loop primitive; wants #128 threading).
+6. **A3 — per-run historical spend analysis** (feeds C1/C2; coarse first).
+7. **Soften the one-shot framing** — edit the delivery-contract +
+   dwelling-habit wording (and the dominion playbook) away from "aim at
+   one task execution" toward "stay in the conversation": proactive,
+   concurrent, multi-message. The mechanical single-flight stays; only
+   the *framing* changes. (Maintainer steer point 3.)
 
 ## Read next
 
