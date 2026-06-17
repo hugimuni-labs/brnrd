@@ -493,6 +493,27 @@ def _docker_passthrough_env_args(cfg: dict[str, Any]) -> list[str]:
     return args
 
 
+def _brr_checkout_src(repo_root: Path) -> Path | None:
+    """Return ``repo_root/src`` when the bind-mounted tree is a brr checkout.
+
+    Runner images bake ``pip install /opt/brr`` at build time. When the
+    mounted repo *is* brr (dogfooding), that install is always behind the
+    live checkout — callers inject this path via ``PYTHONPATH`` so ``brr``
+    CLI invocations inside the container prefer the mounted source.
+    """
+    package = repo_root / "src" / "brr"
+    if (package / "__init__.py").is_file() and (package / "cli.py").is_file():
+        return repo_root / "src"
+    return None
+
+
+def _docker_brr_source_env_args(repo_root: Path) -> list[str]:
+    src = _brr_checkout_src(repo_root)
+    if src is None:
+        return []
+    return ["-e", f"PYTHONPATH={src}"]
+
+
 def _docker_credential_mount_args(cfg: dict[str, Any]) -> list[str]:
     """Build ``-v`` args for known runner credential paths under HOME.
 
@@ -722,6 +743,7 @@ class DockerEnv(WorktreeEnv):
             "-e", "GIT_EDITOR=true",
             *_docker_git_config_env_args(bool(_docker_github_token_for_git(ctx))),
             *_docker_passthrough_env_args(cfg),
+            *_docker_brr_source_env_args(ctx.repo_root),
             *_docker_credential_mount_args(cfg),
             # Inject the GitHub gate token when available so ``gh`` CLI
             # and HTTPS git operations are authenticated inside the
