@@ -290,6 +290,13 @@ regardless of status, so a human can recover work.
   the corresponding `*_API_KEY` is exported in the daemon's
   environment. Both paths surface in the `docker run` argv visible in
   trace mode.
+- **`brr docs <topic>` missing a topic the checkout has** — when dogfooding
+  brr itself in docker, the bind-mounted ``src/`` should win over the
+  image's baked ``pip install /opt/brr``. Recent brr injects
+  ``PYTHONPATH=<repo>/src`` automatically when the mounted tree looks like
+  a brr checkout. If you're on an older daemon, set that by hand or rebuild
+  after pulling. For non-brr repos, rebuild the runner image when brr itself
+  changes (``brr init -i``).
 - **`brr review` runs the wrong tool (image-renderer help)** — PyPI's
   ``brr`` package is an unrelated terminal image renderer. Older bundled
   Dockerfiles ``pip install 'brr>=0.1.0'`` pulled that by mistake.
