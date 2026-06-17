@@ -370,26 +370,26 @@ def _join_prompt_parts(
 def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
     """Return whether runner prompts should ask for a diffense review pack.
 
-    On by default now that the consuming surface ships: the resident
-    projects the pack into the PR body and sends it through the forge gate,
-    so a review-worthy change can produce a richer PR. Opt out per repo
-    with ``diffense.emit_pack=false`` in ``.brr/config``. (Default was off
-    through slices 1–2, before the projection consumed the pack.)
+    Off by default because the prompt fragment and follow-on review-pack
+    work are not free: a chat-only turn, a tiny fix, or a user who did not
+    ask for PR ceremony should not pay that token and attention tax. Opt in
+    per repo with ``diffense.emit_pack=true`` in ``.brr/config`` when the
+    richer review surface is worth the cost.
     """
     cfg = cfg or {}
-    return bool(cfg.get("diffense.emit_pack", cfg.get("diffense_emit_pack", True)))
+    return bool(cfg.get("diffense.emit_pack", cfg.get("diffense_emit_pack", False)))
 
 
 def diffense_create_pr_enabled(cfg: dict[str, Any] | None) -> bool:
     """Return whether the GitHub delivery gate should open/refresh a PR.
 
-    On by default (GitHub only for now): when the resident sends a checked
-    diffense projection through ``gate: forge``, the GitHub gate opens or
-    refreshes the PR. Opt out independently with ``diffense.create_pr=false``
-    to keep packs local (review by hand).
+    Off by default. When enabled alongside ``diffense.emit_pack``, a checked
+    diffense projection sent through ``gate: forge`` opens or refreshes the
+    PR. Keeping this explicit prevents a review-pack control message from
+    silently spending forge/API work or creating PRs on routine tasks.
     """
     cfg = cfg or {}
-    return bool(cfg.get("diffense.create_pr", cfg.get("diffense_create_pr", True)))
+    return bool(cfg.get("diffense.create_pr", cfg.get("diffense_create_pr", False)))
 
 
 # ── Top-level builders ───────────────────────────────────────────────
@@ -607,7 +607,10 @@ def _build_task_context_bundle(
     sections.append(
         "These are the per-task *values* and the operative rules. The full "
         "control-file protocol and the shape of an average task run live in "
-        "the cockpit manual — run `brr docs cockpit` when a step is unfamiliar."
+        "the cockpit manual — run `brr docs cockpit` when a step is unfamiliar. "
+        "Use the available surfaces to stay in the conversation: keep visible "
+        "state honest, and fold queued input at plan boundaries when it belongs "
+        "in this run."
     )
     sections.append(
         "- Stdout is the default terminal reply for the current thread. "
@@ -629,8 +632,10 @@ def _build_task_context_bundle(
             "delivers each as its own chat message, in order, while you keep "
             "working. One file is one message (stage `*.tmp` and rename for "
             "an atomic write). For an addressed event, make sure this thread "
-            "gets stdout, an outbox reply, or an honest noop/failure note — "
-            "but a single final stdout is already a complete, healthy run."
+            "gets stdout, an outbox reply, or an honest noop/failure note. "
+            "A quick self-contained request can still end with one final "
+            "stdout; substantial work should use the card and, when useful, "
+            "mid-thought replies so the user is not waiting in the dark."
         )
         sections.append(
             "- Outbox frontmatter routes a file elsewhere: `event: <id>` "
