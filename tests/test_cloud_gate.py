@@ -366,3 +366,44 @@ def test_render_update_relays_card_through_the_cloud_transport(tmp_path, monkeyp
     cards = [body for path, body in posts if path == "/v1/daemons/card"]
     assert len(cards) == 2
     assert cards[1]["message_id"] == 9       # edit replays the returned id
+
+
+def test_request_raises_auth_error_on_401(monkeypatch):
+    class FakeResp:
+        status_code = 401
+        text = '{"detail":"invalid token"}'
+        content = b'{"detail":"invalid token"}'
+
+    monkeypatch.setattr(cloud._SESSION, "request", lambda *a, **k: FakeResp())
+    with pytest.raises(cloud.BrnrdAuthError, match="invalid token"):
+        cloud._request("http://brnrd", "GET", "/v1/daemons/inbox", token="bad")
+
+
+def test_run_loop_exits_on_auth_error(tmp_path, monkeypatch):
+    import threading
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    cloud._save_state(
+        brr_dir,
+        {
+            "brnrd_url": "http://brnrd",
+            "token": "bd_bad",
+            "project_id": "proj_x",
+            "since": 0,
+        },
+    )
+
+    def fail_request(*_a, **_k):
+        raise cloud.BrnrdAuthError("invalid token")
+
+    monkeypatch.setattr(cloud, "_request", fail_request)
+    thread = threading.Thread(
+        target=cloud.run_loop,
+        args=(brr_dir, inbox_dir, responses_dir),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
