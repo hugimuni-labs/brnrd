@@ -6986,3 +6986,39 @@ Two edits, both committed:
 
 Chat-only direction-set + the two kb edits; awaits the maintainer's nod
 before the bundled doc + dedup land. Branch `brr/cockpit-injection-direction`.
+
+## [2026-06-16] implement | Cockpit manual shipped: bundled+inspected doc, `brr docs` restored, protocol deduped
+
+Implemented all three calls of `plan-resident-cockpit.md` §G5 on the
+maintainer's nod ("implement the whole 5").
+
+- **`docs/cockpit.md`** (new bundled doc) — agent-facing cockpit manual:
+  a control-file cheatsheet (outbox replies, `event:` / `gate:` sends,
+  `.keepalive`, `.card`, `inbox.json`, `schedule.md`) + the average-task
+  choreography (receive → orient → decide plan-vs-execute → narrate →
+  deliver → decompose/defer) + a robustness-ladder note. It lives in
+  **`docs/`, not `prompts/`**: the plan's "working name
+  `prompts/cockpit.md`" was tentative, and *inspected, not injected* is
+  precisely what the docs system (bundled + per-repo overridable) is for.
+- **`brr docs` CLI re-introduced.** Wiring "inspected via `brr docs`"
+  surfaced standing drift: the command was removed in the 2026-05-01
+  "remove agent commands from git" cull, yet `decision-bundled-docs.md`,
+  `index.md`, and the (still-tested) docs module all assumed it existed.
+  Re-added `cmd_docs` (list / read a topic); dropped `docs` from the
+  removed-commands test; added CLI + docs-topic tests. Noted the lineage
+  on `decision-bundled-docs.md`.
+- **Pointer injected; protocol deduped.** `daemon-substrate.md` now ends
+  with a one-line pointer to `brr docs cockpit` rather than the protocol
+  being re-narrated; the Task Context Bundle's delivery contract was
+  compressed to per-task *values* + operative rules with a single "full
+  protocol lives in `brr docs cockpit`" line. The bundle stays per-task
+  authority; the manual is the one conceptual home. Updated the
+  `test_bundled_daemon_prompt_*` case (the prompt now *intentionally*
+  carries the `brr docs cockpit` pointer — the old command-free assertion
+  was the policy G5 deliberately revisits).
+
+Remaining third voice — the **dominion playbook** still re-narrates the
+protocol — is the resident's own `brr-home` follow-up, not this branch.
+Full suite green except one pre-existing, unrelated
+`test_runner.py::...claude_bare_api_only` failure (config mismatch on
+main, confirmed by stashing my edits). Branch `brr/cockpit-manual`.
