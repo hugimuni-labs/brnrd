@@ -219,6 +219,21 @@ class TestPromptBuilding:
         assert "Review pack (diffense)" not in prompt
         assert "Review pack path" not in prompt
 
+    def test_daemon_prompt_surfaces_runner_medium(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-9",
+            runner_medium="codex",
+        )
+        assert "- Runner: codex" in prompt
+
+    def test_daemon_prompt_omits_runner_medium_when_absent(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-9",
+        )
+        assert "- Runner:" not in prompt
+
     def test_daemon_prompt_includes_outbox_contract_when_given(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
