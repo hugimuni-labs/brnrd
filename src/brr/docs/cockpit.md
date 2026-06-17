@@ -25,7 +25,7 @@ does.
 | `<name>.md` with `event: <id>` frontmatter | Same, but delivered to a **different pending event's** thread and marks that event handled, so it won't wake again. One complete reply per folded-in event. |
 | `<name>.md` with `gate: <name>` frontmatter | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` opens/refreshes a PR (`head`, `base`, `title` frontmatter; body is the PR body). An unconfigured gate is dropped. |
 | `.keepalive` | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. |
-| `.card` | **Narrate the live progress card.** A line or two renders as a `note:` under the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
+| `.card` | **Narrate the live progress card.** Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
 | `inbox.json` | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries; never edit or remove it. |
 
 Two more steering surfaces live outside the outbox:
@@ -63,9 +63,10 @@ Two more steering surfaces live outside the outbox:
    compose `.card` so the human sees a live, self-authored status instead
    of bare daemon scaffolding. Name the phase, the runner medium / quota
    posture when the bundle gives one, and whether you are chunking for
-   cost or resilience. Send an outbox trajectory note before a long
-   stretch or at a fork. Bound long commands; write `.keepalive` if the
-   work will outlast your budget.
+   cost or resilience. Do not prefix the content with `note:` — the gate
+   renderer supplies that label. Send an outbox trajectory note before a
+   long stretch or at a fork. Bound long commands; write `.keepalive` if
+   the work will outlast your budget.
 
 5. **Deliver.** Final answer → stdout. If you wrote files, commit them on
    the current branch — the diff is the receipt the work happened. Rename
