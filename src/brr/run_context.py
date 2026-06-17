@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from . import forge_state
 from .envs import RunContext
 from .task import Task
 
@@ -293,11 +294,22 @@ def _render_forge_state(forge: Any) -> str:
         return ""
     lines: list[str] = ["Forge state (local, network-free):"]
     worktrees = forge.get("worktrees")
-    if isinstance(worktrees, list) and worktrees:
-        lines.append("- Worktrees / branches:")
-        for wt in worktrees:
-            if not isinstance(wt, dict):
-                continue
+    worktree_summary = forge_state.summarize_worktrees(worktrees)
+    if worktree_summary["total"]:
+        bits = [f"{worktree_summary['total']} total"]
+        if worktree_summary["unpushed_branches"]:
+            branches = worktree_summary["unpushed_branches"]
+            commits = worktree_summary["unpushed_commits"]
+            commit_noun = "commit" if commits == 1 else "commits"
+            bits.append(
+                f"{branches} with unpushed commits ({commits} {commit_noun})"
+            )
+        if worktree_summary["dirty_branches"]:
+            bits.append(f"{worktree_summary['dirty_branches']} dirty")
+        if worktree_summary["current_branches"]:
+            bits.append(f"{worktree_summary['current_branches']} current")
+        lines.append(f"- Worktrees / branches: {'; '.join(bits)}")
+        for wt in worktree_summary["attention"]:
             branch = str(wt.get("branch") or "").strip() or "(detached)"
             tid = str(wt.get("task_id") or "").strip()
             bits: list[str] = []
@@ -313,6 +325,10 @@ def _render_forge_state(forge: Any) -> str:
             url = str(wt.get("branch_url") or "").strip()
             link = f" — {url}" if url else ""
             lines.append(f"  - {branch}{tag}{detail}{link}")
+        omitted = worktree_summary["omitted"]
+        if omitted:
+            noun = "branch" if omitted == 1 else "branches"
+            lines.append(f"  - {omitted} clean pushed {noun} omitted")
     threads = forge.get("threads")
     if isinstance(threads, list) and threads:
         lines.append("- Issues / PRs in play:")
