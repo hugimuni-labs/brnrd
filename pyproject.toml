@@ -43,3 +43,4 @@ brr = "brr.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
