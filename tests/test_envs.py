@@ -714,6 +714,34 @@ def test_docker_invoke_extra_env_does_not_duplicate_defaults(tmp_path, monkeypat
     assert _passthrough_env_names(command) == ["OPENAI_API_KEY"]
 
 
+def test_docker_invoke_sets_pythonpath_for_brr_checkout(tmp_path, monkeypatch):
+    """Dogfooding brr in docker should prefer the bind-mounted checkout.
+
+    The image-baked pip install cannot keep pace with every source edit.
+    """
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+    (tmp_path / "src" / "brr").mkdir(parents=True)
+    (tmp_path / "src" / "brr" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "src" / "brr" / "cli.py").write_text("", encoding="utf-8")
+
+    command = _build_docker_invoke(tmp_path, monkeypatch)
+
+    assert f"PYTHONPATH={tmp_path / 'src'}" in command
+
+
+def test_docker_invoke_omits_pythonpath_for_non_brr_repos(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+
+    command = _build_docker_invoke(tmp_path, monkeypatch)
+
+    assert all(
+        not (arg == "-e" and command[i + 1].startswith("PYTHONPATH="))
+        for i, arg in enumerate(command[:-1])
+    )
+
+
 def test_docker_invoke_mounts_credential_dirs_when_present(tmp_path, monkeypatch):
     fake_home = _isolate_docker_creds(monkeypatch, tmp_path)
     _stub_worktree(monkeypatch, tmp_path)
