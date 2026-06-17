@@ -32,17 +32,13 @@ raw diff.
   path>` and fix every error it reports — a dead locator, a dangling card
   edge, a missing axis. A pack that fails `--check` is not done.
 - **Publish from the pack** when `diffense.create_pr` is on (the default):
-  project the checked pack yourself with `brr review <Review pack path>
-  --pr-body --relay` and derive the title with `brr review <Review pack
-  path> --pr-title --fallback-title <branch>`. `--relay` now means "make a
-  rich review link": it first writes the pack JSON to a secret gist owned
-  by the user's GitHub account and links brnrd's `/r?pack=<raw gist url>`
-  renderer shell; if gist publication is unavailable, it falls back to
-  the transient brnrd RAM relay. Then write a `gate: forge` outbox file
-  whose frontmatter names `head`, `base`, and `title`; the body is the
-  projected PR body. The GitHub gate opens or refreshes the PR
-  idempotently and refuses publication when diffense PR creation is
-  disabled.
+  validate, project the PR body/title from the checked pack, and open or
+  refresh the PR with a `gate: forge` outbox send. The full publish
+  procedure — the `brr review --pr-body --relay` / `--pr-title`
+  invocations, what `--relay` does (gist + brnrd renderer, RAM-relay
+  fallback), and the `gate: forge` frontmatter — lives at
+  `brr docs review-pack`. Summon it when you have a checked pack; it is
+  not re-narrated here every wake.
 
 If the change isn't review-worthy, skip the pack: an honest absence beats
 a hollow pack. When you do publish, the pack you emit and project *is* the
