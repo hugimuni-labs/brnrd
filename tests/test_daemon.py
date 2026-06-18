@@ -105,6 +105,56 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
+def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-quota")
+    _stub_env_isolated(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.runner_quota,
+        "describe_runner_quota",
+        lambda runner_name, _cfg, _brr_dir: (
+            "weekly 0% - resets 2026-06-17T01:29Z"
+            if runner_name == "codex"
+            else None
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def _prompt(_task, _eid, _rp, _root, **kw):
+        captured.update(kw)
+        return "PROMPT"
+
+    monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", _prompt)
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    assert captured["runner_medium"] == "codex"
+    assert captured["runner_quota"] == "weekly 0% - resets 2026-06-17T01:29Z"
+
+
 def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-2")

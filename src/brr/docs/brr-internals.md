@@ -13,13 +13,13 @@ file before guessing.
 You can tell you are running under a brr-driven invocation by the
 following signals in your prompt:
 
-- An `Event:` and/or `Task ID:` line in the metadata block.
-- A `### Delivery contract` block telling you how stdout and the task
+- An `Event:` and/or `Run ID:` line in the metadata block.
+- A `### Delivery contract` block telling you how stdout and the run
   outbox map to user-visible deliveries, plus the specific
   `.brr/responses/<event-id>.md` path used for captured stdout.
 - A `Shared runtime dir:` pointing at the main checkout's `.brr/`.
-- A generated `.brr/runs/<task-id>/context.md` file named in the
-  Task Context Bundle.
+- A generated `.brr/runs/<run-id>/context.md` file named in the
+  Run Context Bundle.
 
 When you see these, you are not in a normal interactive session. You
 are one step of a pipeline. Behave accordingly:
@@ -39,13 +39,13 @@ gitignored; do not commit its contents.
 | Folder       | Purpose                                                            |
 | ------------ | ------------------------------------------------------------------ |
 | `inbox/`     | Incoming events from gates, one markdown file per event            |
-| `tasks/`     | Task manifests, one per event (source of truth for the worker)     |
+| `tasks/`     | Legacy task manifests, one per event (source of truth for today's worker) |
 | `responses/` | Agent final responses destined for gate replies; per-event `<id>.partials/` hold queued interim replies |
 | `outbox/`    | Per-event drop zone (`<id>/`) where the resident writes interim/interleaved replies mid-thought |
 | `presence/`  | Who's awake right now — one JSON file per active thought/session, pruned on read |
 | `dominion/`  | The resident's durable working memory (worktree on the `brr-home` branch); captured at sleep |
 | `schedule/`  | Firing-state (`state.json`) for self-scheduled thoughts; specs live in the dominion's `schedule.md` |
-| `runs/`      | Generated per-task run files: `context.md` (metadata), `prompt.md` (assembled wake prompt, written on attempt 1) |
+| `runs/`      | Generated per-run files: `context.md` (metadata), `prompt.md` (assembled wake prompt, written on attempt 1) |
 | `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
 | `traces/`    | Prompt + stdout + meta per runner invocation (cleaned on success)  |
 | `reviews/`   | Reserved for explicit review artifacts; default tasks do not write here |
@@ -57,10 +57,10 @@ gitignored; do not commit its contents.
 
 ## Agent recovery surface
 
-Agents should orient from the Task Context Bundle in the prompt. When
+Agents should orient from the Run Context Bundle in the prompt. When
 they need to re-check runtime details, they should read the generated
-`.brr/runs/<task-id>/context.md` file named in the bundle. That file
-replaces the old command cheat sheet for task/event recovery.
+`.brr/runs/<run-id>/context.md` file named in the bundle. That file
+replaces the old command cheat sheet for run/event recovery.
 
 The agent does not run daemon lifecycle commands. `brr up` and
 `brr down` are managed by the human operator.
@@ -78,8 +78,8 @@ This is an opt-in developer mode, not the default daemon lifecycle. It
 watches brr's installed package files (`.py`, bundled markdown,
 `Dockerfile`, and source-layout `pyproject.toml` when visible). When a
 change is detected, the daemon re-execs the same Python command at a
-safe boundary: before starting the next pending task, or after the
-current task has produced its response, finalized, and attempted push.
+safe boundary: before starting the next pending run, or after the
+current run has produced its response, finalized, and attempted push.
 
 The same mode can be enabled with `dev_reload=true` in `.brr/config`.
 Normal `brr up` stays a stable foreground process; use an external
@@ -103,16 +103,17 @@ Use `environment` for the user-facing execution policy:
 The legacy `env` and `default_env` config keys are still accepted, but
 new config should use `environment`.
 
-Branching is no longer carried on the task file. Before env prep the
+Branching is no longer carried on the legacy task file. Before env prep the
 daemon resolves a publish plan: seed ref, optional
 `expected_publish_branch` (when the event named one), source string,
 host checkout branch as context, and an optional `expected_remote_oid`
-captured from the remote-tracking ref at task start for force-with-
+captured from the remote-tracking ref at run start for force-with-
 lease pushes. Worktree and Docker runs always start on a fresh
-`brr/<task-id>` branch sprouted from the seed ref. After the run,
-finalize records `publish_branch` + `publish_status` on the task and
+`brr/<run-id>` branch sprouted from the seed ref. The legacy id string
+may still look like `task-...` until the storage rename lands. After the run,
+finalize records `publish_branch` + `publish_status` on the manifest and
 `daemon.publish` ships that branch — via a refspec push when the
-agent kept the task branch but the event named a different expected
+agent kept the run branch but the event named a different expected
 publish target, a leased force-push when the agent rewrote the
 expected branch, or an ordinary push otherwise.
 `branch.fallback` (or the legacy spelling `branch_fallback`) controls
@@ -201,7 +202,7 @@ addresses the delivery path explicitly):
 
 - **Drop zone** — `.brr/outbox/<event-id>/`. The resident writes a
   complete markdown reply per file (staging as `*.tmp` and renaming for
-  an atomic write). The path rides the Task Context Bundle's delivery
+  an atomic write). The path rides the Run Context Bundle's delivery
   contract. The daemon also reserves `inbox.json` in this directory as a
   live view of other pending events; it is control state for the agent to
   read at plan boundaries, not a deliverable message.
@@ -298,23 +299,23 @@ separate status module.
 The daemon runs **single-flight**: one *thought* at a time, by design. A
 resident agent's continuity lives in durable memory (the dominion), not in
 throughput-parallel workers, so the local loop spawns one worker when idle
-and lets new events wait. Per-task worktree/branch isolation and the
-partitioned per-event/per-task state still hold — they let overlapping
+and lets new events wait. Per-run worktree/branch isolation and the
+partitioned per-event/per-run state still hold — they let overlapping
 thoughts (ad-hoc sessions, a second daemon) coexist without sharing a
 mutable surface, coordinated by presence rather than a lock. See
 `kb/subject-daemon.md` and `kb/design-agent-dominion.md` §4. Whether the
 daemon should grow back toward owned concurrency is an open question — see
 `kb/review-daemon-coherence-2026-06.md` §4.
 
-When a worktree-backed task finishes, the daemon inspects the
+When a worktree-backed run finishes, the daemon inspects the
 worktree's git state. If the agent left commits on the original
-`brr/<task-id>` branch and the branch plan has an auto-land target,
+`brr/<run-id>` branch and the branch plan has an auto-land target,
 that target is fast-forwarded. If there is no target, or if the agent
 created/checked out a different branch, the resulting branch is
-preserved as-is. Conflicts preserve the task branch. The worktree is
+preserved as-is. Conflicts preserve the run branch. The worktree is
 removed only on a clean success with no uncommitted/untracked
 leftovers; failures, conflicts, and dirty leftovers keep the worktree
-for inspection. Docker tasks use the same worktree-backed branch
+for inspection. Docker runs use the same worktree-backed branch
 behavior with the same outcome-aware cleanup applied to the container
 itself, and run the runner command inside the configured container
 image.

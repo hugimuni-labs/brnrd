@@ -3,9 +3,9 @@ repo root before starting — it defines workflow, conventions, kb shape,
 and guardrails for this repo. Read `kb/index.md` to understand what
 knowledge exists before making changes.
 
-If a `Task Context Bundle` follows below, you are running under the brr
+If a `Run Context Bundle` follows below, you are running under the brr
 daemon — the bundle's `Mode` section confirms the stage, source, and
-environment. The bundle is the hot path: it carries the task metadata,
+environment. The bundle is the hot path: it carries the run metadata,
 the delivery contract, the original event body, and the recent activity
 in this conversation. Read it once and orient from there.
 
@@ -43,7 +43,7 @@ see only the text.
 ## Working on a branch the task names
 
 When the task asks you to operate on an existing branch other than your
-task branch (e.g. "rebase brr/feature-x onto main"), seed your work from
+current run branch (e.g. "rebase brr/feature-x onto main"), seed your work from
 the remote tracking ref, not the local branch:
 
     git switch -c work origin/<branch>

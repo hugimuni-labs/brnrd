@@ -8,7 +8,7 @@ per-repo by dropping a file at `.brr/docs/execution-map.md`.
 ## Pipeline
 
 ```
-event (inbox) → task (persisted) → context file → run env → response → response release → kb preflight → finalize
+event (inbox) -> run manifest -> context file -> run env -> response -> response release -> kb preflight -> finalize
 ```
 
 ### 1. Event arrives
@@ -22,28 +22,32 @@ event (`schedule.py`; `at:` one-shot / `every:` interval), so a
 self-scheduled wake enters this same flow — see
 `kb/design-self-scheduled-thoughts.md`.
 
-### 2. Task created
+### 2. Run manifest created
 
 The daemon constructs a `Task` directly from the event with
-`Task.from_event` — no LLM-driven triage step. Environment policy is
-resolved deterministically from the event source and `.brr/config`.
-The task is saved to `.brr/tasks/<task-id>.md` and tracks: event ID,
+`Task.from_event` — no LLM-driven triage step. `Task`/`task_id` is the
+current storage name; the prompt and docs now frame the product unit as
+a daemon run. Environment policy is resolved deterministically from the
+event source and `.brr/config`.
+The manifest is saved to `.brr/tasks/<run-id>.md` and tracks: event ID,
 env, status, source, and manifest metadata (response path, branch
-name, worktree path, run context path, trace directories). Task files
+name, worktree path, run context path, trace directories). Manifests
 still store the concrete backend as `env`; user-facing config should
 prefer `environment`.
 
-Branch behavior is no longer carried on the task. The daemon resolves a
+Branch behavior is no longer carried on the manifest. The daemon resolves a
 branch plan before env prep: seed ref, optional auto-land target, and
 authority. Worktree and Docker runs start on a fresh `brr/<task-id>`
-branch sprouted from the seed ref. If the plan has no auto-land target,
-commits on that task branch are preserved for human routing and
+branch sprouted from the seed ref. The legacy id string still commonly
+starts with `task-`, so today's concrete branch may look like
+`brr/task-...`. If the plan has no auto-land target,
+commits on that run branch are preserved for human routing and
 published when a remote is configured. The agent can still switch to a
 named branch at runtime; brr preserves the branch it ends on.
 
 ### 3. Execution
 
-The daemon hands the task off to one of the env backends — `host`,
+The daemon hands the run off to one of the env backends — `host`,
 `worktree`, or `docker` today. Each backend prepares the working
 directory, invokes the runner, and finalizes the result. See
 [`envs.md`](envs.md) for the full breakdown: when to pick each, the
@@ -51,12 +55,12 @@ docker credential wiring, the durability contract, and the salvage
 rule.
 
 The runner receives `run.md` + recent `kb/log.md` context + daemon
-metadata (task ID, event ID, execution root, seed ref, optional
+metadata (run ID, event ID, execution root, seed ref, optional
 auto-land target, current branch, response path, interim-response outbox,
 other pending events, live `inbox.json` path, shared runtime dir,
 generated run context file).
 The bundle's delivery contract is explicit: stdout is the default terminal
-reply for the current thread, the task outbox can carry additional or
+reply for the current thread, the outbox can carry additional or
 replacement deliveries, and kb writes are optional — agents log only when
 there's something worth logging (see AGENTS.md → Knowledge base).
 
@@ -129,12 +133,12 @@ clean up.
 
 ### 5. Finalization
 
-For worktree tasks, the daemon inspects the worktree's git state. If
-the agent left commits on the original `brr/<task-id>` branch and the
+For worktree-backed runs, the daemon inspects the worktree's git state. If
+the agent left commits on the original `brr/<run-id>` branch and the
 branch plan has an auto-land target, that target is fast-forwarded.
 With no target, or when the agent moved to another branch, the branch
-is preserved as-is. If the target cannot fast-forward, the task becomes
-`conflict` and the task branch is preserved. The worktree is removed
+is preserved as-is. If the target cannot fast-forward, the run becomes
+`conflict` and the run branch is preserved. The worktree is removed
 on a clean success with nothing uncommitted left behind; failures,
 conflicts, and uncommitted/untracked leftovers keep the worktree for
 inspection.
@@ -148,22 +152,22 @@ files changed. Reload never interrupts a running worker.
 | Artifact      | Path                                        | Persists across runs                |
 | ------------- | ------------------------------------------- | ----------------------------------- |
 | Events        | `.brr/inbox/<event-id>.md`                  | Yes (until cleanup)                 |
-| Tasks         | `.brr/tasks/<task-id>.md`                   | Yes                                 |
+| Run manifests | `.brr/tasks/<run-id>.md` (legacy folder name) | Yes                              |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
 | Interim queue | `.brr/responses/<event-id>.partials/`       | Until streamed + cleaned up         |
 | Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; live `inbox.json`; removed at finalize |
 | Presence      | `.brr/presence/<id>.json`                   | While a thought/session is active; pruned on read |
 | Dominion      | `.brr/dominion/` (branch `brr-home`)        | Durable; committed at sleep, travels with the remote |
 | Schedule state | `.brr/schedule/state.json`                 | Machine-persistent (firing-state); specs live in dominion `schedule.md` |
-| Run context   | `.brr/runs/<task-id>/context.md`            | Yes                                 |
-| Wake prompt   | `.brr/runs/<task-id>/prompt.md`             | Yes — persists through success so "what did this wake see?" is always answerable |
+| Run context   | `.brr/runs/<run-id>/context.md`             | Yes                                 |
+| Wake prompt   | `.brr/runs/<run-id>/prompt.md`              | Yes — persists through success so "what did this wake see?" is always answerable |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Kept on `error` / `conflict`, removed on clean `done` |
 | Reviews       | `.brr/reviews/`                             | Reserved for explicit review artifacts; not part of the default lifecycle |
-| Worktrees     | `.brr/worktrees/<task-id>/`                 | Removed on clean success; kept on failure / conflict / uncommitted leftovers |
+| Worktrees     | `.brr/worktrees/<run-id>/`                  | Removed on clean success; kept on failure / conflict / uncommitted leftovers |
 | Gate state    | `.brr/gates/<gate>.json`                    | Yes                                 |
 | Config        | `.brr/config`                               | Yes                                 |
 
-There are no per-task kb log files. Durable project knowledge goes in
+There are no per-run kb log files. Durable project knowledge goes in
 `kb/` only when the task produced material worth preserving; `kb/log.md`
 is the curated chronological narrative, not a mandatory completion
 receipt.
