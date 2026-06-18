@@ -471,6 +471,7 @@ def _sanitize_view_for_html(view):
         display_base=_esc(view.display_base),
         detail=_esc(view.detail) if isinstance(view.detail, str) else view.detail,
         error=_esc(view.error),
+        agent_card_text=_esc(view.agent_card_text),
         phase_history=new_history,
     )
 

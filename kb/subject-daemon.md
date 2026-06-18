@@ -139,7 +139,10 @@ sessions, and the managed multi-daemon case:
   describes the user-visible side.
 - **Gate progress card state is one file per run**
   (`.brr/gates/<gate>/progress/<run-id>.json`); the render path reads
-  and writes only its own file.
+  and writes only its own file, and the run-progress projection ignores
+  conversation records that do not explicitly name that `run_id`. That
+  keeps task-era records, which lacked `run_id`, from being replayed into
+  new run cards after the run-manifest migration.
 - **Per-run artefacts** (`.brr/runs/<run-id>/run.md`, the response file
   at `.brr/responses/<event-id>.md`, trace dirs) are keyed by id.
 - **Publish** (`daemon.publish`) takes a per-branch lock keyed on the
@@ -188,7 +191,10 @@ For each pending event, the daemon:
    default branch (and any structured branch named on the event) via
    [`sync.refresh_before_run`](../src/brr/sync.py) — the seed-ref
    invariant is described in
-   [`design-git-layer-rework.md`](design-git-layer-rework.md);
+   [`design-git-layer-rework.md`](design-git-layer-rework.md). Any visible
+   sync outcome is emitted only after the `Run` exists, with that
+   `run_id`, so it remains a per-run card line rather than a thread-wide
+   anonymous record;
 3. resolves the branch plan, then creates and persists a `Run`;
 4. records the thought in the presence registry (`presence.py`,
    `.brr/presence/`) so concurrent thoughts see who's on which stream;

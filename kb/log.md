@@ -7251,3 +7251,18 @@ pre-release cues.
 
 Tracked the public runner-control release-readiness gap as GitHub issue #158,
 linked under #23.
+
+## [2026-06-18] fix | Run-scoped progress cards stop replaying task-era history
+
+Telegram status cards disappeared after the `Task` → `Run` storage cut because
+the run-progress projector still treated conversation records without
+`run_id` as belonging to every run. Long-lived Telegram threads contained old
+task-era card records, so a new `run-*` card replayed stale phase history into
+a giant Telegram HTML payload that the platform rejected.
+
+Run cards now require an explicit `run_id` match, sync outcomes are emitted
+after the `Run` exists so their card line stays run-scoped, and Telegram also
+escapes resident-authored `.card` notes before HTML rendering. `subject-daemon.md`
+records the current invariant.
+
+Tests: `pytest -q` (943 passed, 1 warning).
