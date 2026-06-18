@@ -17,21 +17,21 @@ These rules are the repository contract for any AI tool reading the repo.
 They divide into **universal** sections that apply in every stage and
 **brr-stage** material that only applies when brr's daemon, runner, or
 setup orchestrator is hosting you. When an orchestrator prompt supplies
-a narrower stage contract — the daemon's Task Context Bundle, the setup
+a narrower stage contract — the daemon's Run Context Bundle, the setup
 prompt — follow that contract for the points it addresses and keep
 AGENTS.md as the base for everything else.
 
 Three stages, and how to read this file in each:
 
 - **Ad-hoc agent session** (Cursor, Codex CLI, Claude Code, plain
-  editor with no brr in the loop). No Task Context Bundle. No
+  editor with no brr in the loop). No Run Context Bundle. No
   `.brr/conversations/`. No preflight runs on this session. Read the
   universal sections (Stewardship, Workflow → Orientation + Task types
   + Commits, Knowledge base, Artifacts, Operating rules, Self-review,
   Guardrails) plus Build and run and Code guidelines. Skip Workflow →
   *When the brr daemon runs you* — that machinery isn't in play here.
 
-- **brr daemon task.** A Task Context Bundle opens with `### Mode`
+- **brr daemon run.** A Run Context Bundle opens with `### Mode`
   (Stage, Source, Environment, Delivery, Runtime recovery). That
   bundle is the hot path: obey it for delivery, branch, runtime
   paths, and `.brr/` access — it overrides the generic workflow
@@ -221,7 +221,7 @@ author, stop and surface the conflict instead.
 ### When the brr daemon runs you
 
 Everything in this subsection applies only when you're being launched
-by `brr up` / the daemon worker — the Task Context Bundle's `### Mode`
+by `brr up` / the daemon worker — the Run Context Bundle's `### Mode`
 section confirms the stage. In an ad-hoc session (Cursor, Codex CLI,
 Claude Code without brr orchestrating), skip the subsection — the
 machinery it describes isn't in play.
@@ -247,18 +247,20 @@ Two opt-out knobs in `.brr/config`, both default-on:
   (for users sharing the daemon's checkout with active dev work).
 
 **Branch and commit nuance.** Every worktree starts on a fresh
-`brr/<task-id>` branch from the seed ref named in the bundle. If the
-bundle names an auto-land branch, staying on the task branch lets brr
+`brr/<run-id>` branch from the seed ref named in the bundle. If the
+bundle names an auto-land branch, staying on the run branch lets brr
 fast-forward that target after the run. If no auto-land branch is
-named, commit on `brr/<task-id>`; brr preserves and publishes that
-task branch for human routing when a remote is configured. Use
+named, commit on `brr/<run-id>`; brr preserves and publishes that
+run branch for human routing when a remote is configured. Use
 `git switch -c <name>` first only when the work belongs on a different
 branch. If a checkout on your chosen name collides with a concurrent
-task that picked the same name, fall back to a unique variant — the
-default `brr/<task-id>` namespace is collision-free, so this only
+run that picked the same name, fall back to a unique variant — the
+default `brr/<run-id>` namespace is collision-free, so this only
 matters if you opted out of it.
+The generated id string may still start with `task-` while the internal
+storage rename is phased; treat it as a run id in the prompt model.
 
-**Delivery and runtime recovery.** The Task Context Bundle is the hot
+**Delivery and runtime recovery.** The Run Context Bundle is the hot
 path — it carries the Mode block (stage / source / environment /
 delivery / runtime recovery), the branch plan, the recent conversation,
 and the original event body. The generated run context file (named in
