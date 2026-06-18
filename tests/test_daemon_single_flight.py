@@ -18,7 +18,7 @@ import time
 import pytest
 
 from brr import daemon
-from brr.task import Task
+from brr.run import Run
 
 from _helpers import write_repo_scaffold
 
@@ -74,7 +74,7 @@ def _run_two_events(tmp_path, monkeypatch, cfg):
             timeline.append(f"exit:{eid}")
             active["n"] -= 1
             queue[:] = [e for e in queue if e["id"] != eid]
-        return Task(id=f"task-{eid}", event_id=eid, body="x", status="done")
+        return Run(id=f"task-{eid}", event_id=eid, body="x", status="done")
 
     monkeypatch.setattr(daemon, "_run_worker", run_worker)
     monkeypatch.setattr(daemon.protocol, "set_status", lambda _e, _s: None)
@@ -141,7 +141,7 @@ def test_thought_crash_does_not_kill_daemon(tmp_path, monkeypatch):
         if eid == "evt-bad":
             raise RuntimeError("boom")
         completed.append(eid)
-        return Task(id=f"task-{eid}", event_id=eid, body="x", status="done")
+        return Run(id=f"task-{eid}", event_id=eid, body="x", status="done")
 
     monkeypatch.setattr(daemon, "_run_worker", run_worker)
     monkeypatch.setattr(daemon.protocol, "set_status", lambda _e, _s: None)
