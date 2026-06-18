@@ -492,7 +492,7 @@ def run_executor(
     return result.stdout
 
 
-# ── Task execution ───────────────────────────────────────────────────
+# ── Run execution ───────────────────────────────────────────────────
 
 
 def run_task(instruction: str) -> str:

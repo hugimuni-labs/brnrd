@@ -61,7 +61,7 @@ from . import schedule as schedule_mod
 from . import sync
 from . import updates
 from . import worktree
-from .task import Task
+from .run import Run
 
 _SCAN_INTERVAL = 3
 _BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
@@ -206,13 +206,13 @@ def _start_gates(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> list[th
 
 def publish(
     repo_root: Path,
-    task: Task,
+    task: Run,
 ) -> None:
-    """Publish the task's branch to its remote, if there are commits.
+    """Publish the run's branch to its remote, if there are commits.
 
     The publish kernel:
 
-    - The agent leaves work on a branch. ``task.meta["publish_branch"]``
+    - The agent leaves work on a branch. ``run.meta["publish_branch"]``
       names it (set by ``WorktreeEnv.finalize``).
     - Normally the agent starts on ``target_branch`` (set up by
       ``WorktreeEnv.prepare``) and commits there, so ``publish_branch``
@@ -221,11 +221,11 @@ def publish(
       published as-is.
     - Refspec fallback: if ``publish_branch`` still diverges from
       ``target_branch`` (e.g. the agent left the worktree on the
-      ``brr/<task-id>`` placeholder), push via a refspec
-      ``brr/<task-id>:refs/heads/<target>`` so the daemon never has
+      ``brr/<run-id>`` placeholder), push via a refspec
+      ``brr/<run-id>:refs/heads/<target>`` so the daemon never has
       to update the local target ref.
     - When the source ref equals ``target_branch`` AND
-      ``task.meta["expected_remote_oid"]`` is set AND the local source
+      ``run.meta["expected_remote_oid"]`` is set AND the local source
       is not an ancestor of the remote target, push with
       ``--force-with-lease`` anchored to that oid. This is the
       PR-rebase case.
@@ -245,12 +245,7 @@ def publish(
         brr_dir, task.conversation_key or "", task.event_id or "",
     )
 
-    # Compat: tasks created before the rename still carry the old key.
-    expected = (
-        task.meta.get("target_branch")
-        or task.meta.get("expected_publish_branch")
-        or None
-    )
+    expected = task.meta.get("target_branch") or None
     expected_remote_oid = task.meta.get("expected_remote_oid") or None
     # Refspec fallback: agent ended on a different branch than target.
     # Push the local source to the named remote ref without touching
@@ -315,7 +310,7 @@ def publish(
             "branch": push_branch,
             "set_upstream": set_upstream,
             "force_with_lease": force_with_lease,
-            "task_id": task.id,
+            "run_id": task.id,
         }
         if task.conversation_key:
             emit("push_started", **push_payload)
@@ -342,7 +337,7 @@ def publish(
             if task.conversation_key:
                 emit(
                     "conflict",
-                    task_id=task.id,
+                    run_id=task.id,
                     branch=push_branch,
                     publish_branch=push_branch,
                 )
@@ -393,7 +388,7 @@ def _forge_view_url(
     unparseable URL, unknown forge, missing config) returns ``None``
     and the caller emits a packet without the link. The push has
     already succeeded by the time we're here; a missing link is never
-    worth failing the task over.
+    worth failing the run over.
     """
     try:
         url = gitops.remote_url(repo_root, remote)
@@ -438,11 +433,11 @@ def _commits_since_seed(repo_root: Path, branch: str) -> list[str]:
 
 
 def _cleanup_traces_on_success(
-    brr_dir: Path, tasks_dir: Path, task: Task,
+    brr_dir: Path, runs_dir: Path, task: Run,
 ) -> None:
-    """Remove every trace dir the task accumulated on a clean ``done``.
+    """Remove every trace dir the run accumulated on a clean ``done``.
 
-    Symmetric with worktree and container cleanup: when the task
+    Symmetric with worktree and container cleanup: when the run
     finished cleanly, the durable artefacts (git commits, response
     file, kb updates) capture everything that matters. Traces only
     earn their disk footprint on ``error`` / ``conflict``, where the
@@ -458,14 +453,14 @@ def _cleanup_traces_on_success(
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
     task.meta.pop("trace_dirs", None)
-    task.save(tasks_dir)
+    task.save(runs_dir)
 
 
 # ── Sync hook helpers ────────────────────────────────────────────────
 
 
 def _branches_to_refresh(repo_root: Path, event: dict) -> list[str]:
-    """Return local branch names worth refreshing before this task.
+    """Return local branch names worth refreshing before this run.
 
     Always includes the local default branch (the typical seed for new
     work). Adds any structured event branch fields the daemon already
@@ -497,12 +492,12 @@ def _run_worker(
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
-) -> Task:
+) -> Run:
     """Run the runner for a single event, with retries.
 
-    Creates a Task from the event, persists it to .brr/tasks/,
+    Creates a Run from the event, persists it to .brr/runs/<run-id>/run.md,
     derives the conversation key, and tracks status throughout
-    execution. Returns the Task.
+    execution. Returns the Run.
 
     Every update packet rides through the local ``emit`` closure so
     ``conversation_key`` and ``event_id`` are populated automatically.
@@ -511,7 +506,7 @@ def _run_worker(
     """
     eid = event["id"]
     brr_dir = gitops.shared_brr_dir(repo_root)
-    tasks_dir = brr_dir / "tasks"
+    runs_dir = brr_dir / "runs"
     runner_name = runner.resolve_runner(repo_root)
 
     conv_key = conversations.conversation_key_for_event(event) or ""
@@ -527,7 +522,7 @@ def _run_worker(
         emit("event_received", event_id=eid, source=event.get("source", ""))
 
     if duplicate_event:
-        task = Task.from_event(event, cfg)
+        task = Run.from_event(event, cfg)
         task.conversation_key = conv_key
         task.status = "done"
         if correspondent_key:
@@ -539,12 +534,12 @@ def _run_worker(
             task.meta["deduplicated_by_event_id"] = prior_event_id
         if prior_conversation:
             task.meta["deduplicated_by_conversation_key"] = prior_conversation
-        task.save(tasks_dir)
-        emit("task_created", task_id=task.id, event_id=eid, env=task.env)
+        task.save(runs_dir)
+        emit("run_created", run_id=task.id, event_id=eid, env=task.env)
         if conv_key:
-            conversations.append_task(
+            conversations.append_run(
                 brr_dir, conv_key,
-                task_id=task.id, event_id=eid,
+                run_id=task.id, event_id=eid,
                 env=task.env, status=task.status,
             )
         body = _deduplicated_event_body()
@@ -552,17 +547,17 @@ def _run_worker(
         protocol.write_response(responses_dir, eid, body)
         _record_response_artifact(emit, task, resp_path)
         _set_event_status_if_present(event, "done")
-        emit("finalizing", task_id=task.id, stage="deduplicated")
-        emit("done", task_id=task.id, event_id=eid, publish_status="deduplicated")
+        emit("finalizing", run_id=task.id, stage="deduplicated")
+        emit("done", run_id=task.id, event_id=eid, publish_status="deduplicated")
         return task
 
-    # Refresh local refs before resolving the branch plan so the task
+    # Refresh local refs before resolving the branch plan so the run
     # seeds from a current view of the world. Computing target_branches
     # off the raw event (rather than the resolved plan) avoids a chicken-
     # and-egg loop and lets a future github-gate event for a PR comment
     # name its head branch via ``branch_target`` for free.
     sync_targets = _branches_to_refresh(repo_root, event)
-    sync_result = sync.refresh_before_task(
+    sync_result = sync.refresh_before_run(
         repo_root, target_branches=sync_targets, cfg=cfg,
     )
 
@@ -580,13 +575,13 @@ def _run_worker(
                 error=sync_result.error,
             )
 
-    task = Task.from_event(event, cfg)
+    task = Run.from_event(event, cfg)
     task.conversation_key = conv_key
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
-    task.save(tasks_dir)
+    task.save(runs_dir)
 
-    emit("task_created", task_id=task.id, event_id=eid, env=task.env)
+    emit("run_created", run_id=task.id, event_id=eid, env=task.env)
 
     # Record this thought in the presence registry so overlapping thoughts
     # (ad-hoc sessions, a second daemon) can see who's on which stream and
@@ -596,13 +591,13 @@ def _run_worker(
     presence_id: str | None = None
     try:
         presence_id = presence.register(
-            brr_dir, kind="daemon", stream=conv_key, task_id=task.id,
+            brr_dir, kind="daemon", stream=conv_key, run_id=task.id,
         )["id"]
         task.meta["presence_id"] = presence_id
     except OSError:
         presence_id = None
 
-    task.update_status("running", tasks_dir)
+    task.update_status("running", runs_dir)
     resp_path = protocol.response_path(responses_dir, eid)
     # Per-event drop zone for interim responses the resident ships
     # mid-flight (the multi-response protocol, kb/design-multi-response.md).
@@ -611,7 +606,7 @@ def _run_worker(
     outbox_dir.mkdir(parents=True, exist_ok=True)
     inbox_dir = brr_dir / "inbox"
 
-    print(f"[brr] task {task.id} (event {eid}): env={task.env}")
+    print(f"[brr] run {task.id} (event {eid}): env={task.env}")
 
     task.meta["response_path"] = str(resp_path)
     task.meta["outbox_path"] = str(outbox_dir)
@@ -630,8 +625,8 @@ def _run_worker(
             outbox_path=outbox_dir,
         )
     except RuntimeError as e:
-        print(f"[brr] task {task.id}: env setup failed: {e}")
-        task.update_status("error", tasks_dir)
+        print(f"[brr] run {task.id}: env setup failed: {e}")
+        task.update_status("error", runs_dir)
         _write_terminal_failure_response(
             emit,
             task,
@@ -640,7 +635,7 @@ def _run_worker(
             resp_path,
             f"environment setup failed: {e}",
         )
-        emit("failed", task_id=task.id, stage="env", error=str(e))
+        emit("failed", run_id=task.id, stage="env", error=str(e))
         return task
 
     run_root = env_ctx.cwd
@@ -653,11 +648,11 @@ def _run_worker(
     # the resolved image/token/worktree state is visible). Routing is
     # owner-aware (env_ctx.owner): user-owned runs default to a quiet
     # daemon log, operator-owned runs and ergonomics=off resolve to the
-    # null proxy and short-circuit. Never gates the task — every failure
+    # null proxy and short-circuit. Never gates the run — every failure
     # mode is swallowed here so a probe bug can't fail a run.
     try:
         from . import ergonomics
-        ergonomics.probe_task_prep(
+        ergonomics.probe_run_prep(
             task=task,
             repo_root=repo_root,
             brr_dir=brr_dir,
@@ -669,7 +664,7 @@ def _run_worker(
 
     emit(
         "env_prepared",
-        task_id=task.id,
+        run_id=task.id,
         env=task.env,
         branch_name=branch_name,
         seed_ref=branch_plan.seed_ref,
@@ -678,9 +673,9 @@ def _run_worker(
     )
 
     if conv_key:
-        conversations.append_task(
+        conversations.append_run(
             brr_dir, conv_key,
-            task_id=task.id, event_id=eid,
+            run_id=task.id, event_id=eid,
             env=task.env, status=task.status,
             branch_name=branch_name,
             seed_ref=branch_plan.seed_ref,
@@ -702,7 +697,7 @@ def _run_worker(
             conv_key,
             correspondent_key,
             event_id=eid,
-            task_id=task.id,
+            run_id=task.id,
             recent_limit=prompts.RECENT_CONVERSATION_MAX,
             history_groups=history_groups,
         )
@@ -716,7 +711,7 @@ def _run_worker(
             repo_root,
             related_threads=communication_snapshot.get("related_threads"),
             current_thread=conv_key,
-            current_task_id=task.id,
+            current_run_id=task.id,
             current_event_meta=event,
         )
         if forge_facet:
@@ -737,7 +732,7 @@ def _run_worker(
     # concurrent session and reconciles rather than fights (slice 5).
     present_snapshot = [
         e for e in presence.list_active(brr_dir)
-        if e.get("task_id") != task.id
+        if e.get("run_id") != task.id
     ]
 
     context_path = run_context.write_context_file(
@@ -751,12 +746,12 @@ def _run_worker(
         event_body=event_body_for_prompt,
     )
     task.meta["context_path"] = str(context_path)
-    task.save(tasks_dir)
+    task.save(runs_dir)
 
     trace_dirs: list[str] = []
     emit(
         "run_started",
-        task_id=task.id,
+        run_id=task.id,
         branch=branch_name,
         seed_ref=branch_plan.seed_ref,
         target_branch=branch_plan.target_branch,
@@ -782,7 +777,7 @@ def _run_worker(
             prompt = prompts.build_daemon_prompt(
                 task.body, eid, str(env_ctx.response_path_env), run_root,
                 outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
-                task_id=task.id,
+                run_id=task.id,
                 source=task.source or event.get("source"),
                 environment=task.env,
                 branch_name=branch_name,
@@ -810,10 +805,10 @@ def _run_worker(
             prompt = prompts.build_daemon_prompt(
                 f"Previous attempt printed no final reply on stdout. "
                 f"Print your full response as the final stdout message.\n\n"
-                f"Original task: {task.body}",
+                f"Original run instruction: {task.body}",
                 eid, str(env_ctx.response_path_env), run_root,
                 outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
-                task_id=task.id,
+                run_id=task.id,
                 source=task.source or event.get("source"),
                 environment=task.env,
                 branch_name=branch_name,
@@ -835,7 +830,7 @@ def _run_worker(
             )
 
         print(f"[brr] worker {eid}: attempt {attempt}")
-        emit("attempt_started", task_id=task.id, event_id=eid, attempt=attempt)
+        emit("attempt_started", run_id=task.id, event_id=eid, attempt=attempt)
 
         attempt_started_monotonic = time.monotonic()
 
@@ -854,7 +849,7 @@ def _run_worker(
             elapsed = int(time.monotonic() - attempt_started_monotonic)
             emit(
                 "heartbeat",
-                task_id=task.id,
+                run_id=task.id,
                 attempt=attempt,
                 elapsed_seconds=elapsed,
             )
@@ -934,17 +929,17 @@ def _run_worker(
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             if _response_has_body(resp_path):
                 _record_response_artifact(emit, task, resp_path)
-            task.update_status("done", tasks_dir)
+            task.update_status("done", runs_dir)
             _set_event_status_if_present(event, "done")
-            emit("finalizing", task_id=task.id, stage="done")
+            emit("finalizing", run_id=task.id, stage="done")
             # Per-branch lock around finalize: serialises publish on a
             # branch name so two pushers can't race it. Under single-flight
             # one daemon never contends here; the lock stays as cheap
             # insurance and a seam for a future concurrency revisit (see
             # kb/review-daemon-coherence-2026-06.md §4).
             with _branch_lock(branch_plan.target_branch):
-                task = env_backend.finalize(env_ctx, task, tasks_dir)
-            _cleanup_traces_on_success(brr_dir, tasks_dir, task)
+                task = env_backend.finalize(env_ctx, task, runs_dir)
+            _cleanup_traces_on_success(brr_dir, runs_dir, task)
             _remove_outbox(outbox_dir)
             _emit_preserved_containers(emit, task)
             # Payload carries the multi-thread delivery shape so the card
@@ -953,7 +948,7 @@ def _run_worker(
             # everything to a single current-thread reply (§8 re-alignment).
             emit(
                 "done",
-                task_id=task.id,
+                run_id=task.id,
                 event_id=eid,
                 publish_branch=task.meta.get("publish_branch"),
                 publish_status=task.meta.get("publish_status"),
@@ -968,7 +963,7 @@ def _run_worker(
         retry_reason = result.retry_reason()
         will_retry = bool(retry_reason and attempt <= max_retries)
         attempt_payload: dict[str, object] = {
-            "task_id": task.id,
+            "run_id": task.id,
             "event_id": eid,
             "attempt": attempt,
             "reason": retry_reason or (
@@ -985,7 +980,7 @@ def _run_worker(
             print(f"[brr] worker {eid}: {retry_reason}, retrying...")
             emit(
                 "retrying",
-                task_id=task.id,
+                run_id=task.id,
                 event_id=eid,
                 attempt=attempt + 1,
                 reason=retry_reason,
@@ -1002,7 +997,7 @@ def _run_worker(
         print(f"[brr] worker {eid}: gave up after {attempt} attempt(s)")
     if trace_dirs:
         task.meta["trace_dirs"] = ", ".join(trace_dirs)
-    task.update_status("error", tasks_dir)
+    task.update_status("error", runs_dir)
     failure_reason = _failure_reason(last_failure, attempt)
     _write_terminal_failure_response(
         emit,
@@ -1013,12 +1008,12 @@ def _run_worker(
         failure_reason,
     )
     # finalize first so any preserved branches / containers are recorded
-    # on the task before the failure packet renders — the failure packet
+    # on the run before the failure packet renders — the failure packet
     # is what gates see last, so its payload must be the canonical
     # explanation.
-    emit("finalizing", task_id=task.id, stage="failed")
+    emit("finalizing", run_id=task.id, stage="failed")
     with _branch_lock(branch_plan.target_branch):
-        task = env_backend.finalize(env_ctx, task, tasks_dir)
+        task = env_backend.finalize(env_ctx, task, runs_dir)
     _remove_outbox(outbox_dir)
     _emit_preserved_containers(emit, task)
     # Classify the failure for the card: §6 says the user owns the runner
@@ -1040,7 +1035,7 @@ def _run_worker(
             "timed_out" if last_failure.get("timed_out") else "runner_error"
         )
     failed_payload: dict[str, object] = {
-        "task_id": task.id,
+        "run_id": task.id,
         "event_id": eid,
         "stage": "run",
         "attempts": attempt,
@@ -1059,7 +1054,7 @@ def _run_worker(
 def _keepalive_until(keepalive_path: Path | None) -> float | None:
     """Read an agent-written keepalive into an absolute epoch deadline.
 
-    The file is a control dotfile in the task outbox carrying one line:
+    The file is a control dotfile in the run outbox carrying one line:
     an ISO-8601 timestamp ("busy until T"), or ``+<duration>`` (e.g.
     ``+30m``) interpreted from the file's mtime ("busy for N from when I
     wrote this", so re-reads don't slide). Returns epoch seconds, or
@@ -1189,7 +1184,7 @@ def _invoke_with_heartbeat(
 
 def _emit_new_containers(
     emit: _WorkerEmit,
-    task_id: str,
+    run_id: str,
     env_ctx: "envs.RunContext",
     seen: set[str],
 ) -> None:
@@ -1209,7 +1204,7 @@ def _emit_new_containers(
         seen.add(cid)
         emit(
             "container_started",
-            task_id=task_id,
+            run_id=run_id,
             env=env_ctx.name,
             container=cid,
         )
@@ -1217,7 +1212,7 @@ def _emit_new_containers(
 
 def _emit_preserved_containers(
     emit: _WorkerEmit,
-    task: Task,
+    task: Run,
 ) -> None:
     """Emit container_preserved when finalize left containers behind."""
     raw = task.meta.get("docker_containers")
@@ -1231,7 +1226,7 @@ def _emit_preserved_containers(
         containers = [str(raw)]
     if not containers:
         return
-    emit("container_preserved", task_id=task.id, containers=containers)
+    emit("container_preserved", run_id=task.id, containers=containers)
 
 
 def _pending_event_record(ev: dict) -> dict[str, object]:
@@ -1272,7 +1267,7 @@ def _write_live_inbox(
 ) -> Path | None:
     """Refresh the live inbox view exposed to the running resident.
 
-    The file sits in the task outbox because that directory is already
+    The file sits in the run outbox because that directory is already
     mounted into every daemon-run environment. It is daemon-owned control
     state, not a deliverable outbox message.
     """
@@ -1309,7 +1304,7 @@ def _find_pending_event(inbox_dir: Path | None, event_id: str) -> dict | None:
 
 def _drain_outbox(
     emit: _WorkerEmit,
-    task: Task,
+    task: Run,
     responses_dir: Path,
     event_id: str,
     outbox_dir: Path | None,
@@ -1422,14 +1417,14 @@ def _drain_outbox(
                 emit.brr_dir, artifact_key,
                 kind="interim_response",
                 path=str(ppath),
-                task_id=task.id,
+                run_id=task.id,
                 event_id=artifact_event_id,
                 label=(f"reply:{target}" if cross else f"interim:{event_id}"),
                 body=body,
             )
         emit(
             "interim_response",
-            task_id=task.id,
+            run_id=task.id,
             event_id=event_id,
             path=str(ppath),
             target_event=(target if cross else None),
@@ -1464,7 +1459,7 @@ def _delivery_source_for_gate(gate: str) -> str:
 
 def _deliver_out_of_bound(
     emit: _WorkerEmit,
-    task: Task,
+    task: Run,
     responses_dir: Path,
     inbox_dir: Path | None,
     event_id: str,
@@ -1508,7 +1503,7 @@ def _deliver_out_of_bound(
             emit.brr_dir, emit.conversation_key,
             kind="outbound_message",
             path=str(protocol.response_path(responses_dir, new_eid)),
-            task_id=task.id,
+            run_id=task.id,
             event_id=event_id,
             label=f"outbound:{gate}",
             body=body,
@@ -1518,7 +1513,7 @@ def _deliver_out_of_bound(
 
 def _drain_agent_card(
     emit: _WorkerEmit,
-    task: Task,
+    task: Run,
     event_id: str,
     card_path: Path | None,
     state: dict[str, str],
@@ -1552,7 +1547,7 @@ def _drain_agent_card(
         state["last"] = ""
         emit(
             "card_composed",
-            task_id=task.id,
+            run_id=task.id,
             event_id=event_id,
             text="",
         )
@@ -1573,7 +1568,7 @@ def _drain_agent_card(
     state["last"] = body
     emit(
         "card_composed",
-        task_id=task.id,
+        run_id=task.id,
         event_id=event_id,
         text=body,
     )
@@ -1667,7 +1662,7 @@ def _retire_internal_event(event: dict, responses_dir: Path) -> bool:
 def _capture_dominion(
     repo_root: Path,
     cfg: dict,
-    task: Task,
+    task: Run,
 ) -> None:
     """Commit whatever the resident wrote into its dominion this thought.
 
@@ -1691,7 +1686,7 @@ def _capture_dominion(
     )
     committed = dominion.commit(
         dominion.dominion_path(repo_root),
-        f"brr-home: capture working memory after task {task.id}",
+        f"brr-home: capture working memory after run {task.id}",
         remote=remote,
         branch=branch,
         push=push and bool(remote),
@@ -1702,7 +1697,7 @@ def _capture_dominion(
 
 def _record_response_artifact(
     emit: _WorkerEmit,
-    task: Task,
+    task: Run,
     response_path: Path,
 ) -> None:
     """Index the response artifact on the conversation log."""
@@ -1718,14 +1713,14 @@ def _record_response_artifact(
             emit.brr_dir, emit.conversation_key,
             kind="response",
             path=str(response_path),
-            task_id=task.id,
+            run_id=task.id,
             event_id=emit.event_id,
             label=label,
             body=body,
         )
     emit(
         "artifact_created",
-        task_id=task.id,
+        run_id=task.id,
         kind="response",
         path=str(response_path),
     )
@@ -1817,7 +1812,7 @@ def _deduplicated_event_body() -> str:
 
 def _write_terminal_failure_response(
     emit: _WorkerEmit,
-    task: Task,
+    task: Run,
     event: dict,
     responses_dir: Path,
     response_path: Path,
@@ -1825,7 +1820,7 @@ def _write_terminal_failure_response(
 ) -> bool:
     """Queue a terminal failure note for addressed events.
 
-    The task record still stays ``error``; only the inbox event moves to
+    The run record still stays ``error``; only the inbox event moves to
     ``done`` so the gate has a message to deliver and a cleanup signal.
     """
     if not _event_requires_thread_delivery(event):
@@ -1857,8 +1852,8 @@ def _run_worker_and_finalize(
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
-) -> Task:
-    """Run one event end-to-end and return the resulting Task.
+) -> Run:
+    """Run one event end-to-end and return the resulting Run.
 
     Owns the full pipeline for one event: run the runner, capture
     response, perform post-response housekeeping, and push to remote.
@@ -1876,7 +1871,7 @@ def _run_worker_and_finalize(
         if event.get("status") != "done":
             _set_event_status_if_present(event, task.status)
         if task.status == "error":
-            print(f"[brr] task {task.id}: failed")
+            print(f"[brr] run {task.id}: failed")
 
         publish(repo_root, task)
         _retire_internal_event(event, responses_dir)
@@ -1907,7 +1902,7 @@ def start(
     boundaries, or the next spawn picks them up). The worker still runs
     off the main thread, so the loop stays responsive to dev-reload,
     gate-thread liveness, and shutdown while a long thought runs. The
-    per-task worktree/branch isolation and partitioned state survive from
+    per-run worktree/branch isolation and partitioned state survive from
     the former parallel design — see ``kb/subject-daemon.md`` and
     ``kb/design-agent-dominion.md`` §4.
 
@@ -1917,7 +1912,7 @@ def start(
 
     *dev_reload* enables the brr-development re-exec watcher.  When
     ``None``, falls back to the ``dev_reload`` key in ``.brr/config``.
-    Reload waits until the in-flight thought drains so no running task
+    Reload waits until the in-flight thought drains so no running run
     has its process replaced underneath it.
     """
     brr_dir = gitops.shared_brr_dir(repo_root)
@@ -2007,13 +2002,13 @@ def start(
                 try:
                     current.result()
                 except Exception as exc:  # noqa: BLE001
-                    # The thought crashed before returning a Task; the
+                    # The thought crashed before returning a Run; the
                     # operator sees the traceback in the daemon console.
                     print(f"[brr] thought crashed: {exc}")
                 current = None
 
             # Quiescent reload: only re-exec between thoughts, so a
-            # running task can't have its process replaced underneath it.
+            # running run can't have its process replaced underneath it.
             if reload_requested and current is None:
                 print("[brr] package files changed; re-execing daemon")
                 pool.shutdown(wait=True)

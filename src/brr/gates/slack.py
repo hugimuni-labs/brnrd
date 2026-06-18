@@ -17,7 +17,7 @@ from typing import Any
 import requests
 
 from .. import protocol, run_progress
-from ..task import Task
+from ..run import Run, run_manifest_path
 from . import runtime
 
 _POLL_INTERVAL = 5
@@ -62,14 +62,14 @@ def _save_state(brr_dir: Path, state: dict) -> None:
     runtime.save_state(brr_dir, "slack", state)
 
 
-def _load_progress_for_task(brr_dir: Path, task_id: str) -> dict | None:
-    """Return this task's previously-rendered card state, or None."""
-    return runtime.load_task_card(brr_dir, "slack", task_id)
+def _load_progress_for_run(brr_dir: Path, run_id: str) -> dict | None:
+    """Return this run's previously-rendered card state, or None."""
+    return runtime.load_run_card(brr_dir, "slack", run_id)
 
 
-def _save_progress_for_task(brr_dir: Path, task_id: str, entry: dict) -> None:
-    """Write this task's card state file (atomic via rename)."""
-    runtime.save_task_card(brr_dir, "slack", task_id, entry)
+def _save_progress_for_run(brr_dir: Path, run_id: str, entry: dict) -> None:
+    """Write this run's card state file (atomic via rename)."""
+    runtime.save_run_card(brr_dir, "slack", run_id, entry)
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -213,7 +213,7 @@ def _deliver_responses(
 
 
 _RENDERABLE_PACKETS = {
-    "task_created",
+    "run_created",
     "env_prepared",
     "container_started",
     "container_preserved",
@@ -235,7 +235,7 @@ _RENDERABLE_PACKETS = {
 def render_update(brr_dir: Path, packet: Any) -> None:
     """Send/edit a Slack progress card for *packet*.
 
-    On ``task_created`` we post a thread reply in the originating
+    On ``run_created`` we post a thread reply in the originating
     channel/thread and store the resulting ``ts`` so later packets can
     update the same message via ``chat.update``. Failures are swallowed
     — the daemon must keep running even if Slack is misconfigured.
@@ -250,11 +250,11 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         return
 
     conv_key = getattr(packet, "conversation_key", "") or ""
-    task_id = run_progress.task_id_from_packet(packet)
-    if not conv_key or not task_id:
+    run_id = run_progress.run_id_from_packet(packet)
+    if not conv_key or not run_id:
         return
 
-    task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
+    task = Run.from_file(run_manifest_path(brr_dir / "runs", run_id))
     if task is None or task.source != "slack":
         return
     channel = task.meta.get("slack_channel") or state.get("channel")
@@ -262,19 +262,19 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         return
     thread_ts = task.meta.get("slack_thread_ts") or task.meta.get("slack_ts")
 
-    view = run_progress.project_task(brr_dir, conv_key, task_id)
+    view = run_progress.project_run(brr_dir, conv_key, run_id)
     if view is None:
         return
     text = run_progress.render_text(
         view, compact=True, style=run_progress.SLACK_MRKDWN_STYLE,
     )
 
-    entry = _load_progress_for_task(brr_dir, task_id)
+    entry = _load_progress_for_run(brr_dir, run_id)
 
     if entry and entry.get("last_text") == text:
         # Identical to the last rendered message — skip the round-trip.
         entry["last_render"] = ptype
-        _save_progress_for_task(brr_dir, task_id, entry)
+        _save_progress_for_run(brr_dir, run_id, entry)
         return
 
     try:
@@ -287,7 +287,7 @@ def render_update(brr_dir: Path, packet: Any) -> None:
                 })
                 entry["last_render"] = ptype
                 entry["last_text"] = text
-                _save_progress_for_task(brr_dir, task_id, entry)
+                _save_progress_for_run(brr_dir, run_id, entry)
                 return
             except Exception:
                 # The message is genuinely gone (deleted, expired, etc.).
@@ -300,7 +300,7 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         ts = resp.get("ts")
         if not ts:
             return
-        _save_progress_for_task(brr_dir, task_id, {
+        _save_progress_for_run(brr_dir, run_id, {
             "channel": channel,
             "thread_ts": thread_ts,
             "ts": ts,

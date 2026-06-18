@@ -7,17 +7,17 @@ them to the configured proxy.
 
 Three contracts, from the design:
 
-- **Never gate the task.** A probe raising is swallowed; an
+- **Never gate the run.** A probe raising is swallowed; an
   ``error``-severity finding is a signal, not a refusal to run.
 - **Cheap.** O(ms) each; the heaviest is a single ``docker image
   inspect``. No probe spawns a container or hits the network.
 - **The vantage rule bounds the set.** Every probe observes a
   host/operator-vantage fact — something the sandboxed agent can't see
-  for itself (a host file, cross-task state, pre-run resolution,
+  for itself (a host file, cross-run state, pre-run resolution,
   installed-version drift). Anything the agent *can* check itself is
   reflection's job, not a probe's.
 
-Routing is owner-aware: ``probe_task_prep`` resolves the proxy from
+Routing is owner-aware: ``probe_run_prep`` resolves the proxy from
 ``RunContext.owner`` plus the ``ergonomics`` knob. The user-owned
 default (``LogErgoProxy``) means probes run for everyone and surface
 ``warn``+ to the daemon log; ``ergonomics=off`` resolves to
@@ -25,7 +25,7 @@ default (``LogErgoProxy``) means probes run for everyone and surface
 pays nothing.
 
 Probes run host-side on the daemon, so env-sensitive checks are scoped
-by ``ctx.name``. In-container probing for docker tasks is deferred — it
+by ``ctx.name``. In-container probing for docker runs is deferred — it
 needs a probe container (breaks the O(ms) contract) and most
 in-container facts are agent-vantage anyway.
 """
@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from ..task import Task
+from ..run import Run
 from ..envs import RunContext
 from .record import Record
 from .proxy import ErgoProxy, NullErgoProxy, resolve_proxy
@@ -63,7 +63,7 @@ class Finding:
 
 @dataclass
 class ProbeContext:
-    task: Task
+    task: Run
     repo_root: Path
     brr_dir: Path
     cfg: dict[str, Any]
@@ -74,7 +74,7 @@ class ProbeContext:
 
 
 def probe_github_auth(p: ProbeContext) -> list[Finding]:
-    """Docker tasks need an injected token; the container can't reach
+    """Docker runs need an injected token; the container can't reach
     the host keyring. If github is in play and ``DockerEnv.prepare``
     resolved no token, gh CLI and HTTPS push will silently be
     unauthenticated — the exact confusion the design was born from.
@@ -164,7 +164,7 @@ def probe_worktree_buildup(p: ProbeContext) -> list[Finding]:
                 "threshold": threshold,
                 "paths": [str(w.path) for w in worktrees[:20]],
                 "hint": (
-                    "leftover task worktrees are piling up (kept on "
+                    "leftover run worktrees are piling up (kept on "
                     "failure/dirty exit). Inspect and remove stale ones to "
                     "reclaim space and cut noise."
                 ),
@@ -243,7 +243,7 @@ def probe_doc_drift(p: ProbeContext) -> list[Finding]:
     ]
 
 
-# Order is presentation-only; all probes run every task-prep. Every
+# Order is presentation-only; all probes run every run-prep. Every
 # probe here observes a host/operator-vantage fact (the vantage rule in
 # kb/design-agent-ergonomics.md): something the agent in its sandbox
 # structurally can't see for itself. Checks the agent *can* run itself
@@ -261,15 +261,15 @@ _PROBES: tuple[Callable[[ProbeContext], list[Finding]], ...] = (
 # ── orchestration ───────────────────────────────────────────────────
 
 
-def probe_task_prep(
+def probe_run_prep(
     *,
-    task: Task,
+    task: Run,
     repo_root: Path,
     brr_dir: Path,
     cfg: dict[str, Any],
     ctx: RunContext,
 ) -> list[Record]:
-    """Resolve the proxy (owner-aware) and run the task-prep probe set.
+    """Resolve the proxy (owner-aware) and run the run-prep probe set.
 
     Short-circuits to an empty result on ``NullErgoProxy`` — i.e.
     ``ergonomics=off`` or an operator-owned run — so those paths run no
@@ -295,7 +295,7 @@ def probe_task_prep(
 
 def run_probes(
     *,
-    task: Task,
+    task: Run,
     repo_root: Path,
     brr_dir: Path,
     cfg: dict[str, Any],
@@ -304,7 +304,7 @@ def run_probes(
 ) -> list[Record]:
     """Run every probe, emit findings to *proxy*, return the records.
 
-    Exposed separately from ``probe_task_prep`` so tests can drive it
+    Exposed separately from ``probe_run_prep`` so tests can drive it
     with an explicit (non-null) proxy without touching config.
     """
     from .. import __version__
@@ -314,7 +314,7 @@ def run_probes(
     )
     envelope = {
         "project_id": _project_id(repo_root),
-        "task_id": task.id,
+        "run_id": task.id,
         "env": ctx.name,
         "image": ctx.env_state.get("docker_image"),
         "source": task.source or None,
@@ -345,7 +345,7 @@ def run_probes(
 # ── helpers ─────────────────────────────────────────────────────────
 
 
-def _github_in_play(task: Task, brr_dir: Path) -> bool:
+def _github_in_play(task: Run, brr_dir: Path) -> bool:
     if (task.source or "") == "github":
         return True
     return (brr_dir / "gates" / "github.json").exists()

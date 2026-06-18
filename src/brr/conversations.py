@@ -14,16 +14,16 @@ Runtime layout::
             <event-id>.jsonl    — append-only records for one pipeline run
 
 Each ``<event-id>.jsonl`` file has exactly one writer for its lifetime:
-the worker handling that one event/task pipeline. This per-event-
+the worker handling that event-led run pipeline. This per-event-
 pipeline partitioning keeps overlapping thoughts (ad-hoc sessions, a
 second daemon) contention-free without per-shared-file locks — see
 ``kb/subject-daemon.md``.
 
 Each record carries ``ts`` (microsecond-precision UTC ISO 8601) plus a
-``kind`` discriminator (``event``, ``task``, ``artifact``, ``update``)
+``kind`` discriminator (``event``, ``run``, ``artifact``, ``update``)
 plus type-specific fields. Dialogue records carry inline ``body`` text
 so the resident can read the prior chat without chasing response files.
-Reading projects one task's lifecycle by opening just its
+Reading projects one run's lifecycle by opening just its
 ``<event-id>.jsonl``; reading the full conversation context merges every
 file in the directory by ``ts``. Tailing only the latest rows uses
 ``read_recent``, which avoids loading whole files when *limit* is small
@@ -270,7 +270,7 @@ def conversation_key_for_event(event: dict[str, Any]) -> str | None:
 
 
 _SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
-_LIFECYCLE_KINDS = {"task", "update"}
+_LIFECYCLE_KINDS = {"run", "update"}
 _DIALOGUE_ARTIFACT_KINDS = {"response", "interim_response", "outbound_message"}
 # Anchor for records that arrive on a conversation without an
 # associated event id (mis-emitted packets or orphan tests). The
@@ -744,13 +744,13 @@ def _without_current_records(
     records: list[dict[str, Any]],
     *,
     event_id: str = "",
-    task_id: str = "",
+    run_id: str = "",
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for record in records:
         if event_id and record.get("event_id") == event_id:
             continue
-        if task_id and record.get("task_id") == task_id:
+        if run_id and record.get("run_id") == run_id:
             continue
         out.append(record)
     return out
@@ -804,7 +804,7 @@ def build_communication_snapshot(
     correspondent_key: str | None = None,
     *,
     event_id: str = "",
-    task_id: str = "",
+    run_id: str = "",
     recent_limit: int = 8,
     history_groups: list[HistoryGroup] | None = None,
 ) -> CommunicationSnapshot:
@@ -830,7 +830,7 @@ def build_communication_snapshot(
         merged.extend(records)
     merged.sort(key=_ts_key)
     prior = _without_current_records(
-        merged, event_id=event_id, task_id=task_id,
+        merged, event_id=event_id, run_id=run_id,
     )
     recent_turns = _select_snapshot_turns(prior, limit=recent_limit)
 
@@ -914,7 +914,7 @@ def read_recent(
     """Return the recent prompt-facing tail, oldest first.
 
     By default the tail is kind-aware: dialogue records are selected and
-    lifecycle ``task``/``update`` rows are dropped, so bursts of progress
+    lifecycle ``run``/``update`` rows are dropped, so bursts of progress
     packets cannot evict user/agent turns from the next prompt. Pass
     ``include_lifecycle=True`` for the raw historical tail.
 
@@ -963,7 +963,7 @@ def read_event_records(
 ) -> list[dict[str, Any]]:
     """Return the records for one event pipeline only.
 
-    Cheaper than ``read_records`` followed by a task-id filter because
+    Cheaper than ``read_records`` followed by a run-id filter because
     we open exactly the one file the pipeline wrote to.
     """
     path = event_log_path(brr_dir, key, event_id)
@@ -1000,11 +1000,11 @@ def append_event(brr_dir: Path, key: str, event: dict[str, Any]) -> None:
     append_record(brr_dir, key, record, event_id=eid)
 
 
-def append_task(
+def append_run(
     brr_dir: Path,
     key: str,
     *,
-    task_id: str,
+    run_id: str,
     event_id: str,
     env: str,
     status: str,
@@ -1014,10 +1014,10 @@ def append_task(
     branch_source: str | None = None,
     host_context_branch: str | None = None,
 ) -> None:
-    """Record a task lifecycle row on the conversation log."""
+    """Record a run lifecycle row on the conversation log."""
     record = {
-        "kind": "task",
-        "task_id": task_id,
+        "kind": "run",
+        "run_id": run_id,
         "event_id": event_id,
         "branch_name": branch_name,
         "env": env,
@@ -1040,7 +1040,7 @@ def append_artifact(
     *,
     kind: str,
     path: str,
-    task_id: str | None = None,
+    run_id: str | None = None,
     event_id: str = "",
     label: str | None = None,
     body: str | None = None,
@@ -1052,8 +1052,8 @@ def append_artifact(
         "artifact_kind": kind,
         "path": path,
     }
-    if task_id:
-        record["task_id"] = task_id
+    if run_id:
+        record["run_id"] = run_id
     if event_id:
         record["event_id"] = event_id
     if label:
@@ -1107,11 +1107,11 @@ def list_conversations(brr_dir: Path) -> list[str]:
 # ── Convenience ──────────────────────────────────────────────────────
 
 
-def records_for_task(
-    brr_dir: Path, key: str, task_id: str,
+def records_for_run(
+    brr_dir: Path, key: str, run_id: str,
 ) -> list[dict[str, Any]]:
-    """Return all records mentioning *task_id* in this conversation."""
+    """Return all records mentioning *run_id* in this conversation."""
     return [
         record for record in read_records(brr_dir, key)
-        if record.get("task_id") == task_id
+        if record.get("run_id") == run_id
     ]

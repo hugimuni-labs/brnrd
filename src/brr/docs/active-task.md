@@ -56,8 +56,7 @@ knowledge, and agents should not edit it.
 ## Branching
 
 You start on a fresh `brr/<run-id>` branch sprouted from the seed ref
-named in the Run Context Bundle. The legacy id string may still look like
-`task-...` while the internal storage rename is phased. Three valid
+named in the Run Context Bundle. New run IDs start with `run-`. Three valid
 outcomes:
 
 - **Q&A / read-only** — answer in the response file and stop. No
