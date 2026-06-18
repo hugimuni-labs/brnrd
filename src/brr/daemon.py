@@ -563,23 +563,24 @@ def _run_worker(
 
     branch_plan = branching.resolve_publish_plan(repo_root, event, cfg)
 
+    task = Run.from_event(event, cfg)
+    task.conversation_key = conv_key
+    if correspondent_key:
+        task.meta["correspondent_key"] = correspondent_key
+    task.save(runs_dir)
+
     if conv_key:
         sync_summary = sync.render_summary(sync_result)
         if sync_summary or sync_result.error:
             emit(
                 "synced",
+                run_id=task.id,
                 event_id=eid,
                 summary=sync_summary,
                 ff_branches=dict(sync_result.ff_branches),
                 skipped=dict(sync_result.skipped),
                 error=sync_result.error,
             )
-
-    task = Run.from_event(event, cfg)
-    task.conversation_key = conv_key
-    if correspondent_key:
-        task.meta["correspondent_key"] = correspondent_key
-    task.save(runs_dir)
 
     emit("run_created", run_id=task.id, event_id=eid, env=task.env)
 
