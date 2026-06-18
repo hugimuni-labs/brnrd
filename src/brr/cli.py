@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser(
         "docs", help="read bundled tool docs (omit topic to list)")
     p.add_argument("topic", nargs="?", default=None,
-                   help="doc topic to print (e.g. cockpit, execution-map)")
+                   help="doc topic to print (e.g. portals, execution-map)")
     p.set_defaults(func=cmd_docs)
 
     agent_p = sub.add_parser(
