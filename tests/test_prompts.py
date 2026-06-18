@@ -885,7 +885,10 @@ class TestIntrospectionMode:
         )
         # The two halves the tone must hold: regard for the existing shape
         # before judging it, and surfacing what's found to the user as
-        # dialogue rather than a silent edit.
+        # dialogue rather than a silent edit. The current dev-mode prompt
+        # also carries the cockpit and pre-release cutting stance.
         assert "without flinching" in text
         assert "say it to" in text.lower()
         assert "silent edit" in text
+        assert "resident's cockpit" in text
+        assert "pre-release" in text
