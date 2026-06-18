@@ -612,7 +612,7 @@ def _build_run_context_bundle(
     sections.append(
         "These are the per-run *values* and the operative rules. The full "
         "control-file protocol and the shape of an average daemon run live in "
-        "the cockpit manual — run `brr docs cockpit` when a step is unfamiliar. "
+        "the portals manual — run `brr docs portals` when a step is unfamiliar. "
         "Use the available surfaces to stay in the conversation: keep visible "
         "state honest, and fold queued input at plan boundaries when it belongs "
         "in this run."
