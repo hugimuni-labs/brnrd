@@ -239,6 +239,18 @@ class TestPromptBuilding:
         )
         assert "- Runner:" not in prompt
 
+    def test_daemon_prompt_surfaces_runner_quota_when_known(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            task_id="task-9",
+            runner_medium="codex",
+            runner_quota="weekly 0% - resets 2026-06-17T01:29Z",
+        )
+        assert (
+            "- Runner: codex (weekly 0% - resets 2026-06-17T01:29Z)"
+            in prompt
+        )
+
     def test_daemon_prompt_includes_outbox_contract_when_given(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
@@ -397,16 +409,17 @@ class TestPromptBuilding:
             branch_name="feat/task-abstraction",
             seed_ref="feat/task-abstraction",
             branch_source="event:target_branch",
-            branch_setup_notice="target branch held elsewhere; using task branch",
+            branch_setup_notice="target branch held elsewhere; using run branch",
             runtime_dir="/repo/.brr",
             context_path="/repo/.brr/runs/task-123/context.md",
         )
-        assert "Task ID: task-123" in prompt
+        assert "Run ID: task-123" in prompt
+        assert "Legacy task id: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
         assert "Seed ref: feat/task-abstraction" in prompt
         assert "Current branch: feat/task-abstraction" in prompt
         assert (
-            "Branch setup: target branch held elsewhere; using task branch"
+            "Branch setup: target branch held elsewhere; using run branch"
             in prompt
         )
         assert "Shared runtime dir: /repo/.brr" in prompt
@@ -433,7 +446,7 @@ class TestPromptBuilding:
             context_path="/repo/.brr/runs/task-123/context.md",
         )
         assert "### Mode" in prompt
-        assert "Stage: brr daemon task" in prompt
+        assert "Stage: brr daemon run" in prompt
         assert "Source: telegram" in prompt
         assert "Environment: docker" in prompt
         assert "Delivery: stdout captured by brr" in prompt
@@ -458,7 +471,7 @@ class TestPromptBuilding:
             task_id="task-9",
         )
         assert "### Mode" in prompt
-        assert "Stage: brr daemon task" in prompt
+        assert "Stage: brr daemon run" in prompt
         assert "Delivery: stdout captured by brr" in prompt
         assert "Source:" not in prompt
         assert "Environment:" not in prompt
@@ -542,14 +555,14 @@ class TestPromptBuilding:
             recent_conversation=recent,
             event_body="please fix the login flow",
         )
-        assert "Task Context Bundle" in prompt
+        assert "Run Context Bundle" in prompt
         assert "Recent in this conversation" in prompt
         assert "earlier ping" in prompt
         assert "task-prev" in prompt
         assert "update done" in prompt
         assert "Original event body" in prompt
         assert "please fix the login flow" in prompt
-        assert "Task ID: task-123" in prompt
+        assert "Run ID: task-123" in prompt
         assert f"Execution root: {tmp_path}" in prompt
         assert "Seed ref: feat/task" in prompt
         assert "Workstream" not in prompt
@@ -801,7 +814,7 @@ class TestRevisitSignalGuardrails:
 
 class TestDaemonModeGuardrails:
     """Pin the run.md changes that route daemon runners through the
-    Task Context Bundle's Mode block and treat the run context file as
+    Run Context Bundle's Mode block and treat the run context file as
     recovery detail rather than routine reading.  See
     `kb/research-cursor-orientation-ergonomics-2026-05-16.md` and
     `kb/plan-agent-orientation-layering.md`."""
