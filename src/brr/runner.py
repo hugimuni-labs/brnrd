@@ -1,12 +1,13 @@
-"""Runner — shell out to AI CLIs, one task at a time.
+"""Runner — shell out to AI CLIs, one run at a time.
 
 brr doesn't do AI work itself. It delegates to whatever runner CLI the
 user has installed (claude, codex, gemini, or any command on PATH).
-Profiles are defined in ``prompts/runners.md``; prompt assembly lives
-in :mod:`brr.prompts`. This module is the plumbing: runner detection,
+Profiles are project-owned data (``.brr/runners.md``), with bundled
+defaults kept for first-run convenience. Prompt assembly lives in
+:mod:`brr.prompts`. This module is the plumbing: runner detection,
 ``RunnerInvocation`` and ``RunnerResult`` types, subprocess execution,
-trace persistence, and the ``TaskRunner`` class for serial task
-execution in a background thread.
+trace persistence, and the ``TaskRunner`` class for serial execution in
+a background thread.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from typing import Any
 
 
 _profiles_cache: dict[str, dict[str, Any]] | None = None
+_profiles_cache_key: str | None = None
 
 _active_proc: subprocess.Popen | None = None
 _proc_lock = threading.Lock()
@@ -222,18 +224,47 @@ class RunnerResult:
         )
 
 
-def _load_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
-    """Load runner profiles from prompts/runners.md."""
-    global _profiles_cache
-    if _profiles_cache is not None:
-        return _profiles_cache
-    from . import prompts, protocol
+def _profiles_source(repo_root: Path | None = None) -> tuple[str, str]:
+    """Return ``(cache_key, frontmatter)``, preferring project-owned data."""
+    from . import prompts
 
-    text = prompts.read_prompt("runners.md", repo_root)
+    if repo_root:
+        from . import gitops
+
+        try:
+            brr_dir = gitops.shared_brr_dir(repo_root)
+        except Exception:  # noqa: BLE001 - non-repo invocations use bundled defaults
+            brr_dir = repo_root / ".brr"
+        project_profiles = brr_dir / "runners.md"
+        if project_profiles.exists():
+            return (
+                str(project_profiles.resolve()),
+                project_profiles.read_text(encoding="utf-8"),
+            )
+        legacy_prompt_profiles = brr_dir / "prompts" / "runners.md"
+        if legacy_prompt_profiles.exists():
+            return (
+                str(legacy_prompt_profiles.resolve()),
+                legacy_prompt_profiles.read_text(encoding="utf-8"),
+            )
+    return ("bundled:runners.md", prompts.read_prompt("runners.md", None))
+
+
+def _load_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Load runner profiles from project data or bundled defaults."""
+    global _profiles_cache, _profiles_cache_key
+    key, text = _profiles_source(repo_root)
+    if _profiles_cache is not None and (
+        _profiles_cache_key is None or _profiles_cache_key == key
+    ):
+        return _profiles_cache
+    from . import protocol
+
     if text:
         _profiles_cache = protocol.parse_frontmatter(text)
     else:
         _profiles_cache = {}
+    _profiles_cache_key = key
     return _profiles_cache
 
 
@@ -290,11 +321,12 @@ def _build_cmd(
     runner_name: str,
     prompt: str,
     cfg: dict[str, Any],
+    repo_root: Path | None = None,
 ) -> list[str]:
     """Build subprocess argv for a built-in or named runner.
 
-    Each runner is invoked headless with approvals bypassed (see
-    ``prompts/runners.md``) and prints its final reply on stdout. brr
+    Each runner is invoked headless with approvals bypassed (see the
+    bundled/default runner profiles) and prints its final reply on stdout. brr
     captures stdout and writes it to the invocation's response file —
     runners do not need to be told where the response file lives.
     """
@@ -307,7 +339,7 @@ def _build_cmd(
             return _replace_placeholders(custom)
         return _replace_placeholders(shlex.split(str(custom)))
 
-    profile = _load_profiles().get(runner_name)
+    profile = _load_profiles(repo_root).get(runner_name)
     if profile:
         cmd = shlex.split(str(profile.get("cmd", runner_name)))
         cmd.append(prompt)
@@ -412,7 +444,7 @@ def invoke_runner(
     """
     global _active_proc
     cfg = cfg or {}
-    cmd = _build_cmd(runner_name, invocation.prompt, cfg)
+    cmd = _build_cmd(runner_name, invocation.prompt, cfg, invocation.repo_root)
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
     stdout = ""
     stderr = ""
