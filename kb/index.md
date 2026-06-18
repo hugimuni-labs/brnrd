@@ -239,6 +239,16 @@ dive-in map) and are stable until something contradicts them.
   (Loop C) — plus a budget-aware self-chunking discipline. Ships A1
   (medium in the wake bundle), the first A2 quota snapshot ingress, and
   the diffense de-firehose first.
+- [Portal grammar & the reconcile/projection layer](design-portal-grammar.md) —
+  *direction settled in conversation (2026-06-18), not yet built; seed for
+  [#159](https://github.com/Gurio/brr/issues/159), sequenced after #148*.
+  Names two shapes the "interrupts as portals" conversation converged on:
+  the **reconcile/projection layer** above the gate (two reconcile
+  semantics — append-log vs desired-state — × N transports, gate stays a
+  thin pipe) and the **portal grammar** (the generated stream *is* the
+  surface; inbound/outbound/parked portals subsume the dotfile control
+  protocol). Drops the "dashboard"/"cockpit" nouns; lists the shapes to
+  change once the re-skin lands.
 
 ## Conversations & responses
 

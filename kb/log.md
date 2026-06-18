@@ -7280,3 +7280,28 @@ progress records, and `test_run.py` coverage.
 Check: deterministic kb preflight (broken-link findings cleared;
 pre-existing oversized-page, hub-coverage, and proposal-scaffolding
 advisories remain).
+
+## [2026-06-18] design | Portal grammar & reconcile/projection layer direction recorded
+
+The multi-turn "interrupts as portals / make the output be the surface"
+Telegram conversation reached a settled direction, and the maintainer
+confirmed all four decisions, asking that they be noted down for a future
+wake to pick up.
+
+Promoted the synthesis from the dominion thread-of-record to
+`design-portal-grammar.md` (the design seed for #159) and linked it from
+`index.md` under Runs & branching. It records: the gate stays a thin
+transport while the unnamed **reconcile/projection layer** above it gets
+named (two reconcile semantics — append-log vs desired-state — orthogonal
+to transport, × N transports); the **portal grammar** where the generated
+stream itself is the surface (inbound/outbound/parked portals subsuming
+the dotfile control protocol, with the run mailbox as the transport for
+parked portals that outlive a wake); #148 ships first because the portal
+grammar is a re-skin best designed after 148 is dogfooded; and a "shapes
+to change" section for the later re-skin.
+
+Surfaced one contradiction: dropping "cockpit" is heavier than dropping
+"dashboard" — "cockpit" is shipped surface (`brr docs cockpit`,
+`src/brr/docs/cockpit.md`, the dominion `cockpit.md`), so it is a
+migration with a code/command edge, left as an open question on the page.
+No code yet; #148 implementation is the next-event work.
