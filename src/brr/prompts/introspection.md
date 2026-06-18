@@ -16,11 +16,12 @@ load-bearing, and what is only habit no one has looked at in a while? What is
 assumed but never said, or implied but never chosen — and is it better surfaced,
 or better left for you to find each time?
 
-Also notice what belongs in the resident's cockpit rather than in a one-off
-reply: sticky orientation handles, queued user or channel state, runner/tool
-injections, reminders to inspect a side channel, and anything else that would
-help a future wake start with a live dashboard instead of reconstructing the
-scene from scattered prose. Name those candidates when they appear.
+Also notice what belongs in a standing portal — the run's live surface —
+rather than in a one-off reply: sticky orientation handles, queued user or
+channel state, runner/tool injections, reminders to inspect a side channel, and
+anything else that would help a future wake start from a live surface instead of
+reconstructing the scene from scattered prose. Name those candidates when they
+appear.
 
 While this block is present, treat the project as pre-release. Bias toward
 cutting obsolete code, names, compatibility shims, and concepts that no longer
