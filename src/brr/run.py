@@ -1,12 +1,13 @@
-"""Task — the unit of work between an event and execution.
+"""Run — one runner invocation over one or more events.
 
-An event arrives via a gate (Telegram, Slack, Git, etc.). brr converts
-it into a ``Task`` mechanically (no LLM step) and hands it to the env
-backend for execution. Branching decisions belong to the agent at run
-time; the daemon just owns env preparation and cleanup.
+An event arrives via a gate (Telegram, Slack, Git, etc.). When the
+daemon wakes a runner, it creates a ``Run`` mechanically and hands it to
+the env backend for execution. Branching decisions belong to the agent
+at run time; the daemon just owns env preparation and cleanup.
 
-Task files are persisted to ``.brr/tasks/`` for crash recovery and
-status inspection. The format mirrors event files: frontmatter + body.
+Run manifests live at ``.brr/runs/<run-id>/run.md`` beside the prompt,
+context, and grouped-history files for the same invocation. The manifest
+format mirrors event files: frontmatter + body.
 """
 
 from __future__ import annotations
@@ -27,24 +28,23 @@ _EVENT_META_FIELDS = {
     "id", "body", "source", "status", "_path", "created", "branch", "env",
     "environment", "conversation_key",
 }
-_TASK_FIELDS = {
+_RUN_FIELDS = {
     "id", "event_id", "branch", "env", "environment", "status", "source",
     "conversation_key",
 }
 
 
-def _generate_task_id() -> str:
-    """Return a sortable, human-readable task ID.
+def _generate_run_id() -> str:
+    """Return a sortable, human-readable run ID.
 
-    Shape: ``task-YYMMDD-HHMM-<4 random>``. The compact UTC date+minute
+    Shape: ``run-YYMMDD-HHMM-<4 random>``. The compact UTC date+minute
     keeps IDs sortable and roughly self-documenting (you can read the
     creation time at a glance) while leaving 4 random chars to
-    disambiguate same-minute tasks. Earlier IDs used the raw unix
-    timestamp, which sorted fine but read as noise to humans.
+    disambiguate same-minute runs.
     """
     stamp = time.strftime("%y%m%d-%H%M", time.gmtime())
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-    return f"task-{stamp}-{rand}"
+    return f"run-{stamp}-{rand}"
 
 
 def _cfg_environment_policy(cfg: dict[str, Any]) -> str:
@@ -86,13 +86,13 @@ def resolve_env(
 
 
 @dataclass
-class Task:
-    """A unit of work derived from an event.
+class Run:
+    """A runner invocation derived from daemon inbox state.
 
     Fields:
-        id:               Unique task identifier.
-        event_id:         The originating event ID.
-        body:             The task description / instruction for the agent.
+        id:               Unique run identifier.
+        event_id:         The lead event ID for the invocation.
+        body:             The lead event body / instruction for the agent.
         env:              Execution environment backend — ``host``,
                           ``worktree``, ``docker``, or a future built-in.
         status:           Lifecycle state — pending → running →
@@ -115,18 +115,18 @@ class Task:
     meta: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_event(cls, event: dict[str, Any], cfg: dict[str, Any] | None = None) -> Task:
-        """Create a task from an event dict, applying config defaults.
+    def from_event(cls, event: dict[str, Any], cfg: dict[str, Any] | None = None) -> Run:
+        """Create a run from an event dict, applying config defaults.
 
         This is a pure mechanical conversion — no LLM call, no
         external state. The agent decides any branching at run time
         from inside its env.
         """
         cfg = cfg or {}
-        task_id = _generate_task_id()
+        run_id = _generate_run_id()
         env_policy = _event_environment_policy(event, cfg)
         return cls(
-            id=task_id,
+            id=run_id,
             event_id=event.get("id", ""),
             body=event.get("body", ""),
             env=resolve_env(env_policy, cfg),
@@ -159,8 +159,8 @@ class Task:
         return "\n".join(lines) + "\n"
 
     @classmethod
-    def from_file(cls, path: Path) -> Task | None:
-        """Load a task from a persisted file. Returns None on parse failure."""
+    def from_file(cls, path: Path) -> Run | None:
+        """Load a run from a persisted manifest. Returns None on parse failure."""
         from . import protocol
 
         try:
@@ -171,7 +171,7 @@ class Task:
         if not fm.get("id"):
             return None
         body = protocol.frontmatter_body(text).strip()
-        meta = {k: v for k, v in fm.items() if k not in _TASK_FIELDS}
+        meta = {k: v for k, v in fm.items() if k not in _RUN_FIELDS}
         return cls(
             id=fm["id"],
             event_id=fm.get("event_id", ""),
@@ -183,30 +183,35 @@ class Task:
             meta=meta,
         )
 
-    def save(self, tasks_dir: Path) -> Path:
-        """Persist this task to disk. Returns the file path."""
+    def save(self, runs_dir: Path) -> Path:
+        """Persist this run manifest to disk. Returns the file path."""
         from . import protocol
 
-        tasks_dir.mkdir(parents=True, exist_ok=True)
-        path = tasks_dir / f"{self.id}.md"
+        path = run_manifest_path(runs_dir, self.id)
+        path.parent.mkdir(parents=True, exist_ok=True)
         protocol._atomic_write(path, self.to_frontmatter())
         return path
 
-    def update_status(self, status: str, tasks_dir: Path) -> None:
+    def update_status(self, status: str, runs_dir: Path) -> None:
         """Update status in memory and on disk."""
         self.status = status
-        self.save(tasks_dir)
+        self.save(runs_dir)
 
 
-def list_tasks(tasks_dir: Path, status: str | None = None) -> list[Task]:
-    """List persisted tasks, optionally filtered by status."""
-    if not tasks_dir.exists():
+def list_runs(runs_dir: Path, status: str | None = None) -> list[Run]:
+    """List persisted runs, optionally filtered by status."""
+    if not runs_dir.exists():
         return []
-    tasks = []
-    for entry in sorted(tasks_dir.iterdir()):
-        if not entry.name.endswith(".md"):
+    runs = []
+    for entry in sorted(runs_dir.iterdir()):
+        if not entry.is_dir():
             continue
-        task = Task.from_file(entry)
-        if task and (status is None or task.status == status):
-            tasks.append(task)
-    return tasks
+        run = Run.from_file(entry / "run.md")
+        if run and (status is None or run.status == status):
+            runs.append(run)
+    return runs
+
+
+def run_manifest_path(runs_dir: Path, run_id: str) -> Path:
+    """Return the canonical manifest path for *run_id* under ``runs_dir``."""
+    return runs_dir / run_id / "run.md"

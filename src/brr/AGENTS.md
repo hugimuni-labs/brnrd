@@ -26,7 +26,7 @@ Three stages, and how to read this file in each:
 - **Ad-hoc agent session** (Cursor, Codex CLI, Claude Code, plain
   editor with no brr in the loop). No Run Context Bundle. No
   `.brr/conversations/`. No preflight runs on this session. Read the
-  universal sections (Stewardship, Workflow → Orientation + Task types
+  universal sections (Stewardship, Workflow → Orientation + Run types
   + Commits, Knowledge base, Artifacts, Operating rules, Self-review,
   Guardrails) plus Build and run and Code guidelines. Skip Workflow →
   *When the brr daemon runs you* — that machinery isn't in play here.
@@ -161,7 +161,7 @@ what older versions of this file split between "Session startup" and
    prior work touches before changing anything. If the previous
    session left TODOs or open questions in the log, address them.
 
-### Task types
+### Run types
 
 Adapt your approach:
 
@@ -227,7 +227,7 @@ Claude Code without brr orchestrating), skip the subsection — the
 machinery it describes isn't in play.
 
 **Daemon freshness.** Before resolving the branch plan for a task, the
-daemon runs `sync.refresh_before_task`: a single
+daemon runs `sync.refresh_before_run`: a single
 `git fetch <default-remote>` plus a best-effort fast-forward of the
 local default branch (and any structured branch named in the event,
 e.g. a PR head branch carried by a forge gate). Fast-forward is
@@ -242,7 +242,7 @@ pulled. Sync outcomes ride on the progress card as a short
 
 Two opt-out knobs in `.brr/config`, both default-on:
 
-- `sync.fetch_before_task=false` — never touch the network.
+- `sync.fetch_before_run=false` — never touch the network.
 - `sync.fast_forward_default=false` — fetch but leave local refs alone
   (for users sharing the daemon's checkout with active dev work).
 
@@ -257,8 +257,8 @@ branch. If a checkout on your chosen name collides with a concurrent
 run that picked the same name, fall back to a unique variant — the
 default `brr/<run-id>` namespace is collision-free, so this only
 matters if you opted out of it.
-The generated id string may still start with `task-` while the internal
-storage rename is phased; treat it as a run id in the prompt model.
+Generated run ids use the `run-...` shape; treat them as opaque run ids
+when reading prompts, branches, and runtime files.
 
 **Delivery and runtime recovery.** The Run Context Bundle is the hot
 path — it carries the Mode block (stage / source / environment /
@@ -312,7 +312,7 @@ The kb has four layers, each with a distinct job:
 
 | Layer | Purpose | Lives in |
 |-------|---------|----------|
-| Raw | What was said / what happened, verbatim | `.brr/conversations/`, `.brr/tasks/`, `.brr/traces/` (gitignored) |
+| Raw | What was said / what happened, verbatim | `.brr/conversations/`, `.brr/runs/`, `.brr/traces/` (gitignored) |
 | Episodic | Curated chronological narrative | `kb/log.md` |
 | Semantic + decisional | Current-state synthesis of what we know / why we chose it | `kb/subject-*.md`, `kb/decision-*.md`, `kb/research-*.md`, `kb/plan-*.md`, `kb/design-*.md` |
 | Schema | How the kb is structured + how to maintain it | this file, `src/brr/docs/` |
