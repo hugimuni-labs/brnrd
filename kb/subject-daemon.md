@@ -91,15 +91,18 @@ paths that can't raise the in-process signal: cross-process writers (the
 work (due `schedule.md` entries). Outbound-only (`done`) events don't set
 the signal — they're delivered by gate threads, not the spawn loop.
 
-Each gate also reuses one `requests.Session` per gate module
-(`_SESSION`), so keep-alive reuses the TCP/TLS connection across
-long-poll cycles instead of dialing the platform fresh every poll. Each
-gate runs its network calls from a single loop thread, so the per-gate
-session needs no locking. The managed brnrd backend plugs its own async
-`httpx` client and never touches the OSS sync transport. (Both landed
-2026-06-14 for the Co-maintainer "daemon responsiveness" slice, #115 →
-[`design-co-maintainer.md`](design-co-maintainer.md) §9; this is idle
-latency, not added concurrency — single-flight is unchanged.)
+Gates reuse HTTP sessions, but the session boundary follows the blocking
+shape of each transport. Telegram keeps its long-poll `getUpdates`
+session separate from outbound send/edit calls, and a lightweight delivery
+loop scans local response queues once per second so folded replies are not
+stuck behind a 30s long poll. Other polling gates keep one session in their
+single loop thread. The managed brnrd backend plugs its own async `httpx`
+client and never touches the OSS sync transport. The first event-driven
+slice landed 2026-06-14 for the Co-maintainer "daemon responsiveness"
+slice (#115 → [`design-co-maintainer.md`](design-co-maintainer.md) §9);
+the Telegram outbound split followed 2026-06-18 after dogfooding showed
+folded replies arriving with the final result. This is delivery latency
+work, not added runner concurrency — single-flight is unchanged.
 
 ### Self-scheduled thoughts (the resident's own clock)
 

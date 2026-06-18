@@ -7203,3 +7203,20 @@ response/outbox key from lead event to run id, and run-granularity
 cost/fold consent.
 
 Tests: `pytest -q` (870 passed, 7 skipped).
+
+## [2026-06-18] fix | Telegram outbound delivery no longer waits behind long polling
+
+Dogfooding the folded-message path showed interim replies to pending
+Telegram events could arrive together with the final result. Root cause:
+the gate promoted outbox replies on the daemon heartbeat, but Telegram
+only delivered responses after its blocking `getUpdates` long poll
+returned.
+
+The Telegram gate now runs outbound response delivery in a lightweight
+separate loop and keeps the long-poll session separate from send/edit
+calls, so progress-card updates and folded replies do not share the
+polling connection state. `subject-daemon.md` now records this as the
+current gate-responsiveness shape.
+
+Tests: `pytest -q tests/test_telegram_gate.py tests/test_telegram_render_update.py tests/test_outbox.py tests/test_deliver_stream.py`
+(53 passed).
