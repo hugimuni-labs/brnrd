@@ -1,32 +1,49 @@
-# Cockpit — the shape of a daemon run, and the panel you steer it with
+# Portals — the shape of a daemon run, and the seams you steer it through
 
 How an average daemon run unfolds under the brr daemon, and the
-control-file protocol you use to steer it. This is the *manual* — read
-it when a run's shape is unfamiliar or you need to look up a control
-file. It is **inspected, not injected**: a wake carries the live per-run
-*values* (paths, ids, budget) in its Run Context Bundle and a one-line
-pointer here; the choreography and the cheatsheet live in this one place
-so a wake doesn't pay for them in tokens every time.
+control-file protocol — the **portals** — you steer it through. This is
+the *manual* — read it when a run's shape is unfamiliar or you need to
+look up a control file. It is **inspected, not injected**: a wake carries
+the live per-run *values* (paths, ids, budget) in its Run Context Bundle
+and a one-line pointer here; the choreography and the cheatsheet live in
+this one place so a wake doesn't pay for them in tokens every time.
+
+A **portal** is a seam where you turn to the world — somewhere the daemon
+fills *in* (input arrives) or drains *out* (a message, a card, a PR
+goes). Today each portal is a file you write into the outbox; the table
+below is that grammar. (Where the grammar is headed — portals as marked
+regions *in the generated stream itself*, so turning-to-the-world is how
+the stream advances rather than a filename you must remember — lives in
+`kb/design-portal-grammar.md`. This manual describes what ships now.)
 
 This document ships with `brr`. Override it per-repo by dropping a file
-at `.brr/docs/cockpit.md`.
+at `.brr/docs/portals.md`.
 
-## The panel — control files
+## The grammar — control files as portals
 
 Everything you steer happens by writing files into the **outbox
 directory** named in your bundle (`.brr/outbox/<event-id>/`). One file is
 one action. The daemon watches the directory and acts on its next
 heartbeat. The bundle carries the concrete paths; this is what each one
-does.
+does, and which **portal form** it is — *inbound* (input flows in),
+*outbound* (you emit to a surface), or *parked* (you emit and park the
+continuation until something refluxes back).
 
-| File | What it does |
-| --- | --- |
-| `<name>.md` | A **chat message**, delivered in filename order while you keep working. The body is the message. Stage as `*.tmp` and rename for an atomic write. |
-| `<name>.md` with `event: <id>` frontmatter | Same, but delivered to a **different pending event's** thread and marks that event handled, so it won't wake again. One complete reply per folded-in event. |
-| `<name>.md` with `gate: <name>` frontmatter | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` opens/refreshes a PR (`head`, `base`, `title` frontmatter; body is the PR body). An unconfigured gate is dropped. |
-| `.keepalive` | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. |
-| `.card` | **Narrate the live progress card.** Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
-| `inbox.json` | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries; never edit or remove it. |
+| File | Portal | What it does |
+| --- | --- | --- |
+| `<name>.md` | outbound (append-log) | A **chat message**, delivered in filename order while you keep working. The body is the message. Stage as `*.tmp` and rename for an atomic write. |
+| `<name>.md` with `event: <id>` frontmatter | outbound to another thread | Same, but delivered to a **different pending event's** thread and marks that event handled, so it won't wake again. One complete reply per folded-in event. |
+| `<name>.md` with `gate: <name>` frontmatter | outbound to a destination | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` opens/refreshes a PR (`head`, `base`, `title` frontmatter; body is the PR body). An unconfigured gate is dropped. |
+| `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. |
+| `.card` | outbound (desired-state) | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
+| `inbox.json` | inbound | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries to fold in waiting work; never edit or remove it. |
+
+The two reconcile semantics in the *Portal* column — append-log
+(ordered, additive) and desired-state (one surface reconciled in place,
+terraform-shaped) — are orthogonal to the transport underneath; the gate
+is a dumb pipe under both. The PLAN→approve handoff is the canonical
+*parked* portal: emit, park the continuation, resume when approval
+refluxes (today via a follow-up event).
 
 Two more steering surfaces live outside the outbox:
 
@@ -89,7 +106,7 @@ Two more steering surfaces live outside the outbox:
 
 Live state is **injected** (the medium, the budget, this run's paths and
 ids) — you can't miss it. The manual is **inspected** (`brr docs
-cockpit`) — one glance away, not memorized, not re-paid every wake. A
+portals`) — one glance away, not memorized, not re-paid every wake. A
 failure the environment makes impossible (a lint, a test, a baked-in
 tool) is stronger still than either. When you move a recurring failure
 all the way down that ladder, retire the pitfall that stood in for it.
