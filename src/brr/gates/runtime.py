@@ -40,24 +40,24 @@ def save_state(brr_dir: Path, gate: str, state: dict) -> None:
     path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
 
-# ── Per-task progress-card state ─────────────────────────────────────
+# ── Per-run progress-card state ──────────────────────────────────────
 
 
-def task_card_path(brr_dir: Path, gate: str, task_id: str) -> Path:
-    """Per-task progress-card state file.
+def run_card_path(brr_dir: Path, gate: str, run_id: str) -> Path:
+    """Per-run progress-card state file.
 
-    Each task owns its own file under
-    ``.brr/gates/<gate>/progress/<task-id>.json``, so overlapping
+    Each run owns its own file under
+    ``.brr/gates/<gate>/progress/<run-id>.json``, so overlapping
     thoughts (ad-hoc sessions, a second daemon) never share a state
     surface. See ``kb/subject-daemon.md``.
     """
-    safe = _PROGRESS_SAFE_RE.sub("_", task_id) if task_id else "_unknown"
+    safe = _PROGRESS_SAFE_RE.sub("_", run_id) if run_id else "_unknown"
     return brr_dir / "gates" / gate / "progress" / f"{safe}.json"
 
 
-def load_task_card(brr_dir: Path, gate: str, task_id: str) -> dict | None:
-    """Return this task's previously-rendered card state, or None."""
-    path = task_card_path(brr_dir, gate, task_id)
+def load_run_card(brr_dir: Path, gate: str, run_id: str) -> dict | None:
+    """Return this run's previously-rendered card state, or None."""
+    path = run_card_path(brr_dir, gate, run_id)
     if not path.exists():
         return None
     try:
@@ -66,9 +66,9 @@ def load_task_card(brr_dir: Path, gate: str, task_id: str) -> dict | None:
         return None
 
 
-def save_task_card(brr_dir: Path, gate: str, task_id: str, entry: dict) -> None:
-    """Write this task's card state file (atomic via rename)."""
-    path = task_card_path(brr_dir, gate, task_id)
+def save_run_card(brr_dir: Path, gate: str, run_id: str, entry: dict) -> None:
+    """Write this run's card state file (atomic via rename)."""
+    path = run_card_path(brr_dir, gate, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(

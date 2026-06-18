@@ -21,7 +21,7 @@ from typing import Any, Callable
 import requests
 
 from .. import protocol, run_progress
-from ..task import Task
+from ..run import Run, run_manifest_path
 from . import delivery, runtime
 
 # Server long-polls up to ~25s; the client timeout must comfortably
@@ -379,7 +379,7 @@ class _CloudCardTransport:
 
 
 def _card_text_for(
-    brr_dir: Path, conv_key: str, task_id: str, platform: str
+    brr_dir: Path, conv_key: str, run_id: str, platform: str
 ) -> str | None:
     """Render the progress card using the origin platform's presentation.
 
@@ -390,12 +390,12 @@ def _card_text_for(
     if platform == "telegram":
         from . import telegram
 
-        return telegram.card_text(brr_dir, conv_key, task_id)
+        return telegram.card_text(brr_dir, conv_key, run_id)
     return None
 
 
 def render_update(brr_dir: Path, packet: Any) -> None:
-    """Relay a live progress card for a cloud-sourced task to brnrd.
+    """Relay a live progress card for a cloud-sourced run to brnrd.
 
     Mirrors the OSS gates: render the card daemon-side from
     ``run_progress`` and drive the shared ``delivery.update_card``
@@ -412,11 +412,11 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         return
 
     conv_key = getattr(packet, "conversation_key", "") or ""
-    task_id = run_progress.task_id_from_packet(packet)
-    if not conv_key or not task_id:
+    run_id = run_progress.run_id_from_packet(packet)
+    if not conv_key or not run_id:
         return
 
-    task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
+    task = Run.from_file(run_manifest_path(brr_dir / "runs", run_id))
     if task is None or task.source != "cloud":
         return
     cloud_event_id = task.meta.get("cloud_event_id")
@@ -424,13 +424,13 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         return
 
     text = _card_text_for(
-        brr_dir, conv_key, task_id, str(task.meta.get("cloud_platform") or "")
+        brr_dir, conv_key, run_id, str(task.meta.get("cloud_platform") or "")
     )
     if text is None:
         return
 
     transport = _CloudCardTransport(state, str(cloud_event_id))
     delivery.update_card(
-        brr_dir, "cloud", task_id, text,
+        brr_dir, "cloud", run_id, text,
         transport=transport, render_tag=getattr(packet, "type", None),
     )

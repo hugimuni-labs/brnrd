@@ -256,10 +256,10 @@ def _setup_brr_dir(repo_root: Path) -> None:
         "responses",   # per-event response files
         "gates",       # gate state (telegram.json, slack.json, …)
         "prompts",     # user overrides for bundled prompt templates
-        "tasks",       # persisted Task files (task-*.md)
+        "runs",        # per-run manifests, prompts, contexts, and history
         "traces",      # runner invocation traces (prompt/stdout/stderr/meta)
         "reviews",     # review artifacts produced by agents
-        "worktrees",   # git worktrees for task-isolated execution
+        "worktrees",   # git worktrees for run-isolated execution
     ):
         (brr / sub).mkdir(parents=True, exist_ok=True)
 
