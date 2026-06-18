@@ -190,7 +190,7 @@ For each pending event, the daemon:
 4. records the thought in the presence registry (`presence.py`,
    `.brr/presence/`) so concurrent thoughts see who's on which stream;
 5. prepares the selected env backend (`host`, `worktree`, or `docker`);
-6. builds the daemon prompt with the Task Context Bundle (including the
+6. builds the daemon prompt with the Run Context Bundle (including the
    dominion digest, any dominion pitfalls whose triggers the task text
    hits — the env-shaping loop's failure-memory affordance,
    [`pitfalls.py`](../src/brr/pitfalls.py) — the wake-time pending-events

@@ -258,16 +258,28 @@ least I can get away with."
   `diffense.create_pr` now default off, so routine wakes do not pay the
   prompt / pack / forge tax unless the repo deliberately enables that
   review surface.
-- **Conversational delivery framing** — the daemon substrate, Task
+- **Conversational delivery framing** — the daemon substrate, Run
   Context Bundle, and cockpit manual now frame single-flight as an
   execution mechanic, not a one-shot reply contract: substantial work
   should keep the live card honest and use mid-thought replies when they
   help.
+- **A2 prompt/snapshot ingress** — the daemon now has a conservative
+  runner-quota snapshot contract (`.brr/runner-quota.json`,
+  `runner.quota.*`, or `BRR_RUNNER_QUOTA_*`) and threads a proven summary
+  into the Mode block as `Runner: <medium> (<quota posture>)`. This ships
+  the run-visible surface without pretending provider-specific collectors
+  exist yet: when no quota signal is present, the line stays compact.
+- **Run-facing bundle language** — the generated prompt, recovery context,
+  and bundled operator docs now frame the live unit as a daemon run/wake
+  (`Run Context Bundle`, `Run ID`) while keeping the legacy `task-...`
+  id string and `.brr/tasks/` storage as compatibility details until
+  #128's model rename lands.
 
 ## Sequence after this run (pickup list)
 
-1. **A2 — quota/reset probe** (vantage-rule clean; needs per-provider
-   bucket parsing).
+1. **A2 provider collectors** — populate the shipped quota snapshot from
+   real Codex / Claude / Gemini signals (headers, errors, usage APIs, or
+   a host wrapper) without adding slow network work to prompt assembly.
 2. **C1 — `.card` cost frame habit in resident memory** (repo prompt
    framing shipped; the dominion playbook still needs the same trim).
 3. **C3 — operator notification + `brr docs operator` doc** (the

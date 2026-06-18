@@ -7166,3 +7166,21 @@ are caught before publish. Also fixed the cockpit/manual wording for the
 user-reported live-card wrinkle: `.card` content is the note body only;
 brr adds the rendered `note:` label, so agents should not prefix the
 content with `note:` themselves.
+
+## [2026-06-18] implement | Runner quota snapshot ingress and run-facing bundle language
+
+Shipped the first A2 slice from `plan-cost-aware-cockpit.md`: the daemon
+now reads an explicit runner quota snapshot from `.brr/runner-quota.json`,
+`runner.quota.*`, or `BRR_RUNNER_QUOTA_*` and threads a proven summary into
+the Mode block as `Runner: <medium> (<quota posture>)`. Prompt assembly
+stays conservative: no quota signal means no noisy placeholder, and
+provider-specific collectors remain the next pickup.
+
+Also resolved the product-model wording conflict around the per-event
+`task` leftover. Generated prompts, the recovery context, bundled
+operator docs, and current kb pages now frame the live unit as a daemon
+run/wake (`Run Context Bundle`, `Run ID`), while documenting `task-...`
+ids and `.brr/tasks/` as legacy storage compatibility until the broader
+run/event model lands.
+
+Tests: `pytest -q` (870 passed, 7 skipped).
