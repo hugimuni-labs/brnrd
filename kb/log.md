@@ -7203,3 +7203,19 @@ response/outbox key from lead event to run id, and run-granularity
 cost/fold consent.
 
 Tests: `pytest -q` (870 passed, 7 skipped).
+
+## [2026-06-18] fix | Runner profiles move out of prompt ownership
+
+Resolved the context-layering contradiction where bundled runner command
+strings told the CLI to orient from `AGENTS.md`. The assembled brr prompt
+already carries the repo contract, dominion, and Run Context Bundle; runner
+profiles now only describe how to invoke a headless process that can
+operate files.
+
+`.brr/runners.md` is now the first-class project-owned runner profile
+file, with `.brr/prompts/runners.md` retained as a legacy override path.
+The bundled profile docs frame runners as execution-medium data, and the
+profile cache is keyed by source so an earlier bundled read does not hide
+a project override in the same daemon process.
+
+Tests: `pytest -q` (939 passed, 1 warning).
