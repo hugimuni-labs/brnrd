@@ -130,7 +130,7 @@ def _build_dominion_block(repo_root: Path) -> str:
     """Render the wake-time self-inject digest from the agent's dominion.
 
     Reads from the shared dominion worktree (``.brr/dominion/``, resolved
-    via the git common dir so a per-task worktree still finds the one
+    via the git common dir so a per-run worktree still finds the one
     dominion). Returns ``""`` when the dominion is disabled, not yet
     materialized, or resolves to nothing — the caller drops the block.
     """
@@ -423,7 +423,7 @@ def build_daemon_prompt(
     repo_root: Path,
     *,
     outbox_path: str | None = None,
-    task_id: str | None = None,
+    run_id: str | None = None,
     source: str | None = None,
     environment: str | None = None,
     branch_name: str | None = None,
@@ -443,7 +443,7 @@ def build_daemon_prompt(
     runner_quota: str | None = None,
     diffense: bool = False,
 ) -> str:
-    """Build the prompt for daemon-originated tasks.
+    """Build the prompt for daemon-originated runs.
 
     Same as the run prompt but with event metadata, recent conversation
     context, and an explicit delivery contract assembled into a single
@@ -467,7 +467,7 @@ def build_daemon_prompt(
         runner_medium=runner_medium,
         runner_quota=runner_quota,
         repo_root=repo_root,
-        task_id=task_id,
+        run_id=run_id,
         source=source,
         environment=environment,
         branch_name=branch_name,
@@ -486,8 +486,8 @@ def build_daemon_prompt(
     )
     trailer = bundle.rstrip()
     if (event_body or "").strip() != task.strip():
-        trailer = f"{trailer}\nTask: {task}"
-    # Match pitfalls against the task and the original event text — the
+        trailer = f"{trailer}\nRun instruction: {task}"
+    # Match pitfalls against the run instruction and the original event text — the
     # triggers the resident recorded tend to echo how a request is phrased.
     pitfall_text = "\n".join(t for t in (task, event_body) if t)
     return _join_prompt_parts(
@@ -499,7 +499,7 @@ def build_daemon_prompt(
 
 # How many prior conversation records the prompt renders. The daemon reads
 # a slightly larger window from the log so that records belonging to the
-# in-flight event/task (filtered out before formatting) don't starve the
+# in-flight event/run (filtered out before formatting) don't starve the
 # tail. Keep the daemon's read cap = RECENT_CONVERSATION_MAX + headroom.
 RECENT_CONVERSATION_MAX = 8
 
@@ -513,7 +513,7 @@ def _build_run_context_bundle(
     runner_medium: str | None = None,
     runner_quota: str | None = None,
     repo_root: Path,
-    task_id: str | None,
+    run_id: str | None,
     source: str | None,
     environment: str | None,
     branch_name: str | None,
@@ -532,9 +532,8 @@ def _build_run_context_bundle(
 ) -> str:
     """Assemble the human-readable Run Context Bundle for the daemon prompt.
 
-    Persisted metadata still uses ``task_id`` internally, but the visible
-    product model is a runner wake: one run can read and respond to more
-    than one event, so this bundle frames the unit as a run.
+    The product model is a runner wake: one run can read and respond to
+    more than one event, so this bundle frames the unit as a run.
     """
     sections: list[str] = ["---", "## Run Context Bundle"]
     sections.append("")
@@ -579,9 +578,8 @@ def _build_run_context_bundle(
     sections.append("")
     sections.append("### Run")
     sections.append(f"- Event: {event_id}")
-    if task_id:
-        sections.append(f"- Run ID: {task_id}")
-        sections.append(f"- Legacy task id: {task_id}")
+    if run_id:
+        sections.append(f"- Run ID: {run_id}")
     sections.append(f"- Execution root: {repo_root}")
     if seed_ref:
         sections.append(f"- Seed ref: {seed_ref}")
@@ -595,7 +593,7 @@ def _build_run_context_bundle(
         sections.append(f"- Branch setup: {branch_setup_notice}")
     if runtime_dir:
         sections.append(f"- Shared runtime dir: {runtime_dir}")
-    if diffense and task_id:
+    if diffense and run_id:
         # An absolute path in the *shared* runtime dir, not a cwd-relative
         # `.brr/...`: the runner works in a worktree whose own `.brr/` is
         # torn down at finalize, so a relative pack would die before the
@@ -604,7 +602,7 @@ def _build_run_context_bundle(
         from . import gitops
 
         base = Path(runtime_dir) if runtime_dir else gitops.shared_brr_dir(repo_root)
-        pack_path = base / "diffense" / task_id / "pack.json"
+        pack_path = base / "diffense" / run_id / "pack.json"
         sections.append(f"- Review pack path: {pack_path}")
     if context_path:
         sections.append(f"- Run context file: {context_path}")
@@ -676,8 +674,8 @@ def _build_run_context_bundle(
         "- The user reads your reply remotely (Telegram / Slack / etc.). "
         "Refer to files by basename only — `subject-envs.md`, "
         "`run_progress.py` — never with absolute or worktree-relative "
-        "paths like `/home/.../.brr/worktrees/task-.../kb/foo.md` or "
-        "`.brr/worktrees/task-.../kb/foo.md`. Those paths exist on the "
+        "paths like `/home/.../.brr/worktrees/<run-id>/kb/foo.md` or "
+        "`.brr/worktrees/<run-id>/kb/foo.md`. Those paths exist on the "
         "host running brr, not on the user's machine, and chat clients "
         "won't render or link them. brr already appends a "
         "forge-hosted branch URL to the response card when one is "
@@ -690,7 +688,7 @@ def _build_run_context_bundle(
     )
     sections.append(
         "- Don't explore or modify any other files in .brr/ beyond what "
-        "this task explicitly asks for."
+        "this run explicitly asks for."
     )
     if branch_name and seed_ref:
         sections.append(
@@ -707,7 +705,7 @@ def _build_run_context_bundle(
                 "`brr/<short-slug>` (e.g. `brr/remove-status-module`, "
                 "`brr/forge-url-inference`). Keep the `brr/` prefix so the "
                 "branch is recognisable as brr-originated. Read-only, "
-                "research, or pure-discussion tasks can keep the "
+                "research, or pure-discussion runs can keep the "
                 "placeholder name."
             )
 
@@ -814,9 +812,9 @@ def _format_presence(
     for e in entries:
         kind = str(e.get("kind") or "thought").strip()
         stream = str(e.get("stream") or "").strip()
-        tid = str(e.get("task_id") or "").strip()
+        tid = str(e.get("run_id") or "").strip()
         where = f" on `{stream}`" if stream else ""
-        tag = f" (task {tid})" if tid else ""
+        tag = f" (run {tid})" if tid else ""
         bullets.append(f"- {kind}{where}{tag}")
     return "\n".join(bullets)
 
@@ -929,7 +927,7 @@ def _format_forge_state(forge: Any) -> str:
         lines.append(f"- Worktrees / branches: {'; '.join(bits)}")
         for wt in worktree_summary["attention"]:
             branch = str(wt.get("branch") or "").strip() or "(detached)"
-            tid = str(wt.get("task_id") or "").strip()
+            tid = str(wt.get("run_id") or "").strip()
             bits: list[str] = []
             unpushed = wt.get("unpushed", 0)
             if isinstance(unpushed, int) and unpushed > 0:
@@ -1050,25 +1048,24 @@ def _format_recent_conversation(
             summary = body or (record.get("summary") or "").strip()
             source = _conversation_source_label(record)
             line = _format_turn(f"{ts} user ({source})", summary)
-        elif kind == "task":
-            tid = record.get("task_id", "")
+        elif kind == "run":
+            tid = record.get("run_id", "")
             status = record.get("status") or "pending"
             branch = (
                 record.get("publish_branch")
                 or record.get("target_branch")
-                or record.get("expected_publish_branch")  # compat: old records
                 or record.get("branch_name")
                 or ""
             )
-            line = f"- {ts} task {tid} status={status} branch={branch}"
+            line = f"- {ts} run {tid} status={status} branch={branch}"
         elif kind == "update":
             ptype = record.get("type") or ""
-            tid = record.get("task_id") or ""
+            tid = record.get("run_id") or ""
             stage = record.get("stage") or ""
             err = record.get("error") or ""
             bits = [f"- {ts} update {ptype}"]
             if tid:
-                bits.append(f"task={tid}")
+                bits.append(f"run={tid}")
             if stage:
                 bits.append(f"stage={stage}")
             if err:

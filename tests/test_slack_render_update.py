@@ -6,30 +6,30 @@ from pathlib import Path
 
 from brr import updates
 from brr.gates import slack
-from brr.task import Task
+from brr.run import Run
 
 
-def _seed_task(
+def _seed_run(
     brr_dir: Path,
-    task_id: str,
+    run_id: str,
     *,
     channel: str = "C12345",
     thread_ts: str | None = "1700000.0001",
     source: str = "slack",
-) -> Task:
-    tasks_dir = brr_dir / "tasks"
-    tasks_dir.mkdir(parents=True, exist_ok=True)
+) -> Run:
+    runs_dir = brr_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
     meta = {"slack_channel": channel}
     if thread_ts is not None:
         meta["slack_thread_ts"] = thread_ts
     conv_key = f"slack:{channel}:" + (thread_ts or "")
-    task = Task(
-        id=task_id, event_id="evt-" + task_id, body="x",
+    task = Run(
+        id=run_id, event_id="evt-" + run_id, body="x",
         env="docker", status="running",
         source=source, conversation_key=conv_key,
         meta=meta,
     )
-    task.save(tasks_dir)
+    task.save(runs_dir)
     return task
 
 
@@ -44,10 +44,10 @@ def _emit(brr_dir: Path, conv_key: str, ptype: str, **payload):
     ))
 
 
-def test_render_update_posts_message_on_task_created(tmp_path, monkeypatch):
+def test_render_update_posts_message_on_run_created(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-sl-1")
+    task = _seed_run(brr_dir, "task-sl-1")
 
     api_calls: list[tuple] = []
 
@@ -61,7 +61,7 @@ def test_render_update_posts_message_on_task_created(tmp_path, monkeypatch):
 
     monkeypatch.setattr(slack, "_slack_api", fake_slack_api)
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="docker")
 
     posts = [c for c in api_calls if c[1] == "chat.postMessage"]
@@ -72,14 +72,14 @@ def test_render_update_posts_message_on_task_created(tmp_path, monkeypatch):
     assert "docker" in params["text"]
     assert "preparing" in params["text"]
     assert task.id not in params["text"]
-    entry = slack._load_progress_for_task(brr_dir, task.id)
+    entry = slack._load_progress_for_run(brr_dir, task.id)
     assert entry["ts"] == "1700000.0500"
 
 
 def test_render_update_updates_existing_message(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-sl-2")
+    task = _seed_run(brr_dir, "task-sl-2")
 
     api_calls: list[tuple] = []
 
@@ -93,13 +93,13 @@ def test_render_update_updates_existing_message(tmp_path, monkeypatch):
 
     monkeypatch.setattr(slack, "_slack_api", fake_slack_api)
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
-    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "attempt_started", run_id=task.id,
           attempt=1)
-    _emit(brr_dir, task.conversation_key, "finalizing", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "finalizing", run_id=task.id,
           stage="done")
-    _emit(brr_dir, task.conversation_key, "done", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "done", run_id=task.id,
           event_id=task.event_id)
 
     methods = [m for _, m, _ in api_calls]
@@ -117,7 +117,7 @@ def test_render_update_updates_existing_message(tmp_path, monkeypatch):
 def test_render_update_falls_back_to_post_when_update_fails(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-sl-3")
+    task = _seed_run(brr_dir, "task-sl-3")
 
     api_calls: list[tuple] = []
     fail_update = {"flag": True}
@@ -135,11 +135,11 @@ def test_render_update_falls_back_to_post_when_update_fails(tmp_path, monkeypatc
 
     monkeypatch.setattr(slack, "_slack_api", fake_slack_api)
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
     # attempt_started flips the card from "preparing" to a struck
     # "preparing" + live "running", so the gate attempts an update.
-    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "attempt_started", run_id=task.id,
           attempt=1)
 
     posts = [c for c in api_calls if c[1] == "chat.postMessage"]
@@ -149,7 +149,7 @@ def test_render_update_falls_back_to_post_when_update_fails(tmp_path, monkeypatc
 def test_render_update_ignores_non_slack_tasks(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-sl-x", source="telegram")
+    task = _seed_run(brr_dir, "task-sl-x", source="telegram")
 
     api_calls: list[tuple] = []
     monkeypatch.setattr(
@@ -157,14 +157,14 @@ def test_render_update_ignores_non_slack_tasks(tmp_path, monkeypatch):
         lambda t, m, p=None: api_calls.append((t, m, p)) or {"ok": True},
     )
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
     assert api_calls == []
 
 
 def test_render_update_skips_when_token_missing(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
-    task = _seed_task(brr_dir, "task-sl-no-token")
+    task = _seed_run(brr_dir, "task-sl-no-token")
 
     api_calls: list[tuple] = []
     monkeypatch.setattr(
@@ -172,7 +172,7 @@ def test_render_update_skips_when_token_missing(tmp_path, monkeypatch):
         lambda t, m, p=None: api_calls.append((t, m, p)) or {"ok": True},
     )
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
     assert api_calls == []
 

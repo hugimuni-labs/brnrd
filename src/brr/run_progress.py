@@ -2,13 +2,13 @@
 
 Conversation logs (under ``.brr/conversations/<safe-key>/``, one
 ``<event-id>.jsonl`` per pipeline) capture durable facts the daemon
-emits about an event/task: the event arrival, the task row, non-heartbeat
+emits about an event-led run: the event arrival, the run row, non-heartbeat
 lifecycle update packets, and artifact records. This module
 folds those records into a compact ``RunProgressView`` that gates and
 local diagnostics can render the same way.
 
 The projection is read-only and does not mutate conversation state.
-Renderers should treat it as the canonical view of a single task's
+Renderers should treat it as the canonical view of a single run's
 execution.
 """
 
@@ -41,7 +41,7 @@ STATES = ("active", "succeeded", "failed")
 
 _PHASE_BY_PACKET: dict[str, str] = {
     "event_received": "queued",
-    "task_created": "preparing",
+    "run_created": "preparing",
     "env_prepared": "preparing",
     "container_started": "running",
     "attempt_started": "running",
@@ -91,7 +91,7 @@ class PhaseEntry:
 
 @dataclass
 class RunProgressView:
-    """Snapshot of a single task's execution, derived from conversation
+    """Snapshot of a single run's execution, derived from conversation
     records.
 
     Renderers (gate cards, local diagnostics) consume this struct.
@@ -99,7 +99,7 @@ class RunProgressView:
     """
 
     conversation_key: str
-    task_id: str | None
+    run_id: str | None
     phase: str = "queued"
     state: str = "active"
     branch_name: str | None = None
@@ -160,43 +160,43 @@ class RunProgressView:
 # ── Projection ──────────────────────────────────────────────────────
 
 
-def project_task(
+def project_run(
     brr_dir: Path,
     conversation_key: str,
-    task_id: str,
+    run_id: str,
 ) -> RunProgressView | None:
-    """Project the latest progress for a given (conversation, task)."""
+    """Project the latest progress for a given (conversation, run)."""
     if not conversation_key:
         return None
     records = conversations_mod.read_records(brr_dir, conversation_key)
     if not records:
         return None
-    return _project(records, conversation_key=conversation_key, task_id=task_id)
+    return _project(records, conversation_key=conversation_key, run_id=run_id)
 
 
 def project_conversation_latest(
     brr_dir: Path,
     conversation_key: str,
 ) -> RunProgressView | None:
-    """Project the most recent task's progress for a conversation.
+    """Project the most recent run's progress for a conversation.
 
     Useful when a gate wants to show "what is currently happening" in
-    a thread without tracking individual task IDs.
+    a thread without tracking individual run IDs.
     """
     if not conversation_key:
         return None
     records = conversations_mod.read_records(brr_dir, conversation_key)
-    latest_task_id = _latest_task_id(records)
-    if latest_task_id is None:
+    latest_run_id = _latest_run_id(records)
+    if latest_run_id is None:
         return None
     return _project(
-        records, conversation_key=conversation_key, task_id=latest_task_id,
+        records, conversation_key=conversation_key, run_id=latest_run_id,
     )
 
 
-def _latest_task_id(records: list[dict[str, Any]]) -> str | None:
+def _latest_run_id(records: list[dict[str, Any]]) -> str | None:
     for record in reversed(records):
-        tid = record.get("task_id")
+        tid = record.get("run_id")
         if tid:
             return str(tid)
     return None
@@ -228,29 +228,28 @@ def _project(
     records: list[dict[str, Any]],
     *,
     conversation_key: str,
-    task_id: str,
+    run_id: str,
 ) -> RunProgressView:
     view = RunProgressView(
         conversation_key=conversation_key,
-        task_id=task_id,
+        run_id=run_id,
     )
 
     last_ts: str | None = None
     for record in records:
-        if record.get("task_id") not in (None, task_id):
-            # Records that mention some other task are skipped.
+        if record.get("run_id") not in (None, run_id):
+            # Records that mention some other run are skipped.
             continue
         kind = record.get("kind")
         ts = record.get("ts")
-        if ts and record.get("task_id") == task_id:
+        if ts and record.get("run_id") == run_id:
             view.updated_at = ts
             last_ts = ts
 
-        if kind == "task":
+        if kind == "run":
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
                 record.get("target_branch")
-                or record.get("expected_publish_branch")  # compat: old records
                 or view.display_base
             )
             view.env = record.get("env") or view.env
@@ -278,7 +277,7 @@ def _project(
                 view.sync_summary = f"sync error: {record['error']}"
             continue
 
-        if ptype == "task_created":
+        if ptype == "run_created":
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
             _open_phase(view, "preparing", ts)
@@ -287,7 +286,6 @@ def _project(
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
                 record.get("target_branch")
-                or record.get("expected_publish_branch")  # compat: old records
                 or view.display_base
             )
         elif ptype == "container_started":
@@ -315,7 +313,6 @@ def _project(
             view.branch_name = record.get("branch") or view.branch_name
             view.display_base = (
                 record.get("target_branch")
-                or record.get("expected_publish_branch")  # compat: old records
                 or view.display_base
             )
         elif ptype == "attempt_failed":
@@ -512,7 +509,7 @@ GITHUB_MARKDOWN_STYLE = RenderStyle(done_open="~~", done_close="~~")
 # and the managed cloud gate — surfaces exactly the same moments and
 # can't drift apart.
 CARD_PACKETS = frozenset({
-    "task_created",
+    "run_created",
     "env_prepared",
     "container_started",
     "container_preserved",
@@ -578,10 +575,10 @@ def _render_compact(
 
     history = list(view.phase_history)
     multi_attempt = sum(1 for e in history if e.name == "running") > 1
-    task_started_at = history[0].started_at if history else view.started_at
+    run_started_at = history[0].started_at if history else view.started_at
 
     if view.sync_summary:
-        # Surfaces the daemon's pre-task fetch+ff outcome on the card so
+        # Surfaces the daemon's pre-run fetch+ff outcome on the card so
         # operators see when the seed branch was actually advanced (or
         # why we couldn't). Quiet when sync was a no-op — daemon only
         # emits the packet on meaningful changes.
@@ -609,7 +606,7 @@ def _render_compact(
         label = _phase_label(entry, multi_attempt, view)
 
         if is_terminal:
-            total_elapsed = _elapsed_seconds(task_started_at, entry.started_at)
+            total_elapsed = _elapsed_seconds(run_started_at, entry.started_at)
             line = label
             if total_elapsed is not None:
                 line += f" · {_format_duration(total_elapsed)}"
@@ -814,8 +811,8 @@ def _delivery_summary(view: RunProgressView) -> str:
 
 def _legacy_header(view: RunProgressView) -> str:
     bits = ["brr"]
-    if view.task_id:
-        bits.append(view.task_id)
+    if view.run_id:
+        bits.append(view.run_id)
     bits.append(view.status_label())
     return " · ".join(bits)
 
@@ -913,14 +910,14 @@ def is_terminal_packet(packet_type: str) -> bool:
     return packet_type in _TERMINAL_STATE
 
 
-def task_id_from_packet(packet: Any) -> str | None:
-    """Extract a task ID from an UpdatePacket (or compatible mapping)."""
+def run_id_from_packet(packet: Any) -> str | None:
+    """Extract a run ID from an UpdatePacket (or compatible mapping)."""
     payload = getattr(packet, "payload", None)
     if payload is None and isinstance(packet, dict):
         payload = packet
     if not isinstance(payload, dict):
         return None
-    tid = payload.get("task_id")
+    tid = payload.get("run_id")
     if tid:
         return str(tid)
     return None

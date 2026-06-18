@@ -34,7 +34,7 @@ class Record:
     severity: str
     detail: dict[str, Any] = field(default_factory=dict)
     project_id: str = ""
-    task_id: str | None = None
+    run_id: str | None = None
     env: str = ""
     image: str | None = None
     source: str | None = None

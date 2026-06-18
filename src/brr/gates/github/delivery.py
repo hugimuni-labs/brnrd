@@ -19,7 +19,7 @@ from requests.utils import quote
 
 from ... import config as conf
 from ... import prompts, protocol
-from ...task import Task
+from ...run import Run
 from .. import runtime
 from . import client, prs
 from .constants import _COMMENT_KINDS
@@ -38,19 +38,19 @@ def _coerce_int(value: object) -> int | None:
         return None
 
 
-def _find_task_for_event(brr_dir: Path, event_id: str) -> Task | None:
-    """Scan .brr/tasks/ for the task whose event_id matches *event_id*."""
-    tasks_dir = brr_dir / "tasks"
-    if not tasks_dir.exists():
+def _find_task_for_event(brr_dir: Path, event_id: str) -> Run | None:
+    """Scan run manifests for the run whose lead event matches *event_id*."""
+    runs_dir = brr_dir / "runs"
+    if not runs_dir.exists():
         return None
-    for path in tasks_dir.glob("*.md"):
-        task = Task.from_file(path)
+    for path in sorted(runs_dir.glob("*/run.md")):
+        task = Run.from_file(path)
         if task and task.event_id == event_id:
             return task
     return None
 
 
-def _branch_footer(repo: str, task: Task) -> str:
+def _branch_footer(repo: str, task: Run) -> str:
     """Return a Markdown footer with branch / PR links, or empty string.
 
     Only appended after finalization has identified the branch that

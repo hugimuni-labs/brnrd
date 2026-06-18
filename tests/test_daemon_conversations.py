@@ -64,7 +64,7 @@ def test_run_worker_routes_to_conversation_and_persists_records(tmp_path, monkey
     records = conversations.read_records(tmp_path / ".brr", task.conversation_key)
     kinds = [r.get("kind") for r in records]
     assert "event" in kinds
-    assert "task" in kinds
+    assert "run" in kinds
     assert "update" in kinds
     artifact_kinds = [
         r.get("artifact_kind") for r in records if r.get("kind") == "artifact"

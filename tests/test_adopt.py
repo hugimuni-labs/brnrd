@@ -47,7 +47,7 @@ def test_creates_brr_dir(tmp_path, monkeypatch):
     brr = repo / ".brr"
     assert brr.exists()
     for sub in ("inbox", "responses", "gates", "prompts",
-                "tasks", "traces", "reviews", "worktrees"):
+                "runs", "traces", "reviews", "worktrees"):
         assert (brr / sub).exists(), f".brr/{sub} missing"
     assert (brr / "config").exists()
 

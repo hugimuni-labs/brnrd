@@ -147,7 +147,7 @@ def test_list_worktrees_finds_brr_worktree(tmp_path):
 
     wts = list_worktrees(repo)
     assert len(wts) == 1
-    assert wts[0].task_id == "task-42"
+    assert wts[0].run_id == "task-42"
     assert wts[0].branch == "brr/task-42"
     assert wts[0].path == wt_path
 

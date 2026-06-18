@@ -10,13 +10,13 @@ brnrd proxy are later slices that reuse the same ``Record`` shape and
 Routing keys off ``RunContext.owner`` plus the ``ergonomics`` knob
 (``off|log|local``, default ``log``): the user-owned default is
 a quiet daemon log, operator-owned runs ignore the knob. Daemon entry
-point is ``probe_task_prep`` (per-task probe set; no-ops when the
+point is ``probe_run_prep`` (per-run probe set; no-ops when the
 resolved proxy is null). The CLI reads via ``store``.
 """
 
 from __future__ import annotations
 
-from .probes import probe_task_prep, run_probes
+from .probes import probe_run_prep, run_probes
 from .proxy import (
     ErgoProxy,
     LocalErgoProxy,
@@ -38,7 +38,7 @@ __all__ = [
     "resolve_proxy",
     "ergonomics_mode",
     "reset_log_dedup",
-    "probe_task_prep",
+    "probe_run_prep",
     "run_probes",
     "ergonomics_dir",
     "read_records",

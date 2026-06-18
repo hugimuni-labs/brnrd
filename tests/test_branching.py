@@ -13,7 +13,7 @@ def _init_repo(repo: Path) -> None:
     commit_files(repo, {"file.txt": "base\n"})
 
 
-def test_default_fallback_preserves_task_branch_from_default_seed(tmp_path):
+def test_default_fallback_preserves_run_branch_from_default_seed(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
@@ -97,7 +97,8 @@ def test_legacy_fallback_modes_downgrade_to_preserve(tmp_path, capsys):
 
 def test_legacy_branch_field_sentinels_skipped(tmp_path):
     """All legacy ``branch=`` sentinel values (``auto``, ``current``,
-    ``task``, ``none``) are no-ops now."""
+    ``none``) are no-ops now. ``task`` is just a normal branch name after
+    the run rename."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
@@ -106,10 +107,14 @@ def test_legacy_branch_field_sentinels_skipped(tmp_path):
         cwd=repo, check=True, stdout=subprocess.PIPE,
     )
 
-    for sentinel in ("auto", "current", "task", "none"):
+    for sentinel in ("auto", "current", "none"):
         plan = branching.resolve_publish_plan(repo, {"branch": sentinel}, {})
         assert plan.target_branch is None, sentinel
         assert plan.source == "fallback:preserve", sentinel
+
+    task_plan = branching.resolve_publish_plan(repo, {"branch": "task"}, {})
+    assert task_plan.target_branch == "task"
+    assert task_plan.source == "event:branch"
 
 
 def _init_repo_with_origin(tmp_path: Path) -> Path:
@@ -237,7 +242,7 @@ def test_cross_task_freshness_sync_then_seed_from_remote(tmp_path):
     sees the freshly published state — not the stale local tip.
 
     This locks in the freshness guarantee the operator flagged when we
-    discussed dropping local-land: the daemon's pre-task sync + the
+    discussed dropping local-land: the daemon's pre-run sync + the
     resolver's ``prefer_remote`` together cover the case where the
     operator's local copy of a target branch lags the remote.
     """
@@ -245,7 +250,7 @@ def test_cross_task_freshness_sync_then_seed_from_remote(tmp_path):
 
     repo = _init_repo_with_origin(tmp_path)
 
-    # Task A: agent stayed on brr/task-a; daemon does refspec push to
+    # Run A: agent stayed on brr/task-a; daemon does refspec push to
     # feature/x. Simulate that by pushing a brand-new commit via a
     # sibling clone so origin/feature/x exists with content the repo's
     # local feature/x does not have.
@@ -271,10 +276,10 @@ def test_cross_task_freshness_sync_then_seed_from_remote(tmp_path):
     # Local repo has no idea feature/x even exists yet.
     assert not (repo / "taska.txt").exists()
 
-    # Pre-task sync (B): fetches origin so origin/feature/x becomes
+    # Pre-run sync (B): fetches origin so origin/feature/x becomes
     # visible. The local feature/x branch doesn't exist, so the ff
     # pass leaves no skip noise — the resolver does the real work.
-    sync.refresh_before_task(repo, target_branches=["feature/x"], cfg={})
+    sync.refresh_before_run(repo, target_branches=["feature/x"], cfg={})
 
     plan = branching.resolve_publish_plan(
         repo, {"branch_target": "feature/x"}, {},
