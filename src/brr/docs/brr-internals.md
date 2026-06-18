@@ -221,7 +221,10 @@ addresses the delivery path explicitly):
   events (`processing` *or* `done`): it delivers queued partials in
   order, deleting each after a successful send (so delivery is
   resumable), and only on `done` delivers the terminal `<id>.md` and
-  cleans up the event, terminal file, and partials dir.
+  cleans up the event, terminal file, and partials dir. Telegram runs
+  this delivery scan in a small outbound loop separate from its
+  `getUpdates` long poll, so interim and folded replies are not delayed
+  by inbound polling.
 - **Silent-run fallback** — when an addressed event reaches the end of the
   runner/env path without stdout or a current-thread outbox reply, the
   daemon writes an explicit terminal failure note and marks the inbox event
