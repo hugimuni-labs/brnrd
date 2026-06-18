@@ -86,10 +86,14 @@ supervisor if you want restart policy outside local development.
 
 ## Override model
 
-brr ships prompts and docs with the package. Lightweight runtime
-choices belong in `.brr/config`, especially `runner`, `runner_cmd`,
-and environment policy. Deep prompt or orchestration customization is
-done by using a local checkout, editable install, or fork of brr.
+brr ships prompts, docs, and default runner profiles with the package.
+Lightweight runtime choices belong in `.brr/config`, especially `runner`,
+`runner_cmd`, and environment policy. Project-owned runner profiles live
+in `.brr/runners.md`; the legacy `.brr/prompts/runners.md` path is still
+accepted as a compatibility override, but runner profiles are execution
+medium data rather than prompt templates. Deep prompt or orchestration
+customization is done by using a local checkout, editable install, or fork
+of brr.
 
 Use `environment` for the user-facing execution policy:
 
