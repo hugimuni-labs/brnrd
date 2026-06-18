@@ -288,8 +288,8 @@ def test_worktree_finalize_ready_when_agent_on_target_branch(tmp_path):
     assert not envs.gitops.branch_exists(repo, "brr/task-switch")
 
 
-def test_worktree_finalize_nothing_when_no_commits_on_task_branch(tmp_path):
-    """status=nothing, no publish_branch, task branch torn down."""
+def test_worktree_finalize_nothing_when_no_commits_on_run_branch(tmp_path):
+    """status=nothing, no publish_branch, run branch torn down."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)

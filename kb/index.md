@@ -223,7 +223,7 @@ dive-in map) and are stable until something contradicts them.
   runner-medium exhaustion: **runner-medium selection & quota-aware
   fallback** (a distinct axis from compute-host
   [`plan-failover-compute.md`](plan-failover-compute.md)), a
-  **plan→approve→execute** duo loop, **task decomposition / delayed
+  **plan→approve→execute** duo loop, **run decomposition / delayed
   execution** atop [`design-run-event-model.md`](design-run-event-model.md),
   and the **cockpit reframe** — cut the forge-state firehose, weave the
   dominion/`.card`/outbox into one legible control surface.
@@ -235,7 +235,8 @@ dive-in map) and are stable until something contradicts them.
   holding operational control through a live cost `.card`, a
   plan→approve handshake, and a documented inbox/acknowledge contract
   (Loop C) — plus a budget-aware self-chunking discipline. Ships A1
-  (medium in the wake bundle) and the diffense de-firehose first.
+  (medium in the wake bundle), the first A2 quota snapshot ingress, and
+  the diffense de-firehose first.
 
 ## Conversations & responses
 
@@ -586,7 +587,7 @@ dive-in map) and are stable until something contradicts them.
   *accepted 2026-05-26, not yet started*. Locking-pass-IV
   clarifications: scope is **identity propagation only**
   (the daemon already injects rich context — kb/log tail +
-  Task Context Bundle + recent conversation records — this
+  Run Context Bundle + recent conversation records — this
   plan adds none of that); **`conversation_id` =
   `conversation_key`** (the existing human-readable
   gate-fingerprint string already implemented in
@@ -832,7 +833,7 @@ dive-in map) and are stable until something contradicts them.
 - [Daemon runner context ergonomics, 2026-05-09](research-runner-context-ergonomics-2026-05-09.md) —
   point-in-time review of a live brr daemon run: how much context the
   agent had to read, which prompt/runtime surfaces helped, where the
-  Task Context Bundle was noisy, stale bundled-doc contradictions, and
+  Run Context Bundle was noisy, stale bundled-doc contradictions, and
   Docker image tooling gaps for brr self-work.
 - [brr vs gh-aw](research-brr-vs-gh-aw.md) — deep comparison with
   GitHub Agentic Workflows: substrate / transport / durability /

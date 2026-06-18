@@ -247,8 +247,8 @@ def test_projection_records_separate_running_entries_per_attempt(tmp_path):
 
 def test_render_text_compact_has_runner_env_branch_header(tmp_path):
     """Compact card opens with a sticky ``runner · env · branch ← base``
-    header naming the three things that don't change once a task starts.
-    Task ID is dev-side noise in a chat reply and stays out."""
+    header naming the three things that don't change once a run starts.
+    Run ID is dev-side noise in a chat reply and stays out."""
     brr_dir = tmp_path / ".brr"
     key = "telegram:8:"
     _emit(brr_dir, key, "task_created", task_id="task-r", env="docker")

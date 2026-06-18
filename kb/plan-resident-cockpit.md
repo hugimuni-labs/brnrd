@@ -19,7 +19,7 @@ This is **not** a competing roadmap to
 the continuity/delivery spine and most of it has shipped. This page adds
 the dimensions the maintainer raised on 2026-06-16 that §11 doesn't
 cover: **runner-medium selection**, a **plan→approve→execute loop**,
-**task decomposition / delayed execution**, and the **cockpit reframe**
+**run decomposition / delayed execution**, and the **cockpit reframe**
 (reduce runner-sourced firehose, weave the dwelling/dashboard/terminal
 into one legible surface). Each gap below is grounded in a lived symptom,
 paired with the *smallest* fix, and pointed at its design home.
@@ -45,8 +45,10 @@ no design home yet. That gap is itself the finding.
 1. **Surface the medium in the wake context.** *(G1.1 shipped 2026-06-17
    on `brr/cost-aware-cockpit`.)* The Mode block now carries a read-only
    `Runner: <medium>` line so a thought can see which runner/model it
-   runs on; the quota/reset half (A2) is the pickup. The cost lens this
-   enables is detailed in
+   runs on. The first A2 ingress shipped 2026-06-18: a conservative
+   quota snapshot can now ride the same line as
+   `Runner: <medium> (<quota posture>)`; provider-specific collectors
+   are the remaining pickup. The cost lens this enables is detailed in
    [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md).
 2. **A fallback chain.** Config a `runner_media: [codex, claude, …]`
    order; on an *operational* failure (the §6 `failed` signal with
@@ -172,18 +174,18 @@ runtime and dashboard sides.
 (`prompts.py` → `build_daemon_prompt` / `_join_prompt_parts`):
 `run.md` + `daemon-substrate.md` (preamble) → dominion digest
 (playbook + self-inject) → matched pitfalls → recent-log tail → kb-health
-→ mode toggles (diffense, introspection) → the Task Context Bundle (the
-per-task delivery contract). The layering is real and mostly clean
+→ mode toggles (diffense, introspection) → the Run Context Bundle (the
+per-run delivery contract). The layering is real and mostly clean
 (`plan-agent-orientation-layering.md` did the first pass). Two problems
 remain:
 
 1. **The same mechanics are re-explained in three voices.** The
    outbox / keepalive / `.card` / `gate:` / `schedule.md` protocol is
-   narrated in `daemon-substrate.md`, again in the Task Context Bundle's
+   narrated in `daemon-substrate.md`, again in the Run Context Bundle's
    delivery contract, and gestured at in the playbook. Each wake pays for
    all three. That's the "layer to unify."
 2. **There is no average-workflow manual at all.** Nothing tells a wake
-   the *shape of a normal task run* — receive an event → orient → decide
+   the *shape of a normal daemon run* — receive an event → orient → decide
    plan-vs-execute → (if plan) emit a PLAN and schedule the approval
    wake → (if execute) do the work, narrate via `.card`, deliver →
    decompose / defer the rest via `schedule.md`. The protocol primitives
@@ -204,16 +206,16 @@ remain:
   firehose G4 cuts. Instead: surface it the way tool docs already are
   (`brr docs` / a `brr agent …` view), and inject a single pointer line
   ("the cockpit manual is at `brr docs cockpit` / `prompts/cockpit.md`;
-  read it when the task's shape is unfamiliar"). Glance at the panel;
+  read it when the run's shape is unfamiliar"). Glance at the panel;
   don't memorize it. This keeps the robustness ladder honest: the *live
-  state* (medium, quota, this task's branches) is injected; the *manual*
+  state* (medium, quota, this run's branches) is injected; the *manual*
   is one glance away.
 - **Deduplicate the protocol to one canonical home.** The delivery
-  mechanics get *one* authoritative description — the Task Context Bundle
-  stays the per-task *values* (paths, budget, this event's ids), and the
+  mechanics get *one* authoritative description — the Run Context Bundle
+  stays the per-run *values* (paths, budget, this event's ids), and the
   *protocol prose* collapses into the cockpit doc that the bundle points
   at. `daemon-substrate.md` keeps only the substrate facts that aren't
-  per-task (single-flight, capture net, schedule semantics). The win is
+  per-run (single-flight, capture net, schedule semantics). The win is
   fewer tokens and one voice instead of three.
 
 **Why bundled-and-inspected is the braided answer.** The maintainer's
@@ -237,7 +239,7 @@ synthesis — the same principle, applied to the manual).
 - **`docs/cockpit.md`** — the bundled, agent-facing cockpit manual: a
   control-file cheatsheet (outbox replies, `event:` / `gate:` sends,
   `.keepalive`, `.card`, `inbox.json`, `schedule.md`) plus the
-  average-task choreography (receive → orient → decide plan-vs-execute →
+  average-run choreography (receive → orient → decide plan-vs-execute →
   narrate → deliver → decompose/defer). It lives in **`docs/`, not
   `prompts/`** — the page's "working name `prompts/cockpit.md`" was
   tentative; *inspected, not injected* means the docs system, which
@@ -250,10 +252,10 @@ synthesis — the same principle, applied to the manual).
   (list + read a topic); the docs module needed no change.
 - **One-line pointer injected; protocol deduped.** `daemon-substrate.md`
   now closes with a pointer to `brr docs cockpit` instead of the
-  protocol being re-narrated; the Task Context Bundle's delivery contract
-  was compressed to its per-task *values* + operative rules with a single
+  protocol being re-narrated; the Run Context Bundle's delivery contract
+  was compressed to its per-run *values* + operative rules with a single
   "full protocol lives in `brr docs cockpit`" line. The bundle stays the
-  per-task authority; the manual is the one conceptual home.
+  per-run authority; the manual is the one conceptual home.
 
 Remaining third voice: the **dominion playbook** still re-narrates the
 same protocol (it's the resident's own memory, a `brr-home` commit, not

@@ -9,9 +9,9 @@ diffense wake. Read it when you have a checked pack and
 
 ## When to publish
 
-Publish only when this task produced a **review-worthy committed
+Publish only when this run produced a **review-worthy committed
 change** and `diffense.create_pr` is enabled. A chat-only reply, a
-read-only task, or a one-line trivial fix is not review-worthy — skip
+read-only run, or a one-line trivial fix is not review-worthy — skip
 the pack and the PR. An honest absence beats a hollow pack.
 
 Both `diffense.emit_pack` and `diffense.create_pr` default off. Turn them

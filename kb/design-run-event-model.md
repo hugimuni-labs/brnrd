@@ -61,7 +61,10 @@ The daemon picks `pending[0]`, builds a `Task` from it
 "task" *is* that one event for the run's whole life. Everything
 downstream — `run_context`, the response key (`responses/<event_id>.md`),
 the bundle's `### Task` framing, the diffense pack path, the branch name
-`brr/<task-id>` — inherits that 1:1.
+`brr/<task-id>` — inherited that 1:1. The prompt-facing framing was split
+off on 2026-06-18: agents now see a Run Context Bundle / Run ID while
+the persisted object, storage path, and id string remain legacy
+`Task` / `.brr/tasks/` / `task-...` until the model rename lands.
 
 ## Want
 
@@ -211,11 +214,13 @@ edges.
   `_run_worker`, `_run_worker_and_finalize`, `_cleanup_traces_on_success`,
   publish (`task.meta["publish_branch"]`).
 - [`../src/brr/run_context.py`](../src/brr/run_context.py) — already named
-  `run`! The context file is `runs/<task-id>/context.md`; the "Task ID"
-  label is the only task-ism. (Evidence the *run* concept already won at
-  the directory layer; only the object is still `Task`.)
-- [`../src/brr/prompts.py`](../src/brr/prompts.py) — bundle `### Task`,
-  `Task ID:`, the "Task Context Bundle" name, `_format_pending_events`.
+  `run`! The context file is `runs/<task-id>/context.md`; the prompt-facing
+  label moved to `Run ID` on 2026-06-18, while the path/id string remains
+  transitional.
+- [`../src/brr/prompts.py`](../src/brr/prompts.py) — prompt-facing
+  `Run Context Bundle` / `### Run` / `Run ID` shipped on 2026-06-18;
+  the remaining work is the internal parameter/storage model
+  (`task_id`, `Task`, `_format_pending_events`).
 - Response/outbox keys, the diffense pack path `diffense/<task-id>/`, the
   branch name `brr/<task-id>`.
 
