@@ -388,7 +388,7 @@ so it can lose the context it has built up. (If the daemon is still running it
 recreates the branch on its next push — but anything that lived only on the
 remote is gone.) Leaving it alone costs you nothing: it never touches `main`.
 
-Per-task branches named `brr/<task-id>` are a different thing — ordinary feature
+Per-task branches named `brr/<run-id>` are a different thing — ordinary feature
 branches that open PRs, safe to handle like any other.
 """
 

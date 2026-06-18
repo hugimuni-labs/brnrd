@@ -512,8 +512,8 @@ def cmd_ergonomics_list(args):
         hint = r.detail.get("hint") if isinstance(r.detail, dict) else None
         line = (f"  {_fmt_ts(r.timestamp)}  {r.severity:5}  {r.issue:22}  "
                 f"env={r.env or '-'}")
-        if r.task_id:
-            line += f"  task={r.task_id}"
+        if r.run_id:
+            line += f"  run={r.run_id}"
         print(line)
         if hint:
             print(f"      {hint}")

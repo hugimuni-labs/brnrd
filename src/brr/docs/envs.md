@@ -36,8 +36,8 @@ structured event/thread metadata names a branch target, `branch.fallback`
 or `branch_fallback` controls the daemon's publish plan. The only
 supported mode is `preserve` (the default): seed from the repo default
 branch and publish the `brr/<run-id>` branch under its own name for
-human routing. The legacy id string may still start with `task-`, so
-today's concrete branch often looks like `brr/task-...`. Legacy values
+human routing. New run IDs start with `run-`, so the concrete branch
+usually looks like `brr/run-...`. Legacy values
 (`inbox`, `default`, `current`) warn once
 on daemon start and downgrade to `preserve`.
 
@@ -69,7 +69,7 @@ git state and records one of four `publish_status` outcomes:
   successful run.
 
 `daemon.publish` then ships the recorded `publish_branch` in one
-step. When the event named an `expected_publish_branch` but the agent
+step. When the event named a `target_branch` but the agent
 kept the run branch, the push uses a refspec
 (`git push origin brr/<run-id>:<expected>`) so the daemon never
 touches the local target ref. When the agent rewrote the expected
