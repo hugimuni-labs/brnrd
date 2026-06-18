@@ -343,6 +343,48 @@ def test_render_update_html_escapes_user_content(tmp_path, monkeypatch):
     assert last_edit[2].get("parse_mode") == "HTML"
 
 
+def test_render_update_html_escapes_agent_card_note(tmp_path, monkeypatch):
+    """The resident-authored ``.card`` note also lands inside Telegram
+    HTML parse mode, so it must be escaped like failure details and
+    branch names.
+    """
+    brr_dir = tmp_path / ".brr"
+    _save_token(brr_dir)
+    task = _seed_run(brr_dir, "task-tg-note-esc", chat_id=333)
+
+    api_calls: list[tuple] = []
+
+    def fake_api_call(token, method, params=None):
+        api_calls.append((token, method, params))
+        if method == "sendMessage":
+            return {"result": {"message_id": 701}}
+        if method == "editMessageText":
+            return {"result": {"message_id": 701}}
+        return {}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
+          event_id=task.event_id, branch="auto", env="docker")
+    _emit(brr_dir, task.conversation_key, "attempt_started",
+          run_id=task.id, event_id=task.event_id, attempt=1)
+    _emit(
+        brr_dir,
+        task.conversation_key,
+        "card_composed",
+        run_id=task.id,
+        event_id=task.event_id,
+        text="checking <card & delivery>",
+    )
+
+    last_edit = next(c for c in reversed(api_calls) if c[1] == "editMessageText")
+    text = last_edit[2]["text"]
+    assert "checking <card" not in text
+    assert "note: checking &lt;card &amp; delivery&gt;" in text
+    assert "<s>preparing" in text
+    assert last_edit[2].get("parse_mode") == "HTML"
+
+
 def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):
     """Telegram's 400 'message is not modified' must not fall through to send.
 
