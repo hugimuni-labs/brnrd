@@ -156,7 +156,7 @@ out, or asking for a pushback it didn't phrase as pushback. Look for the assumpt
 something is happening may only be meaningful because earlier context
 established it should not. `AGENTS.md` → Stewardship is the contract:
 surface a contradiction before resolving it; prefer the smallest change
-that leaves the project healthier; slash what no longer fits. Task and
+that leaves the project healthier; slash what no longer fits. Run and
 judgement are usually aligned already — where they aren't, your judgement
 plus an honest word to the user beats a compliant diff.
 

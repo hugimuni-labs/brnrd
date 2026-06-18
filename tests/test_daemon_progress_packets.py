@@ -56,7 +56,7 @@ def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
 
     assert task.status == "done"
     types = _packet_types(tmp_path / ".brr", task.conversation_key)
-    assert "task_created" in types
+    assert "run_created" in types
     assert "env_prepared" in types
     assert "attempt_started" in types
     assert "run_started" in types
@@ -217,7 +217,7 @@ class _FakeDockerEnv:
             branch_name=None,
         )
         ctx.env_state.update({
-            "task_id": task.id,
+            "run_id": task.id,
             "docker_image": "img:latest",
             "docker_containers": [],
         })
@@ -225,7 +225,7 @@ class _FakeDockerEnv:
         return ctx
 
     def invoke(self, ctx, runner_name, invocation, cfg, *, trace=False):
-        cid = f"brr-{ctx.env_state['task_id']}-{invocation.label}"
+        cid = f"brr-{ctx.env_state['run_id']}-{invocation.label}"
         ctx.env_state["docker_containers"].append(cid)
         ctx.env_state["docker_container"] = cid
         self.containers.append(cid)
@@ -239,11 +239,11 @@ class _FakeDockerEnv:
             stderr="", returncode=0, trace_dir=None, artifacts=[],
         )
 
-    def finalize(self, ctx, task, tasks_dir):
+    def finalize(self, ctx, task, runs_dir):
         preserved = ctx.env_state.get("docker_containers", [])
         if preserved and task.status != "done":
             task.meta["docker_containers"] = ", ".join(preserved)
-            task.save(tasks_dir)
+            task.save(runs_dir)
         return task
 
 
@@ -304,10 +304,10 @@ class _Result:
         self.stderr = stderr
 
 
-def _publish_task(*, meta: dict, conv_key: str = "telegram:99:") -> "daemon.Task":
-    from brr.task import Task
+def _publish_task(*, meta: dict, conv_key: str = "telegram:99:") -> "daemon.Run":
+    from brr.run import Run
 
-    return Task(
+    return Run(
         id="task-publish",
         event_id="evt-publish",
         body="publish me",
@@ -365,7 +365,7 @@ def test_publish_plain_push_to_existing_upstream(tmp_path, monkeypatch):
 
 
 def test_publish_new_branch_pushes_with_upstream_flag(tmp_path, monkeypatch):
-    """New ``brr/<task-id>`` with no upstream + new commits → push
+    """New ``brr/<run-id>`` with no upstream + new commits → push
     with ``-u`` so the local branch tracks origin afterwards."""
     brr_dir = tmp_path / ".brr"
     brr_dir.mkdir()
@@ -399,8 +399,8 @@ def test_publish_new_branch_pushes_with_upstream_flag(tmp_path, monkeypatch):
     assert started.get("set_upstream") is True
 
 
-def test_publish_refspec_when_agent_kept_task_branch(tmp_path, monkeypatch):
-    """Agent stayed on ``brr/<task-id>`` but event named a different
+def test_publish_refspec_when_agent_kept_run_branch(tmp_path, monkeypatch):
+    """Agent stayed on ``brr/<run-id>`` but event named a different
     expected publish branch → push via refspec to the expected name
     without touching any local ref."""
     brr_dir = tmp_path / ".brr"

@@ -35,7 +35,7 @@ _PR_URL_RE = re.compile(r"/pulls/(\d+)(?:/|$)")
 # progress card. Anything not in this set is ignored so render_update
 # stays a thin pass-through on noise.
 _RENDERABLE_PACKETS = {
-    "task_created",
+    "run_created",
     "env_prepared",
     "container_started",
     "container_preserved",

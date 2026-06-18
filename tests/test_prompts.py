@@ -201,7 +201,7 @@ class TestPromptBuilding:
     def test_daemon_prompt_includes_diffense_pack_when_enabled(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-9",
+            run_id="task-9",
             runtime_dir="/repo/.brr",
             diffense=True,
         )
@@ -218,7 +218,7 @@ class TestPromptBuilding:
     def test_daemon_prompt_omits_diffense_pack_when_not_requested(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-9",
+            run_id="task-9",
             runtime_dir="/repo/.brr",
         )
         assert "Review pack (diffense)" not in prompt
@@ -227,7 +227,7 @@ class TestPromptBuilding:
     def test_daemon_prompt_surfaces_runner_medium(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-9",
+            run_id="task-9",
             runner_medium="codex",
         )
         assert "- Runner: codex" in prompt
@@ -235,14 +235,14 @@ class TestPromptBuilding:
     def test_daemon_prompt_omits_runner_medium_when_absent(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-9",
+            run_id="task-9",
         )
         assert "- Runner:" not in prompt
 
     def test_daemon_prompt_surfaces_runner_quota_when_known(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-9",
+            run_id="task-9",
             runner_medium="codex",
             runner_quota="weekly 0% - resets 2026-06-17T01:29Z",
         )
@@ -255,7 +255,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             outbox_path="/repo/.brr/outbox/evt-1",
-            task_id="task-9",
+            run_id="task-9",
         )
         assert "/repo/.brr/outbox/evt-1" in prompt
         assert "mid-thought" in prompt
@@ -267,7 +267,7 @@ class TestPromptBuilding:
     def test_daemon_prompt_omits_outbox_contract_without_path(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-9",
+            run_id="task-9",
         )
         assert "mid-thought" not in prompt
         assert "outbox directory" not in prompt
@@ -277,7 +277,7 @@ class TestPromptBuilding:
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             outbox_path="/repo/.brr/outbox/evt-1",
             budget_seconds=3600,
-            task_id="task-9",
+            run_id="task-9",
         )
         assert "Budget:" in prompt
         assert "60m" in prompt
@@ -288,7 +288,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             outbox_path="/repo/.brr/outbox/evt-1",
-            task_id="task-9",
+            run_id="task-9",
         )
         assert "Budget:" not in prompt
         assert ".keepalive" not in prompt
@@ -298,7 +298,7 @@ class TestPromptBuilding:
         machinery (single-flight, capture net, self-scheduled wakes) the
         host-agnostic playbook deliberately leaves out."""
         prompt = build_daemon_prompt(
-            "ship it", "evt-1", "/tmp/resp.md", tmp_path, task_id="task-9",
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
         )
         assert "How brr drives you" in prompt
         assert "single-flight" in prompt
@@ -315,7 +315,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
             outbox_path="/repo/.brr/outbox/evt-A",
-            task_id="task-A",
+            run_id="task-A",
             pending_events=[
                 {"id": "evt-B", "source": "telegram",
                  "summary": "quick question about X"},
@@ -332,16 +332,16 @@ class TestPromptBuilding:
     def test_daemon_prompt_omits_inbox_when_no_pending_events(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
-            outbox_path="/repo/.brr/outbox/evt-A", task_id="task-A",
+            outbox_path="/repo/.brr/outbox/evt-A", run_id="task-A",
         )
         assert "other pending events" not in prompt
 
     def test_daemon_prompt_lists_present_thoughts(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,
-            task_id="task-A",
+            run_id="task-A",
             present=[
-                {"kind": "session", "stream": "telegram:9:", "task_id": "task-Z"},
+                {"kind": "session", "stream": "telegram:9:", "run_id": "task-Z"},
             ],
         )
         assert "Also awake right now" in prompt
@@ -352,7 +352,7 @@ class TestPromptBuilding:
 
     def test_daemon_prompt_omits_presence_when_alone(self, tmp_path):
         prompt = build_daemon_prompt(
-            "work on A", "evt-A", "/tmp/resp.md", tmp_path, task_id="task-A",
+            "work on A", "evt-A", "/tmp/resp.md", tmp_path, run_id="task-A",
         )
         assert "Also awake right now" not in prompt
 
@@ -364,7 +364,7 @@ class TestPromptBuilding:
         )
         prompt = build_daemon_prompt(
             "rebuild the docker image and ship", "evt-A", "/tmp/resp.md",
-            tmp_path, task_id="task-A",
+            tmp_path, run_id="task-A",
         )
         assert "Pitfalls that match this task" in prompt
         assert "Blind retry" in prompt
@@ -377,7 +377,7 @@ class TestPromptBuilding:
         )
         prompt = build_daemon_prompt(
             "update the readme wording", "evt-A", "/tmp/resp.md",
-            tmp_path, task_id="task-A",
+            tmp_path, run_id="task-A",
         )
         assert "Pitfalls that match this task" not in prompt
 
@@ -390,7 +390,7 @@ class TestPromptBuilding:
         # original event text — both feed the matcher.
         prompt = build_daemon_prompt(
             "handle the request", "evt-A", "/tmp/resp.md", tmp_path,
-            task_id="task-A",
+            run_id="task-A",
             event_body="the invoice total looks wrong for mid-month signups",
         )
         assert "Pitfalls that match this task" in prompt
@@ -403,7 +403,7 @@ class TestPromptBuilding:
 
         prompt = build_daemon_prompt(
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-123",
+            run_id="run-123",
             source="telegram",
             environment="docker",
             branch_name="feat/task-abstraction",
@@ -411,10 +411,10 @@ class TestPromptBuilding:
             branch_source="event:target_branch",
             branch_setup_notice="target branch held elsewhere; using run branch",
             runtime_dir="/repo/.brr",
-            context_path="/repo/.brr/runs/task-123/context.md",
+            context_path="/repo/.brr/runs/run-123/context.md",
         )
-        assert "Run ID: task-123" in prompt
-        assert "Legacy task id: task-123" in prompt
+        assert "Run ID: run-123" in prompt
+        assert "Legacy task id" not in prompt
         assert f"Execution root: {tmp_path}" in prompt
         assert "Seed ref: feat/task-abstraction" in prompt
         assert "Current branch: feat/task-abstraction" in prompt
@@ -423,7 +423,7 @@ class TestPromptBuilding:
             in prompt
         )
         assert "Shared runtime dir: /repo/.brr" in prompt
-        assert "Run context file: /repo/.brr/runs/task-123/context.md" in prompt
+        assert "Run context file: /repo/.brr/runs/run-123/context.md" in prompt
         assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
         assert "fix it" in prompt
         assert "kb/log-" not in prompt
@@ -440,7 +440,7 @@ class TestPromptBuilding:
 
         prompt = build_daemon_prompt(
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-123",
+            run_id="task-123",
             source="telegram",
             environment="docker",
             context_path="/repo/.brr/runs/task-123/context.md",
@@ -468,7 +468,7 @@ class TestPromptBuilding:
 
         prompt = build_daemon_prompt(
             "do thing", "evt-9", "/tmp/r.md", tmp_path,
-            task_id="task-9",
+            run_id="task-9",
         )
         assert "### Mode" in prompt
         assert "Stage: brr daemon run" in prompt
@@ -477,14 +477,14 @@ class TestPromptBuilding:
         assert "Environment:" not in prompt
         assert "Runtime recovery:" not in prompt
 
-    def test_daemon_prompt_describes_preserved_task_branch(self, tmp_path):
+    def test_daemon_prompt_describes_preserved_run_branch(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
         (prompts / "run.md").write_text("You are an agent.")
 
         prompt = build_daemon_prompt(
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-123",
+            run_id="task-123",
             branch_name="brr/task-123",
             seed_ref="main",
             branch_source="fallback:preserve",
@@ -494,7 +494,7 @@ class TestPromptBuilding:
         assert "Seed ref: main" in prompt
         assert "Branch source: fallback:preserve" in prompt
         assert "Host context branch: feature/host" in prompt
-        # No target branch → nudge the agent to rename the brr/<task-id>
+        # No target branch → nudge the agent to rename the brr/<run-id>
         # placeholder to something descriptive.
         assert "rename the branch" in prompt
         assert "brr/<short-slug>" in prompt
@@ -515,7 +515,7 @@ class TestPromptBuilding:
 
         prompt = build_daemon_prompt(
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-123",
+            run_id="task-123",
             branch_name="brr/task-123",
             seed_ref="main",
         )
@@ -542,13 +542,13 @@ class TestPromptBuilding:
                 "ts": "2026-05-05T20:00:05Z",
                 "kind": "update",
                 "type": "done",
-                "task_id": "task-prev",
+                "run_id": "task-prev",
             },
         ]
 
         prompt = build_daemon_prompt(
             "fix it", "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-123",
+            run_id="task-123",
             branch_name="brr/task-123",
             seed_ref="feat/task",
             runtime_dir="/repo/.brr",
@@ -705,13 +705,13 @@ class TestPromptBuilding:
         body = "long telegram request"
         prompt = build_daemon_prompt(
             body, "evt-1", "/tmp/resp.md", tmp_path,
-            task_id="task-123",
+            run_id="task-123",
             event_body=body,
         )
 
         assert "Original event body" in prompt
         assert body in prompt
-        assert f"Task: {body}" not in prompt
+        assert f"Run: {body}" not in prompt
 
     def test_daemon_prompt_without_recent_conversation(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
@@ -720,7 +720,7 @@ class TestPromptBuilding:
 
         prompt = build_daemon_prompt(
             "do thing", "evt-9", "/tmp/r.md", tmp_path,
-            task_id="task-9",
+            run_id="task-9",
         )
         assert "Workstream" not in prompt
         assert "Recent in this conversation" not in prompt
@@ -732,7 +732,7 @@ class TestPromptBuilding:
             "evt-9",
             "/tmp/r.md",
             tmp_path,
-            task_id="task-9",
+            run_id="task-9",
             context_path="/repo/.brr/runs/task-9/context.md",
         )
         assert "Run context file: /repo/.brr/runs/task-9/context.md" in prompt
@@ -750,7 +750,7 @@ class TestPromptBuilding:
             "/tmp/resp.md",
             tmp_path,
             outbox_path="/repo/.brr/outbox/evt-1",
-            task_id="task-9",
+            run_id="task-9",
         )
         assert "stay in the conversation" in prompt
         assert "substantial work should use the card" in prompt
@@ -854,7 +854,7 @@ class TestIntrospectionMode:
 
     def test_off_by_default_daemon_prompt(self, tmp_path):
         prompt = build_daemon_prompt(
-            "ship it", "evt-1", "/tmp/resp.md", tmp_path, task_id="task-9",
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
         )
         assert "Look at it" not in prompt
 
@@ -871,7 +871,7 @@ class TestIntrospectionMode:
     def test_injected_into_daemon_prompt_when_enabled(self, tmp_path):
         self._enable(tmp_path)
         prompt = build_daemon_prompt(
-            "ship it", "evt-1", "/tmp/resp.md", tmp_path, task_id="task-9",
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
         )
         assert "Look at it" in prompt
 

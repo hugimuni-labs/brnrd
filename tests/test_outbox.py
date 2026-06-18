@@ -13,7 +13,7 @@ import types
 
 from brr import conversations, daemon, protocol, run_context, run_progress, updates
 from brr.envs import RunContext
-from brr.task import Task
+from brr.run import Run
 
 
 def _emit(brr_dir, key, ptype, **payload):
@@ -452,18 +452,18 @@ def test_live_inbox_file_lists_other_pending_events(tmp_path):
 def test_interim_response_packet_updates_card(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:1:"
-    conversations.append_task(
-        brr_dir, key, task_id="task-1", event_id="evt-1",
+    conversations.append_run(
+        brr_dir, key, run_id="task-1", event_id="evt-1",
         env="worktree", status="running", branch_name="brr/task-1",
     )
-    _emit(brr_dir, key, "attempt_started", task_id="task-1", attempt=1)
-    _emit(brr_dir, key, "run_started", task_id="task-1", branch="brr/task-1")
-    _emit(brr_dir, key, "interim_response", task_id="task-1", event_id="evt-1",
+    _emit(brr_dir, key, "attempt_started", run_id="task-1", attempt=1)
+    _emit(brr_dir, key, "run_started", run_id="task-1", branch="brr/task-1")
+    _emit(brr_dir, key, "interim_response", run_id="task-1", event_id="evt-1",
           path="/x/.brr/responses/evt-1.partials/000001.md")
-    _emit(brr_dir, key, "interim_response", task_id="task-1", event_id="evt-1",
+    _emit(brr_dir, key, "interim_response", run_id="task-1", event_id="evt-1",
           path="/x/.brr/responses/evt-1.partials/000002.md")
 
-    view = run_progress.project_task(brr_dir, key, "task-1")
+    view = run_progress.project_run(brr_dir, key, "task-1")
     assert view is not None
     assert view.interim_count == 2
     assert "interim" in view.detail.lower()
@@ -474,22 +474,22 @@ def test_interim_response_packet_updates_card(tmp_path):
 def test_cross_event_interim_card_names_the_folded_in_event(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:1:"
-    conversations.append_task(
-        brr_dir, key, task_id="task-A", event_id="evt-A",
+    conversations.append_run(
+        brr_dir, key, run_id="task-A", event_id="evt-A",
         env="worktree", status="running",
     )
-    _emit(brr_dir, key, "run_started", task_id="task-A")
-    _emit(brr_dir, key, "interim_response", task_id="task-A", event_id="evt-A",
+    _emit(brr_dir, key, "run_started", run_id="task-A")
+    _emit(brr_dir, key, "interim_response", run_id="task-A", event_id="evt-A",
           target_event="evt-B", path="/x/.brr/responses/evt-B.partials/000001.md")
 
-    view = run_progress.project_task(brr_dir, key, "task-A")
+    view = run_progress.project_run(brr_dir, key, "task-A")
     assert view is not None
     assert "folded-in" in view.detail
     assert "evt-B" in view.detail
 
 
 def test_run_context_includes_outbox_paths(tmp_path):
-    task = Task(id="task-1", event_id="evt-1", body="do it", source="telegram")
+    task = Run(id="task-1", event_id="evt-1", body="do it", source="telegram")
     ctx = RunContext(
         name="worktree",
         cwd=tmp_path,
@@ -507,7 +507,7 @@ def test_run_context_includes_outbox_paths(tmp_path):
 
 
 def test_run_context_includes_communication_snapshot_and_history(tmp_path):
-    task = Task(id="task-1", event_id="evt-1", body="do it", source="telegram")
+    task = Run(id="task-1", event_id="evt-1", body="do it", source="telegram")
     ctx = RunContext(
         name="worktree",
         cwd=tmp_path,
@@ -566,7 +566,7 @@ def test_run_context_includes_communication_snapshot_and_history(tmp_path):
 
 
 def test_run_context_renders_prior_failure_facet(tmp_path):
-    task = Task(id="task-2", event_id="evt-2", body="again", source="telegram")
+    task = Run(id="task-2", event_id="evt-2", body="again", source="telegram")
     ctx = RunContext(
         name="worktree",
         cwd=tmp_path,
@@ -599,7 +599,7 @@ def test_run_context_renders_prior_failure_facet(tmp_path):
 
 
 def test_run_context_omits_outbox_when_absent(tmp_path):
-    task = Task(id="task-1", event_id="evt-1", body="do it")
+    task = Run(id="task-1", event_id="evt-1", body="do it")
     ctx = RunContext(
         name="host", cwd=tmp_path, repo_root=tmp_path,
         runtime_dir=tmp_path / ".brr",
@@ -620,7 +620,7 @@ def test_run_context_includes_prompt_file_path(tmp_path):
     built after the context file); the path is pre-announced so the agent
     knows where to look once it exists.
     """
-    task = Task(id="task-abc", event_id="evt-1", body="do it")
+    task = Run(id="task-abc", event_id="evt-1", body="do it")
     ctx = RunContext(
         name="worktree",
         cwd=tmp_path,
@@ -640,10 +640,10 @@ def test_run_context_includes_prompt_file_path(tmp_path):
 def test_write_prompt_file_creates_file_in_run_dir(tmp_path):
     """write_prompt_file persists the prompt alongside context.md."""
     from brr import run_context
-    from brr.task import Task
+    from brr.run import Run
 
     brr_dir = tmp_path / ".brr"
-    task = Task(id="task-xyz", event_id="evt-1", body="fix it")
+    task = Run(id="task-xyz", event_id="evt-1", body="fix it")
     prompt_text = "# My assembled prompt\n\nsome content"
 
     path = run_context.write_prompt_file(brr_dir, task, prompt_text)

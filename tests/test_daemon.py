@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from brr import daemon, envs, presence, protocol
-from brr.task import Task
+from brr.run import Run
 from brr.runner import RunnerResult
 
 from _helpers import (
@@ -47,7 +47,7 @@ def _stub_env_isolated(monkeypatch, tmp_path):
         def invoke(self, ctx, runner_name, invocation, cfg=None, *, trace=False):
             raise NotImplementedError("override in test")
 
-        def finalize(self, ctx, task, tasks_dir):
+        def finalize(self, ctx, task, runs_dir):
             finalized.append(task.id)
             return task
 
@@ -65,7 +65,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon.prompts,
         "build_daemon_prompt",
-        lambda task, eid, rp, root, **kw: f"PROMPT {eid} {kw.get('task_id')} -> {rp}",
+        lambda task, eid, rp, root, **kw: f"PROMPT {eid} {kw.get('run_id')} -> {rp}",
     )
 
     invocations: list[str] = []
@@ -98,7 +98,7 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     # no separate triage stage, no retry. The labelled-kind check
     # captures both halves of that intent in one assertion.
     assert invocations == ["daemon-run"]
-    persisted = Task.from_file(tmp_path / ".brr" / "tasks" / f"{task.id}.md")
+    persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
     assert persisted is not None
     assert persisted.status == "done"
     response = (tmp_path / ".brr" / "responses" / "evt-1.md").read_text(encoding="utf-8")
@@ -182,7 +182,7 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
     response = protocol.read_response(tmp_path / ".brr" / "responses", "evt-2")
     assert response is not None
     assert "environment setup failed: boom" in response
-    persisted = Task.from_file(tmp_path / ".brr" / "tasks" / f"{task.id}.md")
+    persisted = Run.from_file(tmp_path / ".brr" / "runs" / task.id / "run.md")
     assert persisted is not None
     assert persisted.status == "error"
 
@@ -208,7 +208,7 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
         # Mid-run: this thought is recorded as present on its stream, so a
         # concurrent session would see it and could avoid colliding.
         active = presence.list_active(brr_dir)
-        seen["during"] = [(e["kind"], e["task_id"]) for e in active]
+        seen["during"] = [(e["kind"], e["run_id"]) for e in active]
         Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
         Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
         return RunnerResult(
@@ -442,7 +442,7 @@ def test_run_worker_calls_sync_before_resolving_branch_plan(
         call_order.append("resolve")
         return real_resolve(repo_root, ev, cfg)
 
-    monkeypatch.setattr(daemon.sync, "refresh_before_task", fake_refresh)
+    monkeypatch.setattr(daemon.sync, "refresh_before_run", fake_refresh)
     monkeypatch.setattr(daemon.branching, "resolve_publish_plan", wrapped_resolve)
 
     base_env = envs.get_env("worktree")
@@ -470,7 +470,7 @@ def test_run_worker_calls_sync_before_resolving_branch_plan(
     # ask sync to consider the host's default branch (or whatever
     # gitops returns there) — empty is acceptable for a repo without
     # a default branch but the call must happen.
-    assert captured_targets, "sync.refresh_before_task was not called"
+    assert captured_targets, "sync.refresh_before_run was not called"
 
 
 def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
@@ -487,7 +487,7 @@ def test_run_worker_proceeds_when_sync_fails(tmp_path, monkeypatch):
         lambda task, eid, rp, root, **kw: "PROMPT",
     )
     monkeypatch.setattr(
-        daemon.sync, "refresh_before_task",
+        daemon.sync, "refresh_before_run",
         lambda _repo, *, target_branches, cfg=None: daemon.sync.SyncResult(
             error="git fetch origin: simulated network failure",
         ),
@@ -573,7 +573,7 @@ def test_start_preserves_error_event_status(tmp_path, monkeypatch):
     monkeypatch.setattr(
         daemon,
         "_run_worker",
-        lambda *_a, **_k: Task(id="task-err", event_id="evt-err", body="help", status="error"),
+        lambda *_a, **_k: Run(id="task-err", event_id="evt-err", body="help", status="error"),
     )
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
@@ -593,37 +593,37 @@ def _seed_trace_dir(brr_dir: Path, rel: str) -> Path:
 
 def test_cleanup_traces_on_success_removes_dirs_and_meta(tmp_path):
     brr_dir = tmp_path / ".brr"
-    tasks_dir = brr_dir / "tasks"
-    tasks_dir.mkdir(parents=True)
+    runs_dir = brr_dir / "runs"
+    runs_dir.mkdir(parents=True)
     trace_a = _seed_trace_dir(brr_dir, "traces/daemon-run/evt-1-attempt-1")
     trace_b = _seed_trace_dir(brr_dir, "traces/daemon-run/evt-1-attempt-2")
-    task = Task(id="task-clean", event_id="evt-1", body="x", status="done")
+    task = Run(id="task-clean", event_id="evt-1", body="x", status="done")
     task.meta["trace_dirs"] = (
         "traces/daemon-run/evt-1-attempt-1, traces/daemon-run/evt-1-attempt-2"
     )
-    task.save(tasks_dir)
+    task.save(runs_dir)
 
-    daemon._cleanup_traces_on_success(brr_dir, tasks_dir, task)
+    daemon._cleanup_traces_on_success(brr_dir, runs_dir, task)
 
     assert not trace_a.exists()
     assert not trace_b.exists()
     assert "trace_dirs" not in task.meta
-    reloaded = Task.from_file(tasks_dir / f"{task.id}.md")
+    reloaded = Run.from_file(runs_dir / task.id / "run.md")
     assert reloaded is not None
     assert "trace_dirs" not in reloaded.meta
 
 
 def test_cleanup_traces_on_success_keeps_on_failure(tmp_path):
     brr_dir = tmp_path / ".brr"
-    tasks_dir = brr_dir / "tasks"
-    tasks_dir.mkdir(parents=True)
+    runs_dir = brr_dir / "runs"
+    runs_dir.mkdir(parents=True)
     trace = _seed_trace_dir(brr_dir, "traces/daemon-run/evt-2-attempt-1")
     for status in ("error", "conflict"):
-        task = Task(id=f"task-{status}", event_id="evt-2", body="x", status=status)
+        task = Run(id=f"task-{status}", event_id="evt-2", body="x", status=status)
         task.meta["trace_dirs"] = "traces/daemon-run/evt-2-attempt-1"
-        task.save(tasks_dir)
+        task.save(runs_dir)
 
-        daemon._cleanup_traces_on_success(brr_dir, tasks_dir, task)
+        daemon._cleanup_traces_on_success(brr_dir, runs_dir, task)
 
         assert trace.exists(), f"trace removed on status={status}"
         assert task.meta.get("trace_dirs"), f"meta cleared on status={status}"
@@ -774,7 +774,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
 
     def fake_run_worker(*_args, **_kwargs):
         record("worker")
-        return Task(
+        return Run(
             id="task-reload",
             event_id="evt-reload",
             body="help",
@@ -813,7 +813,7 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
 def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     """The publish kernel reads ``publish_branch`` + ``expected_remote_oid``
     directly from ``task.meta`` (no extra threading from the worker)."""
-    task = Task(
+    task = Run(
         id="task-lease",
         event_id="evt-lease",
         body="rebase",
@@ -856,7 +856,7 @@ def test_worker_finalize_tolerates_gate_cleanup_after_response(
     def fake_run_worker(ev, *_args, **_kwargs):
         daemon._set_event_status_if_present(ev, "done")
         ev["_path"].unlink()
-        return Task(
+        return Run(
             id="task-cleaned",
             event_id=ev["id"],
             body=ev["body"],
@@ -1072,7 +1072,7 @@ def test_result_satisfied_delivery_missing_artifact_fails():
 
 
 def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
-    """The daemon persists the assembled prompt in .brr/runs/<task-id>/prompt.md.
+    """The daemon persists the assembled prompt in .brr/runs/<run-id>/prompt.md.
 
     On successful runs the trace directories are cleaned up, but the run dir
     is not, so prompt.md survives — giving a faithful "what did this wake
@@ -1088,7 +1088,7 @@ def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
     captured_prompts: list[str] = []
 
     def fake_build_prompt(task, eid, rp, root, **kw):
-        p = f"PROMPT task={kw.get('task_id')} evt={eid}"
+        p = f"PROMPT run={kw.get('run_id')} evt={eid}"
         captured_prompts.append(p)
         return p
 

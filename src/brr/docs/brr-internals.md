@@ -39,17 +39,16 @@ gitignored; do not commit its contents.
 | Folder       | Purpose                                                            |
 | ------------ | ------------------------------------------------------------------ |
 | `inbox/`     | Incoming events from gates, one markdown file per event            |
-| `tasks/`     | Legacy task manifests, one per event (source of truth for today's worker) |
+| `runs/`      | Per-run directories: `run.md` manifest, `context.md`, `prompt.md`, grouped history |
 | `responses/` | Agent final responses destined for gate replies; per-event `<id>.partials/` hold queued interim replies |
 | `outbox/`    | Per-event drop zone (`<id>/`) where the resident writes interim/interleaved replies mid-thought |
 | `presence/`  | Who's awake right now — one JSON file per active thought/session, pruned on read |
 | `dominion/`  | The resident's durable working memory (worktree on the `brr-home` branch); captured at sleep |
 | `schedule/`  | Firing-state (`state.json`) for self-scheduled thoughts; specs live in the dominion's `schedule.md` |
-| `runs/`      | Generated per-run files: `context.md` (metadata), `prompt.md` (assembled wake prompt, written on attempt 1) |
-| `conversations/` | Per-gate-thread append-only logs of events, tasks, artifacts, lifecycle updates |
+| `conversations/` | Per-gate-thread append-only logs of events, runs, artifacts, lifecycle updates |
 | `traces/`    | Prompt + stdout + meta per runner invocation (cleaned on success)  |
-| `reviews/`   | Reserved for explicit review artifacts; default tasks do not write here |
-| `worktrees/` | Isolated git worktrees for concurrent tasks                        |
+| `reviews/`   | Reserved for explicit review artifacts; default runs do not write here |
+| `worktrees/` | Isolated git worktrees for concurrent runs                         |
 | `gates/`     | Per-gate auth/state JSON                                           |
 | `prompts/`   | Legacy per-repo prompt overrides                                   |
 | `docs/`      | User overrides of bundled docs (see below)                         |
@@ -103,14 +102,14 @@ Use `environment` for the user-facing execution policy:
 The legacy `env` and `default_env` config keys are still accepted, but
 new config should use `environment`.
 
-Branching is no longer carried on the legacy task file. Before env prep the
+Branching is no longer carried on the event file. Before env prep the
 daemon resolves a publish plan: seed ref, optional
-`expected_publish_branch` (when the event named one), source string,
+`target_branch` (when the event named one), source string,
 host checkout branch as context, and an optional `expected_remote_oid`
 captured from the remote-tracking ref at run start for force-with-
 lease pushes. Worktree and Docker runs always start on a fresh
-`brr/<run-id>` branch sprouted from the seed ref. The legacy id string
-may still look like `task-...` until the storage rename lands. After the run,
+`brr/<run-id>` branch sprouted from the seed ref. New run IDs start with
+`run-`. After the run,
 finalize records `publish_branch` + `publish_status` on the manifest and
 `daemon.publish` ships that branch — via a refspec push when the
 agent kept the run branch but the event named a different expected
@@ -222,7 +221,7 @@ addresses the delivery path explicitly):
 - **Silent-run fallback** — when an addressed event reaches the end of the
   runner/env path without stdout or a current-thread outbox reply, the
   daemon writes an explicit terminal failure note and marks the inbox event
-  `done` so the gate closes the thread. The task record still stays
+  `done` so the gate closes the thread. The run record still stays
   `error`, preserving the operational truth.
 - **Interleaving** — an outbox file whose frontmatter names another
   pending event (`event: <id>`) is routed to *that* event's queue and
@@ -264,7 +263,7 @@ phase log, terminal state); brnrd stays a transient relay. See
 ## Run progress UX
 
 The daemon emits typed lifecycle packets through `brr.updates` for
-every task: `task_created`, `env_prepared`, `container_started`,
+every run: `run_created`, `env_prepared`, `container_started`,
 `attempt_started`, `attempt_failed`, `retrying`, `run_started`,
 `artifact_created`, `interim_response`, `card_composed`, `finalizing`,
 `container_preserved`, `push_started`, `push_done`, plus the terminal
@@ -276,14 +275,14 @@ it as a `note:` tail line.
 Gates may opt in to a `render_update(brr_dir, packet)` hook to surface
 progress to a human:
 
-- The Telegram gate sends one progress message per task in the
-  originating chat or topic on `task_created`, then edits the same
-  message via `editMessageText` for later packets. Per-task state lives
-  under `.brr/gates/telegram/progress/<task-id>.json` so concurrent
+- The Telegram gate sends one progress message per run in the
+  originating chat or topic on `run_created`, then edits the same
+  message via `editMessageText` for later packets. Per-run state lives
+  under `.brr/gates/telegram/progress/<run-id>.json` so concurrent
   workers never share a file.
-- The Slack gate posts one threaded reply per task on `task_created`,
-  then updates it with `chat.update`. Per-task state lives under
-  `.brr/gates/slack/progress/<task-id>.json` on the same one-writer
+- The Slack gate posts one threaded reply per run on `run_created`,
+  then updates it with `chat.update`. Per-run state lives under
+  `.brr/gates/slack/progress/<run-id>.json` on the same one-writer
   guarantee.
 - Non-chat gates (script gates, future forge gates posting on issues
   or PRs) typically skip live progress and let the durable artifact —
@@ -330,13 +329,13 @@ Every runner invocation writes a trace directory under
 `.brr/traces/<kind>/<label>-<timestamp>/` containing the prompt,
 stdout, stderr, meta JSON, and any artifacts the runner produced.
 Traces are always *written* — there is no operator switch — but
-they're forensic-only: the daemon removes them when the task
+they're forensic-only: the daemon removes them when the run
 finishes cleanly. Failures (`error`) and unmerged outcomes
 (`conflict`) keep their traces so you can correlate the run-context
 file with what the agent actually saw and said.
 
 `.brr/` is gitignored, so traces stay local to whoever ran the
-daemon. The durable record of a successful task is the git commit,
+daemon. The durable record of a successful run is the git commit,
 the response file at `.brr/responses/<event-id>.md`, and any kb
 updates the agent committed — the trace would only repeat that
 information.

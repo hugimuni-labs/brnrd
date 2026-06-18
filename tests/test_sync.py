@@ -92,7 +92,7 @@ def test_refresh_no_remote_is_silent_noop(tmp_path):
     init_git_repo(repo)
     _commit_file(repo, "x", "x\n", message="solo")
 
-    result = sync.refresh_before_task(repo, target_branches=["main"])
+    result = sync.refresh_before_run(repo, target_branches=["main"])
 
     assert result.fetched is False
     assert result.error is None
@@ -105,7 +105,7 @@ def test_refresh_fetches_then_ff_main(tmp_path):
     remote, local = _setup_remote_and_local(tmp_path)
     new_oid = _push_new_commit(tmp_path, remote, branch="main")
 
-    result = sync.refresh_before_task(local, target_branches=["main"])
+    result = sync.refresh_before_run(local, target_branches=["main"])
 
     assert result.fetched is True
     assert result.error is None
@@ -122,7 +122,7 @@ def test_refresh_skips_when_working_tree_dirty(tmp_path):
     # local edit to it makes the merge unsafe.
     (local / "README.md").write_text("local dirty edit\n", encoding="utf-8")
 
-    result = sync.refresh_before_task(local, target_branches=["main"])
+    result = sync.refresh_before_run(local, target_branches=["main"])
 
     assert result.fetched is True
     assert result.error is None
@@ -137,7 +137,7 @@ def test_refresh_skips_when_history_diverged(tmp_path):
     # Diverge local main with a fresh commit instead of pulling.
     _commit_file(local, "local-only.txt", "x\n", message="local divergence")
 
-    result = sync.refresh_before_task(local, target_branches=["main"])
+    result = sync.refresh_before_run(local, target_branches=["main"])
 
     assert result.fetched is True
     assert result.error is None
@@ -158,7 +158,7 @@ def test_refresh_handles_multiple_target_branches(tmp_path):
     main_oid = _push_new_commit(tmp_path, remote, branch="main")
     feature_oid = _push_new_commit(tmp_path, remote, branch="feature")
 
-    result = sync.refresh_before_task(
+    result = sync.refresh_before_run(
         local, target_branches=["main", "feature", "main"],
     )
 
@@ -172,7 +172,7 @@ def test_refresh_skips_branch_without_remote_ref(tmp_path):
     _git(local, "checkout", "-b", "purely-local")
     _commit_file(local, "local.txt", "x\n", message="purely local")
 
-    result = sync.refresh_before_task(
+    result = sync.refresh_before_run(
         local, target_branches=["purely-local"],
     )
 
@@ -184,7 +184,7 @@ def test_refresh_skips_branch_without_remote_ref(tmp_path):
 def test_refresh_skips_missing_local_branch(tmp_path):
     _, local = _setup_remote_and_local(tmp_path)
 
-    result = sync.refresh_before_task(
+    result = sync.refresh_before_run(
         local, target_branches=["never-existed"],
     )
 
@@ -200,7 +200,7 @@ def test_refresh_captures_unexpected_exception_into_result(monkeypatch, tmp_path
 
     monkeypatch.setattr(sync.gitops, "default_remote", boom)
 
-    result = sync.refresh_before_task(local, target_branches=["main"])
+    result = sync.refresh_before_run(local, target_branches=["main"])
 
     assert result.fetched is False
     assert result.ff_branches == {}
@@ -224,7 +224,7 @@ def test_refresh_records_fetch_failure(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sync.subprocess, "run", maybe_fail)
 
-    result = sync.refresh_before_task(local, target_branches=["main"])
+    result = sync.refresh_before_run(local, target_branches=["main"])
 
     assert result.fetched is False
     assert result.error is not None
@@ -237,16 +237,16 @@ def test_refresh_disabled_via_config(tmp_path):
     _, local = _setup_remote_and_local(tmp_path)
     _push_new_commit(tmp_path, local.parent / "remote.git", branch="main")
 
-    result = sync.refresh_before_task(
+    result = sync.refresh_before_run(
         local,
         target_branches=["main"],
-        cfg={"sync.fetch_before_task": False},
+        cfg={"sync.fetch_before_run": False},
     )
 
     assert result.fetched is False
     assert result.ff_branches == {}
     assert result.skipped == {
-        "main": "fetch disabled (sync.fetch_before_task=false)",
+        "main": "fetch disabled (sync.fetch_before_run=false)",
     }
 
 
@@ -255,7 +255,7 @@ def test_refresh_ff_disabled_via_config(tmp_path):
     _push_new_commit(tmp_path, remote, branch="main")
 
     pre_oid = _git(local, "rev-parse", "HEAD").stdout.strip()
-    result = sync.refresh_before_task(
+    result = sync.refresh_before_run(
         local,
         target_branches=["main"],
         cfg={"sync.fast_forward_default": False},
@@ -273,7 +273,7 @@ def test_refresh_ff_disabled_via_config(tmp_path):
 def test_refresh_already_up_to_date_is_quiet(tmp_path):
     _, local = _setup_remote_and_local(tmp_path)
 
-    result = sync.refresh_before_task(local, target_branches=["main"])
+    result = sync.refresh_before_run(local, target_branches=["main"])
 
     assert result.fetched is True
     assert result.error is None
@@ -342,7 +342,7 @@ def test_refresh_fast_forward_all_advances_untargeted_branch(tmp_path):
     remote, local = _local_with_tracked_feature(tmp_path)
     feature_oid = _push_new_commit(tmp_path, remote, branch="feature")
 
-    result = sync.refresh_before_task(local, target_branches=["main"])
+    result = sync.refresh_before_run(local, target_branches=["main"])
 
     assert result.ff_branches.get("feature") == feature_oid
     assert "feature" not in result.skipped
@@ -359,7 +359,7 @@ def test_refresh_fast_forward_all_silent_on_diverged_untargeted(tmp_path):
     _commit_file(local, "local-only.txt", "x\n", message="local divergence")
     _git(local, "checkout", "main")
 
-    result = sync.refresh_before_task(local, target_branches=["main"])
+    result = sync.refresh_before_run(local, target_branches=["main"])
 
     assert "feature" not in result.ff_branches
     assert "feature" not in result.skipped
@@ -376,7 +376,7 @@ def test_refresh_fast_forward_all_records_skip_for_explicit_target(tmp_path):
     _commit_file(local, "local-only.txt", "x\n", message="local divergence")
     _git(local, "checkout", "main")
 
-    result = sync.refresh_before_task(
+    result = sync.refresh_before_run(
         local, target_branches=["main", "feature"],
     )
 
@@ -392,7 +392,7 @@ def test_refresh_fast_forward_all_disabled_via_config(tmp_path):
     feature_oid = _push_new_commit(tmp_path, remote, branch="feature")
 
     pre_oid = _git(local, "rev-parse", "feature").stdout.strip()
-    result = sync.refresh_before_task(
+    result = sync.refresh_before_run(
         local,
         target_branches=["main"],
         cfg={"sync.fast_forward_all": False},

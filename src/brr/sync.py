@@ -1,10 +1,10 @@
 """Daemon freshness — fetch and best-effort fast-forward target branches.
 
-Called by the daemon just before resolving a branch plan for a new task,
-so the task seeds from a current view of the world instead of whatever
+Called by the daemon just before resolving a branch plan for a new run,
+so the run seeds from a current view of the world instead of whatever
 the host last pulled. Without this hook, every brr-produced branch
 merged on the remote leaves the daemon's local default branch stale,
-and subsequent tasks silently start from old code.
+and subsequent runs silently start from old code.
 
 The contract is deliberately small:
 
@@ -22,11 +22,11 @@ The contract is deliberately small:
   ``SyncResult.skipped``) — abandoned branches that diverged ages ago
   should not fill the progress card.
 - Never raises. Any unexpected exception is captured in
-  ``SyncResult.error`` so a fetch failure cannot block task execution.
+  ``SyncResult.error`` so a fetch failure cannot block run execution.
 
 Three opt-out config knobs in ``.brr/config``:
 
-- ``sync.fetch_before_task=false`` — skip the network entirely.
+- ``sync.fetch_before_run=false`` — skip the network entirely.
 - ``sync.fast_forward_default=false`` — fetch but do not advance local
   refs (for users sharing the daemon's checkout with active dev work).
 - ``sync.fast_forward_all=false`` — fetch and ff the explicit targets,
@@ -48,7 +48,7 @@ from . import gitops
 
 @dataclass
 class SyncResult:
-    """Outcome of a single ``refresh_before_task`` call.
+    """Outcome of a single ``refresh_before_run`` call.
 
     *fetched* tells whether a network fetch was attempted (false when
     no remote is configured or the operator disabled the knob).
@@ -88,12 +88,12 @@ def _bool(cfg: dict[str, Any], key: str, default: bool) -> bool:
 
 
 def fetch_enabled(cfg: dict[str, Any]) -> bool:
-    """Whether ``refresh_before_task`` should perform a network fetch."""
-    return _bool(cfg, "sync.fetch_before_task", True)
+    """Whether ``refresh_before_run`` should perform a network fetch."""
+    return _bool(cfg, "sync.fetch_before_run", True)
 
 
 def fast_forward_enabled(cfg: dict[str, Any]) -> bool:
-    """Whether ``refresh_before_task`` may advance local target branches."""
+    """Whether ``refresh_before_run`` may advance local target branches."""
     return _bool(cfg, "sync.fast_forward_default", True)
 
 
@@ -111,7 +111,7 @@ def fast_forward_all_enabled(cfg: dict[str, Any]) -> bool:
 # ── Public entry point ───────────────────────────────────────────────
 
 
-def refresh_before_task(
+def refresh_before_run(
     repo_root: Path,
     *,
     target_branches: list[str],
@@ -142,7 +142,7 @@ def refresh_before_task(
             result.fetched = _fetch(repo_root, remote, result)
         else:
             for branch in branches:
-                result.skipped[branch] = "fetch disabled (sync.fetch_before_task=false)"
+                result.skipped[branch] = "fetch disabled (sync.fetch_before_run=false)"
             return result
 
         if not fast_forward_enabled(cfg):

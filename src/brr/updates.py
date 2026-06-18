@@ -1,6 +1,6 @@
-"""Lifecycle update packets — gate-agnostic task progress events.
+"""Lifecycle update packets — gate-agnostic run progress events.
 
-The daemon emits typed packets for task lifecycle moments. Most packets
+The daemon emits typed packets for run lifecycle moments. Most packets
 are persisted to the conversation log (``.brr/conversations/<safe-key>/
 <event-id>.jsonl``) and optionally rendered by gates (Telegram, Slack,
 GitHub, CLI). Heartbeats are the exception: they are daemon/card
@@ -25,7 +25,7 @@ from . import conversations
 PACKET_TYPES = (
     "event_received",
     "synced",
-    "task_created",
+    "run_created",
     "env_prepared",
     "container_started",
     "run_started",
@@ -134,7 +134,7 @@ def _render_console(packet: UpdatePacket) -> None:
     bits = [f"[brr:update] {packet.type}"]
     if packet.conversation_key:
         bits.append(f"conv={packet.conversation_key}")
-    for key in ("task_id", "event_id", "branch", "stage", "kind", "error"):
+    for key in ("run_id", "event_id", "branch", "stage", "kind", "error"):
         if key in payload and payload[key] not in (None, ""):
             bits.append(f"{key}={payload[key]}")
     print(" ".join(bits), file=sys.stdout, flush=False)

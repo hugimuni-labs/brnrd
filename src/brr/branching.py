@@ -1,15 +1,15 @@
-"""Publish plan resolution for daemon tasks.
+"""Publish plan resolution for daemon runs.
 
 The plan is a thin pre-run record naming the ref the
-``brr/<task-id>`` worktree branch sprouts from, the branch (if any)
+``brr/<run-id>`` worktree branch sprouts from, the branch (if any)
 the event names as the target, and the remote-tracking oid captured at
-task start so a leased rebase push can refuse to clobber a concurrent
+run start so a leased rebase push can refuse to clobber a concurrent
 writer.
 
 When ``target_branch`` is set, ``WorktreeEnv.prepare`` switches the
 worktree HEAD to that branch before launching the agent, so the agent
 starts on the right branch without any prompt nudge. The throwaway
-``brr/<task-id>`` branch is cleaned up as part of finalization.
+``brr/<run-id>`` branch is cleaned up as part of finalization.
 
 Resolution order:
 
@@ -18,9 +18,9 @@ Resolution order:
    target, the plan seeds from the **remote** tracking ref
    (``<remote>/<target>``) if present, so the worker sprouts from the
    forge-visible state even when the daemon's local copy of that branch
-   diverged and the pre-task ff was refused.
+   diverged and the pre-run ff was refused.
 2. Fallback policy: seed from the repo default branch (falling back to
-   host ``HEAD``) and set no expected publish target — committed task
+   host ``HEAD``) and set no expected publish target — committed run
    branches are preserved for human routing and published under their
    own name. ``branch.fallback=current`` (the old self-development knob
    that also fast-forwarded the host checkout) was removed when the
@@ -60,7 +60,7 @@ class PublishPlan:
     expected_remote_oid: str | None = None
 
     def meta_items(self) -> dict[str, str]:
-        """Return non-empty task metadata fields for this plan."""
+        """Return non-empty run metadata fields for this plan."""
         out: dict[str, str] = {
             "seed_ref": self.seed_ref,
             "branch_source": self.source,
@@ -122,7 +122,7 @@ def _plan_for_event_target(
     """Resolve seed + remote lease anchor for an event-named *target*.
 
     The seed prefers ``<remote>/<target>`` when that tracking ref
-    exists: the daemon's pre-task sync is ff-only and refuses on
+    exists: the daemon's pre-run sync is ff-only and refuses on
     diverged history, so without this preference the worker would seed
     from a stale local branch and produce a divergent, unpushable
     history. Anchoring to the remote ref guarantees the worker sprouts
@@ -130,7 +130,7 @@ def _plan_for_event_target(
     local branch is.
 
     The expected remote oid is captured from the remote-tracking ref at
-    task start. It only ever feeds a force-with-lease push when the
+    run start. It only ever feeds a force-with-lease push when the
     agent rewrote that branch locally (the PR-rebase case); plain
     pushes never use it.
     """
@@ -197,7 +197,7 @@ def _event_branch_candidate(
 ) -> str | None:
     if key == "branch" and isinstance(value, str):
         legacy = value.strip().lower()
-        if legacy in {"", "auto", "task", "none", "current"}:
+        if legacy in {"", "auto", "none", "current"}:
             return None
     if not isinstance(value, str):
         return None

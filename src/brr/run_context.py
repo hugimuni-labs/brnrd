@@ -7,16 +7,16 @@ from typing import Any
 
 from . import forge_state
 from .envs import RunContext
-from .task import Task
+from .run import Run, run_manifest_path
 
 
-def write_prompt_file(brr_dir: Path, task: Task, prompt: str) -> Path | None:
+def write_prompt_file(brr_dir: Path, task: Run, prompt: str) -> Path | None:
     """Write the assembled wake prompt to `.brr/runs/<run-id>/prompt.md`.
 
     Unlike the ephemeral trace-dir prompt (cleaned up on successful runs),
     this copy persists so "what did this wake see?" has an honest answer
     after any run — success or failure.  Returns the path written, or ``None``
-    on error (non-fatal; the task continues regardless).
+    on error (non-fatal; the run continues regardless).
     """
     context_dir = brr_dir / "runs" / task.id
     context_dir.mkdir(parents=True, exist_ok=True)
@@ -30,7 +30,7 @@ def write_prompt_file(brr_dir: Path, task: Task, prompt: str) -> Path | None:
 
 def write_context_file(
     brr_dir: Path,
-    task: Task,
+    task: Run,
     event: dict[str, Any],
     ctx: RunContext,
     *,
@@ -57,7 +57,7 @@ def write_context_file(
 
 
 def render_context(
-    task: Task,
+    task: Run,
     event: dict[str, Any],
     ctx: RunContext,
     *,
@@ -79,7 +79,6 @@ def render_context(
         "## Run",
         "",
         f"- Run ID: {task.id}",
-        f"- Legacy task id: {task.id}",
         f"- Event ID: {task.event_id}",
         f"- Source: {task.source or event.get('source', '')}",
         f"- Status: {task.status}",
@@ -151,16 +150,16 @@ def render_context(
     if body:
         lines.extend(["", "## Original Event Body", "", body])
 
-    task_file = ctx.runtime_dir / "tasks" / f"{task.id}.md"
+    run_file = run_manifest_path(ctx.runtime_dir / "runs", task.id)
     prompt_file = ctx.runtime_dir / "runs" / task.id / "prompt.md"
     lines.extend([
         "",
         "## Runtime Files",
         "",
         f"- Event file: {event.get('_path', '')}",
-        f"- Task file: {task_file}",
+        f"- Run manifest: {run_file}",
         f"- Response file: {ctx.response_path_host}",
-        f"- Assembled wake prompt: {prompt_file} (written once the task starts)",
+        f"- Assembled wake prompt: {prompt_file} (written once the run starts)",
     ])
     if ctx.outbox_host:
         lines.append(f"- Interim-response outbox: {ctx.outbox_host}")
@@ -192,26 +191,25 @@ def _render_recent_conversation(records: list[dict[str, Any]]) -> str:
             )
             source = record.get("source") or ""
             bullets.append(f"- {ts} event ({source}): {summary}".rstrip())
-        elif kind == "task":
-            tid = record.get("task_id", "")
+        elif kind == "run":
+            tid = record.get("run_id", "")
             status = record.get("status") or "pending"
             branch = (
                 record.get("publish_branch")
                 or record.get("target_branch")
-                or record.get("expected_publish_branch")  # compat: old task files
                 or record.get("branch_name")
                 or ""
             )
             bullets.append(
-                f"- {ts} task {tid} status={status} branch={branch}".rstrip()
+                f"- {ts} run {tid} status={status} branch={branch}".rstrip()
             )
         elif kind == "update":
             ptype = record.get("type") or ""
-            tid = record.get("task_id") or ""
+            tid = record.get("run_id") or ""
             stage = record.get("stage") or ""
             bits = [f"- {ts} update {ptype}"]
             if tid:
-                bits.append(f"task={tid}")
+                bits.append(f"run={tid}")
             if stage:
                 bits.append(f"stage={stage}")
             bullets.append(" ".join(bits))
@@ -312,7 +310,7 @@ def _render_forge_state(forge: Any) -> str:
         lines.append(f"- Worktrees / branches: {'; '.join(bits)}")
         for wt in worktree_summary["attention"]:
             branch = str(wt.get("branch") or "").strip() or "(detached)"
-            tid = str(wt.get("task_id") or "").strip()
+            tid = str(wt.get("run_id") or "").strip()
             bits: list[str] = []
             unpushed = wt.get("unpushed", 0)
             if isinstance(unpushed, int) and unpushed > 0:
