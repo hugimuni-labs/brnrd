@@ -98,7 +98,7 @@ def test_run_worker_threads_recent_conversation_through_prompt(tmp_path, monkeyp
         c[2] for c in captured if c[0] == "daemon" and c[1] == "evt-thread-2"
     ][0]
     # The daemon prompt receives prior conversation records only. The
-    # in-flight event/task are rendered elsewhere in the Task Context Bundle.
+    # in-flight event/run is rendered elsewhere in the Run Context Bundle.
     assert daemon_records is not None
     assert any(r.get("event_id") == "evt-thread-1" for r in daemon_records)
     assert not any(r.get("event_id") == "evt-thread-2" for r in daemon_records)

@@ -1,12 +1,12 @@
 ## Review pack (diffense)
 
-When this task produced a **review-worthy committed change** — code, kb,
+When this run produced a **review-worthy committed change** — code, kb,
 or tests headed for a branch/PR, not a chat-only reply or a one-line
 trivial fix — emit a diffense *review pack* as the last step before you
 finish, so the change can be reviewed as a graph of cards rather than a
 raw diff.
 
-- **Write it to the `Review pack path`** named in the Task Context Bundle
+- **Write it to the `Review pack path`** named in the Run Context Bundle
   — an absolute path in the shared runtime dir. Use that exact path: a
   cwd-relative `.brr/diffense/...` would land in the worktree and be torn
   down before the pack can be read. It is a gitignored runtime path —
