@@ -21,6 +21,11 @@ from brr.runner import (
     runner_timeout,
 )
 
+_RUNNER_BASE = (
+    "You are a brr runner. Follow the supplied prompt and operate on the "
+    "files available in the working directory."
+)
+
 
 def test_detect_runner_returns_string_or_none():
     result = detect_runner()
@@ -70,6 +75,37 @@ def test_resolve_runner_accepts_binary_alias(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path) == "claude-bare-api-only"
 
 
+def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("runner=local-agent\n")
+    (tmp_path / ".brr" / "runners.md").write_text(
+        "---\n"
+        "local-agent:\n"
+        "  binary: local-agent\n"
+        "  cmd: 'local-agent run --yes'\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    # Simulate an earlier bundled-profile read in the same daemon
+    # process. A project-owned profile must still get its own cache key.
+    runner_mod._profiles_cache = {"codex": {"cmd": "codex exec"}}
+    runner_mod._profiles_cache_key = "bundled:runners.md"
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/local-agent" if name == "local-agent" else None,
+    )
+
+    try:
+        assert resolve_runner(tmp_path) == "local-agent"
+        assert _build_cmd("local-agent", "fix it", {}, tmp_path) == [
+            "local-agent", "run", "--yes", "fix it",
+        ]
+    finally:
+        runner_mod._profiles_cache = None
+        runner_mod._profiles_cache_key = None
+
+
 class TestCommandBuilding:
     def test_build_cmd_codex_headless(self):
         cmd = _build_cmd("codex", "fix it", {})
@@ -78,7 +114,7 @@ class TestCommandBuilding:
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "-c",
-            "base_instructions=You are brr agent. Find your orientation in AGENTS.md",
+            f"base_instructions={_RUNNER_BASE}",
             "-c",
             "include_permissions_instructions=false",
             "-c",
@@ -98,7 +134,7 @@ class TestCommandBuilding:
             "--dangerously-skip-permissions",
             "--safe-mode",
             "--system-prompt",
-            "You are brr agent. Find your orientation in AGENTS.md",
+            _RUNNER_BASE,
             "fix it",
         ]
 
@@ -110,7 +146,7 @@ class TestCommandBuilding:
             "--dangerously-skip-permissions",
             "--bare",
             "--system-prompt",
-            "You are brr agent. Find your orientation in AGENTS.md",
+            _RUNNER_BASE,
             "fix it",
         ]
 
