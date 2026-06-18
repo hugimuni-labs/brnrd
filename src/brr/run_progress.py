@@ -237,8 +237,11 @@ def _project(
 
     last_ts: str | None = None
     for record in records:
-        if record.get("run_id") not in (None, run_id):
-            # Records that mention some other run are skipped.
+        if record.get("run_id") != run_id:
+            # Per-run cards must never borrow anonymous records from the
+            # rest of the conversation. Older task-era logs lack run_id;
+            # treating them as "maybe current" can make a new card replay
+            # a whole thread's history.
             continue
         kind = record.get("kind")
         ts = record.get("ts")

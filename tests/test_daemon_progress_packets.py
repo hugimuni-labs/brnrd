@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from brr import conversations, daemon, envs
+from brr import conversations, daemon, envs, run_progress
 from brr.runner import RunnerResult
 
 from _helpers import (
@@ -66,6 +66,51 @@ def test_success_emits_full_progress_lifecycle(tmp_path, monkeypatch):
     assert types.index("env_prepared") < types.index("attempt_started")
     assert types.index("attempt_started") < types.index("finalizing")
     assert types.index("finalizing") < types.index("done")
+
+
+def test_sync_packet_is_scoped_to_run(tmp_path, monkeypatch):
+    """The sync card line belongs to a run, not to the whole thread.
+
+    Run cards now ignore anonymous task-era records, so the daemon must
+    emit sync outcomes only after it has a concrete run id to attach.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(
+        tmp_path, eid="evt-sync", body="ship it",
+        telegram_chat_id=10, telegram_topic_id=1,
+    )
+    _patch_runner(monkeypatch)
+    monkeypatch.setattr(
+        daemon.sync,
+        "refresh_before_run",
+        lambda *_args, **_kwargs: daemon.sync.SyncResult(
+            ff_branches={"main": "abc1234"},
+        ),
+    )
+    monkeypatch.setattr(
+        daemon.sync,
+        "render_summary",
+        lambda _result: "ff main -> abc1234",
+    )
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke()),
+    )
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    synced = next(r for r in records if r.get("type") == "synced")
+    assert synced["run_id"] == task.id
+    assert synced["event_id"] == "evt-sync"
+
+    view = run_progress.project_run(
+        tmp_path / ".brr", task.conversation_key, task.id,
+    )
+    assert view is not None
+    assert view.sync_summary == "ff main -> abc1234"
 
 
 def test_retry_emits_attempt_failed_and_retrying(tmp_path, monkeypatch):

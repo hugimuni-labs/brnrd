@@ -61,6 +61,37 @@ def test_project_run_succeeds_through_full_lifecycle(tmp_path):
     assert "brr-run-1-evt-1-attempt-1" in view.container_ids
 
 
+def test_project_run_ignores_anonymous_task_era_records(tmp_path):
+    """Old task-era conversation records did not carry ``run_id``.
+
+    After run manifests landed, treating those anonymous records as
+    "maybe current" made every new run card inherit stale phase history
+    from the whole thread. Per-run projection must require an explicit
+    run_id match.
+    """
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:legacy-thread:"
+
+    _emit(brr_dir, key, "run_created", event_id="evt-old", env="docker")
+    _emit(brr_dir, key, "attempt_started", event_id="evt-old", attempt=1)
+    _emit(brr_dir, key, "done", event_id="evt-old")
+
+    _emit(brr_dir, key, "run_created", run_id="run-new",
+          event_id="evt-new", env="host")
+    _emit(brr_dir, key, "attempt_started", run_id="run-new",
+          event_id="evt-new", attempt=1)
+
+    view = run_progress.project_run(brr_dir, key, "run-new")
+    assert view is not None
+    assert view.phase == "running"
+    assert [entry.name for entry in view.phase_history] == [
+        "preparing",
+        "running",
+    ]
+    text = run_progress.render_text(view, compact=True)
+    assert "delivered" not in text
+
+
 def test_project_run_failed_with_retry(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:2:"
