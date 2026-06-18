@@ -47,18 +47,18 @@ def test_removed_diagnostic_commands_are_not_public(tmp_path, monkeypatch, comma
 
 def test_docs_lists_topics(capsys):
     # `brr docs` (no topic) lists the bundled topics. Re-introduced as the
-    # inspect surface for the cockpit manual (G5) — the docs module and
+    # inspect surface for the portals manual (G5) — the docs module and
     # decision-bundled-docs.md always assumed this command existed.
     assert main(["docs"]) == 0
     out = capsys.readouterr().out
-    assert "cockpit" in out
+    assert "portals" in out
     assert "execution-map" in out
 
 
 def test_docs_prints_topic(capsys):
-    assert main(["docs", "cockpit"]) == 0
+    assert main(["docs", "portals"]) == 0
     out = capsys.readouterr().out
-    assert "control-file" in out.lower() or "cockpit" in out.lower()
+    assert "control-file" in out.lower() or "portal" in out.lower()
 
 
 def test_docs_unknown_topic_errors(capsys):
