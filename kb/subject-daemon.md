@@ -66,7 +66,7 @@ holds the prior reasoning.)
 
 Events that arrive while a thought is running are no longer invisible
 until the next spawn. The worker writes an initial pending-events view to
-the task outbox and refreshes `inbox.json` there on every heartbeat after
+the run outbox and refreshes `inbox.json` there on every heartbeat after
 draining any agent-written replies. The resident checks that file at
 natural plan / todo boundaries and may fold in quick replies with the
 multi-response `event: <id>` path. Idle dispatch is still FIFO: true
@@ -119,14 +119,14 @@ schedule thought is retired by the daemon when it completes
 reply. See
 [`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md).
 
-The per-task isolation primitives the parallel design relied on
+The per-run isolation primitives the parallel design relied on
 **survive** — they still earn their keep for crash recovery, ad-hoc
 sessions, and the managed multi-daemon case:
 
-- **Worktree / branch identity is per task.** Each task gets a fresh
-  `brr/<task-id>` branch sprouted from the resolved seed ref into
-  `.brr/worktrees/<task-id>/`. Task ids are globally unique
-  (`evt-<nanotime>-<random>`), so task starts never collide on branch
+- **Worktree / branch identity is per run.** Each run gets a fresh
+  `brr/<run-id>` branch sprouted from the resolved seed ref into
+  `.brr/worktrees/<run-id>/`. Run ids are globally unique
+  (`run-<date>-<time>-<random>`), so run starts never collide on branch
   name or worktree directory.
 - **Conversation log is one file per event pipeline.**
   `.brr/conversations/<key>/<event-id>.jsonl` holds every record one
@@ -134,17 +134,17 @@ sessions, and the managed multi-daemon case:
   by `ts`. The bundled doc
   ([`src/brr/docs/conversations.md`](../src/brr/docs/conversations.md))
   describes the user-visible side.
-- **Gate progress card state is one file per task**
-  (`.brr/gates/<gate>/progress/<task-id>.json`); the render path reads
+- **Gate progress card state is one file per run**
+  (`.brr/gates/<gate>/progress/<run-id>.json`); the render path reads
   and writes only its own file.
-- **Per-task artefacts** (`.brr/tasks/<task-id>.md`, the response file
+- **Per-run artefacts** (`.brr/runs/<run-id>/run.md`, the response file
   at `.brr/responses/<event-id>.md`, trace dirs) are keyed by id.
 - **Publish** (`daemon.publish`) takes a per-branch lock keyed on the
   branch being pushed. Within one single-flight daemon this is now
   uncontended (one publish at a time), but it still guards a daemon
   publish racing an ad-hoc session that pushes the same branch, and
   stays cheap. Finalize no longer participates — the env layer never
-  updates a non-task ref since the 2026-05-21 publish-kernel collapse
+  updates a non-run ref since the 2026-05-21 publish-kernel collapse
   (see [`design-publish-kernel.md`](design-publish-kernel.md)). PR
   finalization no longer rides this step; the resident projects its
   diffense pack and sends `gate: forge`, which the GitHub delivery loop
@@ -183,15 +183,15 @@ For each pending event, the daemon:
 1. marks the event `processing`;
 2. fetches the default remote and best-effort fast-forwards the local
    default branch (and any structured branch named on the event) via
-   [`sync.refresh_before_task`](../src/brr/sync.py) — the seed-ref
+   [`sync.refresh_before_run`](../src/brr/sync.py) — the seed-ref
    invariant is described in
    [`design-git-layer-rework.md`](design-git-layer-rework.md);
-3. resolves the branch plan, then creates and persists a `Task`;
+3. resolves the branch plan, then creates and persists a `Run`;
 4. records the thought in the presence registry (`presence.py`,
    `.brr/presence/`) so concurrent thoughts see who's on which stream;
 5. prepares the selected env backend (`host`, `worktree`, or `docker`);
 6. builds the daemon prompt with the Run Context Bundle (including the
-   dominion digest, any dominion pitfalls whose triggers the task text
+   dominion digest, any dominion pitfalls whose triggers the run text
    hits — the env-shaping loop's failure-memory affordance,
    [`pitfalls.py`](../src/brr/pitfalls.py) — the wake-time pending-events
    snapshot plus live `inbox.json` path, and who else is present), plus
@@ -219,7 +219,7 @@ For each pending event, the daemon:
    branch so the memory travels;
 10. retries only when the addressed thread has no output yet; if the
     runner/env path ultimately fails or stays silent, writes an explicit
-    terminal failure note for addressed events while keeping the task record
+    terminal failure note for addressed events while keeping the run record
     `error`;
 11. marks the inbox event `done` once it has something deliverable; the
     originating gate streams any queued interim partials, then the terminal
@@ -244,7 +244,7 @@ finalization and push: those stages are post-response housekeeping and
 should not delay the operator seeing the result. The progress card can
 continue to show finalization and push after the final reply is already
 in the originating chat thread. (Deterministic kb-health now rides the
-*wake* prompt rather than a post-task pass; see
+*wake* prompt rather than a post-run pass; see
 [`subject-kb.md`](subject-kb.md).)
 
 ### Society-of-Mind concurrency (dominion + presence)
@@ -297,7 +297,7 @@ internal hosts the host-pattern table doesn't recognise, two
 The module is intentionally observational: any failure (missing
 remote, unparseable URL, unknown forge) returns `None` and the card
 emits without the link rather than guessing. Action-shaped behaviour
-like opening a PR / MR belongs to a post-task hook, deferred so its
+like opening a PR / MR belongs to a post-run hook, deferred so its
 contract can be designed honestly rather than wedged into the
 default prompt.
 
@@ -321,7 +321,7 @@ layers:
 That boundary avoids letting chat messages or agent code kill the
 process that is currently responsible for delivering their response.
 Agents should not run daemon lifecycle commands from inside daemon
-tasks; the generated run context and bundled internals doc both frame
+runs; the generated run context and bundled internals doc both frame
 daemon lifecycle verbs as human-operator concerns. The Linux systemd
 and macOS LaunchAgent service-lifecycle slices shipped on 2026-05-26
 from [`plan-laptop-daemoning.md`](plan-laptop-daemoning.md); the
@@ -340,7 +340,7 @@ stays terminal-owned and explicit, not a remote command.
 ## Status and troubleshooting
 
 Remote gates are the primary progress surface. Troubleshooting follows
-the generated run context, persisted task and conversation files,
+the generated run context, persisted run and conversation files,
 traces, response artifacts, and preserved worktree/container metadata
 rather than a separate local status module. New lifecycle UX should
 extend update packets, `RunProgressView`, and gate renderers.
@@ -373,7 +373,7 @@ removed on 2026-05-14 once the only importers were tests and stale docs.
 
 (Lineage: a concurrent worker pool was once deferred and the original
 merge-coordinator design abandoned; both were reversed 2026-05-16 when
-concurrency shipped on the per-event/per-task partitioning above, so the
+concurrency shipped on the per-event/per-run partitioning above, so the
 coordinator never came back. Then concurrency itself was reversed to
 single-flight 2026-06-08 with the resident-agent reshape — the
 partitioning primitives survived the round trip and now serve crash
@@ -395,12 +395,12 @@ Read these in order when changing daemon behavior:
 4. [`subject-envs.md`](subject-envs.md) for environment backend
    responsibilities; [`design-env-interface.md`](design-env-interface.md)
    for the underlying protocol spec.
-5. [`subject-tasks-branching.md`](subject-tasks-branching.md) and
-   [`design-publish-kernel.md`](design-publish-kernel.md) for task
+5. [`subject-runs-branching.md`](subject-runs-branching.md) and
+   [`design-publish-kernel.md`](design-publish-kernel.md) for run
    construction, branch intent resolution, and the accepted publish
    kernel that replaced the predecessor land-then-push pipeline.
 6. [`design-git-layer-rework.md`](design-git-layer-rework.md) for the
-   pre-task fetch+ff invariant, the boundary between pure git refs
+   pre-run fetch+ff invariant, the boundary between pure git refs
    (daemon) and forge concepts (per-provider gates), and the staged
    Phase 1 / 2 / 3 plan.
 7. [`decision-drop-streams.md`](decision-drop-streams.md) and

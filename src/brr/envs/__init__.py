@@ -1,11 +1,11 @@
-"""Execution environment backends for daemon tasks.
+"""Execution environment backends for daemon runs.
 
 The public CLI stays small; environments are daemon plumbing. Each
-backend owns the task scratch location (host checkout, git worktree,
+backend owns the run scratch location (host checkout, git worktree,
 docker container) and the cleanup rules around one runner invocation.
 
 Branching is the agent's call now: every worktree starts on a fresh
-``brr/<task-id>`` branch from the daemon's resolved seed ref. The
+``brr/<run-id>`` branch from the daemon's resolved seed ref. The
 agent commits there or switches to another branch; the daemon's
 publish step (in ``daemon.publish``) reads whatever branch the
 worktree ends up on and publishes it. The env layer does no
@@ -26,11 +26,11 @@ from pathlib import Path
 from typing import Protocol, Any
 
 from .. import branching, gitops, runner, worktree
-from ..task import Task
+from ..run import Run
 
 
 class UnsupportedEnvironmentError(RuntimeError):
-    """Raised when a task asks for an environment with no backend."""
+    """Raised when a run asks for an environment with no backend."""
 
 
 @dataclass
@@ -49,7 +49,7 @@ class RunContext:
     outbox_host: Path | None = None
     outbox_env: Path | None = None
     branch_name: str | None = None
-    task_branch: str | None = None
+    run_branch: str | None = None
     branch_plan: branching.PublishPlan | None = None
     env_state: dict[str, Any] = field(default_factory=dict)
     # Who operates this run: "user" (the local daemon — host, worktree,
@@ -68,7 +68,7 @@ class EnvBackend(Protocol):
 
     def prepare(
         self,
-        task: Task,
+        task: Run,
         repo_root: Path,
         cfg: dict[str, Any],
         *,
@@ -92,9 +92,9 @@ class EnvBackend(Protocol):
     def finalize(
         self,
         ctx: RunContext,
-        task: Task,
-        tasks_dir: Path,
-    ) -> Task:
+        task: Run,
+        runs_dir: Path,
+    ) -> Run:
         ...
 
 
@@ -103,7 +103,7 @@ class HostEnv:
 
     def prepare(
         self,
-        task: Task,
+        task: Run,
         repo_root: Path,
         cfg: dict[str, Any],
         *,
@@ -138,9 +138,9 @@ class HostEnv:
     def finalize(
         self,
         ctx: RunContext,
-        task: Task,
-        tasks_dir: Path,
-    ) -> Task:
+        task: Run,
+        runs_dir: Path,
+    ) -> Run:
         return task
 
 
@@ -149,7 +149,7 @@ class WorktreeEnv(HostEnv):
 
     def prepare(
         self,
-        task: Task,
+        task: Run,
         repo_root: Path,
         cfg: dict[str, Any],
         *,
@@ -157,31 +157,31 @@ class WorktreeEnv(HostEnv):
         response_path: Path,
         outbox_path: Path | None = None,
     ) -> RunContext:
-        run_root, task_branch_name = worktree.create(
+        run_root, run_branch_name = worktree.create(
             repo_root, task.id, base_ref=branch_plan.seed_ref,
         )
         # When the event named a target branch, switch the worktree HEAD
         # there before the agent starts so it commits on the right branch
-        # without any prompt instruction. The throwaway brr/<task-id>
+        # without any prompt instruction. The throwaway brr/<run-id>
         # placeholder stays as a local ref and is cleaned up at finalize.
         if branch_plan.target_branch:
             try:
                 worktree.switch_to(run_root, branch_plan.target_branch)
             except worktree.BranchCheckedOutError as exc:
-                starting_branch = task_branch_name
+                starting_branch = run_branch_name
                 notice = (
                     f"target branch {branch_plan.target_branch!r} is checked out "
-                    f"at {exc.checkout_path}; starting on {task_branch_name!r} "
+                    f"at {exc.checkout_path}; starting on {run_branch_name!r} "
                     f"from {branch_plan.seed_ref!r} instead"
                 )
-                print(f"[brr] task {task.id}: {notice}")
+                print(f"[brr] run {task.id}: {notice}")
                 task.meta["branch_setup"] = "target-checked-out-elsewhere"
                 task.meta["branch_setup_notice"] = notice
                 task.meta["target_branch_checkout_path"] = str(exc.checkout_path)
             else:
                 starting_branch = branch_plan.target_branch
         else:
-            starting_branch = task_branch_name
+            starting_branch = run_branch_name
         task.meta["worktree_path"] = str(run_root)
         task.meta["branch_name"] = starting_branch
         task.meta.update(branch_plan.meta_items())
@@ -195,7 +195,7 @@ class WorktreeEnv(HostEnv):
             outbox_host=outbox_path,
             outbox_env=outbox_path,
             branch_name=starting_branch,
-            task_branch=task_branch_name,
+            run_branch=run_branch_name,
             branch_plan=branch_plan,
             env_state={"worktree_path": str(run_root)},
         )
@@ -203,17 +203,17 @@ class WorktreeEnv(HostEnv):
     def finalize(
         self,
         ctx: RunContext,
-        task: Task,
-        tasks_dir: Path,
-    ) -> Task:
+        task: Run,
+        runs_dir: Path,
+    ) -> Run:
         """Classify the worktree's final state into a publish outcome.
 
         The agent's branch is whatever ``git`` says is checked out in the
         worktree after the run. The daemon's publish step (in
-        ``daemon.publish``) reads ``task.meta["publish_branch"]`` and
-        ``task.meta["publish_status"]`` and decides whether to push,
+        ``daemon.publish``) reads ``run.meta["publish_branch"]`` and
+        ``run.meta["publish_status"]`` and decides whether to push,
         with what lease, and to which remote ref. Finalize itself never
-        updates a non-task branch ref and never calls
+        updates a non-run branch ref and never calls
         ``gitops.fast_forward_branch``.
 
         Worktree teardown is outcome-aware: a clean success with no
@@ -223,11 +223,11 @@ class WorktreeEnv(HostEnv):
         operator can inspect what the agent left behind.
         """
         worktree_path = Path(ctx.env_state.get("worktree_path") or ctx.cwd)
-        task_branch = ctx.task_branch or worktree.task_branch_name(task.id)
-        initial_branch = ctx.branch_name or task_branch
+        run_branch = ctx.run_branch or worktree.run_branch_name(task.id)
+        initial_branch = ctx.branch_name or run_branch
 
         if task.status != "done":
-            task.save(tasks_dir)
+            task.save(runs_dir)
             return task
 
         outcome = self._resolve_outcome(
@@ -242,35 +242,35 @@ class WorktreeEnv(HostEnv):
             task.meta["branch_name"] = outcome.publish_branch
         elif "publish_branch" in task.meta:
             del task.meta["publish_branch"]
-        task.save(tasks_dir)
+        task.save(runs_dir)
 
         if outcome.keep_worktree:
             print(
-                f"[brr] task {task.id}: keeping worktree at {worktree_path} "
+                f"[brr] run {task.id}: keeping worktree at {worktree_path} "
                 f"({outcome.keep_reason})"
             )
             return task
 
         if worktree.has_uncommitted_changes(worktree_path):
             print(
-                f"[brr] task {task.id}: keeping worktree at {worktree_path} "
+                f"[brr] run {task.id}: keeping worktree at {worktree_path} "
                 "(uncommitted changes left behind)"
             )
             return task
 
         worktree.remove(
             ctx.repo_root, task.id,
-            branch=task_branch,
-            delete_branch=outcome.delete_task_branch,
+            branch=run_branch,
+            delete_branch=outcome.delete_run_branch,
             force=True,
         )
         if outcome.delete_unused_initial:
-            self._delete_unused_initial_branch(ctx.repo_root, task_branch)
-        elif outcome.publish_branch and task_branch != outcome.publish_branch:
-            # task_branch is a throwaway placeholder (brr/<task-id>) that
+            self._delete_unused_initial_branch(ctx.repo_root, run_branch)
+        elif outcome.publish_branch and run_branch != outcome.publish_branch:
+            # run_branch is a throwaway placeholder (brr/<run-id>) that
             # was switched away from before the agent ran; it won't be
             # pushed, so clean it up now.
-            self._delete_unused_initial_branch(ctx.repo_root, task_branch)
+            self._delete_unused_initial_branch(ctx.repo_root, run_branch)
         return task
 
     def _resolve_outcome(
@@ -287,7 +287,7 @@ class WorktreeEnv(HostEnv):
         - detached HEAD: ``status=detached``, no publish branch,
           keep the worktree for inspection.
         - final branch has no commits beyond the seed ref:
-          ``status=nothing``, no publish branch, delete the task branch
+          ``status=nothing``, no publish branch, delete the run branch
           along with the worktree.
         - final branch has commits, agent stayed on the starting branch:
           ``status=ready``, publish the starting branch. Worktree is torn
@@ -295,7 +295,7 @@ class WorktreeEnv(HostEnv):
         - final branch has commits, agent switched branches:
           ``status=ready``, publish the new branch. Worktree is torn
           down unless it has uncommitted leftovers; the unused
-          ``brr/<task-id>`` placeholder is best-effort deleted.
+          ``brr/<run-id>`` placeholder is best-effort deleted.
         """
         plan = ctx.branch_plan
         if plan is None:
@@ -319,7 +319,7 @@ class WorktreeEnv(HostEnv):
             return _FinalizeOutcome(
                 status="nothing",
                 publish_branch=None,
-                delete_task_branch=True,
+                delete_run_branch=True,
             )
 
         if final_branch != initial_branch:
@@ -335,9 +335,9 @@ class WorktreeEnv(HostEnv):
         )
 
     def _delete_unused_initial_branch(self, repo_root: Path, branch: str) -> None:
-        """Best-effort delete of the throwaway ``brr/<task-id>`` placeholder.
+        """Best-effort delete of the throwaway ``brr/<run-id>`` placeholder.
 
-        Called when the agent ended on a different branch, so the task
+        Called when the agent ended on a different branch, so the run
         branch still points at the seed commit and can be safely removed.
         Failures are non-fatal — branches are cheap.
         """
@@ -355,17 +355,17 @@ class WorktreeEnv(HostEnv):
 class _FinalizeOutcome:
     """Classification produced by ``WorktreeEnv._resolve_outcome``.
 
-    ``status`` mirrors ``task.meta["publish_status"]``: one of
+    ``status`` mirrors ``run.meta["publish_status"]``: one of
     ``ready``, ``nothing``, or ``detached``. ``conflict`` is owned by
     the daemon's publish step — finalize never produces it because the
-    env layer no longer touches non-task refs.
+    env layer no longer touches non-run refs.
     """
 
     status: str
     publish_branch: str | None
     keep_worktree: bool = False
     keep_reason: str = ""
-    delete_task_branch: bool = False
+    delete_run_branch: bool = False
     delete_unused_initial: bool = False
 
 
@@ -400,7 +400,7 @@ _DOCKER_DEFAULT_PASSTHROUGH_ENV: tuple[str, ...] = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     # Forward the GitHub token when the operator sets it in the environment
-    # directly; tasks triggered by the GitHub gate additionally receive it
+    # directly; runs triggered by the GitHub gate additionally receive it
     # injected from the gate's stored state (see _resolve_github_gate_token).
     "GITHUB_TOKEN",
     "GH_TOKEN",
@@ -449,7 +449,7 @@ def _docker_extra_env_keys(cfg: dict[str, Any]) -> list[str]:
 def _resolve_github_gate_token(brr_dir: Path) -> str | None:
     """Return the token stored in the GitHub gate's state file, or from env.
 
-    Used to inject ``GITHUB_TOKEN`` into Docker containers when a task was
+    Used to inject ``GITHUB_TOKEN`` into Docker containers when a run was
     triggered by the GitHub gate, so the runner's ``gh`` CLI and HTTPS git
     operations are authenticated without relying on the system keyring (which
     is unavailable inside a container).
@@ -560,7 +560,7 @@ def _docker_git_config_env_args(github_token_available: bool = False) -> list[st
     host. The host directory is owned by the user running the daemon,
     while the container runs as root by default. Without this, git
     refuses to operate (``fatal: detected dubious ownership in
-    repository``, CVE-2022-24765), which breaks every branch task — the
+    repository``, CVE-2022-24765), which breaks every branch run — the
     agent can't even ``git status``.
 
     Using git's env-var config (``GIT_CONFIG_COUNT/KEY/VALUE``, supported
@@ -613,10 +613,10 @@ def _docker_github_token_for_git(ctx: RunContext) -> str | None:
     return None
 
 
-def _docker_container_name(task_id: str, label: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{task_id}-{label}").strip(".-_")
+def _docker_container_name(run_id: str, label: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{run_id}-{label}").strip(".-_")
     if not slug or not slug[0].isalnum():
-        slug = f"task-{slug}"
+        slug = f"run-{slug}"
     return f"brr-{slug}"[:120]
 
 
@@ -646,7 +646,7 @@ class DockerEnv(WorktreeEnv):
 
     def prepare(
         self,
-        task: Task,
+        task: Run,
         repo_root: Path,
         cfg: dict[str, Any],
         *,
@@ -671,7 +671,7 @@ class DockerEnv(WorktreeEnv):
         ctx.name = self.name
 
         ctx.env_state.update({
-            "task_id": task.id,
+            "run_id": task.id,
             "docker_image": image,
             "docker_network": _docker_cfg(cfg, "network", "bridge"),
             "docker_mount": str(repo_root),
@@ -679,14 +679,14 @@ class DockerEnv(WorktreeEnv):
         })
         task.meta["docker_image"] = image
 
-        # Resolve a GitHub token for every docker task, not only the
+        # Resolve a GitHub token for every docker run, not only the
         # github-source ones. The container has no path to the host's
         # keyring or to the user's gh stored accounts, so without an
         # injected ``GITHUB_TOKEN`` the agent's ``gh`` CLI is dead and
         # ``git push`` over HTTPS to github.com falls back to anonymous
-        # — which silently breaks any task that needs to look up sibling
+        # — which silently breaks any run that needs to look up sibling
         # PRs, read upstream issues, or open a fresh PR from a worktree
-        # branch even when the task wasn't strictly triggered by the
+        # branch even when the run wasn't strictly triggered by the
         # github gate. Resolution prefers stored gate state, then
         # daemon-side env vars, then ``gh auth token``; absent all
         # three the field stays unset and the container runs with no
@@ -712,7 +712,7 @@ class DockerEnv(WorktreeEnv):
             or _docker_cfg(cfg, "network", "bridge")
         )
         container_name = _docker_container_name(
-            str(ctx.env_state.get("task_id", "") or "task"),
+            str(ctx.env_state.get("run_id", "") or "run"),
             invocation.label,
         )
         containers = ctx.env_state.setdefault("docker_containers", [])
@@ -831,10 +831,10 @@ class DockerEnv(WorktreeEnv):
     def finalize(
         self,
         ctx: RunContext,
-        task: Task,
-        tasks_dir: Path,
-    ) -> Task:
-        task = super().finalize(ctx, task, tasks_dir)
+        task: Run,
+        runs_dir: Path,
+    ) -> Run:
+        task = super().finalize(ctx, task, runs_dir)
         containers = ctx.env_state.get("docker_containers", [])
         if not isinstance(containers, list):
             containers = []
@@ -847,7 +847,7 @@ class DockerEnv(WorktreeEnv):
                 task.meta["docker_containers"] = ", ".join(
                     str(c) for c in containers
                 )
-                task.save(tasks_dir)
+                task.save(runs_dir)
             return task
 
         for container in containers:

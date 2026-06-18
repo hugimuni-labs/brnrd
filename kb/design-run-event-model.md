@@ -1,13 +1,15 @@
 # Run / event model — retire the per-event "task"
 
-Status: **proposed (2026-06-14)**. A slice of the **Co-maintainer**
-milestone ([`design-co-maintainer.md`](design-co-maintainer.md) §6
-run↔reply decoupling, §9 responsiveness, §11 execution order) and the
-design page issue **#128** asks for before code. It reframes a core
-concept (`task`) rather than adding behaviour, so it lands as its own
-page that §6/§9/§11 reference, instead of bloating the co-maintainer
-hub. Subsumes the narrower "batch pending events per correspondent into
-one wake" idea raised on #114.
+Status: **active; rename slice shipped 2026-06-18**. A slice of the
+**Co-maintainer** milestone ([`design-co-maintainer.md`](design-co-maintainer.md)
+§6 run↔reply decoupling, §9 responsiveness, §11 execution order) and the
+design page issue **#128**. The first implementation slice retired the
+persisted `Task` / `.brr/tasks` layer in favour of `Run` manifests at
+`.brr/runs/<run-id>/run.md`, generated `run-*` ids, run-keyed lifecycle
+packets, and run conversation records. Remaining work is behavioural:
+per-run event claims, defer/debounce, primary response/outbox keying, and
+cost/consent policy. The page subsumes the narrower "batch pending events
+per correspondent into one wake" idea raised on #114.
 
 ## Why
 
@@ -56,15 +58,15 @@ if pending:
     current = pool.submit(_run_worker_and_finalize, event, ...)
 ```
 
-The daemon picks `pending[0]`, builds a `Task` from it
-([`../src/brr/task.py`](../src/brr/task.py) `Task.from_event`), and the
-"task" *is* that one event for the run's whole life. Everything
-downstream — `run_context`, the response key (`responses/<event_id>.md`),
-the bundle's `### Task` framing, the diffense pack path, the branch name
-`brr/<task-id>` — inherited that 1:1. The prompt-facing framing was split
-off on 2026-06-18: agents now see a Run Context Bundle / Run ID while
-the persisted object, storage path, and id string remain legacy
-`Task` / `.brr/tasks/` / `task-...` until the model rename lands.
+The daemon still picks `pending[0]`, then builds a `Run` from it
+([`../src/brr/run.py`](../src/brr/run.py) `Run.from_event`). The rename
+slice shipped on 2026-06-18, so persisted manifests now live at
+`.brr/runs/<run-id>/run.md`, new ids have the `run-*` shape, lifecycle
+packets use `run_created` + `run_id`, and conversation rows use
+`kind: run`. The remaining coupling is behavioural: the response key
+(`responses/<event_id>.md`) and primary outbox still key off the lead
+event, and daemon dispatch still chooses `pending[0]` before the run can
+claim / defer the rest of the inbox.
 
 ## Want
 
@@ -94,8 +96,8 @@ Concretely:
   (correct today) — but the **next run** sees those un-resolved events as
   pending and decides about them, instead of the daemon serially
   re-spawning one wake per stuck event.
-- Naming/IDs, run-context, response-routing keys, and the bundle's "Task"
-  framing move from task-centric to **run + events**.
+- Naming/IDs, run-context, and bundle framing have moved to **run +
+  events**. Response/outbox keys and dispatch claims are still pending.
 
 ## What stays the same
 
@@ -107,10 +109,11 @@ Concretely:
 - **Event immutability + file CRUD.** `protocol.py`'s event files stay the
   substrate; this is a dispatch + naming reshape, not a storage rewrite.
 
-## The hard questions a design must settle before code
+## The hard questions remaining
 
-These are why #128 asks for a page first. Each carries a recommended
-resolution; the user's nod (or amendment) is what turns them into spec.
+These were why #128 asked for a page first. The rename slice has shipped;
+Q1-Q4 remain the behaviour spec. Each carries a recommended resolution;
+the user's nod (or amendment) is what turns it into implementation scope.
 
 ### Q1 — Event lifecycle: what does a run "claim"?
 
@@ -162,21 +165,19 @@ events needs each resolved event to route its reply correctly. The
 events; the change is making it the **norm**, not the exception:
 
 - A run is dispatched against the inbox; its **primary** outbox/response
-  dir can stay keyed to a "lead" event for backward-compatible single-event
-  delivery, but every delivery names its target event (`event:`) or gate
-  (`gate:`) explicitly.
+  dir should move to the run id. Every delivery names its target event
+  (`event:`) or gate (`gate:`) explicitly.
 - An event with **no** output at run end is *not* resolved — it stays
   pending (Q1) — so "I never answered this" and "I postponed this" share a
   mechanism, and silence on an event is honestly visible as still-pending,
   not falsely `done`.
 
-**Open sub-question:** the run/outbox/response directory is named per
-event today. If a run has no single "lead" event (e.g. woken purely by a
-self-schedule that then reads inbound events), the natural key is the
-**run id**, and per-event delivery routes via frontmatter. Recommend
-moving the primary key to **run id**, with event resolution always
-explicit — this is the cleanest end state and removes the "which event is
-the task" question entirely.
+The run/outbox/response directory is still named per event today. If a
+run has no single "lead" event (e.g. woken purely by a self-schedule that
+then reads inbound events), the natural key is the **run id**, and
+per-event delivery routes via frontmatter. Move the primary key to **run
+id**, with event resolution always explicit — this is the clean end state
+and removes the "which event owns the run" question entirely.
 
 ### Q4 — Billing / retry interaction (the real cost question)
 
@@ -204,33 +205,31 @@ question is genuinely coupled to #130** and is the strongest argument for
 landing the pricing/spend decision before the rename's billing-facing
 edges.
 
-### Q5 — The rename surface (cosmetic but wide)
+### Q5 — The rename surface (shipped 2026-06-18)
 
-`task` → `run` touches a broad surface, all mechanical:
+`task` → `run` touched a broad surface, all mechanical. The shipped slice
+chose a clean break instead of a compatibility layer because brr has no
+external users yet and the leftover `task` layer was itself confusing:
 
-- [`../src/brr/task.py`](../src/brr/task.py) — `Task` → `Run`,
-  `from_event` → a constructor that doesn't imply 1:1, `.brr/tasks/` dir.
-- [`../src/brr/daemon.py`](../src/brr/daemon.py) — the dispatch loop,
-  `_run_worker`, `_run_worker_and_finalize`, `_cleanup_traces_on_success`,
-  publish (`task.meta["publish_branch"]`).
+- [`../src/brr/run.py`](../src/brr/run.py) is the persisted model:
+  `Run.from_event`, generated `run-*` ids, and
+  `.brr/runs/<run-id>/run.md` manifests.
+- [`../src/brr/daemon.py`](../src/brr/daemon.py) emits
+  `run_created` / `run_id` packets and writes run manifests and prompt
+  files under `.brr/runs/<run-id>/`.
 - [`../src/brr/run_context.py`](../src/brr/run_context.py) — already named
-  `run`! The context file is `runs/<task-id>/context.md`; the prompt-facing
-  label moved to `Run ID` on 2026-06-18, while the path/id string remains
-  transitional.
+  `run`; the context file is `runs/<run-id>/context.md`, and the
+  prompt-facing label is `Run ID`.
 - [`../src/brr/prompts.py`](../src/brr/prompts.py) — prompt-facing
-  `Run Context Bundle` / `### Run` / `Run ID` shipped on 2026-06-18;
-  the remaining work is the internal parameter/storage model
-  (`task_id`, `Task`, `_format_pending_events`).
-- Response/outbox keys, the diffense pack path `diffense/<task-id>/`, the
-  branch name `brr/<task-id>`.
+  `Run Context Bundle` / `Run ID` shipped, and lifecycle/conversation
+  records use run terminology.
+- Response/outbox keys and diffense pack paths remain event/lead-run
+  shaped; those are covered by Q3 rather than by the storage rename.
 
-**Recommendation: phase it.** The model change (Q1–Q4) is the substance
-and ships first; the **rename is a separate, mechanical follow-up** so a
-wide diff doesn't obscure the behavioural change in review. Keep the
-existing **id string** stable across the rename (a run id can keep the
-`task-…` shape transitionally) to avoid churning branch names, response
-paths, and persisted bundles mid-flight. The user named the rename as
-in-scope; phasing is about *review legibility*, not dropping it.
+Lineage: the original proposal recommended phasing the rename after Q1-Q4
+and keeping `task-*` ids transitionally. The 2026-06-18 implementation
+reversed that because no compatibility promise exists yet and removing
+the confusing layer first made the remaining behaviour work easier to see.
 
 ## Resilience tie-in (why this matters beyond #114)
 
@@ -261,15 +260,13 @@ ticket; this page is its substrate.
   of the rename want the spend decision first.
 - **Substrate for** the resumable-tasks / interruption-resilience work.
 
-## Open decisions for the user
+## Remaining work
 
 1. **Q1/Q2** — accept the per-run claim + `defer_until` debounce, or a
    simpler "mark all processing, clear on reap" with no postpone brake?
 2. **Q3** — move the primary response/outbox key to **run id** (cleanest),
-   or keep a "lead event" key for backward compatibility?
+   with explicit per-event delivery routing.
 3. **Q4** — confirm **run-granularity** cost attribution and "folding is
    the consent point," sequenced after #130.
-4. **Q5** — confirm **phase the rename** behind the model change, and
-   whether to keep the `task-…` id-string shape transitionally.
-5. **Home** — this dedicated page, or fold into `design-co-maintainer.md`
+4. **Home** — this dedicated page, or fold into `design-co-maintainer.md`
    as a new §? (Recommended: dedicated, per the oversized-hub signal.)

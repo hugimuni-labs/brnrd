@@ -61,18 +61,18 @@ together with the framing reshape.
    has 2-3 ranked options; each env picks per its platform's
    constraints.
 4. Per-platform cold start ranges from ~90ms (Daytona from
-   snapshot) to ~minutes (cold Codespaces). Per-task cost floor
+   snapshot) to ~minutes (cold Codespaces). Per-run cost floor
    for a 5-minute small task ranges from a fraction of a cent
    (Fly Machines per-second) to free-tier (Codespaces personal
    account).
 5. First cloud env to ship is **`fly_machines`** — fastest cold
-   start, REST API, cheapest per-task, AND the chosen brnrd
+   start, REST API, cheapest per-run, AND the chosen brnrd
    server-side managed-compute backend. **`codespaces`** is the
    cheap fast-follow on the laptop-daemon-only side (`gh` CLI,
    devcontainer-native, huge audience overlap).
 6. Read-only PaaS platforms (Heroku, Upsun, Render, Railway,
    App Platform) are NOT cloud-env candidates — wrong runtime
-   shape (no per-task ephemeral sandbox API, no
+   shape (no per-run ephemeral sandbox API, no
    bring-your-own-OCI image, read-only `/app` blocks git
    worktree-style operations). They ARE *daemon-hosting* and
    *brnrd backend-hosting* candidates; see
@@ -137,7 +137,7 @@ The env code is identical between callers. What differs:
 | **Token source** | `os.environ[env.api_token_env]` | brnrd's own pool-control token (managed compute, launch); decrypted from the user's stored cloud-credential vault at spawn time, cleared after (BYO server-side, deferred) |
 | **Repo delivery** | Per Pattern B below — usually `git clone` with a token from the user's env | Per Pattern B below — git token comes from a per-spawn GH App installation token (for GitHub remotes) OR a per-account deploy key (for other remotes); brnrd-side bootstrap clones into a scratch dir before invoking the env |
 | **AI-credential delivery** | Per Pattern A below — env vars / mounted dirs from the user's home | Decrypted from brnrd's AI-credential vault at spawn time per `design-brnrd-protocol.md` → "AI-credential vault"; injected as env var (api-key shape) OR tar-expanded into `$HOME/<provider>` (dir-tarball shape) on the bootstrap side, then env's normal mount/inject logic carries it into the sandbox |
-| **Response delivery** | Writes to `.brr/responses/` on the daemon host | Sandbox carries a one-shot `task-key` (Bearer token scoped to one `event_id`, 1h TTL) and POSTs to `/v1/daemons/responses` directly |
+| **Response delivery** | Writes to `.brr/responses/` on the daemon host | Sandbox carries a one-shot `run-key` (Bearer token scoped to one `event_id`, 1h TTL) and POSTs to `/v1/daemons/responses` directly |
 | **Failure salvage** | Daemon's `salvage` rule from [`subject-envs.md`](subject-envs.md): preserve on `error` / `conflict`, destroy on `done` | Server-side default destroy-on-anything; on failure, orphan response written to `.brr/failover-orphans/<event-id>.md` and pushed via git so user sees the trace |
 | **Cost ceiling** | Not the env's concern (user pays their own bill in real time) | Enforced before spawn by the dispatcher per `failover-policy.monthly_spawn_cap` and `monthly_cost_cap_credits`; debited from the wallet at spawn-finalize per [`design-billing.md`](design-billing.md) |
 
@@ -168,7 +168,7 @@ work, in adapter terms:
 | `invoke` | Exec the runner CLI inside the sandbox; stream stdout / stderr back to the host trace; honour the task timeout. |
 | `finalize` | Push the branch back (from inside the sandbox) or bundle-and-fetch (from the host); pull the response file to `response_path_host`; destroy the sandbox on clean `status=done`; preserve on `status ∈ {error, conflict}` per the salvage rule from [`subject-envs.md`](subject-envs.md). |
 
-The runner CLI install is **not** a per-task concern — it ships
+The runner CLI install is **not** a per-run concern — it ships
 inside the image. The bundled image at
 [`src/brr/Dockerfile`](../src/brr/Dockerfile) already builds a
 practical runner image with claude / codex / gemini and the dev
@@ -249,14 +249,14 @@ Three patterns, each with trade-offs:
 
 1. **`git clone https://${TOKEN}@github.com/<owner>/<repo>` in the
    sandbox `prepare`.** Cleanest; assumes the sandbox can reach
-   the remote and the operator has provisioned a per-task token.
+   the remote and the operator has provisioned a per-run token.
    Best default.
 2. **`git bundle create` locally then upload + `git fetch`.**
    Works over any transport; expensive for large repos; useful
    when the remote isn't reachable from the sandbox (corporate
    VPN, private mirror).
 3. **Platform-native volume / snapshot reuse.** Daytona snapshots,
-   Fly volumes pinned to a host. Lowest per-task cost; highest
+   Fly volumes pinned to a host. Lowest per-run cost; highest
    coupling to the platform; only sensible once an adapter is
    shipping at non-trivial volume.
 
@@ -321,7 +321,7 @@ way around.
   tarball-via-secret path. Adapter plan:
   [`plan-env-fly-machines.md`](plan-env-fly-machines.md).
 - **Open question.** Volumes pinned to physical hosts — fine for
-  per-task ephemeral machines (no volume), but if a managed-mode
+  per-run ephemeral machines (no volume), but if a managed-mode
   user wants persistent caches (pip / npm), the volume pinning
   forces region-locked tasks.
 
@@ -386,10 +386,10 @@ way around.
   file API or `git clone` in the startup script.
   `sandbox.commands.run(...)` for invoke. Destroy on close.
 - **What brr needs to add.** An `E2BEnv` adapter (~300 LOC).
-  Template build is a one-off operator step, not per-task. SDK is
+  Template build is a one-off operator step, not per-run. SDK is
   a runtime dep when this env is in use.
 - **Open question.** E2B's main muscle is short-lived
-  code-interpreter sandboxes (max ~24h default). Brr's per-task
+  code-interpreter sandboxes (max ~24h default). Brr's per-run
   shape is well within that window. Less clear how it handles
   persistent caches; probably bring-a-clean-template-every-time
   is the right default for v1.
@@ -437,7 +437,7 @@ way around.
   prepare wrapper around the existing `ssh` shape that calls the
   platform's "create server" API (Hetzner Cloud, vultr /
   digitalocean / etc.) once.
-- **Open question.** "Pay-per-task ephemeral VM" on these
+- **Open question.** "Pay-per-run ephemeral VM" on these
   platforms is poorly priced — better used in long-lived-box
   mode (one always-on cheap VM that brr ssh's into). That's the
   operator's BYO-laptop replacement, not really a managed-mode
@@ -463,9 +463,9 @@ way around.
 - **PaaS platforms with read-only application containers
   (Heroku, Upsun, Render, Railway, App Platform).** Designed for
   always-on web apps with writes limited to declared mount paths;
-  no per-task ephemeral sandbox API, no bring-your-own-OCI-image,
+  no per-run ephemeral sandbox API, no bring-your-own-OCI-image,
   and the read-only `/app` blocks `git worktree`-style operations
-  brr's envs do. Wrong shape for the per-task sandbox role.
+  brr's envs do. Wrong shape for the per-run sandbox role.
 
   These same platforms ARE viable as **daemon-hosting** targets —
   the brr daemon is exactly the always-on-web-app shape they were

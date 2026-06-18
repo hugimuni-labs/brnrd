@@ -96,7 +96,7 @@ project-cap unlock, supporter cohort) live in
 | Surface | What it is | Adoption pain it removes |
 |---------|-----------|--------------------------|
 | **A. Managed dispatcher** — hosted bots + multi-project routing + permission prompts + audit | Hosted GH App + Telegram bot routing events to a per-account brnrd inbox, multi-project routing on top of one bot per platform, permission prompts before failover spawns, audit log | Per-user GH App / BotFather setup — currently the longest friction in adoption — AND "my laptop has to be up" — together, in one flow |
-| **B. Compute** — failover spawn, two sub-options for subscribers | When the user's daemon is offline and the user opts in, brnrd dispatches a per-task ephemeral sandbox. **Managed (default)**: spawns on brnrd-owned Fly Machines pool, decrypts user's AI credentials into the sandbox, runs the task, returns response via the gate. **BYO (subscriber opt-in)**: subscriber stores a cloud-platform credential in the vault (`brr brnrd creds add cloud-platform --provider fly --token …`); the same dispatcher invokes the same env class with the subscriber's token; spawn runs in subscriber's own cloud account; user pays the cloud provider directly. Same env class, two callers per the "Caller axis" pattern in [`research-cloud-envs.md`](research-cloud-envs.md). | "I want managed continuity without a credit card surprise" — subscribers get generous included compute on managed; "I already have a Fly account and don't want compute markup" — subscribers BYO and the wallet is bypassed entirely |
+| **B. Compute** — failover spawn, two sub-options for subscribers | When the user's daemon is offline and the user opts in, brnrd dispatches a per-run ephemeral sandbox. **Managed (default)**: spawns on brnrd-owned Fly Machines pool, decrypts user's AI credentials into the sandbox, runs the task, returns response via the gate. **BYO (subscriber opt-in)**: subscriber stores a cloud-platform credential in the vault (`brr brnrd creds add cloud-platform --provider fly --token …`); the same dispatcher invokes the same env class with the subscriber's token; spawn runs in subscriber's own cloud account; user pays the cloud provider directly. Same env class, two callers per the "Caller axis" pattern in [`research-cloud-envs.md`](research-cloud-envs.md). | "I want managed continuity without a credit card surprise" — subscribers get generous included compute on managed; "I already have a Fly account and don't want compute markup" — subscribers BYO and the wallet is bypassed entirely |
 
 Surface A is the entry point — Free is genuinely usable for
 hobbyists, and the subscription unlocks the natural "I'm
@@ -281,7 +281,7 @@ event arrives at brnrd (TG message / GH @brr comment / etc.)
               auto: spawn now
                    │
                    ▼
-            spawn per-task sandbox
+            spawn per-run sandbox
             in brnrd's Fly pool
             with AI creds decrypted
             and per-spawn GH App
@@ -370,7 +370,7 @@ in [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md).
 
 ## Surface B — managed compute (failover spawn)
 
-Per-task spawn when the user's daemon is offline (or — as a
+Per-run spawn when the user's daemon is offline (or — as a
 v-next opt-in — when it's overloaded). brnrd holds the user's
 credentials in the vault (AI runner + docker-registry, all
 encrypted), holds its own pool-control token for the managed
@@ -605,7 +605,7 @@ deployment templates are still worth shipping but their role is
 | Target | Setup | Notes |
 |--------|-------|-------|
 | Free-tier always-on cloud apps (Fly app, Render free worker, Railway) | `flyctl launch` from template / one-click deploy | "Deploy brr in 30 seconds" — for cloud-first users who don't want a laptop daemon at all |
-| Read-only PaaS templates (Heroku, Upsun, Render Blueprint, Railway, App Platform) | One-click deploy button | Broadest developer-audience reach; per-task work must fan out to cloud-runner envs (no `docker` env without docker-in-docker) |
+| Read-only PaaS templates (Heroku, Upsun, Render Blueprint, Railway, App Platform) | One-click deploy button | Broadest developer-audience reach; per-run work must fan out to cloud-runner envs (no `docker` env without docker-in-docker) |
 | Cheap always-on VPS (Hetzner CX11 €3.79/mo, Oracle Free Tier ARM, low-end OVH / DO / Vultr) | `docker compose up -d brr` + systemd unit | Most flexible (full `docker` env); cheapest at scale for power users running many concurrent tasks |
 | Laptop / home server | `brr daemon install` (per-user systemd unit on Linux, LaunchAgent on macOS) | Existing default; the `install` verb removes the "go add it to your startup scripts" friction without sudo, without re-implementing supervision |
 
@@ -691,7 +691,7 @@ In scope for managed-mode launch:
   decision tree with managed-vs-BYO branch on credential
   presence, brnrd-owned Fly Machines pool for the managed path,
   BYO Fly for the subscriber-opt-in path (same env class invoked
-  with the user's token), sandbox image, per-spawn task-key + GH
+  with the user's token), sandbox image, per-spawn run-key + GH
   App installation token, accounting +
   CSV exporter for accounting. Included credits in the
   subscription; metered top-ups for overage via Stripe
@@ -733,7 +733,7 @@ Out of scope, explicitly:
   CI breaks across multiple projects and propose a fix"). Tracked
   in [`decision-connectors-layering.md`](decision-connectors-layering.md)
   for the connectors layering question. Not at launch.
-- **Scheduler-shaped managed compute.** Surface B is per-task
+- **Scheduler-shaped managed compute.** Surface B is per-run
   spawn-and-teardown via the same path as a daemon's local env;
   just with a different token. No scheduler needed.
 - **Server-side spawn for online daemons (load-shedding).**

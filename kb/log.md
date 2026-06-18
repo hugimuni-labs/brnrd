@@ -7184,3 +7184,22 @@ ids and `.brr/tasks/` as legacy storage compatibility until the broader
 run/event model lands.
 
 Tests: `pytest -q` (870 passed, 7 skipped).
+
+## [2026-06-18] implement | Run manifests replace task storage
+
+Follow-up on the broader run/event model after the maintainer explicitly
+preferred a clean break over compatibility. The daemon's persisted work
+unit is now `Run`: new ids use the `run-YYMMDD-HHMM-xxxx` shape,
+manifests live at `.brr/runs/<run-id>/run.md`, lifecycle packets and
+conversation records use `run_id` / `run_created` / `kind: run`, and the
+old `.brr/tasks` / `Task` module path is gone. The sync hook and config
+knob moved with the model (`refresh_before_run`,
+`sync.fetch_before_run`), and current docs/kb now point at the
+`subject-runs-branching.md` hub.
+
+Remaining broader-scope work is behavioural, not storage compatibility:
+per-run event claims plus `defer_until`, moving the primary
+response/outbox key from lead event to run id, and run-granularity
+cost/fold consent.
+
+Tests: `pytest -q` (870 passed, 7 skipped).

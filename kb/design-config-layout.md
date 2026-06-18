@@ -241,7 +241,7 @@ The schema declares scope per key. Headline assignments:
 | `docker.image` | `project` | The container image the project's tasks run in. |
 | `env.default` | `project` | Project's preferred env (`docker` vs `worktree` vs `host` vs a cloud env). |
 | `kb.maintenance_schedule` | `project` | Methodology choice for the repo. |
-| `sync.fetch_before_task` | `project` | The pre-task sync behaviour is project-level (per AGENTS.md → "When the brr daemon runs you"). |
+| `sync.fetch_before_run` | `project` | The pre-run sync behaviour is project-level (per AGENTS.md → "When the brr daemon runs you"). |
 | `sync.fast_forward_default` | `project` | Same. |
 | `daemon.host` | `local` | Per-machine binding. |
 | `daemon.port` | `local` | Per-machine binding. |

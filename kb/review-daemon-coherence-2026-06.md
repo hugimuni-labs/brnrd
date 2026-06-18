@@ -45,7 +45,7 @@ describing machinery the resident reshape retired:
 - **Superseded design citations.** `design-concurrent-execution.md` is
   `Status: superseded`; its surviving rationale moved to
   [`subject-daemon.md`](subject-daemon.md) and
-  [`subject-tasks-branching.md`](subject-tasks-branching.md). Re-pointed the
+  [`subject-runs-branching.md`](subject-runs-branching.md). Re-pointed the
   citations in `daemon.py`, `gates/runtime.py`, `conversations.py`, and
   `docs/conversations.md`, and reworded "concurrent worker pool" to
   "overlapping thoughts (ad-hoc sessions, a second daemon)" — the

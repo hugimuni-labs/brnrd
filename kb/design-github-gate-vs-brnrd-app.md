@@ -59,10 +59,10 @@ behind `brr gate github setup`. Five concrete surfaces:
   `/pulls/{n}/comments/{cid}/replies`, edits via PATCH for the live
   progress card. Quote-pointer preface mirrors GitHub's "Quote reply"
   UX so the conversation thread stays legible.
-- **Live progress card.** A `task_created` packet posts a fresh
+- **Live progress card.** A `run_created` packet posts a fresh
   comment and stores its ID; subsequent packets PATCH the same
   comment, with a fall-through to a fresh post if the original was
-  deleted. State at `.brr/gates/github/progress/<task-id>.json`.
+  deleted. State at `.brr/gates/github/progress/<run-id>.json`.
 
 What OSS deliberately does **not** ship: webhooks (require a public URL
 + signature verification + reverse-proxy setup — exactly the friction
@@ -142,7 +142,7 @@ will import them*, and stay transport-agnostic:
   `_skip_mention_comment_author`. brnrd's webhook receiver normalises
   the *same* event meta (`github_kind`, `github_pr_number`,
   `github_path`, `github_line`, `branch_target`, …) so the daemon's
-  task-construction code path works identically on cloud-gate events
+  run-construction code path works identically on cloud-gate events
   and OSS-gate events.
 
 The reusable-core illusion is the obvious failure mode here: easy to

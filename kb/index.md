@@ -129,7 +129,7 @@ dive-in map) and are stable until something contradicts them.
 - [Generalize the playbook; brr becomes one driver](plan-playbook-generalization.md) —
   *shipped 2026-06-10*. Splits the daemon-assuming playbook
   into a host-agnostic **core** (the resident), brr's **driver's manual**
-  (daemon-owned substrate: scheduled-wakes, capture-net, the Task Context
+  (daemon-owned substrate: scheduled-wakes, capture-net, the Run Context
   Bundle), and a **`brr agent inject`** tool that hands any wrapper brr's
   assembled wake-context via the runner's own path. Reframe: *the playbook
   is the resident; brr is one driver of it.* Drops capture-at-sleep
@@ -177,13 +177,13 @@ dive-in map) and are stable until something contradicts them.
   *superseded on 2026-06-08 by*
   [`design-agent-dominion.md`](design-agent-dominion.md). The threaded
   daemon loop is reversed to single-flight by the resident-agent reshape;
-  the partitioned per-event/per-task state + per-task worktree isolation it
-  built on survive in `subject-tasks-branching` / `subject-daemon`.
+  the partitioned per-event/per-run state + per-run worktree isolation it
+  built on survive in `subject-runs-branching` / `subject-daemon`.
 
-## Tasks & branching
+## Runs & branching
 
-- **Hub: [tasks and branching](subject-tasks-branching.md)** —
-  synthesis of mechanical task construction, environment resolution,
+- **Hub: [runs and branching](subject-runs-branching.md)** —
+  synthesis of mechanical run construction, environment resolution,
   agent-owned runtime branching, the 4-state finalize outcome table,
   and the publish kernel that ships the agent's branch in one step.
 - [Publish kernel design](design-publish-kernel.md) —
@@ -197,24 +197,26 @@ dive-in map) and are stable until something contradicts them.
   with `auto_land_branch`, metadata triple); preserved for context on
   the constraints the kernel inherits.
 - [Branch Modes Plan](plan-branch-modes.md) — *shipped, with
-  revisions*. Branch and env are task properties, the agent owns
+  revisions*. Branch and env are run properties, the agent owns
   branching at runtime. Triage and `needs_context` were reversed —
   see the decision below.
 - [Remove the triage stage](decision-remove-triage.md) — why the
   LLM-driven triage step and the frontmatter-as-stdout contract were
-  removed in favour of mechanical task construction, agent-decided
+  removed in favour of mechanical run construction, agent-decided
   branching, and plain-text responses.
 - [Run / event model — retire the per-event "task"](design-run-event-model.md) —
-  *proposed (2026-06-14, #128)*. The `task` concept is a leftover of the
+  *active; run-manifest rename shipped 2026-06-18*. The `task` concept is a leftover of the
   spawn-per-event arch (one event → one task → one run → one reply); the
   resident reshape already broke that 1:1 (multi-response, folded-in
   events, `gate:` sends, the §6 delivery floor). Reframes the two real
   entities — **event** (immutable signal, consumed/produced by runs) and
   **run** (a runner invocation that reads the whole inbox and decides what
-  to tackle / fold / postpone) — and settles the design questions before
-  code: per-run claim + `defer_until` debounce, run-id response keying,
-  run-granularity cost attribution (coupled to #130), and phasing the
-  task→run rename behind the model change. Slice of
+  to tackle / fold / postpone). The first slice removed the persisted
+  `Task`/`.brr/tasks` layer in favour of `Run` manifests at
+  `.brr/runs/<run-id>/run.md`, `run-*` IDs, and run-keyed lifecycle
+  packets / conversation records. Remaining behaviour work: per-run
+  claim + `defer_until` debounce, run-id response/outbox keying, and
+  run-granularity cost attribution (coupled to #130). Slice of
   [`design-co-maintainer.md`](design-co-maintainer.md) §6/§9/§11.
 
 - [The resident's cockpit — runner control & a live dwelling](plan-resident-cockpit.md) —
@@ -815,7 +817,7 @@ dive-in map) and are stable until something contradicts them.
 - [Runner orientation ergonomics, 2026-05-16](research-runner-orientation-ergonomics-2026-05-16.md) —
   *shipped*. Same-day daemon-launched-runner view of the same
   problem from inside Docker: pinpoints the stage-vs-environment
-  axis confusion, the missing Mode block on the Task Context
+  axis confusion, the missing Mode block on the Run Context
   Bundle, and the run-context-file duplication. Converged
   independently with the Cursor review.
 - [Test suite grooming, 2026-05-16](research-test-suite-grooming-2026-05-16.md) —

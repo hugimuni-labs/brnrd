@@ -48,7 +48,7 @@ class RunContext:
     runtime_dir: Path          # host's shared .brr/
     response_path_host: Path   # where finalize must land it; daemon checks this
     response_path_env: Path    # path rendered to the runner prompt
-    branch_name: str | None    # task branch, when env created one
+    branch_name: str | None    # run branch, when env created one
     branch_plan: PublishPlan   # seed / expected publish target
     env_state: dict            # opaque to brr; env may stash anything here
 
@@ -56,14 +56,14 @@ class EnvBackend(Protocol):
     name: str                  # "host" | "worktree" | "docker" | …
 
     def prepare(
-        self, task: Task, repo_root: Path, cfg: dict,
+        self, run: Run, repo_root: Path, cfg: dict,
         *, branch_plan: PublishPlan, response_path: Path,
     ) -> RunContext: ...
     def invoke(
         self, ctx: RunContext, runner_name: str,
         invocation: RunnerInvocation, cfg: dict, *, trace: bool = False,
     ) -> RunnerResult: ...
-    def finalize(self, ctx: RunContext, task: Task, tasks_dir: Path) -> Task: ...
+    def finalize(self, ctx: RunContext, run: Run, runs_dir: Path) -> Run: ...
 ```
 
 `invoke` keeps returning `RunnerResult` so the existing trace / retry
@@ -85,7 +85,7 @@ filesystem with the host, the two paths are the same; for remote envs,
 | `host`         | `repo_root/.brr/responses/<id>.md`             | same                                           | yes    |
 | `worktree`     | `repo_root/.brr/responses/<id>.md`             | same (worktree shares `.brr/`)                 | yes    |
 | `docker`       | `/work/.brr/responses/<id>.md` (bind-mount)    | `repo_root/.brr/responses/<id>.md`             | yes (same inode via mount) |
-| `ssh`          | `<scratch>/<task-id>/.brr/responses/<id>.md`   | `repo_root/.brr/responses/<id>.md`             | **no** — `finalize` scp's it back |
+| `ssh`          | `<scratch>/<run-id>/.brr/responses/<id>.md`    | `repo_root/.brr/responses/<id>.md`             | **no** — `finalize` scp's it back |
 | `devcontainer` | `/workspaces/<repo>/.brr/responses/<id>.md`    | `repo_root/.brr/responses/<id>.md`             | yes (same inode via devcontainer mount) |
 | plugin envs    | env's choice                                   | `repo_root/.brr/responses/<id>.md`             | plugin-dependent |
 
@@ -191,7 +191,7 @@ or a single executable dispatching by first argv:
 ```
 
 Protocol is **JSON-in on stdin, JSON-out on stdout**, with fields
-matching the Python dataclasses verbatim (`RunContext`, `Task`,
+matching the Python dataclasses verbatim (`RunContext`, `Run`,
 `RunnerResult`). `stderr` is propagated unchanged to the trace.
 
 Minimal bash stub for the `invoke` step of a script env:
@@ -233,7 +233,7 @@ Concrete rules every `EnvBackend.finalize()` must satisfy:
 |---------------------------------------------|----------------------------------------|------------------------------------------|
 | Git commits on `ctx.branch_name`            | reachable in host's `.git`             | `ctx.branch_name is not None`            |
 | Response file `<event-id>.md`               | `repo_root/.brr/responses/<id>.md`     | always (existing daemon contract)        |
-| diffense review pack                        | `repo_root/.brr/diffense/<task-id>/pack.json` (the `Review pack path` handed in the bundle) | when pack emission is on and the agent produced one — validated/projected by the resident before a `gate: forge` PR send |
+| diffense review pack                        | `repo_root/.brr/diffense/<run-id>/pack.json` (the `Review pack path` handed in the bundle) | when pack emission is on and the agent produced one — validated/projected by the resident before a `gate: forge` PR send |
 | Trace artefacts                             | `repo_root/.brr/traces/<kind>/…/`      | always written; removed on clean `status=done`, kept on `error`/`conflict` |
 | Env-private scratch teardown                | n/a — removed from env's territory     | clean `status=done` with no uncommitted files |
 
@@ -281,7 +281,7 @@ This is the host-checkout path behind the protocol.
 
 ### `worktree`
 
-- **prepare** → `git worktree add .brr/worktrees/<task-id> <branch>` (creating the branch if needed); cwd points at the worktree.
+- **prepare** → `git worktree add .brr/worktrees/<run-id> <branch>` (creating the branch if needed); cwd points at the worktree.
 - **invoke** → unchanged.
 - **finalize** →
   - Read the final HEAD in the worktree and record `publish_status`
@@ -345,11 +345,11 @@ compose axis moves into a follow-up, not v1.
     review pack the same inode) without a copy step.
   - Network: configurable (`cfg["docker"]["network"]`, default `bridge`).
   - **Branch handling:** current-branch Docker tasks mount the main checkout.
-    Non-current branch tasks first create the same `.brr/worktrees/<task-id>`
+    Non-current branch runs first create the same `.brr/worktrees/<run-id>`
     checkout that `worktree` uses and run Docker with that as the working
     directory. This keeps branch work from switching or dirtying the host's
     main checkout while keeping commits visible through the shared `.git`.
-- **invoke** → `docker run --name brr-<task-id>-<attempt> -v <repo>:<repo> -w <run-root> <image> <runner-cmd>`. The cmd line is built from the existing runner profile machinery. Note: **no `--rm`** — cleanup is `finalize`'s job so we can preserve the container for salvage and support retry diagnostics.
+- **invoke** → `docker run --name brr-<run-id>-<attempt> -v <repo>:<repo> -w <run-root> <image> <runner-cmd>`. The cmd line is built from the existing runner profile machinery. Note: **no `--rm`** — cleanup is `finalize`'s job so we can preserve the container for salvage and support retry diagnostics.
 - **finalize** → branch handling identical to worktree finalize. Container teardown matches the worktree salvage rule: `docker rm -f <container>` on clean `status=done`; preserve on `status ∈ {error, conflict}` or when the worktree has uncommitted/untracked files.
 
 #### Isolation posture (what `docker` is and isn't)
@@ -378,15 +378,15 @@ proposed follow-up (a stated trust model + these knobs), not yet wired.
 
 - **prepare**:
   - Remote spec: `cfg["ssh"]["host"]`, `cfg["ssh"]["scratch"]` (default `~/.brr/scratch`).
-  - `ssh remote 'mkdir -p <scratch>/<task-id>'`
-  - `rsync -a --delete <repo_root>/ remote:<scratch>/<task-id>/`
+  - `ssh remote 'mkdir -p <scratch>/<run-id>'`
+  - `rsync -a --delete <repo_root>/ remote:<scratch>/<run-id>/`
   - `ctx.cwd` is local but `env_state["remote_path"]` is set; invoke proxies through ssh.
-- **invoke**: `ssh remote 'cd <scratch>/<task-id> && <runner-cmd>'`. Stdout/stderr piped back; trace is host-side as usual.
+- **invoke**: `ssh remote 'cd <scratch>/<run-id> && <runner-cmd>'`. Stdout/stderr piped back; trace is host-side as usual.
 - **finalize**:
-  - Pull the branch back: `ssh remote 'cd <scratch>/<task-id> && git bundle create /tmp/<task-id>.bundle <branch>'` then `scp` the bundle and `git fetch` it locally to `<branch>`. Bundles handle disconnected transfer cleanly; no need to expose the host's repo over ssh-back.
-  - Pull the response file: `scp remote:<scratch>/<task-id>/.brr/responses/<event-id>.md repo_root/.brr/responses/`
-  - Pull traces always: `rsync remote:<scratch>/<task-id>/.brr/traces/ repo_root/.brr/traces/`
-  - Tear down: `ssh remote 'rm -rf <scratch>/<task-id>'` on clean `status=done`. Preserve the remote scratch dir on `status ∈ {error, conflict}` for salvage, matching the worktree/docker rule.
+  - Pull the branch back: `ssh remote 'cd <scratch>/<run-id> && git bundle create /tmp/<run-id>.bundle <branch>'` then `scp` the bundle and `git fetch` it locally to `<branch>`. Bundles handle disconnected transfer cleanly; no need to expose the host's repo over ssh-back.
+  - Pull the response file: `scp remote:<scratch>/<run-id>/.brr/responses/<event-id>.md repo_root/.brr/responses/`
+  - Pull traces always: `rsync remote:<scratch>/<run-id>/.brr/traces/ repo_root/.brr/traces/`
+  - Tear down: `ssh remote 'rm -rf <scratch>/<run-id>'` on clean `status=done`. Preserve the remote scratch dir on `status ∈ {error, conflict}` for salvage, matching the worktree/docker rule.
 
 ssh is the most procedural env. It's also the proof that the contract
 generalises: anything that can hold a git repo + write a markdown file
@@ -416,7 +416,7 @@ maintain a parallel `docker.image` for brr.
 
 ### The model
 
-Worktree and Docker tasks start on a task branch from the resolved
+Worktree and Docker runs start on a run branch from the resolved
 `PublishPlan.seed_ref`. Finalize classifies the worktree's final git
 state into a `publish_status` and records the branch to publish;
 `daemon.publish` then ships that branch. The env layer never updates
@@ -426,9 +426,9 @@ they are a human's problem or the next agent run's problem.
 | Runtime shape | What `finalize` records |
 | --- | --- |
 | Host env | no branch finalization |
-| Task branch with commits | `publish_status=ready`, `publish_branch=brr/<task-id>` |
+| Run branch with commits | `publish_status=ready`, `publish_branch=brr/<run-id>` |
 | Agent switched branches with commits | `publish_status=ready`, `publish_branch=<switched-to>` |
-| No commits beyond seed | `publish_status=nothing`, no publish branch (task branch deleted) |
+| No commits beyond seed | `publish_status=nothing`, no publish branch (run branch deleted) |
 | Detached HEAD | `publish_status=detached`, no publish branch (worktree kept) |
 
 That's the whole "coordinator". Earlier env and branch-intent designs
@@ -447,9 +447,9 @@ and rejected pushes surface as `publish_status=conflict`.
 ### Why this is enough
 
 - Q&A tasks normally produce no branch changes.
-- Small implementation or research tasks can stay on the task branch
+- Small implementation or research runs can stay on the run branch
   and let the daemon publish it via refspec to an
-  `expected_publish_branch` named by the event.
+  `target_branch` named by the event.
 - Named or switched branches are still preserved for human review or
   PR tooling.
 - If a push fails (lease lost, remote rewritten under us, permissions),
@@ -474,7 +474,7 @@ Current source keeps env mechanics behind `EnvBackend`:
    backend (`DockerEnv` wraps it in `docker run`).
 5. `finalize()` reads task status and git state, applies the
    outcome-aware salvage rule, records branch facts on `task.meta`, and
-   returns the updated `Task`.
+   returns the updated `Run`.
 
 The daemon owns retries, response validation, kb maintenance, progress
 packets, and push. Env backends own workspace setup, runner transport,
@@ -507,12 +507,12 @@ brnrd-side bootstrap (per failover spawn):
      tarball shape, expanded).
   4. Construct a RunContext with cwd=scratch, repo_root=scratch,
      runtime_dir=scratch/.brr, response_path_host=scratch/.brr/
-     responses/<id>.md (response will be POSTed back via the
-     task-key, not read from disk).
-  5. envs.get_env("fly_machines").prepare(task, scratch, cfg,
+     responses/<id>.md (response will be POSTed back through the
+     delivery route, not read from disk).
+  5. envs.get_env("fly_machines").prepare(run, scratch, cfg,
      branch_plan=..., response_path=...).
   6. .invoke(ctx, runner_name, invocation, cfg).
-  7. .finalize(ctx, task, tasks_dir=scratch/.brr/tasks).
+  7. .finalize(ctx, run, runs_dir=scratch/.brr/runs).
   8. Tear down the scratch dir; debit the wallet per
      `design-billing.md`.
 ```
@@ -574,7 +574,7 @@ from outside:
    with the table above).
 2. `invoke` is called with a stub runner (existing
    `runner.invoke_runner` mocking pattern); stdout/stderr propagate.
-3. `finalize` returns an updated `Task` with the right metadata:
+3. `finalize` returns an updated `Run` with the right metadata:
    response file present on the host; changed branch recorded when
    commits exist; preserved branch/container state recorded when
    cleanup is not safe.
@@ -661,7 +661,7 @@ their own homes:
 - First-party plugins (Daytona, Firecracker, E2B) — ship outside core
   as dogfood, see
   [`notes-pondering-fleet.md`](notes-pondering-fleet.md) §10.
-- Auto-`git push` policy on auto/task branches — the daemon publishes
+- Auto-`git push` policy on auto/run branches — the daemon publishes
   branches when a remote is configured; explicit per-branch push
   policy is a follow-up captured alongside the branch-intent design.
 

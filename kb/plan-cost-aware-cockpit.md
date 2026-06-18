@@ -58,7 +58,7 @@ sharpened the direction. Five points, each folded into the slices below.
    status-card updates, mid-thought outbox sends, folding in queued
    events at plan boundaries, more than one message per wake. The aim is
    duo-programming texture, not a request/response servant. Concretely
-   this means *softening* the "aim at one task execution" wording in the
+   this means *softening* the "aim at one isolated run execution" wording in the
    delivery contract and dwelling habits toward "stay in the
    conversation." → amends Loop C and the cockpit dwelling habits.
 
@@ -271,9 +271,9 @@ least I can get away with."
   exist yet: when no quota signal is present, the line stays compact.
 - **Run-facing bundle language** — the generated prompt, recovery context,
   and bundled operator docs now frame the live unit as a daemon run/wake
-  (`Run Context Bundle`, `Run ID`) while keeping the legacy `task-...`
-  id string and `.brr/tasks/` storage as compatibility details until
-  #128's model rename lands.
+  (`Run Context Bundle`, `Run ID`). The follow-up #128 rename slice now
+  removes the legacy `task-...` id string and `.brr/tasks/` storage in
+  favour of `run-*` ids and `.brr/runs/<run-id>/run.md` manifests.
 
 ## Sequence after this run (pickup list)
 

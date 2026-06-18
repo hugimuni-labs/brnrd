@@ -319,7 +319,7 @@ def test_render_update_relays_card_through_the_cloud_transport(tmp_path, monkeyp
     """A cloud task's progress card is rendered locally and POSTed to the
     brnrd card relay — send first, edit-in-place on later packets."""
     from brr import updates
-    from brr.task import Task
+    from brr.run import Run
 
     brr_dir = tmp_path / ".brr"
     cloud._save_state(
@@ -339,23 +339,23 @@ def test_render_update_relays_card_through_the_cloud_transport(tmp_path, monkeyp
     # Seed a cloud task as the drain + runner would: source=cloud, origin
     # telegram, carrying the discrete routing fields render_update reads.
     conv_key = "cloud:telegram:555:"
-    tasks_dir = brr_dir / "tasks"
-    tasks_dir.mkdir(parents=True, exist_ok=True)
-    task = Task(
+    runs_dir = brr_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(
         id="task-cloud-1", event_id="ev-1", body="x", env="docker",
         status="running", source="cloud", conversation_key=conv_key,
         meta={"cloud_event_id": "brnrd-evt-1", "cloud_platform": "telegram",
               "cloud_chat_id": 555},
     )
-    task.save(tasks_dir)
+    task.save(runs_dir)
 
     def _emit(ptype, **payload):
         updates.emit(brr_dir, updates.UpdatePacket(
             type=ptype, conversation_key=conv_key, event_id="ev-1",
-            payload={"task_id": task.id, "event_id": "ev-1", **payload},
+            payload={"run_id": task.id, "event_id": "ev-1", **payload},
         ))
 
-    _emit("task_created", branch="auto", env="docker")
+    _emit("run_created", branch="auto", env="docker")
     cards = [body for path, body in posts if path == "/v1/daemons/card"]
     assert len(cards) == 1
     assert cards[0]["event_id"] == "brnrd-evt-1"

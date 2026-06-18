@@ -9,7 +9,7 @@ shipped; the page now reads as the canonical synthesis of the
 current shape, not a plan.
 
 The page hangs off [`subject-daemon.md`](subject-daemon.md) and
-[`subject-tasks-branching.md`](subject-tasks-branching.md). The
+[`subject-runs-branching.md`](subject-runs-branching.md). The
 running plan lives outside the kb in
 `.cursor/plans/daemon-sync-and-git-gate-cleanup_*.plan.md`.
 
@@ -51,7 +51,7 @@ Status: shipped on 2026-05-15.
 [`sync.py`](../src/brr/sync.py) exposes a single entry point:
 
 ```python
-def refresh_before_task(
+def refresh_before_run(
     repo_root: Path,
     *,
     target_branches: list[str],
@@ -84,7 +84,7 @@ short `synced: ff main -> abc1234` line; the no-op path is quiet.
 
 ### Seed-ref invariant
 
-After `refresh_before_task` returns, the daemon's local view of any
+After `refresh_before_run` returns, the daemon's local view of any
 named target branch is at least as fresh as the remote was at the
 start of task setup, *or* the result records why it isn't (dirty
 tree, divergence, fetch failure, opt-out). Worker code can rely on
@@ -95,7 +95,7 @@ manual `git pull`.
 
 Two opt-out knobs in `.brr/config`, both default-on:
 
-- `sync.fetch_before_task=false` — never touch the network.
+- `sync.fetch_before_run=false` — never touch the network.
 - `sync.fast_forward_default=false` — fetch but leave local refs
   alone (for users sharing the daemon's checkout with active dev
   work).
@@ -298,7 +298,7 @@ branch which mistook "on by default" for the real fix.
 
 - [`subject-daemon.md`](subject-daemon.md) for the daemon hub this
   page hangs off.
-- [`subject-tasks-branching.md`](subject-tasks-branching.md) for the
+- [`subject-runs-branching.md`](subject-runs-branching.md) for the
   branch plan resolution that the seed-ref invariant feeds.
 - [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
   for the structured-branch contract that Phase 1 reuses and Phase 2

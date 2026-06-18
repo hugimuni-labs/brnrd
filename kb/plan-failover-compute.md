@@ -7,7 +7,7 @@ contract).
 
 Implementation plan for the **managed-compute failover** surface
 of [managed mode](subject-managed-mode.md): when a user's daemon
-is offline and failover is enabled, brnrd spawns a per-task
+is offline and failover is enabled, brnrd spawns a per-run
 sandbox in **its own** cloud account, decrypts the user's AI
 credentials into the sandbox, runs the task, returns the response
 via the originating gate, tears down.
@@ -39,7 +39,7 @@ the dispatcher reads from account-scope settings.
 
 **Not started.** Blocked on:
 
-- `decision-pricing-shape.md` acceptance — the per-task
+- `decision-pricing-shape.md` acceptance — the per-run
   accounting hooks the dispatcher emits feed the billing model;
   the tier shape (Free / Subscribed / metered overage) and the
   per-tier caps need to be locked before billing surfaces
@@ -93,7 +93,7 @@ parallel-shipped with managed".
 - Permission-prompt round trip (event arrives → prompt posted via
   gate → user taps Approve → spawn starts) under 5 seconds added
   latency vs auto-approve.
-- Per-task accounting hooks emit every spawn outcome (cost,
+- Per-run accounting hooks emit every spawn outcome (cost,
   duration, exit status, project_id) to an account-scoped audit
   log queryable via `brr brnrd audit`.
 - Subscription-auth users (Claude Pro, Codex Plus, Gemini OAuth)
@@ -179,7 +179,7 @@ parallel-shipped with managed".
   - `brr brnrd subscription status | start | cancel | resume | portal`
     (+ `brr brnrd subscribe` as shortcut for `subscription start`)
   - `brr brnrd audit [--since <date>]`
-- One-shot per-task `task-key` issuance and acceptance on
+- One-shot per-run `run-key` issuance and acceptance on
   `POST /v1/daemons/responses` so failover sandboxes can post
   responses without holding an account-level API key.
 - Per-spawn GH App installation token issued for the spawn's
@@ -194,7 +194,7 @@ parallel-shipped with managed".
   decision tree per branch (including the tier-based caps for
   Free vs Subscribed), cap enforcement under concurrent load,
   permission-prompt resolution via gate callback, one-shot
-  task-key acceptance, audit-log writes per spawn outcome,
+  run-key acceptance, audit-log writes per spawn outcome,
   sandbox boot end-to-end against a test Fly app, Stripe
   webhook handling for subscription lifecycle events.
 
@@ -279,7 +279,7 @@ Steps:
    - same shape for `github`
    Each verifies platform signing, marks the prompt resolved,
    and either fires the spawn or queues the event.
-5. Per-event one-shot `task-key` issuance (Bearer token scoped
+5. Per-event one-shot `run-key` issuance (Bearer token scoped
    to one `event_id`, 1-hour TTL, single use for
    `POST /v1/daemons/responses`).
 6. Gate-side notification when failover fires
@@ -312,7 +312,7 @@ Steps:
        non-GH remotes)
      - invokes the runner CLI on the task body
      - on completion: pushes the branch, POSTs the response
-       with the task-key, exits 0
+       with the run-key, exits 0
      - on failure: writes orphan response to
        `.brr/failover-orphans/<event-id>.md` and pushes that,
        exits non-zero
@@ -331,7 +331,7 @@ Steps:
    - issue a per-spawn GH App installation token (scoped to one
      repo, 1-hour TTL)
    - create the Fly Machine with the task payload, AI
-     credentials, GH token, task-key, project_id as secrets
+     credentials, GH token, run-key, project_id as secrets
    - return the spawn handle to the dispatcher
    - clear the AI-credential plaintext from memory
    - watch the machine to completion via Fly's machine API; on
@@ -526,7 +526,7 @@ app + their own credential vault.
    dispatch + Credential vault endpoints (AI + docker-registry)
    + Subscription endpoints + Permission-prompt sections).
 3. [`decision-pricing-shape.md`](decision-pricing-shape.md) for
-   the billing model the per-task accounting hooks feed.
+   the billing model the per-run accounting hooks feed.
 4. [`research-cloud-envs.md`](research-cloud-envs.md)
    for the cross-adapter patterns the server-side Fly caller is
    one instance of.

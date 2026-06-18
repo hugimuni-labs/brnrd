@@ -122,7 +122,7 @@ fetch-or-create:
   (plumbing — empty tree → root commit → branch, or `git worktree add --orphan`
   on git ≥ 2.42), `worktree add`, seed a skeleton self-inject index, push.
 
-A *thought* therefore touches **two trees**: its ephemeral per-task worktree
+A *thought* therefore touches **two trees**: its ephemeral per-run worktree
 (seeded from `main`, where code work happens → PR / land) and the shared dominion
 worktree (where memory work happens → `brr-home`). Clean separation by
 destination — code to `main`'s history, memory to the parallel one. Concurrent
@@ -156,7 +156,7 @@ in the dominion (see integrity, below).
 
 **Provenance breadcrumbs.** Every block brr assembles into a wake — the
 dominion digest, the by-trigger pitfalls, the `kb/log.md` *Recent Activity*
-tail, the daemon's Task Context Bundle — opens with a one-line tag naming its
+tail, the daemon's Run Context Bundle — opens with a one-line tag naming its
 source and how durable/ownable it is (your owned memory vs. the shared,
 governed `kb/` vs. per-thought runtime facts vs. brr's prompts). The layers
 aren't equal, and the resident uses them differently; the tags make the *shape*
@@ -229,7 +229,7 @@ not omission.
 Local parallelism is **discarded** (this reshapes
 [`design-concurrent-execution.md`](design-concurrent-execution.md), whose
 threaded worker pool existed only to stop a quick question waiting behind a long
-task). Per-task worktree/branch isolation is **kept** for clean finalize and
+task). Per-run worktree/branch isolation is **kept** for clean finalize and
 publish. Concurrency becomes cooperative within one resident, not parallel
 across many.
 
@@ -238,7 +238,7 @@ across many.
 events into the running thought's view, and keep a **liveness backstop** so a
 wedged CLI subprocess can't hold the single-flight slot forever. The live
 event view shipped 2026-06-10 as the daemon-refreshed `inbox.json` control file
-in the task outbox; next-event selection and long-running batch claims remain a
+in the run outbox; next-event selection and long-running batch claims remain a
 separate claim-protocol follow-on. No command layer: the reflex never parses
 `/cancel` or the like — every event either wakes the agent or waits for the
 living agent. Keeping the body this thin is deliberate — orchestration stays
@@ -426,7 +426,7 @@ independent of host — brr is **one driver** among possible wrappers — and
 the daemon-specific mechanics moved back *out*: self-scheduled wakes, the
 capture-at-sleep net, and the delivery-contract framing now live in a
 brr-owned **driver's manual** (`daemon-substrate.md`, injected only on the
-daemon path) plus the Task Context Bundle; single-flight-as-identity became
+daemon path) plus the Run Context Bundle; single-flight-as-identity became
 the society-of-mind framing in the core. `brr agent inject` hands that same
 assembled wake-context to any non-brr wrapper. See
 [`plan-playbook-generalization.md`](plan-playbook-generalization.md).
@@ -468,14 +468,14 @@ split ever grates — it just trades a sliver of human cringe for zero registers
 
 | Surface | Disposition |
 |---|---|
-| [`design-concurrent-execution.md`](design-concurrent-execution.md) | **Superseded (2026-06-08).** Its threaded-loop concurrency thesis is reversed → single-flight; the partitioned-state + per-task worktree/branch primitives it built on survive in [`subject-tasks-branching.md`](subject-tasks-branching.md) / [`subject-daemon.md`](subject-daemon.md). |
+| [`design-concurrent-execution.md`](design-concurrent-execution.md) | **Superseded (2026-06-08).** Its threaded-loop concurrency thesis is reversed → single-flight; the partitioned-state + per-run worktree/branch primitives it built on survive in [`subject-runs-branching.md`](subject-runs-branching.md) / [`subject-daemon.md`](subject-daemon.md). |
 | [`design-environment-shaping.md`](design-environment-shaping.md) | **Companion.** This is the substrate; that is the loop. Salience counters + captured friction (incl. the `Pitfall:` failure-memory, formerly a kb marker / first slice) live in the dominion; the playbook carries the loop's pain-evaluation input; and the loop now runs *inward* too, as dominion dissonance-resolution. |
 | [`design-agent-ergonomics.md`](design-agent-ergonomics.md) | **Inherited.** The probe/telemetry/reflection sensing layer is how the resident perceives; probe-first is still the right first slice; reflection feeds the dominion journal. |
 | [`subject-kb.md`](subject-kb.md) / [`decision-kb-shape.md`](decision-kb-shape.md) | **Extended.** The dominion fills the missing durable+owned cell; kb stays curated+shared; the promotion bridge connects them. Reconcile the layering framing on accept. |
 | [`subject-daemon.md`](subject-daemon.md) | **Reshaped.** The worker pool becomes spawn-one-when-idle; reflex/deliberation split; explicit-cancel + liveness backstop; staged post-task pipeline removed. |
 | [`plan-agent-orientation-layering.md`](plan-agent-orientation-layering.md) | **Reshaped.** Most per-stage overlay prompts retire; the standing playbook (from the dominion self-inject index) becomes the wake-time orientation, and events stay lightweight (body + metadata). |
-| [`subject-tasks-branching.md`](subject-tasks-branching.md) / [`design-publish-kernel.md`](design-publish-kernel.md) | **Mostly inherited.** Per-task branch → PR publish unchanged; the dominion branch is **never** PR'd or merged to `main` — it's pushed directly. |
-| [`subject-managed-mode.md`](subject-managed-mode.md) (failover) | **Orthogonal.** Managed failover stays stateless per-task; the dominion-in-git lets a failover agent inherit continuity. |
+| [`subject-runs-branching.md`](subject-runs-branching.md) / [`design-publish-kernel.md`](design-publish-kernel.md) | **Mostly inherited.** Per-run branch → PR publish unchanged; the dominion branch is **never** PR'd or merged to `main` — it's pushed directly. |
+| [`subject-managed-mode.md`](subject-managed-mode.md) (failover) | **Orthogonal.** Managed failover stays stateless per-run; the dominion-in-git lets a failover agent inherit continuity. |
 | [#47](https://github.com/Gurio/brr/issues/47) (async + pooling) | **Rescope** to managed-side scale; the local daemon is single-flight by design. |
 | [#49](https://github.com/Gurio/brr/issues/49) (`brr agent` namespace) | **Expand** to host the resident-agent surface: memory branch, crons, dominion inspection ("what is brr thinking/queued"). *`brr agent inject` shipped 2026-06-10 — the wake-context surface a non-brr wrapper reuses; the rest is pending.* |
 | [#23](https://github.com/Gurio/brr/issues/23) (release readiness) | This reshape is sequenced **first**, so it's a pre-release item, not the post-launch epic. Light on ticketing. |

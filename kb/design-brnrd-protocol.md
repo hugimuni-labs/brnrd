@@ -12,7 +12,7 @@ contracts and endpoint shapes are stable. Scope and contracts
 for the protocol that ties brr daemons to brnrd. Covers the
 **managed-gates** path (events flow in via hosted bots, drain
 through a daemon long-poll), the **failover-compute** path (when a
-user's daemon is offline, brnrd spawns a per-task sandbox in
+user's daemon is offline, brnrd spawns a per-run sandbox in
 brnrd's own cloud account), **multi-project routing** (one global
 bot serves many of a user's projects), and the **permission-gate**
 API (ask before spawning). Both daemon-side adapters and the
@@ -66,7 +66,7 @@ In scope:
   `(event-source) → project_id` so one bot can serve many of a
   user's projects.
 - The failover dispatch decision tree (laptop-online → forward;
-  laptop-offline → ask-or-spawn) and the per-task spawn flow.
+  laptop-offline → ask-or-spawn) and the per-run spawn flow.
 - The credential vault on brnrd (encrypted at rest; two
   domains in one store — AI-runner credentials with API-key
   or credential-dir-tarball shapes for Anthropic / OpenAI /
@@ -88,7 +88,7 @@ Out of scope, explicitly:
   this page is its API spec, not its code).
 - Wallet / Stripe / debit / refund mechanics — these are spec'd
   in [`design-billing.md`](design-billing.md); this page only
-  exposes the per-task accounting hooks the billing design
+  exposes the per-run accounting hooks the billing design
   consumes. Pricing model lives in
   [`decision-pricing-shape.md`](decision-pricing-shape.md)).
 - **BYO cloud-platform tokens for non-Fly clouds** at launch
@@ -212,7 +212,7 @@ Things we explicitly do **not** hold:
                            │   spawn? → managed-compute Fly Machine
                            ▼
             ┌─────────────────────────────────┐
-            │ per-task ephemeral sandbox      │
+            │ per-run ephemeral sandbox      │
             │ (brnrd's Fly account, OR        │
             │  subscriber's BYO Fly account   │
             │  via cloud-platform creds)      │
@@ -547,7 +547,7 @@ endpoint on every dispatch decision.
 | `POST` | `/v1/daemons/responses` | Post a response for one event (callable by daemon OR by a failover sandbox carrying a one-shot token). Body forwarded to gate, dropped. | Metadata row (status, length, ms); no body |
 
 All require `Authorization: Bearer <api-key>` (long-lived account
-key) OR `Authorization: Bearer <task-key>` (short-lived per-task
+key) OR `Authorization: Bearer <run-key>` (short-lived per-run
 token issued when a failover sandbox spawns; scoped to a single
 `event_id`).
 
@@ -557,9 +557,9 @@ Additive to the response shape above (added 2026-06-01, delivery
 shape **H** — see
 [`design-managed-delivery.md`](design-managed-delivery.md)). The
 OSS gates render a live progress card from local `run_progress`
-and edit it in place as a task moves (`task_created → running →
+and edit it in place as a run moves (`run_created → running →
 finalizing → done`). That view is **daemon-local** — `run_progress`
-reads `.brr/tasks/` — so brnrd cannot render it; the daemon must.
+reads `.brr/runs/` — so brnrd cannot render it; the daemon must.
 In managed mode the cloud gate renders the card text (via the
 shared delivery driver, styled per the event's origin platform)
 and relays it for the managed bot to post / edit in place:
@@ -1102,7 +1102,7 @@ decision tree:
      "ask"                        → prompt
      "never"                      → enqueue; done
 
-6. (Spawn path) Issue a one-shot task-key, decrypt credentials
+6. (Spawn path) Issue a one-shot run-key, decrypt credentials
    into process memory, run the **daemon-equivalent bootstrap**:
      - clone repo with the per-spawn GH App token
      - **read `brr.toml` from the cloned repo** for project-scope
@@ -1136,7 +1136,7 @@ decision tree:
        env config, AI creds)
      - a per-spawn GH App installation token (push permission)
      - the event payload + project_id
-     - the task-key (Bearer scoped to this event_id, 1h TTL,
+     - the run-key (Bearer scoped to this event_id, 1h TTL,
        single use for POST /v1/daemons/responses)
    Clear all credential material (AI + registry) from memory
    after hand-off. Docker registry credentials live only in the
@@ -1147,7 +1147,7 @@ decision tree:
      - clones the repo via the GH token
      - runs the runner CLI on the task body
      - pushes the resulting branch back via the GH token
-     - POSTs the response with the task-key
+     - POSTs the response with the run-key
      - tears itself down on clean exit
 
 8. brnrd records the spawn outcome (cost USD, duration, exit
@@ -1363,7 +1363,7 @@ simple; the first two cover the common cases.
 |---------|-----------|
 | Daemon offline when event arrives; failover disabled | Event queues in brnrd inbox; delivered on next poll. 30-day TTL by default; configurable per account. |
 | Daemon offline; failover enabled and under caps; policy=ask | Permission prompt posted via gate; resolution drives spawn-or-queue. Prompt TTL 6h (configurable). |
-| Daemon offline; failover enabled and under caps; policy=auto-approve | Per-task sandbox spawned; result returned via gate; daemon sees the branch on next pull. |
+| Daemon offline; failover enabled and under caps; policy=auto-approve | Per-run sandbox spawned; result returned via gate; daemon sees the branch on next pull. |
 | Daemon offline; failover enabled but cap hit | Event queues; user notified via gate ("cap hit, raise cap or run daemon to resume"). |
 | Daemon dies mid-task | Event remains marked "in-flight" on brnrd until response posts OR `in_flight_ttl` (default 1h) elapses, then re-queues. Daemon dedupes on `event_id` so re-delivery is safe. |
 | Failover sandbox dies mid-task | Same `in_flight_ttl` behaviour; re-spawn on retry up to 2 attempts before queuing for daemon return. |
@@ -1594,7 +1594,7 @@ branch + symlink + autosync shape.
 
 - The brnrd service codebase (lives at `src/brnrd/` in the
   monorepo; this page is the API spec, not the implementation).
-- Detailed billing / invoicing surfaces — the per-task accounting
+- Detailed billing / invoicing surfaces — the per-run accounting
   hooks above feed into them, but the user-facing billing UI is a
   separate design.
 - The brnrd dashboard (covered in
@@ -1627,7 +1627,7 @@ branch + symlink + autosync shape.
    conversation_id POST on response) that powers the cross-gate
    conversation graph.
 3. [`decision-pricing-shape.md`](decision-pricing-shape.md) for
-   the pricing model the per-task accounting hooks feed.
+   the pricing model the per-run accounting hooks feed.
 4. [`design-billing.md`](design-billing.md) for the wallet /
    Stripe / debit-at-finalize / refund mechanics that turn
    spawn outcomes from this design into actual billing
@@ -1713,7 +1713,7 @@ branch + symlink + autosync shape.
   triggers a wallet debit per the new
   [`design-billing.md`](design-billing.md) (the page that now
   owns wallet / Stripe / refund mechanics; this page only
-  exposes the per-task accounting hooks the billing design
+  exposes the per-run accounting hooks the billing design
   consumes). Cost fields stay USD on the API surface;
   conversion to credits happens at debit time in the billing
   layer. Failover-spawn step 6 description updated to call the

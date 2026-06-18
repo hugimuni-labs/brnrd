@@ -115,7 +115,7 @@ several facts. A non-exhaustive list, just from this session:
 |------|--------|-----------|----------|-------------|------------------------------|
 | "brr is a playbook + remote execution" | ✓ | ✓ | (implied) | ✓ "one-sentence model" | subject-* preambles |
 | Environment policy = `host|worktree|docker|auto` | ✓ | — | (links) | ✓ "Current ownership snapshot" + Ring 3 | subject-envs, envs.md (bundled), design-env-interface |
-| No LLM triage; mechanical task construction | — | (oblique) | (links) | ✓ "Current ownership snapshot" + invariant | decision-remove-triage, subject-tasks-branching, subject-daemon |
+| No LLM triage; mechanical task construction | — | (oblique) | (links) | ✓ "Current ownership snapshot" + invariant | decision-remove-triage, subject-runs-branching, subject-daemon |
 | Stewardship "surface contradictions" | — | ✓ (section) | — | ✓ "Current ownership snapshot" | — |
 | Daemon-side freshness invariant | — | ✓ (section) | (links) | ✓ header + Ring 4 + invariant | subject-daemon, design-git-layer-rework |
 | KB four-layer model | — | ✓ (table) | (links) | (invariant + dive list) | subject-kb (full synthesis) |

@@ -1282,8 +1282,8 @@ The pack path is **handed to the runner, not assumed.** The runner works
 in a worktree whose own `.brr/` is torn down at finalize, so a
 cwd-relative `.brr/diffense/...` would die before the resident could
 validate and project it. The daemon computes an absolute path in the
-*shared* runtime dir and puts it in the Task Context Bundle as `Review
-pack path` (`<shared .brr>/diffense/<task-id>/pack.json`); the fragment
+*shared* runtime dir and puts it in the Run Context Bundle as `Review
+pack path` (`<shared .brr>/diffense/<run-id>/pack.json`); the fragment
 writes there, `brr review --check` validates it, and `brr review
 --pr-body` projects it. Same plumbing pattern as `response_path` — brr
 names the file, the agent fills and consumes it through explicit helper
@@ -1292,7 +1292,7 @@ commands.
 **PR creation — agent-owned gate send — ships** (2026-06-10; earlier
 daemon-owned creation shipped 2026-06-01 and was removed when the
 resident took ownership). Before this the publish kernel picked up the
-task-keyed pack after a clean push and `_maybe_open_pr` projected it
+run-keyed pack after a clean push and `_maybe_open_pr` projected it
 inside `daemon.publish`. Now the resident writes a `gate: forge` (or
 `gate: github` + `github_action: pull_request`) outbox file whose body is
 already the projected PR body. `_deliver_out_of_bound` maps `forge` to

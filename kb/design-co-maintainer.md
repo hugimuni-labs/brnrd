@@ -83,7 +83,7 @@ named them; the principle to hold:
 1. **Resident core (the self).** The playbook, the dominion, taste,
    memory. Host-agnostic. Owned by the resident — it reshapes its own
    playbook. brr only injects it.
-2. **brr driver (the substrate).** Wake, deliver, branch, sync, the Task
+2. **brr driver (the substrate).** Wake, deliver, branch, sync, the Run
    Context Bundle, the capture net. Owned by brr. This is *how* the self is
    run here; it is not the self.
 3. **Dev introspection (opt-in).** The "look at it" stance — a development
@@ -359,18 +359,18 @@ push/reply-ownership thread in
 
 Concrete, high-pain, small. `WorktreeEnv.prepare`
 ([`../src/brr/envs/__init__.py`](../src/brr/envs/__init__.py)) creates the
-collision-free `brr/<task-id>` branch, then **unconditionally**
+collision-free `brr/<run-id>` branch, then **unconditionally**
 `worktree.switch_to(target_branch)` when the event names one (e.g. a PR head
 branch). `switch_to` ([`../src/brr/worktree.py`](../src/brr/worktree.py))
 tries `git switch <branch>` then `git switch -c <branch>` — **both fail** if
 that branch is already checked out in another worktree (a human's or a
 Cursor dev checkout), raising `fatal: a branch named '…' already exists`.
 
-`sync.refresh_before_task` already guards "skip branches checked out in
+`sync.refresh_before_run` already guards "skip branches checked out in
 another worktree." `prepare` must apply the same guard: detect
 checked-out-elsewhere and fall back to a unique branch at the target's tip
 (or detached HEAD there), surfacing the choice — instead of failing the
-task. See [`subject-tasks-branching.md`](subject-tasks-branching.md).
+run. See [`subject-runs-branching.md`](subject-runs-branching.md).
 
 ## 8. Status-card UX & agent-owned composition
 
@@ -380,7 +380,7 @@ The co-maintainer should be able to **compose what its card says** — a
 collaborator narrates its own progress.
 
 **Composition seam (shipped 2026-06-14, slice #114).** The resident writes
-its preferred narration into a `.card` control dotfile in the per-task
+its preferred narration into a `.card` control dotfile in the per-run
 outbox (already mounted into every run env). The daemon drains it on
 each heartbeat (and once more after the runner returns), emits a
 `card_composed` packet only when the content changes, and the gates'
@@ -431,7 +431,7 @@ legibility fix (gate keeps one card `message_id` keyed on
 failed runs no longer stack three dead cards) is brnrd/gate-side state,
 not the daemon projection layer this slice re-aligned. It's the remaining
 work on #126: preserve the relay-not-store invariant (brnrd still holds
-only the `message_id`, now per-thread not per-task) while rolling prior
+only the `message_id`, now per-thread not per-run) while rolling prior
 outcomes into a short status header rather than a fresh comment per run.
 
 ## 9. Daemon responsiveness — shipped 2026-06-14 (#115)
@@ -488,7 +488,7 @@ The leverage order and the dependency order mostly agree. Recommended
 sequence (each maps to a milestone issue):
 
 1. **Worktree branch-collision guard** (§7, #112) — tiny, independent,
-   removes a live task-failure; ship first so dogfooding on topic branches
+   removes a live run failure; ship first so dogfooding on topic branches
    is reliable.
 2. **Conversation persistence refactor + heartbeat demotion** (§4.3 / §4.5,
    #108, with #93) — foundational; everything downstream reads cleaner

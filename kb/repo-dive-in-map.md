@@ -32,14 +32,14 @@ Carry these current-shape facts while reading:
   configured, otherwise `worktree`. `host` is explicit only. The
   shipped backends are `host`, `worktree`, and `docker`.
 - Before resolving the branch plan, the daemon runs a best-effort
-  `sync.refresh_before_task`: one `git fetch` plus ff-only refreshes
+  `sync.refresh_before_run`: one `git fetch` plus ff-only refreshes
   of the local default branch and any structured event branch.
-- Worktree and Docker tasks start from the resolved seed ref on a
-  fresh `brr/<task-id>` branch. Finalization classifies the worktree's
+- Worktree and Docker runs start from the resolved seed ref on a
+  fresh `brr/<run-id>` branch. Finalization classifies the worktree's
   final state into a `publish_status` (`ready` | `nothing` |
   `detached`); `daemon.publish` then publishes the recorded branch,
-  using a refspec push when the agent kept the task branch but the
-  event named a different `expected_publish_branch`, and a leased
+  using a refspec push when the agent kept the run branch but the
+  event named a different `target_branch`, and a leased
   force-push when the agent rewrote that branch (the PR-rebase case).
 - Runner stdout is the response. `runner.invoke_runner()` captures the
   final stdout and writes `.brr/responses/<event-id>.md`.
@@ -69,8 +69,8 @@ Read these in order for the fastest useful model:
 2. [Gate protocol](../src/brr/gates/README.md) for file-based I/O.
 3. [Protocol source](../src/brr/protocol.py) with
    [protocol tests](../tests/test_protocol.py).
-4. [Task model](../src/brr/task.py) with
-   [task tests](../tests/test_task.py).
+4. [Run model](../src/brr/run.py) with
+   [run tests](../tests/test_run.py).
 5. [Conversation log](../src/brr/conversations.py) with
    [conversation tests](../tests/test_conversations.py).
 6. [Runner plumbing](../src/brr/runner.py) and
@@ -126,7 +126,7 @@ Tests: [protocol](../tests/test_protocol.py),
 
 Read:
 
-- [`src/brr/task.py`](../src/brr/task.py)
+- [`src/brr/run.py`](../src/brr/run.py)
 - [`src/brr/branching.py`](../src/brr/branching.py)
 - [`src/brr/conversations.py`](../src/brr/conversations.py)
 - [`src/brr/updates.py`](../src/brr/updates.py)
@@ -135,15 +135,15 @@ Read:
 
 Keep in mind:
 
-- `Task` is the work unit derived from an event. It carries the
+- `Run` is the work unit derived from an event. It carries the
   concrete env backend, status, source, conversation key, and runtime
   metadata.
-- `PublishPlan` is resolved once per task from structured event
+- `PublishPlan` is resolved once per run from structured event
   fields (`branch_target`, `target_branch`, `base_branch`, legacy
   `branch`) and `branch.fallback`. It records `seed_ref`, optional
-  `expected_publish_branch`, source, host-context branch, and an
+  `target_branch`, source, host-context branch, and an
   optional `expected_remote_oid` captured from the remote-tracking
-  ref at task start for force-with-lease pushes (the PR-rebase case).
+  ref at run start for force-with-lease pushes (the PR-rebase case).
 - Conversations are directories of per-event jsonl files:
   `.brr/conversations/<key>/<event-id>.jsonl`. Each worker writes one
   file; readers merge by timestamp.
@@ -151,7 +151,7 @@ Keep in mind:
   log and optionally rendered by gates.
 - `RunProgressView` is a projection over conversation records, not a
   persisted state file.
-- `run_context.py` writes `.brr/runs/<task-id>/context.md` as recovery
+- `run_context.py` writes `.brr/runs/<run-id>/context.md` as recovery
   detail for daemon-launched agents.
 
 Tests: [task](../tests/test_task.py),
@@ -207,26 +207,26 @@ events up to `max_workers` capacity. Each worker thread runs
 Read `_run_worker()` in lifecycle passes:
 
 1. Derive the conversation key and local `_WorkerEmit` closure.
-2. Refresh local refs with `sync.refresh_before_task`.
+2. Refresh local refs with `sync.refresh_before_run`.
 3. Resolve `PublishPlan`.
 4. Append event arrival and sync packets.
-5. Build and persist the `Task`.
+5. Build and persist the `Run`.
 6. Resolve and prepare the env backend.
 7. Write the run context file.
-8. Build the daemon prompt with the Task Context Bundle.
+8. Build the daemon prompt with the Run Context Bundle.
 9. Invoke the runner with heartbeat packets and retry on empty stdout.
 10. Record the response artifact.
 11. Mark the inbox event `done` so the gate may deliver the response.
 12. Run kb preflight, graph stats, and optional kb maintenance.
 13. Finalize the environment — classify the worktree's final state
     into a `publish_status` and record the branch to publish on
-    `task.meta`.
-14. Emit terminal task packets and hand off to the worker-tail
+    `run.meta`.
+14. Emit terminal run packets and hand off to the worker-tail
     wrapper, which calls `daemon.publish`.
 
 Then `_run_worker_and_finalize()` publishes the recorded branch under
-a per-branch lock — refspec push when the agent kept the task branch
-but the event named a different `expected_publish_branch`, leased
+a per-branch lock — refspec push when the agent kept the run branch
+but the event named a different `target_branch`, leased
 force-push when the agent rewrote that branch (PR-rebase), plain
 push otherwise — and attaches a `forges.view_branch_url` link to
 `push_done` when derivable.
@@ -275,16 +275,16 @@ Tests: [Telegram gate](../tests/test_telegram_gate.py),
 | Entity | Source | Durable location | Main rule |
 | --- | --- | --- | --- |
 | Event | [`protocol.py`](../src/brr/protocol.py) | `.brr/inbox/<event-id>.md` | Gates create events; daemon moves them through `pending`, `processing`, and terminal statuses. |
-| Task | [`task.py`](../src/brr/task.py) | `.brr/tasks/<task-id>.md` | Mechanical work unit derived from an event and config. |
+| Run | [`run.py`](../src/brr/run.py) | `.brr/runs/<run-id>/run.md` | Mechanical work unit derived from an event and config. |
 | Conversation | [`conversations.py`](../src/brr/conversations.py) | `.brr/conversations/<key>/<event-id>.jsonl` | Routing/history context, not durable project knowledge. |
 | UpdatePacket | [`updates.py`](../src/brr/updates.py) | Conversation jsonl record | Gate-agnostic lifecycle event. |
 | RunProgressView | [`run_progress.py`](../src/brr/run_progress.py) | Derived on demand | Projection gates render; not persisted. |
 | RunnerInvocation / RunnerResult | [`runner.py`](../src/brr/runner.py) | Optional traces | One external AI CLI call and its validation result. |
-| RunContext | [`run_context.py`](../src/brr/run_context.py) | `.brr/runs/<task-id>/context.md` | Recovery detail plus host/env path mapping. |
-| PublishPlan | [`branching.py`](../src/brr/branching.py) | Task metadata | Deterministic seed, expected publish target, and remote lease anchor. |
-| SyncResult | [`sync.py`](../src/brr/sync.py) | `synced` packet payload | Best-effort freshness; never blocks task execution. |
+| RunContext | [`run_context.py`](../src/brr/run_context.py) | `.brr/runs/<run-id>/context.md` | Recovery detail plus host/env path mapping. |
+| PublishPlan | [`branching.py`](../src/brr/branching.py) | Run metadata | Deterministic seed, expected publish target, and remote lease anchor. |
+| SyncResult | [`sync.py`](../src/brr/sync.py) | `synced` packet payload | Best-effort freshness; never blocks run execution. |
 | ForgeMatch | [`forges.py`](../src/brr/forges.py) | `push_done.view_url` when available | Pure remote-URL parsing; no network or auth. |
-| EnvBackend | [`envs/__init__.py`](../src/brr/envs/__init__.py) | Task metadata plus env scratch | `prepare -> invoke -> finalize`. |
+| EnvBackend | [`envs/__init__.py`](../src/brr/envs/__init__.py) | Run metadata plus env scratch | `prepare -> invoke -> finalize`. |
 | Gate module | [`gates/`](../src/brr/gates/) | Gate state under `.brr/gates/` | Transport adapter around event and response files. |
 
 ## Module Map
@@ -337,10 +337,10 @@ requested.
 ### Branching Is Runtime-Owned By The Agent
 
 The daemon resolves seed and optional expected publish target before
-the run. Inside the worktree, the agent may stay on the task branch or
+the run. Inside the worktree, the agent may stay on the run branch or
 switch to a named branch. Finalization reads git state after the fact
 and records the branch to publish; `daemon.publish` then ships it
-(via refspec push when the agent kept the task branch but the event
+(via refspec push when the agent kept the run branch but the event
 named a different publish target, leased force-push for PR rebases,
 or a plain push otherwise).
 
@@ -369,7 +369,7 @@ Subject hubs:
 
 - [Subject: the kb itself](subject-kb.md)
 - [Subject: daemon and process lifecycle](subject-daemon.md)
-- [Subject: tasks and branching](subject-tasks-branching.md)
+- [Subject: tasks and branching](subject-runs-branching.md)
 - [Subject: environments](subject-envs.md)
 - [Subject: fleet and overlays](subject-fleet-overlays.md)
 
@@ -405,7 +405,7 @@ Plans and research worth knowing:
   [protocol.py](../src/brr/protocol.py).
 - Seed refs, expected publish targets, or structured branch fields:
   read [branching.py](../src/brr/branching.py) and
-  [subject-tasks-branching.md](subject-tasks-branching.md).
+  [subject-runs-branching.md](subject-runs-branching.md).
 - Thread continuity or recent conversation injection: read
   [conversations.py](../src/brr/conversations.py) and
   [prompts.py](../src/brr/prompts.py).

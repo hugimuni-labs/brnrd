@@ -107,7 +107,7 @@ Three sources, complementary, each catching what the others miss:
 
 | Layer | When it runs | Producer | Catches |
 |-------|--------------|----------|---------|
-| **Probe** | Task prep (pre-invoke; startup/finalize hooks still designed) | Daemon code, deterministic | Stale image, unresolvable auth, worktree buildup, low disk, drifted bundled docs, anything host/operator-vantage checkable in O(ms) |
+| **Probe** | Run prep (pre-invoke; startup/finalize hooks still designed) | Daemon code, deterministic | Stale image, unresolvable auth, worktree buildup, low disk, drifted bundled docs, anything host/operator-vantage checkable in O(ms) |
 | **Telemetry** | During and after the runner invocation | Daemon code, deterministic | Runner exit code, attempt count, retry reasons, time-in-phase, subprocess failures inside container, tool-call patterns visible in trace |
 | **Reflection** | Sampled, post-task | Runner agent, free-text via prompt | Confusion, surprise, redundant tool calls, prompt incoherence, anything that needs introspection — the residual the deterministic layers can't see |
 
@@ -133,7 +133,7 @@ class Record:
                                  # "runner_retried", "reflection_raw"
     severity: Literal["info", "warn", "error"]
     detail: dict                 # issue-specific structured payload
-    task_id: str | None          # absent for daemon-startup probes
+    run_id: str | None           # absent for daemon-startup probes
     project_id: str
     env: str                     # "host" / "worktree" / "docker" / ...
     image: str | None            # docker image ref when env=docker
@@ -330,10 +330,10 @@ would ship before consenting to share.
 1. Daemon startup: one-shot environment audit (config sanity, gate
    reachability, optional `gh auth token` check, bundled-doc
    freshness vs source). Emits records once per daemon process.
-2. Task prep: per-task probe set scoped to the resolved env (image
+2. Run prep: per-run probe set scoped to the resolved env (image
    freshness, GitHub token resolvable for docker tasks, worktree
    health, disk health, bundled-doc drift). Emits records tagged with
-   `task_id`.
+   `run_id`.
 
 Probes are cheap (O(ms) each, single-digit count per task) and
 unconditional once the proxy is non-null. They never gate the task —
@@ -362,12 +362,12 @@ short-circuits to `NullErgoProxy` and pays nothing. Operator-owned runs
 also short-circuit to `NullErgoProxy` until the brnrd sink is built.
 Deferred to a follow-up: the one-shot
 **daemon-startup** audit (resolved here as design open-question #2 —
-hardcode task-prep first, add a startup phase only when a probe needs
+hardcode run-prep first, add a startup phase only when a probe needs
 it), and **in-container** PATH probing for docker tasks (spawning a
 probe container breaks the O(ms) contract, and most in-container facts
 are agent-vantage anyway).
 
-**Telemetry** rides on the existing run-progress and task-lifecycle
+**Telemetry** rides on the existing run-progress and run-lifecycle
 infrastructure. The daemon already emits structured packets
 (`run_progress.py`); the telemetry layer is a sidecar consumer that
 turns lifecycle events into ergonomics records when they match a
@@ -431,7 +431,7 @@ issue="reflection_raw", detail={"body": ...})` shipped to the
 configured `ErgoProxy`.
 
 **Sampling stays daemon-side, not agent-side.** The agent always
-gets the nudge when injected; the daemon decides per-task whether
+gets the nudge when injected; the daemon decides per-run whether
 to *inject* the nudge based on `ergonomics.reflection_sample_rate`
 plus the forced-override rules above. Producer logic stays
 centralised; the agent doesn't have to roll a die or remember
@@ -582,7 +582,7 @@ degenerate destination until the storage layer lands).
    done. The telemetry layer could read trace files to extract more
    detail (e.g. how many tool calls the agent made), but that
    couples it to a specific runner. Probably out of scope for v1;
-   revisit when there's demand for finer-grained per-task
+   revisit when there's demand for finer-grained per-run
    instrumentation.
 
 5. **Subject hub timing.** This design plus the existing ergonomics

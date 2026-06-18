@@ -54,8 +54,8 @@ def _ctx(name: str = "docker", *, owner: str = "user", **env_state) -> RunContex
     )
 
 
-def _task(task_id: str = "t1", source: str | None = None):
-    return SimpleNamespace(id=task_id, source=source, meta={})
+def _task(run_id: str = "t1", source: str | None = None):
+    return SimpleNamespace(id=run_id, source=source, meta={})
 
 
 class _CapturingProxy:
@@ -91,7 +91,7 @@ def test_record_from_dict_ignores_unknown_and_fills_defaults():
     rec = Record.from_dict({"kind": "probe", "issue": "x", "severity": "info",
                             "bogus": 1})
     assert rec.detail == {}
-    assert rec.task_id is None
+    assert rec.run_id is None
     assert rec.project_id == ""
     assert not hasattr(rec, "bogus")
 
@@ -367,34 +367,34 @@ def test_run_probes_emits_and_survives_a_raising_probe(tmp_path, monkeypatch):
         proxy=proxy,
     )
     assert len(records) == 2  # both good() findings; boom swallowed
-    assert all(r.kind == "probe" and r.task_id == "task-9" for r in records)
+    assert all(r.kind == "probe" and r.run_id == "task-9" for r in records)
     assert proxy.records == records
 
 
-def test_probe_task_prep_noop_when_off(tmp_path):
+def test_probe_run_prep_noop_when_off(tmp_path):
     # ergonomics=off → null proxy → no probes run, empty result
-    assert probes.probe_task_prep(
+    assert probes.probe_run_prep(
         task=_task(), repo_root=tmp_path, brr_dir=tmp_path,
         cfg={"ergonomics": "off"}, ctx=_ctx(),
     ) == []
 
 
-def test_probe_task_prep_noop_on_operator_run(tmp_path, monkeypatch):
+def test_probe_run_prep_noop_on_operator_run(tmp_path, monkeypatch):
     # operator-owned: knob ignored, null sink, short-circuit even on local
     monkeypatch.setattr(probes, "_PROBES",
                         (lambda _p: [probes.Finding("x", "warn", {})],))
-    assert probes.probe_task_prep(
+    assert probes.probe_run_prep(
         task=_task(), repo_root=tmp_path, brr_dir=tmp_path,
         cfg={"ergonomics": "local"}, ctx=_ctx(owner="operator"),
     ) == []
     assert store.read_records(tmp_path) == []
 
 
-def test_probe_task_prep_default_logs(tmp_path, monkeypatch, capsys):
+def test_probe_run_prep_default_logs(tmp_path, monkeypatch, capsys):
     # default cfg (user-owned) → LogErgoProxy: probes run, warn+ to stdout
     monkeypatch.setattr(probes, "_PROBES",
                         (lambda _p: [probes.Finding("x", "warn", {"hint": "h"})],))
-    records = probes.probe_task_prep(
+    records = probes.probe_run_prep(
         task=_task(), repo_root=tmp_path, brr_dir=tmp_path, cfg={}, ctx=_ctx(),
     )
     assert [r.issue for r in records] == ["x"]
@@ -402,10 +402,10 @@ def test_probe_task_prep_default_logs(tmp_path, monkeypatch, capsys):
     assert store.read_records(tmp_path) == []  # log proxy writes no store
 
 
-def test_probe_task_prep_runs_on_local_proxy(tmp_path, monkeypatch):
+def test_probe_run_prep_runs_on_local_proxy(tmp_path, monkeypatch):
     monkeypatch.setattr(probes, "_PROBES",
                         (lambda _p: [probes.Finding("x", "info", {})],))
-    records = probes.probe_task_prep(
+    records = probes.probe_run_prep(
         task=_task(), repo_root=tmp_path, brr_dir=tmp_path,
         cfg={"ergonomics": "local"}, ctx=_ctx(),
     )

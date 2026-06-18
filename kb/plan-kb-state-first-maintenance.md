@@ -183,7 +183,7 @@ Use this classification per page:
 
 - **Canonical current page**: rewrite to current state plus compact
   lineage. Candidates: `subject-kb.md`,
-  `subject-tasks-branching.md`, `subject-daemon.md`,
+  `subject-runs-branching.md`, `subject-daemon.md`,
   `repo-dive-in-map.md`.
 - **Decision receipt**: preserve the stable decision and useful
   alternatives, but compress later implementation notes. Candidates:

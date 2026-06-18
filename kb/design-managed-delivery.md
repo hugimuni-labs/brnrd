@@ -1,6 +1,6 @@
 # Design: managed-mode delivery — one driver, two transports
 
-Status: accepted 2026-06-01 (delivery shape **H**). Locks how a task's
+Status: accepted 2026-06-01 (delivery shape **H**). Locks how a run's
 human-facing output (the live progress card and the final response) is
 rendered and delivered in **both** self-hosted and managed mode, so the
 cloud gate reuses the OSS gates' rich behaviour instead of
@@ -11,7 +11,7 @@ contract this builds on) and [`subject-managed-mode.md`](subject-managed-mode.md
 ## The problem this closes
 
 The OSS gates do real delivery work: a **live progress card** (post a
-message on `task_created`, edit it in place through `running →
+message on `run_created`, edit it in place through `running →
 finalizing → done`) and **overflow handling** for the final response
 (too long → offload to a gist via the user's `gh`, else truncate). See
 the Telegram gate's `render_update` / `_send_with_overflow` in
@@ -24,7 +24,7 @@ had none of it: it shipped the raw response body to brnrd and emitted no
 progress card at all. The tempting fix — teach brnrd to chunk / format /
 render cards — duplicates the gate behaviour on the server and is
 **impossible for the card**, because the card is rendered from
-`run_progress`, which reads daemon-local `.brr/tasks/`. brnrd cannot see
+`run_progress`, which reads daemon-local `.brr/runs/`. brnrd cannot see
 it.
 
 So the shape is forced, and it happens to be the right one:
@@ -65,7 +65,7 @@ that already factored out gate state / loop / response-delivery):
 - **Per-platform presentation** (pure). Card text from
   `run_progress.render_text(view, style=…)` with the platform's style
   (`TELEGRAM_HTML_STYLE`, etc.) + escaping; final-response formatting.
-  The card *model* (`run_progress.project_task`) is already
+  The card *model* (`run_progress.project_run`) is already
   platform-agnostic; only the style and escaping are platform-specific.
 - **`overflow(text, limit, gh)`** — the gist/truncate decision currently
   inside the Telegram gate's `_send_with_overflow`, lifted out so the
@@ -82,7 +82,7 @@ The card body is **daemon-rendered + agent-narrated**. The lifecycle
 scaffolding (header, sync line, vertical phase log, terminal state) stays
 daemon-owned. On top of it, the resident can compose a short narration
 of what it is actually doing by writing the `.card` control dotfile in
-its per-task outbox; the daemon promotes it on each heartbeat into a
+its per-run outbox; the daemon promotes it on each heartbeat into a
 `card_composed` packet, which lands on
 `RunProgressView.agent_card_text` and renders as a `note: …` tail line
 under the live phase. Rewrite the file to update; empty/delete it to

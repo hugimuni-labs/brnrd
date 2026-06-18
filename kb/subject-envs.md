@@ -56,9 +56,9 @@ image predates the bundled Dockerfile.
 
 ## Durability contract
 
-Tasks running in an isolated env run in an **ephemeral** location.
+Runs executing in an isolated env run in an **ephemeral** location.
 The only outputs that survive are git refs and the response file on
-the host. Trace artefacts and per-task scratch (worktree directory,
+the host. Trace artefacts and per-run scratch (worktree directory,
 container, remote scratch dir) are env territory and get torn down on
 clean completion — see the salvage rule below for the exact
 conditions.
@@ -91,7 +91,7 @@ flip the task to `publish_status=conflict` with the branch preserved;
 the next human or agent run owns the resolution.
 
 The full branch-resolution logic lives one subject over in
-[`subject-tasks-branching.md`](subject-tasks-branching.md) and
+[`subject-runs-branching.md`](subject-runs-branching.md) and
 [`design-publish-kernel.md`](design-publish-kernel.md); the env's job
 is to classify the workspace state and preserve scratch when the
 salvage rule says to.
@@ -101,7 +101,7 @@ salvage rule says to.
 1. [`design-env-interface.md`](design-env-interface.md) for the full
    protocol, the per-env mechanics, the response-path split, the
    plugin / script-env model, and the configuration surface.
-2. [`subject-tasks-branching.md`](subject-tasks-branching.md) for how
+2. [`subject-runs-branching.md`](subject-runs-branching.md) for how
    the daemon resolves publish plans feeding into `Env.finalize` and
    `daemon.publish`.
 3. [`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md) for

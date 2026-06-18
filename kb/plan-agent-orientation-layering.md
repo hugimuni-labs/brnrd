@@ -11,7 +11,7 @@ independently on the same diagnosis and direction, plus a same-day
 follow-up review taken after slices 1+2 shipped:
 
 - [`research-runner-orientation-ergonomics-2026-05-16.md`](research-runner-orientation-ergonomics-2026-05-16.md) —
-  daemon-launched runner view, Docker env, brr/<task-id> branch.
+  daemon-launched runner view, Docker env, brr/<run-id> branch.
 - [`research-cursor-orientation-ergonomics-2026-05-16.md`](research-cursor-orientation-ergonomics-2026-05-16.md) —
   external Cursor session view, no daemon in the loop.
 - [`research-cursor-orientation-ergonomics-followup-2026-05-16.md`](research-cursor-orientation-ergonomics-followup-2026-05-16.md) —
@@ -35,7 +35,7 @@ which layer owns any given fact without searching.
 | **Repository contract** | [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) | Project identity, build/test commands, Stewardship, kb schema, commit rules, guardrails, self-review. Universal across every stage and every tool that reads the repo. |
 | **Resident self-orientation** | the resident's playbook in its dominion (seeded from [`prompts/dominion-playbook.md`](../src/brr/prompts/dominion-playbook.md), injected on wake from the self-inject index — see [`design-agent-dominion.md`](design-agent-dominion.md)) | Who the resident is and how it carries itself: ownership stance, the pain/friction-evaluation loop, honest environment description, how to use the dominion. Present only when brr hosts a resident; rests on the repository contract. |
 | **Stage overlay** | bundled prompts: [`run.md`](../src/brr/prompts/run.md), [`setup.md`](../src/brr/prompts/setup.md) | What role the runner is playing right now and which base rules narrow or override. Stage = daemon task / init-setup. |
-| **Runtime state packet** | Task Context Bundle (built by [`prompts._build_task_context_bundle`](../src/brr/prompts.py)) + optional generated run context file ([`run_context.py`](../src/brr/run_context.py)) | Per-task state: stage, source, environment, branch plan, delivery path, recent conversation, runtime recovery paths. Bundle is hot path; context file is recovery detail. |
+| **Runtime state packet** | Run Context Bundle (built by [`prompts._build_task_context_bundle`](../src/brr/prompts.py)) + optional generated run context file ([`run_context.py`](../src/brr/run_context.py)) | Per-run state: stage, source, environment, branch plan, delivery path, recent conversation, runtime recovery paths. Bundle is hot path; context file is recovery detail. |
 | **Subject knowledge** | [`kb/index.md`](index.md), [`subject-*.md`](.) hubs, decisions, plans, designs, research | Project knowledge graph: current shape of each area, why decisions were made, what is shipped vs in flight vs paused. |
 
 The important distinction is **stage**, not environment. Docker /
@@ -89,7 +89,7 @@ inside the playbook instead of relying on the reader to infer it.
   presence of `### Mode` in the prompt.
 - Workflow rebuilt as Orientation (universal) + Task types + Commits
   (universal) + "When the brr daemon runs you" (daemon-only
-  subsection absorbing Daemon freshness, the `brr/<task-id>` commit
+  subsection absorbing Daemon freshness, the `brr/<run-id>` commit
   nuance, and the delivery/recovery rules).
 - "Work re-review" deleted — it duplicated Session startup. Both
   collapsed into Workflow → Orientation.

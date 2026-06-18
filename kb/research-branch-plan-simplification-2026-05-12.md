@@ -3,7 +3,7 @@
 This research follows the accepted
 [`design-daemon-landing-branch.md`](design-daemon-landing-branch.md)
 implementation and the tasks/branching hub,
-[`subject-tasks-branching.md`](subject-tasks-branching.md). The prompt
+[`subject-runs-branching.md`](subject-runs-branching.md). The prompt
 from the operator was to re-check whether the branch plan became more
 complicated than the job requires, with the goal of simplifying code
 while preserving runner-agent economics and the user-facing remote-run

@@ -7,7 +7,7 @@ records was the immediate predecessor of today's publish kernel and
 its two amendments (2026-05-12 conversation-authority removal,
 2026-05-18 leased PR rebase) carry into the kernel unchanged. The live
 current-state synthesis lives in
-[`subject-tasks-branching.md`](subject-tasks-branching.md) →
+[`subject-runs-branching.md`](subject-runs-branching.md) →
 "Publishing and the publish kernel" and
 [`design-publish-kernel.md`](design-publish-kernel.md). Everything
 below describes the shape *before* the 2026-05-21 collapse: a
@@ -17,7 +17,7 @@ metadata triple `preserved_branch` / `landed_branch` /
 for context only — the names and step boundaries have all moved.
 
 This hangs off the tasks/branching hub,
-[`subject-tasks-branching.md`](subject-tasks-branching.md), and refines
+[`subject-runs-branching.md`](subject-runs-branching.md), and refines
 the agent-owned branch contract introduced by
 [`decision-remove-triage.md`](decision-remove-triage.md).
 

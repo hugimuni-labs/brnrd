@@ -11,7 +11,7 @@ cross-event interleaving, and gate-addressed sends are live; the remaining
 follow-ons are **deliberately deferred** (see "Deferred follow-ons" below).
 **Live inflight inbox awareness** landed
 2026-06-10: the daemon now refreshes a reserved `inbox.json` control file
-in the task outbox on each heartbeat, so newly arrived events are visible
+in the run outbox on each heartbeat, so newly arrived events are visible
 to the running thought at plan boundaries. **Delivery robustness** landed
 2026-06-13 as the Co-maintainer §6 slice: a current-thread outbox reply now
 satisfies the addressed event even with empty stdout, cross-event dialogue is
@@ -140,7 +140,7 @@ artifact is indexed on the target event's conversation key so future wakes
 read the answer in the thread that received it. A target that isn't a live
 pending event is dropped (don't misroute to a stale thread). The resident
 learns which events are pending from the wake-time pending-events list in
-the Task Context Bundle plus the live `inbox.json` refreshed in its outbox
+the Run Context Bundle plus the live `inbox.json` refreshed in its outbox
 during the run.
 
 There is no separate "final" flag: one outbox file is one complete reply
@@ -186,8 +186,8 @@ in [`review-daemon-coherence-2026-06.md`](review-daemon-coherence-2026-06.md)
 
 ### Diffense PR finalization — shipped 2026-06-10
 
-The diffense review pack remains a task-keyed structured artifact
-(`.brr/diffense/<task-id>/pack.json`), not a chat partial. The fold landed
+The diffense review pack remains a run-keyed structured artifact
+(`.brr/diffense/<run-id>/pack.json`), not a chat partial. The fold landed
 at the delivery layer instead: the resident validates and projects the
 pack with `brr review`, then writes a `gate: forge` outbox message whose
 body is the PR body and whose frontmatter names `head`, `base`, and

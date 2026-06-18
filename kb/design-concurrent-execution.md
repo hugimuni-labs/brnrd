@@ -6,19 +6,19 @@ The threaded daemon loop this doc accepted is reversed by the resident-agent
 reshape: local execution is now **single-flight** (spawn one thought when idle),
 because a resident agent's continuity lives in durable memory, not in
 throughput-parallel workers. What **survives** and is not superseded: the
-per-task worktree / branch isolation and the partitioned per-event/per-task state
-(per-event jsonl conversations, per-task progress json) — those primitives
+per-run worktree / branch isolation and the partitioned per-event/per-run state
+(per-event jsonl conversations, per-run progress json) — those primitives
 predate this doc and now anchor in
-[`subject-tasks-branching.md`](subject-tasks-branching.md) and
+[`subject-runs-branching.md`](subject-runs-branching.md) and
 [`subject-daemon.md`](subject-daemon.md). Only the *concurrency-via-threading*
 thesis retires.
 
 Replaces the deferred-serial pose and the abandoned merge-coordinator
 shape from
 [`plan-concurrent-worktrees.md`](plan-concurrent-worktrees.md). The
-plan's per-task worktree/branch/env primitives still hold; what
+plan's per-run worktree/branch/env primitives still hold; what
 changes is the daemon loop (now threaded), the conversation layer
-(now per-event jsonl), and the gate progress state (now per-task
+(now per-event jsonl), and the gate progress state (now per-run
 json). The accepted shape ships these together because the threading
 work is honest only when the shared mutable surfaces it would have
 locked are removed instead.
@@ -37,7 +37,7 @@ forces tip it:
   min) make the head-of-line blocking visible. A "quick question"
   posted while a long task is in flight waits behind it.
 
-The pre-existing isolation primitives — per-task worktrees and
+The pre-existing isolation primitives — per-run worktrees and
 branches, per-event response files, env backends — already paid the
 cost of partition-by-task. The remaining shared surfaces were
 incidental aggregation in the conversation log and gate progress
@@ -52,14 +52,14 @@ under a per-resource lock. Concretely:
 
 | Resource | Path | Writer scope |
 |---|---|---|
-| Task spec | `.brr/tasks/<task-id>.md` | one worker (this task) |
+| Run manifest | `.brr/runs/<run-id>/run.md` | one worker (this run) |
 | Event spec | `.brr/inbox/<event-id>.md` | one writer (gate or daemon stamping status) |
 | Response | `.brr/responses/<event-id>.md` | one writer (the runner) |
-| Trace dir | `.brr/traces/<task-id>-<label>/` | one worker (this task) |
+| Trace dir | `.brr/traces/<run-id>-<label>/` | one worker (this run) |
 | Conversation record stream | `.brr/conversations/<key>/<event-id>.jsonl` | one worker (the pipeline for this event) |
-| Gate progress card state | `.brr/gates/<gate>/progress/<task-id>.json` | one worker (the pipeline for this task) |
-| Worktree | `.brr/worktrees/<task-id>/` | one worker (this task) |
-| Local branch ref `brr/<task-id>` | git ref | one worker (this task) |
+| Gate progress card state | `.brr/gates/<gate>/progress/<run-id>.json` | one worker (the pipeline for this run) |
+| Worktree | `.brr/worktrees/<run-id>/` | one worker (this run) |
+| Local branch ref `brr/<run-id>` | git ref | one worker (this run) |
 | Local branch ref for auto-land target | git ref | per-branch lock |
 | Remote branch ref under push | git ref | per-branch lock |
 | Daemon PID, gate inbox cursor state | various | single writer (one daemon, one gate thread per gate) |
@@ -100,7 +100,7 @@ Read paths:
   prompt tails do not read every line of every jsonl when only a short
   window is needed. ``limit <= 0`` falls back to a full ``read_records``
   merge (same as "give me everything").
-- `records_for_task(brr_dir, key, task_id)` benefits from the per-
+- `records_for_run(brr_dir, key, run_id)` benefits from the per-
   event layout: we read just `<event-id>.jsonl` (when we can map
   task id → event id) instead of filtering across all conversation
   records.
@@ -115,13 +115,13 @@ gets a layout-update paragraph but keeps its current framing
 ## Gate progress state change
 
 Before: `.brr/gates/telegram_progress.json` (and `slack_progress.json`)
-— one file holding `{task_id: {...}}` for every in-flight task on
+— one file holding `{run_id: {...}}` for every in-flight task on
 that gate. Render path was load → mutate → save, no lock.
 
 After: `.brr/gates/<gate>/progress/<task-id>.json` — one file per
 task. The render path reads and writes only the file for the task
 whose packet it is rendering. With one worker per task and packets
-for distinct tasks routed by `task_id`, two concurrent renders
+for distinct tasks routed by `run_id`, two concurrent renders
 touch two distinct files. No locks.
 
 Helpers (`_load_progress_state`, `_save_progress_state`,
@@ -239,7 +239,7 @@ inspection.
   executor fit the existing sync-IO codebase and the "runner is a
   subprocess" reality. Asyncio would only pay off for I/O-bound
   fan-out, which isn't where the work is.
-- **Per-task subprocess workers.** The runner itself already runs as
+- **Per-run subprocess workers.** The runner itself already runs as
   a subprocess inside each task; an extra layer of process isolation
   doesn't earn its operational cost for this scale.
 

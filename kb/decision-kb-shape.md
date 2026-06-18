@@ -77,7 +77,7 @@ states what we're choosing not to do.
 
 | Layer                | Purpose                                  | Lives in                                                       |
 |----------------------|------------------------------------------|----------------------------------------------------------------|
-| Raw                  | What was said / what happened, verbatim  | `.brr/conversations/`, `.brr/tasks/`, `.brr/traces/` (gitignored) |
+| Raw                  | What was said / what happened, verbatim  | `.brr/conversations/`, `.brr/runs/`, `.brr/traces/` (gitignored) |
 | Episodic-thin        | Curated chronological narrative          | `kb/log.md` (one entry per substantive piece of work)          |
 | Semantic + decisional | What we know / why we chose it          | `kb/subject-*.md`, `kb/decision-*.md`, `kb/research-*.md`, `kb/plan-*.md`, `kb/design-*.md` |
 | Schema               | How the wiki is structured + how to maintain it | `AGENTS.md`, `src/brr/docs/`, `src/brr/prompts/`        |

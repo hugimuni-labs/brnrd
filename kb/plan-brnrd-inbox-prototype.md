@@ -191,14 +191,14 @@ Code-reuse notes for the slice:
 ## Code reuse — shared gate runtime
 
 Slack and Telegram duplicate four things nearly verbatim:
-`_load_state` / `_save_state`, the per-task progress-card state
+`_load_state` / `_save_state`, the per-run progress-card state
 file helpers, the backoff `run_loop` wrapper, and the
 `_deliver_responses` skeleton (iterate `list_done` → read
 response → post → `cleanup`). These move to
 `src/brr/gates/runtime.py` as gate-name-parameterized helpers:
 
 - `load_state` / `save_state(brr_dir, gate, ...)`
-- `load_task_card` / `save_task_card(brr_dir, gate, task_id, ...)`
+- `load_run_card` / `save_run_card(brr_dir, gate, run_id, ...)`
 - `run_loop(loop_once, *, label, poll_interval=0, backoff_max=120)`
 - `deliver_responses(inbox_dir, responses_dir, source, deliver)`
   — `deliver(event, body)` raises to signal a per-event delivery

@@ -27,7 +27,7 @@ Concretely the kb covers four kinds of memory:
 | Memory       | Purpose                                  | Where it lives                              |
 | ------------ | ---------------------------------------- | ------------------------------------------- |
 | Raw          | What literally happened — every event,   | `.brr/conversations/<key>/<event-id>.jsonl` |
-|              | every prompt, every stdout — immutable.  | (merge by ``ts``), `.brr/tasks/<id>/`,      |
+|              | every prompt, every stdout — immutable.  | (merge by ``ts``), `.brr/runs/<id>/`,       |
 |              |                                          | `.brr/traces/`                              |
 | Episodic     | Curated narrative of what was done and   | [`kb/log.md`](log.md)                       |
 |              | what was learned, one entry per session. |                                             |
