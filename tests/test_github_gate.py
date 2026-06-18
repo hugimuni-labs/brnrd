@@ -39,7 +39,7 @@ from brr.gates.github import (
     state,
     wizard,
 )
-from brr.task import Task
+from brr.run import Run
 
 
 # ── parse_origin_url ─────────────────────────────────────────────────
@@ -1744,31 +1744,29 @@ def test_any_trigger_overrides_other_pollers_in_loop(tmp_path, monkeypatch):
 # ── render_update (progress cards) ───────────────────────────────────
 
 
-def _make_packet(ptype: str, conv_key: str, task_id: str):
+def _make_packet(ptype: str, conv_key: str, run_id: str):
     """Minimal UpdatePacket-compatible object for render_update tests."""
     from types import SimpleNamespace
-    return SimpleNamespace(type=ptype, conversation_key=conv_key, payload={"task_id": task_id})
+    return SimpleNamespace(type=ptype, conversation_key=conv_key, payload={"run_id": run_id})
 
 
-def _write_task(brr_dir: Path, task_id: str, *, repo: str, issue_number: int) -> None:
-    task = Task(
-        id=task_id,
+def _write_run(brr_dir: Path, run_id: str, *, repo: str, issue_number: int) -> None:
+    task = Run(
+        id=run_id,
         event_id="evt-001",
         body="do the thing",
         source="github",
         conversation_key="github:default",
         meta={"github_repo": repo, "github_issue_number": issue_number},
     )
-    tasks_dir = brr_dir / "tasks"
-    tasks_dir.mkdir(parents=True, exist_ok=True)
-    (tasks_dir / f"{task_id}.md").write_text(task.to_frontmatter(), encoding="utf-8")
+    task.save(brr_dir / "runs")
 
 
-def test_render_update_creates_comment_on_task_created(tmp_path, monkeypatch):
+def test_render_update_creates_comment_on_run_created(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
-    _write_task(brr_dir, "task-001", repo="o/r", issue_number=42)
-    monkeypatch.setattr(progress, "_build_card_text", lambda *a: "**task received**")
+    _write_run(brr_dir, "task-001", repo="o/r", issue_number=42)
+    monkeypatch.setattr(progress, "_build_card_text", lambda *a: "**run received**")
 
     posts: list[tuple[str, dict]] = []
     monkeypatch.setattr(
@@ -1777,22 +1775,22 @@ def test_render_update_creates_comment_on_task_created(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(client, "_api_patch", lambda token, path, body: None)
 
-    pkt = _make_packet("task_created", "github:default", "task-001")
+    pkt = _make_packet("run_created", "github:default", "task-001")
     github.render_update(brr_dir, pkt)
 
     assert len(posts) == 1
     assert posts[0][0] == "/repos/o/r/issues/42/comments"
-    assert posts[0][1]["body"] == "**task received**"
+    assert posts[0][1]["body"] == "**run received**"
 
-    entry = progress._load_progress_for_task(brr_dir, "task-001")
+    entry = progress._load_progress_for_run(brr_dir, "task-001")
     assert entry["comment_id"] == 999
 
 
 def test_render_update_patches_existing_comment(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
-    _write_task(brr_dir, "task-002", repo="o/r", issue_number=7)
-    progress._save_progress_for_task(brr_dir, "task-002", {"comment_id": 555, "last_text": "old"})
+    _write_run(brr_dir, "task-002", repo="o/r", issue_number=7)
+    progress._save_progress_for_run(brr_dir, "task-002", {"comment_id": 555, "last_text": "old"})
     monkeypatch.setattr(progress, "_build_card_text", lambda *a: "**running...**")
 
     patches: list[tuple[str, dict]] = []
@@ -1810,8 +1808,8 @@ def test_render_update_patches_existing_comment(tmp_path, monkeypatch):
 def test_render_update_skips_duplicate_text(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "tok", "bot_login": "brr-bot", "repo": "o/r"})
-    _write_task(brr_dir, "task-003", repo="o/r", issue_number=1)
-    progress._save_progress_for_task(
+    _write_run(brr_dir, "task-003", repo="o/r", issue_number=1)
+    progress._save_progress_for_run(
         brr_dir, "task-003", {"comment_id": 11, "last_text": "same text"},
     )
     monkeypatch.setattr(progress, "_build_card_text", lambda *a: "same text")
@@ -1833,20 +1831,19 @@ def test_render_update_noop_for_non_github_source(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     state._save_state(brr_dir, {"token": "tok"})
     # Write a task with source="telegram"
-    task = Task(
+    task = Run(
         id="task-tg",
         event_id="evt-x",
         body="ping",
         source="telegram",
         meta={"telegram_chat_id": 123},
     )
-    (brr_dir / "tasks").mkdir(parents=True, exist_ok=True)
-    (brr_dir / "tasks" / "task-tg.md").write_text(task.to_frontmatter(), encoding="utf-8")
+    task.save(brr_dir / "runs")
 
     posts: list = []
     monkeypatch.setattr(client, "_api_post", lambda *a, **kw: posts.append(a))
 
-    pkt = _make_packet("task_created", "telegram:123:", "task-tg")
+    pkt = _make_packet("run_created", "telegram:123:", "task-tg")
     github.render_update(brr_dir, pkt)
 
     assert posts == []
@@ -1861,7 +1858,7 @@ def test_render_update_noop_when_no_token(tmp_path, monkeypatch):
     posts: list = []
     monkeypatch.setattr(client, "_api_post", lambda *a, **kw: posts.append(a))
 
-    pkt = _make_packet("task_created", "github:default", "task-x")
+    pkt = _make_packet("run_created", "github:default", "task-x")
     github.render_update(brr_dir, pkt)
 
     assert posts == []
@@ -1871,12 +1868,12 @@ def test_render_update_noop_when_no_token(tmp_path, monkeypatch):
 
 
 def test_branch_footer_returns_empty_when_no_branch():
-    task = Task(id="t", event_id="e", body="b", source="github", meta={})
+    task = Run(id="t", event_id="e", body="b", source="github", meta={})
     assert delivery._branch_footer("o/r", task) == ""
 
 
 def test_branch_footer_ignores_branch_name_before_finalize():
-    task = Task(
+    task = Run(
         id="t", event_id="e", body="b", source="github",
         meta={"branch_name": "brr/task-abc"},
     )
@@ -1884,7 +1881,7 @@ def test_branch_footer_ignores_branch_name_before_finalize():
 
 
 def test_branch_footer_includes_tree_and_compare_links():
-    task = Task(
+    task = Run(
         id="t", event_id="e", body="b", source="github",
         meta={"publish_branch": "brr/task-abc"},
     )
@@ -1897,9 +1894,9 @@ def test_branch_footer_includes_tree_and_compare_links():
 
 def test_find_task_for_event(tmp_path):
     brr_dir = tmp_path / ".brr"
-    _write_task(brr_dir, "task-find-me", repo="o/r", issue_number=1)
+    _write_run(brr_dir, "task-find-me", repo="o/r", issue_number=1)
     # Give it a known event_id by rewriting the frontmatter:
-    task_path = brr_dir / "tasks" / "task-find-me.md"
+    task_path = brr_dir / "runs" / "task-find-me" / "run.md"
     text = task_path.read_text()
     text = text.replace("event_id: evt-001", "event_id: evt-target")
     task_path.write_text(text)
@@ -1918,7 +1915,7 @@ def test_deliver_responses_appends_branch_footer(tmp_path, monkeypatch):
     state._save_state(brr_dir, {"token": "tok", "repo": "owner/repo"})
 
     # Create a task file with a pushed branch.
-    task = Task(
+    task = Run(
         id="task-deliver",
         event_id="evt-deliver",
         body="do something",
@@ -1926,8 +1923,7 @@ def test_deliver_responses_appends_branch_footer(tmp_path, monkeypatch):
         meta={"github_repo": "owner/repo", "github_issue_number": 5,
               "publish_branch": "brr/task-deliver"},
     )
-    (brr_dir / "tasks").mkdir(parents=True, exist_ok=True)
-    (brr_dir / "tasks" / "task-deliver.md").write_text(task.to_frontmatter())
+    task.save(brr_dir / "runs")
 
     # Create a done event and a response file.
     protocol.create_event(

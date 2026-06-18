@@ -386,13 +386,13 @@ def test_scan_suppresses_hub_coverage_when_subject_present(tmp_path):
     _write(tmp_path / "kb" / "index.md", (
         "# Index\n\n"
         "## Tasks & branching\n\n"
-        "- [Hub](subject-tasks-branching.md) — synthesis\n"
+        "- [Hub](subject-runs-branching.md) — synthesis\n"
         "- [Design](design-daemon-landing-branch.md) — desc\n"
         "- [Plan](plan-branch-modes.md) — desc\n"
         "- [Decision](decision-remove-triage.md) — desc\n"
     ))
     for name in (
-        "subject-tasks-branching.md",
+        "subject-runs-branching.md",
         "design-daemon-landing-branch.md",
         "plan-branch-modes.md",
         "decision-remove-triage.md",

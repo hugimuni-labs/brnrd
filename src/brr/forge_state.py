@@ -83,7 +83,7 @@ def _resolve_remote(repo_root: Path) -> tuple[str | None, dict[str, str | None]]
 def _worktrees_facet(
     repo_root: Path,
     *,
-    current_task_id: str,
+    current_run_id: str,
     remote_url: str | None,
     overrides: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -96,9 +96,9 @@ def _worktrees_facet(
     out: list[dict[str, Any]] = []
     for info in infos:
         entry: dict[str, Any] = {
-            "task_id": info.task_id,
+            "run_id": info.run_id,
             "branch": info.branch,
-            "current": bool(current_task_id) and info.task_id == current_task_id,
+            "current": bool(current_run_id) and info.run_id == current_run_id,
         }
         try:
             entry["unpushed"] = worktree.unpushed_commit_count(info.path)
@@ -229,7 +229,7 @@ def build_forge_state(
     *,
     related_threads: list[dict[str, Any]] | None = None,
     current_thread: str = "",
-    current_task_id: str = "",
+    current_run_id: str = "",
     current_event_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build the forge-state facet, or ``None`` when there is nothing to show.
@@ -247,7 +247,7 @@ def build_forge_state(
     remote_url, overrides = _resolve_remote(repo_root)
     worktrees = _worktrees_facet(
         repo_root,
-        current_task_id=current_task_id,
+        current_run_id=current_run_id,
         remote_url=remote_url,
         overrides=overrides,
     )

@@ -12,8 +12,8 @@ implementation and differ only in their *transport*:
   ``CardTransport`` so the same logic backs a direct platform call or
   a relay to brnrd.
 
-Card-state files are the per-task ones owned by ``runtime`` under
-``.brr/gates/<gate>/progress/<task>.json``. See
+Card-state files are the per-run ones owned by ``runtime`` under
+``.brr/gates/<gate>/progress/<run>.json``. See
 ``kb/design-managed-delivery.md`` for the one-driver / two-transports
 shape this implements.
 """
@@ -107,27 +107,27 @@ class CardTransport(Protocol):
 def update_card(
     brr_dir: Path,
     gate: str,
-    task_id: str,
+    run_id: str,
     text: str,
     *,
     transport: CardTransport,
     reply_to: int | None = None,
     render_tag: str | None = None,
 ) -> None:
-    """Send or edit the live progress card for *task_id*, idempotently.
+    """Send or edit the live progress card for *run_id*, idempotently.
 
     Skips the round-trip when the rendered text matches the last one.
     Edits the stored message when present, falling back to a fresh send
     if it has vanished. Transport failures are swallowed — a gate thread
     must keep running even if its platform is briefly unreachable.
     """
-    entry = runtime.load_task_card(brr_dir, gate, task_id)
+    entry = runtime.load_run_card(brr_dir, gate, run_id)
 
     if entry and entry.get("last_text") == text:
         # Identical to the last rendered message — nothing to send.
         if render_tag is not None:
             entry["last_render"] = render_tag
-            runtime.save_task_card(brr_dir, gate, task_id, entry)
+            runtime.save_run_card(brr_dir, gate, run_id, entry)
         return
 
     try:
@@ -143,22 +143,22 @@ def update_card(
                 message_id = transport.send(text, reply_to=reply_to)
                 if message_id is None:
                     return
-                runtime.save_task_card(
-                    brr_dir, gate, task_id,
+                runtime.save_run_card(
+                    brr_dir, gate, run_id,
                     _card_entry(message_id, text, render_tag),
                 )
                 return
             entry["last_text"] = text
             if render_tag is not None:
                 entry["last_render"] = render_tag
-            runtime.save_task_card(brr_dir, gate, task_id, entry)
+            runtime.save_run_card(brr_dir, gate, run_id, entry)
             return
 
         message_id = transport.send(text, reply_to=reply_to)
         if message_id is None:
             return
-        runtime.save_task_card(
-            brr_dir, gate, task_id, _card_entry(message_id, text, render_tag),
+        runtime.save_run_card(
+            brr_dir, gate, run_id, _card_entry(message_id, text, render_tag),
         )
     except Exception:
         return

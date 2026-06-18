@@ -14,7 +14,7 @@ import os
 import subprocess
 
 from brr import daemon, dominion, gitops
-from brr.task import Task
+from brr.run import Run
 
 from _helpers import commit_files, init_git_repo
 
@@ -108,7 +108,7 @@ def test_capture_dominion_helper_commits_when_dirty(tmp_path):
     (path / "focus.md").write_text("current focus\n", encoding="utf-8")
     head_before = gitops.rev_parse(path, "HEAD")
 
-    task = Task(id="t1", event_id="e1", body="b", source="telegram")
+    task = Run(id="t1", event_id="e1", body="b", source="telegram")
     daemon._capture_dominion(repo, {"dominion.push_on_capture": False}, task)
 
     assert gitops.rev_parse(path, "HEAD") != head_before
@@ -121,7 +121,7 @@ def test_capture_dominion_helper_respects_disabled(tmp_path):
     (path / "x.md").write_text("y\n", encoding="utf-8")
     head_before = gitops.rev_parse(path, "HEAD")
 
-    task = Task(id="t1", event_id="e1", body="b", source="telegram")
+    task = Run(id="t1", event_id="e1", body="b", source="telegram")
     daemon._capture_dominion(repo, {"dominion.enabled": False}, task)
 
     # Disabled → left untouched for the operator to manage by hand.

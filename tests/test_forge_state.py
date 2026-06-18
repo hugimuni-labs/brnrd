@@ -127,9 +127,9 @@ def test_unpushed_commit_count_no_remote(tmp_path):
 
 def _repo_with_worktree(tmp_path: Path) -> Path:
     repo = _repo_with_remote(tmp_path)
-    # A brr-managed worktree under .brr/worktrees/<task-id>.
-    task_id = "task-test-1"
-    wt_path, branch = worktree.create(repo, task_id)
+    # A brr-managed worktree under .brr/worktrees/<run-id>.
+    run_id = "run-test-1"
+    wt_path, branch = worktree.create(repo, run_id)
     # Add an unpushed commit on the worktree branch.
     commit_files(wt_path, {"feature.txt": "wip\n"}, message="feature")
     return repo
@@ -141,17 +141,17 @@ def test_build_forge_state_lists_worktrees(tmp_path):
         repo,
         related_threads=[],
         current_thread="github:Gurio/brr:113",
-        current_task_id="task-test-1",
+        current_run_id="run-test-1",
     )
     assert facet is not None
     worktrees = facet["worktrees"]
     by_branch = {w["branch"]: w for w in worktrees}
-    assert "brr/task-test-1" in by_branch
-    wt = by_branch["brr/task-test-1"]
+    assert "brr/run-test-1" in by_branch
+    wt = by_branch["brr/run-test-1"]
     assert wt["unpushed"] == 1
     assert wt["current"] is True
     # forge branch URL derived from origin remote
-    assert wt["branch_url"] == "https://github.com/Gurio/brr/tree/brr/task-test-1"
+    assert wt["branch_url"] == "https://github.com/Gurio/brr/tree/brr/run-test-1"
 
 
 def test_build_forge_state_threads_cross_reference(tmp_path):
@@ -160,7 +160,7 @@ def test_build_forge_state_threads_cross_reference(tmp_path):
         repo,
         related_threads=[{"conversation_key": "github:Gurio/brr:99"}],
         current_thread="github:Gurio/brr:113",
-        current_task_id="",
+        current_run_id="",
     )
     assert facet is not None
     threads = facet["threads"]
@@ -178,7 +178,7 @@ def test_build_forge_state_enriches_current_from_event_meta(tmp_path):
         repo,
         related_threads=[],
         current_thread="github:Gurio/brr:113",
-        current_task_id="",
+        current_run_id="",
         current_event_meta={
             "github_kind": "pull_request",
             "branch_target": "brr/feature-x",
@@ -202,7 +202,7 @@ def test_build_forge_state_none_when_empty(tmp_path):
         repo,
         related_threads=[{"conversation_key": "telegram:123:"}],
         current_thread="telegram:123:",
-        current_task_id="",
+        current_run_id="",
     )
     assert facet is None
 
@@ -214,7 +214,7 @@ def test_format_forge_state_renders_sections():
     facet = {
         "worktrees": [
             {
-                "task_id": "task-1",
+                "run_id": "task-1",
                 "branch": "brr/feature",
                 "unpushed": 2,
                 "dirty": True,
@@ -246,28 +246,28 @@ def test_format_forge_state_collapses_clean_pushed_branches():
     facet = {
         "worktrees": [
             {
-                "task_id": "task-current",
+                "run_id": "task-current",
                 "branch": "brr/current",
                 "unpushed": 0,
                 "dirty": False,
                 "current": True,
             },
             {
-                "task_id": "task-clean-a",
+                "run_id": "task-clean-a",
                 "branch": "brr/clean-a",
                 "unpushed": 0,
                 "dirty": False,
                 "current": False,
             },
             {
-                "task_id": "task-clean-b",
+                "run_id": "task-clean-b",
                 "branch": "brr/clean-b",
                 "unpushed": 0,
                 "dirty": False,
                 "current": False,
             },
             {
-                "task_id": "task-wip",
+                "run_id": "task-wip",
                 "branch": "brr/wip",
                 "unpushed": 3,
                 "dirty": True,

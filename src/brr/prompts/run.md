@@ -36,7 +36,7 @@ the deliverable.
 
 When the task came from a GitHub issue or PR and you pushed a branch,
 end your response with the branch name and commit SHA (e.g.
-`committed abc1234 on brr/task-…`). The gate appends a branch link and
+`committed abc1234 on brr/run-…`). The gate appends a branch link and
 compare URL automatically, but naming them in the body helps readers who
 see only the text.
 

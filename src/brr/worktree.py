@@ -1,12 +1,12 @@
-"""Git worktree helpers for task-isolated execution.
+"""Git worktree helpers for run-isolated execution.
 
-Each task gets a fresh worktree at ``.brr/worktrees/<task-id>/`` on a
-dedicated ``brr/<task-id>`` branch sprouted from the resolved seed ref. The
+Each run gets a fresh worktree at ``.brr/worktrees/<run-id>/`` on a
+dedicated ``brr/<run-id>`` branch sprouted from the resolved seed ref. The
 agent runs inside that sandbox and decides how its work should land:
 
-- Leaving commits on ``brr/<task-id>`` follows the daemon's branch
+- Leaving commits on ``brr/<run-id>`` follows the daemon's branch
   plan: finalization fast-forwards a resolved auto-land target, or
-  preserves the task branch when no safe target exists.
+  preserves the run branch when no safe target exists.
 - Switching to a different branch (``git switch -c feat/foo`` or
   ``git switch existing``) records a runtime branch choice, and the
   branch is preserved as-is on cleanup.
@@ -36,7 +36,7 @@ class WorktreeInfo:
     """A brr-managed worktree entry."""
 
     path: Path
-    task_id: str
+    run_id: str
     branch: str
 
 
@@ -49,9 +49,9 @@ class BranchCheckedOutError(RuntimeError):
         super().__init__(f"{branch} is checked out at {checkout_path}")
 
 
-def task_branch_name(task_id: str) -> str:
-    """Return the standard task branch name brr creates for a worktree."""
-    return f"brr/{task_id}"
+def run_branch_name(run_id: str) -> str:
+    """Return the standard run branch name brr creates for a worktree."""
+    return f"brr/{run_id}"
 
 
 def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
@@ -84,10 +84,10 @@ def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
             except ValueError:
                 pass
             else:
-                task_id = current_path.name
+                run_id = current_path.name
                 entries.append(WorktreeInfo(
                     path=current_path,
-                    task_id=task_id,
+                    run_id=run_id,
                     branch=current_branch,
                 ))
             current_path = None
@@ -101,33 +101,33 @@ def list_worktrees(repo_root: Path) -> list[WorktreeInfo]:
         else:
             entries.append(WorktreeInfo(
                 path=current_path,
-                task_id=current_path.name,
+                run_id=current_path.name,
                 branch=current_branch,
             ))
 
     return entries
 
 
-def path_for(repo_root: Path, task_id: str) -> Path:
-    """Return the worktree path for *task_id*."""
+def path_for(repo_root: Path, run_id: str) -> Path:
+    """Return the worktree path for *run_id*."""
     from . import gitops
 
-    return gitops.shared_brr_dir(repo_root) / "worktrees" / task_id
+    return gitops.shared_brr_dir(repo_root) / "worktrees" / run_id
 
 
-def create(repo_root: Path, task_id: str, *, base_ref: str = "HEAD") -> tuple[Path, str]:
-    """Create a fresh task worktree on a new ``brr/<task_id>`` branch.
+def create(repo_root: Path, run_id: str, *, base_ref: str = "HEAD") -> tuple[Path, str]:
+    """Create a fresh run worktree on a new ``brr/<run_id>`` branch.
 
     Always sprouts a new branch from *base_ref* so worktree creation
     never collides with a branch that's checked out elsewhere. Returns
     ``(worktree_path, branch_name)``.
     """
-    worktree_path = path_for(repo_root, task_id)
+    worktree_path = path_for(repo_root, run_id)
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
     if worktree_path.exists():
         raise RuntimeError(f"worktree already exists: {worktree_path}")
 
-    branch = task_branch_name(task_id)
+    branch = run_branch_name(run_id)
     args = ["worktree", "add", "-b", branch, str(worktree_path), base_ref]
     result = _git(repo_root, *args, check=False)
     if result.returncode != 0:
@@ -142,12 +142,12 @@ def switch_to(worktree_path: Path, branch: str) -> None:
     Uses ``git switch <branch>`` when the branch already exists locally,
     otherwise ``git switch -c <branch>`` to create it at the current HEAD.
     Called by ``WorktreeEnv.prepare`` to move the agent's starting point
-    from the throwaway ``brr/<task-id>`` placeholder to the event's named
+    from the throwaway ``brr/<run-id>`` placeholder to the event's named
     target branch before the agent runs.
 
     Raises ``BranchCheckedOutError`` before invoking git when the branch is
     already checked out in another worktree. Git refuses that checkout anyway;
-    the typed error lets callers keep the unique task branch instead.
+    the typed error lets callers keep the unique run branch instead.
     """
     from . import gitops
 
@@ -228,7 +228,7 @@ def unpushed_commit_count(worktree_path: Path) -> int:
 
     ``git rev-list --count HEAD --not --remotes`` counts commits reachable
     from HEAD but from no ``refs/remotes/*`` ref — i.e. local work not yet
-    pushed anywhere. It needs no configured upstream, so a fresh task
+    pushed anywhere. It needs no configured upstream, so a fresh run
     branch (which has none) still reports honestly. Any git failure
     (detached/empty repo, command error) yields ``0`` rather than raising:
     the forge facet this feeds is observational and must never fail a run.
@@ -273,14 +273,14 @@ def has_uncommitted_changes(worktree_path: Path) -> bool:
 
 def remove(
     repo_root: Path,
-    task_id: str,
+    run_id: str,
     *,
     branch: str | None = None,
     delete_branch: bool = False,
     force: bool = False,
 ) -> None:
-    """Remove a task worktree and optionally delete its branch."""
-    worktree_path = path_for(repo_root, task_id)
+    """Remove a run worktree and optionally delete its branch."""
+    worktree_path = path_for(repo_root, run_id)
     if worktree_path.exists():
         args = ["worktree", "remove", str(worktree_path)]
         if force:
