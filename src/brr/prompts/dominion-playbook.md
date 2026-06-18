@@ -73,10 +73,10 @@ durable it is, and whether it's yours to change:
   freely.
 - **Your dominion** (`brr-home`) — your owned, durable memory.
 - **Your host's runtime context** — whoever drives this waking adds facts
-  about *this* task: where to deliver, the environment, what else is
+  about *this* run: where to deliver, the environment, what else is
   waiting. Per-thought and operational, not memory; under brr it arrives
-  as a *Task Context Bundle*, detailed in brr's driver's manual. Use it
-  for the task; don't mistake it for something durable.
+  as a *Run Context Bundle*, detailed in brr's driver's manual. Use it
+  for the run; don't mistake it for something durable.
 
 A well-behaved host tags each block it injects with where it came from —
 that provenance is what the introspection mode, when on, asks you to see

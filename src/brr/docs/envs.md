@@ -10,8 +10,8 @@ by dropping a file at `.brr/docs/envs.md`.
 
 | Env         | Where the runner runs                       | Credentials       | Repo isolation                | Notes                                |
 | ----------- | ------------------------------------------- | ----------------- | ----------------------------- | ------------------------------------ |
-| `host`      | Main repo checkout, current process         | Inherited         | None                          | Default for trivial / Q&A tasks      |
-| `worktree`  | `.brr/worktrees/<task-id>/` (`brr/<task-id>` branch) | Inherited | Working dir + branch | Default for code work |
+| `host`      | Main repo checkout, current process         | Inherited         | None                          | Default for trivial / Q&A runs       |
+| `worktree`  | `.brr/worktrees/<run-id>/` (`brr/<run-id>` branch) | Inherited | Working dir + branch | Default for code work |
 | `docker`    | A container, worktree bind-mounted          | Auto-wired to host| Container + worktree          | Bundled image includes brr + common dev tools |
 
 Other envs (`devcontainer`, `ssh`) are planned but not yet shipped. See
@@ -27,7 +27,7 @@ Resolution order in `.brr/config`:
    Docker is on PATH, otherwise worktree. `host` is never auto-picked;
    set it explicitly if you want to forgo isolation.
 
-The env is resolved deterministically when the task is built — there
+The env is resolved deterministically when the run manifest is built — there
 is no LLM in the loop. If a request needs different isolation, change
 `.brr/config` or wire your gate to set `env=` on the event.
 
@@ -35,8 +35,10 @@ Branch fallback is separate from environment selection. When no
 structured event/thread metadata names a branch target, `branch.fallback`
 or `branch_fallback` controls the daemon's publish plan. The only
 supported mode is `preserve` (the default): seed from the repo default
-branch and publish the `brr/<task-id>` branch under its own name for
-human routing. Legacy values (`inbox`, `default`, `current`) warn once
+branch and publish the `brr/<run-id>` branch under its own name for
+human routing. The legacy id string may still start with `task-`, so
+today's concrete branch often looks like `brr/task-...`. Legacy values
+(`inbox`, `default`, `current`) warn once
 on daemon start and downgrade to `preserve`.
 
 ## `host`
@@ -48,17 +50,17 @@ where you want the change visible immediately.
 
 ## `worktree`
 
-The daemon creates a git worktree under `.brr/worktrees/<task-id>/`
-on a fresh `brr/<task-id>` branch sprouted from the resolved seed ref.
+The daemon creates a git worktree under `.brr/worktrees/<run-id>/`
+on a fresh `brr/<run-id>` branch sprouted from the resolved seed ref.
 The runner cwd points at the worktree; your main checkout is
 untouched. After a successful run, the daemon inspects the worktree's
 git state and records one of four `publish_status` outcomes:
 
 - `ready` — the agent committed on a branch. `publish_branch` records
-  what to ship (the original `brr/<task-id>` if the agent stayed put,
+  what to ship (the original `brr/<run-id>` if the agent stayed put,
   or whichever branch the agent switched to). The worktree is torn
   down unless it carries uncommitted leftovers.
-- `nothing` — no commits beyond the seed ref. The empty task branch
+- `nothing` — no commits beyond the seed ref. The empty run branch
   and worktree are deleted; nothing is published.
 - `detached` — the agent left HEAD detached. The worktree is kept so
   you can recover the commits.
@@ -68,8 +70,8 @@ git state and records one of four `publish_status` outcomes:
 
 `daemon.publish` then ships the recorded `publish_branch` in one
 step. When the event named an `expected_publish_branch` but the agent
-kept the task branch, the push uses a refspec
-(`git push origin brr/<task-id>:<expected>`) so the daemon never
+kept the run branch, the push uses a refspec
+(`git push origin brr/<run-id>:<expected>`) so the daemon never
 touches the local target ref. When the agent rewrote the expected
 branch locally (the PR-rebase case) and brr captured the remote OID
 at task start, the push uses `--force-with-lease` against that OID.
@@ -85,7 +87,7 @@ the agent did.
 The runner command is wrapped in `docker run`. The repo is bind-mounted
 into the container at the same absolute path it has on the host, so
 file references in prompts and traces remain valid in both directions.
-Docker tasks first set up the same `brr/<task-id>` worktree as the
+Docker runs first set up the same `brr/<run-id>` worktree as the
 `worktree` env and mount that directory instead of the main checkout,
 keeping the host's working tree clean.
 
