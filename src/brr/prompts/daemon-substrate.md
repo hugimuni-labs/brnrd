@@ -41,22 +41,22 @@ So you can read what past firings did, even as you rebuild working context
 from your dominion like any wake. A scheduled thought often has nothing to
 reply to — its effect is the work it does (an edit, a commit, a
 reconcile) — but when it should speak, address a gate directly through
-the delivery contract in the Task Context Bundle below. Add, edit, and
+the delivery contract in the Run Context Bundle below. Add, edit, and
 retire entries freely; they're your specs in your memory. This is the
 seam between reacting and *intending*: ambient initiative is just a
 recurring entry whose body says "keep making progress on what matters,"
 with the interval as its own brake. Use it deliberately — a thought that
 wakes for nothing is friction you pay every cycle.
 
-Your per-task **delivery contract** — how to message the user while you
+Your per-run **delivery contract** — how to message the user while you
 work, the time budget for this thought, and how to extend it — rides in
-that bundle, conditionally on what this task allows. Read it there; it's
+that bundle, conditionally on what this run allows. Read it there; it's
 the operational detail behind the playbook's "how depends on your host."
 
 **The cockpit manual.** The full control-file protocol (outbox replies,
 `event:` / `gate:` sends, liveness, progress-card narration, scheduling)
-and the shape of an average task run — receive → orient → decide
+and the shape of an average daemon run — receive → orient → decide
 plan-vs-execute → narrate → deliver → decompose/defer — live in one
-place: run `brr docs cockpit`. The bundle carries the live per-task
+place: run `brr docs cockpit`. The bundle carries the live per-run
 *values*; the manual carries the *choreography*. Glance at the panel when
-a task's shape is unfamiliar; don't carry it all in working memory.
+a run's shape is unfamiliar; don't carry it all in working memory.

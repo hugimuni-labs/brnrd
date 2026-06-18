@@ -1,10 +1,10 @@
-# Cockpit — the shape of a task run, and the panel you steer it with
+# Cockpit — the shape of a daemon run, and the panel you steer it with
 
-How an average task run unfolds under the brr daemon, and the
+How an average daemon run unfolds under the brr daemon, and the
 control-file protocol you use to steer it. This is the *manual* — read
-it when a task's shape is unfamiliar or you need to look up a control
-file. It is **inspected, not injected**: a wake carries the live per-task
-*values* (paths, ids, budget) in its Task Context Bundle and a one-line
+it when a run's shape is unfamiliar or you need to look up a control
+file. It is **inspected, not injected**: a wake carries the live per-run
+*values* (paths, ids, budget) in its Run Context Bundle and a one-line
 pointer here; the choreography and the cheatsheet live in this one place
 so a wake doesn't pay for them in tokens every time.
 
@@ -41,9 +41,9 @@ Two more steering surfaces live outside the outbox:
   how you defer, set reminders, decompose work across wakes, and keep
   your own clock.
 
-## The choreography — an average task run
+## The choreography — an average daemon run
 
-1. **Receive.** A wake lands with a Task Context Bundle: the event, the
+1. **Receive.** A wake lands with a Run Context Bundle: the lead event, the
    delivery contract (paths, budget), recent conversation, the original
    event body. Read it once and orient from there.
 
@@ -70,7 +70,7 @@ Two more steering surfaces live outside the outbox:
 
 5. **Deliver.** Final answer → stdout. If you wrote files, commit them on
    the current branch — the diff is the receipt the work happened. Rename
-   the task branch to something descriptive (keep the `brr/` prefix)
+   the run branch to something descriptive (keep the `brr/` prefix)
    before committing if the work has a clear theme.
 
 6. **Decompose / defer the rest.** Can't finish it all in one wake, or
@@ -87,7 +87,7 @@ Two more steering surfaces live outside the outbox:
 
 ## The robustness ladder
 
-Live state is **injected** (the medium, the budget, this task's paths and
+Live state is **injected** (the medium, the budget, this run's paths and
 ids) — you can't miss it. The manual is **inspected** (`brr docs
 cockpit`) — one glance away, not memorized, not re-paid every wake. A
 failure the environment makes impossible (a lint, a test, a baked-in

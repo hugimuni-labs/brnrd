@@ -32,7 +32,7 @@ def test_cockpit_topic_covers_protocol_and_choreography():
     assert ".keepalive" in text
     assert ".card" in text
     assert "gate: forge" in text
-    # …and the average-task choreography.
+    # …and the average-run choreography.
     assert "schedule.md" in text
     assert "plan or execute" in text.lower() or "plan-vs-execute" in text.lower()
     assert "Stay in the conversation" in text

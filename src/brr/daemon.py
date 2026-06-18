@@ -56,6 +56,7 @@ from . import prompts
 from . import protocol
 from . import run_context
 from . import runner
+from . import runner_quota
 from . import schedule as schedule_mod
 from . import sync
 from . import updates
@@ -766,6 +767,7 @@ def _run_worker(
     last_failure: dict[str, object] | None = None
     output_stats = {"current": 0, "other": 0, "outbound": 0}
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
+    quota_summary = runner_quota.describe_runner_quota(runner_name, cfg, brr_dir)
     # Liveness budget: the heartbeat enforces this soft, agent-extensible
     # deadline; the runner's communicate() backstops at the hard cap. The
     # agent extends it by writing the keepalive control dotfile in its
@@ -797,6 +799,7 @@ def _run_worker(
                 event_body=event_body_for_prompt,
                 budget_seconds=budget_seconds,
                 runner_medium=runner_name,
+                runner_quota=quota_summary,
                 diffense=prompt_diffense,
             )
             # Persist the assembled prompt so "what did this wake see?" has
@@ -827,6 +830,7 @@ def _run_worker(
                 event_body=event_body_for_prompt,
                 budget_seconds=budget_seconds,
                 runner_medium=runner_name,
+                runner_quota=quota_summary,
                 diffense=prompt_diffense,
             )
 
