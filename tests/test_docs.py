@@ -10,7 +10,7 @@ def test_list_topics_includes_bundled():
     assert "active-task" in topics
     assert "execution-map" in topics
     assert "brr-internals" in topics
-    assert "cockpit" in topics
+    assert "portals" in topics
     assert "review-pack" in topics
 
 
@@ -25,8 +25,8 @@ def test_review_pack_topic_carries_publish_plumbing():
     assert "default off" in text
 
 
-def test_cockpit_topic_covers_protocol_and_choreography():
-    text = docs.read_topic("cockpit")
+def test_portals_topic_covers_protocol_and_choreography():
+    text = docs.read_topic("portals")
     assert text is not None
     # The control-file cheatsheet…
     assert ".keepalive" in text
