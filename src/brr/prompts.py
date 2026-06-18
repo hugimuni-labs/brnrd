@@ -6,7 +6,7 @@ module knows how to:
 
 - read a template (with override support);
 - inject conversation continuity from ``kb/log.md``;
-- assemble the daemon-task **Task Context Bundle** (delivery contract,
+- assemble the daemon-run **Run Context Bundle** (delivery contract,
   branch/runtime metadata, recent conversation, original event body).
 
 It does *not* shell out — that's :mod:`brr.runner`'s job. Keeping the
@@ -440,13 +440,14 @@ def build_daemon_prompt(
     event_body: str | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
+    runner_quota: str | None = None,
     diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated tasks.
 
     Same as the run prompt but with event metadata, recent conversation
     context, and an explicit delivery contract assembled into a single
-    ``Task Context Bundle``.
+    ``Run Context Bundle``.
 
     The daemon path also injects ``daemon-substrate.md`` — brr's driver's
     manual for the daemon-specific machinery (single-flight, capture net,
@@ -458,12 +459,13 @@ def build_daemon_prompt(
     substrate = read_prompt("daemon-substrate.md", repo_root)
     if substrate.strip():
         preamble = f"{preamble.rstrip()}\n\n{substrate.strip()}"
-    bundle = _build_task_context_bundle(
+    bundle = _build_run_context_bundle(
         event_id=event_id,
         response_path=response_path,
         outbox_path=outbox_path,
         budget_seconds=budget_seconds,
         runner_medium=runner_medium,
+        runner_quota=runner_quota,
         repo_root=repo_root,
         task_id=task_id,
         source=source,
@@ -493,7 +495,7 @@ def build_daemon_prompt(
     )
 
 
-# ── Task Context Bundle internals ────────────────────────────────────
+# ── Run Context Bundle internals ─────────────────────────────────────
 
 # How many prior conversation records the prompt renders. The daemon reads
 # a slightly larger window from the log so that records belonging to the
@@ -502,13 +504,14 @@ def build_daemon_prompt(
 RECENT_CONVERSATION_MAX = 8
 
 
-def _build_task_context_bundle(
+def _build_run_context_bundle(
     *,
     event_id: str,
     response_path: str,
     outbox_path: str | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
+    runner_quota: str | None = None,
     repo_root: Path,
     task_id: str | None,
     source: str | None,
@@ -527,30 +530,33 @@ def _build_task_context_bundle(
     event_body: str | None,
     diffense: bool = False,
 ) -> str:
-    """Assemble the human-readable Task Context Bundle for the daemon prompt.
+    """Assemble the human-readable Run Context Bundle for the daemon prompt.
 
-    The bundle preserves the ``Key: value`` lines (Task ID:, Execution
-    root:, Current branch:, etc.) under semantic headings so any tool
-    grepping the prompt keeps working.
+    Persisted metadata still uses ``task_id`` internally, but the visible
+    product model is a runner wake: one run can read and respond to more
+    than one event, so this bundle frames the unit as a run.
     """
-    sections: list[str] = ["---", "## Task Context Bundle"]
+    sections: list[str] = ["---", "## Run Context Bundle"]
     sections.append("")
     sections.append(
-        "_From the brr daemon: the runtime facts for *this* thought — task "
+        "_From the brr daemon: the runtime facts for *this* thought — run "
         "metadata, environment, and the delivery contract. Operational and "
         "per-thought, not durable memory (that's your dominion)._"
     )
 
     sections.append("")
     sections.append("### Mode")
-    sections.append("- Stage: brr daemon task")
+    sections.append("- Stage: brr daemon run")
     if source:
         sections.append(f"- Source: {source}")
     if environment:
         sections.append(f"- Environment: {environment}")
     if runner_medium:
+        runner_label = runner_medium
+        if runner_quota:
+            runner_label = f"{runner_label} ({runner_quota})"
         sections.append(
-            f"- Runner: {runner_medium} — the compute medium this thought runs "
+            f"- Runner: {runner_label} — the compute medium this thought runs "
             "on. A failure here (quota exhausted, provider error) costs the user "
             "a manual reroute, so chunk work and commit early when the budget is "
             "tight; see plan-cost-aware-cockpit.md."
@@ -571,10 +577,11 @@ def _build_task_context_bundle(
         )
 
     sections.append("")
-    sections.append("### Task")
+    sections.append("### Run")
     sections.append(f"- Event: {event_id}")
     if task_id:
-        sections.append(f"- Task ID: {task_id}")
+        sections.append(f"- Run ID: {task_id}")
+        sections.append(f"- Legacy task id: {task_id}")
     sections.append(f"- Execution root: {repo_root}")
     if seed_ref:
         sections.append(f"- Seed ref: {seed_ref}")
@@ -605,8 +612,8 @@ def _build_task_context_bundle(
     sections.append("")
     sections.append("### Delivery contract")
     sections.append(
-        "These are the per-task *values* and the operative rules. The full "
-        "control-file protocol and the shape of an average task run live in "
+        "These are the per-run *values* and the operative rules. The full "
+        "control-file protocol and the shape of an average daemon run live in "
         "the cockpit manual — run `brr docs cockpit` when a step is unfamiliar. "
         "Use the available surfaces to stay in the conversation: keep visible "
         "state honest, and fold queued input at plan boundaries when it belongs "
@@ -1028,7 +1035,7 @@ def _format_recent_conversation(
     """Render the last few conversation records as human-readable bullets.
 
     Callers pass only prior records; the current event body is rendered
-    separately in the Task Context Bundle. Returns an empty string when
+    separately in the Run Context Bundle. Returns an empty string when
     nothing useful is available.
     """
     if not records:
