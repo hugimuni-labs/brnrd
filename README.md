@@ -132,9 +132,11 @@ you want gates and managed brnrd traffic to reach the local daemon.
 `.brr/responses/`.  Any language works.  See `src/brr/gates/README.md`
 for the spec and a bash example.
 
-**Runners** are CLI commands on PATH.  Built-in profiles: `claude`,
-`codex`, `gemini`.  Set `runner=<name>` in `.brr/config` or use any
-executable.
+**Runners** are CLI commands on PATH: any process that can operate files
+from a prompt, print the final reply to stdout, and stream progress to
+stderr. Built-in profiles cover `claude`, `codex`, and `gemini`; manage
+project-specific profiles in `.brr/runners.md`, set `runner=<name>` in
+`.brr/config`, or use `runner_cmd` for one custom command.
 
 **Environments** are daemon backends.  Configure the user-facing policy
 with `environment=<auto|host|worktree|docker>` in `.brr/config`.
