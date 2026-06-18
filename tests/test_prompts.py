@@ -726,7 +726,7 @@ class TestPromptBuilding:
         assert "Recent in this conversation" not in prompt
         assert "Original event body" not in prompt
 
-    def test_bundled_daemon_prompt_points_at_cockpit_not_dead_commands(self, tmp_path):
+    def test_bundled_daemon_prompt_points_at_portals_not_dead_commands(self, tmp_path):
         prompt = build_daemon_prompt(
             "do thing",
             "evt-9",
@@ -738,10 +738,10 @@ class TestPromptBuilding:
         assert "Run context file: /repo/.brr/runs/task-9/context.md" in prompt
         assert "brr inspect" not in prompt
         assert "brr stream" not in prompt
-        # The cockpit manual is inspected, not injected: the daemon prompt
+        # The portals manual is inspected, not injected: the daemon prompt
         # carries a one-line pointer to it (the protocol choreography lives
         # there, not re-narrated in full on every wake).
-        assert "brr docs cockpit" in prompt
+        assert "brr docs portals" in prompt
 
     def test_daemon_prompt_frames_delivery_as_conversational(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -886,9 +886,9 @@ class TestIntrospectionMode:
         # The two halves the tone must hold: regard for the existing shape
         # before judging it, and surfacing what's found to the user as
         # dialogue rather than a silent edit. The current dev-mode prompt
-        # also carries the cockpit and pre-release cutting stance.
+        # also carries the standing-portal and pre-release cutting stance.
         assert "without flinching" in text
         assert "say it to" in text.lower()
         assert "silent edit" in text
-        assert "resident's cockpit" in text
+        assert "standing portal" in text
         assert "pre-release" in text
