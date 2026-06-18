@@ -13,6 +13,7 @@ incoming messages and stored on each event.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,15 @@ from . import delivery, runtime
 _API = "https://api.telegram.org/bot{token}/{method}"
 _MAX_TG_LEN = 3900
 _POLL_TIMEOUT = 30
+_DELIVERY_INTERVAL = 1.0
 
-# One Session for the gate's single loop thread: keep-alive reuses the
-# TCP/TLS connection across long-poll cycles instead of dialing fresh
-# each getUpdates. See ``kb/subject-daemon.md`` → gate responsiveness.
+# Telegram long-polling can hold one HTTP request open for up to
+# _POLL_TIMEOUT seconds. Keep it on a separate session from outbound
+# sends/edits so a progress card or folded-in reply never queues behind
+# getUpdates on shared connection state.
+_POLL_SESSION = requests.Session()
 _SESSION = requests.Session()
+_SESSION_LOCK = threading.Lock()
 
 
 # ── Bot API helpers ──────────────────────────────────────────────────
@@ -43,10 +48,21 @@ class _TelegramNotModified(Exception):
     """
 
 
-def _api_call(token: str, method: str, params: dict | None = None) -> dict:
+def _api_call(
+    token: str,
+    method: str,
+    params: dict | None = None,
+    *,
+    poll: bool = False,
+) -> dict:
     url = _API.format(token=token, method=method)
     try:
-        response = _SESSION.post(url, json=params or {}, timeout=90)
+        session = _POLL_SESSION if poll else _SESSION
+        if poll:
+            response = session.post(url, json=params or {}, timeout=90)
+        else:
+            with _SESSION_LOCK:
+                response = session.post(url, json=params or {}, timeout=90)
     except requests.RequestException as exc:
         message = str(exc).replace(token, "<token>")
         raise RuntimeError(f"Telegram API request failed: {message}") from exc
@@ -250,13 +266,43 @@ def is_configured(brr_dir: Path) -> bool:
 def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     """Main gate loop — poll messages, create events, deliver responses.
 
-    Designed to run in a daemon thread. Crashes are caught and retried
-    with exponential backoff. No post-success pause: ``getUpdates``
-    long-polls for ``_POLL_TIMEOUT`` seconds itself.
+    Designed to run in a daemon thread. Inbound polling and outbound
+    delivery are deliberately split: Telegram ``getUpdates`` is a long
+    poll, so letting it own response delivery would make folded-in
+    replies wait behind the poll timeout. The outbound loop scans local
+    response queues once per second and only hits Telegram when there is
+    a message to send.
     """
+    threading.Thread(
+        target=runtime.run_loop,
+        args=(lambda: _delivery_loop_once(brr_dir, inbox_dir, responses_dir),),
+        kwargs={
+            "label": "telegram-delivery",
+            "poll_interval": _DELIVERY_INTERVAL,
+        },
+        daemon=True,
+        name="gate-telegram-delivery",
+    ).start()
     runtime.run_loop(
         lambda: _loop_once(brr_dir, inbox_dir, responses_dir),
         label="telegram",
+    )
+
+
+def _delivery_loop_once(
+    brr_dir: Path,
+    inbox_dir: Path,
+    responses_dir: Path,
+) -> None:
+    state = _load_state(brr_dir)
+    token = state["token"]
+    _deliver_responses(
+        brr_dir,
+        inbox_dir,
+        responses_dir,
+        token,
+        state.get("chat_id"),
+        state.get("topic_id"),
     )
 
 
@@ -271,7 +317,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         "offset": offset,
         "timeout": _POLL_TIMEOUT,
         "allowed_updates": ["message"],
-    }).get("result", [])
+    }, poll=True).get("result", [])
 
     for update in updates:
         offset = update["update_id"] + 1
@@ -307,11 +353,6 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
 
     state["offset"] = offset
     _save_state(brr_dir, state)
-
-    _deliver_responses(
-        brr_dir, inbox_dir, responses_dir, token,
-        configured_chat_id, configured_topic_id,
-    )
 
 
 def _deliver_responses(
