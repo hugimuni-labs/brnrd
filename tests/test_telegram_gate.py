@@ -17,9 +17,10 @@ def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
     responses_dir = brr_dir / "responses"
     telegram._save_state(brr_dir, {"token": "secret"})
 
-    def fake_api_call(token, method, params=None):
+    def fake_api_call(token, method, params=None, *, poll=False):
         assert token == "secret"
         assert method == "getUpdates"
+        assert poll is True
         return {
             "result": [
                 {
@@ -217,6 +218,35 @@ def test_api_call_uses_requests_json_and_typed_not_modified(monkeypatch):
             "https://api.telegram.org/botsecret/editMessageText",
             {"json": {"chat_id": 1}, "timeout": 90},
         )
+    ]
+
+
+def test_run_loop_starts_dedicated_delivery_loop(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    calls: list[tuple[str, float]] = []
+
+    class FakeThread:
+        def __init__(self, *, target, args=(), kwargs=None, **_ignored):
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+
+        def start(self):
+            self.target(*self.args, **self.kwargs)
+
+    def fake_run_loop(_loop_once, *, label, poll_interval=0.0, backoff_max=120):
+        calls.append((label, poll_interval))
+
+    monkeypatch.setattr(telegram.threading, "Thread", FakeThread)
+    monkeypatch.setattr(telegram.runtime, "run_loop", fake_run_loop)
+
+    telegram.run_loop(brr_dir, inbox_dir, responses_dir)
+
+    assert calls == [
+        ("telegram-delivery", telegram._DELIVERY_INTERVAL),
+        ("telegram", 0.0),
     ]
 
 
