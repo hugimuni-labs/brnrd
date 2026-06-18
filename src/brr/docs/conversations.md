@@ -45,7 +45,7 @@ second daemon) from sharing mutable state across pipelines. Every record carries
 | `kind`   | What it captures                                          |
 |----------|-----------------------------------------------------------|
 | `event`  | An incoming event from the gate (with `event_id`, `body`, `summary`, and optional `correspondent_key` / `origin_message_key`) |
-| `task`   | A task row (`task_id`, `env`, `status`, plus runtime branch info) |
+| `task`   | A task row (`run_id`, `env`, `status`, plus runtime branch info) |
 | `update` | A lifecycle update packet for a task (typed via `type:`)  |
 | `artifact` | A produced artifact (response file, durable kb page, etc.; response/interim/outbound artifacts include inline `body`) |
 
@@ -112,7 +112,7 @@ packets are persisted on the conversation log. Packet types are stable
 identifiers gates can branch on:
 
 ```
-event_received task_created env_prepared container_started
+event_received run_created env_prepared container_started
 attempt_started attempt_failed retrying run_started artifact_created
 heartbeat finalizing container_preserved push_started push_done
 done failed conflict

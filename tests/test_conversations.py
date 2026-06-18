@@ -363,7 +363,7 @@ def test_build_communication_snapshot_groups_related_threads(tmp_path):
         cloud_key,
         "telegram:user-id:42",
         event_id="evt-cloud",
-        task_id="task-cloud",
+        run_id="run-cloud",
         recent_limit=5,
     )
 
@@ -422,7 +422,7 @@ def test_build_communication_snapshot_surfaces_prior_run_failure(tmp_path):
         key,
         type="failed",
         payload={
-            "task_id": "task-old",
+            "run_id": "run-old",
             "event_id": "evt-old",
             "stage": "run",
             "attempts": 3,
@@ -439,7 +439,7 @@ def test_build_communication_snapshot_surfaces_prior_run_failure(tmp_path):
     )
 
     snapshot = conversations.build_communication_snapshot(
-        tmp_path, key, event_id="evt-new", task_id="task-new", recent_limit=5,
+        tmp_path, key, event_id="evt-new", run_id="run-new", recent_limit=5,
     )
 
     failure = snapshot["prior_failure"]
@@ -475,7 +475,7 @@ def test_build_communication_snapshot_prior_failure_cleared_by_success(tmp_path)
     )
 
     snapshot = conversations.build_communication_snapshot(
-        tmp_path, key, event_id="evt-new", task_id="task-new", recent_limit=5,
+        tmp_path, key, event_id="evt-new", run_id="run-new", recent_limit=5,
     )
 
     assert "prior_failure" not in snapshot
@@ -499,7 +499,7 @@ def test_build_communication_snapshot_no_failure_on_clean_thread(tmp_path):
     )
 
     snapshot = conversations.build_communication_snapshot(
-        tmp_path, key, event_id="evt-new", task_id="task-new", recent_limit=5,
+        tmp_path, key, event_id="evt-new", run_id="run-new", recent_limit=5,
     )
 
     assert "prior_failure" not in snapshot
@@ -516,14 +516,14 @@ def test_write_grouped_history_files_writes_untruncated_thread_jsonl(tmp_path):
     }
     key = conversations.conversation_key_for_event(event)
     conversations.append_event(tmp_path, key, event)
-    conversations.append_task(
+    conversations.append_run(
         tmp_path, key,
-        task_id="task-1", event_id="evt-1",
+        run_id="run-1", event_id="evt-1",
         env="docker", status="running",
     )
 
     groups = conversations.write_grouped_history_files(
-        tmp_path, tmp_path / "runs" / "task-1" / "history",
+        tmp_path, tmp_path / "runs" / "run-1" / "history",
         key, "github:login:octo",
     )
 
@@ -535,9 +535,9 @@ def test_write_grouped_history_files_writes_untruncated_thread_jsonl(tmp_path):
         json.loads(line)
         for line in (tmp_path / group["path"]).read_text(encoding="utf-8").splitlines()
     ]
-    assert [r["kind"] for r in records] == ["event", "task"]
+    assert [r["kind"] for r in records] == ["event", "run"]
     assert records[0]["conversation_key"] == key
-    manifest = tmp_path / "runs" / "task-1" / "history" / "manifest.json"
+    manifest = tmp_path / "runs" / "run-1" / "history" / "manifest.json"
     assert manifest.exists()
 
 
@@ -552,7 +552,7 @@ def test_read_recent_prefers_dialogue_over_lifecycle_noise(tmp_path):
             tmp_path,
             "k",
             type="attempt_started",
-            payload={"task_id": "task-1", "attempt": i},
+            payload={"run_id": "run-1", "attempt": i},
             event_id="evt-1",
         )
     conversations.append_artifact(
@@ -592,17 +592,17 @@ def test_append_event_records_full_body_and_summary(tmp_path):
     assert "ts" in records[-1]
 
 
-def test_append_task_includes_env_and_branch_name(tmp_path):
-    conversations.append_task(
+def test_append_run_includes_env_and_branch_name(tmp_path):
+    conversations.append_run(
         tmp_path, "k",
-        task_id="t-1", event_id="evt-1",
+        run_id="t-1", event_id="evt-1",
         env="worktree", status="pending",
         seed_ref="main", target_branch="main",
         branch_source="event:target_branch",
         branch_name="brr/t-1",
     )
     record = conversations.read_records(tmp_path, "k")[-1]
-    assert record["task_id"] == "t-1"
+    assert record["run_id"] == "t-1"
     assert record["env"] == "worktree"
     assert record["seed_ref"] == "main"
     assert record["target_branch"] == "main"
@@ -616,14 +616,14 @@ def test_append_artifact_records_kind_and_path(tmp_path):
     conversations.append_artifact(
         tmp_path, "k",
         kind="response", path="/abs/x.md",
-        task_id="t-1", event_id="evt-1",
+        run_id="t-1", event_id="evt-1",
         label="response:evt-1",
         body="agent reply\nsecond line",
     )
     record = conversations.read_records(tmp_path, "k")[-1]
     assert record["kind"] == "artifact"
     assert record["artifact_kind"] == "response"
-    assert record["task_id"] == "t-1"
+    assert record["run_id"] == "t-1"
     assert record["event_id"] == "evt-1"
     assert record["label"] == "response:evt-1"
     assert record["body"] == "agent reply\nsecond line"
@@ -633,14 +633,14 @@ def test_append_artifact_records_kind_and_path(tmp_path):
 def test_append_update_records_type_and_payload(tmp_path):
     conversations.append_update(
         tmp_path, "k",
-        type="task_created",
-        payload={"task_id": "t-1", "branch": "auto"},
+        type="run_created",
+        payload={"run_id": "t-1", "branch": "auto"},
         event_id="evt-1",
     )
     record = conversations.read_records(tmp_path, "k")[-1]
     assert record["kind"] == "update"
-    assert record["type"] == "task_created"
-    assert record["task_id"] == "t-1"
+    assert record["type"] == "run_created"
+    assert record["run_id"] == "t-1"
     assert record["branch"] == "auto"
     assert record["event_id"] == "evt-1"
 
@@ -649,7 +649,7 @@ def test_append_update_skips_heartbeat_memory(tmp_path):
     conversations.append_update(
         tmp_path, "k",
         type="heartbeat",
-        payload={"task_id": "t-1", "elapsed_seconds": 30},
+        payload={"run_id": "t-1", "elapsed_seconds": 30},
         event_id="evt-1",
     )
 
@@ -675,23 +675,23 @@ def test_list_conversations_returns_decoded_keys(tmp_path):
     assert "slack:C:1.0" in keys
 
 
-# ── records_for_task ────────────────────────────────────────────────
+# ── records_for_run ────────────────────────────────────────────────
 
 
-def test_records_for_task_filters_by_task_id(tmp_path):
+def test_records_for_run_filters_by_run_id(tmp_path):
     conversations.append_record(
-        tmp_path, "k", {"kind": "task", "task_id": "t-1"}, event_id="evt-a",
+        tmp_path, "k", {"kind": "run", "run_id": "t-1"}, event_id="evt-a",
     )
     conversations.append_record(
-        tmp_path, "k", {"kind": "update", "task_id": "t-2"}, event_id="evt-b",
+        tmp_path, "k", {"kind": "update", "run_id": "t-2"}, event_id="evt-b",
     )
     conversations.append_record(
-        tmp_path, "k", {"kind": "update", "task_id": "t-1", "type": "done"},
+        tmp_path, "k", {"kind": "update", "run_id": "t-1", "type": "done"},
         event_id="evt-a",
     )
-    matches = conversations.records_for_task(tmp_path, "k", "t-1")
+    matches = conversations.records_for_run(tmp_path, "k", "t-1")
     assert len(matches) == 2
-    assert all(r["task_id"] == "t-1" for r in matches)
+    assert all(r["run_id"] == "t-1" for r in matches)
 
 
 # ── Concurrency: per-event-pipeline writes don't share a file ────────

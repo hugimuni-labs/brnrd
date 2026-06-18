@@ -4,7 +4,7 @@ import pytest
 
 from brr import branching, envs
 from brr.runner import DEFAULT_RUNNER_TIMEOUT, RunnerInvocation
-from brr.task import Task
+from brr.run import Run
 
 from _helpers import commit_files, init_git_repo
 
@@ -34,7 +34,7 @@ def test_get_env_rejects_unknown_backend():
 
 def test_docker_prepare_requires_cli_and_image(tmp_path, monkeypatch):
     backend = envs.get_env("docker")
-    task = Task(id="task-1", event_id="evt-1", body="run in docker")
+    task = Run(id="task-1", event_id="evt-1", body="run in docker")
     response_path = tmp_path / ".brr" / "responses" / "evt-1.md"
 
     monkeypatch.setattr(envs.shutil, "which", lambda _name: None)
@@ -59,11 +59,11 @@ def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
     monkeypatch.setattr(
         envs.worktree,
         "create",
-        lambda repo_root, task_id, base_ref="HEAD": created.append((repo_root, task_id, base_ref))
-        or (worktree_path, f"brr/{task_id}"),
+        lambda repo_root, run_id, base_ref="HEAD": created.append((repo_root, run_id, base_ref))
+        or (worktree_path, f"brr/{run_id}"),
     )
     monkeypatch.setattr(envs.worktree, "switch_to", lambda _path, _branch: None)
-    task = Task(id="task-2", event_id="evt-2", body="change code")
+    task = Run(id="task-2", event_id="evt-2", body="change code")
     response_path = tmp_path / ".brr" / "responses" / "evt-2.md"
 
     ctx = envs.get_env("docker").prepare(
@@ -75,7 +75,7 @@ def test_docker_prepare_creates_worktree(tmp_path, monkeypatch):
     assert ctx.cwd == worktree_path
     # _plan() has target="main", so the auto-switch fires: agent starts on main.
     assert ctx.branch_name == "main"
-    assert ctx.task_branch == "brr/task-2"
+    assert ctx.run_branch == "brr/task-2"
     assert task.meta["worktree_path"] == str(worktree_path)
     assert task.meta["branch_name"] == "main"
     assert created == [(tmp_path, "task-2", "main")]
@@ -112,10 +112,10 @@ def _isolate_docker_creds(monkeypatch, tmp_path):
 
 def _stub_worktree(monkeypatch, tmp_path):
     """Replace worktree.create and switch_to with stubs that just make the dir."""
-    def _create(_repo_root, task_id, base_ref="HEAD"):
-        path = tmp_path / ".brr" / "worktrees" / task_id
+    def _create(_repo_root, run_id, base_ref="HEAD"):
+        path = tmp_path / ".brr" / "worktrees" / run_id
         path.mkdir(parents=True, exist_ok=True)
-        return path, f"brr/{task_id}"
+        return path, f"brr/{run_id}"
 
     monkeypatch.setattr(envs.worktree, "create", _create)
     monkeypatch.setattr(envs.worktree, "switch_to", lambda _path, _branch: None)
@@ -137,38 +137,38 @@ def _make_finalize_task(
 ):
     """Common setup for ``WorktreeEnv.finalize`` outcome-table tests.
 
-    Returns ``(backend, ctx, task, tasks_dir)``. Each test is responsible
+    Returns ``(backend, ctx, task, runs_dir)``. Each test is responsible
     for whatever git activity inside ``ctx.cwd`` produces the worktree
     state it wants to classify.
     """
     response_path = repo / ".brr" / "responses" / f"{tid}.md"
-    task = Task(id=tid, event_id=tid, body="change", status=status)
+    task = Run(id=tid, event_id=tid, body="change", status=status)
     backend = envs.get_env("worktree")
     ctx = backend.prepare(
         task, repo, {},
         branch_plan=plan, response_path=response_path,
     )
-    return backend, ctx, task, repo / ".brr" / "tasks"
+    return backend, ctx, task, repo / ".brr" / "runs"
 
 
-def test_worktree_finalize_ready_when_task_branch_has_commits(tmp_path):
-    """status=ready, publish_branch=brr/<task-id>; clean worktree torn down."""
+def test_worktree_finalize_ready_when_run_branch_has_commits(tmp_path):
+    """status=ready, publish_branch=brr/<run-id>; clean worktree torn down."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
     plan = _plan(seed="main", target=None)
-    backend, ctx, task, tasks_dir = _make_finalize_task(
+    backend, ctx, task, runs_dir = _make_finalize_task(
         repo, "task-preserve", plan=plan,
     )
     _commit_in(ctx.cwd, "change.txt", "change\n", "change")
 
-    backend.finalize(ctx, task, tasks_dir)
+    backend.finalize(ctx, task, runs_dir)
 
     assert task.meta["publish_status"] == "ready"
     assert task.meta["publish_branch"] == "brr/task-preserve"
     assert task.meta["branch_name"] == "brr/task-preserve"
     assert not ctx.cwd.exists()
-    # Task branch stays alive: the daemon's publish step will read it.
+    # Run branch stays alive: the daemon's publish step will read it.
     assert envs.gitops.branch_exists(repo, "brr/task-preserve")
     # Worktree changes never leak into the host checkout.
     assert not (repo / "change.txt").exists()
@@ -184,7 +184,7 @@ def test_worktree_prepare_auto_switches_to_target_branch(tmp_path):
         cwd=repo, check=True, stdout=subprocess.PIPE,
     )
     plan = _plan(seed="main", target="feature/auto")
-    task = Task(id="task-auto", event_id="evt-auto", body="do work")
+    task = Run(id="task-auto", event_id="evt-auto", body="do work")
     response_path = repo / ".brr" / "responses" / "evt-auto.md"
     backend = envs.get_env("worktree")
 
@@ -193,7 +193,7 @@ def test_worktree_prepare_auto_switches_to_target_branch(tmp_path):
     )
 
     assert ctx.branch_name == "feature/auto"
-    assert ctx.task_branch == "brr/task-auto"
+    assert ctx.run_branch == "brr/task-auto"
     assert task.meta["branch_name"] == "feature/auto"
     # Worktree HEAD is on feature/auto, not on the task placeholder.
     assert envs.worktree.current_branch(ctx.cwd) == "feature/auto"
@@ -216,14 +216,14 @@ def test_worktree_prepare_falls_back_when_target_checked_out_elsewhere(
         cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     plan = _plan(seed="feature/held", target="feature/held")
-    task = Task(id="task-held", event_id="evt-held", body="do work")
+    task = Run(id="task-held", event_id="evt-held", body="do work")
     response_path = repo / ".brr" / "responses" / "evt-held.md"
     backend = envs.get_env("worktree")
 
     ctx = backend.prepare(task, repo, {}, branch_plan=plan, response_path=response_path)
 
     assert ctx.branch_name == "brr/task-held"
-    assert ctx.task_branch == "brr/task-held"
+    assert ctx.run_branch == "brr/task-held"
     assert task.meta["branch_name"] == "brr/task-held"
     assert task.meta["target_branch"] == "feature/held"
     assert task.meta["branch_setup"] == "target-checked-out-elsewhere"
@@ -246,10 +246,10 @@ def test_worktree_finalize_nothing_preserves_target_branch(tmp_path):
         cwd=repo, check=True, stdout=subprocess.PIPE,
     )
     plan = _plan(seed="main", target="feature/keep")
-    backend, ctx, task, tasks_dir = _make_finalize_task(repo, "task-keep", plan=plan)
+    backend, ctx, task, runs_dir = _make_finalize_task(repo, "task-keep", plan=plan)
     # No commits inside the worktree.
 
-    backend.finalize(ctx, task, tasks_dir)
+    backend.finalize(ctx, task, runs_dir)
 
     assert task.meta["publish_status"] == "nothing"
     assert not ctx.cwd.exists()
@@ -259,7 +259,7 @@ def test_worktree_finalize_nothing_preserves_target_branch(tmp_path):
 
 
 def test_worktree_finalize_ready_when_agent_on_target_branch(tmp_path):
-    """status=ready, publish_branch=target_branch; brr/<task-id>
+    """status=ready, publish_branch=target_branch; brr/<run-id>
     placeholder is cleaned up."""
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -269,22 +269,22 @@ def test_worktree_finalize_ready_when_agent_on_target_branch(tmp_path):
         cwd=repo, check=True, stdout=subprocess.PIPE,
     )
     plan = _plan(seed="main", target="feature/pr")
-    backend, ctx, task, tasks_dir = _make_finalize_task(
+    backend, ctx, task, runs_dir = _make_finalize_task(
         repo, "task-switch", plan=plan,
     )
     # After auto-switch in prepare, ctx.cwd is already on feature/pr.
     assert ctx.branch_name == "feature/pr"
-    assert ctx.task_branch == "brr/task-switch"
+    assert ctx.run_branch == "brr/task-switch"
     _commit_in(ctx.cwd, "pr.txt", "pr\n", "pr")
 
-    backend.finalize(ctx, task, tasks_dir)
+    backend.finalize(ctx, task, runs_dir)
 
     assert task.meta["publish_status"] == "ready"
     assert task.meta["publish_branch"] == "feature/pr"
     assert task.meta["branch_name"] == "feature/pr"
     assert not ctx.cwd.exists()
     assert envs.gitops.branch_exists(repo, "feature/pr")
-    # The empty brr/<task-id> placeholder is cleaned up best-effort.
+    # The empty brr/<run-id> placeholder is cleaned up best-effort.
     assert not envs.gitops.branch_exists(repo, "brr/task-switch")
 
 
@@ -294,12 +294,12 @@ def test_worktree_finalize_nothing_when_no_commits_on_run_branch(tmp_path):
     repo.mkdir()
     _init_repo(repo)
     plan = _plan(seed="main", target=None)
-    backend, ctx, task, tasks_dir = _make_finalize_task(
+    backend, ctx, task, runs_dir = _make_finalize_task(
         repo, "task-noop", plan=plan,
     )
     # No commits inside the worktree.
 
-    backend.finalize(ctx, task, tasks_dir)
+    backend.finalize(ctx, task, runs_dir)
 
     assert task.meta["publish_status"] == "nothing"
     assert "publish_branch" not in task.meta
@@ -313,7 +313,7 @@ def test_worktree_finalize_detached_keeps_worktree(tmp_path):
     repo.mkdir()
     _init_repo(repo)
     plan = _plan(seed="main", target=None)
-    backend, ctx, task, tasks_dir = _make_finalize_task(
+    backend, ctx, task, runs_dir = _make_finalize_task(
         repo, "task-detach", plan=plan,
     )
     # Agent detaches HEAD in the worktree.
@@ -322,7 +322,7 @@ def test_worktree_finalize_detached_keeps_worktree(tmp_path):
         cwd=ctx.cwd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
 
-    backend.finalize(ctx, task, tasks_dir)
+    backend.finalize(ctx, task, runs_dir)
 
     assert task.meta["publish_status"] == "detached"
     assert "publish_branch" not in task.meta
@@ -337,14 +337,14 @@ def test_worktree_finalize_keeps_worktree_with_uncommitted_changes(tmp_path):
     repo.mkdir()
     _init_repo(repo)
     plan = _plan(seed="main", target=None)
-    backend, ctx, task, tasks_dir = _make_finalize_task(
+    backend, ctx, task, runs_dir = _make_finalize_task(
         repo, "task-dirty", plan=plan,
     )
     _commit_in(ctx.cwd, "committed.txt", "ok\n", "committed")
     # Leave an unstaged file behind.
     (ctx.cwd / "dirty.txt").write_text("scratch\n", encoding="utf-8")
 
-    backend.finalize(ctx, task, tasks_dir)
+    backend.finalize(ctx, task, runs_dir)
 
     assert task.meta["publish_status"] == "ready"
     assert task.meta["publish_branch"] == "brr/task-dirty"
@@ -361,12 +361,12 @@ def test_worktree_finalize_skips_classification_when_task_not_done(tmp_path):
     repo.mkdir()
     _init_repo(repo)
     plan = _plan(seed="main", target=None)
-    backend, ctx, task, tasks_dir = _make_finalize_task(
+    backend, ctx, task, runs_dir = _make_finalize_task(
         repo, "task-error", plan=plan, status="error",
     )
     _commit_in(ctx.cwd, "partial.txt", "partial\n", "partial")
 
-    backend.finalize(ctx, task, tasks_dir)
+    backend.finalize(ctx, task, runs_dir)
 
     assert "publish_status" not in task.meta
     assert "publish_branch" not in task.meta
@@ -379,7 +379,7 @@ def test_docker_invoke_wraps_runner_command(tmp_path, monkeypatch):
     _stub_worktree(monkeypatch, tmp_path)
     response_path = tmp_path / ".brr" / "responses" / "evt-3.md"
     response_path.parent.mkdir(parents=True)
-    task = Task(id="task-3", event_id="evt-3", body="run in docker")
+    task = Run(id="task-3", event_id="evt-3", body="run in docker")
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "brr/test-runner:latest"},
         branch_plan=_plan(), response_path=response_path,
@@ -463,7 +463,7 @@ def test_docker_invoke_attaches_stdin_devnull(tmp_path, monkeypatch):
     monkeypatch.setattr(envs.subprocess, "run", _fake_run)
     response_path = tmp_path / ".brr" / "responses" / "evt-stdin.md"
     response_path.parent.mkdir(parents=True)
-    task = Task(id="task-stdin", event_id="evt-stdin", body="hi")
+    task = Run(id="task-stdin", event_id="evt-stdin", body="hi")
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "img:latest"},
         branch_plan=_plan(), response_path=response_path,
@@ -502,7 +502,7 @@ def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(envs.subprocess, "run", _fake_run)
     response_path = tmp_path / ".brr" / "responses" / "evt-t.md"
     response_path.parent.mkdir(parents=True)
-    task = Task(id="task-t", event_id="evt-t", body="hi")
+    task = Run(id="task-t", event_id="evt-t", body="hi")
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, {"docker.image": "img:latest"},
         branch_plan=_plan(), response_path=response_path,
@@ -536,7 +536,7 @@ def test_docker_invoke_honours_configured_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(envs.subprocess, "run", _fake_run)
     response_path = tmp_path / ".brr" / "responses" / "evt-cfg.md"
     response_path.parent.mkdir(parents=True)
-    task = Task(id="task-cfg", event_id="evt-cfg", body="hi")
+    task = Run(id="task-cfg", event_id="evt-cfg", body="hi")
     cfg = {"docker.image": "img:latest", "runner.timeout_seconds": 1200}
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, cfg,
@@ -590,7 +590,7 @@ def test_docker_invoke_timeout_message_uses_configured_value(
 
     response_path = tmp_path / ".brr" / "responses" / "evt-to.md"
     response_path.parent.mkdir(parents=True)
-    task = Task(id="task-to", event_id="evt-to", body="hi")
+    task = Run(id="task-to", event_id="evt-to", body="hi")
     cfg = {"docker.image": "img:latest", "runner.timeout_seconds": 42}
     ctx = envs.get_env("docker").prepare(
         task, tmp_path, cfg,
@@ -620,7 +620,7 @@ def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
     response_path = tmp_path / ".brr" / "responses" / "evt-x.md"
     response_path.parent.mkdir(parents=True, exist_ok=True)
-    task = Task(id=f"task-{label}", event_id="evt-x", body="run in docker")
+    task = Run(id=f"task-{label}", event_id="evt-x", body="run in docker")
     cfg: dict = {"docker.image": "brr/test-runner:latest"}
     if cfg_extra:
         cfg.update(cfg_extra)
@@ -819,7 +819,7 @@ def test_docker_finalize_removes_containers_after_success(tmp_path, monkeypatch)
     )
     # Avoid touching real git inside finalize.
     monkeypatch.setattr(envs.worktree, "current_branch", lambda _path: None)
-    task = Task(id="task-4", event_id="evt-4", body="done", status="done")
+    task = Run(id="task-4", event_id="evt-4", body="done", status="done")
     ctx = envs.RunContext(
         name="docker",
         cwd=tmp_path,
@@ -835,7 +835,7 @@ def test_docker_finalize_removes_containers_after_success(tmp_path, monkeypatch)
         },
     )
 
-    envs.get_env("docker").finalize(ctx, task, tmp_path / ".brr" / "tasks")
+    envs.get_env("docker").finalize(ctx, task, tmp_path / ".brr" / "runs")
 
     assert ["docker", "rm", "-f", "brr-task-4-evt-4-attempt-1"] in commands
 
@@ -849,7 +849,7 @@ def test_docker_finalize_preserves_containers_on_error(tmp_path, monkeypatch):
         or envs.subprocess.CompletedProcess(command, 0, "", ""),
     )
     monkeypatch.setattr(envs.worktree, "current_branch", lambda _path: None)
-    task = Task(id="task-5", event_id="evt-5", body="failed", status="error")
+    task = Run(id="task-5", event_id="evt-5", body="failed", status="error")
     ctx = envs.RunContext(
         name="docker",
         cwd=tmp_path,
@@ -864,11 +864,11 @@ def test_docker_finalize_preserves_containers_on_error(tmp_path, monkeypatch):
         },
     )
 
-    envs.get_env("docker").finalize(ctx, task, tmp_path / ".brr" / "tasks")
+    envs.get_env("docker").finalize(ctx, task, tmp_path / ".brr" / "runs")
 
     assert commands == []
     assert task.meta["docker_containers"] == "brr-task-5-evt-5-attempt-1"
-    persisted = Task.from_file(tmp_path / ".brr" / "tasks" / "task-5.md")
+    persisted = Run.from_file(tmp_path / ".brr" / "runs" / "task-5" / "run.md")
     assert persisted is not None
     assert persisted.meta["docker_containers"] == "brr-task-5-evt-5-attempt-1"
 
@@ -877,7 +877,7 @@ def _build_docker_invoke_with_task(
     tmp_path,
     monkeypatch,
     *,
-    task: "Task",
+    task: "Run",
     cfg_extra=None,
     label="evt-gh-1",
 ):
@@ -930,7 +930,7 @@ def test_docker_inject_github_token_from_gate_state(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    task = Task(id="task-gh", event_id="evt-gh", body="review PR", source="github")
+    task = Run(id="task-gh", event_id="evt-gh", body="review PR", source="github")
     command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
 
     kv_env = [
@@ -961,7 +961,7 @@ def test_docker_github_token_rewrites_ssh_remotes(tmp_path, monkeypatch):
         '{"token": "ghs_stored_token"}', encoding="utf-8",
     )
 
-    task = Task(
+    task = Run(
         id="task-gh-rewrite", event_id="evt-gh-r",
         body="rebase", source="github",
     )
@@ -1010,7 +1010,7 @@ def test_docker_github_token_can_come_from_gh_cli(tmp_path, monkeypatch):
 
     monkeypatch.setattr(envs.subprocess, "run", fake_run)
 
-    task = Task(
+    task = Run(
         id="task-gh-cli", event_id="evt-gh-cli",
         body="push", source="github",
     )
@@ -1052,7 +1052,7 @@ def test_docker_inject_github_token_for_non_github_task(tmp_path, monkeypatch):
         '{"token": "ghs_stored_token"}', encoding="utf-8",
     )
 
-    task = Task(id="task-tg", event_id="evt-tg", body="telegram task", source="telegram")
+    task = Run(id="task-tg", event_id="evt-tg", body="telegram task", source="telegram")
     command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
 
     kv_env = [
@@ -1087,7 +1087,7 @@ def test_docker_no_github_token_when_unresolvable(tmp_path, monkeypatch):
         lambda command, **_kwargs: envs.subprocess.CompletedProcess(command, 1, "", "no auth"),
     )
 
-    task = Task(id="task-noauth", event_id="evt-noauth", body="adhoc", source="cli")
+    task = Run(id="task-noauth", event_id="evt-noauth", body="adhoc", source="cli")
     command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
 
     kv_env = [
@@ -1112,7 +1112,7 @@ def test_docker_github_token_not_duplicated_when_in_daemon_env(tmp_path, monkeyp
         '{"token": "ghs_stored_different"}', encoding="utf-8",
     )
 
-    task = Task(id="task-gh2", event_id="evt-gh2", body="from env", source="github")
+    task = Run(id="task-gh2", event_id="evt-gh2", body="from env", source="github")
     command = _build_docker_invoke_with_task(tmp_path, monkeypatch, task=task)
 
     kv_env = [

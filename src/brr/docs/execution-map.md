@@ -24,23 +24,22 @@ self-scheduled wake enters this same flow — see
 
 ### 2. Run manifest created
 
-The daemon constructs a `Task` directly from the event with
-`Task.from_event` — no LLM-driven triage step. `Task`/`task_id` is the
+The daemon constructs a `Run` directly from the event with
+`Run.from_event` — no LLM-driven triage step. `Run`/`run_id` is the
 current storage name; the prompt and docs now frame the product unit as
 a daemon run. Environment policy is resolved deterministically from the
 event source and `.brr/config`.
-The manifest is saved to `.brr/tasks/<run-id>.md` and tracks: event ID,
-env, status, source, and manifest metadata (response path, branch
+The manifest is saved to `.brr/runs/<run-id>/run.md` and tracks: event
+ID, env, status, source, and manifest metadata (response path, branch
 name, worktree path, run context path, trace directories). Manifests
-still store the concrete backend as `env`; user-facing config should
-prefer `environment`.
+store the concrete backend as `env`; user-facing config should prefer
+`environment`.
 
 Branch behavior is no longer carried on the manifest. The daemon resolves a
 branch plan before env prep: seed ref, optional auto-land target, and
-authority. Worktree and Docker runs start on a fresh `brr/<task-id>`
-branch sprouted from the seed ref. The legacy id string still commonly
-starts with `task-`, so today's concrete branch may look like
-`brr/task-...`. If the plan has no auto-land target,
+authority. Worktree and Docker runs start on a fresh `brr/<run-id>`
+branch sprouted from the seed ref. New run IDs start with `run-`, so the
+default branch is `brr/run-...`. If the plan has no auto-land target,
 commits on that run branch are preserved for human routing and
 published when a remote is configured. The agent can still switch to a
 named branch at runtime; brr preserves the branch it ends on.
@@ -124,10 +123,10 @@ never races the shared git index.
 
 If the runner exits cleanly but stdout is empty and no current-thread
 outbox reply has been produced, the daemon retries up to
-`response_retries` times before failing the task. Hard failures (non-zero
+`response_retries` times before failing the run. Hard failures (non-zero
 exit, timeout — controlled by `runner.timeout_seconds`, default 3600s) are
 not retried. In both cases, an addressed event that would otherwise go
-silent receives an explicit terminal failure note; the task record remains
+silent receives an explicit terminal failure note; the run record remains
 `error`, while the inbox event is marked `done` so the gate can deliver and
 clean up.
 
@@ -152,7 +151,7 @@ files changed. Reload never interrupts a running worker.
 | Artifact      | Path                                        | Persists across runs                |
 | ------------- | ------------------------------------------- | ----------------------------------- |
 | Events        | `.brr/inbox/<event-id>.md`                  | Yes (until cleanup)                 |
-| Run manifests | `.brr/tasks/<run-id>.md` (legacy folder name) | Yes                              |
+| Run manifests | `.brr/runs/<run-id>/run.md`             | Yes                                 |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
 | Interim queue | `.brr/responses/<event-id>.partials/`       | Until streamed + cleaned up         |
 | Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; live `inbox.json`; removed at finalize |
@@ -174,12 +173,13 @@ receipt.
 
 ## Cross-linking
 
-The task file (`.brr/tasks/<task-id>.md`) is the central manifest.
+The run manifest (`.brr/runs/<run-id>/run.md`) is the central runtime
+record.
 Its frontmatter contains:
 
 - `event_id` → links to `.brr/inbox/` and `.brr/responses/`
 - `branch_name` → the git branch used
-- `seed_ref` / `expected_publish_branch` → the resolved publish plan
+- `seed_ref` / `target_branch` → the resolved publish plan
 - `publish_branch` / `publish_status` → recorded by finalize for the
   publish step (status is `ready` | `nothing` | `detached` |
   `conflict`)

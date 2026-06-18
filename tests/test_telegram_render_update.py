@@ -6,33 +6,33 @@ from pathlib import Path
 
 from brr import updates
 from brr.gates import telegram
-from brr.task import Task
+from brr.run import Run
 
 
-def _seed_task(
+def _seed_run(
     brr_dir: Path,
-    task_id: str,
+    run_id: str,
     *,
     chat_id: int = 555,
     topic_id: int | None = None,
     source: str = "telegram",
     message_id: int | None = None,
-) -> Task:
-    tasks_dir = brr_dir / "tasks"
-    tasks_dir.mkdir(parents=True, exist_ok=True)
+) -> Run:
+    runs_dir = brr_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
     meta = {"telegram_chat_id": chat_id}
     if topic_id is not None:
         meta["telegram_topic_id"] = topic_id
     if message_id is not None:
         meta["telegram_message_id"] = message_id
     conv_key = f"telegram:{chat_id}:" + (str(topic_id) if topic_id is not None else "")
-    task = Task(
-        id=task_id, event_id="evt-" + task_id, body="x",
+    task = Run(
+        id=run_id, event_id="evt-" + run_id, body="x",
         env="docker", status="running",
         source=source, conversation_key=conv_key,
         meta=meta,
     )
-    task.save(tasks_dir)
+    task.save(runs_dir)
     return task
 
 
@@ -46,10 +46,10 @@ def _emit(brr_dir: Path, conv_key: str, ptype: str, **payload):
     ))
 
 
-def test_render_update_sends_message_on_task_created(tmp_path, monkeypatch):
+def test_render_update_sends_message_on_run_created(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-tg-1", chat_id=555, topic_id=7)
+    task = _seed_run(brr_dir, "task-tg-1", chat_id=555, topic_id=7)
 
     api_calls: list[tuple] = []
 
@@ -63,8 +63,8 @@ def test_render_update_sends_message_on_task_created(tmp_path, monkeypatch):
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    _emit(brr_dir, task.conversation_key, "task_created",
-          task_id=task.id, event_id=task.event_id,
+    _emit(brr_dir, task.conversation_key, "run_created",
+          run_id=task.id, event_id=task.event_id,
           branch="auto", env="docker")
 
     sends = [c for c in api_calls if c[1] == "sendMessage"]
@@ -80,7 +80,7 @@ def test_render_update_sends_message_on_task_created(tmp_path, monkeypatch):
     # Telegram-flavoured rendering: HTML parse_mode so the strike-
     # through markup later in the lifecycle renders as the user expects.
     assert params.get("parse_mode") == "HTML"
-    entry = telegram._load_progress_for_task(brr_dir, task.id)
+    entry = telegram._load_progress_for_run(brr_dir, task.id)
     assert entry["message_id"] == 42
 
 
@@ -95,7 +95,7 @@ def test_render_update_threads_first_send_under_source_message(
     """
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-tg-thread", chat_id=555, message_id=4242)
+    task = _seed_run(brr_dir, "task-tg-thread", chat_id=555, message_id=4242)
 
     api_calls: list[tuple] = []
 
@@ -109,9 +109,9 @@ def test_render_update_threads_first_send_under_source_message(
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           event_id=task.event_id, branch="auto", env="host")
-    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "attempt_started", run_id=task.id,
           attempt=1)
 
     sends = [c for c in api_calls if c[1] == "sendMessage"]
@@ -132,7 +132,7 @@ def test_render_update_first_send_omits_reply_to_when_unknown(
     # just without the reply pointer.
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-tg-legacy", chat_id=555)
+    task = _seed_run(brr_dir, "task-tg-legacy", chat_id=555)
 
     api_calls: list[tuple] = []
 
@@ -144,7 +144,7 @@ def test_render_update_first_send_omits_reply_to_when_unknown(
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           event_id=task.event_id, branch="auto", env="host")
 
     sends = [c for c in api_calls if c[1] == "sendMessage"]
@@ -155,7 +155,7 @@ def test_render_update_first_send_omits_reply_to_when_unknown(
 def test_render_update_edits_existing_message(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-tg-2", chat_id=999)
+    task = _seed_run(brr_dir, "task-tg-2", chat_id=999)
 
     api_calls: list[tuple] = []
 
@@ -169,13 +169,13 @@ def test_render_update_edits_existing_message(tmp_path, monkeypatch):
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
-    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "attempt_started", run_id=task.id,
           attempt=1)
-    _emit(brr_dir, task.conversation_key, "finalizing", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "finalizing", run_id=task.id,
           stage="done")
-    _emit(brr_dir, task.conversation_key, "done", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "done", run_id=task.id,
           event_id=task.event_id)
 
     methods = [m for _, m, _ in api_calls]
@@ -192,7 +192,7 @@ def test_render_update_edits_existing_message(tmp_path, monkeypatch):
 def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-tg-3", chat_id=777)
+    task = _seed_run(brr_dir, "task-tg-3", chat_id=777)
 
     api_calls: list[tuple] = []
     fail_edit = {"flag": True}
@@ -210,17 +210,17 @@ def test_render_update_falls_back_to_send_when_edit_fails(tmp_path, monkeypatch)
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
     # attempt_started actually changes the rendered card (preparing →
     # running), so the gate tries to edit; the stub raises, which forces
     # the fall-back sendMessage.
-    _emit(brr_dir, task.conversation_key, "attempt_started", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "attempt_started", run_id=task.id,
           attempt=1)
 
     methods = [m for _, m, _ in api_calls]
     assert methods.count("sendMessage") == 2
-    entry = telegram._load_progress_for_task(brr_dir, task.id)
+    entry = telegram._load_progress_for_run(brr_dir, task.id)
     assert entry["message_id"] != 201
 
 
@@ -228,7 +228,7 @@ def test_render_update_ignores_non_telegram_tasks(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
     # Slack-source task in a 'telegram:' shaped key shouldn't slip through.
-    task = _seed_task(brr_dir, "task-tg-x", source="slack")
+    task = _seed_run(brr_dir, "task-tg-x", source="slack")
 
     api_calls: list[tuple] = []
     monkeypatch.setattr(
@@ -236,14 +236,14 @@ def test_render_update_ignores_non_telegram_tasks(tmp_path, monkeypatch):
         lambda t, m, p=None: api_calls.append((t, m, p)) or {},
     )
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
     assert api_calls == []
 
 
 def test_render_update_skips_when_token_missing(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
-    task = _seed_task(brr_dir, "task-no-token")
+    task = _seed_run(brr_dir, "task-no-token")
 
     api_calls: list[tuple] = []
     monkeypatch.setattr(
@@ -251,7 +251,7 @@ def test_render_update_skips_when_token_missing(tmp_path, monkeypatch):
         lambda t, m, p=None: api_calls.append((t, m, p)) or {},
     )
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="host")
     assert api_calls == []
 
@@ -271,7 +271,7 @@ def test_render_update_skips_api_when_text_unchanged(tmp_path, monkeypatch):
     """
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-tg-dedupe", chat_id=111)
+    task = _seed_run(brr_dir, "task-tg-dedupe", chat_id=111)
 
     api_calls: list[tuple] = []
 
@@ -285,15 +285,15 @@ def test_render_update_skips_api_when_text_unchanged(tmp_path, monkeypatch):
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    # task_created → preparing card. Initial post.
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    # run_created → preparing card. Initial post.
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="docker")
     # container_started → no compact-card change → no API call.
     _emit(brr_dir, task.conversation_key, "container_started",
-          task_id=task.id, env="docker", container="brr-task-tg-dedupe-x")
+          run_id=task.id, env="docker", container="brr-task-tg-dedupe-x")
     # artifact_created → also invisible in compact → no API call.
     _emit(brr_dir, task.conversation_key, "artifact_created",
-          task_id=task.id, kind="response",
+          run_id=task.id, kind="response",
           path="/tmp/r.md", label="response:evt-x")
 
     methods = [m for _, m, _ in api_calls]
@@ -308,7 +308,7 @@ def test_render_update_html_escapes_user_content(tmp_path, monkeypatch):
     on ``can't parse entities``."""
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-tg-esc", chat_id=333)
+    task = _seed_run(brr_dir, "task-tg-esc", chat_id=333)
 
     api_calls: list[tuple] = []
 
@@ -322,14 +322,14 @@ def test_render_update_html_escapes_user_content(tmp_path, monkeypatch):
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    _emit(brr_dir, task.conversation_key, "task_created", task_id=task.id,
+    _emit(brr_dir, task.conversation_key, "run_created", run_id=task.id,
           branch="auto", env="docker")
     _emit(brr_dir, task.conversation_key, "attempt_started",
-          task_id=task.id, attempt=1)
+          run_id=task.id, attempt=1)
     _emit(brr_dir, task.conversation_key, "finalizing",
-          task_id=task.id, stage="failed")
+          run_id=task.id, stage="failed")
     _emit(brr_dir, task.conversation_key, "failed",
-          task_id=task.id, event_id=task.event_id,
+          run_id=task.id, event_id=task.event_id,
           stage="run", attempts=1, exit_code=1,
           error="docker run failed: <ulimit & oom-killer>")
 
@@ -353,14 +353,14 @@ def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):
     """
     brr_dir = tmp_path / ".brr"
     _save_token(brr_dir)
-    task = _seed_task(brr_dir, "task-tg-nm", chat_id=222)
+    task = _seed_run(brr_dir, "task-tg-nm", chat_id=222)
 
     # Pre-seed progress state: a prior message exists, but with no
     # cached last_text — so render_update will try to edit, hit
     # "not modified", and must NOT fall through to sendMessage.
-    telegram._save_progress_for_task(brr_dir, task.id, {
+    telegram._save_progress_for_run(brr_dir, task.id, {
         "chat_id": 222, "topic_id": None, "message_id": 900,
-        "last_render": "task_created",
+        "last_render": "run_created",
     })
 
     api_calls: list[tuple] = []
@@ -375,10 +375,10 @@ def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):
 
     monkeypatch.setattr(telegram, "_api_call", fake_api_call)
 
-    _emit(brr_dir, task.conversation_key, "run_started", task_id=task.id)
+    _emit(brr_dir, task.conversation_key, "run_started", run_id=task.id)
 
     methods = [m for _, m, _ in api_calls]
     assert methods.count("editMessageText") == 1
     assert methods.count("sendMessage") == 0
-    entry = telegram._load_progress_for_task(brr_dir, task.id)
+    entry = telegram._load_progress_for_run(brr_dir, task.id)
     assert entry["message_id"] == 900

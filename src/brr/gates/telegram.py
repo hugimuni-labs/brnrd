@@ -19,7 +19,7 @@ from typing import Any
 import requests
 
 from .. import protocol, run_progress
-from ..task import Task
+from ..run import Run, run_manifest_path
 from . import delivery, runtime
 
 _API = "https://api.telegram.org/bot{token}/{method}"
@@ -152,22 +152,22 @@ def _save_state(brr_dir: Path, state: dict) -> None:
     runtime.save_state(brr_dir, "telegram", state)
 
 
-def _load_progress_for_task(brr_dir: Path, task_id: str) -> dict | None:
-    """Return this task's previously-rendered card state, or None.
+def _load_progress_for_run(brr_dir: Path, run_id: str) -> dict | None:
+    """Return this run's previously-rendered card state, or None.
 
-    Test-facing accessor for the per-task card file; the live write
+    Test-facing accessor for the per-run card file; the live write
     path now lives in the shared ``delivery.update_card`` driver.
     """
-    return runtime.load_task_card(brr_dir, "telegram", task_id)
+    return runtime.load_run_card(brr_dir, "telegram", run_id)
 
 
-def _save_progress_for_task(brr_dir: Path, task_id: str, entry: dict) -> None:
-    """Write this task's card state file (test-facing accessor).
+def _save_progress_for_run(brr_dir: Path, run_id: str, entry: dict) -> None:
+    """Write this run's card state file (test-facing accessor).
 
     Tests seed card state through this; the live write path goes
     through ``delivery.update_card``.
     """
-    runtime.save_task_card(brr_dir, "telegram", task_id, entry)
+    runtime.save_run_card(brr_dir, "telegram", run_id, entry)
 
 
 # ── Interactive setup ────────────────────────────────────────────────
@@ -374,13 +374,13 @@ def _escape_html(text: str) -> str:
     )
 
 
-def _build_card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
-    """Render the Telegram-flavoured progress card for a task, if any.
+def _build_card_text(brr_dir: Path, conv_key: str, run_id: str) -> str | None:
+    """Render the Telegram-flavoured progress card for a run, if any.
 
-    Returns None when the conversation has no record of the task yet
-    (e.g. heartbeat fired before task_created was persisted).
+    Returns None when the conversation has no record of the run yet
+    (e.g. heartbeat fired before run_created was persisted).
     """
-    view = run_progress.project_task(brr_dir, conv_key, task_id)
+    view = run_progress.project_run(brr_dir, conv_key, run_id)
     if view is None:
         return None
     # Escape user-controlled content (errors, branch names, runner names)
@@ -394,15 +394,15 @@ def _build_card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
     )
 
 
-def card_text(brr_dir: Path, conv_key: str, task_id: str) -> str | None:
-    """Render the Telegram-flavoured progress card for a task.
+def card_text(brr_dir: Path, conv_key: str, run_id: str) -> str | None:
+    """Render the Telegram-flavoured progress card for a run.
 
     Public seam so the managed ``cloud`` gate can reuse Telegram's
     presentation for telegram-origin events (see
     ``kb/design-managed-delivery.md`` → per-platform presentation), so a
     managed card looks identical to a self-hosted one.
     """
-    return _build_card_text(brr_dir, conv_key, task_id)
+    return _build_card_text(brr_dir, conv_key, run_id)
 
 
 def _sanitize_view_for_html(view):
@@ -461,7 +461,7 @@ class _CardTransport:
 def render_update(brr_dir: Path, packet: Any) -> None:
     """Send/edit a Telegram progress card for *packet*.
 
-    On ``task_created`` we send a fresh message in the originating chat
+    On ``run_created`` we send a fresh message in the originating chat
     or topic and store the resulting ``message_id`` so later packets can
     edit the same message via ``editMessageText``. Failures are swallowed
     — the daemon must keep running even if Telegram is misconfigured.
@@ -476,11 +476,11 @@ def render_update(brr_dir: Path, packet: Any) -> None:
         return
 
     conv_key = getattr(packet, "conversation_key", "") or ""
-    task_id = run_progress.task_id_from_packet(packet)
-    if not conv_key or not task_id:
+    run_id = run_progress.run_id_from_packet(packet)
+    if not conv_key or not run_id:
         return
 
-    task = Task.from_file(brr_dir / "tasks" / f"{task_id}.md")
+    task = Run.from_file(run_manifest_path(brr_dir / "runs", run_id))
     if task is None or task.source != "telegram":
         return
     chat_id = _coerce_optional_int(task.meta.get("telegram_chat_id"))
@@ -492,12 +492,12 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     # message's reply target after the fact, so this only matters once).
     reply_to = _coerce_optional_int(task.meta.get("telegram_message_id"))
 
-    text = _build_card_text(brr_dir, conv_key, task_id)
+    text = _build_card_text(brr_dir, conv_key, run_id)
     if text is None:
         return
 
     transport = _CardTransport(token, chat_id, topic_id)
     delivery.update_card(
-        brr_dir, "telegram", task_id, text,
+        brr_dir, "telegram", run_id, text,
         transport=transport, reply_to=reply_to, render_tag=ptype,
     )
