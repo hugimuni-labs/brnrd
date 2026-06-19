@@ -756,6 +756,28 @@ class TestPromptBuilding:
         assert "substantial work should use the card" in prompt
         assert "not waiting in the dark" in prompt
 
+    def test_delivery_contract_carries_portal_model_summary(self, tmp_path):
+        # The delivery contract injects a *summary* of the portal grammar so
+        # the inbound/outbound/parked model rides hot without re-narrating the
+        # whole manual. It must name the three forms and point at the manual as
+        # the pull-only full reference — the anti-drift link the maintainer
+        # asked for. The reciprocal half is pinned in test_docs.py
+        # (test_portals_manual_links_back_to_delivery_contract); keep the two
+        # tests in step so contract and manual can't silently diverge.
+        prompt = build_daemon_prompt(
+            "ship it",
+            "evt-1",
+            "/tmp/resp.md",
+            tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            run_id="task-9",
+        )
+        assert "portals" in prompt
+        for form in ("*inbound*", "*outbound*", "*parked*"):
+            assert form in prompt
+        assert "injected summary" in prompt
+        assert "brr docs portals" in prompt
+
 
 # ── Phase 3 guardrails: revisit-signal handling ──────────────────────
 
