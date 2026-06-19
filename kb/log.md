@@ -7331,3 +7331,32 @@ Their literal `brr docs cockpit` invocations were updated to
 cheatsheet → `portals.md` tracks separately on `brr-home`.
 
 Tests: `pytest -q` (943 passed, 1 warning).
+
+## [2026-06-19] refactor | Portal model framed in the delivery contract, cross-linked to the manual
+
+The injected delivery contract was carrying portal *mechanics* (paths,
+frontmatter rules, one-file-one-message) but not the *model* — that the
+outbox/card/inbox are **portals**, inbound/outbound/parked, the seams where a
+run turns to the world. That framing lived only in `portals.md`, which is
+pull-only, so a wake got the *how* hot and the *what-it-is* cold (the gap the
+maintainer's "ornament the weave" instinct caught).
+
+Added the contract paragraph in `prompts.py`: it now names the three portal
+forms inline with concrete examples and calls itself "the injected summary of
+that grammar", pointing at `brr docs portals` as the pull-only full reference.
+A light typographic pass on `portals.md` makes the doc's own shape signal
+portal — the three forms as a scannable legend, ◂/▸/⏸ markers anchoring the
+grammar table's Portal column — and adds a reciprocal note that the delivery
+contract carries the injected summary, so an editor of either reconciles the
+other.
+
+Anti-drift lock (the maintainer's explicit ask — "link them so they don't
+drift apart"): two paired tests, `test_delivery_contract_carries_portal_model_summary`
+(test_prompts.py) and `test_portals_manual_links_back_to_delivery_contract`
+(test_docs.py), each pinning the shared inbound/outbound/parked vocabulary and
+the "injected summary" cross-reference, each pointing at the other. Drift is now
+a CI failure, not a thing to remember. Part of the #148→#159 portal-grammar arc
+(see `design-portal-grammar.md`).
+
+Tests: `pytest -q tests/test_docs.py tests/test_prompts.py tests/test_cli.py`
+(92 passed).
