@@ -59,6 +59,71 @@ def frontmatter_body(text: str) -> str:
     return text
 
 
+# Routing selectors that may lead an outbox message's frontmatter. Used
+# only to gate the lenient (missing-opening-fence) parse below — see
+# ``parse_outbox_message``.
+_OUTBOX_ROUTING_KEYS = ("event", "gate")
+
+
+def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
+    """Parse an outbox message's routing frontmatter and body, tolerantly.
+
+    Returns ``(meta, body)``. Accepts two shapes:
+
+    - **Canonical** — a ``---``-fenced frontmatter block, exactly as
+      :func:`parse_frontmatter` / :func:`frontmatter_body` handle it.
+    - **Lenient** — a leading ``key: value`` block with *no opening
+      fence*, terminated by a ``---`` line: e.g. ``event: <id>\\n---\\nbody``.
+
+    The lenient shape exists because the resident reaches for it
+    naturally — the delivery contract names ``event:`` / ``gate:`` as
+    "frontmatter" without showing the fences, and writing the selector
+    line then a ``---`` separator reads as obviously correct. Under the
+    strict parser that silently failed: the routing was dropped, the
+    literal ``event:`` line leaked into the delivered message, and the
+    reply attached to the run's *lead* event instead of its target (the
+    "messed-up quotes" failure). Tolerating it moves the lesson off the
+    "remember the exact fences" rung of the robustness ladder.
+
+    To avoid mistaking a plain message for routing, the lenient path
+    engages **only** when the first non-empty line is a recognised
+    routing selector (``event:`` / ``gate:``) *and* a closing ``---``
+    line follows in the contiguous leading key-block. A normal message
+    that merely contains ``---`` dividers (a PLAN, say) is never touched.
+    Misparses degrade safely: the drain drops an unknown ``event:`` target
+    or unconfigured ``gate:`` with a console note rather than misdelivering.
+    """
+    if text.startswith("---\n"):
+        return parse_frontmatter(text), frontmatter_body(text)
+
+    lines = text.splitlines(keepends=True)
+    idx = 0
+    while idx < len(lines) and not lines[idx].strip():
+        idx += 1
+    if idx >= len(lines):
+        return {}, text
+
+    first = lines[idx].strip()
+    lead_key = first.split(":", 1)[0].strip() if ":" in first else ""
+    if lead_key not in _OUTBOX_ROUTING_KEYS:
+        return {}, text
+
+    block: list[str] = []
+    j = idx
+    while j < len(lines):
+        stripped = lines[j].strip()
+        if stripped == "---":
+            meta = _parse_block(block, 0)[0] if block else {}
+            body = "".join(lines[j + 1:])
+            return meta, body
+        if stripped == "" or (":" in stripped and not stripped.startswith("#")):
+            block.append(lines[j].rstrip("\n"))
+            j += 1
+            continue
+        break
+    return {}, text
+
+
 def _parse_block(lines: list[str], base_indent: int) -> tuple[dict[str, Any], int]:
     result: dict[str, Any] = {}
     i = 0
