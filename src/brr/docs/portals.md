@@ -53,7 +53,43 @@ The two reconcile semantics in the *Portal* column — append-log
 terraform-shaped) — are orthogonal to the transport underneath; the gate
 is a dumb pipe under both. The PLAN→approve handoff is the canonical
 *parked* portal: emit, park the continuation, resume when approval
-refluxes (today via a follow-up event).
+refluxes (today via a follow-up event). Its message shape is below.
+
+## The PLAN message — the parked portal's shape
+
+When a request is large, multi-step, costly, or where you'd rather get a
+nod before committing the compute, **don't execute on reflex and don't
+just reply with vague intent** — emit a PLAN: a structured outbound
+message (an ordinary outbox `<name>.md`, append-log) the human can
+approve or edit with a short reply. Emitting it *parks* this run; the
+approval reply is a fresh event whose wake carries the plan back in
+(today via the woven conversation turns + gate-thread history + your
+dominion — so the approval wake resumes from the plan, it does not
+rebuild it cold).
+
+A PLAN carries five things, no more:
+
+1. **The decomposition** — the request broken into the concrete steps or
+   chunks you'd actually run, in order. If it's one step, it isn't a PLAN
+   — just do it.
+2. **The chosen approach / medium per chunk** — where it matters: which
+   runner medium, whether a chunk is its own wake (`schedule.md`) or a
+   child event, what you'd branch vs. fold.
+3. **Historical cost framing, never a projected promise** — ground the
+   weight in *comparable past runs* ("a review of this size has
+   historically run ~N wakes / ~$X"), drawn from what actually happened.
+   **Never** invent a forward dollar figure or guarantee a cost; the
+   honest frame is the past, not a quote.
+4. **What parks and what resumes it** — say plainly that you're parking
+   until they reply, and what their reply sets in motion.
+5. **An explicit approve / edit affordance** — one line: "reply to
+   approve, or edit any step and I'll re-plan." Make the seam obvious so
+   the human knows a short word is all it takes.
+
+Keep it scannable — a PLAN the human won't read is worse than executing.
+After emitting it, stop: a parked plan is a complete, healthy turn. The
+approval (or edit) arrives as its own event and starts the execution
+wake.
 
 Two more steering surfaces live outside the outbox:
 
@@ -80,11 +116,13 @@ Two more steering surfaces live outside the outbox:
    steer you.
 
 3. **Decide: plan or execute.** Small, clear, in-reach → execute. Large,
-   ambiguous, or "I think the current shape is wrong" → plan: surface
-   contradictions and a proposed direction as a chat reply, and stop. A
-   chat-only direction-set is a complete, healthy turn — the build is the
-   follow-up event. (See AGENTS.md → Stewardship and run.md → "When the
-   task asks you to reconsider".)
+   ambiguous, costly, or "I think the current shape is wrong" → plan:
+   emit a **PLAN** message (the parked-portal shape above) for a build
+   you want a nod on, or surface contradictions and a proposed direction
+   as a chat reply for a reconsider. Either way, stop after — a parked
+   plan or a chat-only direction-set is a complete, healthy turn; the
+   build is the follow-up event. (See AGENTS.md → Stewardship and run.md
+   → "When the task asks you to reconsider".)
 
 4. **Stay in the conversation.** For anything beyond a quick reply,
    compose `.card` so the human sees a live, self-authored status instead
