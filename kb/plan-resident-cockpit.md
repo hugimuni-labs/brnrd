@@ -78,12 +78,24 @@ object.
 - A recognized **PLAN message shape** I emit to the outbox: a structured
   proposal (decomposition, chosen media, historical cost pre-analysis
   from comparable past runs, never a projected dollar promise) the human
-  can approve with a short reply.
+  can approve with a short reply. **(Tier A — shipped 2026-06-19** on
+  `brr/plan-shape-148-tierA`: `src/brr/docs/portals.md` now defines the
+  five-part PLAN message under *The PLAN message — the parked portal's
+  shape*, and choreography step 3 points at it. This is the one concrete
+  gap part 1 had on today's dotfile protocol — `portals.md` called
+  PLAN→approve "the canonical parked portal" but never said what a PLAN
+  looked like. No daemon machinery; ships independent of #128.)
 - The approval reply wakes a run **scoped to that plan** — the plan rides
-  in as context so execution doesn't rebuild from zero. Mechanically this
-  is the run/event model (#128) plus a marker the daemon threads from the
-  plan event to the execution event. Mostly prompt + a small piece of
-  daemon state, not new infrastructure.
+  in as context so execution doesn't rebuild from zero. **(Tier B — still
+  open.)** Today the plan rides into the approval wake via the woven
+  conversation turns + gate history + dominion (a *convention*, good
+  enough to be useful now). First-class *scoping* — a marker the daemon
+  threads from the plan event to the execution event — is the run/event
+  model (#128) plus a small piece of daemon state. It sits on the
+  behavioural slice (per-run claim + `defer_until`, Q1–Q4) and is best
+  designed **after** #148 is dogfooded (the portal grammar reveals which
+  parked portals actually recur — see
+  [`design-portal-grammar.md`](design-portal-grammar.md) decision 4).
 
 **Home:** [`design-co-maintainer.md`](design-co-maintainer.md) §6/§11
 (run↔reply decoupling) + [`design-run-event-model.md`](design-run-event-model.md).
@@ -279,8 +291,9 @@ Next:
 2. **G1.2/1.3 — fallback chain + quota-aware deferral.** The fix that
    stops live runs from dying on exhaustion. Highest *pain* leverage;
    slightly more machinery, so second.
-3. **G2 — plan→approve loop.** Convention-light; unlocks the duo cadence
-   the maintainer wants. Wants #128's run/event threading.
+3. **G2 — plan→approve loop.** Tier A (PLAN message shape) shipped
+   2026-06-19; Tier B (daemon-threaded plan→execution scoping) wants
+   #128's run/event behavioural slice and the post-#148 portal grammar.
 4. **G3 — decomposition via child events.** Defer behind #128.
 5. **G4 dominion-side dwelling habits — keep a richer dominion surface
    and trim the resident playbook's remaining protocol re-narration now
