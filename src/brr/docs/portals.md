@@ -24,19 +24,29 @@ at `.brr/docs/portals.md`.
 Everything you steer happens by writing files into the **outbox
 directory** named in your bundle (`.brr/outbox/<event-id>/`). One file is
 one action. The daemon watches the directory and acts on its next
-heartbeat. The bundle carries the concrete paths; this is what each one
-does, and which **portal form** it is — *inbound* (input flows in),
-*outbound* (you emit to a surface), or *parked* (you emit and park the
-continuation until something refluxes back).
+heartbeat. The bundle carries the concrete paths; this section is what
+each one does, and which **portal form** it is:
+
+- **inbound** ◂ — input flows in; you read (`inbox.json`).
+- **outbound** ▸ — you emit to a surface: a chat message, the card, a PR.
+- **parked** ⏸ — you emit *and park the continuation*, resuming when
+  something refluxes back (the PLAN→approve handoff).
+
+Your wake never reads this table cold to act: the **delivery contract**
+in the Run Context Bundle carries an *injected summary* of these three
+forms, so the model rides hot while this manual stays the pull-only
+reference for the full grammar. The two are a matched pair — the contract
+names the forms, this manual defines them; change one and reconcile the
+other so they don't drift.
 
 | File | Portal | What it does |
 | --- | --- | --- |
-| `<name>.md` | outbound (append-log) | A **chat message**, delivered in filename order while you keep working. The body is the message. Stage as `*.tmp` and rename for an atomic write. |
-| `<name>.md` with `event: <id>` frontmatter | outbound to another thread | Same, but delivered to a **different pending event's** thread and marks that event handled, so it won't wake again. One complete reply per folded-in event. |
-| `<name>.md` with `gate: <name>` frontmatter | outbound to a destination | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` opens/refreshes a PR (`head`, `base`, `title` frontmatter; body is the PR body). An unconfigured gate is dropped. |
-| `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. |
-| `.card` | outbound (desired-state) | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
-| `inbox.json` | inbound | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries to fold in waiting work; never edit or remove it. |
+| `<name>.md` | outbound ▸ append-log | A **chat message**, delivered in filename order while you keep working. The body is the message. Stage as `*.tmp` and rename for an atomic write. |
+| `<name>.md` with `event: <id>` frontmatter | outbound ▸ another thread | Same, but delivered to a **different pending event's** thread and marks that event handled, so it won't wake again. One complete reply per folded-in event. |
+| `<name>.md` with `gate: <name>` frontmatter | outbound ▸ a destination | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` opens/refreshes a PR (`head`, `base`, `title` frontmatter; body is the PR body). An unconfigured gate is dropped. |
+| `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
+| `.card` | outbound ▸ desired-state | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
+| `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries to fold in waiting work; never edit or remove it. |
 
 The two reconcile semantics in the *Portal* column — append-log
 (ordered, additive) and desired-state (one surface reconciled in place,

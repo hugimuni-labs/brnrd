@@ -610,12 +610,17 @@ def _build_run_context_bundle(
     sections.append("")
     sections.append("### Delivery contract")
     sections.append(
-        "These are the per-run *values* and the operative rules. The full "
-        "control-file protocol and the shape of an average daemon run live in "
-        "the portals manual — run `brr docs portals` when a step is unfamiliar. "
-        "Use the available surfaces to stay in the conversation: keep visible "
-        "state honest, and fold queued input at plan boundaries when it belongs "
-        "in this run."
+        "These are the per-run *values* and the operative rules. The surfaces "
+        "below are **portals** — the seams where this run turns to the world: "
+        "*inbound* (input flows in, like `inbox.json`), *outbound* (you emit to "
+        "a surface — a chat reply, the `.card`), and *parked* (you emit and "
+        "park the continuation until something refluxes back, like the "
+        "PLAN→approve handoff). This list is the injected summary of that "
+        "grammar; the full control-file protocol and the shape of an average "
+        "daemon run live in the portals manual — run `brr docs portals` when a "
+        "step is unfamiliar. Use these portals to stay in the conversation: "
+        "keep visible state honest, and fold queued input at plan boundaries "
+        "when it belongs in this run."
     )
     sections.append(
         "- Stdout is the default terminal reply for the current thread. "
