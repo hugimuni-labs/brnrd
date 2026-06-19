@@ -38,6 +38,20 @@ def test_portals_topic_covers_protocol_and_choreography():
     assert "Stay in the conversation" in text
 
 
+def test_portals_manual_links_back_to_delivery_contract():
+    # The manual and the injected delivery contract are a matched pair: the
+    # contract names the inbound/outbound/parked forms hot, the manual defines
+    # them. The manual must say so explicitly so an editor of either reconciles
+    # the other and they don't drift. The reciprocal half is pinned in
+    # test_prompts.py (test_delivery_contract_carries_portal_model_summary).
+    text = docs.read_topic("portals")
+    assert text is not None
+    for form in ("inbound", "outbound", "parked"):
+        assert form in text
+    assert "injected summary" in text
+    assert "delivery contract" in text
+
+
 def test_read_topic_bundled_returns_content():
     text = docs.read_topic("execution-map")
     assert text is not None
