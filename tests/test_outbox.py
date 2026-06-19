@@ -247,6 +247,69 @@ class TestDrainOutbox:
         current_records = conversations.read_records(brr_dir, "telegram:111:")
         assert current_records == []
 
+    def test_cross_event_routes_without_opening_fence(self, tmp_path, monkeypatch):
+        # The live failure: the resident wrote `event: <id>` then `---`
+        # with no opening fence. The strict parser left the selector in the
+        # body and delivered to the lead event (wrong quote). The tolerant
+        # parse must route it to the target and strip the selector.
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        protocol.create_event(inbox, source="telegram", body="quick q")
+        bid = protocol.list_pending(inbox)[0]["id"]
+        (outbox / "reply.md").write_text(
+            f"event: {bid}\n---\nhere's the answer\n")
+        emitted = []
+        monkeypatch.setattr(daemon.updates, "emit",
+                            lambda brr, pkt: emitted.append(pkt))
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        # Routed to B's queue with the selector stripped — not leaked.
+        assert [protocol.read_partial(p)
+                for p in protocol.list_partials(responses, bid)] == ["here's the answer"]
+        assert protocol.list_partials(responses, "evt-A") == []
+        assert emitted[0].payload.get("target_event") == bid
+
+    def test_gate_addressed_without_opening_fence(self, tmp_path, monkeypatch):
+        brr_dir = tmp_path / ".brr"
+        responses = brr_dir / "responses"
+        inbox = brr_dir / "inbox"
+        inbox.mkdir(parents=True)
+        outbox = brr_dir / "outbox" / "evt-A"
+        outbox.mkdir(parents=True)
+        (outbox / "ping.md").write_text(
+            "gate: telegram\ntelegram_chat_id: 999\n---\ndaily summary\n")
+        monkeypatch.setattr(daemon, "_gate_can_deliver", lambda brr, gate: True)
+        monkeypatch.setattr(daemon.updates, "emit", lambda brr, pkt: None)
+        emit = daemon._WorkerEmit(
+            brr_dir=brr_dir, conversation_key="", event_id="evt-A")
+        task = types.SimpleNamespace(id="task-A")
+        n = daemon._drain_outbox(emit, task, responses, "evt-A", outbox, inbox)
+
+        assert n == 1
+        done = protocol.list_done(inbox, "telegram")
+        assert len(done) == 1
+        assert str(done[0].get("telegram_chat_id")) == "999"
+        assert protocol.read_response(responses, done[0]["id"]).strip() == "daily summary"
+
+    def test_plain_message_with_dividers_delivered_verbatim(self, tmp_path, monkeypatch):
+        # A PLAN-style interim with --- dividers must reach the current
+        # event's queue intact, not be parsed as misrouting frontmatter.
+        n, responses, outbox, _ = self._drain(
+            tmp_path, monkeypatch,
+            [("plan.md", "Here is the PLAN.\n\n---\n\n1. step one\n")],
+        )
+        assert n == 1
+        bodies = [protocol.read_partial(p)
+                  for p in protocol.list_partials(responses, "evt-1")]
+        assert bodies == ["Here is the PLAN.\n\n---\n\n1. step one"]
+
     def test_cross_event_unknown_target_is_dropped(self, tmp_path, monkeypatch):
         brr_dir = tmp_path / ".brr"
         responses = brr_dir / "responses"

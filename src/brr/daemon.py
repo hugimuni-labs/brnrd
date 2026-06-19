@@ -1370,8 +1370,13 @@ def _drain_outbox(
             text = fpath.read_text(encoding="utf-8")
         except OSError:
             continue
-        fm = protocol.parse_frontmatter(text)
-        body = protocol.frontmatter_body(text).strip()
+        # Tolerant parse: accept both a ``---``-fenced block and the common
+        # resident slip of a leading ``event:`` / ``gate:`` line + ``---``
+        # with no opening fence. The strict parser silently misrouted the
+        # latter (leaked selector text, reply on the lead event); see
+        # ``protocol.parse_outbox_message``.
+        fm, body = protocol.parse_outbox_message(text)
+        body = body.strip()
         gate = str(fm.get("gate") or "").strip()
         if gate:
             # Gate-addressed: an agent-initiated message to a destination

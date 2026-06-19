@@ -38,6 +38,60 @@ class TestFrontmatter:
         assert fm["count"] == 42
 
 
+class TestParseOutboxMessage:
+    """Tolerant routing-frontmatter parse for outbox messages.
+
+    Guards the footgun that misrouted live replies: a resident writing
+    ``event: <id>\\n---\\nbody`` (no opening fence) used to fall through the
+    strict parser, leaking the selector into the message and quoting the
+    run's lead event instead of the target.
+    """
+
+    def test_canonical_fenced_block(self):
+        meta, body = protocol.parse_outbox_message(
+            "---\nevent: evt-9\n---\nthe answer\n")
+        assert meta == {"event": "evt-9"}
+        assert body == "the answer\n"
+
+    def test_lenient_missing_opening_fence(self):
+        meta, body = protocol.parse_outbox_message(
+            "event: evt-9\n---\nthe answer\n")
+        assert meta == {"event": "evt-9"}
+        assert body == "the answer\n"
+
+    def test_lenient_gate_with_extra_keys(self):
+        meta, body = protocol.parse_outbox_message(
+            "gate: forge\nhead: brr/x\nbase: main\ntitle: T\n---\nPR body\n")
+        assert meta == {
+            "gate": "forge", "head": "brr/x", "base": "main", "title": "T",
+        }
+        assert body == "PR body\n"
+
+    def test_plain_message_with_dividers_is_not_frontmatter(self):
+        # A PLAN-style message leads with prose and uses --- as a section
+        # divider — it must never be mistaken for routing frontmatter.
+        text = "Here is the PLAN.\n\n---\n\n1. step one\n"
+        meta, body = protocol.parse_outbox_message(text)
+        assert meta == {}
+        assert body == text
+
+    def test_leading_non_routing_key_is_left_alone(self):
+        # A message that happens to start "note: ..." is not a routing
+        # selector, so it stays a plain body.
+        text = "note: heads up\n---\nmore\n"
+        meta, body = protocol.parse_outbox_message(text)
+        assert meta == {}
+        assert body == text
+
+    def test_routing_selector_without_fence_stays_body(self):
+        # No closing ``---`` → not confident it's frontmatter; leave intact
+        # rather than guess an event id out of prose.
+        text = "event: the meeting is moved\nsee you there\n"
+        meta, body = protocol.parse_outbox_message(text)
+        assert meta == {}
+        assert body == text
+
+
 class TestEvents:
     def test_create_and_list(self, tmp_path):
         inbox = tmp_path / "inbox"
