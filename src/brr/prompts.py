@@ -622,8 +622,9 @@ def _build_run_context_bundle(
         "grammar; the full control-file protocol and the shape of an average "
         "daemon run live in the portals manual — run `brr docs portals` when a "
         "step is unfamiliar. Use these portals to stay in the conversation: "
-        "keep visible state honest, and fold queued input at plan boundaries "
-        "when it belongs in this run."
+        "keep visible state honest, fold queued input at plan boundaries "
+        "when it belongs in this run, and check for a last-minute follow-up "
+        "before terminal delivery."
     )
     sections.append(
         "- Stdout is the compatibility/current-thread fallback, not the "
@@ -665,8 +666,21 @@ def _build_run_context_bundle(
             f"- A live inbox view at `{outbox_path}/inbox.json` is refreshed "
             "each heartbeat: at plan / todo boundaries, re-read it before "
             "deciding whether to continue, fold in a quick event, or leave "
-            "waiting work for its own wake. Daemon-owned — don't edit it."
+            "waiting work for its own wake. Re-read it once more immediately "
+            "before a terminal closeout; if a related follow-up is waiting, "
+            "fold it in or say explicitly why it should stay queued. This "
+            "does not catch messages that arrive after the runner has already "
+            "returned, but it prevents avoidable orphaned follow-ups. "
+            "Daemon-owned — don't edit it."
         )
+        if runner_medium == "codex":
+            sections.append(
+                "- Codex runner note: Codex-native progress/final channels "
+                "are runner-local under brr. User-visible mid-run "
+                "communication goes through `.card`, outbox replies, or "
+                "`gate:` sends; stdout remains only the plain current-thread "
+                "fallback."
+            )
         if budget_seconds:
             sections.append(
                 f"- To outlast your budget without getting killed mid-run, "
