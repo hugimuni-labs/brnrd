@@ -968,8 +968,8 @@ def _result(ok=True, has_response=False, missing=()):
 
 
 def test_result_satisfied_delivery_picks_current_reply_signal():
-    """A stdout reply on the current thread is the canonical signal —
-    it wins over commit/outbound and identifies as ``current_reply``."""
+    """A stdout reply on the current thread is one satisfying signal; it
+    wins over commit/outbound and identifies as ``current_reply``."""
     event = {"source": "telegram"}
     stats = {"current": 1, "other": 0, "outbound": 0}
     ok, signal = daemon._result_satisfied_delivery(
