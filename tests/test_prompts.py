@@ -802,9 +802,14 @@ def _read_bundled_agents_md() -> str:
 
 
 class TestRevisitSignalGuardrails:
-    """Pin the prompt + AGENTS.md guidance that prevents path-of-least-
-    resistance shipping on design-loaded tasks. See
-    `kb/design-git-layer-rework.md` Phase 3 for the rationale."""
+    """Pin the prompt + AGENTS.md guidance for design-loaded / "reconsider"
+    tasks. Stance refined 2026-06-20 (see `kb/log.md`): the default is
+    *reconcile and act in the same thought*, not surface-and-wait; a
+    chat-only reply is reserved for a genuine fork, where it still must be
+    authorized so the diff-as-receipt rule can't force a half-fitting
+    commit. Both failure modes — path-of-least-resistance compliance and
+    aloof bounce-back — are guarded. See `kb/design-git-layer-rework.md`
+    Phase 3 for the original revisit-signal rationale."""
 
     def test_run_prompt_mentions_revisit_signals(self):
         prompt = _read_bundled_run_prompt()
@@ -817,20 +822,28 @@ class TestRevisitSignalGuardrails:
         assert "engage with the substance" in prompt
         assert "ownership stance" in prompt
 
-    def test_run_prompt_authorizes_no_commit_for_revisit(self):
+    def test_run_prompt_biases_to_resolve_and_act(self):
         prompt = _read_bundled_run_prompt()
-        # The chat-only-reply outcome must be named explicitly so the
-        # diff-as-receipt rule doesn't override it on revisit tasks.
-        assert "chat-only reply" in prompt
-        assert "complete and successful task" in prompt
+        # The default on a clear, reversible reconsider is to resolve it
+        # in-thread, not to park it for a second "go do that" event.
+        assert "this same thought" in prompt
+        assert "round-trip" in prompt
         assert "Stewardship" in prompt
+
+    def test_run_prompt_authorizes_no_commit_for_genuine_fork(self):
+        prompt = _read_bundled_run_prompt()
+        # The chat-only-reply outcome must stay named for the genuine-fork
+        # case so the diff-as-receipt rule doesn't force a half-fitting
+        # commit when there is no clear edit yet.
+        assert "chat-only reply" in prompt
+        assert "the complete task" in prompt
 
     def test_agents_md_self_review_contains_contradiction_check(self):
         agents = _read_bundled_agents_md()
-        # The new self-review bullet must reference the Stewardship
-        # section it maps onto so the link between checklist and
-        # principle stays explicit.
-        assert "did you surface it before resolving it" in agents
+        # The self-review bullet maps onto Stewardship and now catches
+        # both failure modes, not just compliance.
+        assert "reconcile it against the current state" in agents
+        assert "aloof bounce-back" in agents
         assert "Stewardship" in agents
 
 
