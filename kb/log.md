@@ -7537,3 +7537,18 @@ mapping Codex-local progress/final channels to brr's user-visible `.card`,
 outbox, and `gate:` portals.
 
 Tests: `pytest tests/test_prompts.py tests/test_docs.py` (67 passed).
+
+## [2026-06-20] plan | #159 portal grammar contract
+
+Picked up #159 now that #148 is closed and its dogfood corrections have
+landed. Rewrote `design-portal-grammar.md` from a future-wake seed into the
+active design contract: the shipped substrate is separated from unbuilt
+grammar work, output frames are named (PLAN, PROGRESS, INBOUND-CHECK,
+INTERRUPTION-REPLY, HANDOFF, DEFERRAL, CLOSEOUT), and the run-mailbox
+contract is stated in parallel-safe terms: event claims are leases,
+parked portals become mailbox records, deliveries target event/gate/surface
+keys explicitly, and cost stays run-granular with folding as the consent
+point. The recommended first code slice is portal helper commands that write
+today's control files, not parallel execution.
+
+Validation: `pytest tests/test_docs.py tests/test_protocol.py` (43 passed).

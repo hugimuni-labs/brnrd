@@ -1,217 +1,340 @@
 # Design: portal grammar & the reconcile/projection layer
 
-Status: **direction settled in conversation (2026-06-18).** The naming +
-command migration shipped (`brr docs cockpit` → `brr docs portals`, the
-bundled manual reframed so the dotfile table *is* the portal grammar — see
-decision 3); a narrow hot-path stdout wording correction shipped
-2026-06-20 after dogfooding showed "final delivery" was actively
-misframing the current model, followed by a #148 dogfood correction that
-makes a pre-closeout `inbox.json` read part of the run contract. The
-behavioral grammar (in-generation portals, parked-portal run mailbox) and
-the reconcile/projection layer naming remain sequenced *after*
-[#148](https://github.com/Gurio/brr/issues/148) ships.
-This page is the design seed for
-[#159](https://github.com/Gurio/brr/issues/159) (*cockpit output frame
-and parallel-safe run mailbox*) — written so a future wake can pick the
-work up cold once #148 is dogfooded. It captures two named shapes and the
-list of existing shapes that have to change to land them.
+Status: active (2026-06-20; #159 design contract drafted after #148
+closed; implementation slices pending).
 
-> Provenance: a multi-turn Telegram design conversation (2026-06-17 →
-> 2026-06-18) that started from the "forge as a synced directory"
-> idea (#117) and turned into "interrupts as portals / make the output
-> *be* the surface." The full turn-by-turn arc lives in the resident
-> dominion `thread-of-record.md`; this page is the promoted, settled
-> synthesis. Maintainer confirmed all four decisions below on 2026-06-18.
+This page is the current design contract for
+[#159](https://github.com/Gurio/brr/issues/159): the output-frame grammar
+and the run-mailbox assumptions that must survive a future parallel-run
+experiment. #148 has now shipped the current-protocol control loop, so
+this page names the next shape rather than waiting for more dogfood.
 
-## The four settled decisions
+The issue title still says "cockpit" because that was the live label
+when it was opened. The settled product idiom is **scrolls and portals**:
+the resident's generated stream is the surface, and portals are the
+marked places where that stream turns to the world.
 
-1. **The gate stays.** It is correctly factored as a thin transport —
-   [`design-managed-delivery.md`](design-managed-delivery.md) settled
-   "render daemon-side, vary only the transport" and that holds for
-   Telegram-self-hosted, Telegram-cloud, and forge alike. Do **not** ditch
-   or split the gate. What is unnamed is the layer one floor *above* it —
-   name and shape that (see *Reconcile/projection layer* below).
-2. **Portal grammar = #159's output-frame.** The resident's generated
-   stream itself is the surface; portals are the marked regions in it.
-   Three forms: inbound, outbound, parked. The parallel-safe run mailbox
-   is the transport for *parked* portals that outlive one wake.
-3. **Drop the nouns "dashboard" and "cockpit."** Both pull against #159's
-   own principle that outputs should *feel like the surface* rather than
-   be a fixed-slot panel a human drew and the resident pours data into.
-   The replacement idiom is **scrolls and portals** — the generative
-   stream and the seams in it. The shipped command + manual migration
-   landed **2026-06-18** (maintainer: "ditch the cockpit … settle on
-   `brr docs portals`"): `brr docs cockpit` → `brr docs portals`, the
-   bundled manual `cockpit.md` → `portals.md` retitled and reframed so
-   the dotfile control-file table *is* the portal grammar (inbound /
-   outbound / parked), and the daemon-substrate + introspection prompts
-   follow the portal idiom. The deeper concept-prose sweep (the
-   `plan-*-cockpit.md` page titles and effort-name framing) still rides
-   the post-#148 re-skin — see *Shapes to change*.
-4. **#148 ships first, unchanged.** It is the behaviour loop
-   (plan→approve→execute, child runs, dwelling habits) and runs fine on
-   today's dotfile protocol. The portal grammar is a later *re-skin* that
-   subsumes those dotfiles, and it is better designed **after** #148 is
-   lived-in, because #148 is what reveals which portals actually recur.
-   Designing the slots now would be guessing.
+> Provenance: a multi-turn Telegram design conversation (2026-06-17 to
+> 2026-06-18) that started from the "forge as a synced directory" idea
+> (#117) and turned into "interrupts as portals / make the output be the
+> surface." The 2026-06-19 to 2026-06-20 dogfood passes supplied the
+> concrete evidence: PLAN shape, live `inbox.json` habits, stdout wording
+> drift, outbox frontmatter footguns, burst coalescing, and failure
+> deferral.
 
-## Reconcile/projection layer (the unnamed floor above the gate)
+## Current shipped surface
 
-The correction that unlocked this: **append-log vs desired-state is
-orthogonal to transport**, not "messenger vs forge." Both semantics ride
-both transports:
+This is the live substrate #159 builds on:
 
-- **append-log** — chat messages, PR/issue comments. Ordered, additive;
-  you emit and it goes.
-- **desired-state** — the status `.card` (one `message_id` reconciled in
-  place — terraform-shaped), a PR's diff/labels, an issue's open/closed.
+- The **gate stays thin**. Telegram, forge, and future transports should
+  remain pipes. Rendering, deduplication, desired-state reconciliation,
+  and portal ownership live one layer above the gate.
+- `brr docs portals` is the inspected manual for today's control-file
+  grammar: outbox markdown files, `event:` and `gate:` routes,
+  `.card`, `.keepalive`, and `inbox.json`.
+- #148 shipped the current-protocol control loop: PLAN message shape,
+  live `.card`/outbox dwelling habits, Codex runner adapter wording,
+  and the explicit pre-closeout `inbox.json` read.
+- #128 shipped the run/task storage rename, burst-coalescing dispatch,
+  and operational-failure sibling deferral. Per-run claims,
+  resident-authored postponement, and run-keyed response/outbox routing
+  remain open.
+- The outbox parser now tolerates the common missing-opening-fence
+  shape (`event: <id>\n---\nbody`) so it does not leak selector text or
+  misroute to the lead event.
 
-So the status card was *never* an append-log item; it is desired-state
-riding a messenger. That is exactly why "the card edits aren't
-append-only" felt wrong under the old framing. The clean factoring is
-**two reconcile semantics × N transports**, with the gate a dumb pipe
-under both. This layer is what's today scattered across `run_progress`,
-card lifecycle, correspondent dedup, and the forge-state facet — naming
-it is the refactor #159/#117 want.
+What is **not** shipped: in-generation portal syntax, run-keyed primary
+outbox/response paths, event leases, resident-authored event deferral,
+parked-portal mailbox records, portal helper commands, and any parallel
+local execution. Single-flight remains the default executor.
 
-Two complications fall out cleanly, neither needing new machinery:
+## Settled design calls
 
-- **Dual Telegram (self-hosted + cloud) duplication** is a *third* axis —
-  fan-out/redundancy — already handled at the identity layer
-  (correspondent-redundancy, shipped 2026-06-14: recognise the duplicate
-  correspondent, deliver once, don't double-act → one perceived
-  continuity regardless of how many pipes reach it).
-- **CRDT is not earned.** CRDTs pay off only under *uncoordinated
-  concurrent writers*. brr is single-flight per dominion — one writer to
-  the card at a time — so last-write-wins reconcile suffices. Borrow the
-  *model* (event log → projection → idempotent reconcile), skip the
-  engine — the same verdict reached on Temporal. Revisit only if the
-  #159 parallel-run-mailbox future ever puts two runs on one surface.
+1. **Reconcile/projection is the floor above gates.** Append-log and
+   desired-state are reconcile semantics, not transports. Both can ride a
+   messenger, forge, or any later gate.
+2. **Portal grammar is the output frame.** The resident's generated
+   stream should carry the shapes the user sees *and* the daemon can act
+   on. Today's files are the implementation; the product contract is the
+   frame.
+3. **Drop "dashboard" and "cockpit" from the conceptual model.** They
+   imply fixed slots someone else drew. Portals are generated surfaces:
+   the resident opens them because the conversation or run needs them.
+4. **Parallelism is a compatibility constraint, not the next feature.**
+   #159 should make the mailbox and output frame safe for future
+   parallel runs, while preserving single-flight as the shipped local
+   behaviour.
 
-## Portal grammar (the output-frame)
+## Reconcile/projection layer
 
-A **portal** is a marked region in the resident's generated stream that
-means *"here I turn to the world."* One primitive, two faces — and the
-two faces are the whole trick: the same region is **what the human sees
-rendered** (the live surface) *and* **the seam the daemon fills or
-drains**. One artifact, both directions. That is the spell-scroll: not a
-layout someone drew and the resident pours data into, but the trace of
-the resident's own generation, where each turning-toward-the-world is a
-glyph that both shows and channels.
+The old mental bucket "messenger = append-log" was wrong. Two semantics
+cut across every transport:
 
-- **Inbound portal** — "is anyone there?": a poll of the event mailbox at
-  a natural seam. Input present → it flows through and the resident folds
-  it into the continuation (the multi-response `event:` path). Absent →
-  the portal closes and generation continues on its own momentum. **This
-  subsumes "interrupt handling"** — there is no separate interrupt
-  mechanism, just a portal the resident chose to open. Today this is the
-  `inbox.json` re-read the resident must *remember* to do; as a portal it
-  is *in the path of generation*.
-- **Outbound portal** — emit to a surface; its *kind* carries the
-  reconcile semantics from the layer above. append-log kind → a
-  message/comment goes out; desired-state kind → reconcile the `.card`,
-  open/refresh a PR. Portals are thus the single syntax sitting *over* the
-  two-semantics model — the unification, expressed at the output-grammar
-  layer, not the transport layer.
-- **Parked portal** — an outbound portal that *parks the continuation*
-  until something refluxes in. PLAN→approve (#148) is the canonical case:
-  emit the plan, park, resume when the approval arrives. When the crossing
-  outlives one thought, the parked portal becomes a **message between
-  actors in the run mailbox** — precisely #159's parallel-safe half. So
-  #159 splits naturally: the **portal grammar** is the language; the **run
-  mailbox** is the transport for portals that outlive a wake.
+- **Append-log**: chat messages, issue comments, PR comments, response
+  partials. Ordered, additive; you emit and it goes.
+- **Desired-state**: the live `.card`, PR branch/diff/labels, issue
+  state, any future status object. One surface is reconciled in place.
 
-It maps one-to-one onto the scattered dotfile conventions the resident
-holds in working memory today:
+The gate should not know which product idea it is carrying. It receives
+an append-log send or a desired-state reconcile request and performs the
+transport-specific IO. The projection layer above it owns:
 
-| today's dotfile / convention | portal form |
-| --- | --- |
-| `inbox.json` re-read | inbound portal |
-| `.card` note | outbound desired-state portal |
-| `gate:` / forge handoff | outbound portal with a destination |
-| PLAN→approve (#148) | parked portal (→ mailbox when cross-wake) |
-| always-on injections (kb-health, pitfalls, forge dump) | resident-*summonable* portals, not firehose |
+- the surface key (`conversation_key`, PR number, issue number, run card,
+  portal id);
+- idempotence and last-write rules for desired-state surfaces;
+- deduplication across redundant transports;
+- rendering choices for the human-facing surface.
 
-The robustness payoff is the real argument, not the aesthetics. Today the
-control surface is "remember the dotfile names and their frontmatter." As
-portals it moves *into the generation itself* — the resident cannot forget
-to narrate or to check for input, because turning-to-the-world is just how
-the stream advances. That pushes the lesson down the robustness ladder
-from "remember" to "structurally in the path." It also folds in the G4
-firehose cut: front-loaded injections become portals the resident summons
-when relevant instead of an always-on dump.
+Single-flight means last-write-wins is enough for today's `.card`: one
+run writes the card at a time. If future parallel runs share a visible
+surface, last-write-wins remains valid only inside one owner/surface key;
+another run needs an explicit handoff or a distinct surface.
 
-## Shapes to change (when the portal re-skin lands, after #148)
+## Output-frame grammar
 
-The "how they are to be changed" the maintainer asked be noted. **None of
-these should be done now** — #148 ships first, and a piecemeal rename
-ahead of the grammar would be the wrong receipt.
+An **output frame** is a resident-authored unit in the generated stream
+that is both human-legible and daemon-actionable. Today the daemon sees
+these through control files and stdout; the contract below defines what
+each frame must mean before any new syntax is built.
 
-- **Drop "dashboard"** from the cockpit/delivery framing in favour of the
-  generative-stream idiom. Mostly prose:
-  [`plan-resident-cockpit.md`](plan-resident-cockpit.md) G4/G5 ("slots",
-  "dashboard"), and the cost-card prose in
-  [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md).
-- **Drop "cockpit" — the shipped surface migrated 2026-06-18.** The open
-  question (keep `brr docs cockpit` for muscle memory, or migrate the
-  command too?) is settled: **migrate.** Done now, ahead of the rest of
-  the re-skin, because the blast radius turned out modest and the
-  maintainer was decisive. The command is `brr docs portals`; the bundled
-  manual is `src/brr/docs/portals.md` (retitled, dotfile table reframed as
-  the portal grammar); `cli.py`, `prompts.py`, `daemon-substrate.md`,
-  `introspection.md`, `review-pack.md`, and the tests follow. **Still
-  pending for the post-#148 re-skin:** the `plan-resident-cockpit.md` /
-  `plan-cost-aware-cockpit.md` page titles and "the cockpit" effort-name
-  prose, `design-runner-management.md`'s "cockpit framing" supersede note,
-  and the `index.md` cockpit prose — their literal `brr docs cockpit`
-  command mentions were updated to `brr docs portals` (no dead commands),
-  but the conceptual rename waits for the holistic re-skin so it is not
-  done piecemeal. The dominion `cockpit.md` cheatsheet → `portals.md`
-  tracks separately on `brr-home`.
-- **Retire the "messenger = append-log" mental bucket** wherever it
-  recurs. It was the resident's own earlier conversational framing, not a
-  fixed page; the correction is the orthogonality stated above (two
-  semantics × N transports). When the #159 write-up lands, state the
-  orthogonality explicitly in
-  [`design-managed-delivery.md`](design-managed-delivery.md) /
-  [`subject-managed-mode.md`](subject-managed-mode.md) so a future wake
-  does not re-derive the wrong bucket.
-- **Retire "stdout is final delivery" in hot-path orientation.** This
-  piece did ship early on 2026-06-20 because a live portals dogfood wake
-  surfaced the contradiction: the daemon already treats success as a
-  recognized operational signal, not as "stdout was non-empty," so wording
-  that centers "final stdout" was making agents reason from the obsolete
-  one-event→one-terminal-reply model. The maintainer also rejected the
-  natural overcorrection: do **not** code up an ontology of every possible
-  satisfactory completion shape. The generated delivery contract,
-  `brr docs portals`, and short runner docs now frame stdout as the plain
-  current-thread fallback, explicit portals as the path for intentional
-  communication, and the daemon's need as an operational receipt. The
-  broader #159 direction is a freer run-completion artifact / output frame,
-  not a longer enum.
-- **Make the live inbox check a pre-closeout habit.** A later #148
-  dogfood wake showed a related Telegram follow-up spawning as its own run
-  right after a terminal reply. The daemon record suggests that exact event
-  may have arrived after the runner had already returned, so this is not
-  fully solved by prompt discipline. The shipped correction is narrower:
-  the generated bundle, manual, and playbook now tell the resident to
-  re-read `inbox.json` immediately before terminal closeout and either fold
-  a related follow-up or explicitly leave it queued. The structural form —
-  an inbound portal that is in the generation path, or a post-run mailbox /
-  output-frame handoff — stays with #159.
+| Frame | Portal form | Human surface | Required affordance | Current implementation |
+| --- | --- | --- | --- | --- |
+| PLAN | parked + outbound append-log | chat / issue comment | approve or edit; what resumes | ordinary outbox message using the five-part PLAN shape |
+| PROGRESS | outbound desired-state | live `.card` | current phase; why chunking; medium/quota if known | `.card` control file |
+| INBOUND-CHECK | inbound | not always user-visible | what was checked; fold/defer/leave decision when it matters | read `inbox.json` at boundaries and pre-closeout |
+| INTERRUPTION-REPLY | outbound append-log to event | target event's thread | one complete reply; no duplicate answer | outbox file with `event:` route |
+| HANDOFF | outbound append-log or desired-state | PR, issue, branch note, chat | what changed; where review continues | `gate: forge`, issue comment, final reply |
+| DEFERRAL | parked | chat note, schedule, or mailbox record | why parked; when / what resumes it | dominion `schedule.md` or daemon-authored `defer_until` today |
+| CLOSEOUT | outbound append-log fallback | current thread | outcome, tests, branch/commit, pending-input choice | stdout or explicit reply portal |
 
-## What a future wake picks up
+Frame names are conceptual, not literal syntax yet. A future helper or
+stream marker may spell them differently; the contract is the behaviour.
 
-After #148 is dogfooded: turn this page into the #159 design write-up
-proper (or a comment on #159), having watched which portals actually
-recurred in #148's lived use. The grammar's slot list should crystallise
-from that evidence, not from this page's guesses. The reconcile/projection
-layer naming (#159/#117) can proceed in parallel — it is a clarifying
-refactor of existing scattered code, independent of the output grammar.
+### Inbound portals
 
-See also: [`design-managed-delivery.md`](design-managed-delivery.md)
-(the gate transport this sits above),
-[`subject-managed-mode.md`](subject-managed-mode.md) (the hub),
-[`design-co-maintainer.md`](design-co-maintainer.md) §11 (the
-continuity/delivery spine), and #117 (forge-as-synced-directory, the
-desired-state sibling of this grammar).
+An inbound portal asks the daemon, "what input is waiting at this point
+in the run?" It must be opened at deliberate boundaries: after a plan is
+formed, after a major todo completes, before terminal closeout, or when a
+long-running step returns.
+
+The resident's decision for each visible event is one of:
+
+- **fold and resolve**: answer it now via `event:` routing;
+- **park/defer**: leave it pending with an explicit resume condition;
+- **leave for another wake**: scope or branch differs enough that a new
+  run is healthier.
+
+The shipped manual makes this a habit ("read `inbox.json`"). #159's
+structural version moves the check into the output frame so the resident
+does not have to remember a filename. The user should see the decision
+when it affects them, not the `.brr/outbox` path.
+
+### Outbound portals
+
+An outbound portal emits to a surface. Every emission must declare:
+
+- its reconcile semantic: append-log or desired-state;
+- its target: current event, another event, a gate destination, or a
+  desired-state surface key;
+- whether it resolves an event, updates a surface, or only narrates
+  progress.
+
+The frontmatter footgun proved the robustness point. A human-facing
+message should not depend on the resident hand-writing hidden protocol
+correctly. The near-term fix is helper commands that write today's files;
+the deeper fix is portal markers in the stream that the runner adapter
+extracts structurally.
+
+### Parked portals
+
+A parked portal emits and then pauses the continuation until something
+refluxes back. PLAN->approve is canonical, but the same shape covers
+deferred work, child-run requests, quota waits, and "resume when a new
+event arrives."
+
+A parked portal record needs:
+
+- `portal_id`;
+- owning `run_id` and, if applicable, owning event ids;
+- the rendered message or artifact that the human saw;
+- the resume condition: approval reply, time, new ingress, forge state,
+  child-run completion, or cancellation;
+- a pointer to continuation context: plan text, branch, commit, kb page,
+  run manifest, or schedule entry;
+- cost/consent policy: what can resume automatically and what needs a
+  human nod.
+
+Today's approximation is conversational: the PLAN is visible in history
+and the approval wake reconstructs from woven context. That is acceptable
+for #148. #159's mailbox work makes the parked portal a first-class
+record so a future wake resumes from an explicit continuation, not only
+from prose.
+
+## Parallel-safe run mailbox
+
+The mailbox contract borrows actor ideas without importing a runtime:
+runs, gates, schedules, and forge reconcilers exchange explicit messages;
+they do not mutate shared event state unless they hold the lease for that
+event or surface.
+
+### Event claim lease
+
+An event claim is a **lease**, not resolution. The future claim fields
+should extend the existing event frontmatter rather than replacing the
+event file model:
+
+- `claimed_by: <run-id>` names the current owner;
+- `claim_expires_at: <ISO timestamp>` lets the daemon clear orphaned
+  claims after a crash or killed runner;
+- an optional `claim_token` / epoch protects against stale writes if true
+  parallel local runs ever exist.
+
+Only the claiming run may resolve, postpone, or release the event. The
+daemon may clear expired/orphaned claims. In single-flight, this can land
+with fewer safeguards, but it must not lean on global `processing` as the
+only ownership marker; that would fail the parallel compatibility test.
+
+### Event outcomes
+
+At run exit, every event the run touched converges to one explicit
+outcome:
+
+- **resolved**: response/gate action/noop recorded; event becomes `done`;
+- **released**: not handled; claim clears and it returns to pending;
+- **postponed**: claim clears, event stays pending with `defer_until`
+  and a resident-authored reason/resume condition;
+- **operational failure**: lead receives the explicit failure note when
+  addressed; siblings may receive daemon-authored short deferral as
+  shipped in #128.
+
+This keeps "I chose not to handle it," "I crashed before handling it,"
+and "the medium failed" distinguishable without spawning one noisy wake
+per leftover event.
+
+### Run mailbox records
+
+A run mailbox record is an append-only message between actors. It is the
+durable form of a parked portal or a cross-run handoff. Minimum fields:
+
+- `mailbox_id`;
+- `from_run` / `to_run` or `to_daemon`;
+- `portal_id` when the message resumes or parks a portal;
+- target event ids or surface keys;
+- state: `open`, `parked`, `resumed`, `cancelled`, `expired`;
+- the continuation pointer and cost/consent policy.
+
+The first implementation does not need a new database. It can be a small
+file/log beside run manifests or an extension of run metadata. What
+matters is the ownership rule: a parked continuation is an explicit
+mailbox message, not a guess reconstructed from whichever thread happens
+to wake next.
+
+### Parallel compatibility rules
+
+If brr later allows more than one run at once, the rules are:
+
+- one owner per claimed event;
+- no run writes to another run's primary outbox;
+- every delivery names an event, gate, or desired-state surface key;
+- desired-state surfaces have an owner/surface key, and cross-owner
+  updates require handoff;
+- cost is attributed at run granularity, because the runner invocation is
+  the billable unit;
+- folding multiple events into one run is the consent point. If folding a
+  stuck or expensive event into a cheap fresh one is ambiguous, park it
+  and say why.
+
+## Cost-aware pacing
+
+The output frame should make pacing visible without inventing promises.
+
+- Show the runner medium and quota posture when the bundle exposes them.
+- Use historical cost facts only; never present a projected dollar figure
+  as a quote.
+- Explain chunking when it affects the user's wait or approval path.
+- Treat expensive folding as a consent decision. The resident can fold,
+  park, or defer, but the reason should be visible in PLAN, DEFERRAL, or
+  CLOSEOUT frames.
+
+The unresolved pricing/spend policy still lives with #130. #159 should
+not split one run's cost across events; it should make the fold decision
+legible enough that #130 can attach policy to the run.
+
+## Operator legibility
+
+The user should understand the control surface from the output itself:
+
+- a PLAN says "approve or edit" and what approval starts;
+- a PROGRESS card says what is happening now, not just that the daemon is
+  alive;
+- an INTERRUPTION-REPLY answers the right thread and avoids duplicate
+  coverage;
+- a DEFERRAL says what is parked and when it will wake;
+- a CLOSEOUT names changed artifacts, tests, branch/commit, and whether
+  related pending input was folded or intentionally left queued.
+
+Do not require the user to know `.brr/outbox`, frontmatter fences, or
+`inbox.json`. Those are implementation details until helper commands or
+stream markers make them structurally hard to misuse.
+
+## Implementation sequence
+
+1. **Portal helper commands.** Add small helpers that write today's
+   control files: `card`, `reply --event`, `send --gate`, `inbox`, and a
+   PLAN/deferral writer if the shape stays useful. This is the cheapest
+   way to move from "remember frontmatter" to "use a tool" without
+   changing daemon storage.
+2. **Resident-authored deferral.** Let a run deliberately postpone a
+   pending event with `defer_until`, reason, and resume condition. This
+   completes the non-failure half of #128 Q2.
+3. **Run-key primary outbox/response.** Move the primary response/outbox
+   key from lead event id to run id; require explicit `event:`/`gate:` or
+   current-thread target for deliveries. This is #128 Q3 and removes the
+   "which event owns the run" question.
+4. **Event claims.** Add per-run claim leases and exit-time outcome
+   handling. Keep single-flight, but make the storage model parallel-safe.
+5. **Parked-portal mailbox records.** Persist PLAN approvals, deferrals,
+   child-run requests, and resume conditions as mailbox records instead
+   of relying only on conversation history.
+6. **Concept prose sweep.** After the primitives land, reconcile
+   `plan-resident-cockpit.md`, `plan-cost-aware-cockpit.md`,
+   `design-managed-delivery.md`, `subject-managed-mode.md`, and the index
+   so the graph consistently says portals / projection instead of
+   dashboard / cockpit.
+
+The first code slice should be helper-shaped, not a parallel executor.
+It attacks the real dogfood pain (manual file/frontmatter protocol) while
+leaving the mailbox storage change crisp and reviewable.
+
+## Standing portal candidates
+
+This wake also confirms which context belongs on a live, summonable
+surface rather than in always-injected prose:
+
+- live inbox / queued-event state;
+- runner medium and quota posture;
+- branch dirt, unpushed commits, and prior-run artifact state;
+- forge issue/PR state when relevant;
+- kb-health findings as a pullable diagnostic, with only urgent drift
+  injected.
+
+These are not all #159 implementation work, but they share the same
+principle: inject the facts a run cannot miss; make everything else a
+portal the resident can summon when the turn needs it.
+
+## See also
+
+- [`src/brr/docs/portals.md`](../src/brr/docs/portals.md) — today's
+  shipped control-file manual.
+- [`design-run-event-model.md`](design-run-event-model.md) — run/event
+  substrate, including the open claim/deferral/response-key questions.
+- [`plan-resident-cockpit.md`](plan-resident-cockpit.md) — parent plan
+  whose "cockpit" language is now a historical label awaiting the
+  concept sweep.
+- [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md) — cost and
+  operator-control braid.
+- [`design-managed-delivery.md`](design-managed-delivery.md) and
+  [`subject-managed-mode.md`](subject-managed-mode.md) — gate transport
+  and managed-mode context this projection layer must reconcile.
+- [`design-co-maintainer.md`](design-co-maintainer.md) §11 — continuity
+  and delivery spine.

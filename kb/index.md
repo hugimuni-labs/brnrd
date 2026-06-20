@@ -243,18 +243,18 @@ dive-in map) and are stable until something contradicts them.
   (medium in the wake bundle), the first A2 quota snapshot ingress, and
   the diffense de-firehose first.
 - [Portal grammar & the reconcile/projection layer](design-portal-grammar.md) —
-  *direction settled in conversation (2026-06-18), not yet built; seed for
-  [#159](https://github.com/Gurio/brr/issues/159), sequenced after #148*.
-  Names two shapes the "interrupts as portals" conversation converged on:
-  the **reconcile/projection layer** above the gate (two reconcile
-  semantics — append-log vs desired-state — × N transports, gate stays a
-  thin pipe) and the **portal grammar** (the generated stream *is* the
-  surface; inbound/outbound/parked portals subsume the dotfile control
-  protocol). Drops the "dashboard"/"cockpit" nouns; lists the shapes to
-  change once the re-skin lands. Narrow exception shipped 2026-06-20:
-  hot-path orientation now says stdout is the plain current-thread fallback,
-  not the delivery model, and the live inbox portal is checked before
-  terminal closeout as part of #148 dogfooding.
+  *active; #159 design contract drafted 2026-06-20 after #148 closed*.
+  Names the **reconcile/projection layer** above gates (append-log vs
+  desired-state semantics × N transports), the resident **output-frame
+  grammar** (PLAN, PROGRESS, INBOUND-CHECK, INTERRUPTION-REPLY, HANDOFF,
+  DEFERRAL, CLOSEOUT), and the **parallel-safe run mailbox** assumptions
+  future code must preserve: event claims are leases, parked portals become
+  explicit mailbox records, deliveries name event/gate/surface targets, and
+  cost stays run-granular with folding as the consent point. The page also
+  records what has shipped early (portals manual, PLAN shape, stdout
+  wording, pre-closeout inbox check, tolerant outbox routing, #128 burst /
+  failure deferral) versus the next implementation slices, starting with
+  portal helper commands rather than parallel execution.
 
 ## Conversations & responses
 
