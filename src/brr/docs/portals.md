@@ -115,14 +115,17 @@ Two more steering surfaces live outside the outbox:
    matched pitfalls, and kb-health findings already rode in — let them
    steer you.
 
-3. **Decide: plan or execute.** Small, clear, in-reach → execute. Large,
-   ambiguous, costly, or "I think the current shape is wrong" → plan:
-   emit a **PLAN** message (the parked-portal shape above) for a build
-   you want a nod on, or surface contradictions and a proposed direction
-   as a chat reply for a reconsider. Either way, stop after — a parked
-   plan or a chat-only direction-set is a complete, healthy turn; the
-   build is the follow-up event. (See AGENTS.md → Stewardship and run.md
-   → "When the task asks you to reconsider".)
+3. **Decide: plan or execute.** Small, clear, in-reach → execute. A
+   contradiction with the current shape isn't a stop sign: reconcile it
+   against the live state and act on the healthiest resolution in this
+   same thought, narrating what you reconciled so the user can redirect.
+   Reserve a parked **PLAN** message (the parked-portal shape above) for a
+   build whose *spend or scope* genuinely wants a nod first, and a
+   chat-only direction-set for a genuine fork (a product/values call, or
+   intent you can't read from the code) — those are the cases that stop
+   and wait for the follow-up event, not every reconsideration. (See
+   AGENTS.md → Stewardship and run.md → "When the task asks you to
+   reconsider".)
 
 4. **Stay in the conversation.** For anything beyond a quick reply,
    compose `.card` so the human sees a live, self-authored status instead
