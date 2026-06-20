@@ -58,10 +58,11 @@ metadata (run ID, event ID, execution root, seed ref, optional
 auto-land target, current branch, response path, interim-response outbox,
 other pending events, live `inbox.json` path, shared runtime dir,
 generated run context file).
-The bundle's delivery contract is explicit: stdout is the default terminal
-reply for the current thread, the outbox can carry additional or
-replacement deliveries, and kb writes are optional — agents log only when
-there's something worth logging (see AGENTS.md → Knowledge base).
+The bundle's delivery contract is explicit: stdout is the plain
+current-thread fallback, and the run should otherwise leave an operational
+receipt while using explicit portals for anything meant to communicate. kb
+writes are optional — agents log only when there's something worth logging
+(see AGENTS.md → Knowledge base).
 
 Prompt assembly also injects the resident's dominion digest (per its
 `self-inject` index) and, when the deterministic kb preflight isn't
@@ -77,11 +78,11 @@ semantic.
 
 ### 4. Response
 
-The agent's default terminal reply is its last stdout message. brr captures
-stdout and writes it to `.brr/responses/<event-id>.md`. Runners are invoked
+When the resident chooses a plain current-thread reply, brr captures stdout
+and writes it to `.brr/responses/<event-id>.md`. Runners are invoked
 headless (`claude --print`, `codex exec`, `gemini -p --yolo`); progress
-goes to stderr and only the final stdout reply is captured in the terminal
-response file, so no per-runner output flag is needed for the common case.
+goes to stderr, so no per-runner output flag is needed for the common
+stdout-capture case.
 
 Responses are plain text — there is no frontmatter contract. If the
 agent cannot complete the task (missing context, ambiguous request,
@@ -89,11 +90,11 @@ unreachable service), it should say so plainly in the response and
 stop. The operator sees the reply in the gate thread and follows up
 with another event.
 
-Once the addressed thread has a deliverable response, the daemon marks the
-inbox event `done` before environment finalization or branch push. Gates
-deliver `done` events and clean up the inbox and response files after a
-successful send, while the progress card can continue to show post-response
-housekeeping.
+Once the run has a recognized operational signal for the addressed thread,
+the daemon marks the inbox event `done` before environment finalization or
+branch push. Gates deliver `done` events and clean up the inbox and response
+files after a successful send, while the progress card can continue to show
+post-response housekeeping.
 
 The agent may *also* stream replies mid-thought (the multi-response
 protocol; see [`brr-internals.md`](brr-internals.md) → Multi-response).
@@ -121,14 +122,13 @@ to the next wake without the agent committing by hand. The commit step is
 serialized across processes by a file lock so a concurrent ad-hoc session
 never races the shared git index.
 
-If the runner exits cleanly but stdout is empty and no current-thread
-outbox reply has been produced, the daemon retries up to
-`response_retries` times before failing the run. Hard failures (non-zero
-exit, timeout — controlled by `runner.timeout_seconds`, default 3600s) are
-not retried. In both cases, an addressed event that would otherwise go
-silent receives an explicit terminal failure note; the run record remains
-`error`, while the inbox event is marked `done` so the gate can deliver and
-clean up.
+If the runner exits cleanly but produces no satisfying signal, the daemon
+retries up to `response_retries` times before failing the run. Hard failures
+(non-zero exit, timeout — controlled by `runner.timeout_seconds`, default
+3600s) are not retried. In both cases, an addressed event that would
+otherwise go silent receives an explicit terminal failure note; the run
+record remains `error`, while the inbox event is marked `done` so the gate
+can deliver and clean up.
 
 ### 5. Finalization
 

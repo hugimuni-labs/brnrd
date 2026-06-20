@@ -560,7 +560,10 @@ def _build_run_context_bundle(
             "a manual reroute, so chunk work and commit early when the budget is "
             "tight; see plan-cost-aware-cockpit.md."
         )
-    sections.append("- Delivery: stdout captured by brr (see Delivery contract below)")
+    sections.append(
+        "- Delivery: situational outputs captured by brr "
+        "(see Delivery contract below)"
+    )
     if budget_seconds:
         sections.append(
             f"- Budget: ~{budget_seconds // 60}m of wall-clock runtime before "
@@ -623,17 +626,18 @@ def _build_run_context_bundle(
         "when it belongs in this run."
     )
     sections.append(
-        "- Stdout is the default terminal reply for the current thread. "
-        "Print the exact intended content as your final stdout message — "
-        "no preamble, no meta acknowledgment, no commentary outside it. "
+        "- Stdout is the compatibility/current-thread fallback, not the "
+        "delivery model. When the situation calls for one plain current-thread "
+        "reply, print the exact intended content as your final stdout message "
+        "— no preamble, no meta acknowledgment, no commentary outside it. "
         "Stream progress, debug, and tool output to stderr."
     )
     sections.append(
-        f"- brr captures stdout and stores it at {response_path}. Don't "
-        "write that file yourself, and don't substitute a file path for "
-        "the answer. If the runner fails or stays silent on an addressed "
-        "event, brr sends an explicit failure note instead of dropping the "
-        "thread."
+        f"- brr captures stdout and stores it at {response_path} as one "
+        "possible output artifact. Don't write that file yourself, and don't "
+        "substitute a file path for the answer. If an addressed run produces "
+        "no satisfying signal, brr sends an explicit failure note instead of "
+        "dropping the thread."
     )
     if outbox_path:
         sections.append(
@@ -641,11 +645,13 @@ def _build_run_context_bundle(
             "file into it to send the user a reply *mid-thought*; brr "
             "delivers each as its own chat message, in order, while you keep "
             "working. One file is one message (stage `*.tmp` and rename for "
-            "an atomic write). For an addressed event, make sure this thread "
-            "gets stdout, an outbox reply, or an honest noop/failure note. "
-            "A quick self-contained request can still end with one final "
-            "stdout; substantial work should use the card and, when useful, "
-            "mid-thought replies so the user is not waiting in the dark."
+            "an atomic write). For an addressed event, make sure the run "
+            "leaves a satisfying operational signal; when you intend to "
+            "communicate, use stdout or an explicit portal rather than "
+            "assuming every completion shape is a chat reply. A quick "
+            "self-contained request can still end through stdout; substantial "
+            "work should use the card and, when useful, mid-thought replies "
+            "so the user is not waiting in the dark."
         )
         sections.append(
             "- Outbox frontmatter routes a file elsewhere: `event: <id>` "
