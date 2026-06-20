@@ -23,9 +23,9 @@ Bundled runner profiles for brr.
 The runner contract is deliberately abstract: a runner is a process that
 can intelligently operate files in its working directory. brr passes the
 assembled prompt as the final command argument, captures stdout as the
-final reply, treats stderr as progress/debug output, and interprets the
-exit status as the process result. The runner does not need to know the
-response-file path for the common case.
+plain current-thread output artifact, treats stderr as progress/debug
+output, and interprets the exit status as the process result. The runner
+does not need to know the response-file path for the common case.
 
 These bundled profiles are defaults, not the user's source of truth. To
 manage runner profiles for a project, create `.brr/runners.md` with the
@@ -54,10 +54,12 @@ Alias profiles with `binary` are for variants of the same CLI, for example
 `claude-bare-api-only` uses `--bare` and requires `ANTHROPIC_API_KEY`
 (OAuth / `~/.claude` subscription auth is not used).
 
-The runner's final reply is read from stdout. brr captures stdout and
-writes it to the event's response file automatically; runners do not
-need a per-CLI flag for that. Progress, traces, and tool output should
-go to stderr (which is the convention for all three runners above).
+When the resident chooses a plain current-thread stdout reply, brr reads it
+from stdout and writes it to the event's response file automatically;
+runners do not need a per-CLI flag for that. Other delivery shapes ride the
+outbox / gate / commit / noop portals named in the run prompt. Progress,
+traces, and tool output should go to stderr (which is the convention for all
+three runners above).
 
 Users can override `cmd` per-repo by setting `runner_cmd` in
 `.brr/config`. The same stdout capture rules apply, and `{prompt}` is

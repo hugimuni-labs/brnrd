@@ -131,6 +131,54 @@ class TestEvents:
         assert ev["telegram_chat_id"] == 123
         assert ev["telegram_user"] == "alice"
 
+    def test_update_event_meta_sets_and_clears_key(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        protocol.create_event(inbox, source="test", body="hello")
+        ev = protocol.list_pending(inbox)[0]
+
+        protocol.update_event_meta(ev, defer_until="2099-01-01T00:00:00Z")
+        updated = protocol.list_pending(inbox)[0]
+        assert updated["defer_until"] == "2099-01-01T00:00:00Z"
+
+        protocol.update_event_meta(updated, defer_until=None)
+        cleared = protocol.list_pending(inbox)[0]
+        assert "defer_until" not in cleared
+
+    def test_list_dispatchable_skips_future_deferred_events(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        protocol.create_event(
+            inbox,
+            source="test",
+            body="wait",
+            defer_until="2099-01-01T00:00:00Z",
+        )
+        protocol.create_event(inbox, source="test", body="now")
+
+        all_pending = protocol.list_pending(inbox)
+        dispatchable = protocol.list_dispatchable(inbox, now=0)
+
+        assert [ev["body"] for ev in all_pending] == ["wait", "now"]
+        assert [ev["body"] for ev in dispatchable] == ["now"]
+
+    def test_list_dispatchable_includes_expired_or_invalid_defer(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        protocol.create_event(
+            inbox,
+            source="test",
+            body="expired",
+            defer_until="2000-01-01T00:00:00Z",
+        )
+        protocol.create_event(
+            inbox,
+            source="test",
+            body="invalid",
+            defer_until="not-a-time",
+        )
+
+        dispatchable = protocol.list_dispatchable(inbox)
+
+        assert [ev["body"] for ev in dispatchable] == ["expired", "invalid"]
+
 
 class TestResponses:
     def test_write_and_read(self, tmp_path):
