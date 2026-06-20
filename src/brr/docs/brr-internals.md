@@ -193,15 +193,14 @@ In `.brr/config`:
   whenever the scan isn't clean.
 - `kb_maintenance=never` — never inject; do kb hygiene by hand.
 
-## Multi-response: terminal, interim + interleaved replies
+## Multi-response: situational outputs
 
-Stdout is the default terminal reply for the current event, but delivery is
-not defined by stdout alone. The resident can satisfy the current thread by
-printing stdout or by writing a current-thread outbox reply, can ship
-**interim** replies mid-thought, and can **fold in** other pending events
-without waiting for their own spawn. The mechanism is a file drop zone,
-mirroring the diffense precedent (agent writes a host-visible artifact, then
-addresses the delivery path explicitly):
+Stdout is the plain current-thread fallback, but delivery is not defined by
+stdout alone. The daemon needs a recognized operational signal that the run
+did not disappear; the resident uses explicit portals when it intends to
+communicate. The mechanism is a file drop zone, mirroring the diffense
+precedent (agent writes a host-visible artifact, then addresses the delivery
+path explicitly):
 
 - **Drop zone** — `.brr/outbox/<event-id>/`. The resident writes a
   complete markdown reply per file (staging as `*.tmp` and renaming for
@@ -226,10 +225,10 @@ addresses the delivery path explicitly):
   `getUpdates` long poll, so interim and folded replies are not delayed
   by inbound polling.
 - **Silent-run fallback** — when an addressed event reaches the end of the
-  runner/env path without stdout or a current-thread outbox reply, the
-  daemon writes an explicit terminal failure note and marks the inbox event
-  `done` so the gate closes the thread. The run record still stays
-  `error`, preserving the operational truth.
+  runner/env path without any satisfying signal, the daemon writes an
+  explicit terminal failure note and marks the inbox event `done` so the
+  gate closes the thread. The run record still stays `error`, preserving
+  the operational truth.
 - **Interleaving** — an outbox file whose frontmatter names another
   pending event (`event: <id>`) is routed to *that* event's queue and
   that event is marked `done`, so its thread gets the reply and it never

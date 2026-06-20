@@ -14,6 +14,7 @@ import threading
 import time
 import random
 import string
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -194,6 +195,16 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
+def _format_meta_value(value: object) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _generate_id() -> str:
     ts = time.time_ns()
     rand = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
@@ -280,6 +291,53 @@ def list_pending(inbox_dir: Path) -> list[dict[str, Any]]:
     return events
 
 
+def _parse_iso_epoch(value: object) -> float | None:
+    """Parse the event ``defer_until`` timestamp, returning epoch seconds."""
+    if value is None:
+        return None
+    candidate = str(value).strip()
+    if not candidate:
+        return None
+    if candidate.endswith(("Z", "z")):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def event_is_deferred(event: dict[str, Any], now: float | None = None) -> bool:
+    """Return true when an event has a future ``defer_until`` timestamp.
+
+    Invalid timestamps degrade to "not deferred" so a malformed event does
+    not disappear from dispatch forever.
+    """
+    until = _parse_iso_epoch(event.get("defer_until"))
+    if until is None:
+        return False
+    return until > (time.time() if now is None else now)
+
+
+def list_dispatchable(
+    inbox_dir: Path,
+    *,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    """Return pending/processing events whose deferral has expired.
+
+    ``list_pending`` intentionally keeps returning deferred events so a
+    fresh wake can still see and fold them from the live inbox. The daemon
+    dispatch loop uses this narrower view for choosing a lead event.
+    """
+    return [
+        event for event in list_pending(inbox_dir)
+        if not event_is_deferred(event, now=now)
+    ]
+
+
 def list_done(inbox_dir: Path, source: str) -> list[dict[str, Any]]:
     """Return done events matching *source*, oldest first."""
     if not inbox_dir.exists():
@@ -325,6 +383,56 @@ def set_status(event: dict[str, Any], status: str) -> None:
     new_text = text.replace(f"status: {old_status}", f"status: {status}", 1)
     _atomic_write(path, new_text)
     event["status"] = status
+
+
+def update_event_meta(event: dict[str, Any], **updates: object) -> None:
+    """Set or clear flat event frontmatter keys atomically.
+
+    Passing ``None`` removes a key. Event frontmatter is intentionally flat
+    today; nested blocks are preserved if present but not edited.
+    """
+    path: Path = event["_path"]
+    text = path.read_text(encoding="utf-8")
+    m = re.match(r"^---\n(.*?\n)---\n?", text, re.DOTALL)
+    if not m:
+        return
+
+    seen: set[str] = set()
+    lines: list[str] = []
+    for line in m.group(1).splitlines():
+        stripped = line.lstrip()
+        if ":" not in stripped or line.startswith(" "):
+            lines.append(line)
+            continue
+        key = stripped.split(":", 1)[0].strip()
+        if key in updates:
+            seen.add(key)
+            value = updates[key]
+            if value is None:
+                continue
+            lines.append(f"{key}: {_format_meta_value(value)}")
+        else:
+            lines.append(line)
+
+    insert_at = len(lines)
+    for idx, line in enumerate(lines):
+        if line.split(":", 1)[0].strip() == "created":
+            insert_at = idx
+            break
+    additions = [
+        f"{key}: {_format_meta_value(value)}"
+        for key, value in updates.items()
+        if key not in seen and value is not None
+    ]
+    lines[insert_at:insert_at] = additions
+
+    body = text[m.end():]
+    _atomic_write(path, "---\n" + "\n".join(lines) + "\n---\n" + body)
+    for key, value in updates.items():
+        if value is None:
+            event.pop(key, None)
+        else:
+            event[key] = value
 
 
 # ── Response files ───────────────────────────────────────────────────
