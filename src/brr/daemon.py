@@ -65,6 +65,17 @@ from .run import Run
 
 _SCAN_INTERVAL = 3
 _BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
+# Burst coalescing. When a burst is already queued (≥2 pending events) and
+# the slot is idle, hold dispatch briefly so the whole burst lands in one
+# wake instead of spawning a fresh thought per fragment. A lone pending
+# event never waits — debounce only spends latency where coalescing repays
+# it. ``burst_window`` is the quiet gap that ends a burst; ``burst_max_wait``
+# caps how long the oldest event waits so a steady trickle can't starve.
+# Overridable via ``.brr/config`` (``dispatch.burst_window_seconds`` /
+# ``dispatch.burst_max_wait_seconds``); a 0 window disables coalescing.
+# See kb/design-run-event-model.md Q2 (re-wake debounce) and #128.
+_BURST_WINDOW_DEFAULT = 1.5
+_BURST_MAX_WAIT_DEFAULT = 12.0
 # Cadence for the run-time heartbeat packet. 30s is short enough that
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
@@ -1892,6 +1903,48 @@ def _run_worker_and_finalize(
             )
 
 
+# ── Burst coalescing (dispatch debounce) ────────────────────────────
+
+
+def _event_mtime(event: dict) -> float:
+    """File mtime of a pending event ≈ its arrival time. 0.0 when unknown,
+    so an unstattable event reads as old and never holds the burst window."""
+    path = event.get("_path")
+    try:
+        return path.stat().st_mtime
+    except (OSError, AttributeError):
+        return 0.0
+
+
+def _burst_settle_delay(
+    pending: list[dict],
+    window: float,
+    max_wait: float,
+    now: float,
+) -> float:
+    """Seconds to hold dispatch so an arriving burst coalesces into one
+    wake; ``0.0`` means dispatch now.
+
+    Holds only when a burst is *already* forming (≥2 pending events), so a
+    lone message never pays debounce latency. While events keep arriving
+    less than *window* apart the burst is still landing and we wait — until
+    either the inbox goes quiet for *window* or the oldest event has waited
+    *max_wait* (the anti-starvation cap). A *window* of 0 disables
+    coalescing. See kb/design-run-event-model.md Q2 (re-wake debounce) and
+    #128: this is the first behavioural slice of the run/event model — one
+    wake reads the settled burst and folds it, instead of the daemon
+    spawning one thought per fragment.
+    """
+    if window <= 0 or len(pending) < 2:
+        return 0.0
+    mtimes = [_event_mtime(ev) for ev in pending]
+    quiet_for = now - max(mtimes)
+    waited = now - min(mtimes)
+    if quiet_for >= window or waited >= max_wait:
+        return 0.0
+    return min(window - quiet_for, max_wait - waited)
+
+
 # ── Main loop ────────────────────────────────────────────────────────
 
 
@@ -1944,6 +1997,10 @@ def start(
 
     cfg = conf.load_config(repo_root)
     max_retries = int(cfg.get("response_retries", 1))
+    burst_window = float(
+        cfg.get("dispatch.burst_window_seconds", _BURST_WINDOW_DEFAULT))
+    burst_max_wait = float(
+        cfg.get("dispatch.burst_max_wait_seconds", _BURST_MAX_WAIT_DEFAULT))
     dev_reload_mode = (
         dev_reload if dev_reload is not None
         else bool(cfg.get("dev_reload", False))
@@ -2031,24 +2088,40 @@ def start(
             # picks them up at a plan boundary (multi-response), or the
             # next spawn handles them. Reload also holds dispatch so the
             # slot can drain.
+            burst_hold = 0.0
             if current is None and not reload_requested:
                 pending = protocol.list_pending(inbox_dir)
                 if pending:
-                    event = pending[0]
-                    eid = event["id"]
-                    print(f"[brr] processing: {eid}")
-                    protocol.set_status(event, "processing")
-                    current = pool.submit(
-                        _run_worker_and_finalize,
-                        event, repo_root, responses_dir, cfg, max_retries,
-                    )
+                    burst_hold = _burst_settle_delay(
+                        pending, burst_window, burst_max_wait, time.time())
+                    if burst_hold <= 0:
+                        # Dispatch the oldest as lead; the wake reads the
+                        # whole settled burst and folds the rest in (the
+                        # multi-response ``event:`` path), so a burst becomes
+                        # one thought, not one spawn per fragment.
+                        event = pending[0]
+                        eid = event["id"]
+                        extra = len(pending) - 1
+                        suffix = f" (+{extra} pending)" if extra else ""
+                        print(f"[brr] processing: {eid}{suffix}")
+                        protocol.set_status(event, "processing")
+                        current = pool.submit(
+                            _run_worker_and_finalize,
+                            event, repo_root, responses_dir, cfg, max_retries,
+                        )
 
             # Event-driven idle wait: block until a fresh in-process event
             # wakes us or the poll tick elapses, whichever comes first.
             # The tick still bounds latency for cross-process writers (the
             # ``brr run`` CLI) and time-based work (due schedules), which
-            # don't set the signal.
-            wake.wait(_SCAN_INTERVAL)
+            # don't set the signal. While holding a burst to settle, shorten
+            # the wait to the remaining window so dispatch fires promptly
+            # once it goes quiet — a fresh event also wakes us early and
+            # extends the window on the next pass.
+            wait_timeout = _SCAN_INTERVAL
+            if burst_hold > 0:
+                wait_timeout = min(wait_timeout, burst_hold)
+            wake.wait(wait_timeout)
 
             for t in gate_threads:
                 if not t.is_alive():

@@ -86,16 +86,18 @@ Concretely, when a task reads that way:
 
 1. Re-read the relevant code and the kb pages that describe the
    current design. Don't infer the shape from the task body alone.
-2. Surface any contradiction between the request and the current
-   code, design notes, or guardrails *before* resolving it (per
-   `AGENTS.md` → Stewardship). Make the conflict visible and let the
-   operator decide.
-3. A chat-only reply that names the contradiction and proposes a
-   direction is a complete and successful task. The diff-as-receipt
-   rule does **not** apply when there is no clear edit to make yet —
-   shipping a half-fitting commit just to have a diff is the failure
-   mode this section exists to prevent.
-
-If the operator agrees with the proposed direction, they will reply
-with a follow-up event scoped to "go do that". That second event is
-the right place for the implementation diff, not the first.
+2. Name any contradiction between the request and the current code,
+   design notes, or guardrails — then resolve it. You hold the recent
+   context; reconcile against it, decide the most sensible shape, and
+   when that shape is clear and the change is reversible, **make it in
+   this same thought**, saying what you reconciled and why so the
+   operator can redirect (per `AGENTS.md` → Stewardship). Don't park a
+   clear, reversible call for a second "go do that" round-trip.
+3. The exception is a genuine fork: when there is no clear edit yet — a
+   real product/values decision, or intent you can't resolve from the
+   code — a chat-only reply that names the contradiction and proposes a
+   direction is the complete task. The diff-as-receipt rule does **not**
+   apply then; shipping a half-fitting commit just to have a diff is the
+   failure mode this guards. That's also the case to wait for the
+   operator's nod before spending — the costly/irreversible/fork case,
+   not every reconsideration.
