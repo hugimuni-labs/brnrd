@@ -76,6 +76,11 @@ _BUILTIN_GATES = ["telegram", "slack", "github", "cloud"]
 # See kb/design-run-event-model.md Q2 (re-wake debounce) and #128.
 _BURST_WINDOW_DEFAULT = 1.5
 _BURST_MAX_WAIT_DEFAULT = 12.0
+# When a run fails before it can fold a settled burst, the lead event gets
+# the terminal failure note and the siblings would otherwise become one
+# failure wake each. Defer those siblings briefly; a fresh event can still
+# wake the resident and show them in the live inbox.
+_FAILURE_DEFER_SECONDS_DEFAULT = 300.0
 # Cadence for the run-time heartbeat packet. 30s is short enough that
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
@@ -519,6 +524,12 @@ def _run_worker(
     brr_dir = gitops.shared_brr_dir(repo_root)
     runs_dir = brr_dir / "runs"
     runner_name = runner.resolve_runner(repo_root)
+    failure_defer_seconds = float(
+        cfg.get(
+            "dispatch.failure_defer_seconds",
+            _FAILURE_DEFER_SECONDS_DEFAULT,
+        )
+    )
 
     conv_key = conversations.conversation_key_for_event(event) or ""
     correspondent_key = conversations.correspondent_key_for_event(event) or ""
@@ -646,6 +657,12 @@ def _run_worker(
             responses_dir,
             resp_path,
             f"environment setup failed: {e}",
+        )
+        _defer_pending_siblings_after_failure(
+            inbox_dir,
+            lead_event_id=eid,
+            run_id=task.id,
+            seconds=failure_defer_seconds,
         )
         emit("failed", run_id=task.id, stage="env", error=str(e))
         return task
@@ -1018,6 +1035,12 @@ def _run_worker(
         responses_dir,
         resp_path,
         failure_reason,
+    )
+    _defer_pending_siblings_after_failure(
+        inbox_dir,
+        lead_event_id=eid,
+        run_id=task.id,
+        seconds=failure_defer_seconds,
     )
     # finalize first so any preserved branches / containers are recorded
     # on the run before the failure packet renders — the failure packet
@@ -1850,6 +1873,50 @@ def _write_terminal_failure_response(
     return True
 
 
+def _format_utc_after(seconds: float) -> str:
+    return time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+        time.gmtime(time.time() + max(0.0, seconds)),
+    )
+
+
+def _defer_pending_siblings_after_failure(
+    inbox_dir: Path,
+    *,
+    lead_event_id: str,
+    run_id: str,
+    seconds: float,
+) -> int:
+    """Brake sibling events after a terminal run failure.
+
+    The current lead event receives the explicit failure note. Other
+    pending events stay pending and visible to future wakes, but they are
+    not eligible to become the next lead until ``defer_until`` passes.
+    This is the first Q2-shaped failure brake for #128; per-run claim and
+    run-keyed primary outbox remain separate slices.
+    """
+    if seconds <= 0:
+        return 0
+    defer_until = _format_utc_after(seconds)
+    changed = 0
+    for pending in protocol.list_pending(inbox_dir):
+        if pending.get("id") == lead_event_id:
+            continue
+        if pending.get("status") != "pending":
+            continue
+        try:
+            protocol.update_event_meta(
+                pending,
+                defer_until=defer_until,
+                deferred_by_run=run_id,
+                defer_reason="operational_failure",
+            )
+        except OSError:
+            continue
+        changed += 1
+    return changed
+
+
 def _set_event_status_if_present(event: dict, status: str) -> bool:
     """Set an inbox event status, tolerating gate cleanup after delivery."""
     try:
@@ -2090,7 +2157,7 @@ def start(
             # slot can drain.
             burst_hold = 0.0
             if current is None and not reload_requested:
-                pending = protocol.list_pending(inbox_dir)
+                pending = protocol.list_dispatchable(inbox_dir)
                 if pending:
                     burst_hold = _burst_settle_delay(
                         pending, burst_window, burst_max_wait, time.time())
@@ -2104,6 +2171,12 @@ def start(
                         extra = len(pending) - 1
                         suffix = f" (+{extra} pending)" if extra else ""
                         print(f"[brr] processing: {eid}{suffix}")
+                        protocol.update_event_meta(
+                            event,
+                            defer_until=None,
+                            deferred_by_run=None,
+                            defer_reason=None,
+                        )
                         protocol.set_status(event, "processing")
                         current = pool.submit(
                             _run_worker_and_finalize,
