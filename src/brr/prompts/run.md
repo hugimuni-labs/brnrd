@@ -24,15 +24,17 @@ any paths the task explicitly requires.
 
 ## Delivery
 
-Your final reply is what the user sees. Print the exact intended content
-as your final stdout message — no preamble, no commentary, no meta
-acknowledgment. Stream progress, debug, and tool output to stderr. brr
-captures stdout and routes it back through whatever surface the task came
-in on.
+Delivery is situational communication. For a plain current-thread closeout,
+print the exact intended content as your final stdout message — no
+preamble, no commentary, no meta acknowledgment. For other work, leave the
+right operational receipt and use the portals in the Run Context Bundle when
+you intend to communicate. Stream progress, debug, and tool output to
+stderr. brr captures stdout and treats it as one output artifact, not the
+whole delivery model.
 
 Don't substitute a file path for the answer. If you wrote findings to
-`kb/`, summarise them in stdout and link to the file; the chat reply is
-the deliverable.
+`kb/`, summarise them in the appropriate user-facing output and link to the
+file; the chat reply is the deliverable when the task asks for one.
 
 When the task came from a GitHub issue or PR and you pushed a branch,
 end your response with the branch name and commit SHA (e.g.
