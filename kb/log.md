@@ -7387,3 +7387,85 @@ is dogfooded. Cramming a daemon-dispatch refactor into the back half of a
 wants its own scoped wake. Left as the maintainer's call.
 
 Check: `pytest tests/test_docs.py -q` (10 passed).
+
+## [2026-06-20] decision | Playbook stance: reconcile-and-act over surface-and-wait; tickets are dated snapshots
+
+The maintainer flagged that the resident does good housekeeping but is
+*aloof*: it surfaces a contradiction between a request and an existing
+ticket and then waits, rather than reconciling it from the recent
+co-maintainer context and acting — and it treats ticket text as
+authoritative even when the architecture has moved past it. The entry
+directly above (#148 Tier A, "Deliberately not done this wake — surfaced
+to the maintainer instead… Left as the maintainer's call") is a specimen.
+
+Root cause was in the prompt shape, not the model: the dominion playbook
+already carried the right instinct ("keep them posted… you decide";
+"your judgement plus an honest word beats a compliant diff"), but it
+**defers to `AGENTS.md` → Stewardship as the contract**, and that contract
+(plus two echoes and the run.md "reconsider" section) encoded a contractor
+default — *"surface the contradiction… let the operator resolve it,"* and a
+mandated two-event round-trip (*"the second event is the right place for
+the implementation diff, not the first"*). The good instinct was walled
+off by the contract it leaned on.
+
+Reshaped the contract rather than bolting on "be bold" language:
+
+- **`AGENTS.md` → Stewardship** now says *name the conflict, then reconcile
+  and act* — form the resolution from the current state, take it, close the
+  loop so the user can redirect — and reserves surface-and-wait for a call
+  that's genuinely the operator's (irreversible/costly/wide-blast, a
+  product/values fork, or unreadable intent). Names the twin failure modes
+  as equal: path-of-least-resistance compliance **and** aloof bounce-back.
+- New **"tickets are dated snapshots, not specs"** paragraph — reconcile a
+  ticket against the live code + recent `kb/log.md` + decisions, act on the
+  reconciled understanding, then keep the ticket honest. Same state-first
+  lens the kb section applies to its own pages.
+- New **"next doable chunk"** line — advance the doable chunk with a
+  close-loop note instead of stalling the whole request on clarification.
+- **`prompts/run.md` → "When the task asks you to reconsider"** drops the
+  round-trip: resolve in the same thought when the shape is clear and
+  reversible; chat-only reply reserved for a genuine fork.
+- Echoes updated: Self-review #2 (catches both failure modes), Guardrails
+  ("when in doubt" scoped to intent / genuinely-the-user's calls),
+  `docs/portals.md` step 3, and the `dominion-playbook.md` *seed*. Bumped
+  the AGENTS.md `Revision:` to 2026-06-20.
+
+Not touched: the **live** dominion playbook (`.brr/dominion/playbook.md`) —
+the resident's owned memory, which restates the old contract and is left
+for the resident to reconcile on a wake (or the maintainer to nudge).
+
+Check: `pytest tests/test_prompts.py -q` (55 passed).
+
+## [2026-06-20] implement | Burst coalescing — dispatch debounce (#128 first behavioural slice)
+
+The daemon spawned a fresh thought per inbound fragment, so a rapid burst
+became N serial wakes and "the daemon wouldn't ship all the messages that
+accumulated into a fresh wake" (the live Telegram symptom). Shipped the
+first *behavioural* slice of the run/event model (#128), deliberately small
+and safe — no change to the claim / finalize / response-keying paths.
+
+`daemon._burst_settle_delay(pending, window, max_wait, now)` is a pure
+function the loop consults before dispatch. It holds **only when a burst is
+already forming** (≥2 pending), so a lone message never pays debounce
+latency — debounce spends time only where coalescing repays it. While
+events keep arriving < `window` apart it holds; it releases once the inbox
+is quiet for `window` **or** the oldest event has waited `max_wait`
+(anti-starvation cap). The wake then reads the settled burst (existing
+*Inbox — other pending events* view) and folds it via `event:` routing —
+one thought, not one spawn per fragment. Config:
+`dispatch.burst_window_seconds` (1.5) / `dispatch.burst_max_wait_seconds`
+(12); 0 window disables. The bottom-of-loop idle wait shrinks to the
+remaining hold so dispatch fires promptly once quiet.
+
+Honest scope: fixes the "one wake for the accumulated burst" symptom. Does
+**not** kill the operational-failure spam — a run that credit-fails before
+folding leaves siblings pending, which now coalesce into one retry wake
+whose lead re-fails (better than N independent failures, not gone). That
+needs the Q1 per-run claim + Q2 failure `defer_until` slice, for which the
+burst-window is the substrate. `design-run-event-model.md` updated (status,
+locus, a *Shipped* section, remaining-work Q1/Q2).
+
+Tests: new `tests/test_daemon_burst.py` (pure-function settle logic with
+controlled mtimes; deterministic loop-wiring + config-path tests).
+`test_daemon_single_flight.py` disables the window so its ordered two-event
+dispatch assertions stay focused. Full suite: 965 passed.

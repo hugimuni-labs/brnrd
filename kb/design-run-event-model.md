@@ -1,15 +1,20 @@
 # Run / event model — retire the per-event "task"
 
-Status: **active; rename slice shipped 2026-06-18**. A slice of the
-**Co-maintainer** milestone ([`design-co-maintainer.md`](design-co-maintainer.md)
-§6 run↔reply decoupling, §9 responsiveness, §11 execution order) and the
-design page issue **#128**. The first implementation slice retired the
-persisted `Task` / `.brr/tasks` layer in favour of `Run` manifests at
+Status: **active; rename slice shipped 2026-06-18, dispatch
+burst-coalescing shipped 2026-06-20**. A slice of the **Co-maintainer**
+milestone ([`design-co-maintainer.md`](design-co-maintainer.md) §6
+run↔reply decoupling, §9 responsiveness, §11 execution order) and the
+design page issue **#128**. The rename slice retired the persisted `Task`
+/ `.brr/tasks` layer in favour of `Run` manifests at
 `.brr/runs/<run-id>/run.md`, generated `run-*` ids, run-keyed lifecycle
-packets, and run conversation records. Remaining work is behavioural:
-per-run event claims, defer/debounce, primary response/outbox keying, and
-cost/consent policy. The page subsumes the narrower "batch pending events
-per correspondent into one wake" idea raised on #114.
+packets, and run conversation records. The burst-coalescing slice taught
+the dispatch loop to hold a forming burst (≥2 pending) until it settles, so
+the accumulated messages land in **one** wake (see *Shipped* below).
+Remaining behavioural work: per-run event claims (Q1), postpone/failure
+`defer_until` (Q2), primary response/outbox keying (Q3), and cost/consent
+policy (Q4). The page subsumes the narrower "batch pending events per
+correspondent into one wake" idea raised on #114 — burst-coalescing is its
+first, safe realisation.
 
 ## Why
 
@@ -59,14 +64,18 @@ if pending:
 ```
 
 The daemon still picks `pending[0]`, then builds a `Run` from it
-([`../src/brr/run.py`](../src/brr/run.py) `Run.from_event`). The rename
-slice shipped on 2026-06-18, so persisted manifests now live at
-`.brr/runs/<run-id>/run.md`, new ids have the `run-*` shape, lifecycle
-packets use `run_created` + `run_id`, and conversation rows use
-`kind: run`. The remaining coupling is behavioural: the response key
-(`responses/<event_id>.md`) and primary outbox still key off the lead
-event, and daemon dispatch still chooses `pending[0]` before the run can
-claim / defer the rest of the inbox.
+([`../src/brr/run.py`](../src/brr/run.py) `Run.from_event`) — but as of
+2026-06-20 it first **holds a forming burst until it settles**
+(`_burst_settle_delay`), so a rapid burst is read by one wake rather than
+re-spawned one fragment at a time. The rename slice shipped on 2026-06-18,
+so persisted manifests now live at `.brr/runs/<run-id>/run.md`, new ids
+have the `run-*` shape, lifecycle packets use `run_created` + `run_id`, and
+conversation rows use `kind: run`. The remaining coupling is behavioural:
+the response key (`responses/<event_id>.md`) and primary outbox still key
+off the lead event, and dispatch still chooses `pending[0]` and can't yet
+**claim / defer** the rest of the inbox — so a run that doesn't fold the
+settled burst, or fails before it can, still re-spawns per leftover event
+(Q1/Q2).
 
 ## Want
 
@@ -108,6 +117,37 @@ Concretely:
   noop. Multi-event runs extend, not replace, that signal (see below).
 - **Event immutability + file CRUD.** `protocol.py`'s event files stay the
   substrate; this is a dispatch + naming reshape, not a storage rewrite.
+
+## Shipped — burst-coalescing dispatch debounce (2026-06-20)
+
+The first *behavioural* slice, kept deliberately small and safe (no change
+to claim / finalize / response-keying). The daemon loop now consults
+`daemon._burst_settle_delay(pending, window, max_wait, now)` before
+dispatching:
+
+- It holds dispatch **only when a burst is already forming** (≥2 pending
+  events) — a lone message never waits, so coalescing adds **no latency**
+  to the common single-message case.
+- While events keep arriving < `window` apart the burst is "still landing"
+  and the loop waits; it dispatches once the inbox is quiet for `window`
+  **or** the oldest event has waited `max_wait` (anti-starvation cap).
+- The wake then reads the whole settled burst (the existing *Inbox — other
+  pending events* view) and folds it via `event:` routing — one thought,
+  not one spawn per fragment.
+
+Config: `dispatch.burst_window_seconds` (default 1.5) and
+`dispatch.burst_max_wait_seconds` (default 12); a 0 window disables it.
+Tests: [`../tests/test_daemon_burst.py`](../tests/test_daemon_burst.py).
+
+**What this does and doesn't fix.** It directly fixes "the daemon wouldn't
+ship all the messages that accumulated into a fresh wake": a settled burst
+is now one wake. It does **not** by itself stop a *successful* run from
+leaving un-folded events to re-spawn (they now re-coalesce into one wake,
+not N — better, not gone), nor the **operational-failure spam** (a run that
+credit-fails before folding leaves its siblings pending; they coalesce into
+one retry wake whose lead re-fails, and so on). Killing that spam is the
+**Q1 per-run claim + Q2 failure `defer_until`** slice — the burst-window is
+the safe substrate it builds on, not a substitute.
 
 ## The hard questions remaining
 
@@ -262,8 +302,11 @@ ticket; this page is its substrate.
 
 ## Remaining work
 
-1. **Q1/Q2** — accept the per-run claim + `defer_until` debounce, or a
-   simpler "mark all processing, clear on reap" with no postpone brake?
+1. **Q1/Q2** — the dispatch burst-coalescing debounce shipped 2026-06-20
+   (arrival coalescing; see *Shipped* above). Still open: the **per-run
+   claim** (Q1) and a **`defer_until`** brake for postponed *and*
+   operationally-failed events (Q2), so an un-folded or credit-failed burst
+   stops re-spawning (and re-failing) per event.
 2. **Q3** — move the primary response/outbox key to **run id** (cleanest),
    with explicit per-event delivery routing.
 3. **Q4** — confirm **run-granularity** cost attribution and "folding is

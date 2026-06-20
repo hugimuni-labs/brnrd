@@ -223,6 +223,15 @@ no abstract base class.
 
 Status: shipped on 2026-05-15.
 
+> Lineage: this records Phase 3 as shipped. The revisit *stance* was later
+> refined (2026-06-20): the default is now *reconcile the contradiction
+> against the current state and act in the same thought*, with
+> surface-and-wait / chat-only reply reserved for a genuine fork (spend
+> nod, product/values call, or unreadable intent) — see `AGENTS.md` →
+> Stewardship and `kb/log.md`. The verbatim trigger-phrase list named
+> below was also dropped earlier in favour of reading for ownership
+> intent. The current shape lives in `prompts/run.md` + `AGENTS.md`.
+
 Three small sharpenings of the existing single-pass runner surface,
 not a pre-task plan stage:
 
