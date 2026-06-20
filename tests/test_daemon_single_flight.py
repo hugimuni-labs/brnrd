@@ -43,6 +43,10 @@ def _baseline_patches(monkeypatch):
     monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
     monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    # These cases assert immediate, ordered dispatch of two pending events;
+    # burst coalescing (which would hold a ≥2 burst to settle) is a separate
+    # concern, exercised in test_daemon_burst.py. Disable it here.
+    monkeypatch.setattr(daemon, "_BURST_WINDOW_DEFAULT", 0.0)
 
 
 def _run_two_events(tmp_path, monkeypatch, cfg):

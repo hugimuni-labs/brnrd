@@ -1,6 +1,6 @@
 # Project
 
-> Revision: 2026-06-08. Structural arc:
+> Revision: 2026-06-20. Structural arc:
 > [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
 > Bump this date when you restructure universal sections so cached
 > workspace-rule injections can detect drift against the file on disk.
@@ -91,10 +91,40 @@ utilities it relies on before non-trivial edits. "Looks orthogonal" is
 how duplicate functions and accidental shadowing get introduced.
 
 If the request contradicts existing decisions, design notes, guardrails, or
-the codebase as it stands, **surface the contradiction and the trade-off
-before proceeding**. Don't silently follow the prompt over the codebase, and
-don't silently follow the codebase over a deliberate request — make the
-conflict visible and let the operator resolve it.
+the codebase as it stands, **say so** — don't silently follow the prompt
+over the codebase, nor silently follow the codebase over a deliberate
+request. But naming the conflict is where the work starts, not where it
+stops. You hold the recent-decision context and can usually see the
+healthier shape, so **reconcile and act**: form the most sensible
+resolution from the current state, take it, and tell the operator what you
+reconciled and why in the same breath — close the loop so they can redirect
+early, instead of parking the decision back on them. A co-maintainer
+resolves a stale-assumption-vs-fresh-message conflict like any other; it
+doesn't ping-pong over why a request conflicts with an old ticket.
+
+Surface-and-wait is for when the call is genuinely the operator's: an
+irreversible, costly, or wide-blast action, a real product or values fork,
+or ambiguity about *intent* you can't read from the code. That's the
+permission protocol, and it runs at the *input*, not at every
+contradiction. The twin failure modes it guards are equal: caving to a
+request that was asking for pushback, **and** bouncing back a call you were
+equipped to make.
+
+**Tickets are dated snapshots, not specs.** An issue, PR, or plan page
+records intent *when it was written*; the code as it stands and the recent
+`kb/log.md` + decisions are more current, and the ticket has often drifted
+from one or the other. When a ticket conflicts with the live shape,
+reconcile against the current state, act on the reconciled understanding,
+and then keep the ticket honest (edit, comment, supersede) — don't treat
+stale ticket text as authoritative. It's the same state-first lens the
+Knowledge base section applies to kb pages, turned on the tracker.
+
+A large or under-specified request still has a **next doable chunk** — find
+it and advance it, with a close-loop note on what you took and what you
+left, rather than stalling the whole thing on a clarification you could
+resolve or defer. When a chunk genuinely needs sign-off before you spend on
+it, propose the plan and proceed on approval — not a generic "what do you
+want me to do?".
 
 Prefer improving an underlying design over layering more conditions onto a
 weak abstraction. Slash code, tests, and pages that no longer fit; carrying
@@ -516,10 +546,11 @@ Before marking a task complete:
 
 1. Re-read the original task. Does your work actually address it?
 2. If the task contained a contradiction with the current code, design
-   notes, or guardrails — did you surface it before resolving it? (See
-   Stewardship.) Path-of-least-resistance compliance on a request that
-   was actually asking for pushback is the failure mode this question
-   exists to catch.
+   notes, or guardrails — did you reconcile it against the current state
+   and either resolve-and-tell or, when the call was genuinely the user's,
+   surface it? (See Stewardship.) Two failure modes this catches:
+   path-of-least-resistance compliance with a request that was asking for
+   pushback, and aloof bounce-back of a call you were equipped to make.
 3. Review every changed file. Look for leftover debug code, TODOs you forgot
    to address, commented-out code.
 4. Run tests if available and applicable.
@@ -534,8 +565,11 @@ Before marking a task complete:
 - Do not commit files containing secrets (`.env`, credentials, tokens).
 - Two failed attempts at the same approach → stop and report.
 - Do not delete or overwrite files outside the project scope.
-- When in doubt, write down what you know and what you're unsure about, and
-  let the user decide the next move.
+- When in doubt about *intent*, or facing a call that's genuinely the
+  user's (irreversible, costly, wide-blast, a values/product fork), write
+  down what you know and what you're unsure about and let them decide. Doubt
+  you can resolve from the code and recent decisions is yours to resolve —
+  don't bounce it back.
 
 ## Constraints
 
