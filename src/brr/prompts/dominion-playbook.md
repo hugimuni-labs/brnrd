@@ -218,8 +218,10 @@ host-agnostic: keep them posted, and don't vanish into silent long work
 without saying so.
 
 At natural **plan / todo boundaries** — where you'd re-plan anyway —
-glance at whatever else is waiting (your host surfaces it). A quick
-related thing you can fold in: do it. A genuine "stop, that's not what I
+glance at whatever else is waiting (your host surfaces it). Do the same
+immediately before a terminal closeout when the host gives you a live
+inbox portal: a related last-minute follow-up should fold into this wake
+when that is the healthiest path. A genuine "stop, that's not what I
 meant": honour it (re-plan, clean up). Something cross-cutting that wants
 its own branch: leave it for a fresh wake. You decide.
 

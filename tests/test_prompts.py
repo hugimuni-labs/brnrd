@@ -261,8 +261,22 @@ class TestPromptBuilding:
         assert "mid-thought" in prompt
         assert "/repo/.brr/outbox/evt-1/inbox.json" in prompt
         assert "plan / todo boundaries" in prompt
+        assert "immediately before a terminal closeout" in prompt
+        assert "after the runner has already returned" in prompt
         assert "satisfying signal" in prompt
         assert "not the delivery model" in prompt
+
+    def test_daemon_prompt_maps_codex_channels_to_brr_portals(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            run_id="task-9",
+            runner_medium="codex",
+        )
+        assert "Codex runner note" in prompt
+        assert "runner-local under brr" in prompt
+        assert ".card" in prompt
+        assert "plain current-thread fallback" in prompt
 
     def test_daemon_prompt_omits_outbox_contract_without_path(self, tmp_path):
         prompt = build_daemon_prompt(
