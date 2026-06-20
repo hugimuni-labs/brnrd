@@ -112,8 +112,9 @@ uses the GitHub gate to open or refresh a PR from the file's `head`,
 `base`, and `title` frontmatter plus the body.
 The same outbox directory also carries a daemon-owned `inbox.json`
 control file refreshed on each heartbeat, so the running agent can see
-events that arrived after wake and decide at plan boundaries whether to
-fold them in or leave them queued.
+events that arrived after wake and decide at plan boundaries, plus once
+more before terminal closeout, whether to fold them in or leave them
+queued.
 
 After the runner returns, the daemon also **captures the resident's
 dominion** (`.brr/dominion/`, the `brr-home` branch) with a serialized

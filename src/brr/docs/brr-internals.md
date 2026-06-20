@@ -207,7 +207,8 @@ path explicitly):
   an atomic write). The path rides the Run Context Bundle's delivery
   contract. The daemon also reserves `inbox.json` in this directory as a
   live view of other pending events; it is control state for the agent to
-  read at plan boundaries, not a deliverable message.
+  read at plan boundaries and before terminal closeout, not a deliverable
+  message.
 - **Drain** — on every heartbeat tick and once right after the runner
   returns, the daemon (`daemon._drain_outbox`) scans the drop zone
   oldest-first, promotes each file to a per-event partials queue
@@ -235,7 +236,9 @@ path explicitly):
   wakes as its own thought. The conversation record is written to the
   target event's thread, not the current event's thread. The bundle lists
   the wake-time pending events, and `inbox.json` keeps that view fresh while
-  the thought runs. Unknown targets are dropped, not misrouted.
+  the thought runs; the prompt asks for one final read before terminal
+  closeout so a related last-minute follow-up is not avoidably orphaned.
+  Unknown targets are dropped, not misrouted.
 - **Gate-addressed sends** — an outbox file whose frontmatter names
   `gate: <name>` is an agent-initiated send with no waiting event. The
   daemon creates an already-`done` event for that gate and the gate's
