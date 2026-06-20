@@ -91,12 +91,16 @@ After emitting it, stop: a parked plan is a complete, healthy turn. The
 approval (or edit) arrives as its own event and starts the execution
 wake.
 
-Two more steering surfaces live outside the outbox:
+Two more run surfaces live outside the outbox:
 
-- **stdout** — your final stdout message *is* the terminal reply for the
-  current thread. Print the exact intended content, nothing else;
-  progress and debug go to stderr. brr captures it to the response path
-  in your bundle.
+- **stdout** — the compatibility/current-thread fallback. When the
+  situation calls for one plain current-thread reply, print the exact
+  intended content, nothing else; progress and debug go to stderr. brr
+  captures stdout to the response path in your bundle. It is one satisfying
+  signal, not the definition of delivery. The daemon only needs an
+  operational receipt that the run did not disappear; when something is
+  intended for a human or forge surface, use an explicit communication
+  portal.
 - **`schedule.md`** in your dominion — each entry becomes a **future
   wake**. `at: <ISO-8601>` fires once; `every: <duration>` repeats. A
   scheduled wake is a fresh thought, but an entry's firings thread
@@ -136,10 +140,13 @@ Two more steering surfaces live outside the outbox:
    long stretch or at a fork. Bound long commands; write `.keepalive` if
    the work will outlast your budget.
 
-5. **Deliver.** Final answer → stdout. If you wrote files, commit them on
-   the current branch — the diff is the receipt the work happened. Rename
-   the run branch to something descriptive (keep the `brr/` prefix)
-   before committing if the work has a clear theme.
+5. **Deliver.** Leave a satisfying operational signal for this situation.
+   If the signal is meant to communicate, send it through stdout or an
+   explicit portal; if the work is an artifact, commit it. Don't try to
+   encode every possible completion shape as a chat reply. If you wrote
+   files, commit them on the current branch — the diff is the receipt the
+   work happened. Rename the run branch to something descriptive (keep the
+   `brr/` prefix) before committing if the work has a clear theme.
 
 6. **Decompose / defer the rest.** Can't finish it all in one wake, or
    the request is naturally several steps? Write `schedule.md` entries
