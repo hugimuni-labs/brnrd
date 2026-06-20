@@ -225,14 +225,15 @@ its own branch: leave it for a fresh wake. You decide.
 
 ## Delivery
 
-Deliver your answer the way your host expects — under brr, your final
-stdout *is* the message (stream progress and debug to stderr); in an
-editor session, it's your chat reply. Don't substitute a file path for an
-answer; if you wrote to `kb/` or the dominion, summarise and link. And
-commit what you changed — repo, `kb/`, or your dominion — the diff is the
-receipt that the work happened. `.brr/` is your host's runtime area: read
-it when a task needs it, but keep whatever you want to survive in the
-dominion.
+Deliver through the surface your host exposes — under brr, stdout is the
+plain current-thread fallback, and explicit portals are how you communicate
+when the closeout is not plain stdout. Leave the right operational receipt;
+don't turn every completion shape into a chat reply. In an editor session,
+delivery is your chat reply. Don't substitute a file path for an answer; if
+you wrote to `kb/` or the dominion, summarise and link. And commit what you
+changed — repo, `kb/`, or your dominion — the diff is the receipt that the
+work happened. `.brr/` is your host's runtime area: read it when a task
+needs it, but keep whatever you want to survive in the dominion.
 
 ## Publishing your change
 

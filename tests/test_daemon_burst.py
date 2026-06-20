@@ -23,6 +23,7 @@ import time
 import pytest
 
 from brr import daemon
+from brr import protocol
 from brr.run import Run
 
 from _helpers import write_repo_scaffold
@@ -212,3 +213,30 @@ def test_config_window_zero_dispatches_burst_immediately(tmp_path, monkeypatch):
         daemon.start(tmp_path)
 
     assert entered == ["evt-a", "evt-b"]
+
+
+def test_failure_defers_pending_siblings_without_hiding_them(tmp_path):
+    """A terminal failure on the lead event brakes siblings instead of
+    immediately re-spawning one failure wake per pending fragment."""
+    inbox = tmp_path / ".brr" / "inbox"
+    lead = _seed(tmp_path, "evt-a")
+    _seed(tmp_path, "evt-b")
+    _seed(tmp_path, "evt-c")
+    protocol.set_status(lead, "done")
+
+    changed = daemon._defer_pending_siblings_after_failure(
+        inbox,
+        lead_event_id="evt-a",
+        run_id="run-x",
+        seconds=60,
+    )
+
+    assert changed == 2
+    pending = protocol.list_pending(inbox)
+    assert [ev["id"] for ev in pending] == ["evt-b", "evt-c"]
+    assert all(ev["deferred_by_run"] == "run-x" for ev in pending)
+    assert all(ev["defer_reason"] == "operational_failure" for ev in pending)
+    assert protocol.list_dispatchable(inbox) == []
+    assert [
+        ev["id"] for ev in protocol.list_dispatchable(inbox, now=time.time() + 61)
+    ] == ["evt-b", "evt-c"]

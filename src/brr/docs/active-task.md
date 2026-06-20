@@ -13,8 +13,9 @@ the prompt. It contains:
 - The run itself: lead event id, run id, seed ref, optional auto-land
   branch, current branch, shared runtime dir, generated run context
   file, and response path.
-- The delivery contract: stdout is the chat reply, brr captures it to
-  the response path, and the branch rules for this run.
+- The delivery contract: how to leave an operational receipt, which
+  communication portals are available when you intend to send something,
+  and the branch rules for this run.
 - A `Recent in this conversation` block when prior events from the
   same gate thread are available, so you can route consistently with
   what already happened.
@@ -37,9 +38,11 @@ knowledge, and agents should not edit it.
 
 ## What to write
 
-- Final response → print the exact intended user-visible reply as stdout.
-  brr captures it to the response path; agents should not write that
-  response file directly.
+- Plain current-thread closeout → print the exact intended user-visible
+  reply as stdout. brr captures it to the response path; agents should not
+  write that response file directly. Other shapes should leave the right
+  operational receipt and use the bundle's portals when they need to
+  communicate.
 - Log entry → `kb/log.md` only when the run produced meaningful
   project knowledge worth preserving.
 - KB pages → `kb/<page>.md` only when the task warrants persistence
