@@ -261,8 +261,8 @@ class TestPromptBuilding:
         assert "mid-thought" in prompt
         assert "/repo/.brr/outbox/evt-1/inbox.json" in prompt
         assert "plan / todo boundaries" in prompt
-        # interim replies are framed as optional extras, not the final reply
-        assert "optional" in prompt.lower()
+        assert "satisfying signal" in prompt
+        assert "not the delivery model" in prompt
 
     def test_daemon_prompt_omits_outbox_contract_without_path(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -449,7 +449,7 @@ class TestPromptBuilding:
         assert "Stage: brr daemon run" in prompt
         assert "Source: telegram" in prompt
         assert "Environment: docker" in prompt
-        assert "Delivery: stdout captured by brr" in prompt
+        assert "Delivery: situational outputs captured by brr" in prompt
         # Runtime-recovery line points at the context file and frames it
         # as opt-in detail, not routine reading.
         assert (
@@ -472,7 +472,7 @@ class TestPromptBuilding:
         )
         assert "### Mode" in prompt
         assert "Stage: brr daemon run" in prompt
-        assert "Delivery: stdout captured by brr" in prompt
+        assert "Delivery: situational outputs captured by brr" in prompt
         assert "Source:" not in prompt
         assert "Environment:" not in prompt
         assert "Runtime recovery:" not in prompt
