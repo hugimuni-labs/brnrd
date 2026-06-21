@@ -1297,12 +1297,15 @@ inside `daemon.publish`. Now the resident writes a `gate: forge` (or
 `gate: github` + `github_action: pull_request`) outbox file whose body is
 already the projected PR body. `_deliver_out_of_bound` maps `forge` to
 the GitHub gate, and the GitHub delivery loop opens or refreshes the PR
-idempotently through the REST API. Policy:
+idempotently through the REST API.
+Policy:
 
-- **Off by default; opt in with both `diffense.emit_pack=true` and
-  `diffense.create_pr=true`.** Disabling or omitting emission removes the
-  prompt path that asks for a pack; disabling or omitting creation makes
-  the GitHub delivery closure refuse the PR send.
+- **Pack emission is off by default; opt in with
+  `diffense.emit_pack=true`.** Disabling or omitting emission removes the
+  prompt path that asks for a pack. The forge PR handoff itself is not
+  diffense-owned: a resident can send `gate: forge` for an ordinary PR
+  body, and a checked pack is the richer path when the diffense surface
+  earns its cost.
 - **Create-if-absent, else refresh** keys off the PR head branch. The
   resident sends `head`, `base`, and `title`; the gate lists open PRs for
   that head, creates when absent, and updates title/body when present.

@@ -156,9 +156,10 @@ sessions, and the managed multi-daemon case:
   stays cheap. Finalize no longer participates — the env layer never
   updates a non-run ref since the 2026-05-21 publish-kernel collapse
   (see [`design-publish-kernel.md`](design-publish-kernel.md)). PR
-  finalization no longer rides this step; the resident projects its
-  diffense pack and sends `gate: forge`, which the GitHub delivery loop
-  opens or refreshes.
+  finalization no longer rides this step; when opt-in diffense PR
+  publication is enabled, the resident projects its diffense pack and
+  sends `gate: forge`, which the GitHub delivery loop opens or refreshes.
+  Generic branch-keyed PR handoff remains future portal work.
 
 **No command layer; liveness is a heartbeat-enforced, agent-extensible
 budget.** The daemon never parses `/cancel` or any command — every event
@@ -220,7 +221,8 @@ For each pending event, the daemon:
    drains the agent's outbox, then refreshes the live inbox view (plus one
    final drain after the runner returns) — promoting interim or
    interleaved replies to per-event partial queues, delivering
-   gate-addressed sends such as `gate: forge` PR publication, and routing
+   gate-addressed sends such as opt-in diffense `gate: forge` PR
+   publication, and routing
    cross-event conversation records to the target thread (the
    multi-response protocol,
    [`design-multi-response.md`](design-multi-response.md)). The same

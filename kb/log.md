@@ -7592,3 +7592,39 @@ slices.
 
 Validation: `pytest tests/test_outbox.py tests/test_runner.py tests/test_envs.py
 tests/test_prompts.py tests/test_docs.py tests/test_cli.py` (194 passed).
+
+## [2026-06-21] fix | #159 forge portal context alignment
+
+Followed up on the PR #166 context review by removing two contradictions from
+the live orientation surface. `design-portal-grammar.md` no longer says the
+INBOUND-CHECK frame lacks a live state capsule now that `portal-state.json`
+ships. The Run Context Bundle, portals/execution/internals docs, GitHub gate
+module doc, playbook seed, and kb summaries now describe the shipped `gate:
+forge` PR path as the opt-in diffense review-pack publisher guarded by
+`diffense.create_pr`, not a generic PR-creation command. The broader "code
+change opens or refreshes a draft PR" idea is recorded as future forge handoff
+portal work that should live in daemon/portal interfaces rather than growing
+the public `brr` subcommand surface; diffense remains optional enrichment.
+
+Validation: `pytest tests/test_docs.py tests/test_prompts.py` (67 passed).
+
+## [2026-06-21] fix | #159 forge PR handoff decoupled from diffense
+
+Maintainer feedback on PR #167 showed the previous context alignment was too
+single-sided: it described the shipped `gate: forge` path as a diffense-only
+publisher even though the original ergonomics need was a lean way for the
+resident to create or refresh PRs for code-changing work.
+
+Corrected the shipped behaviour and the docs together. GitHub PR delivery now
+honours an explicit `gate: forge` / pull-request event without requiring
+`diffense.emit_pack` or the legacy `diffense.create_pr` flag. The Run Context
+Bundle wording, portals/execution/internals docs, playbook seed, and kb current
+state now frame `gate: forge` as the generic explicit PR handoff (`head`,
+`base`, `title`, body), with diffense only as optional review-pack enrichment
+that can generate a richer title/body. The future #159 forge work is now the
+larger branch-keyed desired-state surface: draft/review posture, issue links,
+labels, refresh policy, acknowledgements, and existing-PR discovery.
+
+Validation: `pytest tests/test_github_gate.py tests/test_outbox.py
+tests/test_prompts.py tests/test_docs.py` (181 passed);
+`pytest tests/test_docs.py tests/test_kb_preflight.py` (39 passed).
