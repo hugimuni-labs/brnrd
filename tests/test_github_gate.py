@@ -1958,12 +1958,6 @@ def test_deliver_responses_opens_pull_request_event(tmp_path, monkeypatch):
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
     state._save_state(brr_dir, {"token": "tok", "repo": "owner/repo"})
-    brr_dir.mkdir(parents=True, exist_ok=True)
-    (brr_dir / "config").write_text(
-        "diffense.emit_pack=true\n"
-        "diffense.create_pr=true\n",
-        encoding="utf-8",
-    )
     protocol.create_event(
         inbox, source="github", body="",
         status="done",
@@ -1996,13 +1990,15 @@ def test_deliver_responses_opens_pull_request_event(tmp_path, monkeypatch):
     assert protocol.read_response(responses, event["id"]) is None
 
 
-def test_deliver_responses_skips_pull_request_when_diffense_disabled(
+def test_deliver_responses_ignores_legacy_diffense_create_pr_false(
     tmp_path, monkeypatch,
 ):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
     (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
+    # This key used to gate PR delivery. Explicit forge handoff is now
+    # generic, so the legacy false value must not block it.
     (tmp_path / ".brr" / "config").write_text("diffense.create_pr=false\n")
     protocol.create_event(
         inbox, source="github", body="",
@@ -2022,11 +2018,11 @@ def test_deliver_responses_skips_pull_request_when_diffense_disabled(
 
     delivery._deliver_responses(brr_dir, inbox, responses, "tok", "owner/repo")
 
-    assert calls == []
+    assert len(calls) == 1
     assert protocol.list_done(inbox, "github") == []
 
 
-def test_deliver_responses_skips_pull_request_by_default(tmp_path, monkeypatch):
+def test_deliver_responses_opens_pull_request_by_default(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
     responses = brr_dir / "responses"
@@ -2049,5 +2045,5 @@ def test_deliver_responses_skips_pull_request_by_default(tmp_path, monkeypatch):
 
     delivery._deliver_responses(brr_dir, inbox, responses, "tok", "owner/repo")
 
-    assert calls == []
+    assert len(calls) == 1
     assert protocol.list_done(inbox, "github") == []

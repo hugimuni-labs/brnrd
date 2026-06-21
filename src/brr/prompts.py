@@ -380,18 +380,6 @@ def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
     return bool(cfg.get("diffense.emit_pack", cfg.get("diffense_emit_pack", False)))
 
 
-def diffense_create_pr_enabled(cfg: dict[str, Any] | None) -> bool:
-    """Return whether the GitHub delivery gate should open/refresh a PR.
-
-    Off by default. When enabled alongside ``diffense.emit_pack``, a checked
-    diffense projection sent through ``gate: forge`` opens or refreshes the
-    PR. Keeping this explicit prevents a review-pack control message from
-    silently spending forge/API work or creating PRs on routine tasks.
-    """
-    cfg = cfg or {}
-    return bool(cfg.get("diffense.create_pr", cfg.get("diffense_create_pr", False)))
-
-
 # ── Top-level builders ───────────────────────────────────────────────
 
 
@@ -660,8 +648,11 @@ def _build_run_context_bundle(
             "delivers to a *different* pending event's thread and marks it "
             "handled (one complete reply per folded-in event); `gate: <name>` "
             "(e.g. `gate: telegram`) sends to a destination with no waiting "
-            "event. `gate: forge` opens/refreshes a PR — it expects `head`, "
-            "`base`, `title` frontmatter and the body is the PR body."
+            "event. `gate: forge` is the explicit PR handoff: when a "
+            "pushed branch should become or refresh a PR, write `head`, "
+            "`base`, and `title` frontmatter and put the PR body in the "
+            "message. Diffense can supply that title/body when a checked "
+            "review pack exists, but it does not own PR creation."
         )
         sections.append(
             f"- A live inbox view at `{outbox_path}/inbox.json` is refreshed "

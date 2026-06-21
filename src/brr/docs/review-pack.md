@@ -4,18 +4,22 @@ This is the *inspected* half of the diffense review-pack flow. The wake
 bundle injects a compact review-pack block (when diffense emit is on)
 that tells you to emit, shape, and `--check` a pack; this doc holds the
 heavier **publish** procedure so it is summoned, not paid for on every
-diffense wake. Read it when you have a checked pack and
-`diffense.create_pr` is explicitly enabled.
+diffense wake. Read it when you have a checked pack and the branch is
+already getting a PR that should carry the diffense review surface.
 
 ## When to publish
 
-Publish only when this run produced a **review-worthy committed
-change** and `diffense.create_pr` is enabled. A chat-only reply, a
-read-only run, or a one-line trivial fix is not review-worthy — skip
-the pack and the PR. An honest absence beats a hollow pack.
+Publish from a pack only when this run produced a **review-worthy
+committed change** and the branch should be opened or refreshed as a PR.
+A chat-only reply, a read-only run, or a one-line trivial fix is not
+review-worthy — skip the pack and the PR ceremony. An honest absence
+beats a hollow pack.
 
-Both `diffense.emit_pack` and `diffense.create_pr` default off. Turn them
-on per repo when the review surface is worth the prompt and forge work.
+`diffense.emit_pack` defaults off. Turn it on per repo when the review
+surface is worth the prompt and pack work. The forge PR send itself is
+not diffense-owned: `gate: forge` is the explicit PR handoff for any
+pushed branch, and a checked pack is one high-context way to generate
+its title and body.
 
 ## Procedure
 
@@ -38,8 +42,7 @@ on per repo when the review surface is worth the prompt and forge work.
 3. **Open or refresh the PR via the forge gate.** Write a `gate: forge`
    outbox file whose frontmatter names `head`, `base`, and `title`; the
    body is the projected PR body. The GitHub gate opens or refreshes the
-   PR idempotently, and refuses publication when diffense PR creation is
-   disabled.
+   PR idempotently for that head branch.
 
 The pack you emit and project *is* the PR a reviewer reads, so the
 quality bar is the pack's, not the diff's.
