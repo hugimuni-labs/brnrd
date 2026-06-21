@@ -615,7 +615,14 @@ def test_docker_invoke_timeout_message_uses_configured_value(
     assert kill_calls  # docker kill <container> was attempted
 
 
-def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-1"):
+def _build_docker_invoke(
+    tmp_path,
+    monkeypatch,
+    *,
+    cfg_extra=None,
+    label="evt-x-1",
+    invocation_env=None,
+):
     """Helper: prepare a DockerEnv ctx + invocation and capture the docker run argv."""
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
     response_path = tmp_path / ".brr" / "responses" / "evt-x.md"
@@ -642,6 +649,7 @@ def _build_docker_invoke(tmp_path, monkeypatch, *, cfg_extra=None, label="evt-x-
         cwd=ctx.cwd,
         repo_root=tmp_path,
         response_path=str(response_path),
+        env=invocation_env or {},
     )
     envs.get_env("docker").invoke(
         ctx, "mock-runner", invocation, {**cfg, "runner_cmd": ["mock", "{prompt}"]},
@@ -677,6 +685,27 @@ def test_docker_invoke_passes_known_runner_env_when_set(tmp_path, monkeypatch):
     assert "ANTHROPIC_API_KEY" not in forwarded
     assert "GEMINI_API_KEY" not in forwarded
     assert "GOOGLE_API_KEY" not in forwarded
+
+
+def test_docker_invoke_passes_invocation_environment(tmp_path, monkeypatch):
+    _isolate_docker_creds(monkeypatch, tmp_path)
+    _stub_worktree(monkeypatch, tmp_path)
+
+    command = _build_docker_invoke(
+        tmp_path,
+        monkeypatch,
+        invocation_env={
+            "BRR_OUTBOX_DIR": "/repo/.brr/outbox/evt-1",
+            "BRR_PORTAL_STATE": "/repo/.brr/outbox/evt-1/portal-state.json",
+        },
+    )
+
+    forwarded = [command[i + 1] for i, arg in enumerate(command) if arg == "-e"]
+    assert "BRR_OUTBOX_DIR=/repo/.brr/outbox/evt-1" in forwarded
+    assert (
+        "BRR_PORTAL_STATE=/repo/.brr/outbox/evt-1/portal-state.json"
+        in forwarded
+    )
 
 
 def test_docker_invoke_passes_no_env_when_none_set(tmp_path, monkeypatch):

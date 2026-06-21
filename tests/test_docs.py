@@ -31,6 +31,8 @@ def test_portals_topic_covers_protocol_and_choreography():
     # The control-file cheatsheet…
     assert ".keepalive" in text
     assert ".card" in text
+    assert "portal-state.json" in text
+    assert "BRR_PORTAL_STATE" in text
     assert "gate: forge" in text
     # …and the average-run choreography.
     assert "schedule.md" in text
