@@ -149,6 +149,17 @@ def main(argv: list[str] | None = None) -> None:
                    help="doc topic to print (e.g. portals, execution-map)")
     p.set_defaults(func=cmd_docs)
 
+    portal_p = sub.add_parser("portal", help="inspect daemon portal state")
+    portal_sub = portal_p.add_subparsers(dest="portal_command", required=True)
+
+    p = portal_sub.add_parser(
+        "state", help="show the live daemon-state portal for a running wake")
+    p.add_argument("--json", action="store_true",
+                   help="emit raw portal JSON")
+    p.add_argument("--path", default=None,
+                   help="read this portal-state.json path instead of auto-detecting")
+    p.set_defaults(func=cmd_portal_state)
+
     agent_p = sub.add_parser(
         "agent", help="resident-agent helpers (wake-context, dominion)")
     agent_sub = agent_p.add_subparsers(dest="agent_command", required=True)
@@ -242,6 +253,111 @@ def cmd_docs(args):
         print(docs.format_listing(repo_root), file=sys.stderr)
         return 1
     print(text)
+    return 0
+
+
+def _latest_portal_state_path() -> Path | None:
+    import os
+
+    env_path = os.environ.get("BRR_PORTAL_STATE")
+    if env_path:
+        return Path(env_path)
+    brr_dir = _maybe_brr_dir()
+    if brr_dir is None:
+        return None
+    candidates = list((brr_dir / "outbox").glob("*/portal-state.json"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+
+
+def _portal_state_path(path_arg: str | None) -> Path | None:
+    return Path(path_arg) if path_arg else _latest_portal_state_path()
+
+
+def _fmt_duration(seconds: object) -> str:
+    try:
+        secs = int(float(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    mins, sec = divmod(secs, 60)
+    if mins:
+        return f"{mins}m{sec:02d}s"
+    return f"{sec}s"
+
+
+def _format_portal_state(payload: dict) -> str:
+    run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+    attention = (
+        payload.get("attention")
+        if isinstance(payload.get("attention"), dict) else {}
+    )
+    inbound = payload.get("inbound") if isinstance(payload.get("inbound"), dict) else {}
+    outbound = (
+        payload.get("outbound")
+        if isinstance(payload.get("outbound"), dict) else {}
+    )
+    budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
+    card = payload.get("card") if isinstance(payload.get("card"), dict) else {}
+    lines = [
+        "[brr portal state] "
+        f"run={run.get('id') or '-'} "
+        f"event={run.get('event_id') or '-'} "
+        f"phase={run.get('phase') or '-'} "
+        f"attempt={run.get('attempt') or '-'} "
+        f"token={payload.get('change_token') or '-'}",
+        "attention: "
+        f"{attention.get('pending_event_count', 0)} pending event(s), "
+        f"{attention.get('pending_outbox_file_count', 0)} pending outbox file(s)",
+        "delivery: "
+        f"current={outbound.get('replies_current', 0)} "
+        f"other={outbound.get('replies_other', 0)} "
+        f"outbound={outbound.get('outbound_messages', 0)}",
+        "budget: "
+        f"elapsed={_fmt_duration(budget.get('elapsed_seconds'))} "
+        f"limit={_fmt_duration(budget.get('budget_seconds'))} "
+        f"keepalive={(budget.get('keepalive') or {}).get('status', '-')}",
+    ]
+    card_text = str(card.get("text") or "").strip()
+    if card_text:
+        lines.append(f"card: {card_text.splitlines()[0][:160]}")
+    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
+    if events:
+        lines.append("pending events:")
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            summary = str(ev.get("summary") or "").strip()
+            lines.append(
+                f"- {ev.get('id') or '-'} {ev.get('source') or '-'}: {summary[:200]}"
+            )
+    pending_files = outbound.get("pending_outbox_files")
+    if isinstance(pending_files, list) and pending_files:
+        lines.append("pending outbox files: " + ", ".join(map(str, pending_files)))
+    return "\n".join(lines)
+
+
+def cmd_portal_state(args):
+    import json
+    import sys
+
+    path = _portal_state_path(args.path)
+    if path is None or not path.exists():
+        print(
+            "[brr portal state] no live portal-state.json found "
+            "(run inside a daemon wake or pass --path)",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[brr portal state] could not read {path}: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(_format_portal_state(payload))
     return 0
 
 

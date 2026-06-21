@@ -30,10 +30,10 @@ preamble, no commentary, no meta acknowledgment. For other work, leave the
 right operational receipt and use the portals in the Run Context Bundle when
 you intend to communicate. Stream progress, debug, and tool output to
 stderr. brr captures stdout and treats it as one output artifact, not the
-whole delivery model. In daemon runs, re-check the live `inbox.json` portal
-before a terminal closeout when the bundle gives you one, so a related
-last-minute follow-up can fold into the current wake instead of spawning
-needlessly.
+whole delivery model. In daemon runs, re-check the live `portal-state.json`
+portal before a terminal closeout when the bundle gives you one
+(`inbox.json` is the focused pending-event view), so a related last-minute
+follow-up can fold into the current wake instead of spawning needlessly.
 
 Don't substitute a file path for the answer. If you wrote findings to
 `kb/`, summarise them in the appropriate user-facing output and link to the
