@@ -119,7 +119,7 @@ each frame must mean before any new syntax is built.
 | PROGRESS | outbound desired-state | live `.card` | current phase; why chunking; medium/quota if known | `.card` control file |
 | INBOUND-CHECK | inbound | not always user-visible | what was checked; fold/defer/leave decision when it matters | `portal-state.json` live capsule plus focused `inbox.json` reads at boundaries and pre-closeout |
 | INTERRUPTION-REPLY | outbound append-log to event | target event's thread | one complete reply; no duplicate answer | outbox file with `event:` route |
-| HANDOFF | outbound append-log or desired-state | PR, issue, branch note, chat | what changed; where review continues | branch publish, issue/comment reply, final reply; opt-in diffense PR publication via `gate: forge` |
+| HANDOFF | outbound append-log or desired-state | PR, issue, branch note, chat | what changed; where review continues | branch publish, issue/comment reply, final reply; explicit PR open/refresh via `gate: forge` |
 | DEFERRAL | parked | chat note, schedule, or mailbox record | why parked; when / what resumes it | dominion `schedule.md` or daemon-authored `defer_until` today |
 | CLOSEOUT | outbound append-log fallback | current thread | outcome, tests, branch/commit, pending-input choice | stdout or explicit reply portal |
 
@@ -174,15 +174,15 @@ pending input show up while the resident is thinking. If any command
 wrapper exists, keep it adapter- or daemon-interface-shaped rather than a
 new broad user-facing `brr` subcommand.
 
-The current `gate: forge` PR path is deliberately narrow: it is the
-diffense review-pack publication route, guarded by `diffense.emit_pack`
-and `diffense.create_pr`, and it opens or refreshes a GitHub PR from an
-already-projected PR body. Generic "create a draft PR for code-changing
-work and keep it refreshed" is the desired future **forge handoff**
-portal, but it should be a daemon/portal surface keyed by branch and
-desired PR state, not another broad `brr` subcommand. Diffense remains
-optional enrichment for that PR surface, not the thing that owns PR
-existence.
+The current `gate: forge` PR path is a deliberately lean explicit
+handoff: the resident names `head`, `base`, and `title`, puts the PR body
+in the message, and the GitHub gate opens or refreshes the PR for that
+head branch. Diffense can produce a richer title/body when a checked
+review pack exists, but it is optional review enrichment, not the thing
+that owns PR existence. The desired future **forge handoff** portal is a
+broader branch-keyed desired-state surface — draft/review posture, issue
+links, labels, refresh policy, acknowledgements — and should live in the
+daemon/portal layer rather than another broad `brr` subcommand.
 
 ### Parked portals
 
@@ -332,12 +332,13 @@ stream markers make them structurally hard to misuse.
    command output. This must stay adapter-level, not the core contract:
    wrappers miss non-shell thinking and runner internals would break the
    swappable-runner shape.
-3. **Forge handoff portal.** Define branch-keyed desired PR state for
-   code-changing work: head/base/title/body, draft/review posture,
-   issue links, labels, and refresh policy. It should reconcile an
-   existing PR before creating one, keep `diffense` optional, and live in
-   the daemon/portal interface rather than expanding the user-facing
-   `brr` subcommand surface.
+3. **Forge desired-state portal.** Grow today's explicit `gate: forge`
+   send into branch-keyed desired PR state for code-changing work:
+   draft/review posture, issue links, labels, refresh policy, delivery
+   acknowledgements, and a cheap way for the runner to discover any
+   existing PR before creating one. Keep `diffense` optional and keep the
+   shape in the daemon/portal interface rather than expanding the
+   user-facing `brr` subcommand surface.
 4. **Outbound portal ergonomics.** Add small helpers or adapter
    affordances that write today's control files (`card`, `reply --event`,
    `send --gate`, PLAN/deferral) only after the resident already knows

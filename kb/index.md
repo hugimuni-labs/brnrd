@@ -255,6 +255,8 @@ dive-in map) and are stable until something contradicts them.
   wording, pre-closeout inbox check, tolerant outbox routing, #128 burst /
   failure deferral, and the first #159 live `portal-state.json` capsule)
   versus the remaining implementation slices: runner-adapter surfacing,
+  a lean `gate: forge` PR handoff, while the remaining implementation
+  slices include richer forge desired-state, runner-adapter surfacing,
   outbound portal ergonomics, resident-authored deferral, run-keyed
   response/outbox paths, mailbox records, and later parallel-compatibility
   work.
@@ -777,10 +779,10 @@ dive-in map) and are stable until something contradicts them.
   ([src/brr/diffense/pack.py](../src/brr/diffense/pack.py)); the runner
   emits packs (Producer B, gated fragment), validates them with `brr
   review --check`, and projects them with
-  [prbody.py](../src/brr/diffense/prbody.py); since 2026-06-10 the
-  resident publishes by sending `gate: forge` only when the opt-in
-  diffense PR path is enabled; the GitHub delivery closure then opens or
-  refreshes the PR. In managed mode `brr review
+  [prbody.py](../src/brr/diffense/prbody.py). Since 2026-06-21, `gate:
+  forge` is the resident's lean PR handoff for any pushed branch; diffense
+  is optional enrichment that can generate the PR title/body, not the
+  permission switch for PR creation. In managed mode `brr review
   --pr-body --relay` is gist-first for public repos: it publishes the pack
   JSON to the user's secret gist, probes brnrd's `/r?pack=...` renderer
   shell before linking it, and falls back to the transient RAM-only relay
@@ -817,9 +819,10 @@ dive-in map) and are stable until something contradicts them.
 - [Daemon-layer coherence + delivery generalization review](review-daemon-coherence-2026-06.md)
   — *active*. Review that shipped generic `gate:` outbox delivery and
   liveness-budget fixes, then recorded the daemon-vs-agent ownership
-  crossroads. The 2026-06-10 follow-up moved opt-in diffense PR
-  finalization to agent-owned `gate: forge`; push/reply ownership remains
-  open.
+  crossroads. The 2026-06-10 follow-up moved PR finalization toward
+  agent-owned `gate: forge`, and the 2026-06-21 correction made that route
+  generic for explicit PR handoffs instead of diffense-only; push/reply
+  ownership remains open.
 
 ## Research
 

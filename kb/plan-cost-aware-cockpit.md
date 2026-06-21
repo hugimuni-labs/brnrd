@@ -39,17 +39,19 @@ sharpened the direction. Five points, each folded into the slices below.
    with no projected total presented as if it were owed. This is a hard
    product guardrail, not a presentation preference.
 
-2. **No PR by default; cost-awareness is situational, not boilerplate.**
-   `diffense.create_pr` defaulting on — and other *token-ignorant*
-   defaults (always emit a review pack, always run the full publish
-   choreography) — spend tokens regardless of whether the run warrants
-   them. Flip the posture: PR / review-pack emission is opt-in or
-   situational, decided from the run's shape and the cost frame, not done
-   reflexively. More broadly the resident's cost-awareness should be
-   *obvious and situational* — surfaced when it bites, not carried as
-   standing ceremony on every wake. The prompt/config slice now defaults
-   both `diffense.emit_pack` and `diffense.create_pr` off; repos opt in
-   when the richer review surface is worth the prompt and forge work.
+2. **No review ceremony by default; cost-awareness is situational, not
+   boilerplate.** Always emitting a review pack, always relaying it, or
+   always running the full diffense publish choreography would spend
+   tokens regardless of whether the run warrants them. Flip the posture:
+   review-pack emission is opt-in or situational, decided from the run's
+   shape and the cost frame, not done reflexively. The lean `gate: forge`
+   PR handoff is separate and cheap: when a pushed branch should have a PR,
+   the resident can open or refresh it with a normal PR body, and diffense
+   is optional enrichment. More broadly the resident's cost-awareness
+   should be *obvious and situational* — surfaced when it bites, not
+   carried as standing ceremony on every wake. The prompt/config slice now
+   defaults `diffense.emit_pack` off; repos opt in when the richer review
+   surface is worth the prompt and pack work.
 
 3. **Conversational & concurrent, not one-shot.** The single-flight
    *execution* model stays — it's mechanical truth — but the *framing*
@@ -254,10 +256,10 @@ least I can get away with."
   contract still carries the full Publish-from-the-pack plumbing
   block"): it's manual-style choreography paid for on *every* diffense
   wake regardless of whether the run is review-worthy.
-- **Opt-in review defaults** — `diffense.emit_pack` and
-  `diffense.create_pr` now default off, so routine wakes do not pay the
-  prompt / pack / forge tax unless the repo deliberately enables that
-  review surface.
+- **Opt-in review defaults** — `diffense.emit_pack` now defaults off, so
+  routine wakes do not pay the prompt / pack / relay tax unless the repo
+  deliberately enables that review surface. Ordinary PR handoff is no
+  longer tied to diffense.
 - **Conversational delivery framing** — the daemon substrate, Run
   Context Bundle, and cockpit manual now frame single-flight as an
   execution mechanic, not a one-shot reply contract: substantial work

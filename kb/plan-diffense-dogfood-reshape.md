@@ -125,10 +125,12 @@ Validator changes:
 
 ## Policy while reshaping
 
-Keep `diffense.emit_pack` and `diffense.create_pr` off by default. Use
-diffense only for explicit dogfood or review experiments until the board
-shape lands. The current surface can slow fast review down, which is worse
-than no surface because it spends attention while claiming to save it.
+Keep `diffense.emit_pack` off by default. Use diffense only for explicit
+dogfood or review experiments until the board shape lands. The current
+surface can slow fast review down, which is worse than no surface because
+it spends attention while claiming to save it. Ordinary `gate: forge` PR
+handoff remains available without diffense; the pack is optional review
+enrichment, not the PR permission switch.
 
 Do not delete the idea. The sampled packs show real value in uncertainty
 capture, summary shaping, and kb/code receipts. The failure is composition:

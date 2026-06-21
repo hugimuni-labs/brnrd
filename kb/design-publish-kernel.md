@@ -128,12 +128,13 @@ One daemon step hangs off a *successful* push, keyed only on
   `push_done` card.
 
 Diffense PR publication used to ride here; it moved on 2026-06-10 to the
-agent-owned forge delivery path. When the opt-in diffense PR flags are
-enabled, the resident projects the checked pack and sends `gate: forge`;
-the GitHub gate opens or refreshes the PR. The push still supplies the
-safety condition: if the push failed, there is no remote head for the
-resident to publish. Generic PR-first handoff is a future portal concern,
-not part of this publish-kernel rider.
+agent-owned forge delivery path. As of 2026-06-21, that path is generic:
+the resident sends `gate: forge` with PR frontmatter and body whenever a
+pushed branch should become or refresh a PR. Diffense can project a
+checked pack into that body, but it no longer gates PR existence. The push
+still supplies the safety condition: if the push failed, there is no remote
+head for the resident to publish. Richer branch-keyed PR desired state is
+a future portal concern, not part of this publish-kernel rider.
 
 ### Possible: auto-fork on conflict (not built)
 

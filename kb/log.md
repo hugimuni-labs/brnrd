@@ -7607,3 +7607,24 @@ portal work that should live in daemon/portal interfaces rather than growing
 the public `brr` subcommand surface; diffense remains optional enrichment.
 
 Validation: `pytest tests/test_docs.py tests/test_prompts.py` (67 passed).
+
+## [2026-06-21] fix | #159 forge PR handoff decoupled from diffense
+
+Maintainer feedback on PR #167 showed the previous context alignment was too
+single-sided: it described the shipped `gate: forge` path as a diffense-only
+publisher even though the original ergonomics need was a lean way for the
+resident to create or refresh PRs for code-changing work.
+
+Corrected the shipped behaviour and the docs together. GitHub PR delivery now
+honours an explicit `gate: forge` / pull-request event without requiring
+`diffense.emit_pack` or the legacy `diffense.create_pr` flag. The Run Context
+Bundle wording, portals/execution/internals docs, playbook seed, and kb current
+state now frame `gate: forge` as the generic explicit PR handoff (`head`,
+`base`, `title`, body), with diffense only as optional review-pack enrichment
+that can generate a richer title/body. The future #159 forge work is now the
+larger branch-keyed desired-state surface: draft/review posture, issue links,
+labels, refresh policy, acknowledgements, and existing-PR discovery.
+
+Validation: `pytest tests/test_github_gate.py tests/test_outbox.py
+tests/test_prompts.py tests/test_docs.py` (181 passed);
+`pytest tests/test_docs.py tests/test_kb_preflight.py` (39 passed).
