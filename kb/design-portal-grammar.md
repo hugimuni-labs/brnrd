@@ -43,8 +43,9 @@ This is the live substrate #159 builds on:
   live daemon-state capsule (#159 first slice): pending/foldable events,
   drained reply counts, pending outbox files, current card text,
   budget/keepalive posture, and a stable `change_token`. The runner also
-  receives `BRR_PORTAL_STATE`, and `brr portal state` renders a compact
-  inspected text view.
+  receives `BRR_PORTAL_STATE`; `brr portal state` renders a compact
+  inspected text view, and `brr portal wrap -- <command>` can run a shell
+  command while appending that view when the `change_token` moves.
 - #128 shipped the run/task storage rename, burst-coalescing dispatch,
   and operational-failure sibling deferral. Per-run claims,
   resident-authored postponement, and run-keyed response/outbox routing
@@ -326,12 +327,13 @@ stream markers make them structurally hard to misuse.
    slice covers pending input, current card/delivery posture,
    budget/keepalive, and a `change_token`; deeper delivery acknowledgements
    and mailbox leases remain later slices.
-2. **Optional runner surfacing.** Experiment with runner-specific ways to
-   show that capsule at natural tool boundaries: a Codex/Claude adapter if
-   the runner exposes one, or an opt-in shell/PATH wrapper for host
-   command output. This must stay adapter-level, not the core contract:
-   wrappers miss non-shell thinking and runner internals would break the
-   swappable-runner shape.
+2. **Mobilising runner surfacing — shell-wrapper slice shipped
+   2026-06-21.** `brr portal wrap -- <command>` runs command-line work and
+   appends a compact state update when the live `change_token` moved
+   (`--always` forces a deliberate status read). This keeps surfacing
+   adapter-level rather than mandatory: wrappers miss non-shell thinking,
+   and runner internals would break the swappable-runner shape. Deeper
+   Codex/Claude adapter hooks remain experimental.
 3. **Forge desired-state portal.** Grow today's explicit `gate: forge`
    send into branch-keyed desired PR state for code-changing work:
    draft/review posture, issue links, labels, refresh policy, delivery
