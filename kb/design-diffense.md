@@ -1297,7 +1297,8 @@ inside `daemon.publish`. Now the resident writes a `gate: forge` (or
 `gate: github` + `github_action: pull_request`) outbox file whose body is
 already the projected PR body. `_deliver_out_of_bound` maps `forge` to
 the GitHub gate, and the GitHub delivery loop opens or refreshes the PR
-idempotently through the REST API. Policy:
+idempotently through the REST API when diffense PR creation is enabled.
+Policy:
 
 - **Off by default; opt in with both `diffense.emit_pack=true` and
   `diffense.create_pr=true`.** Disabling or omitting emission removes the

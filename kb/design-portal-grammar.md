@@ -2,7 +2,7 @@
 
 Status: active (2026-06-21; #159 design contract revised after live
 dogfood: first slice should expose runner-visible daemon state, not start
-with outbound helper commands).
+with outbound helper surface).
 
 This page is the current design contract for
 [#159](https://github.com/Gurio/brr/issues/159): the output-frame grammar
@@ -22,7 +22,7 @@ marked places where that stream turns to the world.
 > concrete evidence: PLAN shape, live `inbox.json` habits, stdout wording
 > drift, outbox frontmatter footguns, burst coalescing, and failure
 > deferral. The 2026-06-21 follow-up corrected the first implementation
-> slice: helper commands reduce protocol slips, but responsiveness is
+> slice: outbound affordances reduce protocol slips, but responsiveness is
 > primarily a live inbound-state problem.
 
 ## Current shipped surface
@@ -56,7 +56,7 @@ This is the live substrate #159 builds on:
 What is **not** shipped: runner-adapter surfacing beyond environment
 handles, in-generation portal syntax, run-keyed primary outbox/response
 paths, event leases, resident-authored event deferral, parked-portal
-mailbox records, outbound portal helper commands, and any parallel local
+mailbox records, outbound portal ergonomics, and any parallel local
 execution. Single-flight remains the default executor.
 
 ## Settled design calls
@@ -117,9 +117,9 @@ each frame must mean before any new syntax is built.
 | --- | --- | --- | --- | --- |
 | PLAN | parked + outbound append-log | chat / issue comment | approve or edit; what resumes | ordinary outbox message using the five-part PLAN shape |
 | PROGRESS | outbound desired-state | live `.card` | current phase; why chunking; medium/quota if known | `.card` control file |
-| INBOUND-CHECK | inbound | not always user-visible | what was checked; fold/defer/leave decision when it matters | read `inbox.json` at boundaries and pre-closeout; no live state capsule yet |
+| INBOUND-CHECK | inbound | not always user-visible | what was checked; fold/defer/leave decision when it matters | `portal-state.json` live capsule plus focused `inbox.json` reads at boundaries and pre-closeout |
 | INTERRUPTION-REPLY | outbound append-log to event | target event's thread | one complete reply; no duplicate answer | outbox file with `event:` route |
-| HANDOFF | outbound append-log or desired-state | PR, issue, branch note, chat | what changed; where review continues | `gate: forge`, issue comment, final reply |
+| HANDOFF | outbound append-log or desired-state | PR, issue, branch note, chat | what changed; where review continues | branch publish, issue/comment reply, final reply; opt-in diffense PR publication via `gate: forge` |
 | DEFERRAL | parked | chat note, schedule, or mailbox record | why parked; when / what resumes it | dominion `schedule.md` or daemon-authored `defer_until` today |
 | CLOSEOUT | outbound append-log fallback | current thread | outcome, tests, branch/commit, pending-input choice | stdout or explicit reply portal |
 
@@ -167,10 +167,22 @@ An outbound portal emits to a surface. Every emission must declare:
 
 The frontmatter footgun proved a robustness point: a human-facing message
 should not depend on the resident hand-writing hidden protocol correctly.
-Small helper commands that write today's files are still worthwhile, but
-they solve outbound syntax and routing mistakes. They do not by themselves
-solve the responsiveness problem, because they do not make pending input
-show up while the resident is thinking.
+Small portal affordances that write today's files are still worthwhile,
+but they solve outbound syntax and routing mistakes. They do not by
+themselves solve the responsiveness problem, because they do not make
+pending input show up while the resident is thinking. If any command
+wrapper exists, keep it adapter- or daemon-interface-shaped rather than a
+new broad user-facing `brr` subcommand.
+
+The current `gate: forge` PR path is deliberately narrow: it is the
+diffense review-pack publication route, guarded by `diffense.emit_pack`
+and `diffense.create_pr`, and it opens or refreshes a GitHub PR from an
+already-projected PR body. Generic "create a draft PR for code-changing
+work and keep it refreshed" is the desired future **forge handoff**
+portal, but it should be a daemon/portal surface keyed by branch and
+desired PR state, not another broad `brr` subcommand. Diffense remains
+optional enrichment for that PR surface, not the thing that owns PR
+existence.
 
 ### Parked portals
 
@@ -301,7 +313,7 @@ The user should understand the control surface from the output itself:
   related pending input was folded or intentionally left queued.
 
 Do not require the user to know `.brr/outbox`, frontmatter fences, or
-`inbox.json`. Those are implementation details until helper commands or
+`inbox.json`. Those are implementation details until portal affordances or
 stream markers make them structurally hard to misuse.
 
 ## Implementation sequence
@@ -320,24 +332,31 @@ stream markers make them structurally hard to misuse.
    command output. This must stay adapter-level, not the core contract:
    wrappers miss non-shell thinking and runner internals would break the
    swappable-runner shape.
-3. **Outbound portal helper commands.** Add small helpers that write
-   today's control files: `card`, `reply --event`, `send --gate`, and a
-   PLAN/deferral writer if the shape stays useful. These are for
-   robustness and ergonomics once the resident already knows which portal
-   it wants to open.
-4. **Resident-authored deferral.** Let a run deliberately postpone a
+3. **Forge handoff portal.** Define branch-keyed desired PR state for
+   code-changing work: head/base/title/body, draft/review posture,
+   issue links, labels, and refresh policy. It should reconcile an
+   existing PR before creating one, keep `diffense` optional, and live in
+   the daemon/portal interface rather than expanding the user-facing
+   `brr` subcommand surface.
+4. **Outbound portal ergonomics.** Add small helpers or adapter
+   affordances that write today's control files (`card`, `reply --event`,
+   `send --gate`, PLAN/deferral) only after the resident already knows
+   which portal it wants to open. These are robustness aids, not the
+   responsiveness fix, and should not grow into another broad top-level
+   CLI surface.
+5. **Resident-authored deferral.** Let a run deliberately postpone a
    pending event with `defer_until`, reason, and resume condition. This
    completes the non-failure half of #128 Q2.
-5. **Run-key primary outbox/response.** Move the primary response/outbox
+6. **Run-key primary outbox/response.** Move the primary response/outbox
    key from lead event id to run id; require explicit `event:`/`gate:` or
    current-thread target for deliveries. This is #128 Q3 and removes the
    "which event owns the run" question.
-6. **Event claims.** Add per-run claim leases and exit-time outcome
+7. **Event claims.** Add per-run claim leases and exit-time outcome
    handling. Keep single-flight, but make the storage model parallel-safe.
-7. **Parked-portal mailbox records.** Persist PLAN approvals, deferrals,
+8. **Parked-portal mailbox records.** Persist PLAN approvals, deferrals,
    child-run requests, and resume conditions as mailbox records instead
    of relying only on conversation history.
-8. **Concept prose sweep.** After the primitives land, reconcile
+9. **Concept prose sweep.** After the primitives land, reconcile
    `plan-resident-cockpit.md`, `plan-cost-aware-cockpit.md`,
    `design-managed-delivery.md`, `subject-managed-mode.md`, and the index
    so the graph consistently says portals / projection instead of

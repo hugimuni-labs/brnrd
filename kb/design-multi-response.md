@@ -194,8 +194,10 @@ The diffense review pack remains a run-keyed structured artifact
 at the delivery layer instead: the resident validates and projects the
 pack with `brr review`, then writes a `gate: forge` outbox message whose
 body is the PR body and whose frontmatter names `head`, `base`, and
-`title`. `_deliver_out_of_bound` maps that to the GitHub gate; the GitHub
-delivery closure opens or refreshes the PR idempotently.
+`title`, but only when diffense PR creation is explicitly enabled.
+`_deliver_out_of_bound` maps that to the GitHub gate; the GitHub delivery
+closure opens or refreshes the PR idempotently and otherwise refuses the
+send.
 
 This preserves the earlier rejection of shoving pack JSON into the chat
 queue. The shared mechanism is only "agent writes a ready-to-deliver

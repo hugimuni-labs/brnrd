@@ -7592,3 +7592,18 @@ slices.
 
 Validation: `pytest tests/test_outbox.py tests/test_runner.py tests/test_envs.py
 tests/test_prompts.py tests/test_docs.py tests/test_cli.py` (194 passed).
+
+## [2026-06-21] fix | #159 forge portal context alignment
+
+Followed up on the PR #166 context review by removing two contradictions from
+the live orientation surface. `design-portal-grammar.md` no longer says the
+INBOUND-CHECK frame lacks a live state capsule now that `portal-state.json`
+ships. The Run Context Bundle, portals/execution/internals docs, GitHub gate
+module doc, playbook seed, and kb summaries now describe the shipped `gate:
+forge` PR path as the opt-in diffense review-pack publisher guarded by
+`diffense.create_pr`, not a generic PR-creation command. The broader "code
+change opens or refreshes a draft PR" idea is recorded as future forge handoff
+portal work that should live in daemon/portal interfaces rather than growing
+the public `brr` subcommand surface; diffense remains optional enrichment.
+
+Validation: `pytest tests/test_docs.py tests/test_prompts.py` (67 passed).

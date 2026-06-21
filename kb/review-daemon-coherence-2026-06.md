@@ -174,8 +174,9 @@ commit, push, and reply-shaped delivery; the agent works within that.
 **Stance now:** keep the daemon-owned push and reply plumbing, but move
 publish-adjacent delivery that is already agent-authored into the
 agent-owned `gate:` path. The 2026-06-10 PR-finalization slice did that
-for diffense: the resident projects its pack, writes `gate: forge`, and
-the GitHub gate opens or refreshes the PR. The broader push/reply
+for opt-in diffense publication: the resident projects its pack, writes
+`gate: forge`, and the GitHub gate opens or refreshes the PR when
+diffense PR creation is enabled. The broader push/reply
 ownership question remains open; the #3 `gate:` primitive lets us drift
 toward the agent-owned flow incrementally instead of via a big-bang
 rewrite. The broader delivery-robustness work this open thread feeds —

@@ -268,6 +268,8 @@ class TestPromptBuilding:
         assert "after the runner has already returned" in prompt
         assert "satisfying signal" in prompt
         assert "not the delivery model" in prompt
+        assert "diffense.create_pr" in prompt
+        assert "Generic PR-first handoff remains future portal work" in prompt
 
     def test_daemon_prompt_maps_codex_channels_to_brr_portals(self, tmp_path):
         prompt = build_daemon_prompt(

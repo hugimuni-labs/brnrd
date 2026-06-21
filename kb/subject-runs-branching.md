@@ -68,9 +68,11 @@ executed in a container.
 The agent leaves work on a branch. The daemon publishes that branch.
 That's the kernel — finalize classifies, `daemon.publish` ships the
 branch. Pull-request open/refresh is now a separate agent-owned delivery
-step: for diffense-backed review, the resident projects the pack and
-sends `gate: forge`, which the GitHub gate turns into an idempotent PR
-create/update.
+step only for the opt-in diffense review-pack path: when both diffense
+flags are enabled, the resident projects the pack and sends `gate:
+forge`, which the GitHub gate turns into an idempotent PR create/update.
+Generic PR-first handoff remains future portal work, not part of the
+publish kernel and not a new user-facing `brr` subcommand.
 Pull-side freshness (so a follow-up run seeds from the previous
 run's publish) lives in [`sync.py`](../src/brr/sync.py); publishing
 is one step.
