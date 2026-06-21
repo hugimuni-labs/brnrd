@@ -108,11 +108,11 @@ outbox file whose frontmatter names another pending event
 handled, so a quick request can be folded in without its own spawn; the
 conversation artifact is recorded on the target event's thread.
 An outbox file with `gate: <name>` is an out-of-bound send. The shipped
-`gate: forge` PR route is the opt-in diffense review-pack publisher: it
-uses the GitHub gate to open or refresh a PR from the file's `head`,
-`base`, and `title` frontmatter plus the projected body only when
-diffense PR creation is enabled. Generic PR-first handoff remains future
-portal work.
+`gate: forge` is the explicit PR handoff: it uses the GitHub gate to
+open or refresh a PR from the file's `head`, `base`, and `title`
+frontmatter plus the body. Diffense can generate that title/body from a
+checked review pack, but the forge send itself is not diffense-owned.
+Richer branch-keyed PR desired state remains future portal work.
 The same outbox directory also carries daemon-owned `portal-state.json`
 and `inbox.json` control files refreshed on each heartbeat. The state
 portal is the broad live view (pending events, card/delivery posture,
