@@ -80,16 +80,21 @@ class TestDrainOutbox:
         # it; it is never delivered as a message or consumed by the drain.
         assert (outbox / ".keepalive").exists()
 
-    def test_skips_live_inbox_control_file(self, tmp_path, monkeypatch):
+    def test_skips_daemon_live_control_files(self, tmp_path, monkeypatch):
         n, responses, outbox, _ = self._drain(
             tmp_path, monkeypatch,
-            [("inbox.json", '{"events": []}\n'), ("real.md", "hi\n")],
+            [
+                ("inbox.json", '{"events": []}\n'),
+                ("portal-state.json", '{"attention": {}}\n'),
+                ("real.md", "hi\n"),
+            ],
         )
         assert n == 1
         bodies = [protocol.read_partial(p)
                   for p in protocol.list_partials(responses, "evt-1")]
         assert bodies == ["hi"]
         assert (outbox / "inbox.json").exists()
+        assert (outbox / "portal-state.json").exists()
 
     def test_gate_addressed_message_synthesizes_done_event(self, tmp_path, monkeypatch):
         brr_dir = tmp_path / ".brr"
@@ -510,6 +515,92 @@ def test_live_inbox_file_lists_other_pending_events(tmp_path):
     assert ev["body"] == "quick question\nwith detail"
     assert ev["telegram_chat_id"] == 123
     assert "_path" not in ev
+
+
+def test_live_portal_state_file_summarizes_run_attention(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-A"
+    outbox.mkdir(parents=True)
+    current_path = protocol.create_event(inbox, source="github", body="current")
+    current = protocol.list_pending(inbox)[0]
+    protocol.set_status(current, "processing")
+    protocol.create_event(
+        inbox,
+        source="telegram",
+        body="quick question\nwith detail",
+        telegram_chat_id="123",
+    )
+    (outbox / "draft.md").write_text("queued reply\n", encoding="utf-8")
+    (outbox / ".card").write_text("working\n", encoding="utf-8")
+    (outbox / ".keepalive").write_text("+30m\n", encoding="utf-8")
+    task = Run(
+        id="run-1",
+        event_id=current["id"],
+        body="work",
+        status="running",
+        env="host",
+        meta={"branch_name": "brr/live-state"},
+    )
+
+    path = daemon._write_live_portal_state(
+        outbox,
+        inbox,
+        current["id"],
+        task,
+        phase="running",
+        attempt=1,
+        runner_name="codex",
+        budget_seconds=3600,
+        hard_cap_seconds=7200,
+        keepalive_path=outbox / ".keepalive",
+        card_state={"last": "working"},
+        output_stats={"current": 1, "other": 2, "outbound": 3},
+        start_monotonic=daemon.time.monotonic() - 1,
+    )
+
+    assert path == outbox / "portal-state.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["version"] == 1
+    assert payload["run"]["id"] == "run-1"
+    assert payload["run"]["phase"] == "running"
+    assert payload["run"]["attempt"] == 1
+    assert payload["run"]["branch"] == "brr/live-state"
+    assert payload["attention"] == {
+        "needs_attention": True,
+        "pending_event_count": 1,
+        "pending_outbox_file_count": 1,
+    }
+    assert payload["inbound"]["events"][0]["summary"] == "quick question with detail"
+    assert payload["outbound"]["replies_current"] == 1
+    assert payload["outbound"]["replies_other"] == 2
+    assert payload["outbound"]["outbound_messages"] == 3
+    assert payload["outbound"]["pending_outbox_files"] == ["draft.md"]
+    assert payload["card"] == {"active": True, "text": "working"}
+    assert payload["budget"]["keepalive"]["status"] == "active"
+    assert payload["budget"]["elapsed_seconds"] >= 0
+    assert payload["change_token"]
+    assert "_path" not in payload["inbound"]["events"][0]
+
+    first_token = payload["change_token"]
+    daemon._write_live_portal_state(
+        outbox,
+        inbox,
+        current["id"],
+        task,
+        phase="running",
+        attempt=1,
+        runner_name="codex",
+        budget_seconds=3600,
+        hard_cap_seconds=7200,
+        keepalive_path=outbox / ".keepalive",
+        card_state={"last": "working"},
+        output_stats={"current": 1, "other": 2, "outbound": 3},
+        start_monotonic=daemon.time.monotonic() - 5,
+    )
+    payload2 = json.loads(path.read_text(encoding="utf-8"))
+    assert payload2["change_token"] == first_token
+    assert payload2["budget"]["elapsed_seconds"] >= payload["budget"]["elapsed_seconds"]
 
 
 def test_interim_response_packet_updates_card(tmp_path):
