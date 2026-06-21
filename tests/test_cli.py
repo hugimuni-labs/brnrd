@@ -65,6 +65,77 @@ def test_docs_unknown_topic_errors(capsys):
     assert main(["docs", "does-not-exist"]) == 1
 
 
+def test_portal_state_prints_text_view(tmp_path, capsys):
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "change_token": "abc123",
+                "run": {
+                    "id": "run-1",
+                    "event_id": "evt-1",
+                    "phase": "running",
+                    "attempt": 1,
+                },
+                "attention": {
+                    "pending_event_count": 1,
+                    "pending_outbox_file_count": 0,
+                },
+                "inbound": {
+                    "events": [
+                        {
+                            "id": "evt-2",
+                            "source": "telegram",
+                            "summary": "quick follow-up",
+                        }
+                    ]
+                },
+                "outbound": {
+                    "replies_current": 1,
+                    "replies_other": 0,
+                    "outbound_messages": 0,
+                    "pending_outbox_files": [],
+                },
+                "budget": {
+                    "elapsed_seconds": 65,
+                    "budget_seconds": 3600,
+                    "keepalive": {"status": "absent"},
+                },
+                "card": {"text": "working"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["portal", "state", "--path", str(state)]) == 0
+
+    out = capsys.readouterr().out
+    assert "run=run-1" in out
+    assert "token=abc123" in out
+    assert "evt-2 telegram: quick follow-up" in out
+    assert "card: working" in out
+
+
+def test_portal_state_prints_json_from_env(tmp_path, capsys, monkeypatch):
+    state = tmp_path / "portal-state.json"
+    state.write_text('{"version": 1, "run": {"id": "run-env"}}\n', encoding="utf-8")
+    monkeypatch.setenv("BRR_PORTAL_STATE", str(state))
+
+    assert main(["portal", "state", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["run"]["id"] == "run-env"
+
+
+def test_portal_state_errors_without_file(capsys, monkeypatch):
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: None)
+
+    assert main(["portal", "state"]) == 1
+    assert "no live portal-state.json" in capsys.readouterr().err
+
+
 def test_run_requires_instruction():
     with pytest.raises(SystemExit):
         main(["run"])

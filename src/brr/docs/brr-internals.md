@@ -205,18 +205,19 @@ path explicitly):
 - **Drop zone** — `.brr/outbox/<event-id>/`. The resident writes a
   complete markdown reply per file (staging as `*.tmp` and renaming for
   an atomic write). The path rides the Run Context Bundle's delivery
-  contract. The daemon also reserves `inbox.json` in this directory as a
-  live view of other pending events; it is control state for the agent to
-  read at plan boundaries and before terminal closeout, not a deliverable
-  message.
+  contract. The daemon also reserves `portal-state.json` and `inbox.json`
+  in this directory as live control state for the agent to read at plan
+  boundaries and before terminal closeout; they are not deliverable
+  messages. The state portal is the broad run view, while `inbox.json` is
+  the focused pending-event list.
 - **Drain** — on every heartbeat tick and once right after the runner
   returns, the daemon (`daemon._drain_outbox`) scans the drop zone
   oldest-first, promotes each file to a per-event partials queue
   (`protocol.write_partial` → `.brr/responses/<id>.partials/<seq>.md`),
   emits an `interim_response` packet, indexes the artifact on the
   conversation log, and removes the consumed file. The same heartbeat
-  refreshes `inbox.json`. A promoting drain is a positive liveness
-  check-in.
+  refreshes `portal-state.json` and `inbox.json`. A promoting drain is a
+  positive liveness check-in.
 - **Streaming delivery** — `runtime.deliver_stream` walks **active**
   events (`processing` *or* `done`): it delivers queued partials in
   order, deleting each after a successful send (so delivery is
@@ -235,10 +236,10 @@ path explicitly):
   that event is marked `done`, so its thread gets the reply and it never
   wakes as its own thought. The conversation record is written to the
   target event's thread, not the current event's thread. The bundle lists
-  the wake-time pending events, and `inbox.json` keeps that view fresh while
-  the thought runs; the prompt asks for one final read before terminal
-  closeout so a related last-minute follow-up is not avoidably orphaned.
-  Unknown targets are dropped, not misrouted.
+  the wake-time pending events, and `portal-state.json` / `inbox.json` keep
+  that view fresh while the thought runs; the prompt asks for one final
+  read before terminal closeout so a related last-minute follow-up is not
+  avoidably orphaned. Unknown targets are dropped, not misrouted.
 - **Gate-addressed sends** — an outbox file whose frontmatter names
   `gate: <name>` is an agent-initiated send with no waiting event. The
   daemon creates an already-`done` event for that gate and the gate's

@@ -615,7 +615,8 @@ def _build_run_context_bundle(
     sections.append(
         "These are the per-run *values* and the operative rules. The surfaces "
         "below are **portals** — the seams where this run turns to the world: "
-        "*inbound* (input flows in, like `inbox.json`), *outbound* (you emit to "
+        "*inbound* (input flows in, like `portal-state.json` / `inbox.json`), "
+        "*outbound* (you emit to "
         "a surface — a chat reply, the `.card`), and *parked* (you emit and "
         "park the continuation until something refluxes back, like the "
         "PLAN→approve handoff). This list is the injected summary of that "
@@ -672,6 +673,14 @@ def _build_run_context_bundle(
             "does not catch messages that arrive after the runner has already "
             "returned, but it prevents avoidable orphaned follow-ups. "
             "Daemon-owned — don't edit it."
+        )
+        sections.append(
+            f"- A live daemon-state portal at `{outbox_path}/portal-state.json` "
+            "is also refreshed each heartbeat and exposed to the runner as "
+            "`BRR_PORTAL_STATE`. Prefer it when you need the current pending "
+            "events, delivery/card posture, budget/keepalive state, or a "
+            "`change_token` showing whether attention-relevant state changed "
+            "since your last read. Daemon-owned — inspect it, don't edit it."
         )
         if runner_medium == "codex":
             sections.append(
@@ -742,8 +751,9 @@ def _build_run_context_bundle(
             "Other events were waiting when you woke. You can fold a quick, "
             "related one in now (answer it via the outbox `event: <id>` "
             "contract above) instead of leaving it for its own spawn — your "
-            "call. For the current list, read the live `inbox.json` in your "
-            "outbox at plan / todo boundaries."
+            "call. For the current list and surrounding run posture, read "
+            "the live `portal-state.json` in your outbox at plan / todo "
+            "boundaries; `inbox.json` remains the focused pending-event list."
         )
         sections.append("")
         sections.append(inbox_block)

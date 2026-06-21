@@ -745,6 +745,11 @@ class DockerEnv(WorktreeEnv):
             *_docker_passthrough_env_args(cfg),
             *_docker_brr_source_env_args(ctx.repo_root),
             *_docker_credential_mount_args(cfg),
+            *[
+                arg
+                for key, value in sorted(invocation.env.items())
+                for arg in ("-e", f"{key}={value}")
+            ],
             # Inject the GitHub gate token when available so ``gh`` CLI
             # and HTTPS git operations are authenticated inside the
             # container regardless of whether the system keyring is
