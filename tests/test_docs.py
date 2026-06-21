@@ -21,8 +21,8 @@ def test_review_pack_topic_carries_publish_plumbing():
     assert text is not None
     assert "--pr-body --relay" in text
     assert "gate: forge" in text
-    assert "diffense.create_pr" in text
-    assert "default off" in text
+    assert "diffense.emit_pack" in text
+    assert "not diffense-owned" in text
 
 
 def test_portals_topic_covers_protocol_and_choreography():
@@ -34,6 +34,8 @@ def test_portals_topic_covers_protocol_and_choreography():
     assert "portal-state.json" in text
     assert "BRR_PORTAL_STATE" in text
     assert "gate: forge" in text
+    assert "explicit PR handoff" in text
+    assert "not diffense-owned" in text
     # …and the average-run choreography.
     assert "schedule.md" in text
     assert "plan or execute" in text.lower() or "plan-vs-execute" in text.lower()
