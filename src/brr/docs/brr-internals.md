@@ -243,9 +243,12 @@ path explicitly):
 - **Gate-addressed sends** — an outbox file whose frontmatter names
   `gate: <name>` is an agent-initiated send with no waiting event. The
   daemon creates an already-`done` event for that gate and the gate's
-  normal delivery loop sends it once. `gate: forge` is an alias for the
-  GitHub delivery path; it opens or refreshes a PR from `head`, `base`,
-  `title`, and the file body.
+  normal delivery loop sends it once. `gate: forge` maps to GitHub PR
+  delivery from `head`, `base`, `title`, and the body, opening or
+  refreshing the PR for that head branch. Diffense can provide that body
+  when a checked review pack exists, but it is not a prerequisite for PR
+  delivery. Richer branch-keyed desired-state PR handoff is future portal
+  work, not this shipped primitive.
 
 This is additive and backward compatible: a thought that prints one final
 stdout and writes nothing to its outbox behaves as before, while failed or
