@@ -260,6 +260,9 @@ class TestPromptBuilding:
         assert "/repo/.brr/outbox/evt-1" in prompt
         assert "mid-thought" in prompt
         assert "/repo/.brr/outbox/evt-1/inbox.json" in prompt
+        assert "/repo/.brr/outbox/evt-1/portal-state.json" in prompt
+        assert "BRR_PORTAL_STATE" in prompt
+        assert "change_token" in prompt
         assert "plan / todo boundaries" in prompt
         assert "immediately before a terminal closeout" in prompt
         assert "after the runner has already returned" in prompt
@@ -340,6 +343,7 @@ class TestPromptBuilding:
         assert "quick question about X" in prompt
         # The fold-in contract names the frontmatter handle.
         assert "event: <id>" in prompt
+        assert "portal-state.json" in prompt
         assert "inbox.json" in prompt
         assert "snapshot from when you woke" not in prompt
 
