@@ -660,8 +660,10 @@ def _build_run_context_bundle(
             "delivers to a *different* pending event's thread and marks it "
             "handled (one complete reply per folded-in event); `gate: <name>` "
             "(e.g. `gate: telegram`) sends to a destination with no waiting "
-            "event. `gate: forge` opens/refreshes a PR — it expects `head`, "
-            "`base`, `title` frontmatter and the body is the PR body."
+            "event. The current `gate: forge` PR path is the opt-in "
+            "diffense review-pack publication route: use it only when the "
+            "review-pack instructions say `diffense.create_pr` is enabled. "
+            "Generic PR-first handoff remains future portal work."
         )
         sections.append(
             f"- A live inbox view at `{outbox_path}/inbox.json` is refreshed "

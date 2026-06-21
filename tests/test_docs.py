@@ -34,6 +34,8 @@ def test_portals_topic_covers_protocol_and_choreography():
     assert "portal-state.json" in text
     assert "BRR_PORTAL_STATE" in text
     assert "gate: forge" in text
+    assert "diffense review-pack publisher" in text
+    assert "not a public" in text
     # …and the average-run choreography.
     assert "schedule.md" in text
     assert "plan or execute" in text.lower() or "plan-vs-execute" in text.lower()
