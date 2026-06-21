@@ -56,8 +56,8 @@ rule.
 The runner receives `run.md` + recent `kb/log.md` context + daemon
 metadata (run ID, event ID, execution root, seed ref, optional
 auto-land target, current branch, response path, interim-response outbox,
-other pending events, live `inbox.json` path, shared runtime dir,
-generated run context file).
+other pending events, live `portal-state.json` / `inbox.json` paths,
+shared runtime dir, generated run context file).
 The bundle's delivery contract is explicit: stdout is the plain
 current-thread fallback, and the run should otherwise leave an operational
 receipt while using explicit portals for anything meant to communicate. kb
@@ -110,11 +110,13 @@ conversation artifact is recorded on the target event's thread.
 An outbox file with `gate: <name>` is an out-of-bound send; `gate: forge`
 uses the GitHub gate to open or refresh a PR from the file's `head`,
 `base`, and `title` frontmatter plus the body.
-The same outbox directory also carries a daemon-owned `inbox.json`
-control file refreshed on each heartbeat, so the running agent can see
-events that arrived after wake and decide at plan boundaries, plus once
-more before terminal closeout, whether to fold them in or leave them
-queued.
+The same outbox directory also carries daemon-owned `portal-state.json`
+and `inbox.json` control files refreshed on each heartbeat. The state
+portal is the broad live view (pending events, card/delivery posture,
+budget/keepalive, change token); `inbox.json` is the focused pending-event
+list. The running agent checks them at plan boundaries and once more
+before terminal closeout to decide whether to fold waiting work in or
+leave it queued.
 
 After the runner returns, the daemon also **captures the resident's
 dominion** (`.brr/dominion/`, the `brr-home` branch) with a serialized
@@ -155,7 +157,7 @@ files changed. Reload never interrupts a running worker.
 | Run manifests | `.brr/runs/<run-id>/run.md`             | Yes                                 |
 | Responses     | `.brr/responses/<event-id>.md`              | Yes                                 |
 | Interim queue | `.brr/responses/<event-id>.partials/`       | Until streamed + cleaned up         |
-| Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; live `inbox.json`; removed at finalize |
+| Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; live `portal-state.json` + `inbox.json`; removed at finalize |
 | Presence      | `.brr/presence/<id>.json`                   | While a thought/session is active; pruned on read |
 | Dominion      | `.brr/dominion/` (branch `brr-home`)        | Durable; committed at sleep, travels with the remote |
 | Schedule state | `.brr/schedule/state.json`                 | Machine-persistent (firing-state); specs live in dominion `schedule.md` |
