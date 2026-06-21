@@ -34,14 +34,17 @@ This is the live substrate #159 builds on:
   and portal ownership live one layer above the gate.
 - `brr docs portals` is the inspected manual for today's control-file
   grammar: outbox markdown files, `event:` and `gate:` routes,
-  `.card`, `.keepalive`, and `inbox.json`.
+  `.card`, `.keepalive`, `inbox.json`, and `portal-state.json`.
 - #148 shipped the current-protocol control loop: PLAN message shape,
   live `.card`/outbox dwelling habits, Codex runner adapter wording,
   and the explicit pre-closeout `inbox.json` read.
-- The daemon refreshes `inbox.json` beside the outbox on every heartbeat,
-  but the runner only sees that state when it chooses to read the file.
-  There is no runner-visible "what changed while I was thinking?" capsule
-  yet.
+- The daemon refreshes `portal-state.json` and `inbox.json` beside the
+  outbox on every heartbeat. `portal-state.json` is the runner-visible
+  live daemon-state capsule (#159 first slice): pending/foldable events,
+  drained reply counts, pending outbox files, current card text,
+  budget/keepalive posture, and a stable `change_token`. The runner also
+  receives `BRR_PORTAL_STATE`, and `brr portal state` renders a compact
+  inspected text view.
 - #128 shipped the run/task storage rename, burst-coalescing dispatch,
   and operational-failure sibling deferral. Per-run claims,
   resident-authored postponement, and run-keyed response/outbox routing
@@ -50,10 +53,10 @@ This is the live substrate #159 builds on:
   shape (`event: <id>\n---\nbody`) so it does not leak selector text or
   misroute to the lead event.
 
-What is **not** shipped: a runner-visible live daemon-state portal,
-in-generation portal syntax, run-keyed primary outbox/response paths,
-event leases, resident-authored event deferral, parked-portal mailbox
-records, outbound portal helper commands, and any parallel local
+What is **not** shipped: runner-adapter surfacing beyond environment
+handles, in-generation portal syntax, run-keyed primary outbox/response
+paths, event leases, resident-authored event deferral, parked-portal
+mailbox records, outbound portal helper commands, and any parallel local
 execution. Single-flight remains the default executor.
 
 ## Settled design calls
@@ -303,14 +306,14 @@ stream markers make them structurally hard to misuse.
 
 ## Implementation sequence
 
-1. **Live daemon-state portal.** Add a daemon-owned, runner-readable
-   state capsule beside the existing outbox/inbox files and a small
-   inspected text view (`brr portal state` / `brr status --agent`, naming
-   TBD). It should merge the live inbox, unacknowledged delivery state,
-   run/card/budget posture, and "changed since last read" attention signal
-   into one place. This keeps the architecture runner-swappable while
-   letting an agent ask one natural question: "what daemon state should I
-   fold into my next step?"
+1. **Live daemon-state portal — shipped 2026-06-21.** A daemon-owned
+   `portal-state.json` now sits beside `inbox.json`, refreshes each
+   heartbeat, and has an inspected text view via `brr portal state`. Runner
+   env handles (`BRR_PORTAL_STATE`, `BRR_OUTBOX_DIR`, `BRR_INBOX_PATH`,
+   etc.) expose the file without copying paths out of prose. The first
+   slice covers pending input, current card/delivery posture,
+   budget/keepalive, and a `change_token`; deeper delivery acknowledgements
+   and mailbox leases remain later slices.
 2. **Optional runner surfacing.** Experiment with runner-specific ways to
    show that capsule at natural tool boundaries: a Codex/Claude adapter if
    the runner exposes one, or an opt-in shell/PATH wrapper for host

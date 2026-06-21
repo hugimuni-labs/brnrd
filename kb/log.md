@@ -7571,3 +7571,24 @@ swappable-runner architecture. Outbound portal helper commands remain useful
 secondary ergonomics after the resident knows which portal it wants to open.
 
 Validation: `pytest tests/test_docs.py` (11 passed).
+
+## [2026-06-21] implement | #159 live daemon-state portal
+
+Shipped the first #159 code slice after the helper-command reconsideration:
+daemon runs now maintain a `portal-state.json` file beside `inbox.json` and
+refresh it on each heartbeat plus final drain. The capsule gives the runner
+one live place for pending/foldable events, drained reply counts, pending
+outbox files, current card text, budget/keepalive posture, and a stable
+`change_token` for attention-relevant changes. Runner subprocesses receive
+`BRR_PORTAL_STATE` and related `BRR_*` handles, including Docker runners,
+so agents do not have to copy paths out of prompt prose.
+
+Added `brr portal state` as the inspected text/JSON view over the same file,
+updated the Run Context Bundle wording, bundled `run.md`, portal/execution/
+internals docs, and the #159 design/index pages. Outbound helper commands
+remain secondary ergonomics; deeper delivery acknowledgements, event leases,
+resident-authored deferral, and parked mailbox records remain future #159
+slices.
+
+Validation: `pytest tests/test_outbox.py tests/test_runner.py tests/test_envs.py
+tests/test_prompts.py tests/test_docs.py tests/test_cli.py` (194 passed).

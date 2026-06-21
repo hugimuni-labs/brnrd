@@ -253,9 +253,11 @@ dive-in map) and are stable until something contradicts them.
   cost stays run-granular with folding as the consent point. The page also
   records what has shipped early (portals manual, PLAN shape, stdout
   wording, pre-closeout inbox check, tolerant outbox routing, #128 burst /
-  failure deferral) versus the next implementation slices, starting with a
-  runner-visible live daemon-state portal rather than outbound helper
-  commands or parallel execution.
+  failure deferral, and the first #159 live `portal-state.json` capsule)
+  versus the remaining implementation slices: runner-adapter surfacing,
+  outbound helper commands, resident-authored deferral, run-keyed
+  response/outbox paths, mailbox records, and later parallel-compatibility
+  work.
 
 ## Conversations & responses
 

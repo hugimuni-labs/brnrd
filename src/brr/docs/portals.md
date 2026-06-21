@@ -27,7 +27,8 @@ one action. The daemon watches the directory and acts on its next
 heartbeat. The bundle carries the concrete paths; this section is what
 each one does, and which **portal form** it is:
 
-- **inbound** ◂ — input flows in; you read (`inbox.json`).
+- **inbound** ◂ — input flows in; you read (`portal-state.json` /
+  `inbox.json`).
 - **outbound** ▸ — you emit to a surface: a chat message, the card, a PR.
 - **parked** ⏸ — you emit *and park the continuation*, resuming when
   something refluxes back (the PLAN→approve handoff).
@@ -47,6 +48,14 @@ other so they don't drift.
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout to fold in waiting work or explicitly leave it queued; never edit or remove it. |
+| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, and a stable `change_token` for attention-relevant changes. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brr portal state`; never edit or remove it. |
+
+The daemon also injects runner environment variables for the live
+surfaces it owns: `BRR_RUN_ID`, `BRR_EVENT_ID`, `BRR_OUTBOX_DIR`,
+`BRR_INBOX_PATH`, `BRR_PORTAL_STATE`, `BRR_RESPONSE_PATH`, and
+`BRR_CONTEXT_PATH` when those paths exist in the run environment. The
+file remains the universal portal contract; the env vars are discovery
+handles so a runner does not have to copy paths out of prose.
 
 The two reconcile semantics in the *Portal* column — append-log
 (ordered, additive) and desired-state (one surface reconciled in place,
@@ -137,22 +146,26 @@ Two more run surfaces live outside the outbox:
    posture when the bundle gives one, and whether you are chunking for
    cost or resilience. Do not prefix the content with `note:` — the gate
    renderer supplies that label. Send an outbox trajectory note before a
-   long stretch or at a fork. Re-read `inbox.json` at natural seams; a
-   related follow-up that appears while you are still thinking should fold
-   into this wake when that is the healthiest path. Bound long commands;
-   write `.keepalive` if the work will outlast your budget.
+   long stretch or at a fork. Re-read `portal-state.json` (or run
+   `brr portal state`) at natural seams; `inbox.json` remains the focused
+   pending-events view when you only need that list. A related follow-up
+   that appears while you are still thinking should fold into this wake
+   when that is the healthiest path. Bound long commands; write
+   `.keepalive` if the work will outlast your budget.
 
 5. **Deliver.** Leave a satisfying operational signal for this situation.
    If the signal is meant to communicate, send it through stdout or an
    explicit portal; if the work is an artifact, commit it. Don't try to
    encode every possible completion shape as a chat reply. Immediately
-   before a terminal closeout, re-read the live `inbox.json` when the run
-   has one; fold a quick related follow-up, or say why it should remain
-   queued. This cannot catch messages that arrive after the runner has
-   already returned, but it prevents avoidable orphaned follow-ups. If you
-   wrote files, commit them on the current branch — the diff is the receipt
-   the work happened. Rename the run branch to something descriptive (keep
-   the `brr/` prefix) before committing if the work has a clear theme.
+   before a terminal closeout, re-read the live `portal-state.json` when
+   the run has one (`inbox.json` is enough when you only need the pending
+   event list); fold a quick related follow-up, or say why it should
+   remain queued. This cannot catch messages that arrive after the runner
+   has already returned, but it prevents avoidable orphaned follow-ups. If
+   you wrote files, commit them on the current branch — the diff is the
+   receipt the work happened. Rename the run branch to something
+   descriptive (keep the `brr/` prefix) before committing if the work has a
+   clear theme.
 
 6. **Decompose / defer the rest.** Can't finish it all in one wake, or
    the request is naturally several steps? Write `schedule.md` entries
