@@ -42,13 +42,13 @@ time, in order:
 
 The gate is built-in but ``is_configured`` returns false until a token
 and repo are configured — there is no surprise auto-enable. Polling
-requires triggers; without them the gate is deliver-only, so opt-in
-diffense PR publication can open or refresh pull requests without also
+requires triggers; without them the gate is deliver-only, so an explicit
+`gate: forge` handoff can open or refresh pull requests without also
 watching issues/comments. Webhooks are deliberately out of scope for the
 OSS path (require a public URL + signature verification + reverse-proxy
-setup); polling matches the rest of brr's gate model. Generic PR-first
-branch handoff is a future portal-layer concern, not a broad GitHub
-subcommand. The managed brnrd GitHub App owns the webhook side; see
+setup); polling matches the rest of brr's gate model. Richer PR desired
+state belongs in the portal layer, not a broad GitHub subcommand. The
+managed brnrd GitHub App owns the webhook side; see
 [`kb/design-github-gate-vs-brnrd-app.md`] for the OSS-vs-brnrd split and
 what code each side reuses.
 
