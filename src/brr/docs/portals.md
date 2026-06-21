@@ -57,6 +57,15 @@ surfaces it owns: `BRR_RUN_ID`, `BRR_EVENT_ID`, `BRR_OUTBOX_DIR`,
 file remains the universal portal contract; the env vars are discovery
 handles so a runner does not have to copy paths out of prose.
 
+`brr portal wrap -- <command>` is the shipped runner-surfacing affordance
+for command-line work. It runs the command normally, preserves the
+command's exit code, and appends a compact `brr portal state` update to
+stderr when the live `change_token` moved while the command ran. Add
+`--always` when a deliberate boundary needs a status read even without a
+state change. This is mobilising, not mandatory: it helps a runner see
+fresh event/delivery/budget state at tool boundaries without making the
+file protocol depend on one shell wrapper.
+
 The two reconcile semantics in the *Portal* column — append-log
 (ordered, additive) and desired-state (one surface reconciled in place,
 terraform-shaped) — are orthogonal to the transport underneath; the gate
@@ -155,7 +164,9 @@ Two more run surfaces live outside the outbox:
    cost or resilience. Do not prefix the content with `note:` — the gate
    renderer supplies that label. Send an outbox trajectory note before a
    long stretch or at a fork. Re-read `portal-state.json` (or run
-   `brr portal state`) at natural seams; `inbox.json` remains the focused
+   `brr portal state`) at natural seams; for shell steps where you want
+   the state to travel with the tool output, use
+   `brr portal wrap -- <command>`. `inbox.json` remains the focused
    pending-events view when you only need that list. A related follow-up
    that appears while you are still thinking should fold into this wake
    when that is the healthiest path. Bound long commands; write
