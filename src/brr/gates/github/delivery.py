@@ -17,8 +17,7 @@ from pathlib import Path
 
 from requests.utils import quote
 
-from ... import config as conf
-from ... import prompts, protocol
+from ... import protocol
 from ...run import Run
 from .. import runtime
 from . import client, prs
@@ -137,20 +136,7 @@ def _is_pull_request_delivery(event: dict) -> bool:
     return action in _PR_ACTIONS
 
 
-def _pull_request_delivery_enabled(brr_dir: Path) -> bool:
-    """Return whether diffense-owned PR publication is enabled here."""
-    try:
-        cfg = conf.load_config(brr_dir.parent)
-    except Exception:
-        cfg = {}
-    return (
-        prompts.diffense_emit_enabled(cfg)
-        and prompts.diffense_create_pr_enabled(cfg)
-    )
-
-
 def _deliver_pull_request(
-    brr_dir: Path,
     token: str,
     event: dict,
     body: str,
@@ -158,9 +144,6 @@ def _deliver_pull_request(
     default_repo: str | None = None,
 ) -> None:
     """Create or refresh a PR from a ``gate: github``/``gate: forge`` event."""
-    if not _pull_request_delivery_enabled(brr_dir):
-        print("[brr:github] pull-request delivery disabled by diffense config")
-        return
     repo = _event_field(event, "github_repo", "repo") or (default_repo or "")
     head = _event_field(event, "head", "github_head")
     title = _event_field(event, "title", "github_title")
@@ -190,7 +173,7 @@ def _deliver_responses(
 
     def deliver_terminal(event: dict, body: str) -> None:
         if _is_pull_request_delivery(event):
-            _deliver_pull_request(brr_dir, token, event, body, default_repo=repo)
+            _deliver_pull_request(token, event, body, default_repo=repo)
             return
         # The branch footer (committed SHA + compare link) is the
         # thread's closing context, so it rides only the terminal reply.

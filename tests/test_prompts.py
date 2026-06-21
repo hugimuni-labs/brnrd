@@ -6,7 +6,6 @@ from brr.prompts import (
     _read_recent_log,
     build_daemon_prompt,
     build_run_prompt,
-    diffense_create_pr_enabled,
     diffense_emit_enabled,
 )
 
@@ -190,14 +189,6 @@ class TestPromptBuilding:
         assert diffense_emit_enabled({"diffense_emit_pack": True})
         assert not diffense_emit_enabled({"diffense_emit_pack": False})
 
-    def test_diffense_create_pr_enabled_defaults_off(self):
-        assert not diffense_create_pr_enabled({})
-        assert not diffense_create_pr_enabled(None)
-        assert diffense_create_pr_enabled({"diffense.create_pr": True})
-        assert not diffense_create_pr_enabled({"diffense.create_pr": False})
-        assert diffense_create_pr_enabled({"diffense_create_pr": True})
-        assert not diffense_create_pr_enabled({"diffense_create_pr": False})
-
     def test_daemon_prompt_includes_diffense_pack_when_enabled(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
@@ -268,8 +259,8 @@ class TestPromptBuilding:
         assert "after the runner has already returned" in prompt
         assert "satisfying signal" in prompt
         assert "not the delivery model" in prompt
-        assert "diffense.create_pr" in prompt
-        assert "Generic PR-first handoff remains future portal work" in prompt
+        assert "`gate: forge` is the explicit PR handoff" in prompt
+        assert "does not own PR creation" in prompt
 
     def test_daemon_prompt_maps_codex_channels_to_brr_portals(self, tmp_path):
         prompt = build_daemon_prompt(
