@@ -7628,3 +7628,21 @@ labels, refresh policy, acknowledgements, and existing-PR discovery.
 Validation: `pytest tests/test_github_gate.py tests/test_outbox.py
 tests/test_prompts.py tests/test_docs.py` (181 passed);
 `pytest tests/test_docs.py tests/test_kb_preflight.py` (39 passed).
+
+## [2026-06-21] implement | #159 mobilising portal command wrapper
+
+Maintainer feedback rejected both "advisory" and "enforced" as the framing
+for runner portal awareness. Shipped the smaller "mobilising" shape instead:
+`brr portal wrap -- <command>` runs normal shell work, preserves the command's
+exit code, and appends the compact `brr portal state` view to stderr only when
+the live `change_token` moved (`--always` forces an explicit status read).
+
+Updated the Run Context Bundle wording and portals manual so agents can use
+the wrapper at tool boundaries, and marked the #159 design/index pages to show
+that command-bound surfacing is now a shipped adapter-level helper while deeper
+runner hooks, in-generation portal syntax, mailbox records, and cost fields
+remain future work.
+
+Validation: `pytest tests/test_cli.py tests/test_prompts.py tests/test_docs.py`
+(99 passed); `pytest tests/test_kb_preflight.py tests/test_kb_health.py`
+(40 passed).

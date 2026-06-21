@@ -673,6 +673,13 @@ def _build_run_context_bundle(
             "`change_token` showing whether attention-relevant state changed "
             "since your last read. Daemon-owned — inspect it, don't edit it."
         )
+        sections.append(
+            "- For shell work where the command output itself should carry "
+            "fresh operational context, use `brr portal wrap -- <command>`: "
+            "it runs the command and appends a compact portal-state update "
+            "when the `change_token` moved. Use `--always` when you need a "
+            "status read even without a change."
+        )
         if runner_medium == "codex":
             sections.append(
                 "- Codex runner note: Codex-native progress/final channels "

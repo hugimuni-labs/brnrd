@@ -253,13 +253,12 @@ dive-in map) and are stable until something contradicts them.
   cost stays run-granular with folding as the consent point. The page also
   records what has shipped early (portals manual, PLAN shape, stdout
   wording, pre-closeout inbox check, tolerant outbox routing, #128 burst /
-  failure deferral, and the first #159 live `portal-state.json` capsule)
-  versus the remaining implementation slices: runner-adapter surfacing,
-  a lean `gate: forge` PR handoff, while the remaining implementation
-  slices include richer forge desired-state, runner-adapter surfacing,
-  outbound portal ergonomics, resident-authored deferral, run-keyed
-  response/outbox paths, mailbox records, and later parallel-compatibility
-  work.
+  failure deferral, the first #159 live `portal-state.json` capsule, the
+  lean `gate: forge` PR handoff, and the command-bound `brr portal wrap`
+  surfacing helper) versus the remaining implementation slices: richer
+  forge desired-state, deeper runner-adapter surfacing, outbound portal
+  ergonomics, resident-authored deferral, run-keyed response/outbox paths,
+  mailbox records, and later parallel-compatibility work.
 
 ## Conversations & responses
 
