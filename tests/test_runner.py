@@ -194,6 +194,39 @@ class TestInvocationTracing:
         assert result.has_response
         assert response_path.read_text(encoding="utf-8") == "final reply\n"
 
+    def test_invoke_runner_passes_invocation_environment(self, tmp_path, monkeypatch):
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                return ("ok\n", "")
+
+            def kill(self):  # pragma: no cover - not exercised here
+                pass
+
+        def _fake_popen(*_args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return _Proc()
+
+        monkeypatch.setenv("EXISTING_ENV", "kept")
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="env",
+            prompt="hi",
+            cwd=tmp_path,
+            repo_root=tmp_path,
+            env={"BRR_PORTAL_STATE": "/tmp/state.json"},
+        )
+
+        result = invoke_runner("mock", invocation, cfg={})
+
+        assert result.ok
+        assert captured["env"]["BRR_PORTAL_STATE"] == "/tmp/state.json"
+        assert captured["env"]["EXISTING_ENV"] == "kept"
+
     def test_invoke_runner_skips_response_write_when_no_path(self, tmp_path):
         repo_root = tmp_path
         cfg = {

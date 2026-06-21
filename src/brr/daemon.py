@@ -8,8 +8,9 @@ leaves judgement to the agent it wakes. It:
 2. Scans ``.brr/inbox/`` for pending events on a timer.
 3. Runs **single-flight** — one *thought* at a time. When idle and work
    is pending it spawns one worker; new events that arrive mid-thought are
-   surfaced to the living agent through ``outbox/<event>/inbox.json`` and
-   either get folded in at plan boundaries or wait for the next spawn.
+   surfaced to the living agent through
+   ``outbox/<event>/portal-state.json`` / ``inbox.json`` and either get
+   folded in at plan boundaries or wait for the next spawn.
    Concurrency within one resident is cooperative, not parallel across
    workers. See ``kb/design-agent-dominion.md`` §4 and
    ``kb/subject-daemon.md``.
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import collections
 import concurrent.futures
+import hashlib
 import json
 import os
 import shutil
@@ -86,6 +88,7 @@ _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
 _HEARTBEAT_INTERVAL = 30.0
 _LIVE_INBOX_NAME = "inbox.json"
+_LIVE_PORTAL_STATE_NAME = "portal-state.json"
 # Agent-owned card narration: the resident writes this control dotfile
 # in its outbox; the daemon drains it on each heartbeat into a
 # ``card_composed`` packet and the gate re-renders the live card. See
@@ -801,6 +804,33 @@ def _run_worker(
     keepalive_path = outbox_dir / ".keepalive"
     card_path = outbox_dir / _CARD_CONTROL_NAME
     card_state: dict[str, str] = {}
+    run_started_monotonic = time.monotonic()
+    _write_live_portal_state(
+        outbox_dir,
+        inbox_dir,
+        eid,
+        task,
+        phase="preparing",
+        runner_name=runner_name,
+        budget_seconds=budget_seconds,
+        hard_cap_seconds=hard_cap_seconds,
+        keepalive_path=keepalive_path,
+        card_state=card_state,
+        output_stats=output_stats,
+        start_monotonic=run_started_monotonic,
+    )
+    runner_env = {
+        "BRR_RUN_ID": task.id,
+        "BRR_EVENT_ID": eid,
+        "BRR_RESPONSE_PATH": str(env_ctx.response_path_env),
+        "BRR_CONTEXT_PATH": str(context_path),
+        "BRR_PORTAL_STATE": str(
+            (env_ctx.outbox_env or outbox_dir) / _LIVE_PORTAL_STATE_NAME
+        ),
+    }
+    if env_ctx.outbox_env:
+        runner_env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
+        runner_env["BRR_INBOX_PATH"] = str(env_ctx.outbox_env / _LIVE_INBOX_NAME)
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = prompts.build_daemon_prompt(
@@ -862,6 +892,21 @@ def _run_worker(
         emit("attempt_started", run_id=task.id, event_id=eid, attempt=attempt)
 
         attempt_started_monotonic = time.monotonic()
+        _write_live_portal_state(
+            outbox_dir,
+            inbox_dir,
+            eid,
+            task,
+            phase="running",
+            attempt=attempt,
+            runner_name=runner_name,
+            budget_seconds=budget_seconds,
+            hard_cap_seconds=hard_cap_seconds,
+            keepalive_path=keepalive_path,
+            card_state=card_state,
+            output_stats=output_stats,
+            start_monotonic=run_started_monotonic,
+        )
 
         def _emit_heartbeat() -> None:
             # Drain first: promoting an interim response is the resident's
@@ -873,6 +918,21 @@ def _run_worker(
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
             _write_live_inbox(outbox_dir, inbox_dir, eid)
+            _write_live_portal_state(
+                outbox_dir,
+                inbox_dir,
+                eid,
+                task,
+                phase="running",
+                attempt=attempt,
+                runner_name=runner_name,
+                budget_seconds=budget_seconds,
+                hard_cap_seconds=hard_cap_seconds,
+                keepalive_path=keepalive_path,
+                card_state=card_state,
+                output_stats=output_stats,
+                start_monotonic=run_started_monotonic,
+            )
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
             elapsed = int(time.monotonic() - attempt_started_monotonic)
@@ -896,6 +956,7 @@ def _run_worker(
                 repo_root=repo_root,
                 response_path=str(env_ctx.response_path_host),
                 timeout_seconds=hard_cap_seconds,
+                env=runner_env,
             ),
             cfg=cfg,
             trace=True,
@@ -912,6 +973,22 @@ def _run_worker(
             stats=output_stats,
         )
         _drain_agent_card(emit, task, eid, card_path, card_state)
+        _write_live_inbox(outbox_dir, inbox_dir, eid)
+        _write_live_portal_state(
+            outbox_dir,
+            inbox_dir,
+            eid,
+            task,
+            phase="finalizing",
+            attempt=attempt,
+            runner_name=runner_name,
+            budget_seconds=budget_seconds,
+            hard_cap_seconds=hard_cap_seconds,
+            keepalive_path=keepalive_path,
+            card_state=card_state,
+            output_stats=output_stats,
+            start_monotonic=run_started_monotonic,
+        )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
         # dominion no-ops, and on retry the next pass just re-captures any
@@ -1327,6 +1404,156 @@ def _write_live_inbox(
         return None
 
 
+def _iso_utc(epoch: float | None) -> str | None:
+    if epoch is None:
+        return None
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _outbox_message_files(outbox_dir: Path | None) -> list[str]:
+    if not outbox_dir or not outbox_dir.exists():
+        return []
+    control_names = {_LIVE_INBOX_NAME, _LIVE_PORTAL_STATE_NAME}
+    try:
+        entries = sorted(
+            (p for p in outbox_dir.iterdir() if p.is_file()),
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
+        )
+    except OSError:
+        return []
+    names: list[str] = []
+    for path in entries:
+        if (
+            path.suffix == ".tmp"
+            or path.name.startswith(".")
+            or path.name in control_names
+        ):
+            continue
+        names.append(path.name)
+    return names
+
+
+def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
+    exists = bool(keepalive_path and keepalive_path.exists())
+    until = _keepalive_until(keepalive_path)
+    status = "absent"
+    if exists and until is None:
+        status = "unparseable"
+    elif until is not None:
+        status = "active" if until > time.time() else "expired"
+    return {"status": status, "until": _iso_utc(until)}
+
+
+def _change_token(payload: dict[str, object]) -> str:
+    stable = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"generated_at", "change_token"}
+    }
+    budget = stable.get("budget")
+    if isinstance(budget, dict):
+        stable["budget"] = {
+            key: value for key, value in budget.items()
+            if key != "elapsed_seconds"
+        }
+    encoded = json.dumps(
+        stable,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _write_live_portal_state(
+    outbox_dir: Path | None,
+    inbox_dir: Path,
+    current_event_id: str,
+    task: Run,
+    *,
+    phase: str,
+    attempt: int | None = None,
+    runner_name: str | None = None,
+    budget_seconds: float | None = None,
+    hard_cap_seconds: float | None = None,
+    keepalive_path: Path | None = None,
+    card_state: dict[str, str] | None = None,
+    output_stats: dict[str, int] | None = None,
+    start_monotonic: float | None = None,
+) -> Path | None:
+    """Refresh the runner-visible daemon-state portal.
+
+    ``inbox.json`` answers only which events are pending. This broader
+    capsule answers "what needs my attention now?" for the running
+    resident: input, delivery/card posture, and budget state in one
+    daemon-owned file refreshed on the heartbeat cadence.
+    """
+    if not outbox_dir:
+        return None
+    try:
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        events = _pending_events_for_agent(inbox_dir, current_event_id)
+        stats = output_stats or {}
+        card_text = (card_state or {}).get("last", "")
+        pending_files = _outbox_message_files(outbox_dir)
+        elapsed = (
+            int(time.monotonic() - start_monotonic)
+            if start_monotonic is not None else None
+        )
+        payload: dict[str, object] = {
+            "version": 1,
+            "generated_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "run": {
+                "id": task.id,
+                "event_id": current_event_id,
+                "status": task.status,
+                "phase": phase,
+                "attempt": attempt,
+                "env": task.env,
+                "runner": runner_name,
+                "branch": task.meta.get("branch_name"),
+            },
+            "attention": {
+                "pending_event_count": len(events),
+                "pending_outbox_file_count": len(pending_files),
+                "needs_attention": bool(events or pending_files),
+            },
+            "inbound": {
+                "current_event": current_event_id,
+                "events": events,
+            },
+            "outbound": {
+                "replies_current": int(stats.get("current", 0)),
+                "replies_other": int(stats.get("other", 0)),
+                "outbound_messages": int(stats.get("outbound", 0)),
+                "pending_outbox_files": pending_files,
+            },
+            "card": {
+                "active": bool(card_text),
+                "text": card_text,
+            },
+            "budget": {
+                "elapsed_seconds": elapsed,
+                "budget_seconds": budget_seconds,
+                "hard_cap_seconds": hard_cap_seconds,
+                "keepalive": _keepalive_state(keepalive_path),
+            },
+        }
+        payload["change_token"] = _change_token(payload)
+        path = outbox_dir / _LIVE_PORTAL_STATE_NAME
+        protocol._atomic_write(
+            path,
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        )
+        return path
+    except OSError:
+        return None
+
+
 def _find_pending_event(inbox_dir: Path | None, event_id: str) -> dict | None:
     """Return the inbox event with *event_id* if it's still pending/processing."""
     if not inbox_dir:
@@ -1392,12 +1619,12 @@ def _drain_outbox(
     for fpath in entries:
         # ``.tmp`` is the agent's atomic-write staging name; dotfiles are
         # reserved as control channels (e.g. ``.keepalive`` for the
-        # liveness budget), and inbox.json is the daemon-owned live-inbox
-        # view. None are deliverable messages.
+        # liveness budget), and the live JSON files are daemon-owned
+        # control state. None are deliverable messages.
         if (
             fpath.suffix == ".tmp"
             or fpath.name.startswith(".")
-            or fpath.name == _LIVE_INBOX_NAME
+            or fpath.name in {_LIVE_INBOX_NAME, _LIVE_PORTAL_STATE_NAME}
         ):
             continue
         try:

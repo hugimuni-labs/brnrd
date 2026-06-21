@@ -21,6 +21,7 @@ import time
 import random
 import string
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,11 @@ class RunnerInvocation:
     # and enforces the real (extensible) budget from its heartbeat — see
     # ``daemon._invoke_with_heartbeat`` and ``kill_active``.
     timeout_seconds: int | None = None
+    # Extra environment variables for the runner subprocess. Daemon runs
+    # use this to expose live portal paths (BRR_PORTAL_STATE,
+    # BRR_OUTBOX_DIR, etc.) without making the resident copy them out of
+    # prose.
+    env: dict[str, str] = field(default_factory=dict)
 
     @property
     def trace_root(self) -> Path:
@@ -446,6 +452,10 @@ def invoke_runner(
     cfg = cfg or {}
     cmd = _build_cmd(runner_name, invocation.prompt, cfg, invocation.repo_root)
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
+    proc_env = None
+    if invocation.env:
+        proc_env = os.environ.copy()
+        proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
     stdout = ""
     stderr = ""
     returncode = 0
@@ -458,6 +468,7 @@ def invoke_runner(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=proc_env,
             )
         proc = _active_proc
         stdout, stderr = proc.communicate(timeout=timeout)
