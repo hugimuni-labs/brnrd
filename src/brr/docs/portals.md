@@ -44,7 +44,7 @@ other so they don't drift.
 | --- | --- | --- |
 | `<name>.md` | outbound ▸ append-log | A **chat message**, delivered in filename order while you keep working. The body is the message. Stage as `*.tmp` and rename for an atomic write. |
 | `<name>.md` with `event: <id>` frontmatter | outbound ▸ another thread | Same, but delivered to a **different pending event's** thread and marks that event handled, so it won't wake again. One complete reply per folded-in event. |
-| `<name>.md` with `gate: <name>` frontmatter | outbound ▸ a destination | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` opens/refreshes a PR (`head`, `base`, `title` frontmatter; body is the PR body). An unconfigured gate is dropped. |
+| `<name>.md` with `gate: <name>` frontmatter | outbound ▸ a destination | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` is the explicit PR handoff (`head`, `base`, `title` frontmatter; body is the PR body) and opens or refreshes the PR for that head branch when the GitHub gate can deliver. Diffense may generate the title/body when a checked review pack exists, but PR delivery is not diffense-owned. An unconfigured gate is dropped. |
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
 | `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout to fold in waiting work or explicitly leave it queued; never edit or remove it. |
@@ -63,6 +63,14 @@ terraform-shaped) — are orthogonal to the transport underneath; the gate
 is a dumb pipe under both. The PLAN→approve handoff is the canonical
 *parked* portal: emit, park the continuation, resume when approval
 refluxes (today via a follow-up event). Its message shape is below.
+
+Code-changing runs have the lean PR handoff today through `gate: forge`.
+What remains future portal work is a richer branch-keyed desired-state
+surface — draft/review posture, issue links, labels, refresh policy, and
+delivery acknowledgements — not the basic ability to ask the forge for a
+PR. Keep this as a portal/gate handoff rather than a broad public `brr`
+subcommand; diffense is optional review enrichment, not a requirement for
+publishing a branch.
 
 ## The PLAN message — the parked portal's shape
 

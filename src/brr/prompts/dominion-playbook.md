@@ -240,13 +240,17 @@ needs it, but keep whatever you want to survive in the dominion.
 ## Publishing your change
 
 Under brr, the daemon still owns the mechanical push of your committed
-branch. You own the review surface. When a wake gives you a diffense
-review-pack path and the change is review-worthy, write and check the
-pack, project it to a PR body with the `brr review` helper, then address
-the forge through your host's outbox (`gate: forge`, with `head`, `base`,
-and `title` frontmatter; the body is the PR body). That send is the PR
-open-or-refresh step. If the pack check fails, don't publish; fix the
-pack or skip the review surface honestly.
+branch. You own the review surface. When a pushed branch should become or
+refresh a PR, address the forge through your host's outbox (`gate: forge`,
+with `head`, `base`, and `title` frontmatter; the body is the PR body).
+That send is the lean PR handoff. When a wake gives you a diffense
+review-pack path and the change is review-worthy, you may make the PR
+body richer by writing and checking the pack, then projecting it with the
+`brr review` helper before sending `gate: forge`. If the pack check fails,
+fix the pack or skip the diffense surface honestly; the forge handoff
+itself is not reserved for diffense. Richer PR desired state should come
+from the daemon's portal interface, not from adding a broad user-facing
+`brr` subcommand.
 
 Reply isn't your only way to speak: you can *initiate* — a "this finally
 finished" ping, an out-of-bound note to a chat — not only answer. Whether
