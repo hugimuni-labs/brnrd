@@ -7711,3 +7711,41 @@ are `threading.Lock` (in-process), so an external `brr hook` cannot drain direct
 without a double-delivery race. Resolution: the hook only *signals* (control-file
 touch, matching `.keepalive`/`.card`) and the daemon stays the sole drainer, draining
 on signal instead of next tick — dissolving the concurrency worry.
+
+## [2026-06-22] decision | #171 runner back channel accepted, second review round folded in
+
+Maintainer reviewed the `design-runner-back-channel` doc and gave the nod to accept
+it (compress slightly), plus eight refinements. Accepted the doc (Status →
+accepted on 2026-06-22, design of record / impl pending), compressed it (merged the
+old Open-questions + Proposed-resolutions duplication into one §Resolutions), and
+folded every point in — two of which overrode what was written:
+
+- **Stop-control no longer deferred.** The doc had parked premature-stop blocking
+  behind a follow-up slice; maintainer overrode — it's in line with the flush work
+  and cheap, so flush + inbound-injection + stop-control now ship as one slice.
+- **Gemini has hooks too.** Doc said Tier 2 "absent for gemini." Verified against
+  geminicli.com/docs/hooks — gemini has a richer taxonomy (SessionStart/BeforeAgent/
+  AfterAgent/BeforeModel/AfterModel/BeforeTool/AfterTool) with context injection +
+  `decision:"deny"` blocking. So all three target runners reach Tier 2; the back
+  channel is a near-universal CLI-agent pattern, not a two-runner coincidence.
+  (Exact gemini injection-field name still to pin from its reference page.)
+
+Other folds: (1) **Tier 2 reframed** from "latency and richness" to the substrate
+of a *holistically aware resident* (event/exec-time/cost/quota meta → balanced
+proactive+reactive flow) — a runner without it is a thinner offering, not just a
+slower one; the lean Telegram-wrapper-on-a-local-CLI case stays first-class and
+should get *easier* than today's mandatory init/KB setup. (2) **Halt vs respawn**
+separated as two concepts: halt = LLM-streaming (inherent to tool-call streaming,
+cheap with caching, only addressable via different streaming/model architecture);
+respawn = brr-resident lifecycle act; mid-thought updates need neither. (3)
+**Config install** = brr-managed per-run/ephemeral following each runner's native
+shell-hook config, *with user overrides* and a **capability precheck** (mark a
+runner `hooks:`-capable only after confirming per-runner prerequisites). (4)
+**`.keepalive` retires** alongside `portal wrap`: hook runners carry budget/quota
+bidirectionally; Tier-0/1 runners just drop the hard timeout (user's
+responsibility). (5) **Control-file touch confirmed** as the daemon-drain signal
+(most in line with current `.keepalive`/`.card` idiom), with a flagged separate
+thread: the daemon has read sluggish before, so a more responsive event-driven core
+is worth its own investigation without blocking this slice.
+
+Design refinement only, no implementation. Branch brr/runner-back-channel-accept.

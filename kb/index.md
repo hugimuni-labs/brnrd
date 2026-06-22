@@ -260,15 +260,20 @@ dive-in map) and are stable until something contradicts them.
   ergonomics, resident-authored deferral, run-keyed response/outbox paths,
   mailbox records, and later parallel-compatibility work.
 - [The runner back channel (hooks) & the minimal runner interface](design-runner-back-channel.md) —
-  *proposed (2026-06-22; #171)*. The runner-surfacing slice of #159, reshaped
-  from the `brr portal wrap` shell wrapper to runner-native **hooks** (Claude
-  `PostToolUse`/`Stop`, Codex notify). Defines the **tiered minimal runner
-  interface** (Tier 0 file-operating process · Tier 1 stdout reply · Tier 2
-  optional hooks back channel that degrades cleanly to heartbeat polling), a
-  transport-neutral `brr hook <phase>` endpoint doing **outbound flush** +
-  **inbound injection**, and the `portal wrap` retirement. Also settles the
-  "update the user mid-thought without halting" question: the outbox is already
-  halt-free; hooks add immediacy and the reverse channel.
+  *accepted on 2026-06-22; #171; impl pending*. The runner-surfacing slice of
+  #159, reshaped from the `brr portal wrap` shell wrapper to runner-native
+  **hooks** — verified bidirectional on **claude, codex, and gemini**. Defines
+  the **tiered minimal runner interface** (Tier 0 file-operating process · Tier 1
+  stdout reply · Tier 2 optional hooks back channel); Tier 2 is the substrate of
+  a **holistically aware resident** (cost/quota/event meta), not just latency,
+  while the lean Telegram-wrapper-on-a-local-CLI case stays first-class. A
+  transport-neutral `brr hook <phase>` endpoint does **outbound flush** +
+  **inbound injection** + **stop-control** (all one slice), the daemon stays sole
+  drainer (hook only signals), and both `portal wrap` **and** `.keepalive` retire.
+  Also separates **halt** (an LLM-streaming concept, inherent to tool-call
+  streaming) from **respawn** (a brr-resident lifecycle act): mid-thought updates
+  need neither — the outbox is already halt-free; hooks add immediacy + reverse
+  channel.
 
 ## Conversations & responses
 
