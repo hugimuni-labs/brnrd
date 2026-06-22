@@ -53,6 +53,7 @@ from . import envs
 from . import forge_state
 from . import forges
 from . import gitops
+from . import hooks as hooks_mod
 from . import presence
 from . import prompts
 from . import protocol
@@ -87,6 +88,12 @@ _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
 # the chat card visibly bumps elapsed time during the long "running"
 # phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
 _HEARTBEAT_INTERVAL = 30.0
+# Sub-heartbeat poll cadence for the runner hooks back-channel flush signal
+# (``.flush``, dropped by ``brr hook post-tool``). The heartbeat itself
+# stays at 30s; this only governs how fast the daemon notices the signal
+# and drains the outbox in response, so a mid-thought reply lands promptly
+# instead of waiting out the tick. See kb/design-runner-back-channel.md.
+_FLUSH_POLL_INTERVAL = 1.0
 _LIVE_INBOX_NAME = "inbox.json"
 _LIVE_PORTAL_STATE_NAME = "portal-state.json"
 # Agent-owned card narration: the resident writes this control dotfile
@@ -803,6 +810,12 @@ def _run_worker(
     hard_cap_seconds = max(budget_seconds * 4, budget_seconds + 3600)
     keepalive_path = outbox_dir / ".keepalive"
     card_path = outbox_dir / _CARD_CONTROL_NAME
+    # Runner hooks back-channel flush signal: the post-tool hook touches
+    # this dotfile to ask the daemon to drain now. Same host dir the runner
+    # writes BRR_OUTBOX_DIR into (bind-mounted for container envs), so the
+    # daemon reads the signal the hook wrote. The hook only signals; the
+    # daemon stays the sole drainer (see _drain_outbox / the design doc).
+    flush_path = outbox_dir / hooks_mod.FLUSH_SIGNAL_NAME
     card_state: dict[str, str] = {}
     run_started_monotonic = time.monotonic()
     _write_live_portal_state(
@@ -822,6 +835,14 @@ def _run_worker(
     runner_env = {
         "BRR_RUN_ID": task.id,
         "BRR_EVENT_ID": eid,
+        # The runner flavour drives the hooks back channel's native
+        # rendering (brr hook reads BRR_RUNNER to pick claude/codex/gemini
+        # output fields). Prefer the profile's declared hooks flavour so
+        # alias profiles render correctly; fall back to the profile name.
+        # Harmless for Tier-0/1 runners that never call the hook.
+        "BRR_RUNNER": (
+            runner.profile_hooks_flavour(runner_name, repo_root) or runner_name
+        ),
         "BRR_RESPONSE_PATH": str(env_ctx.response_path_env),
         "BRR_CONTEXT_PATH": str(context_path),
         "BRR_PORTAL_STATE": str(
@@ -944,6 +965,35 @@ def _run_worker(
             )
             _emit_new_containers(emit, task.id, env_ctx, seen_containers)
 
+        def _emit_flush() -> None:
+            # Event-driven drain fired by the post-tool hook's .flush signal
+            # (chunk 3 of the back channel): push the just-written outbox
+            # file / card to the gate promptly, then refresh the live inbox
+            # + portal-state the next hook reads back for injection. Lighter
+            # than _emit_heartbeat — no heartbeat packet / presence ping, so
+            # a tool-boundary flush doesn't spam the chat card.
+            _drain_outbox(
+                emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+                stats=output_stats,
+            )
+            _drain_agent_card(emit, task, eid, card_path, card_state)
+            _write_live_inbox(outbox_dir, inbox_dir, eid)
+            _write_live_portal_state(
+                outbox_dir,
+                inbox_dir,
+                eid,
+                task,
+                phase="running",
+                attempt=attempt,
+                runner_name=runner_name,
+                budget_seconds=budget_seconds,
+                hard_cap_seconds=hard_cap_seconds,
+                keepalive_path=keepalive_path,
+                card_state=card_state,
+                output_stats=output_stats,
+                start_monotonic=run_started_monotonic,
+            )
+
         result = _invoke_with_heartbeat(
             env_backend,
             env_ctx,
@@ -961,6 +1011,8 @@ def _run_worker(
             cfg=cfg,
             trace=True,
             on_heartbeat=_emit_heartbeat,
+            on_flush=_emit_flush,
+            flush_path=flush_path,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
@@ -1222,6 +1274,9 @@ def _invoke_with_heartbeat(
     trace: bool,
     on_heartbeat,
     interval: float = _HEARTBEAT_INTERVAL,
+    on_flush=None,
+    flush_path: Path | None = None,
+    flush_interval: float = _FLUSH_POLL_INTERVAL,
     budget_seconds: float | None = None,
     hard_cap_seconds: float | None = None,
     keepalive_path: Path | None = None,
@@ -1264,11 +1319,32 @@ def _invoke_with_heartbeat(
     )
     worker.start()
     start = time.monotonic()
+    last_heartbeat = start
+    # When a flush signal is in play, poll at the faster cadence so the
+    # post-tool hook's drain lands promptly; the heartbeat itself still
+    # fires only every *interval*. With no flush_path the loop keeps its
+    # original single-cadence shape.
+    poll = min(interval, flush_interval) if flush_path is not None else interval
     deadline_killed = False
     while worker.is_alive():
-        worker.join(timeout=interval)
+        worker.join(timeout=poll)
         if not worker.is_alive():
             break
+        # Event-driven flush: the runner's post-tool hook touched the
+        # signal file; consume it and drain now instead of at the next tick.
+        if flush_path is not None and flush_path.exists():
+            try:
+                flush_path.unlink()
+            except OSError:
+                pass
+            if on_flush is not None:
+                try:
+                    on_flush()
+                except Exception:
+                    pass
+        if time.monotonic() - last_heartbeat < interval:
+            continue
+        last_heartbeat = time.monotonic()
         try:
             on_heartbeat()
         except Exception:
