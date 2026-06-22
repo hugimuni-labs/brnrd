@@ -1119,6 +1119,16 @@ def _run_worker(
         run_id=task.id,
         seconds=failure_defer_seconds,
     )
+    # Safety net: salvage whatever the failed run left on its branch. On a
+    # clean failure exit (timeout / runner error / quota exhaustion) the
+    # agent often never reached its own commit+push, and WorktreeEnv.finalize
+    # deliberately skips publish-outcome resolution for a non-done run — so
+    # without this the branch is never pushed and in-flight edits sit
+    # uncommitted in a preserved worktree, visible only on the host (the
+    # 2026-06-22 quota incident). Commit leftovers and arm publish_branch so
+    # the publish() tail carries the work to the remote. Best-effort; runs
+    # before finalize so the publish_branch it sets survives finalize's save.
+    _capture_worktree(task, env_ctx, branch_plan, cfg, runs_dir)
     # finalize first so any preserved branches / containers are recorded
     # on the run before the failure packet renders — the failure packet
     # is what gates see last, so its payload must be the canonical
@@ -1960,6 +1970,62 @@ def _capture_dominion(
     )
     if committed:
         print(f"[brr] dominion: captured working memory after {task.id}")
+
+
+def _capture_worktree(
+    task: Run,
+    ctx,
+    branch_plan,
+    cfg: dict,
+    runs_dir: Path,
+) -> None:
+    """Salvage a failed run's branch so its work isn't stranded locally.
+
+    The work-branch counterpart to :func:`_capture_dominion`, fired on the
+    give-up path. A killed/timed-out/quota-exhausted run usually never ran
+    the agent's own commit+push, and :meth:`WorktreeEnv.finalize` resolves a
+    publish outcome only for a ``done`` run — so on failure the branch never
+    publishes and any uncommitted edits sit in a preserved worktree, visible
+    only on the host. This:
+
+    1. commits any uncommitted changes on the work branch (the "at least
+       locally" floor), and
+    2. arms ``task.meta["publish_branch"]`` so the publish() tail pushes the
+       branch to the remote — but only when the branch carries real commits
+       beyond the seed, so a run that failed before doing anything stays
+       silent.
+
+    Best-effort and gated by ``salvage.enabled`` (default on); a detached
+    HEAD or unreadable tree is skipped. Runs before finalize so the
+    publish_branch it sets survives finalize's ``task.save``.
+    """
+    if not bool(cfg.get("salvage.enabled", cfg.get("salvage_enabled", True))):
+        return
+    run_root = getattr(ctx, "cwd", None)
+    if run_root is None:
+        return
+    run_root = Path(run_root)
+    branch = worktree.current_branch(run_root)
+    if not branch:
+        # Detached HEAD — no branch to publish; finalize keeps the worktree
+        # for forensic inspection.
+        return
+    try:
+        if gitops.worktree_dirty(run_root):
+            if gitops.commit_all(
+                run_root,
+                f"brr salvage: in-flight work from interrupted run {task.id}",
+            ):
+                print(f"[brr] salvage: committed in-flight work for {task.id}")
+        seed_ref = getattr(branch_plan, "seed_ref", None)
+        if seed_ref and not worktree.has_commits_beyond(run_root, seed_ref):
+            return
+        task.meta["publish_branch"] = branch
+        task.meta["branch_name"] = branch
+        task.save(runs_dir)
+        print(f"[brr] salvage: arming publish of {branch} for failed {task.id}")
+    except Exception as e:  # best-effort — never let salvage break the give-up path
+        print(f"[brr] salvage: skipped for {task.id} ({e})")
 
 
 def _record_response_artifact(
