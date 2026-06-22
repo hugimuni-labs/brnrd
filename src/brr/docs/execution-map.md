@@ -148,6 +148,15 @@ on a clean success with nothing uncommitted left behind; failures,
 conflicts, and uncommitted/untracked leftovers keep the worktree for
 inspection.
 
+On the give-up path (timeout, runner error, quota exhaustion) the daemon
+first runs a salvage net (`_capture_worktree`): it commits any in-flight
+edits on the work branch and arms `publish_branch` so the publish step
+ships the branch to the remote — finalize otherwise resolves a publish
+outcome only for a `done` run, so without this a killed run's work (even
+already-committed commits) would sit local-only in the preserved worktree.
+Best-effort, gated by `salvage.enabled` (default on), and silent when the
+branch carries no commits beyond the seed.
+
 When `brr up --dev-reload` or `dev_reload=true` is active, this is also
 the safe boundary where the daemon may re-exec itself if brr package
 files changed. Reload never interrupts a running worker.
