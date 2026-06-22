@@ -7646,3 +7646,68 @@ remain future work.
 Validation: `pytest tests/test_cli.py tests/test_prompts.py tests/test_docs.py`
 (99 passed); `pytest tests/test_kb_preflight.py tests/test_kb_health.py`
 (40 passed).
+
+## [2026-06-22] plan | #171 runner hooks back channel + lean runner interface
+
+Maintainer asked to bundle the `brr portal wrap` retirement with implementing
+the back channel both Claude Code and Codex CLI ship — **hooks** — and to write
+down a general minimal runner interface so the runner stays swappable.
+
+Filed `design-runner-back-channel.md` (proposed) and issue #171. The design:
+defines the runner interface as three tiers — Tier 0 (required) file-operating
+process, Tier 1 (optional) stdout reply, Tier 2 (optional) hooks back channel
+that degrades cleanly to today's heartbeat poll, so Tier 2 is never load-bearing
+for correctness. The back channel is one transport-neutral `brr hook <phase>`
+endpoint (JSON in/out): `post-tool` flushes the outbox/card immediately
+(event-driven instead of heartbeat-polled) and returns a portal-state delta for
+injection; `stop` does a final drain and, in a later slice, can block a premature
+stop. brr generates the hook config per runner profile (Claude `settings.json`
+hooks, Codex notify). `portal wrap` is retired; `brr portal state` stays as the
+inspected view and the hook's injection source. Reshaped portal-grammar
+implementation-sequence #2 from shell-wrapper-shipped to hooks, and linked the
+new page from the index.
+
+Folded in the maintainer's follow-up (mid-thought writes without a halt):
+updating the user mid-thought already does **not** halt the run — the outbox is a
+normal tool-call write drained by the heartbeat; only terminal stdout and the
+parked PLAN portal truly halt. The outbox lacks immediacy and a reverse channel,
+which is exactly what the `post-tool` hook adds. No new primitive needed.
+
+---
+
+## [2026-06-22] research | #171 hooks verified as a true back channel into the runner
+
+Maintainer asked to double-check (with the linked Claude Code / Codex hook docs
+plus web research) that hooks can be used as a back channel *into* a runner —
+pushing fresh context into the running agent — not just fire-and-forget telemetry
+out ("analytics and shit"). Also confirmed the design file was committed (it is:
+`design-runner-back-channel.md` merged to main in fe556b6), approved #171.
+
+Verified, bidirectional on both runners. Claude Code: `PostToolUse` accepts
+`hookSpecificOutput.additionalContext` for **non-blocking** injection alongside
+the tool result (the `post-tool` inbound path); `Stop` accepts `decision: "block"`
++ `reason`/`additionalContext` which prevents the stop and continues the turn (the
+premature-stop affordance); `SessionStart`/`UserPromptSubmit` inject bare stdout.
+Mechanism caveat folded into the design: for `PostToolUse`/`Stop`, plain stdout is
+debug-log only — injection needs the JSON `additionalContext` field, so `brr hook`
+must speak JSON for those phases. Codex CLI: same event set with `additionalContext`,
+`continue: false`, `updatedInput`; its own doc says hooks are "not fire-and-forget."
+This resolves the design's "Codex parity" open question — full Tier 2, not flush-only.
+
+Updated `design-runner-back-channel.md`: verified field names in the per-runner
+mapping, a new §Verification, status line noting the check, and a "Still undefined"
+list (the `brr hook` JSON schema, config-installation method, stop-control
+activation scope, outbox→flush wiring) so the next implementation slice starts from
+what's settled vs. open. No implementation in this PR — design refinement only.
+
+Follow-up folded into the same run ("address the remaining wtfs at this stage"):
+firmed the open implementation questions into **proposed resolutions** rather than
+parking them — a concrete `brr hook` JSON envelope (neutral `{inject, block,
+block_reason}` mapped per profile), config installation per-run/ephemeral into the
+worktree settings, stop-control deferred behind the first slice. For outbox→flush
+wiring I checked `daemon.py` first and corrected an optimistic draft: `_drain_outbox`
+is coupled to the daemon's in-process `_WorkerEmit`/log indexing and the drain locks
+are `threading.Lock` (in-process), so an external `brr hook` cannot drain directly
+without a double-delivery race. Resolution: the hook only *signals* (control-file
+touch, matching `.keepalive`/`.card`) and the daemon stays the sole drainer, draining
+on signal instead of next tick — dissolving the concurrency worry.

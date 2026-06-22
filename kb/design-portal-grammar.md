@@ -327,13 +327,17 @@ stream markers make them structurally hard to misuse.
    slice covers pending input, current card/delivery posture,
    budget/keepalive, and a `change_token`; deeper delivery acknowledgements
    and mailbox leases remain later slices.
-2. **Mobilising runner surfacing — shell-wrapper slice shipped
-   2026-06-21.** `brr portal wrap -- <command>` runs command-line work and
-   appends a compact state update when the live `change_token` moved
-   (`--always` forces a deliberate status read). This keeps surfacing
-   adapter-level rather than mandatory: wrappers miss non-shell thinking,
-   and runner internals would break the swappable-runner shape. Deeper
-   Codex/Claude adapter hooks remain experimental.
+2. **Runner surfacing — moving from shell-wrapper to hooks (#171).** The
+   `brr portal wrap -- <command>` shell-wrapper slice shipped 2026-06-21 as
+   a stopgap, but it only fires around shell commands the resident remembers
+   to prefix, misses non-shell thinking, and is one-directional. Both
+   supported runners expose lifecycle **hooks** (Claude `PostToolUse`/`Stop`,
+   Codex notify), which are automatic, boundary-complete, and bidirectional.
+   [`design-runner-back-channel.md`](design-runner-back-channel.md) reshapes
+   this slice into a transport-neutral hooks back channel and retires
+   `portal wrap` (keeping `brr portal state` as the inspected view + hook
+   injection source). Tier-2 hooks stay optional enrichment: a runner
+   without them degrades cleanly to today's heartbeat poll.
 3. **Forge desired-state portal.** Grow today's explicit `gate: forge`
    send into branch-keyed desired PR state for code-changing work:
    draft/review posture, issue links, labels, refresh policy, delivery
