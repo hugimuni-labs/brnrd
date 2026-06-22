@@ -832,17 +832,19 @@ def _run_worker(
         output_stats=output_stats,
         start_monotonic=run_started_monotonic,
     )
+    # The runner's declared hooks flavour drives both the back channel's
+    # native rendering (``brr hook`` reads BRR_RUNNER to pick the
+    # claude/codex/gemini output fields) and which native hook config brr
+    # generates below. Prefer the profile's declared flavour so alias
+    # profiles render correctly; fall back to the profile name. Harmless
+    # for Tier-0/1 runners that never call the hook.
+    hooks_flavour = (
+        runner.profile_hooks_flavour(runner_name, repo_root) or runner_name
+    )
     runner_env = {
         "BRR_RUN_ID": task.id,
         "BRR_EVENT_ID": eid,
-        # The runner flavour drives the hooks back channel's native
-        # rendering (brr hook reads BRR_RUNNER to pick claude/codex/gemini
-        # output fields). Prefer the profile's declared hooks flavour so
-        # alias profiles render correctly; fall back to the profile name.
-        # Harmless for Tier-0/1 runners that never call the hook.
-        "BRR_RUNNER": (
-            runner.profile_hooks_flavour(runner_name, repo_root) or runner_name
-        ),
+        "BRR_RUNNER": hooks_flavour,
         "BRR_RESPONSE_PATH": str(env_ctx.response_path_env),
         "BRR_CONTEXT_PATH": str(context_path),
         "BRR_PORTAL_STATE": str(
@@ -852,6 +854,30 @@ def _run_worker(
     if env_ctx.outbox_env:
         runner_env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
         runner_env["BRR_INBOX_PATH"] = str(env_ctx.outbox_env / _LIVE_INBOX_NAME)
+
+    # Tier 2: generate the runner's native per-run hook config so the runner
+    # actually invokes ``brr hook`` at tool/turn boundaries. This is the call
+    # site that activates the whole back channel — without it the daemon-side
+    # flush-drain and injection wiring stay dark. Gated by a runtime
+    # capability precheck (flavour brr can emit for, brr endpoint on PATH,
+    # cwd writable); a failed precheck degrades cleanly to the
+    # heartbeat-polled model. The config lands in the run worktree
+    # (``.claude/settings.local.json``, conventionally gitignored) and
+    # disappears with it — nothing touches the user's global config.
+    if hooks_mod.hook_capability(hooks_flavour, run_root):
+        hook_config_path = hooks_mod.install_hook_config(hooks_flavour, run_root)
+        if hook_config_path is not None:
+            emit(
+                "hooks_installed",
+                run_id=task.id,
+                event_id=eid,
+                flavour=hooks_flavour,
+                path=str(hook_config_path),
+            )
+            print(
+                f"[brr] worker {eid}: installed {hooks_flavour} hook config "
+                f"at {hook_config_path}"
+            )
     for attempt in range(1, max_retries + 2):
         if attempt == 1:
             prompt = prompts.build_daemon_prompt(
