@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -304,6 +305,96 @@ def render_native(
         "block": block,
         "block_reason": reason,
     }, 0
+
+
+# ── Config generation (brr-managed, per-run, worktree-scoped) ────────────
+#
+# brr generates the runner's *native* hook config into the run's working
+# directory each run so the user never hand-writes it, and so it disappears
+# with the worktree (nothing touches the user's global config). A runner is
+# only treated as hooks-capable after a runtime precheck confirms the
+# prerequisites — the profile's ``hooks:`` field is the *intent*, the
+# precheck is the *assertion* (kb/design-runner-back-channel.md §Resolutions).
+
+# Flavours brr can currently emit native hook config for. codex / gemini
+# declare the capability (their docs confirm bidirectional hooks) but their
+# config emitters are a follow-up; until then they degrade to Tier 0/1.
+_CONFIG_SUPPORTED = {"claude"}
+
+
+def hook_config_supported(flavour: str | None) -> bool:
+    """True when brr can generate native hook config for *flavour* today."""
+    return bool(flavour) and flavour in _CONFIG_SUPPORTED
+
+
+def hook_command(phase: str, brr_bin: str = "brr") -> str:
+    """The shell command a native hook runs for *phase*."""
+    return f"{brr_bin} hook {phase}"
+
+
+def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
+    def _entry(phase: str) -> dict[str, Any]:
+        return {"hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}]}
+
+    return {
+        "hooks": {
+            "PostToolUse": [_entry(PHASE_POST_TOOL)],
+            "Stop": [_entry(PHASE_STOP)],
+            "SessionStart": [_entry(PHASE_SESSION_START)],
+        }
+    }
+
+
+def hook_capability(
+    flavour: str | None, cwd: Path | None, *, brr_bin: str = "brr"
+) -> bool:
+    """Runtime precheck: is this run actually hooks-capable?
+
+    Asserts (not assumes) the per-runner prerequisites: brr can emit config
+    for the flavour, the brr endpoint is invocable on PATH, and the run cwd
+    is a writable place to drop the native config. Returns False — degrade
+    cleanly to the heartbeat-polled model — when any prerequisite is missing.
+    """
+    if not hook_config_supported(flavour):
+        return False
+    if cwd is None or not Path(cwd).is_dir():
+        return False
+    if shutil.which(brr_bin) is None:
+        return False
+    return os.access(cwd, os.W_OK)
+
+
+def install_hook_config(
+    flavour: str | None, cwd: Path, *, brr_bin: str = "brr"
+) -> Path | None:
+    """Write *flavour*'s native per-run hook config into *cwd*.
+
+    For claude this is ``<cwd>/.claude/settings.local.json`` — the local
+    project overlay that layers on top of any committed ``settings.json``
+    and is conventionally gitignored, so brr's generated hooks coexist with
+    user settings rather than clobbering them. Merges into an existing local
+    overlay (user keys win except for the ``hooks`` block brr owns). Returns
+    the written path, or None when the flavour is unsupported.
+    """
+    if flavour != "claude":
+        return None
+    settings_dir = cwd / ".claude"
+    settings_path = settings_dir / "settings.local.json"
+    existing: dict[str, Any] = _read_json(settings_path)
+    generated = _claude_hook_settings(brr_bin)
+    # User overrides layer on top of brr's defaults; brr owns only the
+    # ``hooks`` block, so a merge preserves any other local settings.
+    merged = {**existing, **generated}
+    if "hooks" in existing:
+        merged["hooks"] = {**existing.get("hooks", {}), **generated["hooks"]}
+    try:
+        settings_dir.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
+            json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        return None
+    return settings_path
 
 
 # ── Entry point ──────────────────────────────────────────────────────────
