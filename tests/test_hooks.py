@@ -138,3 +138,73 @@ def test_missing_portal_state_is_graceful(tmp_path):
     assert code == 0
     assert (tmp_path / hooks.FLUSH_SIGNAL_NAME).exists()
     assert "hookSpecificOutput" not in out
+
+
+# ── Config generation (brr-managed per-run native hook config) ───────────
+
+
+def test_hook_config_supported_only_claude_today():
+    assert hooks.hook_config_supported("claude") is True
+    # codex / gemini declare the capability but have no emitter yet.
+    assert hooks.hook_config_supported("codex") is False
+    assert hooks.hook_config_supported("gemini") is False
+    assert hooks.hook_config_supported(None) is False
+    assert hooks.hook_config_supported("") is False
+
+
+def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
+    path = hooks.install_hook_config("claude", tmp_path, brr_bin="brr")
+    assert path == tmp_path / ".claude" / "settings.local.json"
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    hook_block = settings["hooks"]
+    # All three abstract phases map to their native claude event names,
+    # each invoking ``brr hook <phase>`` — the keystone the wiring relies on.
+    assert set(hook_block) == {"PostToolUse", "Stop", "SessionStart"}
+    cmds = {
+        name: entries[0]["hooks"][0]["command"]
+        for name, entries in hook_block.items()
+    }
+    assert cmds["PostToolUse"] == "brr hook post-tool"
+    assert cmds["Stop"] == "brr hook stop"
+    assert cmds["SessionStart"] == "brr hook session-start"
+
+
+def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.local.json").write_text(
+        json.dumps(
+            {
+                "permissions": {"allow": ["Bash(ls)"]},
+                "hooks": {"PreToolUse": [{"hooks": []}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    path = hooks.install_hook_config("claude", tmp_path)
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    # User's non-hook keys survive untouched...
+    assert settings["permissions"] == {"allow": ["Bash(ls)"]}
+    # ...a user hook brr doesn't own is preserved alongside brr's phases.
+    assert "PreToolUse" in settings["hooks"]
+    assert "PostToolUse" in settings["hooks"]
+
+
+def test_install_hook_config_unsupported_flavour_is_noop(tmp_path):
+    assert hooks.install_hook_config("codex", tmp_path) is None
+    assert not (tmp_path / ".claude").exists()
+
+
+def test_hook_capability_precheck(tmp_path, monkeypatch):
+    # Pretend brr is on PATH so the precheck's only variables are flavour /
+    # cwd writability.
+    monkeypatch.setattr(hooks.shutil, "which", lambda _name: "/usr/bin/brr")
+    assert hooks.hook_capability("claude", tmp_path) is True
+    # Unsupported flavour → degrade.
+    assert hooks.hook_capability("codex", tmp_path) is False
+    assert hooks.hook_capability(None, tmp_path) is False
+    # Missing cwd → degrade.
+    assert hooks.hook_capability("claude", tmp_path / "nope") is False
+    # brr not invocable → degrade.
+    monkeypatch.setattr(hooks.shutil, "which", lambda _name: None)
+    assert hooks.hook_capability("claude", tmp_path) is False
