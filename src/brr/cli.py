@@ -171,6 +171,13 @@ def main(argv: list[str] | None = None) -> None:
                    help="command to run; prefix with -- to stop option parsing")
     p.set_defaults(func=cmd_portal_wrap)
 
+    p = sub.add_parser(
+        "hook",
+        help="runner hooks back channel endpoint (Tier 2; called by the "
+             "runner's native lifecycle hooks, not by hand)")
+    p.add_argument("phase", help="abstract phase: post-tool | stop | session-start")
+    p.set_defaults(func=cmd_hook)
+
     agent_p = sub.add_parser(
         "agent", help="resident-agent helpers (wake-context, dominion)")
     agent_sub = agent_p.add_subparsers(dest="agent_command", required=True)
@@ -421,6 +428,20 @@ def cmd_portal_wrap(args):
         )
         print(_format_portal_state(after_payload), file=sys.stderr)
     return code
+
+
+def cmd_hook(args):
+    import sys
+
+    from . import hooks
+
+    phase = str(args.phase or "").strip()
+    if phase not in hooks.PHASES:
+        # Tolerant: an unknown phase is a no-op success so a runner mapping
+        # an extra native hook onto brr never hard-fails the agent's turn.
+        print("{}", end="")
+        return 0
+    return hooks.main(phase)
 
 
 def cmd_review(args):
