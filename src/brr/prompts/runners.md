@@ -1,6 +1,7 @@
 ---
 claude:
   cmd: 'claude --print --dangerously-skip-permissions --safe-mode --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  hooks: claude
 claude-bare-api-only:
   binary: claude
   cmd: 'claude --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
@@ -15,8 +16,10 @@ claude-bare-api-only-fable:
   cmd: 'claude --model "claude-fable-5" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
 codex:
   cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
+  hooks: codex
 gemini:
   cmd: gemini -p --yolo
+  hooks: gemini
 ---
 Bundled runner profiles for brr.
 
@@ -26,6 +29,34 @@ assembled prompt as the final command argument, captures stdout as the
 plain current-thread output artifact, treats stderr as progress/debug
 output, and interprets the exit status as the process result. The runner
 does not need to know the response-file path for the common case.
+
+## The minimal runner interface (tiers)
+
+The contract stays lean by staying *tiered* — each tier is optional
+enrichment of the one below, and a runner that satisfies only Tier 0 still
+works. See `kb/design-runner-back-channel.md` for the full design.
+
+- **Tier 0 (required).** A process that, given the assembled prompt as its
+  final argument, operates files in its working directory and exits with a
+  status code. The irreducible floor — all real work happens here.
+- **Tier 1 (optional).** Prints a final reply on stdout (progress/debug on
+  stderr). brr captures stdout as the plain current-thread reply. This is
+  the `response_path` capture above.
+- **Tier 2 (optional).** A *hooks back channel*: the runner invokes a
+  brr-provided callback (`brr hook <phase>`) at tool/turn boundaries and at
+  stop, passing run context and consuming a JSON result. Used for
+  event-driven outbound flush, fresh-context injection, premature-stop
+  control, and the operational meta-awareness a holistically aware resident
+  runs on. A Tier-0/1 runner degrades cleanly to the heartbeat-polled model
+  (the daemon keeps draining the outbox and refreshing `portal-state.json`
+  on its timer). Tier 2 is never load-bearing for *correctness*, but it is
+  the substrate of a fuller class of resident.
+
+A profile opts into Tier 2 with a `hooks: <flavour>` field naming the
+runner family whose native hook config brr should generate (`claude`,
+`codex`, `gemini`). brr marks the runner `hooks`-capable only after a
+runtime capability precheck confirms the per-runner prerequisites — the
+field is the *intent*, the precheck is the *assertion*.
 
 These bundled profiles are defaults, not the user's source of truth. To
 manage runner profiles for a project, create `.brr/runners.md` with the
