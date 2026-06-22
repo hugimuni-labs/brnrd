@@ -7749,3 +7749,30 @@ thread: the daemon has read sluggish before, so a more responsive event-driven c
 is worth its own investigation without blocking this slice.
 
 Design refinement only, no implementation. Branch brr/runner-back-channel-accept.
+
+## [2026-06-22] implement | Daemon salvage net: failed runs commit+publish their branch
+
+A quota-exhaustion kill mid-run stranded work: `brr/runner-back-channel-impl` had
+3 committed-but-unpushed commits plus an uncommitted `src/brr/hooks.py` (the
+config-generation block for #171), and the daemon never pushed any of it.
+
+**Salvaged** the work — committed the hooks.py block (compiles, hook tests pass)
+and pushed the branch with all 4 commits.
+
+**Root cause found, deeper than "uncommitted edits."** `WorktreeEnv.finalize`
+resolves a publish outcome (sets `publish_branch`) *only* for a `done` run — on
+any failure it returns early, so `daemon.publish` reads `publish_branch=None` and
+no-ops. Result: a failed/killed run pushes **nothing**, not even already-committed
+commits; the worktree is preserved locally for forensics but never reaches the
+remote. That's exactly the incident.
+
+**Fix** (branch `brr/daemon-salvage-net`): a `_capture_worktree` salvage net on
+the give-up path, mirroring `_capture_dominion`. It (1) commits any in-flight
+edits on the work branch ("at least locally"), and (2) arms `publish_branch` so
+the existing publish() tail ships the branch to the remote — but only when the
+branch carries commits beyond the seed, so a run that failed before doing anything
+stays silent. Best-effort, gated by `salvage.enabled` (default on), skips detached
+HEAD. Covers timeout / runner error / quota exhaustion (clean-exit failure paths
+that reach the in-process finally); a hard SIGKILL of the worker process still
+can't run it — noted as the residual gap. New tests in `test_daemon_salvage.py`
+(5), full suite 983→988 green. Docs updated (execution-map, brr-internals).
