@@ -1,6 +1,6 @@
 ---
 claude:
-  cmd: 'claude --print --dangerously-skip-permissions --safe-mode --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
   hooks: claude
 claude-bare-api-only:
   binary: claude
@@ -57,6 +57,17 @@ runner family whose native hook config brr should generate (`claude`,
 `codex`, `gemini`). brr marks the runner `hooks`-capable only after a
 runtime capability precheck confirms the per-runner prerequisites — the
 field is the *intent*, the precheck is the *assertion*.
+
+A hooks-capable invocation must not also disable hooks. The `claude`
+profile uses `--setting-sources local` (not `--safe-mode`): brr writes its
+generated hook config to `.claude/settings.local.json` (the **local**
+settings source), so loading that source activates the back channel while
+still excluding the user's global and the project's committed settings —
+the isolation `--safe-mode` was reaching for. `--safe-mode` cannot be used
+on a Tier 2 profile: it sets `CLAUDE_CODE_SAFE_MODE=1`, which disables
+hooks (along with CLAUDE.md, skills, plugins, MCP) and so silently makes
+the declared `hooks: claude` a no-op. The `--bare` alias profiles
+deliberately skip hooks and so declare no `hooks:` field.
 
 These bundled profiles are defaults, not the user's source of truth. To
 manage runner profiles for a project, create `.brr/runners.md` with the
