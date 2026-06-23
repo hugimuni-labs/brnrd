@@ -279,6 +279,28 @@ def _profile_binary(name: str, profiles: dict[str, dict[str, Any]]) -> str:
     return str(profile.get("binary") or name)
 
 
+def profile_hooks_flavour(
+    name: str, repo_root: Path | None = None
+) -> str | None:
+    """Return the runner's declared hook *flavour*, or None.
+
+    Tier 2 of the runner interface (``kb/design-runner-back-channel.md``):
+    a profile opts into the hooks back channel with a ``hooks: <flavour>``
+    field naming the runner family (``claude`` / ``codex`` / ``gemini``)
+    whose native hook config brr generates. This reads the *declared*
+    intent from the profile; whether the runner is actually hooks-capable
+    is a separate runtime precheck (settings location writable, native
+    config present), so a caller wires hooks only after confirming the
+    flavour here *and* passing that precheck.
+    """
+    profile = _load_profiles(repo_root).get(name) or {}
+    flavour = profile.get("hooks")
+    if not flavour:
+        return None
+    flavour = str(flavour).strip().lower()
+    return flavour or None
+
+
 def _runner_available(name: str, profiles: dict[str, dict[str, Any]]) -> bool:
     return shutil.which(_profile_binary(name, profiles)) is not None
 

@@ -39,6 +39,37 @@ def _ok_result(invocation: RunnerInvocation) -> RunnerResult:
     )
 
 
+def test_invoke_with_heartbeat_drains_on_flush_signal(tmp_path):
+    """A .flush signal dropped mid-run triggers on_flush and is consumed,
+    without waiting for the (long) heartbeat interval."""
+    flush_path = tmp_path / ".flush"
+    flushes: list[float] = []
+    heartbeats: list[float] = []
+
+    def slow_invoke(_ctx, _runner, invocation, cfg, *, trace=False):
+        # Drop the signal partway through, then keep "working".
+        time.sleep(0.05)
+        flush_path.write_text("now")
+        time.sleep(0.2)
+        return _ok_result(invocation)
+
+    backend = SimpleNamespace(invoke=slow_invoke)
+    result = daemon._invoke_with_heartbeat(
+        backend, None, "codex", _invocation(),
+        cfg={}, trace=False,
+        on_heartbeat=lambda: heartbeats.append(time.monotonic()),
+        on_flush=lambda: flushes.append(time.monotonic()),
+        flush_path=flush_path,
+        flush_interval=0.02,
+        interval=10.0,  # long: a flush must not wait for the heartbeat tick
+    )
+
+    assert result.returncode == 0
+    assert len(flushes) >= 1  # the signal was noticed and drained
+    assert not flush_path.exists()  # and consumed
+    assert heartbeats == []  # the 10s heartbeat never fired in this window
+
+
 def test_invoke_with_heartbeat_ticks_during_long_run():
     """A runner that takes longer than the interval gets at least one
     heartbeat tick while it's still alive."""
