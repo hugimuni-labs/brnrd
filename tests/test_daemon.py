@@ -1120,3 +1120,28 @@ def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
     content = prompt_path.read_text(encoding="utf-8")
     # The first attempt's prompt (not a retry prompt) is what's persisted.
     assert "evt=evt-prompt" in content
+
+
+# ── _scm_facet (portal-state SCM posture) ────────────────────────────
+
+
+def test_scm_facet_unknown_without_workdir():
+    # No readable worktree → known=False so the back channel stays silent
+    # rather than claim a clean tree it never inspected.
+    facet = daemon._scm_facet(None, "brr/run-x")
+    assert facet == {
+        "known": False, "branch": "brr/run-x",
+        "unpushed_commits": 0, "modified_files": 0,
+    }
+
+
+def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "x\n"})  # no remote → 1 unpushed
+    (repo / "b.txt").write_text("dirty\n", encoding="utf-8")  # 1 untracked
+    facet = daemon._scm_facet(repo, "brr/run-x")
+    assert facet["known"] is True
+    assert facet["branch"] == "brr/run-x"
+    assert facet["unpushed_commits"] == 1
+    assert facet["modified_files"] == 1
