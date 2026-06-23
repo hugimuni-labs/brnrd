@@ -831,6 +831,7 @@ def _run_worker(
         card_state=card_state,
         output_stats=output_stats,
         start_monotonic=run_started_monotonic,
+        work_dir=run_root,
     )
     # The runner's declared hooks flavour drives both the back channel's
     # native rendering (``brr hook`` reads BRR_RUNNER to pick the
@@ -953,6 +954,7 @@ def _run_worker(
             card_state=card_state,
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
+            work_dir=run_root,
         )
 
         def _emit_heartbeat() -> None:
@@ -979,6 +981,7 @@ def _run_worker(
                 card_state=card_state,
                 output_stats=output_stats,
                 start_monotonic=run_started_monotonic,
+                work_dir=run_root,
             )
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
@@ -1018,6 +1021,7 @@ def _run_worker(
                 card_state=card_state,
                 output_stats=output_stats,
                 start_monotonic=run_started_monotonic,
+                work_dir=run_root,
             )
 
         result = _invoke_with_heartbeat(
@@ -1066,6 +1070,7 @@ def _run_worker(
             card_state=card_state,
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
+            work_dir=run_root,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean

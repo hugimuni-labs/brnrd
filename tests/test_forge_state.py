@@ -122,6 +122,25 @@ def test_unpushed_commit_count_no_remote(tmp_path):
     assert worktree.unpushed_commit_count(repo) == 1
 
 
+# ── worktree.uncommitted_file_count ──────────────────────────────────
+
+
+def test_uncommitted_file_count_clean_tree(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "x\n"})
+    assert worktree.uncommitted_file_count(repo) == 0
+
+
+def test_uncommitted_file_count_counts_tracked_and_untracked(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    commit_files(repo, {"a.txt": "x\n"})
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")  # modified
+    (repo / "new.txt").write_text("fresh\n", encoding="utf-8")  # untracked
+    assert worktree.uncommitted_file_count(repo) == 2
+
+
 # ── build_forge_state ────────────────────────────────────────────────
 
 
