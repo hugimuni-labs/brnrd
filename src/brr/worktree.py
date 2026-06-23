@@ -271,6 +271,28 @@ def has_uncommitted_changes(worktree_path: Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def uncommitted_file_count(worktree_path: Path) -> int:
+    """Return the number of changed paths (untracked + unstaged + staged).
+
+    A line of ``git status --porcelain`` per affected path. Feeds the
+    portal-state ``scm`` facet so the back channel can report "you have N
+    modified file(s)" at closeout — the cheap, observational counterpart to
+    :func:`has_uncommitted_changes`. Any git failure yields ``0`` rather than
+    raising: like :func:`unpushed_commit_count`, this is observational and
+    must never fail a run.
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return 0
+    return sum(1 for line in result.stdout.splitlines() if line.strip())
+
+
 def remove(
     repo_root: Path,
     run_id: str,
