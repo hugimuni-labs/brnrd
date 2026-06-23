@@ -7750,6 +7750,31 @@ is worth its own investigation without blocking this slice.
 
 Design refinement only, no implementation. Branch brr/runner-back-channel-accept.
 
+---
+
+## [2026-06-22] implement | Wire install_hook_config into the run lifecycle (#171)
+
+The keystone gap on the runner hooks back channel (#175): `install_hook_config`
+/ `hook_capability` were defined but had **no call site**, so no runner ever
+invoked `brr hook` and the daemon-side flush-drain + injection wiring stayed
+dark. `_run_worker` now computes the runner's declared hooks flavour once
+(reused for `BRR_RUNNER`) and, after the `hook_capability` runtime precheck,
+generates the native per-run hook config into the run worktree; a failed
+precheck degrades cleanly to the heartbeat-polled model. Emits a
+`hooks_installed` trace for dogfood verification.
+
+Answers the maintainer's question — **the user never hand-writes hooks**: brr
+generates `.claude/settings.local.json` (gitignored) per run, layered over user
+settings, gone with the worktree.
+
+Also closed a coverage gap the salvage left: `install_hook_config` /
+`hook_capability` / `hook_config_supported` had no tests despite the prior
+status note claiming "unit-tested" — added 5 (well-formed claude settings,
+merge-preserves-user-keys, unsupported no-op, capability degrade paths). Suite
+995 green. Pushed to `brr/runner-back-channel-impl` (#175). Still open and
+ordered after: live dogfood (needs daemon reload), then retire `brr portal
+wrap` and `.keepalive`. Container-env precheck (in-container `brr` PATH) noted
+as a dogfood follow-up.
 ## [2026-06-22] implement | Daemon salvage net: failed runs commit+publish their branch
 
 A quota-exhaustion kill mid-run stranded work: `brr/runner-back-channel-impl` had
