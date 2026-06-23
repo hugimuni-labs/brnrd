@@ -118,7 +118,12 @@ finalize records `publish_branch` + `publish_status` on the manifest and
 `daemon.publish` ships that branch — via a refspec push when the
 agent kept the run branch but the event named a different expected
 publish target, a leased force-push when the agent rewrote the
-expected branch, or an ordinary push otherwise.
+expected branch, or an ordinary push otherwise. On a *failed* run
+finalize skips that outcome resolution, so a salvage net
+(`_capture_worktree`, gated by `salvage.enabled`, default on) commits any
+in-flight edits and arms `publish_branch` first, so a killed/timed-out/
+quota-exhausted run's work still reaches the remote instead of sitting
+local-only in the preserved worktree.
 `branch.fallback` (or the legacy spelling `branch_fallback`) controls
 the no-authority fallback. The only supported mode is `preserve`
 (the default). Legacy values (`inbox`, `default`, `current`) warn once
