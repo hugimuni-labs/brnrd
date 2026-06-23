@@ -254,13 +254,15 @@ dive-in map) and are stable until something contradicts them.
   records what has shipped early (portals manual, PLAN shape, stdout
   wording, pre-closeout inbox check, tolerant outbox routing, #128 burst /
   failure deferral, the first #159 live `portal-state.json` capsule, the
-  lean `gate: forge` PR handoff, and the command-bound `brr portal wrap`
-  surfacing helper) versus the remaining implementation slices: richer
+  lean `gate: forge` PR handoff; the command-bound `brr portal wrap`
+  surfacing helper shipped here too but was **retired 2026-06-23** once the
+  hooks back channel landed) versus the remaining implementation slices: richer
   forge desired-state, deeper runner-adapter surfacing, outbound portal
   ergonomics, resident-authored deferral, run-keyed response/outbox paths,
   mailbox records, and later parallel-compatibility work.
 - [The runner back channel (hooks) & the minimal runner interface](design-runner-back-channel.md) —
-  *accepted on 2026-06-22; #171; impl pending*. The runner-surfacing slice of
+  *accepted 2026-06-22; #171/#175 shipped on `main`; `portal wrap` retired
+  2026-06-23, `.keepalive` retirement still gated*. The runner-surfacing slice of
   #159, reshaped from the `brr portal wrap` shell wrapper to runner-native
   **hooks** — verified bidirectional on **claude, codex, and gemini**. Defines
   the **tiered minimal runner interface** (Tier 0 file-operating process · Tier 1
@@ -269,7 +271,8 @@ dive-in map) and are stable until something contradicts them.
   while the lean Telegram-wrapper-on-a-local-CLI case stays first-class. A
   transport-neutral `brr hook <phase>` endpoint does **outbound flush** +
   **inbound injection** + **stop-control** (all one slice), the daemon stays sole
-  drainer (hook only signals), and both `portal wrap` **and** `.keepalive` retire.
+  drainer (hook only signals); `portal wrap` is **retired** and `.keepalive`
+  retirement stays **gated** on the no-timeout-for-Tier-0/1 behaviour.
   Also separates **halt** (an LLM-streaming concept, inherent to tool-call
   streaming) from **respawn** (a brr-resident lifecycle act): mid-thought updates
   need neither — the outbox is already halt-free; hooks add immediacy + reverse

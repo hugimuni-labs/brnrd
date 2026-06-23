@@ -44,8 +44,10 @@ This is the live substrate #159 builds on:
   drained reply counts, pending outbox files, current card text,
   budget/keepalive posture, and a stable `change_token`. The runner also
   receives `BRR_PORTAL_STATE`; `brr portal state` renders a compact
-  inspected text view, and `brr portal wrap -- <command>` can run a shell
-  command while appending that view when the `change_token` moves.
+  inspected text view. (A Tier 2 hooks runner gets that delta woven in
+  automatically at tool boundaries; the earlier `brr portal wrap` shell
+  wrapper that surfaced it around shell commands was retired when the
+  hooks back channel landed — see `design-runner-back-channel.md`.)
 - #128 shipped the run/task storage rename, burst-coalescing dispatch,
   and operational-failure sibling deferral. Per-run claims,
   resident-authored postponement, and run-keyed response/outbox routing
@@ -327,17 +329,21 @@ stream markers make them structurally hard to misuse.
    slice covers pending input, current card/delivery posture,
    budget/keepalive, and a `change_token`; deeper delivery acknowledgements
    and mailbox leases remain later slices.
-2. **Runner surfacing — moving from shell-wrapper to hooks (#171).** The
-   `brr portal wrap -- <command>` shell-wrapper slice shipped 2026-06-21 as
-   a stopgap, but it only fires around shell commands the resident remembers
-   to prefix, misses non-shell thinking, and is one-directional. Both
-   supported runners expose lifecycle **hooks** (Claude `PostToolUse`/`Stop`,
-   Codex notify), which are automatic, boundary-complete, and bidirectional.
-   [`design-runner-back-channel.md`](design-runner-back-channel.md) reshapes
-   this slice into a transport-neutral hooks back channel and retires
-   `portal wrap` (keeping `brr portal state` as the inspected view + hook
-   injection source). Tier-2 hooks stay optional enrichment: a runner
-   without them degrades cleanly to today's heartbeat poll.
+2. **Runner surfacing — moving from shell-wrapper to hooks (#171, shipped).**
+   The `brr portal wrap -- <command>` shell-wrapper slice shipped 2026-06-21
+   as a stopgap, but it only fired around shell commands the resident
+   remembered to prefix, missed non-shell thinking, and was one-directional.
+   Both supported runners expose lifecycle **hooks** (Claude
+   `PostToolUse`/`Stop`, Codex notify), which are automatic,
+   boundary-complete, and bidirectional.
+   [`design-runner-back-channel.md`](design-runner-back-channel.md) reshaped
+   this slice into a transport-neutral hooks back channel; it landed on
+   `main` (#171/#175, 2026-06-22) and **`portal wrap` was retired**
+   2026-06-23 (wrapper + tests + prose), keeping `brr portal state` as the
+   inspected view + hook injection source. Tier-2 hooks stay optional
+   enrichment: a runner without them degrades cleanly to today's heartbeat
+   poll. (`.keepalive` retirement remains gated on the no-timeout-for-Tier-0/1
+   behaviour — still carried.)
 3. **Forge desired-state portal.** Grow today's explicit `gate: forge`
    send into branch-keyed desired PR state for code-changing work:
    draft/review posture, issue links, labels, refresh policy, delivery

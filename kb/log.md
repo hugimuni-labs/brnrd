@@ -7801,3 +7801,45 @@ HEAD. Covers timeout / runner error / quota exhaustion (clean-exit failure paths
 that reach the in-process finally); a hard SIGKILL of the worker process still
 can't run it — noted as the residual gap. New tests in `test_daemon_salvage.py`
 (5), full suite 983→988 green. Docs updated (execution-map, brr-internals).
+
+## [2026-06-23] fix | Hooks back channel never fired — claude profile disabled it via --safe-mode
+
+Dogfooding a multistep responsive run surfaced that the runner hooks back
+channel (#171/#175, merged) was **dark in practice**. While the run worked, the
+user fired a 3-message burst asking "do you see the pending inbox items via the
+hooks back channel?" — and the answer was no: the pending events reached the
+resident only via a manual `inbox.json` read, never as an injected hook result.
+
+**Root cause (proven in-run):** the `claude` runner profile declared
+`hooks: claude` (Tier 2) but invoked `claude --safe-mode`, and Claude Code's
+`--safe-mode` sets `CLAUDE_CODE_SAFE_MODE=1`, disabling hooks (plus CLAUDE.md,
+skills, plugins, MCP). So brr generated `.claude/settings.local.json` correctly
+and `brr hook post-tool` returned the live pending events as `additionalContext`
+when invoked by hand — but the harness fired the hook zero times. Diagnostic
+that nailed it: the hook writes `.hook-state.json` on every call; it was absent
+after a full run of tool calls.
+
+**Fix** (`brr/retire-portal-wrap`): swap `--safe-mode` → `--setting-sources
+local`. brr's hook config lives in the *local* settings source, so loading just
+that source activates the channel while keeping the user-global/project-committed
+isolation `--safe-mode` was reaching for. Updated profile + its test + runners.md
+rationale. A Tier 2 profile must never disable hooks. Needs a daemon-reload run
+to confirm end-to-end (and that dropping the user settings source doesn't lose a
+default like model selection) — a profile flag change can't self-verify from
+inside a `--safe-mode` run. Pitfall recorded (trigger: hooks back channel,
+--safe-mode, hooks not firing).
+
+## [2026-06-23] refactor | Retire `brr portal wrap` (superseded by the hooks back channel)
+
+`brr portal wrap -- <command>` was the stopgap that surfaced portal-state at
+shell-command boundaries. The hooks back channel strictly dominates it (every
+tool boundary, automatic, bidirectional), so per `design-runner-back-channel.md`
+§Retiring it's the unconditional cut now that the channel landed: removed the
+`wrap` subcommand + `cmd_portal_wrap` + its 3 tests, the wrapper paragraph in the
+Run Context Bundle wording (`prompts.py`) and the shipped portals manual (now
+describing hook-pushed injection with a `portal-state.json` / `brr portal state`
+pull fallback), and the portal-grammar implementation-sequence framing. Kept
+`brr portal state`. `.keepalive` deliberately **kept** — its retirement is gated
+on the unbuilt no-timeout-for-Tier-0/1 behaviour, so the prior wake's "both
+retire" framing was reconciled to "portal wrap now, keepalive later." Suite green
+(997). kb/index, portal-grammar, and back-channel pages updated.
