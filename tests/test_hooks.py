@@ -7,7 +7,7 @@ import json
 from brr import hooks
 
 
-def _portal(tmp_path, *, token="t1", pending=0, events=None):
+def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None):
     payload = {
         "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
         "attention": {
@@ -23,6 +23,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None):
         "budget": {"elapsed_seconds": 10, "budget_seconds": 3600},
         "change_token": token,
     }
+    if scm is not None:
+        payload["scm"] = scm
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -99,6 +101,73 @@ def test_session_start_seeds(tmp_path):
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     # Seed injects even with nothing pending (it's the initial capsule).
     assert "seed" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_stop_injects_affirmative_zero_pending_signal(tmp_path):
+    # "Knowing there's no events explicitly is also a signal": the closeout
+    # boundary renders unconditionally, even with nothing pending and the
+    # token unchanged, so the resident gets an explicit all-clear, not silence.
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "closeout" in ctx
+    assert "0 pending event(s)" in ctx
+
+
+def test_stop_surfaces_unpushed_and_modified_scm(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        scm={"known": True, "branch": "brr/run-x",
+             "unpushed_commits": 2, "modified_files": 3},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "2 commit(s) not pushed" in ctx
+    assert "3 modified file(s)" in ctx
+    assert "brr/run-x" in ctx
+
+
+def test_seed_surfaces_scm_when_dirty(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        scm={"known": True, "branch": "brr/run-x",
+             "unpushed_commits": 1, "modified_files": 0},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    assert "1 commit(s) not pushed" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_stop_silent_scm_when_clean(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        scm={"known": True, "branch": "brr/run-x",
+             "unpushed_commits": 0, "modified_files": 0},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_post_tool_never_renders_scm(tmp_path):
+    # SCM posture is a boundary signal; mid-run it must stay quiet even when
+    # the token moves, so editing churn doesn't spam a push reminder.
+    _portal(
+        tmp_path, token="t1", pending=1,
+        events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
+        scm={"known": True, "branch": "brr/run-x",
+             "unpushed_commits": 2, "modified_files": 3},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_scm_unknown_is_silent(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        scm={"known": False, "branch": None,
+             "unpushed_commits": 0, "modified_files": 0},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_codex_block_renders_continue_false(tmp_path):

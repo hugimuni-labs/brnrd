@@ -125,13 +125,23 @@ def _touch_flush(ctx: HookContext) -> None:
 # ── Injection rendering (portal-state → compact delta) ───────────────────
 
 
-def format_delta(payload: dict[str, Any], *, seed: bool = False) -> str | None:
+def format_delta(
+    payload: dict[str, Any], *, seed: bool = False, stop: bool = False
+) -> str | None:
     """Render a compact context delta from the live portal-state payload.
 
     Short on purpose: it is woven into the agent's context every boundary,
     so it carries only what shifts attention — pending events, delivery
-    acks, budget pressure. Returns ``None`` when there is nothing worth
-    injecting (so the hook can stay silent rather than inject noise).
+    acks, budget pressure.
+
+    Two boundaries render *unconditionally* (``seed`` and ``stop``): the
+    seed is the initial capsule, and the stop is the closeout capsule. At
+    those moments an explicit "0 pending event(s)" is itself the signal —
+    silence is ambiguous, an affirmative "all clear" is not (maintainer's
+    point, 2026-06-23). Stop additionally surfaces the local SCM posture
+    (unpushed commits / modified files) so a wake about to end sees its
+    branch is not yet pushed. Mid-run (``post-tool``) it stays gated and
+    returns ``None`` when nothing shifted, so the channel injects no noise.
     """
     if not payload:
         return None
@@ -148,11 +158,17 @@ def format_delta(payload: dict[str, Any], *, seed: bool = False) -> str | None:
         if isinstance(payload.get("outbound"), dict) else {}
     )
     budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
+    scm = payload.get("scm") if isinstance(payload.get("scm"), dict) else {}
 
     pending = int(attention.get("pending_event_count", 0) or 0)
     pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
     lines: list[str] = []
-    header = "brr portal seed" if seed else "brr portal update"
+    if seed:
+        header = "brr portal seed"
+    elif stop:
+        header = "brr portal closeout"
+    else:
+        header = "brr portal update"
     lines.append(
         f"[{header}] {pending} pending event(s), "
         f"{pending_files} undelivered outbox file(s)."
@@ -177,8 +193,24 @@ def format_delta(payload: dict[str, Any], *, seed: bool = False) -> str | None:
             f"other={outbound.get('replies_other', 0)} "
             f"outbound={outbound.get('outbound_messages', 0)}."
         )
-    # A bare header with no pending work and no movement isn't worth a turn.
-    if not seed and pending == 0 and pending_files == 0 and not acked:
+    # SCM posture is a boundary signal (seed / stop only): the commit/push
+    # reminder a wake about to end needs. Rendered only when there is
+    # something to act on — unpushed commits or modified files — so a clean
+    # tree stays quiet. ``known`` is False when no worktree was inspected.
+    if (seed or stop) and scm.get("known"):
+        unpushed = int(scm.get("unpushed_commits", 0) or 0)
+        modified = int(scm.get("modified_files", 0) or 0)
+        if unpushed or modified:
+            branch = scm.get("branch") or "-"
+            lines.append(
+                f"- scm: {unpushed} commit(s) not pushed, "
+                f"{modified} modified file(s) on {branch} — commit and let "
+                "the branch publish before ending."
+            )
+    # Mid-run, a bare header with no pending work and no movement isn't worth
+    # a turn. Seed and stop always render: their empty state ("0 pending") is
+    # the affirmative signal, not noise.
+    if not seed and not stop and pending == 0 and pending_files == 0 and not acked:
         return None
     return "\n".join(lines)
 
@@ -210,6 +242,12 @@ def compute_neutral(
 
     if phase == PHASE_SESSION_START:
         inject = format_delta(portal, seed=True)
+        state["last_token"] = portal.get("change_token")
+    elif phase == PHASE_STOP:
+        # The closeout boundary renders unconditionally (not token-gated):
+        # the affirmative "0 pending" signal and the SCM commit/push
+        # reminder must land even when nothing moved since the last tick.
+        inject = format_delta(portal, stop=True)
         state["last_token"] = portal.get("change_token")
     else:
         token = portal.get("change_token")
