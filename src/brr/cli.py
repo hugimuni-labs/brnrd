@@ -160,17 +160,6 @@ def main(argv: list[str] | None = None) -> None:
                    help="read this portal-state.json path instead of auto-detecting")
     p.set_defaults(func=cmd_portal_state)
 
-    p = portal_sub.add_parser(
-        "wrap",
-        help="run a command and surface live portal state when it changes")
-    p.add_argument("--always", action="store_true",
-                   help="print portal state after the command even when unchanged")
-    p.add_argument("--path", default=None,
-                   help="read this portal-state.json path instead of auto-detecting")
-    p.add_argument("command", nargs=argparse.REMAINDER,
-                   help="command to run; prefix with -- to stop option parsing")
-    p.set_defaults(func=cmd_portal_wrap)
-
     p = sub.add_parser(
         "hook",
         help="runner hooks back channel endpoint (Tier 2; called by the "
@@ -396,38 +385,6 @@ def cmd_portal_state(args):
     else:
         print(_format_portal_state(payload))
     return 0
-
-
-def cmd_portal_wrap(args):
-    import subprocess
-    import sys
-
-    command = list(args.command)
-    if command and command[0] == "--":
-        command = command[1:]
-    if not command:
-        print("[brr portal wrap] missing command", file=sys.stderr)
-        return 2
-
-    path = _portal_state_path(args.path)
-    _before_payload, before_token, _before_error = _read_portal_state(path)
-    code = subprocess.call(command)
-    after_payload, after_token, _after_error = _read_portal_state(path)
-    should_print = (
-        args.always
-        or (
-            after_payload is not None
-            and after_token is not None
-            and after_token != before_token
-        )
-    )
-    if should_print and after_payload is not None:
-        print(
-            "\n[brr portal update] live state after command:",
-            file=sys.stderr,
-        )
-        print(_format_portal_state(after_payload), file=sys.stderr)
-    return code
 
 
 def cmd_hook(args):
