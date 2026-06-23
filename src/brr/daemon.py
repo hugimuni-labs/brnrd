@@ -831,6 +831,7 @@ def _run_worker(
         card_state=card_state,
         output_stats=output_stats,
         start_monotonic=run_started_monotonic,
+        work_dir=run_root,
     )
     # The runner's declared hooks flavour drives both the back channel's
     # native rendering (``brr hook`` reads BRR_RUNNER to pick the
@@ -953,6 +954,7 @@ def _run_worker(
             card_state=card_state,
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
+            work_dir=run_root,
         )
 
         def _emit_heartbeat() -> None:
@@ -979,6 +981,7 @@ def _run_worker(
                 card_state=card_state,
                 output_stats=output_stats,
                 start_monotonic=run_started_monotonic,
+                work_dir=run_root,
             )
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
@@ -1018,6 +1021,7 @@ def _run_worker(
                 card_state=card_state,
                 output_stats=output_stats,
                 start_monotonic=run_started_monotonic,
+                work_dir=run_root,
             )
 
         result = _invoke_with_heartbeat(
@@ -1066,6 +1070,7 @@ def _run_worker(
             card_state=card_state,
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
+            work_dir=run_root,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
@@ -1559,11 +1564,40 @@ def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
     return {"status": status, "until": _iso_utc(until)}
 
 
+def _scm_facet(
+    work_dir: Path | None, branch: str | None
+) -> dict[str, object]:
+    """Local SCM posture for the run worktree: unpushed + modified counts.
+
+    Cheap, local, failure-safe (the underlying helpers yield 0 on any git
+    error). Surfaced by the hooks back channel at the closeout boundary so a
+    wake that forgot to commit/push sees "N commit(s) not pushed, M modified
+    file(s)" before it ends — the lived gap that motivated this (a wake closed
+    out leaving its branch unpushed). ``known`` is False when there is no
+    readable worktree, so the channel can stay silent rather than claim a
+    clean tree it never inspected.
+    """
+    if not work_dir or not Path(work_dir).is_dir():
+        return {"known": False, "branch": branch, "unpushed_commits": 0,
+                "modified_files": 0}
+    return {
+        "known": True,
+        "branch": branch,
+        "unpushed_commits": worktree.unpushed_commit_count(Path(work_dir)),
+        "modified_files": worktree.uncommitted_file_count(Path(work_dir)),
+    }
+
+
 def _change_token(payload: dict[str, object]) -> str:
     stable = {
         key: value
         for key, value in payload.items()
-        if key not in {"generated_at", "change_token"}
+        # ``scm`` is excluded like ``elapsed_seconds`` below: modified-file
+        # churn during normal editing should not bump the token and trip a
+        # post-tool injection on every edit. Git posture is a boundary
+        # signal — the seed (session-start) and stop hooks render it
+        # unconditionally; mid-run it stays quiet.
+        if key not in {"generated_at", "change_token", "scm"}
     }
     budget = stable.get("budget")
     if isinstance(budget, dict):
@@ -1595,13 +1629,15 @@ def _write_live_portal_state(
     card_state: dict[str, str] | None = None,
     output_stats: dict[str, int] | None = None,
     start_monotonic: float | None = None,
+    work_dir: Path | None = None,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
     ``inbox.json`` answers only which events are pending. This broader
     capsule answers "what needs my attention now?" for the running
-    resident: input, delivery/card posture, and budget state in one
-    daemon-owned file refreshed on the heartbeat cadence.
+    resident: input, delivery/card posture, budget state, and local SCM
+    posture (unpushed commits / modified files) in one daemon-owned file
+    refreshed on the heartbeat cadence.
     """
     if not outbox_dir:
         return None
@@ -1654,6 +1690,7 @@ def _write_live_portal_state(
                 "hard_cap_seconds": hard_cap_seconds,
                 "keepalive": _keepalive_state(keepalive_path),
             },
+            "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
         }
         payload["change_token"] = _change_token(payload)
         path = outbox_dir / _LIVE_PORTAL_STATE_NAME
