@@ -1,7 +1,6 @@
 ---
 claude:
   cmd: 'claude --print --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
-  hooks: claude
 claude-bare-api-only:
   binary: claude
   cmd: 'claude --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
@@ -58,16 +57,26 @@ runner family whose native hook config brr should generate (`claude`,
 runtime capability precheck confirms the per-runner prerequisites — the
 field is the *intent*, the precheck is the *assertion*.
 
-A hooks-capable invocation must not also disable hooks. The `claude`
-profile uses `--setting-sources local` (not `--safe-mode`): brr writes its
-generated hook config to `.claude/settings.local.json` (the **local**
-settings source), so loading that source activates the back channel while
-still excluding the user's global and the project's committed settings —
-the isolation `--safe-mode` was reaching for. `--safe-mode` cannot be used
-on a Tier 2 profile: it sets `CLAUDE_CODE_SAFE_MODE=1`, which disables
-hooks (along with CLAUDE.md, skills, plugins, MCP) and so silently makes
-the declared `hooks: claude` a no-op. The `--bare` alias profiles
-deliberately skip hooks and so declare no `hooks:` field.
+The `claude` profile declares **no** `hooks:` field. Empirically (Claude
+Code v2.1.185) the headless `claude --print "<prompt>"` mode brr uses does
+not run settings-file lifecycle hooks at all, so a `hooks: claude`
+declaration would advertise a Tier 2 back channel that never fires. The
+profile therefore runs Tier 0/1 on the daemon's heartbeat-polled model
+(outbox drain + `portal-state.json` refresh on the timer) — which is what
+actually carries mid-thought responsiveness today. (Earlier the profile
+declared `hooks: claude`; demoted 2026-06-26 after a controlled experiment
+isolated the non-firing to `--print` mode — see
+`kb/design-runner-back-channel.md`.) `--setting-sources local` is kept for
+settings **isolation**: it excludes the user's global and the project's
+committed settings without the collateral damage of `--safe-mode`, which
+sets `CLAUDE_CODE_SAFE_MODE=1` and disables CLAUDE.md, skills, plugins, and
+MCP. The `--bare` alias profiles likewise declare no `hooks:` field.
+
+`codex` and `gemini` keep their `hooks:` declarations as *intent*: brr can
+render their native hook config and the runtime capability precheck still
+gates activation. Whether their hooks fire end-to-end under brr's headless
+invocation is unverified — treat Tier 2 as confirmed only after a live
+firing test on each runner, not assumed from the declaration.
 
 These bundled profiles are defaults, not the user's source of truth. To
 manage runner profiles for a project, create `.brr/runners.md` with the
