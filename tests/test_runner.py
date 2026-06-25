@@ -132,9 +132,11 @@ class TestCommandBuilding:
             "claude",
             "--print",
             "--dangerously-skip-permissions",
-            # local settings source loads brr's generated hook config
-            # (.claude/settings.local.json) — NOT --safe-mode, which would
-            # disable hooks and make the profile's `hooks: claude` a no-op.
+            # local settings source isolates the run from the user's global
+            # and the project's committed settings — NOT --safe-mode, which
+            # would also nuke CLAUDE.md / skills / plugins / MCP. The claude
+            # profile declares no `hooks:` field (--print doesn't fire
+            # settings-file lifecycle hooks; see runners.md).
             "--setting-sources",
             "local",
             "--system-prompt",
