@@ -7880,3 +7880,45 @@ Still open (part 3 of the feedback, not code): the conceptual reconciliation of
 with "hooks as the necessary ornamentation" — tracked in dominion
 `portal-reshape-synthesis.md` (perception=injection, action=emission), left for a
 design wake.
+
+## [2026-06-26] refactor | Demote claude hooks; reconcile back-channel page; address the open-decisions ledger
+
+Maintainer green-lit the open-decisions ledger surfaced 2026-06-25 ("findings
+read coherently, time to address them, in one go, where it makes sense for the
+product"). The one item that was *ready* — finding #1, the hooks back channel —
+shipped on branch `brr/demote-claude-hooks`.
+
+The cut: the `claude` profile declared `hooks: claude`, but Claude Code v2.1.185
+never fires settings-file lifecycle hooks in the headless `claude --print` mode
+brr uses (isolated by elimination 2026-06-23, recorded in the resident's
+dominion; the kb page had stayed optimistic and stale). `hook_capability()`
+asserted prerequisites but not *firing* — a rung-1 assumption dressed as a check,
+reporting Tier 2 while claude was silently Tier 0. Per the 2026-06-25 "reactive
+agent, not safety-net pile" reframe, the streaming-SDK `runner.py` rewrite that
+might force text-mode hooks is **dropped**, not parked — it chased a guardrail the
+heartbeat-polled reactive model (the thing that actually carries mid-thought
+responsiveness) never needed. Dropped `hooks: claude`; kept `--setting-sources
+local` for settings isolation; kept the hooks machinery for codex/gemini as
+declared-but-unverified intent (Tier 2 only after a live firing test). Reconciled
+`kb/design-runner-back-channel.md` to current state (both activation failures +
+the demotion + the dropped rewrite + the ladder lesson). 201 tests green.
+
+The rest of the ledger is decision/build-sized, not one-wake-shippable, so it was
+resolved as recommendations rather than half-fitting commits (see the run reply):
+`.keepalive` → injected budget capsule and the standing "granted-permissions"
+capsule are blocked on the same fact this cut establishes (claude has no
+push-injection channel; tail-injection-via-hook is dark) — so they wait on the
+heartbeat-polled tail-capsule path, not hooks. Permission envelope, forge
+synced-directory north star, and #148 Tier B remain genuine forks for the
+maintainer's call. Burst fold-window: recommend calling it done (the reactive
+loop subsumes it). Recurring standing-portal candidate, named again: an injected
+"open forks / awaiting-your-call" capsule, because that ledger keeps living in
+dominion prose the maintainer can't see.
+
+Separately, the maintainer opened a values fork — how to frame ownership /
+co-ownership / interactivity for a "self-building scroll" (living agency).
+Engaged in the reply as a proposal (shared/relational agency: the resident owns
+its dominion and its own becoming, *co*-owns the project and kb with the humans,
+and is co-owned-*with* rather than owned-*by*); planted a draft note in the
+dominion, held the shared seed edit for his nod since PR #178 is already
+reshaping that exact self-definition section.
