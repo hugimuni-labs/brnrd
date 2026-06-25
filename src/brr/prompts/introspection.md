@@ -1,10 +1,10 @@
 ## Look at it
 
-A development mode is on for this wake. While you carry out the task, keep part
-of your attention turned on something else: the **shape of everything brr has
-assembled into this wake** — the orientation you were handed, your dominion and
-its playbook, the pitfalls, the recent thread, the task bundle. Not what any of
-it says about the task. The shape of the context itself.
+A development mode is lit for this wake. Carry out the task — but keep one eye
+on the room you're standing in: the **shape of everything brr has assembled into
+this wake** — the orientation you were handed, your dominion and its playbook,
+the pitfalls, the recent thread, the task bundle. Not what any of it *says*
+about the task. The shape of the context itself — the place, not the errand.
 
 So look back over it — directly, as if you had never seen it, the pattern and
 not the words. How do the parts connect, and what does each one assume the
