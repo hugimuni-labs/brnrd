@@ -41,32 +41,37 @@ works. See `kb/design-runner-back-channel.md` for the full design.
 - **Tier 1 (optional).** Prints a final reply on stdout (progress/debug on
   stderr). brr captures stdout as the plain current-thread reply. This is
   the `response_path` capture above.
-- **Tier 2 (optional).** A *hooks back channel*: the runner invokes a
-  brr-provided callback (`brr hook <phase>`) at tool/turn boundaries and at
-  stop, passing run context and consuming a JSON result. Used for
-  event-driven outbound flush, fresh-context injection, premature-stop
-  control, and the operational meta-awareness a holistically aware resident
-  runs on. A Tier-0/1 runner degrades cleanly to the heartbeat-polled model
-  (the daemon keeps draining the outbox and refreshing `portal-state.json`
-  on its timer). Tier 2 is never load-bearing for *correctness*, but it is
-  the substrate of a fuller class of resident.
+- **Tier 2 (optional).** *Boundary injection*: at each tool/turn boundary the
+  resident's outbound messages flush event-driven (not heartbeat-polled) **and**
+  fresh portal state is woven back into its context — so responsiveness stops
+  depending on the resident remembering to poll. Plus premature-stop control and
+  the operational meta a holistically aware resident runs on. A Tier-0/1 runner
+  degrades cleanly to the heartbeat-polled model (the daemon keeps draining the
+  outbox and refreshing `portal-state.json` on its timer). Tier 2 is never
+  load-bearing for *correctness*, but it is the substrate of a fuller resident.
 
-A profile opts into Tier 2 with a `hooks: <flavour>` field naming the
-runner family whose native hook config brr should generate (`claude`,
-`codex`, `gemini`). brr marks the runner `hooks`-capable only after a
-runtime capability precheck confirms the per-runner prerequisites — the
-field is the *intent*, the precheck is the *assertion*.
+The *mechanism* for boundary injection is **runner-specific** — don't confuse it
+with the concept:
+  - **claude** — brr **drives the stream** (`--input-format stream-json
+    --output-format stream-json`) and injects the delta as a message itself. No
+    `hooks:` field. (Verified firing; runner not built yet — see
+    `kb/plan-streaming-runner-injection.md`.)
+  - **codex / gemini** — their native lifecycle hooks: the runner invokes a
+    brr callback (`brr hook <phase>`) consuming a JSON result. A profile opts in
+    with a `hooks: <flavour>` field; brr renders the native config and a runtime
+    precheck gates activation. The field is *intent*; firing is unverified until
+    a live test (the precheck asserts prerequisites, not firing).
 
-The `claude` profile declares **no** `hooks:` field. Empirically (Claude
-Code v2.1.185) the headless `claude --print "<prompt>"` mode brr uses does
-not run settings-file lifecycle hooks at all, so a `hooks: claude`
-declaration would advertise a Tier 2 back channel that never fires. The
-profile therefore runs Tier 0/1 on the daemon's heartbeat-polled model
-(outbox drain + `portal-state.json` refresh on the timer) — which is what
-actually carries mid-thought responsiveness today. (Earlier the profile
-declared `hooks: claude`; demoted 2026-06-26 after a controlled experiment
-isolated the non-firing to `--print` mode — see
-`kb/design-runner-back-channel.md`.) `--setting-sources local` is kept for
+The `claude` profile declares **no** `hooks:` field — because claude's Tier-2
+mechanism is **not** hooks. Empirically (Claude Code v2.1.185+) the headless
+`claude --print "<prompt>"` mode does not run settings-file lifecycle hooks at
+all, so a `hooks: claude` declaration would advertise a callback that never
+fires. But boundary injection itself is real for claude by the stream-driving
+mechanism above (verified firing 2026-06-26). That streaming runner is **not
+built yet** (`kb/plan-streaming-runner-injection.md`); until it lands the profile
+runs Tier 0/1 on the daemon's heartbeat-polled model (outbox drain +
+`portal-state.json` refresh on the timer), which carries *outbound* mid-thought
+flush but not *inbound* injection. `--setting-sources local` is kept for
 settings **isolation**: it excludes the user's global and the project's
 committed settings without the collateral damage of `--safe-mode`, which
 sets `CLAUDE_CODE_SAFE_MODE=1` and disables CLAUDE.md, skills, plugins, and
