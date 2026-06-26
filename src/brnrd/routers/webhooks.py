@@ -51,7 +51,7 @@ _UNPAIRED_TEXT = (
 )
 _UNBOUND_REPO_TEXT = (
     "This repository is not connected to a brnrd project yet. "
-    "Connect it from brnrd, then mention the bot again."
+    "Open brnrd.dev, bind this repository to a project, then call the bot again."
 )
 
 
@@ -180,6 +180,76 @@ def _github_mention(settings) -> str:
     return f"@{login}" if login else ""
 
 
+def _github_mention_candidates(settings) -> list[str]:
+    """Return mention handles that should trigger brnrd.
+
+    ``github_bot_login`` is the user-facing call sign. ``github_app_slug`` is
+    accepted too because beta installs often expose the App slug before the
+    machine-user identity is fully polished. The old brr-bot default remains
+    as a temporary compatibility alias for already-configured test installs.
+    """
+    handles = [
+        settings.github_bot_login,
+        getattr(settings, "github_app_slug", ""),
+        "brr-bot",
+    ]
+    out: list[str] = []
+    folded: set[str] = set()
+    for handle in handles:
+        login = str(handle or "").strip().lstrip("@")
+        if not login:
+            continue
+        mention = f"@{login}"
+        key = mention.casefold()
+        if key not in folded:
+            out.append(mention)
+            folded.add(key)
+    return out
+
+
+def _github_command_candidates(settings) -> list[str]:
+    aliases = str(getattr(settings, "github_trigger_aliases", "") or "")
+    out: list[str] = []
+    folded: set[str] = set()
+    for alias in aliases.split(","):
+        name = alias.strip().lstrip("/").rstrip(":")
+        if not name:
+            continue
+        key = name.casefold()
+        if key not in folded:
+            out.append(name)
+            folded.add(key)
+    return out
+
+
+def _github_trigger(settings, body: str) -> tuple[str, str] | None:
+    """Return the trigger kind and text when a GitHub comment addresses brnrd.
+
+    This keeps the pleasant ``@brnrd-bot`` path while also allowing command
+    fallbacks such as ``/brnrd`` and ``brnrd:`` in repositories where GitHub
+    autocomplete lags behind the desired bot identity.
+    """
+    text = body or ""
+    folded = text.casefold()
+    for mention in _github_mention_candidates(settings):
+        if mention.casefold() in folded:
+            return "mention", mention
+
+    stripped = text.strip()
+    folded_stripped = stripped.casefold()
+    for alias in _github_command_candidates(settings):
+        alias_folded = alias.casefold()
+        if (
+            folded_stripped == f"/{alias_folded}"
+            or folded_stripped.startswith(f"/{alias_folded} ")
+            or folded_stripped == f"{alias_folded}:"
+            or folded_stripped.startswith(f"{alias_folded}:")
+        ):
+            return "command", alias
+
+    return None
+
+
 def _github_signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
     if not secret or not signature:
         return False
@@ -282,14 +352,17 @@ def _handle_github_issue_comment(
     issue_number = _coerce_int(issue.get("number"))
     comment_id = _coerce_int(comment.get("id"))
     body = str(comment.get("body") or "")
-    mention = _github_mention(settings)
+    trigger = _github_trigger(settings, body)
     if not repo or issue_number is None or comment_id is None:
         return
-    if mention and mention not in body:
+    if trigger is None:
         return
 
+    trigger_kind, trigger_text = trigger
     author = str(((comment.get("user") or {}).get("login") or "")).strip()
-    if gh_parse._skip_mention_comment_author(author, mention, settings.github_bot_login):
+    if gh_parse._skip_mention_comment_author(
+        author, trigger_text, settings.github_bot_login
+    ):
         return
 
     is_pr = bool(issue.get("pull_request")) or "/pull/" in str(
@@ -305,8 +378,8 @@ def _handle_github_issue_comment(
         "kind": kind,
         "author": author,
         "html_url": str(comment.get("html_url") or ""),
-        "trigger": "mention",
-        "mention": mention,
+        "trigger": trigger_kind,
+        "mention": trigger_text,
     }
     binding = _repo_binding(db, repo, installation_id)
     if binding is None:
@@ -351,7 +424,6 @@ def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) ->
             "Have the current owner unbind it first.",
         )
         return
-
     if existing is not None:
         existing.account_id = pc.account_id
         existing.project_id = pc.project_id
