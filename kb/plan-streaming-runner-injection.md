@@ -1,11 +1,19 @@
 # Plan: the streaming runner — claude Tier-2 boundary injection
 
-Status: in flight 2026-06-26 (evt vtyq; reviewed + live-driven evt 8f8y) — **step 1
-shipped** (the stream-json client module `src/brr/runner_stream.py`, now 22 tests);
-steps 2–4 below remain. Step 1 is **re-verified against the live claude v2.1.191
-CLI** (not just the synthetic fixture), and that drive found a load-bearing
-correction: the driver must run a **persistent (no-`--print`) session**, not
-`--print` — see §Driver re-verification. This is the concrete build behind
+Status: in flight 2026-06-26 (evt vtyq; reviewed + live-driven evt 8f8y; **step 2
+shipped at module level** evt wcxs) — steps 1–2 done in `src/brr/runner_stream.py`
+(now 43 tests); steps 3–4 below remain. **Step 1** = the stream-json client,
+re-verified against the live claude v2.1.191 CLI. **Step 2** = the persistent
+(no-`--print`) driver with boundary injection: `build_stream_cmd` strips
+`--print`/`-p` (`_DROP_FLAGS`); `consume_stream` grew an `on_result` stop-control
+seam; `run_stream` binds a stdin `Injector` to the boundary/result callbacks and,
+when none are wired, builds a default `StreamInjectionPolicy` from the run env's
+`BRR_PORTAL_STATE` — change_token-gated delta at each boundary, fold-pending-once
+at each result, else close stdin. It reuses `hooks.format_delta`, so the streaming
+and hook paths render the same capsule. **Not yet daemon-routed** — no profile
+sets `stream:`, so every run still takes the blocking `invoke_runner` path; step 3
+flips claude onto it behind the flag and validates a real wake. This is the
+concrete build behind
 [`design-runner-back-channel.md`](design-runner-back-channel.md)
 §Streaming-driven injection. Parent: [#159](https://github.com/Gurio/brr/issues/159),
 [#171](https://github.com/Gurio/brr/issues/171).
@@ -76,7 +84,8 @@ session:**
   `result` whether a foldable pending event exists → inject it as a new turn, or
   no pending input → close stdin and capture the last `result` as the response.
 
-**Consequence — two corrections to this plan and the module:**
+**Consequence — corrections to this plan and the module** (all three **applied in
+step 2**, evt wcxs — kept here as the rationale):
 
 1. **`build_stream_cmd` currently inherits `--print` from the claude profile cmd**
    and only *adds* the stream flags, so today it produces the strictly-weaker
@@ -131,17 +140,30 @@ streaming driver alongside it; route to it only for a profile that opts in.
 1. **stream-json client module** — Popen + event parser + tool-boundary detector,
    tested against recorded event fixtures (capture a real session's stdout once,
    replay in tests). No injection yet. Proves brr can drive the loop and read it.
-2. **Persistent session + inject/drain at the boundary** — strip `--print` so the
-   driver runs a multi-turn session (see §Driver re-verification: `--print` is
-   single-turn, no stop-control); give `on_boundary` an injector bound to
-   `proc.stdin`; wire outbox drain and `change_token`-gated delta injection at
-   each tool boundary; at each terminal `result`, decide fold-in vs close (the
-   stop-control seam) — fold a foldable pending event as a new-turn user message,
-   else close stdin and capture the last `result` as the response. Framing rules
-   from the spike (relayed follow-ups as the user's words; operational deltas
-   informational). Dogfood behind the flag on a throwaway branch.
-3. **Flag claude onto it** — `stream: claude` in the profile; run a real daemon
-   wake through it; confirm a mid-thought follow-up is perceived without a poll.
+2. **Persistent session + inject at the boundary** — ✅ **shipped at module level**
+   (evt wcxs). `build_stream_cmd` strips `--print`/`-p`; `run_stream` binds a stdin
+   `Injector` to the boundary/result seams; the default `StreamInjectionPolicy`
+   does `change_token`-gated delta injection at each tool boundary and, at each
+   terminal `result`, folds a still-pending event once (stop-control) else closes
+   stdin. Reuses `hooks.format_delta`. The maintainer (evt wcxs) confirmed the
+   reframe behind this: **stdout result-capture is a compat fallback, not the
+   delivery model** — the resident already delivers via the outbox, and the daemon
+   already accepts that (`_result_satisfied_delivery` counts `outbound`/`commit`/
+   folded-in replies, not just stdout). So this step's *purpose* narrowed to the
+   one thing the maintainer still wanted: reliably deliver pending events to the
+   resident mid-run without it polling `inbox.json`. **Deferred to step 3:** outbox
+   *drain* at the boundary (the heartbeat already drains outbound, and the in-process
+   drain is daemon-coupled), and relaying a folded event's **body verbatim** as the
+   user's words (the policy injects the portal *delta* — summaries — today; the full
+   verbatim relay wants the event body the daemon holds). Framing rules from the
+   spike still apply (relayed follow-ups as the user's words; operational deltas
+   informational).
+3. **Flag claude onto it + daemon wiring** — `stream: claude` in the profile; route
+   `_invoke_with_heartbeat` to `run_stream` when `stream_flavour` is set (keeping the
+   heartbeat/budget/`kill_active` contract); run a real daemon wake through it; confirm
+   a mid-thought follow-up is perceived without a poll. Fold in the step-2 deferrals
+   here: in-process outbox drain at the boundary, and relaying a folded event's body
+   verbatim (the daemon holds the event body) rather than only the portal summary.
 4. **Retire the claude pull-reliance** — once stable, the heartbeat poll becomes
    claude's *fallback*, not its primary inbound channel. Revisit `.keepalive` and
    the tail-injection capsule (both were blocked on "claude has no push channel"

@@ -7956,3 +7956,38 @@ driver + injection wiring) is the next chunk; held it for the maintainer's nod
 since it touches the most load-bearing surface (every claude run) and settles the
 single-turn-vs-persistent architecture, not just a one-liner. Findings written to
 the plan + `design-runner-back-channel.md` §Persistence correction.
+
+## [2026-06-26] implement | Streaming runner step 2: persistent session + boundary injection (strip --print, pass injector)
+
+Implemented step 2 of the claude streaming runner (`runner_stream.py`) after the
+maintainer approved the three review corrections and reframed the goal (evt wcxs).
+The three points and what shipped:
+
+1. **Strip `--print`** — `build_stream_cmd` now drops `--print`/`-p` (`_DROP_FLAGS`)
+   before adding the stream flags. `--print` forces a *single-turn* session (exits on
+   first `result`, no stop-control); the driver runs a persistent multi-turn session
+   instead. Verified the daemon "handles that alright" (the maintainer's caveat):
+   `_result_satisfied_delivery` already counts `outbound`/`commit`/folded-in replies,
+   so a run that delivers via the outbox and returns empty stdout is a *successful*
+   run — stdout result-capture is the compat fallback, not the delivery model.
+2. **Pass an injector** — `run_stream` binds an `Injector` (`Callable[[str],None]`)
+   to the live `proc.stdin` and hands it to the boundary/result callbacks. New seam
+   on the pure consumer: `consume_stream(..., on_result=...)` fires at each `result`;
+   returning `False` stops consuming (driver then closes stdin), else keeps reading
+   the folded-in turn. This is what makes stripping `--print` *safe* — without a
+   result seam the persistent process would block `consume_stream` forever after the
+   first `result`. The two are one change, not three.
+3. **No close-and-capture-by-stdout** — the new default `StreamInjectionPolicy`
+   (built from the run env's `BRR_PORTAL_STATE`) is the inbound-delivery channel the
+   maintainer asked for: change_token-gated `hooks.format_delta` at each boundary
+   (pending events reach the resident without it polling `inbox.json`), fold-pending-
+   once at each result (stop-control mirroring the hook `Stop` block), else close.
+   Primed from the run-start portal so the seed already in the prompt isn't re-injected.
+
+Reuses `hooks.format_delta` so streaming and hook paths render the same capsule.
+**Not yet daemon-routed** — no profile sets `stream:`, so every run still takes the
+blocking `invoke_runner` path; step 3 flips claude onto it behind the flag, wires
+`_invoke_with_heartbeat → run_stream`, and validates a real wake. Deferred to step 3:
+in-process outbox drain at the boundary, and relaying a folded event's body verbatim
+(today the policy injects the portal delta/summaries). 43 tests in
+`test_runner_stream.py` (full suite 1039 green). Plan page updated.

@@ -205,6 +205,131 @@ def test_consume_stream_no_result_event():
     assert outcome.boundary_count == 1
 
 
+# ── consume_stream on_result seam (persistent stop-control) ──────────────
+
+
+def test_consume_stream_on_result_stops_when_false():
+    seen: list[str | None] = []
+    lines = [_result("first"), _result("second")]
+
+    def cb(outcome: runner_stream.StreamOutcome) -> bool:
+        seen.append(outcome.result_text)
+        return False  # close after the first result
+
+    outcome = runner_stream.consume_stream(lines, on_result=cb)
+    assert outcome.result_count == 1
+    assert outcome.result_text == "first"
+    assert seen == ["first"]
+
+
+def test_consume_stream_on_result_continue_reads_next_turn():
+    # Returning True keeps consuming — the turn a fold-in injection produced.
+    lines = [
+        _result("first"),
+        _assistant_tool_use("t", "Bash"),
+        _user_tool_result("t"),
+        _result("second"),
+    ]
+    calls: list[str | None] = []
+
+    def cb(outcome: runner_stream.StreamOutcome) -> bool:
+        calls.append(outcome.result_text)
+        return True
+
+    outcome = runner_stream.consume_stream(lines, on_result=cb)
+    assert outcome.result_count == 2
+    assert outcome.result_text == "second"
+    assert outcome.boundary_count == 1
+    assert calls == ["first", "second"]
+
+
+# ── StreamInjectionPolicy ────────────────────────────────────────────────
+
+
+def _write_portal(path: Path, **payload) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _bnd() -> runner_stream.StreamBoundary:
+    return runner_stream.StreamBoundary(index=1, tool_names=[], tool_use_ids=[])
+
+
+def test_injection_policy_injects_pending_on_first_boundary(tmp_path):
+    portal = tmp_path / "portal.json"
+    _write_portal(
+        portal,
+        change_token="t1",
+        attention={"pending_event_count": 1, "pending_outbox_file_count": 0},
+        inbound={"events": [{"id": "e1", "source": "telegram", "summary": "hi"}]},
+    )
+    policy = runner_stream.StreamInjectionPolicy(portal)
+    injected: list[str] = []
+    policy.on_boundary(_bnd(), injected.append)
+    assert len(injected) == 1 and "pending" in injected[0]
+    # Same token → no second injection (change_token gate).
+    policy.on_boundary(_bnd(), injected.append)
+    assert len(injected) == 1
+
+
+def test_injection_policy_prime_suppresses_unchanged_then_injects_on_move(tmp_path):
+    portal = tmp_path / "portal.json"
+    _write_portal(
+        portal,
+        change_token="t1",
+        attention={"pending_event_count": 0, "pending_outbox_file_count": 0},
+    )
+    policy = runner_stream.StreamInjectionPolicy(portal)
+    policy.prime_from_portal()  # the snapshot the prompt already carried
+    injected: list[str] = []
+    policy.on_boundary(_bnd(), injected.append)
+    assert injected == []  # nothing changed since the prompt
+    # A new event arrives mid-run → token moves → delta injects.
+    _write_portal(
+        portal,
+        change_token="t2",
+        attention={"pending_event_count": 1, "pending_outbox_file_count": 0},
+        inbound={"events": [{"id": "e2", "source": "telegram", "summary": "later"}]},
+    )
+    policy.on_boundary(_bnd(), injected.append)
+    assert len(injected) == 1 and "later" in injected[0]
+
+
+def test_injection_policy_folds_pending_once_then_closes(tmp_path):
+    portal = tmp_path / "portal.json"
+    _write_portal(
+        portal,
+        change_token="t1",
+        attention={"pending_event_count": 2, "pending_outbox_file_count": 0},
+        inbound={"events": [{"id": "e1", "source": "telegram", "summary": "do x"}]},
+    )
+    policy = runner_stream.StreamInjectionPolicy(portal)
+    injected: list[str] = []
+    outcome = runner_stream.StreamOutcome(result_text="done")
+    assert policy.on_result(outcome, injected.append) is True  # fold the turn
+    assert len(injected) == 1 and "pending" in injected[0]
+    # Once-only: the next result closes the session even with work pending.
+    assert policy.on_result(outcome, injected.append) is False
+    assert len(injected) == 1
+
+
+def test_injection_policy_no_pending_closes(tmp_path):
+    portal = tmp_path / "portal.json"
+    _write_portal(portal, change_token="t1", attention={"pending_event_count": 0})
+    policy = runner_stream.StreamInjectionPolicy(portal)
+    injected: list[str] = []
+    assert policy.on_result(runner_stream.StreamOutcome(), injected.append) is False
+    assert injected == []
+
+
+def test_injection_policy_missing_portal_is_quiet(tmp_path):
+    policy = runner_stream.StreamInjectionPolicy(tmp_path / "absent.json")
+    injected: list[str] = []
+    policy.prime_from_portal()
+    policy.on_boundary(_bnd(), injected.append)
+    assert policy.on_result(runner_stream.StreamOutcome(), injected.append) is False
+    assert injected == []
+
+
 # ── build_stream_cmd ─────────────────────────────────────────────────────
 
 
@@ -232,6 +357,28 @@ def test_build_stream_cmd_drops_prompt_placeholder():
     cmd = runner_stream.build_stream_cmd("x", {"runner_cmd": ["mytool", "{prompt}"]})
     assert "{prompt}" not in cmd
     assert cmd[0] == "mytool"
+
+
+def test_build_stream_cmd_strips_print_flag(monkeypatch):
+    # --print forces a single-turn session; streaming runs persistent, so it
+    # must be stripped while other profile flags survive.
+    monkeypatch.setattr(
+        runner,
+        "_load_profiles",
+        lambda repo_root=None: {
+            "claude": {"cmd": "claude --print --dangerously-skip-permissions"}
+        },
+    )
+    cmd = runner_stream.build_stream_cmd("claude", {})
+    assert "--print" not in cmd
+    assert "--dangerously-skip-permissions" in cmd
+    assert "--input-format" in cmd
+
+
+def test_build_stream_cmd_strips_short_print_flag():
+    cmd = runner_stream.build_stream_cmd("x", {"runner_cmd": "claude -p"})
+    assert "-p" not in cmd
+    assert "--output-format" in cmd
 
 
 # ── stream_flavour ───────────────────────────────────────────────────────
@@ -314,7 +461,7 @@ def test_run_stream_captures_result_and_writes_response(tmp_path, monkeypatch):
         "claude",
         _make_invocation(tmp_path, response_path),
         {},
-        on_boundary=boundaries.append,
+        on_boundary=lambda b, inject: boundaries.append(b),
     )
 
     assert result.stdout == "Final summary: ran two tools."
@@ -347,3 +494,52 @@ def test_run_stream_error_result_marks_failure(tmp_path, monkeypatch):
     result = runner_stream.run_stream("claude", _make_invocation(tmp_path), {})
     assert result.returncode == 1
     assert not result.ok
+
+
+def test_run_stream_default_policy_injects_changed_portal(tmp_path, monkeypatch):
+    # The default policy (no explicit callbacks) reads BRR_PORTAL_STATE and
+    # weaves a delta in at the boundary when a new event arrives mid-run.
+    states = iter(
+        [
+            {"change_token": "t0"},  # prime: the snapshot the prompt carried
+            {  # a follow-up landed by the first tool boundary
+                "change_token": "t1",
+                "attention": {"pending_event_count": 1, "pending_outbox_file_count": 0},
+                "inbound": {
+                    "events": [
+                        {"id": "e9", "source": "telegram", "summary": "new follow-up"}
+                    ]
+                },
+            },
+        ]
+    )
+    last: dict = {}
+
+    def fake_read(path):
+        nonlocal last
+        try:
+            last = next(states)
+        except StopIteration:
+            pass
+        return last
+
+    monkeypatch.setattr(runner_stream, "_read_portal", fake_read)
+    fake = _FakePopen([line + "\n" for line in SESSION])
+    monkeypatch.setattr(runner_stream.subprocess, "Popen", lambda *a, **k: fake)
+
+    invocation = runner.RunnerInvocation(
+        kind="run",
+        label="t",
+        prompt="go",
+        cwd=tmp_path,
+        repo_root=tmp_path,
+        env={"BRR_PORTAL_STATE": str(tmp_path / "portal-state.json")},
+    )
+    runner_stream.run_stream("claude", invocation, {})
+
+    texts = [
+        json.loads(w)["message"]["content"][0]["text"] for w in fake.stdin.written
+    ]
+    assert texts[0] == "go"  # the prompt is the first stdin message
+    assert any("new follow-up" in t for t in texts[1:])  # the delta was woven in
+    assert fake.stdin.closed is True
