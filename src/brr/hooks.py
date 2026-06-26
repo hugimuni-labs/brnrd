@@ -1,13 +1,12 @@
 """Runner hooks back channel — ``brr hook <phase>``.
 
 Tier 2 of the runner interface (``kb/design-runner-back-channel.md``).
-Every target CLI agent (claude, codex, gemini) ships lifecycle hooks:
-runner-native callbacks at tool/turn boundaries whose JSON result is
-injected back into the agent's context. brr exposes **one** endpoint,
-``brr hook <phase>``, reading a JSON event on stdin and writing a JSON
-result on stdout. brr owns the abstract *phases*; each runner profile maps
-its native hook names onto them, and brr renders the one neutral result
-into that runner's native fields.
+Some target CLI agents expose runner-native lifecycle hooks: callbacks at
+tool/turn boundaries whose JSON result is injected back into the agent's
+context. brr exposes **one** endpoint, ``brr hook <phase>``, reading a JSON
+event on stdin and writing a JSON result on stdout. brr owns the abstract
+*phases*; each hook-backed runner profile maps its native hook names onto
+them, and brr renders the one neutral result into that runner's native fields.
 
 Two directions across the single endpoint:
 
@@ -384,9 +383,9 @@ def render_native(
 # prerequisites — the profile's ``hooks:`` field is the *intent*, the
 # precheck is the *assertion* (kb/design-runner-back-channel.md §Resolutions).
 
-# Flavours brr can currently emit native hook config for. codex / gemini
-# declare the capability (their docs confirm bidirectional hooks) but their
-# config emitters are a follow-up; until then they degrade to Tier 0/1.
+# Flavours brr can currently emit native hook config for. Codex uses the
+# JSONL streaming path instead of native hooks; gemini's config emitter is a
+# follow-up, so it degrades to Tier 0/1 until that exists.
 _CONFIG_SUPPORTED = {"claude"}
 
 
