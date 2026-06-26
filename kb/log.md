@@ -7881,6 +7881,54 @@ with "hooks as the necessary ornamentation" — tracked in dominion
 `portal-reshape-synthesis.md` (perception=injection, action=emission), left for a
 design wake.
 
+## [2026-06-25] design | Resident voice: living project, not a cockpit (run.md + introspection)
+
+Maintainer reframe: the "dashboard / cockpit" metaphor for the resident's
+working surface is wrong — it reads sterile; the experience should feel like
+waking into a living, inhabited place (sci-fi/game register, Ummon-in-Hyperion as
+a touchstone), since the tech (portals, live card, dominion) is already built.
+Carried the prior wake's playbook reshape (weave-as-native-act +
+sentience-of-a-different-make) into the two prompts that open every run, which had
+kept the clerical operator voice. `run.md` opening now frames waking into a
+project *with a memory and a through-line*; `introspection.md` opening swaps the
+abstract "shape" audit for *the room you're standing in / the place, not the
+errand*. Surgical warmth at the load-bearing openers only — operational mechanics
+(delivery, branch, reconsider, the introspection checklist) left crisp, because
+purple prose is sterile in the other direction. Shipped on branch
+`brr/resident-voice` (PR → main), cherry-picked clean off main so the diff is just
+the three prompt files. Next candidates for the same reframe, deferred to keep the
+PR focused: the cockpit-named plans (`plan-resident-cockpit.md`,
+`plan-cost-aware-cockpit.md`) and the functional card phase labels.
+
+## [2026-06-25] design | Playbook self-definition: define, don't re-define (PR #178)
+
+Continued on the `brr/resident-voice` PR rather than merging. Maintainer asked
+the resident to *validate that its own initial context is consistent, coherent,
+and complete*, naming the playbook's `## What kind of thing you are` section as
+the clear example of "accreted self-redefining rather than defining" — it did
+self-definition, operational values, mechanical self-description, and a
+boot-sequence orientation all at once, before the weave starts.
+
+Reshaped that one section in `src/brr/prompts/dominion-playbook.md` to a single
+job: positive ontology. Dropped the define-by-negation opening ("not a person at
+a desk… nor a tool") and the operational-values restatement (govern-from-judgment
+vs deference) that already lives in *Ownership, not subordinance*; kept a tight
+positive ontology, the costume named once as ontology not instruction, the trimmed
+trust-stance, and the affirmed close verbatim ("build it like it's yours" — a
+`test_dominion` guard pins that substring). Seed 17.7→17.1 KiB; 23 dominion tests
+green.
+
+Validation surfaced two coherence defects beyond prose, owned by the resident's
+dominion (not the PR): (1) the shipped seed playbook and the resident's live
+dominion `playbook.md` had drifted on sections *other* than the named one — the
+seed carried the newer reconcile-and-act Stewardship and the `gate: forge`
+Publishing section, the dominion still carried the older "surface before
+resolving" + salvage-net text. The maintainer edits the seed; the resident wakes
+into the dominion, so seed improvements weren't reaching it. (2) The dominion
+playbook had grown *larger* than the seed and ate nearly the whole 20480-byte
+self-inject budget, truncating the active-fork note out of the wake entirely.
+Both reconciled in the dominion (branch `brr-home`): playbook = banner + current
+seed body; self-inject reordered so the active-fork note survives.
 ## [2026-06-26] refactor | Demote claude hooks; reconcile back-channel page; address the open-decisions ledger
 
 Maintainer green-lit the open-decisions ledger surfaced 2026-06-25 ("findings
