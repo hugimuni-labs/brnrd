@@ -4,8 +4,12 @@
   <h1>brnrd dashboard</h1>
   {% if logged_in %}
     <p>Connected as {{ account.github_login }}</p>
+    <p>GitHub App: {{ github_app_slug }}</p>
+    <p>Call sign: @{{ github_bot_login }}</p>
+    <p><a class="button button-primary" href="{{ install_url }}">Install or update GitHub App</a></p>
   {% else %}
     <p>Connect GitHub before managing repositories.</p>
+    <p><a class="button button-primary" href="{{ signin_url }}">Continue</a></p>
   {% endif %}
 </main>
 {% endblock %}
