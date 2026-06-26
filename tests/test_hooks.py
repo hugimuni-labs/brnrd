@@ -251,7 +251,7 @@ def test_missing_portal_state_is_graceful(tmp_path):
 
 def test_hook_config_supported_only_claude_today():
     assert hooks.hook_config_supported("claude") is True
-    # codex / gemini declare the capability but have no emitter yet.
+    # Codex now uses the JSONL stream path; Gemini has no emitter yet.
     assert hooks.hook_config_supported("codex") is False
     assert hooks.hook_config_supported("gemini") is False
     assert hooks.hook_config_supported(None) is False

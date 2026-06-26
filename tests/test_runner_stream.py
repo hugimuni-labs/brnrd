@@ -1,11 +1,13 @@
-"""Tests for the streaming runner client (step 1).
+"""Tests for the streaming runner client.
 
 The fixture mirrors Claude Code's ``--output-format stream-json`` schema as
 exercised by the verified spike (2026-06-26): an ``init`` system event, an
 assistant message that carries one or more ``tool_use`` blocks, a ``user``
 event carrying the matching ``tool_result``, and a terminal ``result`` event.
-Step 3 (the live dogfood) validates the parser against the real CLI; these
-tests pin the parsing/boundary contract the rest of the build rests on.
+The Codex fixtures mirror codex-cli 0.141.0 ``exec --json``: a thread id, a
+turn, command execution items, agent-message items, and a terminal
+``turn.completed``. Live probes validate both schemas; these tests pin the
+parsing/boundary contract the rest of the build rests on.
 """
 
 from __future__ import annotations
@@ -48,6 +50,65 @@ def _result(text: str, is_error: bool = False) -> str:
     )
 
 
+def _codex_thread(thread_id: str = "019f04b5-77c8") -> str:
+    return _line({"type": "thread.started", "thread_id": thread_id})
+
+
+def _codex_turn_started() -> str:
+    return _line({"type": "turn.started"})
+
+
+def _codex_command_started(item_id: str, command: str = "printf ok") -> str:
+    return _line(
+        {
+            "type": "item.started",
+            "item": {
+                "id": item_id,
+                "type": "command_execution",
+                "command": command,
+                "aggregated_output": "",
+                "exit_code": None,
+                "status": "in_progress",
+            },
+        }
+    )
+
+
+def _codex_command_completed(
+    item_id: str, command: str = "printf ok", output: str = "ok\n"
+) -> str:
+    return _line(
+        {
+            "type": "item.completed",
+            "item": {
+                "id": item_id,
+                "type": "command_execution",
+                "command": command,
+                "aggregated_output": output,
+                "exit_code": 0,
+                "status": "completed",
+            },
+        }
+    )
+
+
+def _codex_agent_message(text: str) -> str:
+    return _line(
+        {
+            "type": "item.completed",
+            "item": {"id": "item_msg", "type": "agent_message", "text": text},
+        }
+    )
+
+
+def _codex_turn_completed() -> str:
+    return _line({"type": "turn.completed", "usage": {"input_tokens": 1}})
+
+
+def _codex_turn_failed(message: str) -> str:
+    return _line({"type": "turn.failed", "error": {"message": message}})
+
+
 # A representative two-tool session.
 SESSION = [
     _line({"type": "system", "subtype": "init", "model": "claude-opus-4-8"}),
@@ -58,6 +119,16 @@ SESSION = [
     _line({"type": "assistant", "message": {"role": "assistant", "content": [
         {"type": "text", "text": "All done."}]}}),
     _result("Final summary: ran two tools."),
+]
+
+
+CODEX_SESSION = [
+    _codex_thread("thread-1"),
+    _codex_turn_started(),
+    _codex_command_started("item_0", "printf CODEX_TOOL_OK"),
+    _codex_command_completed("item_0", "printf CODEX_TOOL_OK", "CODEX_TOOL_OK\n"),
+    _codex_agent_message("DONE"),
+    _codex_turn_completed(),
 ]
 
 
@@ -123,6 +194,32 @@ def test_consume_stream_full_session():
     assert boundaries[0].tool_names == ["Bash"]
     assert boundaries[0].tool_use_ids == ["toolu_1"]
     assert boundaries[1].tool_names == ["Read"]
+
+
+def test_consume_stream_codex_json_session():
+    boundaries: list[runner_stream.StreamBoundary] = []
+    outcome = runner_stream.consume_stream(CODEX_SESSION, on_boundary=boundaries.append)
+
+    assert outcome.saw_result is True
+    assert outcome.thread_id == "thread-1"
+    assert outcome.result_text == "DONE"
+    assert outcome.is_error is False
+    assert outcome.boundary_count == 1
+    assert outcome.tool_use_count == 1
+    assert boundaries[0].tool_use_ids == ["item_0"]
+    assert boundaries[0].tool_names == ["printf CODEX_TOOL_OK"]
+
+
+def test_consume_stream_codex_error_message():
+    outcome = runner_stream.consume_stream(
+        [
+            _line({"type": "error", "message": "model unsupported"}),
+            _codex_turn_failed("same failure"),
+        ]
+    )
+
+    assert outcome.is_error is True
+    assert outcome.error_text == "same failure"
 
 
 def test_consume_stream_no_callback_still_counts():
@@ -371,6 +468,29 @@ def test_build_stream_cmd_from_bundled_claude_profile():
     assert cmd[-1] != "{prompt}"
 
 
+def test_build_stream_cmd_from_bundled_codex_profile():
+    cmd = runner_stream.build_stream_cmd("codex", {})
+    assert cmd[:2] == ["codex", "exec"]
+    assert "--json" in cmd
+    assert cmd.count("--json") == 1
+    # The prompt is appended by the Codex driver so the base argv can also
+    # become `codex exec resume ...`.
+    assert "{prompt}" not in cmd
+
+
+def test_build_stream_cmd_infers_codex_flags_without_stream_field(monkeypatch):
+    # Direct run_stream callers may name codex even when a project override has
+    # not yet grown `stream: codex`; don't fall back to Claude stream flags.
+    monkeypatch.setattr(
+        runner,
+        "_load_profiles",
+        lambda repo_root=None: {"codex": {"cmd": "codex exec"}},
+    )
+    cmd = runner_stream.build_stream_cmd("codex", {})
+    assert "--json" in cmd
+    assert "--input-format" not in cmd
+
+
 def test_build_stream_cmd_does_not_duplicate_existing_flags():
     cmd = runner_stream.build_stream_cmd(
         "x", {"runner_cmd": "claude --print --input-format stream-json"}
@@ -415,6 +535,10 @@ def test_build_stream_cmd_strips_short_print_flag():
 def test_stream_flavour_on_bundled_claude_profile():
     # Step 3 wired claude onto the streaming path: the bundled profile opts in.
     assert runner_stream.stream_flavour("claude") == "claude"
+
+
+def test_stream_flavour_on_bundled_codex_profile():
+    assert runner_stream.stream_flavour("codex") == "codex"
 
 
 def test_stream_flavour_absent_on_bare_alias_profiles():
@@ -508,6 +632,130 @@ def test_run_stream_captures_result_and_writes_response(tmp_path, monkeypatch):
     assert result.stderr == "progress\n"
     # Active-proc handle is cleared after the run (kill_active stays safe).
     assert runner._active_proc is None
+
+
+def test_run_stream_codex_captures_json_result(tmp_path, monkeypatch):
+    response_path = tmp_path / "resp.md"
+    fake = _FakePopen([line + "\n" for line in CODEX_SESSION], ["progress\n"])
+    captured: dict = {}
+    monkeypatch.setattr(
+        runner,
+        "_load_profiles",
+        lambda repo_root=None: {"codex": {"cmd": "codex exec"}},
+    )
+
+    def _fake_popen(cmd, *args, **kwargs):
+        captured["cmd"] = cmd
+        captured["stdin"] = kwargs.get("stdin")
+        return fake
+
+    monkeypatch.setattr(runner_stream.subprocess, "Popen", _fake_popen)
+
+    result = runner_stream.run_stream(
+        "codex",
+        _make_invocation(tmp_path, response_path),
+        {},
+    )
+
+    assert result.stdout == "DONE"
+    assert result.returncode == 0
+    assert result.ok
+    assert response_path.read_text() == "DONE"
+    assert captured["cmd"][-1] == "do the thing"
+    assert "--json" in captured["cmd"]
+    assert captured["stdin"] is runner_stream.subprocess.DEVNULL
+    assert result.stderr == "progress\n"
+    assert runner._active_proc is None
+
+
+def test_run_stream_codex_resumes_once_for_folded_pending_event(
+    tmp_path, monkeypatch
+):
+    portal = tmp_path / "portal-state.json"
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    _write_portal(portal, change_token="t0", attention={"pending_event_count": 0})
+
+    first = _FakePopen([
+        _codex_thread("thread-9") + "\n",
+        _codex_agent_message("FIRST") + "\n",
+        _codex_turn_completed() + "\n",
+    ])
+    second = _FakePopen([
+        _codex_agent_message("SECOND") + "\n",
+        _codex_turn_completed() + "\n",
+    ])
+    fakes = iter([first, second])
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        runner,
+        "_load_profiles",
+        lambda repo_root=None: {"codex": {"cmd": "codex exec", "stream": "codex"}},
+    )
+
+    def _fake_popen(cmd, *args, **kwargs):
+        commands.append(cmd)
+        if len(commands) == 1:
+            _write_portal(
+                portal,
+                change_token="t1",
+                attention={
+                    "pending_event_count": 1,
+                    "pending_outbox_file_count": 0,
+                },
+                inbound={
+                    "events": [
+                        {
+                            "id": "e1",
+                            "source": "telegram",
+                            "summary": "later",
+                            "body": "please handle the follow-up",
+                        }
+                    ]
+                },
+            )
+        return next(fakes)
+
+    monkeypatch.setattr(runner_stream.subprocess, "Popen", _fake_popen)
+    invocation = runner.RunnerInvocation(
+        kind="run",
+        label="t",
+        prompt="go",
+        cwd=tmp_path,
+        repo_root=tmp_path,
+        env={
+            "BRR_PORTAL_STATE": str(portal),
+            "BRR_OUTBOX_DIR": str(outbox),
+        },
+    )
+
+    result = runner_stream.run_stream("codex", invocation, {})
+
+    assert result.stdout == "SECOND"
+    assert len(commands) == 2
+    assert commands[0][-1] == "go"
+    assert commands[1][:3] == ["codex", "exec", "resume"]
+    assert "thread-9" in commands[1]
+    assert "please handle the follow-up" in commands[1][-1]
+    assert (outbox / ".flush").exists()
+
+
+def test_run_stream_codex_surfaces_structured_error(tmp_path, monkeypatch):
+    fake = _FakePopen([
+        _line({"type": "error", "message": "bad model"}) + "\n",
+        _codex_turn_failed("bad model") + "\n",
+    ])
+    monkeypatch.setattr(
+        runner,
+        "_load_profiles",
+        lambda repo_root=None: {"codex": {"cmd": "codex exec", "stream": "codex"}},
+    )
+    monkeypatch.setattr(runner_stream.subprocess, "Popen", lambda *a, **k: fake)
+
+    result = runner_stream.run_stream("codex", _make_invocation(tmp_path), {})
+
+    assert result.returncode == 1
+    assert "bad model" in result.stderr
 
 
 def test_run_stream_missing_binary(tmp_path, monkeypatch):
