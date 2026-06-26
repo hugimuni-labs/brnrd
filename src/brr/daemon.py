@@ -832,6 +832,7 @@ def _run_worker(
         output_stats=output_stats,
         start_monotonic=run_started_monotonic,
         work_dir=run_root,
+        quota_summary=quota_summary,
     )
     # The runner's declared hooks flavour drives both the back channel's
     # native rendering (``brr hook`` reads BRR_RUNNER to pick the
@@ -955,6 +956,7 @@ def _run_worker(
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
             work_dir=run_root,
+            quota_summary=quota_summary,
         )
 
         def _emit_heartbeat() -> None:
@@ -982,6 +984,7 @@ def _run_worker(
                 output_stats=output_stats,
                 start_monotonic=run_started_monotonic,
                 work_dir=run_root,
+                quota_summary=quota_summary,
             )
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
@@ -1022,6 +1025,7 @@ def _run_worker(
                 output_stats=output_stats,
                 start_monotonic=run_started_monotonic,
                 work_dir=run_root,
+                quota_summary=quota_summary,
             )
 
         result = _invoke_with_heartbeat(
@@ -1071,6 +1075,7 @@ def _run_worker(
             output_stats=output_stats,
             start_monotonic=run_started_monotonic,
             work_dir=run_root,
+            quota_summary=quota_summary,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
@@ -1564,6 +1569,37 @@ def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
     return {"status": status, "until": _iso_utc(until)}
 
 
+def _resources_facet(quota_summary: str | None) -> dict[str, object]:
+    """Operator-facing 'work status' the running resident can read.
+
+    One facet for the live cost/quota/parallelism picture. Each sub-field
+    is either ``known`` (the daemon can prove it cheaply today) or
+    ``unavailable`` (the capability isn't built yet) — an honest placeholder
+    is more useful to the resident than a silently-missing field, so a future
+    wake knows the slot exists and what would fill it.
+
+    - ``quota`` — known when the daemon proved a runner-quota snapshot
+      (``runner_quota.describe_runner_quota``); else unavailable.
+    - ``cost`` — per-run token/$ accounting: not metered yet.
+    - ``coexisting_runs`` — other concurrent runs (incl. cheaper-model
+      shadow runs with their own ranking/pricing): brr is single-flight
+      today, so not implemented.
+    - ``remote_scm`` — unpushed-branch / open-PR posture across the repo:
+      the per-run worktree's local posture already rides the ``scm`` facet;
+      the cross-repo remote view is not wired into the heartbeat yet.
+    """
+    quota_known = bool(quota_summary and str(quota_summary).strip())
+    return {
+        "quota": {
+            "status": "known" if quota_known else "unavailable",
+            "summary": quota_summary if quota_known else None,
+        },
+        "cost": {"status": "unavailable"},
+        "coexisting_runs": {"status": "unavailable"},
+        "remote_scm": {"status": "unavailable"},
+    }
+
+
 def _scm_facet(
     work_dir: Path | None, branch: str | None
 ) -> dict[str, object]:
@@ -1630,6 +1666,7 @@ def _write_live_portal_state(
     output_stats: dict[str, int] | None = None,
     start_monotonic: float | None = None,
     work_dir: Path | None = None,
+    quota_summary: str | None = None,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -1691,6 +1728,7 @@ def _write_live_portal_state(
                 "keepalive": _keepalive_state(keepalive_path),
             },
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
+            "resources": _resources_facet(quota_summary),
         }
         payload["change_token"] = _change_token(payload)
         path = outbox_dir / _LIVE_PORTAL_STATE_NAME
