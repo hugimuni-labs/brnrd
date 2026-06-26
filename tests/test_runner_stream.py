@@ -154,6 +154,49 @@ def test_consume_stream_ignores_interleaved_garbage():
     assert outcome.result_text == "Final summary: ran two tools."
 
 
+# Noise events the REAL claude v2.1.191 stream-json surface interleaves,
+# captured from a live haiku session (2026-06-26): rate-limit pings,
+# per-turn ``thinking_tokens`` system events, and assistant messages whose
+# content carries ``thinking`` blocks alongside ``text`` / ``tool_use``.
+# The parser must skip every one of them — this pins that the boundary count
+# and result capture are unaffected by the live schema, not just the clean
+# synthetic fixture above.
+REAL_NOISE = [
+    _line({"type": "rate_limit_event", "tier": "default"}),
+    _line({"type": "system", "subtype": "thinking_tokens", "count": 42}),
+    _line({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Let me echo ALPHA."}]}}),
+]
+
+
+def test_consume_stream_tolerates_real_cli_noise():
+    lines = [
+        _line({"type": "system", "subtype": "init", "model": "claude-haiku"}),
+        *REAL_NOISE,
+        _assistant_tool_use("toolu_a", "Bash", text=""),
+        _user_tool_result("toolu_a", "ALPHA"),
+        _line({"type": "system", "subtype": "thinking_tokens", "count": 7}),
+        _line({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "done"},
+            {"type": "text", "text": "Done."}]}}),
+        _result("Done."),
+    ]
+    outcome = runner_stream.consume_stream(lines)
+    assert outcome.boundary_count == 1
+    assert outcome.tool_use_count == 1
+    assert outcome.saw_result is True
+    assert outcome.result_text == "Done."
+
+
+def test_thinking_block_is_not_a_tool_use():
+    # An assistant ``thinking`` block must not be miscounted as a tool_use.
+    ev = runner_stream.parse_event(
+        _line({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "pondering"}]}})
+    )
+    assert ev.tool_uses == []
+
+
 def test_consume_stream_no_result_event():
     # A truncated stream (killed mid-run) yields no result text but doesn't crash.
     outcome = runner_stream.consume_stream(SESSION[:3])
