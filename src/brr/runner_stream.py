@@ -1,13 +1,18 @@
-"""Streaming runner — brr drives claude's stream-json loop and reads it.
+"""Streaming runner — brr drives runner event streams and reads them.
 
-Tier 2 boundary injection for claude is **not** hooks: Claude Code's
-settings-file lifecycle hooks never fire under headless ``claude --print``
-(see ``kb/design-runner-back-channel.md``). The verified mechanism is brr
-*driving* the stream itself: ``claude --print --input-format stream-json
---output-format stream-json --verbose`` is an interactive loop — brr writes
-newline-delimited JSON user messages on stdin (kept open) and reads JSON
-events on stdout. brr owns the message loop, so it can weave a portal delta
-in as a user message at a tool boundary without any harness callback.
+Tier 2 boundary injection is runner-specific. Claude Code's settings-file
+lifecycle hooks never fire under headless ``claude --print`` (see
+``kb/design-runner-back-channel.md``), so brr *drives* Claude's stream-json
+loop itself: stdin stays open, stdout emits JSON events, and brr can weave
+portal deltas in as user messages at tool boundaries.
+
+Codex exposes a different surface: ``codex exec --json`` emits JSONL events
+for a single turn and records a ``thread_id`` that can be resumed. brr streams
+that event feed to capture command boundaries and final text; when a pending
+user follow-up is still live at the terminal turn, brr launches a
+``codex exec resume --json <thread_id> ...`` follow-up with the folded-in body.
+That preserves prompt responsiveness without pretending Codex has Claude's
+persistent stdin loop.
 
 This module is **steps 1–2** of ``kb/plan-streaming-runner-injection.md``:
 
@@ -26,11 +31,11 @@ This module is **steps 1–2** of ``kb/plan-streaming-runner-injection.md``:
   :class:`StreamInjectionPolicy`, reusing :func:`hooks.format_delta` so the
   streaming path and the hook path render the same capsule.
 
-Routing claude onto this path (the ``stream:`` profile flag, the daemon
-heartbeat/budget wiring) is step 3; until a profile opts in, the blocking
-``runner.invoke_runner`` path stays the default for every run, untouched.
+Routing a runner onto this path is via the ``stream:`` profile flag; until a
+profile opts in, the blocking ``runner.invoke_runner`` path stays the default
+for every run, untouched.
 
-The event schema is a Claude Code surface that can shift across versions, so
+The event schemas are external CLI surfaces that can shift across versions, so
 the parser degrades safely: an unparseable or unknown line is ignored, never
 fatal, and result capture never depends on an optional field.
 """
@@ -46,23 +51,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-# stream-json flags brr adds to a profile's base command to drive the loop,
-# each as the argv tokens to append when the flag is absent. These turn
-# claude's single-shot invocation into a bidirectional NDJSON stream.
-# ``--verbose`` is required by the CLI to emit ``--output-format stream-json``
-# events headlessly.
-_STREAM_FLAGS: tuple[tuple[str, ...], ...] = (
+# Stream flags brr adds to a profile's base command, each as the argv tokens to
+# append when the flag is absent. Claude's flags turn the CLI into a
+# bidirectional NDJSON loop; Codex's ``--json`` emits JSONL for the exec turn.
+# ``--verbose`` is required by Claude Code to emit ``--output-format
+# stream-json`` events headlessly.
+_CLAUDE_STREAM_FLAGS: tuple[tuple[str, ...], ...] = (
     ("--input-format", "stream-json"),
     ("--output-format", "stream-json"),
     ("--verbose",),
 )
+_CODEX_STREAM_FLAGS: tuple[tuple[str, ...], ...] = (("--json",),)
+_STREAM_FLAGS_BY_FLAVOUR: dict[str, tuple[tuple[str, ...], ...]] = {
+    "claude": _CLAUDE_STREAM_FLAGS,
+    "codex": _CODEX_STREAM_FLAGS,
+}
 
 # Flags stripped from the base command when streaming. ``--print`` / ``-p``
-# makes claude *single-turn*: it exits on the first ``result`` regardless of
+# makes Claude *single-turn*: it exits on the first ``result`` regardless of
 # stdin, so there is no stop-control and no way to fold a late event in. The
-# streaming driver runs a persistent multi-turn session instead and owns the
-# close itself (see the module docstring and :func:`run_stream`).
-_DROP_FLAGS: frozenset[str] = frozenset({"--print", "-p"})
+# Claude streaming driver runs a persistent multi-turn session instead and
+# owns the close itself (see the module docstring and :func:`run_stream`).
+_DROP_FLAGS_BY_FLAVOUR: dict[str, frozenset[str]] = {
+    "claude": frozenset({"--print", "-p"}),
+    "codex": frozenset(),
+}
 
 
 # ── Profile opt-in ───────────────────────────────────────────────────────
@@ -72,7 +85,7 @@ def stream_flavour(name: str, repo_root: Path | None = None) -> str | None:
     """Return the runner's declared streaming *dialect*, or None.
 
     A profile opts into the streaming-driven path with a ``stream: <flavour>``
-    field (today only ``claude``). Absent → the run takes the blocking
+    field (currently ``claude`` or ``codex``). Absent → the run takes the blocking
     ``--print`` path unchanged. This reads declared intent from the profile;
     it is the switch that keeps the most load-bearing surface (every run)
     safe while the new path proves itself.
@@ -87,6 +100,14 @@ def stream_flavour(name: str, repo_root: Path | None = None) -> str | None:
     return flavour or None
 
 
+def _effective_stream_flavour(runner_name: str, repo_root: Path | None = None) -> str:
+    """Return the stream dialect to use for a direct streaming invocation."""
+    flavour = stream_flavour(runner_name, repo_root)
+    if flavour is not None:
+        return flavour
+    return runner_name if runner_name in _STREAM_FLAGS_BY_FLAVOUR else "claude"
+
+
 def build_stream_cmd(
     runner_name: str, cfg: dict[str, Any], repo_root: Path | None = None
 ) -> list[str]:
@@ -94,14 +115,16 @@ def build_stream_cmd(
 
     Starts from the profile's (or ``runner_cmd``'s) base command — the same
     source ``runner._build_cmd`` uses — but does **not** append the prompt as
-    a final argument: in stream-json input mode the prompt is sent as the
-    first user message on stdin, not on argv. ``--print`` / ``-p`` is
-    **stripped** (it forces a single-turn session, see :data:`_DROP_FLAGS`),
-    and the stream-json flags are added only when absent, so a custom command
-    that already declares them is left as the user wrote it.
+    a final argument. Claude sends the prompt as the first user message on
+    stdin; Codex appends it later in the driver because the same base argv is
+    reused for ``exec resume``. Flavour-specific single-shot flags (for
+    Claude, ``--print`` / ``-p``) are stripped, and stream flags are added only
+    when absent, so a custom command that already declares them is left as the
+    user wrote it.
     """
     from . import runner
 
+    flavour = _effective_stream_flavour(runner_name, repo_root)
     custom = cfg.get("runner_cmd")
     if custom:
         base = list(custom) if isinstance(custom, list) else shlex.split(str(custom))
@@ -115,8 +138,9 @@ def build_stream_cmd(
         else:
             base = [runner_name]
 
-    base = [tok for tok in base if tok not in _DROP_FLAGS]
-    for flag_tokens in _STREAM_FLAGS:
+    drop_flags = _DROP_FLAGS_BY_FLAVOUR.get(flavour, frozenset())
+    base = [tok for tok in base if tok not in drop_flags]
+    for flag_tokens in _STREAM_FLAGS_BY_FLAVOUR.get(flavour, ()):
         if flag_tokens[0] not in base:
             base.extend(flag_tokens)
     return base
@@ -157,13 +181,47 @@ class StreamEvent:
 
     @property
     def is_result(self) -> bool:
-        return self.type == "result"
+        return self.type in {"result", "turn.completed", "turn.failed"}
 
     @property
     def result_text(self) -> str | None:
         if self.type != "result":
             return None
         text = self.data.get("result")
+        return text if isinstance(text, str) else None
+
+    @property
+    def thread_id(self) -> str | None:
+        if self.type != "thread.started":
+            return None
+        thread_id = self.data.get("thread_id")
+        return thread_id if isinstance(thread_id, str) else None
+
+    @property
+    def item(self) -> dict[str, Any]:
+        item = self.data.get("item")
+        return item if isinstance(item, dict) else {}
+
+    @property
+    def item_id(self) -> str | None:
+        item_id = self.item.get("id")
+        return item_id if isinstance(item_id, str) else None
+
+    @property
+    def item_type(self) -> str | None:
+        item_type = self.item.get("type")
+        return item_type if isinstance(item_type, str) else None
+
+    @property
+    def command_text(self) -> str:
+        command = self.item.get("command")
+        return command if isinstance(command, str) else ""
+
+    @property
+    def agent_message_text(self) -> str | None:
+        if self.type != "item.completed" or self.item_type != "agent_message":
+            return None
+        text = self.item.get("text")
         return text if isinstance(text, str) else None
 
 
@@ -224,6 +282,8 @@ class StreamOutcome:
     result_event: dict[str, Any] | None = None
     saw_result: bool = False
     result_count: int = 0
+    thread_id: str | None = None
+    error_text: str | None = None
 
 
 def consume_stream(
@@ -254,12 +314,39 @@ def consume_stream(
     pending: dict[str, str] = {}
     outcome = StreamOutcome()
     for event in iter_events(lines):
-        if event.type == "assistant":
+        if event.type == "thread.started":
+            outcome.thread_id = event.thread_id or outcome.thread_id
+        elif event.type == "error":
+            message = event.data.get("message")
+            if isinstance(message, str):
+                outcome.error_text = message
+            outcome.is_error = True
+        elif event.type == "assistant":
             for block in event.tool_uses:
                 tool_id = block.get("id")
                 if isinstance(tool_id, str):
                     pending[tool_id] = str(block.get("name") or "")
                     outcome.tool_use_count += 1
+        elif event.type == "item.started" and event.item_type == "command_execution":
+            item_id = event.item_id
+            if item_id:
+                pending[item_id] = event.command_text
+                outcome.tool_use_count += 1
+        elif event.type == "item.completed" and event.item_type == "agent_message":
+            if event.agent_message_text is not None:
+                outcome.result_text = event.agent_message_text
+        elif event.type == "item.completed" and event.item_type == "command_execution":
+            item_id = event.item_id
+            if item_id:
+                outcome.boundary_count += 1
+                if on_boundary is not None:
+                    on_boundary(
+                        StreamBoundary(
+                            index=outcome.boundary_count,
+                            tool_names=[pending.pop(item_id, event.command_text)],
+                            tool_use_ids=[item_id],
+                        )
+                    )
         elif event.type == "user":
             completed_ids: list[str] = []
             completed_names: list[str] = []
@@ -281,10 +368,18 @@ def consume_stream(
                             tool_use_ids=completed_ids,
                         )
                     )
-        elif event.type == "result":
+        elif event.is_result:
             outcome.saw_result = True
             outcome.result_event = event.data
-            outcome.is_error = bool(event.data.get("is_error"))
+            outcome.is_error = event.type == "turn.failed" or bool(
+                event.data.get("is_error")
+            )
+            if event.type == "turn.failed":
+                error = event.data.get("error")
+                if isinstance(error, dict) and isinstance(error.get("message"), str):
+                    outcome.error_text = error["message"]
+                elif isinstance(error, str):
+                    outcome.error_text = error
             outcome.result_count += 1
             if event.result_text is not None:
                 outcome.result_text = event.result_text
@@ -425,6 +520,205 @@ class StreamInjectionPolicy:
 # ── Live driver ──────────────────────────────────────────────────────────
 
 
+def _proc_env(invocation: "Any") -> dict[str, str] | None:
+    if not invocation.env:
+        return None
+    proc_env = os.environ.copy()
+    proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
+    return proc_env
+
+
+def _artifact_records(invocation: "Any") -> list["Any"]:
+    from . import runner
+
+    return [
+        runner.RunnerArtifactRecord(
+            path=spec.path,
+            label=spec.label or str(spec.path),
+            exists=spec.path.exists(),
+        )
+        for spec in invocation.required_artifacts
+    ]
+
+
+def _merge_outcome(target: StreamOutcome, source: StreamOutcome) -> None:
+    if source.result_text is not None:
+        target.result_text = source.result_text
+    target.is_error = source.is_error
+    target.boundary_count += source.boundary_count
+    target.tool_use_count += source.tool_use_count
+    target.result_event = source.result_event or target.result_event
+    target.saw_result = target.saw_result or source.saw_result
+    target.result_count += source.result_count
+    target.thread_id = source.thread_id or target.thread_id
+    target.error_text = source.error_text or target.error_text
+
+
+def _drain_stderr(stream: Any, chunks: list[str]) -> None:
+    try:
+        for line in stream:
+            chunks.append(line)
+    except (OSError, ValueError):
+        pass
+
+
+def _make_default_policy(invocation: "Any") -> StreamInjectionPolicy:
+    from . import hooks
+
+    env = invocation.env or {}
+    portal_env = env.get("BRR_PORTAL_STATE")
+    outbox_env = env.get("BRR_OUTBOX_DIR")
+    flush_path = Path(outbox_env) / hooks.FLUSH_SIGNAL_NAME if outbox_env else None
+    return StreamInjectionPolicy(
+        Path(portal_env) if portal_env else None,
+        flush_signal_path=flush_path,
+    )
+
+
+def _result_from_outcome(
+    runner_name: str,
+    invocation: "Any",
+    cmd: list[str],
+    outcome: StreamOutcome,
+    stderr_chunks: list[str],
+    returncode: int,
+):
+    from . import runner
+
+    stdout = outcome.result_text or ""
+    if outcome.is_error and returncode == 0:
+        # A terminal result flagged as error is a runner-level failure even
+        # when the process exits 0; surface it as a non-zero result.
+        returncode = 1
+    stderr = "".join(stderr_chunks)
+    if outcome.error_text:
+        if stderr and not stderr.endswith("\n"):
+            stderr += "\n"
+        stderr += outcome.error_text
+
+    if invocation.response_path and returncode == 0 and stdout.strip():
+        runner._write_response_file(invocation.response_path, stdout)
+
+    return runner.RunnerResult(
+        invocation=invocation,
+        runner_name=runner_name,
+        command=cmd,
+        stdout=stdout,
+        stderr=stderr,
+        returncode=returncode,
+        trace_dir=None,
+        artifacts=_artifact_records(invocation),
+    )
+
+
+def _codex_resume_cmd(base_cmd: list[str], thread_id: str, prompt: str) -> list[str]:
+    """Build ``codex exec resume`` from a ``codex exec --json`` base argv."""
+    if len(base_cmd) >= 2 and base_cmd[0] == "codex" and base_cmd[1] == "exec":
+        return [base_cmd[0], base_cmd[1], "resume", *base_cmd[2:], thread_id, prompt]
+    return [*base_cmd, prompt]
+
+
+def _run_codex_stream(
+    runner_name: str,
+    invocation: "Any",
+    cfg: dict[str, Any],
+    *,
+    on_boundary: Callable[[StreamBoundary, Injector], None] | None = None,
+    on_result: Callable[[StreamOutcome, Injector], bool] | None = None,
+):
+    """Drive Codex's one-turn JSONL stream, resuming once for fold-in."""
+    from . import runner
+
+    base_cmd = build_stream_cmd(runner_name, cfg, invocation.repo_root)
+    proc_env = _proc_env(invocation)
+    policy: StreamInjectionPolicy | None = None
+    if on_boundary is None and on_result is None:
+        policy = _make_default_policy(invocation)
+        policy.prime_from_portal()
+
+        def boundary_cb(boundary: StreamBoundary, _inject: Injector) -> None:
+            # Codex exec is a single-turn stream: there is no live stdin channel
+            # to weave an operational delta into. The boundary still matters for
+            # outbound responsiveness, so reuse the same flush signal.
+            policy._touch_flush()
+
+        on_boundary = boundary_cb
+        on_result = policy.on_result
+
+    stderr_chunks: list[str] = []
+    returncode = 0
+    outcome = StreamOutcome()
+    cmd = [*base_cmd, invocation.prompt]
+    reported_cmd = cmd
+    turns = 0
+
+    while True:
+        turns += 1
+        resume_prompts: list[str] = []
+
+        def inject_for_resume(text: str) -> None:
+            resume_prompts.append(text)
+
+        try:
+            with runner._proc_lock:
+                runner._active_proc = subprocess.Popen(
+                    cmd,
+                    cwd=invocation.cwd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env=proc_env,
+                )
+            proc = runner._active_proc
+            stderr_thread = threading.Thread(
+                target=_drain_stderr, args=(proc.stderr, stderr_chunks), daemon=True
+            )
+            stderr_thread.start()
+
+            boundary_cb = (
+                (lambda b: on_boundary(b, inject_for_resume))
+                if on_boundary is not None else None
+            )
+            result_cb = (
+                (lambda o: on_result(o, inject_for_resume))
+                if on_result is not None else None
+            )
+            turn_outcome = consume_stream(
+                proc.stdout, on_boundary=boundary_cb, on_result=result_cb
+            )
+            try:
+                for _ in proc.stdout:
+                    pass
+            except (OSError, ValueError):
+                pass
+            turn_returncode = proc.wait()
+            stderr_thread.join(timeout=5)
+        except FileNotFoundError:
+            stderr_chunks.append(f"executable '{cmd[0]}' not found on PATH")
+            returncode = 127
+            break
+        finally:
+            with runner._proc_lock:
+                runner._active_proc = None
+
+        _merge_outcome(outcome, turn_outcome)
+        returncode = turn_returncode
+        if returncode != 0 or turn_outcome.is_error:
+            break
+
+        resume_prompt = resume_prompts[-1] if resume_prompts else None
+        thread_id = turn_outcome.thread_id or outcome.thread_id
+        if not resume_prompt or not thread_id or turns >= 2:
+            break
+        cmd = _codex_resume_cmd(base_cmd, thread_id, resume_prompt)
+
+    return _result_from_outcome(
+        runner_name, invocation, reported_cmd, outcome, stderr_chunks, returncode
+    )
+
+
 def run_stream(
     runner_name: str,
     invocation: "Any",
@@ -458,12 +752,18 @@ def run_stream(
     from . import runner
 
     cfg = cfg or {}
-    cmd = build_stream_cmd(runner_name, cfg, invocation.repo_root)
+    flavour = _effective_stream_flavour(runner_name, invocation.repo_root)
+    if flavour == "codex":
+        return _run_codex_stream(
+            runner_name,
+            invocation,
+            cfg,
+            on_boundary=on_boundary,
+            on_result=on_result,
+        )
 
-    proc_env: dict[str, str] | None = None
-    if invocation.env:
-        proc_env = os.environ.copy()
-        proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
+    cmd = build_stream_cmd(runner_name, cfg, invocation.repo_root)
+    proc_env = _proc_env(invocation)
 
     # Default inbound-delivery policy when the caller wires no explicit seams:
     # weave the daemon's portal delta in at each boundary and fold a pending
@@ -471,31 +771,13 @@ def run_stream(
     # same handle the hooks path reads).
     policy: StreamInjectionPolicy | None = None
     if on_boundary is None and on_result is None:
-        from . import hooks
-
-        env = invocation.env or {}
-        portal_env = env.get("BRR_PORTAL_STATE")
-        outbox_env = env.get("BRR_OUTBOX_DIR")
-        flush_path = (
-            Path(outbox_env) / hooks.FLUSH_SIGNAL_NAME if outbox_env else None
-        )
-        policy = StreamInjectionPolicy(
-            Path(portal_env) if portal_env else None,
-            flush_signal_path=flush_path,
-        )
+        policy = _make_default_policy(invocation)
         on_boundary = policy.on_boundary
         on_result = policy.on_result
 
     stderr_chunks: list[str] = []
     returncode = 0
     outcome = StreamOutcome()
-
-    def _drain_stderr(stream: Any) -> None:
-        try:
-            for line in stream:
-                stderr_chunks.append(line)
-        except (OSError, ValueError):
-            pass
 
     try:
         with runner._proc_lock:
@@ -511,7 +793,7 @@ def run_stream(
             )
         proc = runner._active_proc
         stderr_thread = threading.Thread(
-            target=_drain_stderr, args=(proc.stderr,), daemon=True
+            target=_drain_stderr, args=(proc.stderr, stderr_chunks), daemon=True
         )
         stderr_thread.start()
 
@@ -562,30 +844,6 @@ def run_stream(
         with runner._proc_lock:
             runner._active_proc = None
 
-    stdout = outcome.result_text or ""
-    if outcome.is_error and returncode == 0:
-        # A terminal result flagged is_error is a runner-level failure even
-        # when the process exits 0; surface it as a non-zero result.
-        returncode = 1
-    stderr = "".join(stderr_chunks)
-
-    if invocation.response_path and returncode == 0 and stdout.strip():
-        runner._write_response_file(invocation.response_path, stdout)
-
-    return runner.RunnerResult(
-        invocation=invocation,
-        runner_name=runner_name,
-        command=cmd,
-        stdout=stdout,
-        stderr=stderr,
-        returncode=returncode,
-        trace_dir=None,
-        artifacts=[
-            runner.RunnerArtifactRecord(
-                path=spec.path,
-                label=spec.label or str(spec.path),
-                exists=spec.path.exists(),
-            )
-            for spec in invocation.required_artifacts
-        ],
+    return _result_from_outcome(
+        runner_name, invocation, cmd, outcome, stderr_chunks, returncode
     )
