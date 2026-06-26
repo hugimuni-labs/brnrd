@@ -2,5 +2,10 @@
 {% block body %}
 <main class="dashboard-shell">
   <h1>brnrd dashboard</h1>
+  {% if logged_in %}
+    <p>Connected as {{ account.github_login }}</p>
+  {% else %}
+    <p>Connect GitHub before managing repositories.</p>
+  {% endif %}
 </main>
 {% endblock %}
