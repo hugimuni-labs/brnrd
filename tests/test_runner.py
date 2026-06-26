@@ -367,6 +367,30 @@ class TestStreamRouting:
         assert result is sentinel
         assert seen["name"] == "claude"
 
+    def test_streaming_run_still_writes_trace(self, tmp_path, monkeypatch):
+        # The streaming path keeps the trace artifact the blocking path writes.
+        from brr import runner_stream
+
+        monkeypatch.setattr(
+            runner_stream, "stream_flavour", lambda name, root=None: "claude"
+        )
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="e", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path,
+        )
+        streamed = RunnerResult(
+            invocation=invocation, runner_name="claude", command=["claude"],
+            stdout="reply", stderr="err", returncode=0,
+            trace_dir=None, artifacts=[],
+        )
+        monkeypatch.setattr(
+            runner_stream, "run_stream", lambda *a, **k: streamed
+        )
+        result = invoke_runner("claude", invocation, cfg={}, trace=True)
+        assert result.trace_dir is not None
+        assert (result.trace_dir / "prompt.md").read_text() == "hi"
+        assert (result.trace_dir / "stdout.txt").read_text() == "reply"
+
     def test_runner_cmd_override_stays_on_blocking_path(self, tmp_path, monkeypatch):
         from brr import runner_stream
 
