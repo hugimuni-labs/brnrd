@@ -485,7 +485,13 @@ def invoke_runner(
         from . import runner_stream
 
         if runner_stream.stream_flavour(runner_name, invocation.repo_root):
-            return runner_stream.run_stream(runner_name, invocation, cfg)
+            result = runner_stream.run_stream(runner_name, invocation, cfg)
+            # Keep the trace artifact the blocking path writes — observability
+            # for the (now default-on) streaming path. _write_trace is generic
+            # over RunnerResult, so the driver stays trace-agnostic.
+            if trace:
+                result.trace_dir = _write_trace(result)
+            return result
 
     cmd = _build_cmd(runner_name, invocation.prompt, cfg, invocation.repo_root)
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
