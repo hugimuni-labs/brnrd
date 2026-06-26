@@ -67,6 +67,11 @@ with the concept:
     precheck gates activation. The field is *intent*; firing is unverified until
     a live test (the precheck asserts prerequisites, not firing).
 
+brr only generates native hook config for a profile that explicitly declares
+`hooks:`. It does not infer hooks from the runner name; a `stream:` runner gets
+its back channel from the streaming driver, and a profile with neither field
+uses the heartbeat-polled fallback.
+
 The `claude` profile declares **no** `hooks:` field — because claude's Tier-2
 mechanism is **not** hooks. Empirically (Claude Code v2.1.185+) the headless
 `claude --print "<prompt>"` mode does not run settings-file lifecycle hooks at
