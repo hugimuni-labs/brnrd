@@ -1,6 +1,7 @@
 # Plan: the streaming runner — claude Tier-2 boundary injection
 
-Status: proposed 2026-06-26 (evt ckc3), after the firing test passed. This is the
+Status: in flight 2026-06-26 (evt vtyq) — **step 1 shipped** (the stream-json client
+module `src/brr/runner_stream.py`, 20 tests); steps 2–4 below remain. This is the
 concrete build behind [`design-runner-back-channel.md`](design-runner-back-channel.md)
 §Streaming-driven injection. Parent: [#159](https://github.com/Gurio/brr/issues/159),
 [#171](https://github.com/Gurio/brr/issues/171).
