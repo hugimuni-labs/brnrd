@@ -86,11 +86,24 @@ class Settings:
     github_api_version: str = os.environ.get(
         "BRNRD_GITHUB_API_VERSION", "2026-03-10"
     )
+    # GitHub App installation settings. The app slug is the installable
+    # integration identity (for example, brnrd-dev during the private beta).
+    github_app_slug: str = os.environ.get("BRNRD_GITHUB_APP_SLUG", "brnrd-dev")
+    github_install_url: str = os.environ.get(
+        "BRNRD_GITHUB_INSTALL_URL",
+        "https://github.com/apps/brnrd-dev/installations/new",
+    )
     # Managed GitHub App webhook / posting settings. ``github_bot_token``
     # is the narrow transport seam for this prototype slice; production
     # replaces it with an installation token minted from the App private key.
     github_webhook_secret: str = os.environ.get("BRNRD_GITHUB_WEBHOOK_SECRET", "")
-    github_bot_login: str = os.environ.get("BRNRD_GITHUB_BOT_LOGIN", "brr-bot")
+    # Human-facing call sign. This is intentionally distinct from the App
+    # slug because GitHub App names cannot collide with existing accounts;
+    # the mentionable face can be a machine user such as @brnrd-bot.
+    github_bot_login: str = os.environ.get("BRNRD_GITHUB_BOT_LOGIN", "brnrd-bot")
+    github_trigger_aliases: str = os.environ.get(
+        "BRNRD_GITHUB_TRIGGER_ALIASES", "brnrd,brr"
+    )
     github_bot_token: str = os.environ.get("BRNRD_GITHUB_BOT_TOKEN", "")
     oauth_state_cookie: str = os.environ.get(
         "BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state"
