@@ -9,12 +9,25 @@ newline-delimited JSON user messages on stdin (kept open) and reads JSON
 events on stdout. brr owns the message loop, so it can weave a portal delta
 in as a user message at a tool boundary without any harness callback.
 
-This module is **step 1** of ``kb/plan-streaming-runner-injection.md``: the
-stream-json client — Popen wiring, the NDJSON event parser, and the
-tool-boundary detector — proven against recorded event fixtures. It does the
-reading and exposes the boundary seam (``on_boundary``); the *injection* and
-outbox drain that ride that seam are step 2, and routing claude onto this
-path (the ``stream:`` profile flag) is step 3. Until then the blocking
+This module is **steps 1–2** of ``kb/plan-streaming-runner-injection.md``:
+
+- *Step 1* (the stream-json client): Popen wiring, the NDJSON event parser,
+  and the tool-boundary detector, proven against recorded event fixtures.
+- *Step 2* (persistent session + boundary injection): the driver runs a
+  **multi-turn** session — ``--print`` is **stripped** (see
+  :func:`build_stream_cmd`), because ``claude --print`` is single-turn and
+  exits on the first ``result`` with no stop-control. With ``--print`` gone
+  the process stays alive after a ``result`` waiting on stdin, so the driver
+  owns the close: at each tool boundary it weaves the daemon's portal delta
+  in as a user message (the inbound-delivery channel — pending events reach
+  the resident without it polling ``inbox.json``), and at each terminal
+  ``result`` it either folds a still-pending event into a fresh turn
+  (stop-control) or closes stdin to end the run. The injection policy is
+  :class:`StreamInjectionPolicy`, reusing :func:`hooks.format_delta` so the
+  streaming path and the hook path render the same capsule.
+
+Routing claude onto this path (the ``stream:`` profile flag, the daemon
+heartbeat/budget wiring) is step 3; until a profile opts in, the blocking
 ``runner.invoke_runner`` path stays the default for every run, untouched.
 
 The event schema is a Claude Code surface that can shift across versions, so
@@ -34,15 +47,22 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 # stream-json flags brr adds to a profile's base command to drive the loop,
-# each as the argv tokens to append when the flag is absent. ``--print`` is
-# already in the claude profile; these turn its single-shot print into a
-# bidirectional NDJSON stream. ``--verbose`` is required by the CLI whenever
-# ``--output-format stream-json`` is used with ``--print``.
+# each as the argv tokens to append when the flag is absent. These turn
+# claude's single-shot invocation into a bidirectional NDJSON stream.
+# ``--verbose`` is required by the CLI to emit ``--output-format stream-json``
+# events headlessly.
 _STREAM_FLAGS: tuple[tuple[str, ...], ...] = (
     ("--input-format", "stream-json"),
     ("--output-format", "stream-json"),
     ("--verbose",),
 )
+
+# Flags stripped from the base command when streaming. ``--print`` / ``-p``
+# makes claude *single-turn*: it exits on the first ``result`` regardless of
+# stdin, so there is no stop-control and no way to fold a late event in. The
+# streaming driver runs a persistent multi-turn session instead and owns the
+# close itself (see the module docstring and :func:`run_stream`).
+_DROP_FLAGS: frozenset[str] = frozenset({"--print", "-p"})
 
 
 # ── Profile opt-in ───────────────────────────────────────────────────────
@@ -75,9 +95,10 @@ def build_stream_cmd(
     Starts from the profile's (or ``runner_cmd``'s) base command — the same
     source ``runner._build_cmd`` uses — but does **not** append the prompt as
     a final argument: in stream-json input mode the prompt is sent as the
-    first user message on stdin, not on argv. The stream-json flags are added
-    only when absent, so a custom command that already declares them is left
-    as the user wrote it.
+    first user message on stdin, not on argv. ``--print`` / ``-p`` is
+    **stripped** (it forces a single-turn session, see :data:`_DROP_FLAGS`),
+    and the stream-json flags are added only when absent, so a custom command
+    that already declares them is left as the user wrote it.
     """
     from . import runner
 
@@ -94,6 +115,7 @@ def build_stream_cmd(
         else:
             base = [runner_name]
 
+    base = [tok for tok in base if tok not in _DROP_FLAGS]
     for flag_tokens in _STREAM_FLAGS:
         if flag_tokens[0] not in base:
             base.extend(flag_tokens)
@@ -201,25 +223,33 @@ class StreamOutcome:
     tool_use_count: int = 0
     result_event: dict[str, Any] | None = None
     saw_result: bool = False
+    result_count: int = 0
 
 
 def consume_stream(
     lines: Iterable[str],
     *,
     on_boundary: Callable[[StreamBoundary], None] | None = None,
+    on_result: Callable[[StreamOutcome], bool] | None = None,
 ) -> StreamOutcome:
-    """Drive over a runner stream, detecting tool boundaries and the result.
+    """Drive over a runner stream, detecting tool boundaries and results.
 
     A **tool boundary** is an assistant ``tool_use`` followed by its matching
     ``tool_result`` (carried by a later ``user`` event). Each user event that
     completes one or more pending tool calls fires ``on_boundary`` once — the
-    natural post-tool seam where step 2 drains the outbox and injects a
-    portal delta. The terminal ``result`` event's text is captured as the
-    run's reply (the same contract as Tier 1 stdout capture).
+    natural post-tool seam where the driver injects a portal delta.
 
-    Pure and side-effect-free apart from the ``on_boundary`` callback, so it
-    is exercised directly over recorded fixtures in tests and over a live
-    ``proc.stdout`` in :func:`run_stream`.
+    Each terminal ``result`` event updates the captured reply and fires
+    ``on_result(outcome)``. In a persistent (no-``--print``) session the
+    process does **not** exit at a ``result`` — it waits on stdin — so the
+    callback is the stop-control seam: returning ``False`` stops consuming
+    (the driver then closes stdin to end the run), while returning anything
+    else keeps the loop reading the turn a folded-in injection produced.
+    Without a callback the loop runs to stream end, single-turn-style.
+
+    Pure and side-effect-free apart from the callbacks, so it is exercised
+    directly over recorded fixtures in tests and over a live ``proc.stdout``
+    in :func:`run_stream`.
     """
     pending: dict[str, str] = {}
     outcome = StreamOutcome()
@@ -255,8 +285,11 @@ def consume_stream(
             outcome.saw_result = True
             outcome.result_event = event.data
             outcome.is_error = bool(event.data.get("is_error"))
+            outcome.result_count += 1
             if event.result_text is not None:
                 outcome.result_text = event.result_text
+            if on_result is not None and on_result(outcome) is False:
+                break
     return outcome
 
 
@@ -277,6 +310,82 @@ def user_message_json(text: str) -> str:
     return json.dumps(payload) + "\n"
 
 
+# ── Inbound-delivery policy ──────────────────────────────────────────────
+
+# What a boundary/result hook calls to weave a message into the live stream.
+Injector = Callable[[str], None]
+
+
+def _read_portal(path: Path | None) -> dict[str, Any]:
+    """Read the daemon-written portal-state JSON, or ``{}`` (best-effort)."""
+    if path is None or not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+@dataclass
+class StreamInjectionPolicy:
+    """The inbound-delivery policy that rides the stream's seams.
+
+    This is what closes the gap the maintainer named: pending events reach
+    the resident *while it runs*, without it remembering to poll
+    ``inbox.json``. It reads the same daemon-written ``portal-state.json``
+    the hooks path reads and renders the same capsule via
+    :func:`hooks.format_delta`:
+
+    - **At each tool boundary** — inject a ``change_token``-gated delta, so a
+      shift in pending events / budget / delivery is woven in as a user
+      message, and an unchanged state injects nothing.
+    - **At the terminal result** — if a foldable event is still pending, fold
+      it into a fresh turn once (stop-control, mirroring the hook ``Stop``
+      block); otherwise signal the driver to close the session.
+
+    Priming (:meth:`prime_from_portal`) seeds ``last_token`` from the portal
+    as it stood at run start, because the prompt/bundle already carried that
+    snapshot — only *later* changes should be injected mid-run.
+    """
+
+    portal_state_path: Path | None = None
+    last_token: Any = None
+    folded_once: bool = False
+
+    def prime_from_portal(self) -> None:
+        self.last_token = _read_portal(self.portal_state_path).get("change_token")
+
+    def on_boundary(self, boundary: StreamBoundary, inject: Injector) -> None:
+        from . import hooks
+
+        payload = _read_portal(self.portal_state_path)
+        token = payload.get("change_token")
+        if token is None or token == self.last_token:
+            return
+        delta = hooks.format_delta(payload)
+        if delta:
+            inject(delta)
+        self.last_token = token
+
+    def on_result(self, outcome: StreamOutcome, inject: Injector) -> bool:
+        from . import hooks
+
+        payload = _read_portal(self.portal_state_path)
+        attention = (
+            payload.get("attention")
+            if isinstance(payload.get("attention"), dict) else {}
+        )
+        pending = int((attention or {}).get("pending_event_count", 0) or 0)
+        if pending > 0 and not self.folded_once:
+            delta = hooks.format_delta(payload, stop=True)
+            if delta:
+                inject(delta)
+            self.folded_once = True
+            return True  # keep the session alive for the folded-in turn
+        return False  # nothing pending — driver closes stdin, run ends
+
+
 # ── Live driver ──────────────────────────────────────────────────────────
 
 
@@ -285,14 +394,24 @@ def run_stream(
     invocation: "Any",
     cfg: dict[str, Any] | None = None,
     *,
-    on_boundary: Callable[[StreamBoundary], None] | None = None,
+    on_boundary: Callable[[StreamBoundary, Injector], None] | None = None,
+    on_result: Callable[[StreamOutcome, Injector], bool] | None = None,
 ):
-    """Drive a streaming runner subprocess and capture its final reply.
+    """Drive a persistent streaming runner subprocess and capture its reply.
 
     Mirrors :func:`runner.invoke_runner`'s contract (returns a
     :class:`runner.RunnerResult`) but over the stream-json loop: it writes
-    the prompt as the first stdin user message, keeps stdin open, reads
-    events to the terminal ``result``, and captures that as the response.
+    the prompt as the first stdin user message, keeps stdin open, and reads
+    events while weaving portal deltas back in at each tool boundary (the
+    inbound-delivery channel). The session is **persistent** — ``--print``
+    is stripped, so the process does not exit at a ``result``; the driver
+    closes stdin to end the run once nothing more is pending.
+
+    ``on_boundary`` / ``on_result`` receive an :data:`Injector` bound to the
+    live ``proc.stdin``. When neither is given, the default
+    :class:`StreamInjectionPolicy` is built from the run env's
+    ``BRR_PORTAL_STATE`` and used for both seams. Tests pass explicit
+    callbacks to drive the seams deterministically.
 
     The active subprocess is registered in ``runner._active_proc`` under
     ``runner._proc_lock`` — the *same* handle ``runner.kill_active`` reads —
@@ -309,6 +428,17 @@ def run_stream(
     if invocation.env:
         proc_env = os.environ.copy()
         proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
+
+    # Default inbound-delivery policy when the caller wires no explicit seams:
+    # weave the daemon's portal delta in at each boundary and fold a pending
+    # event in at the terminal result. The portal path rides the run env (the
+    # same handle the hooks path reads).
+    policy: StreamInjectionPolicy | None = None
+    if on_boundary is None and on_result is None:
+        portal_env = (invocation.env or {}).get("BRR_PORTAL_STATE")
+        policy = StreamInjectionPolicy(Path(portal_env) if portal_env else None)
+        on_boundary = policy.on_boundary
+        on_result = policy.on_result
 
     stderr_chunks: list[str] = []
     returncode = 0
@@ -339,16 +469,43 @@ def run_stream(
         )
         stderr_thread.start()
 
-        # Send the prompt as the first user message; keep stdin open so a
-        # boundary callback (step 2) can inject further messages mid-loop.
+        def inject(text: str) -> None:
+            try:
+                proc.stdin.write(user_message_json(text))
+                proc.stdin.flush()
+            except (OSError, ValueError):
+                pass
+
+        # Seed the delta gate from the portal as it stood at run start; the
+        # prompt already carried that snapshot, so only later changes inject.
+        if policy is not None:
+            policy.prime_from_portal()
+
+        # Send the prompt as the first user message; keep stdin open so the
+        # boundary/result seams can inject further messages mid-loop.
         proc.stdin.write(user_message_json(invocation.prompt))
         proc.stdin.flush()
 
-        outcome = consume_stream(proc.stdout, on_boundary=on_boundary)
+        boundary_cb = (
+            (lambda b: on_boundary(b, inject)) if on_boundary is not None else None
+        )
+        result_cb = (
+            (lambda o: on_result(o, inject)) if on_result is not None else None
+        )
+        outcome = consume_stream(
+            proc.stdout, on_boundary=boundary_cb, on_result=result_cb
+        )
 
+        # End the persistent session: close stdin (claude exits on EOF), then
+        # drain any trailing stdout so a full pipe can't block ``wait``.
         try:
             proc.stdin.close()
         except OSError:
+            pass
+        try:
+            for _ in proc.stdout:
+                pass
+        except (OSError, ValueError):
             pass
         returncode = proc.wait()
         stderr_thread.join(timeout=5)
