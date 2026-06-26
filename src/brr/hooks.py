@@ -1,13 +1,12 @@
 """Runner hooks back channel — ``brr hook <phase>``.
 
 Tier 2 of the runner interface (``kb/design-runner-back-channel.md``).
-Every target CLI agent (claude, codex, gemini) ships lifecycle hooks:
-runner-native callbacks at tool/turn boundaries whose JSON result is
-injected back into the agent's context. brr exposes **one** endpoint,
-``brr hook <phase>``, reading a JSON event on stdin and writing a JSON
-result on stdout. brr owns the abstract *phases*; each runner profile maps
-its native hook names onto them, and brr renders the one neutral result
-into that runner's native fields.
+Some target CLI agents expose runner-native lifecycle hooks: callbacks at
+tool/turn boundaries whose JSON result is injected back into the agent's
+context. brr exposes **one** endpoint, ``brr hook <phase>``, reading a JSON
+event on stdin and writing a JSON result on stdout. brr owns the abstract
+*phases*; each hook-backed runner profile maps its native hook names onto
+them, and brr renders the one neutral result into that runner's native fields.
 
 Two directions across the single endpoint:
 
@@ -159,6 +158,10 @@ def format_delta(
     )
     budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
     scm = payload.get("scm") if isinstance(payload.get("scm"), dict) else {}
+    resources = (
+        payload.get("resources")
+        if isinstance(payload.get("resources"), dict) else {}
+    )
 
     pending = int(attention.get("pending_event_count", 0) or 0)
     pending_files = int(attention.get("pending_outbox_file_count", 0) or 0)
@@ -207,12 +210,38 @@ def format_delta(
                 f"{modified} modified file(s) on {branch} — commit and let "
                 "the branch publish before ending."
             )
+    # Work-status posture (cost / quota / parallelism). A boundary signal like
+    # scm: rendered at seed / stop only, where the affirmative picture is worth
+    # a line. Known fields carry their value; not-yet-built ones read
+    # "unavailable" so the resident sees the slot honestly rather than a gap.
+    if (seed or stop) and resources:
+        rendered = _format_resources(resources)
+        if rendered:
+            lines.append(rendered)
     # Mid-run, a bare header with no pending work and no movement isn't worth
     # a turn. Seed and stop always render: their empty state ("0 pending") is
     # the affirmative signal, not noise.
     if not seed and not stop and pending == 0 and pending_files == 0 and not acked:
         return None
     return "\n".join(lines)
+
+
+def _format_resources(resources: dict[str, Any]) -> str | None:
+    """One compact 'work status' line: quota/cost/coexisting/remote posture."""
+    def _facet_text(key: str, label: str) -> str:
+        facet = resources.get(key) if isinstance(resources.get(key), dict) else {}
+        if facet.get("status") == "known":
+            summary = str(facet.get("summary") or "").strip()
+            return f"{label}={summary}" if summary else f"{label}=known"
+        return f"{label}=unavailable"
+
+    parts = [
+        _facet_text("quota", "quota"),
+        _facet_text("cost", "cost"),
+        _facet_text("coexisting_runs", "coexisting-runs"),
+        _facet_text("remote_scm", "remote-scm"),
+    ]
+    return "- resources: " + "; ".join(parts) + "."
 
 
 # ── Phase logic (neutral result) ─────────────────────────────────────────
@@ -354,9 +383,9 @@ def render_native(
 # prerequisites — the profile's ``hooks:`` field is the *intent*, the
 # precheck is the *assertion* (kb/design-runner-back-channel.md §Resolutions).
 
-# Flavours brr can currently emit native hook config for. codex / gemini
-# declare the capability (their docs confirm bidirectional hooks) but their
-# config emitters are a follow-up; until then they degrade to Tier 0/1.
+# Flavours brr can currently emit native hook config for. Codex uses the
+# JSONL streaming path instead of native hooks; gemini's config emitter is a
+# follow-up, so it degrades to Tier 0/1 until that exists.
 _CONFIG_SUPPORTED = {"claude"}
 
 
