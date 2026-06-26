@@ -327,6 +327,30 @@ def _read_portal(path: Path | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _first_pending_event(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The first foldable pending event from a portal-state payload, or None."""
+    inbound = payload.get("inbound") if isinstance(payload.get("inbound"), dict) else {}
+    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
+    for ev in events:
+        if isinstance(ev, dict) and str(ev.get("body") or "").strip():
+            return ev
+    return None
+
+
+def _fold_in_message(event: dict[str, Any]) -> str:
+    """Frame a newly-arrived event as the user's own relayed words.
+
+    The 2026-06-26 spike found framing is load-bearing: a delta framed as a
+    coercive daemon interrupt is perceived but *refused* (correct injection
+    defense), while the same content relayed as the user's genuine words is
+    acted on. So the fold-in carries the event **body verbatim** under a
+    neutral, non-imperative relay header — not the operational summary.
+    """
+    source = str(event.get("source") or "user").strip() or "user"
+    body = str(event.get("body") or "").strip()
+    return f"(folded-in follow-up from the user via {source}:)\n\n{body}"
+
+
 @dataclass
 class StreamInjectionPolicy:
     """The inbound-delivery policy that rides the stream's seams.
@@ -337,12 +361,20 @@ class StreamInjectionPolicy:
     the hooks path reads and renders the same capsule via
     :func:`hooks.format_delta`:
 
-    - **At each tool boundary** — inject a ``change_token``-gated delta, so a
-      shift in pending events / budget / delivery is woven in as a user
-      message, and an unchanged state injects nothing.
-    - **At the terminal result** — if a foldable event is still pending, fold
-      it into a fresh turn once (stop-control, mirroring the hook ``Stop``
-      block); otherwise signal the driver to close the session.
+    - **At each tool boundary** — touch the daemon's ``.flush`` signal so the
+      heartbeat drains the outbox promptly (outbound replies reach the user at
+      the boundary, not at the next timer tick), then inject a
+      ``change_token``-gated operational delta — a shift in pending events /
+      budget / delivery is woven in as an informational user message, and an
+      unchanged state injects nothing.
+    - **At the terminal result** — touch ``.flush`` again, then, if a foldable
+      event is still pending, fold its **body verbatim** into a fresh turn once
+      (stop-control, mirroring the hook ``Stop`` block) so the resident
+      addresses it in the same thought; otherwise signal the driver to close.
+
+    The ``.flush`` touch reuses the existing daemon flush mechanism (the hooks
+    post-tool path touches the same file): the daemon stays the sole outbox
+    drainer, so the streaming driver never couples to daemon internals.
 
     Priming (:meth:`prime_from_portal`) seeds ``last_token`` from the portal
     as it stood at run start, because the prompt/bundle already carried that
@@ -350,15 +382,26 @@ class StreamInjectionPolicy:
     """
 
     portal_state_path: Path | None = None
+    flush_signal_path: Path | None = None
     last_token: Any = None
     folded_once: bool = False
 
     def prime_from_portal(self) -> None:
         self.last_token = _read_portal(self.portal_state_path).get("change_token")
 
+    def _touch_flush(self) -> None:
+        """Ask the daemon to drain the outbox now (best-effort)."""
+        if self.flush_signal_path is None:
+            return
+        try:
+            self.flush_signal_path.touch()
+        except OSError:
+            pass
+
     def on_boundary(self, boundary: StreamBoundary, inject: Injector) -> None:
         from . import hooks
 
+        self._touch_flush()
         payload = _read_portal(self.portal_state_path)
         token = payload.get("change_token")
         if token is None or token == self.last_token:
@@ -369,21 +412,14 @@ class StreamInjectionPolicy:
         self.last_token = token
 
     def on_result(self, outcome: StreamOutcome, inject: Injector) -> bool:
-        from . import hooks
-
+        self._touch_flush()
         payload = _read_portal(self.portal_state_path)
-        attention = (
-            payload.get("attention")
-            if isinstance(payload.get("attention"), dict) else {}
-        )
-        pending = int((attention or {}).get("pending_event_count", 0) or 0)
-        if pending > 0 and not self.folded_once:
-            delta = hooks.format_delta(payload, stop=True)
-            if delta:
-                inject(delta)
+        event = _first_pending_event(payload)
+        if event is not None and not self.folded_once:
+            inject(_fold_in_message(event))
             self.folded_once = True
             return True  # keep the session alive for the folded-in turn
-        return False  # nothing pending — driver closes stdin, run ends
+        return False  # nothing foldable — driver closes stdin, run ends
 
 
 # ── Live driver ──────────────────────────────────────────────────────────
@@ -435,8 +471,18 @@ def run_stream(
     # same handle the hooks path reads).
     policy: StreamInjectionPolicy | None = None
     if on_boundary is None and on_result is None:
-        portal_env = (invocation.env or {}).get("BRR_PORTAL_STATE")
-        policy = StreamInjectionPolicy(Path(portal_env) if portal_env else None)
+        from . import hooks
+
+        env = invocation.env or {}
+        portal_env = env.get("BRR_PORTAL_STATE")
+        outbox_env = env.get("BRR_OUTBOX_DIR")
+        flush_path = (
+            Path(outbox_env) / hooks.FLUSH_SIGNAL_NAME if outbox_env else None
+        )
+        policy = StreamInjectionPolicy(
+            Path(portal_env) if portal_env else None,
+            flush_signal_path=flush_path,
+        )
         on_boundary = policy.on_boundary
         on_result = policy.on_result
 

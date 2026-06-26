@@ -338,6 +338,56 @@ class TestInvocationTracing:
         assert result.missing_artifacts[0].path == missing
 
 
+class TestStreamRouting:
+    """invoke_runner delegates to the streaming driver for stream: profiles."""
+
+    def test_routes_to_run_stream_when_profile_opts_in(self, tmp_path, monkeypatch):
+        from brr import runner_stream
+
+        seen = {}
+        monkeypatch.setattr(
+            runner_stream, "stream_flavour", lambda name, root=None: "claude"
+        )
+        sentinel = RunnerResult(
+            invocation=None, runner_name="claude", command=["claude"],
+            stdout="streamed", stderr="", returncode=0,
+            trace_dir=None, artifacts=[],
+        )
+
+        def _fake_run_stream(name, inv, cfg=None, **kw):
+            seen["name"] = name
+            return sentinel
+
+        monkeypatch.setattr(runner_stream, "run_stream", _fake_run_stream)
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="e", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path,
+        )
+        result = invoke_runner("claude", invocation, cfg={})
+        assert result is sentinel
+        assert seen["name"] == "claude"
+
+    def test_runner_cmd_override_stays_on_blocking_path(self, tmp_path, monkeypatch):
+        from brr import runner_stream
+
+        # A pinned runner_cmd must not be rewritten for streaming even if the
+        # profile would opt in — the user chose an exact command.
+        monkeypatch.setattr(
+            runner_stream, "stream_flavour", lambda name, root=None: "claude"
+        )
+        monkeypatch.setattr(
+            runner_stream, "run_stream",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not stream")),
+        )
+        cfg = {"runner_cmd": [sys.executable, "-c", "print('plain')", "{prompt}"]}
+        invocation = RunnerInvocation(
+            kind="daemon-run", label="e", prompt="hi",
+            cwd=tmp_path, repo_root=tmp_path,
+        )
+        result = invoke_runner("claude", invocation, cfg=cfg)
+        assert result.stdout.strip() == "plain"
+
+
 class TestTimeoutConfig:
     def test_runner_timeout_defaults_to_one_hour(self):
         assert runner_timeout(None) == DEFAULT_RUNNER_TIMEOUT == 3600
