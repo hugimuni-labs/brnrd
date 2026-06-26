@@ -810,11 +810,12 @@ def _run_worker(
     hard_cap_seconds = max(budget_seconds * 4, budget_seconds + 3600)
     keepalive_path = outbox_dir / ".keepalive"
     card_path = outbox_dir / _CARD_CONTROL_NAME
-    # Runner hooks back-channel flush signal: the post-tool hook touches
-    # this dotfile to ask the daemon to drain now. Same host dir the runner
-    # writes BRR_OUTBOX_DIR into (bind-mounted for container envs), so the
-    # daemon reads the signal the hook wrote. The hook only signals; the
-    # daemon stays the sole drainer (see _drain_outbox / the design doc).
+    # Runner boundary back-channel flush signal: a stream driver or native
+    # hook touches this dotfile to ask the daemon to drain now. Same host dir
+    # the runner writes BRR_OUTBOX_DIR into (bind-mounted for container envs),
+    # so the daemon reads the signal the boundary mechanism wrote. The signal
+    # only asks; the daemon stays the sole drainer (see _drain_outbox / the
+    # design doc).
     flush_path = outbox_dir / hooks_mod.FLUSH_SIGNAL_NAME
     card_state: dict[str, str] = {}
     run_started_monotonic = time.monotonic()
@@ -998,10 +999,10 @@ def _run_worker(
             _emit_new_containers(emit, task.id, env_ctx, seen_containers)
 
         def _emit_flush() -> None:
-            # Event-driven drain fired by the post-tool hook's .flush signal
+            # Event-driven drain fired by the boundary back channel's .flush signal
             # (chunk 3 of the back channel): push the just-written outbox
             # file / card to the gate promptly, then refresh the live inbox
-            # + portal-state the next hook reads back for injection. Lighter
+            # + portal-state the next boundary reads back for injection. Lighter
             # than _emit_heartbeat — no heartbeat packet / presence ping, so
             # a tool-boundary flush doesn't spam the chat card.
             _drain_outbox(
@@ -1367,7 +1368,7 @@ def _invoke_with_heartbeat(
     start = time.monotonic()
     last_heartbeat = start
     # When a flush signal is in play, poll at the faster cadence so the
-    # post-tool hook's drain lands promptly; the heartbeat itself still
+    # boundary-triggered drain lands promptly; the heartbeat itself still
     # fires only every *interval*. With no flush_path the loop keeps its
     # original single-cadence shape.
     poll = min(interval, flush_interval) if flush_path is not None else interval
@@ -1376,7 +1377,7 @@ def _invoke_with_heartbeat(
         worker.join(timeout=poll)
         if not worker.is_alive():
             break
-        # Event-driven flush: the runner's post-tool hook touched the
+        # Event-driven flush: the runner boundary mechanism touched the
         # signal file; consume it and drain now instead of at the next tick.
         if flush_path is not None and flush_path.exists():
             try:
@@ -1606,7 +1607,7 @@ def _scm_facet(
     """Local SCM posture for the run worktree: unpushed + modified counts.
 
     Cheap, local, failure-safe (the underlying helpers yield 0 on any git
-    error). Surfaced by the hooks back channel at the closeout boundary so a
+    error). Surfaced by the boundary back channel at the closeout boundary so a
     wake that forgot to commit/push sees "N commit(s) not pushed, M modified
     file(s)" before it ends — the lived gap that motivated this (a wake closed
     out leaving its branch unpushed). ``known`` is False when there is no
