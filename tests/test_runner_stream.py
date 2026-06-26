@@ -1,0 +1,306 @@
+"""Tests for the streaming runner client (step 1).
+
+The fixture mirrors Claude Code's ``--output-format stream-json`` schema as
+exercised by the verified spike (2026-06-26): an ``init`` system event, an
+assistant message that carries one or more ``tool_use`` blocks, a ``user``
+event carrying the matching ``tool_result``, and a terminal ``result`` event.
+Step 3 (the live dogfood) validates the parser against the real CLI; these
+tests pin the parsing/boundary contract the rest of the build rests on.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from brr import runner, runner_stream
+
+
+def _line(obj: dict) -> str:
+    return json.dumps(obj)
+
+
+def _assistant_tool_use(tool_id: str, name: str, text: str = "") -> str:
+    content: list[dict] = []
+    if text:
+        content.append({"type": "text", "text": text})
+    content.append({"type": "tool_use", "id": tool_id, "name": name, "input": {}})
+    return _line({"type": "assistant", "message": {"role": "assistant", "content": content}})
+
+
+def _user_tool_result(tool_id: str, output: str = "ok") -> str:
+    return _line(
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": tool_id, "content": output}
+                ],
+            },
+        }
+    )
+
+
+def _result(text: str, is_error: bool = False) -> str:
+    return _line(
+        {"type": "result", "subtype": "success", "is_error": is_error, "result": text}
+    )
+
+
+# A representative two-tool session.
+SESSION = [
+    _line({"type": "system", "subtype": "init", "model": "claude-opus-4-8"}),
+    _assistant_tool_use("toolu_1", "Bash", text="running step one"),
+    _user_tool_result("toolu_1", "step-one"),
+    _assistant_tool_use("toolu_2", "Read"),
+    _user_tool_result("toolu_2", "file contents"),
+    _line({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": "All done."}]}}),
+    _result("Final summary: ran two tools."),
+]
+
+
+# ── parse_event ──────────────────────────────────────────────────────────
+
+
+def test_parse_event_valid():
+    ev = runner_stream.parse_event(_result("hi"))
+    assert ev is not None
+    assert ev.type == "result"
+    assert ev.result_text == "hi"
+
+
+def test_parse_event_skips_noise():
+    assert runner_stream.parse_event("") is None
+    assert runner_stream.parse_event("   ") is None
+    assert runner_stream.parse_event("not json at all") is None
+    assert runner_stream.parse_event("[1, 2, 3]") is None  # not an object
+    assert runner_stream.parse_event(_line({"no": "type"})) is None
+    assert runner_stream.parse_event(_line({"type": 5})) is None  # non-string type
+
+
+def test_iter_events_drops_unparseable_lines():
+    lines = ["", "garbage", _result("x"), "{bad json"]
+    events = list(runner_stream.iter_events(lines))
+    assert [e.type for e in events] == ["result"]
+
+
+# ── StreamEvent accessors ────────────────────────────────────────────────
+
+
+def test_tool_use_and_result_accessors():
+    asst = runner_stream.parse_event(_assistant_tool_use("toolu_9", "Grep"))
+    assert [b["name"] for b in asst.tool_uses] == ["Grep"]
+    assert asst.tool_results == []  # assistant carries no tool_result
+
+    usr = runner_stream.parse_event(_user_tool_result("toolu_9"))
+    assert [b["tool_use_id"] for b in usr.tool_results] == ["toolu_9"]
+    assert usr.tool_uses == []
+
+
+def test_accessors_tolerate_missing_fields():
+    ev = runner_stream.parse_event(_line({"type": "assistant"}))
+    assert ev.tool_uses == []
+    ev2 = runner_stream.parse_event(_line({"type": "assistant", "message": "oops"}))
+    assert ev2.tool_uses == []
+
+
+# ── consume_stream ───────────────────────────────────────────────────────
+
+
+def test_consume_stream_full_session():
+    boundaries: list[runner_stream.StreamBoundary] = []
+    outcome = runner_stream.consume_stream(SESSION, on_boundary=boundaries.append)
+
+    assert outcome.saw_result is True
+    assert outcome.result_text == "Final summary: ran two tools."
+    assert outcome.is_error is False
+    assert outcome.boundary_count == 2
+    assert outcome.tool_use_count == 2
+
+    assert [b.index for b in boundaries] == [1, 2]
+    assert boundaries[0].tool_names == ["Bash"]
+    assert boundaries[0].tool_use_ids == ["toolu_1"]
+    assert boundaries[1].tool_names == ["Read"]
+
+
+def test_consume_stream_no_callback_still_counts():
+    outcome = runner_stream.consume_stream(SESSION)
+    assert outcome.boundary_count == 2
+
+
+def test_consume_stream_is_error_propagates():
+    lines = [_result("partial", is_error=True)]
+    outcome = runner_stream.consume_stream(lines)
+    assert outcome.is_error is True
+    assert outcome.result_text == "partial"
+
+
+def test_consume_stream_tolerates_orphan_tool_result():
+    # A tool_result with no preceding tool_use is still a real boundary,
+    # just with an unknown name (replayed / truncated streams).
+    boundaries: list[runner_stream.StreamBoundary] = []
+    lines = [_user_tool_result("toolu_unseen"), _result("done")]
+    outcome = runner_stream.consume_stream(lines, on_boundary=boundaries.append)
+    assert outcome.boundary_count == 1
+    assert boundaries[0].tool_names == [""]
+
+
+def test_consume_stream_ignores_interleaved_garbage():
+    lines = ["", "junk", *SESSION, "{broken"]
+    outcome = runner_stream.consume_stream(lines)
+    assert outcome.boundary_count == 2
+    assert outcome.result_text == "Final summary: ran two tools."
+
+
+def test_consume_stream_no_result_event():
+    # A truncated stream (killed mid-run) yields no result text but doesn't crash.
+    outcome = runner_stream.consume_stream(SESSION[:3])
+    assert outcome.saw_result is False
+    assert outcome.result_text is None
+    assert outcome.boundary_count == 1
+
+
+# ── build_stream_cmd ─────────────────────────────────────────────────────
+
+
+def test_build_stream_cmd_from_bundled_claude_profile():
+    cmd = runner_stream.build_stream_cmd("claude", {})
+    assert cmd[0] == "claude"
+    assert "--input-format" in cmd and "stream-json" in cmd
+    assert "--output-format" in cmd
+    assert "--verbose" in cmd
+    # The prompt is NOT appended as an argv token in streaming mode.
+    assert cmd[-1] != "{prompt}"
+
+
+def test_build_stream_cmd_does_not_duplicate_existing_flags():
+    cmd = runner_stream.build_stream_cmd(
+        "x", {"runner_cmd": "claude --print --input-format stream-json"}
+    )
+    assert cmd.count("--input-format") == 1
+    # Missing flags are still added.
+    assert "--output-format" in cmd
+    assert "--verbose" in cmd
+
+
+def test_build_stream_cmd_drops_prompt_placeholder():
+    cmd = runner_stream.build_stream_cmd("x", {"runner_cmd": ["mytool", "{prompt}"]})
+    assert "{prompt}" not in cmd
+    assert cmd[0] == "mytool"
+
+
+# ── stream_flavour ───────────────────────────────────────────────────────
+
+
+def test_stream_flavour_absent_on_bundled_profiles():
+    # No bundled profile declares stream: yet (step 3 wires claude onto it).
+    assert runner_stream.stream_flavour("claude") is None
+
+
+def test_stream_flavour_reads_field(monkeypatch):
+    monkeypatch.setattr(
+        runner, "_load_profiles", lambda repo_root=None: {"claude": {"stream": "Claude"}}
+    )
+    assert runner_stream.stream_flavour("claude") == "claude"
+    assert runner_stream.stream_flavour("missing") is None
+
+
+# ── user_message_json ────────────────────────────────────────────────────
+
+
+def test_user_message_json_framing():
+    raw = runner_stream.user_message_json("hello there")
+    assert raw.endswith("\n")
+    obj = json.loads(raw)
+    assert obj["type"] == "user"
+    assert obj["message"]["role"] == "user"
+    assert obj["message"]["content"][0]["text"] == "hello there"
+
+
+# ── run_stream live driver (fake subprocess) ─────────────────────────────
+
+
+class _FakeStdin:
+    def __init__(self) -> None:
+        self.written: list[str] = []
+        self.closed = False
+
+    def write(self, text: str) -> None:
+        self.written.append(text)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakePopen:
+    def __init__(self, stdout_lines: list[str], stderr_lines: list[str] | None = None):
+        self.stdin = _FakeStdin()
+        self.stdout = iter(stdout_lines)
+        self.stderr = iter(stderr_lines or [])
+        self.returncode = 0
+        self._waited = False
+
+    def wait(self, timeout=None):
+        self._waited = True
+        return self.returncode
+
+
+def _make_invocation(tmp_path: Path, response_path: Path | None = None):
+    return runner.RunnerInvocation(
+        kind="run",
+        label="t",
+        prompt="do the thing",
+        cwd=tmp_path,
+        repo_root=tmp_path,
+        response_path=str(response_path) if response_path else None,
+    )
+
+
+def test_run_stream_captures_result_and_writes_response(tmp_path, monkeypatch):
+    response_path = tmp_path / "resp.md"
+    fake = _FakePopen([line + "\n" for line in SESSION], ["progress\n"])
+    monkeypatch.setattr(runner_stream.subprocess, "Popen", lambda *a, **k: fake)
+
+    boundaries: list[runner_stream.StreamBoundary] = []
+    result = runner_stream.run_stream(
+        "claude",
+        _make_invocation(tmp_path, response_path),
+        {},
+        on_boundary=boundaries.append,
+    )
+
+    assert result.stdout == "Final summary: ran two tools."
+    assert result.returncode == 0
+    assert result.ok
+    assert response_path.read_text() == "Final summary: ran two tools."
+    # Prompt was sent as the first stdin user message; stdin was closed.
+    assert json.loads(fake.stdin.written[0])["message"]["content"][0]["text"] == "do the thing"
+    assert fake.stdin.closed is True
+    assert len(boundaries) == 2
+    assert result.stderr == "progress\n"
+    # Active-proc handle is cleared after the run (kill_active stays safe).
+    assert runner._active_proc is None
+
+
+def test_run_stream_missing_binary(tmp_path, monkeypatch):
+    def _boom(*a, **k):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(runner_stream.subprocess, "Popen", _boom)
+    result = runner_stream.run_stream("claude", _make_invocation(tmp_path), {})
+    assert result.returncode == 127
+    assert "not found on PATH" in result.stderr
+
+
+def test_run_stream_error_result_marks_failure(tmp_path, monkeypatch):
+    lines = [_result("oops", is_error=True) + "\n"]
+    fake = _FakePopen(lines)
+    monkeypatch.setattr(runner_stream.subprocess, "Popen", lambda *a, **k: fake)
+    result = runner_stream.run_stream("claude", _make_invocation(tmp_path), {})
+    assert result.returncode == 1
+    assert not result.ok
