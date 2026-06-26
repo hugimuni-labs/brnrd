@@ -105,6 +105,103 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
+def test_run_worker_does_not_infer_native_hooks_from_runner_name(
+    tmp_path, monkeypatch
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-no-hooks")
+    _stub_env_isolated(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "claude")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.runner,
+        "profile_hooks_flavour",
+        lambda _runner_name, _repo_root=None: None,
+    )
+    monkeypatch.setattr(
+        daemon.hooks_mod,
+        "hook_capability",
+        lambda *_args, **_kwargs: pytest.fail(
+            "hook capability should only be checked for declared hooks"
+        ),
+    )
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *args, **kwargs: "PROMPT"
+    )
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+
+
+def test_run_worker_installs_native_hooks_only_when_profile_declares_them(
+    tmp_path, monkeypatch
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-declared-hooks")
+    _stub_env_isolated(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "custom")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.runner,
+        "profile_hooks_flavour",
+        lambda _runner_name, _repo_root=None: "claude",
+    )
+    checked: list[str] = []
+    installed: list[str] = []
+
+    def fake_capability(flavour, _cwd):
+        checked.append(flavour)
+        return True
+
+    def fake_install(flavour, cwd):
+        installed.append(flavour)
+        return cwd / ".claude" / "settings.local.json"
+
+    monkeypatch.setattr(daemon.hooks_mod, "hook_capability", fake_capability)
+    monkeypatch.setattr(daemon.hooks_mod, "install_hook_config", fake_install)
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *args, **kwargs: "PROMPT"
+    )
+    base_env = envs.get_env("worktree")
+    seen_env: dict[str, str] = {}
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        seen_env.update(invocation.env)
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="ok\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    assert checked == ["claude"]
+    assert installed == ["claude"]
+    assert seen_env["BRR_RUNNER"] == "claude"
+
+
 def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-quota")
