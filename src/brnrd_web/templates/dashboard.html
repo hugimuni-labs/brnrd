@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="dashboard-shell">
+  <h1>brnrd dashboard</h1>
+  <p class="lede">Install the GitHub App, bind repositories, then call brnrd from issues or pull requests.</p>
+
+  {% if logged_in %}
+    {% if notice %}<div class="notice-banner">{{ notice }}</div>{% endif %}
+    <section class="status-grid">
+      <article class="status-card status-ok"><strong>Signed in</strong><small>@{{ account.github_login }}</small></article>
+      <article class="status-card"><strong>App</strong><small>{{ github_app_slug }}</small></article>
+      <article class="status-card"><strong>Repos</strong><small>{{ bindings|length }} bound</small></article>
+      <article class="status-card"><strong>Call sign</strong><small>@{{ github_bot_login }}</small></article>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel dashboard-panel">
+        <p class="eyebrow">Install</p>
+        <h2>Give brnrd repo access</h2>
+        <p class="panel-copy">Install {{ github_app_slug }} for the repos brnrd should handle.</p>
+        <a class="button button-primary" href="{{ install_url }}">Install or update GitHub App</a>
+      </article>
+
+      <article class="panel dashboard-panel">
+        <p class="eyebrow">Call sign</p>
+        <h2>Use @{{ github_bot_login }}</h2>
+        <p class="panel-copy">The GitHub App slug and the mentionable bot account are separate.</p>
+        <div class="copy-box"><code>@{{ github_bot_login }} summarize this thread</code></div>
+      </article>
+    </section>
+
+    <section class="panel dashboard-panel full-width">
+      <div class="section-heading">
+        <div><p class="eyebrow">Repositories</p><h2>Repository bindings</h2></div>
+        <span class="pill">{{ bindings|length }} bound</span>
+      </div>
+      {% if bindings %}
+        <div class="binding-list">
+          {% for binding in bindings %}
+            <div class="binding-row">
+              <div><strong>{{ binding.repo_full_name }}</strong><small>installation {{ binding.installation_id }}</small></div>
+              <span>{{ project_names.get(binding.project_id, binding.project_id) }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="panel-copy">No repositories are bound yet.</p>
+      {% endif %}
+
+      <form class="stack-form binding-form" method="post" action="/bindings/repo">
+        <label for="repo_full_name">Repository</label>
+        <input id="repo_full_name" name="repo_full_name" placeholder="Gurio/brr">
+        <label for="installation_id">Installation id</label>
+        <input id="installation_id" name="installation_id" value="{{ setup_installation_id }}">
+        <label for="project_id">Project</label>
+        <select id="project_id" name="project_id">
+          {% for project in projects %}<option value="{{ project.id }}">{{ project.name }}</option>{% endfor %}
+        </select>
+        <button class="button button-primary" type="submit">Bind repository</button>
+      </form>
+    </section>
+  {% else %}
+    <section class="panel dashboard-panel">
+      <h2>Connect GitHub</h2>
+      <p class="panel-copy">Sign in before managing repositories.</p>
+      <a class="button button-primary" href="{{ signin_url }}">Continue</a>
+    </section>
+  {% endif %}
+</main>
+{% endblock %}
