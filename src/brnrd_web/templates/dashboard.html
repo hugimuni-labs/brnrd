@@ -46,6 +46,18 @@
       {% else %}
         <p class="panel-copy">No repositories are bound yet.</p>
       {% endif %}
+
+      <form class="stack-form binding-form" method="post" action="/bindings/repo">
+        <label for="repo_full_name">Repository</label>
+        <input id="repo_full_name" name="repo_full_name" placeholder="Gurio/brr">
+        <label for="installation_id">Installation id</label>
+        <input id="installation_id" name="installation_id" value="{{ setup_installation_id }}">
+        <label for="project_id">Project</label>
+        <select id="project_id" name="project_id">
+          {% for project in projects %}<option value="{{ project.id }}">{{ project.name }}</option>{% endfor %}
+        </select>
+        <button class="button button-primary" type="submit">Bind repository</button>
+      </form>
     </section>
   {% else %}
     <section class="panel dashboard-panel">
