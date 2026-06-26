@@ -115,14 +115,50 @@ def _project_rows(db: Session, account_id: str) -> list[Project]:
     )
 
 
-def _repo_binding_rows(db: Session, account_id: str) -> list[RepoBinding]:
-    return list(
-        db.execute(
-            select(RepoBinding)
-            .where(RepoBinding.account_id == account_id)
-            .order_by(RepoBinding.created_at)
-        ).scalars()
-    )
+def _repo_owner(repo_full_name: str) -> str:
+    owner, _, _name = repo_full_name.strip().partition("/")
+    return owner
+
+
+def _repo_owner_matches(account: Account, repo_full_name: str) -> bool:
+    return _repo_owner(repo_full_name).casefold() == account.github_login.casefold()
+
+
+def _visible_repo_binding_rows(db: Session, account: Account) -> list[dict]:
+    """Return bindings this account owns or can plausibly recover.
+
+    During the prototype, some production bindings were created before the
+    GitHub-OAuth account row existed, so their ``account_id`` may point at an
+    older local/API account. If the repo owner matches the logged-in GitHub
+    login, show it as recoverable instead of hiding a working cloud gate.
+    """
+    rows = list(db.execute(select(RepoBinding).order_by(RepoBinding.created_at)).scalars())
+    out: list[dict] = []
+    for binding in rows:
+        is_connected = binding.account_id == account.id
+        is_recoverable = not is_connected and _repo_owner_matches(account, binding.repo_full_name)
+        if not is_connected and not is_recoverable:
+            continue
+        project = db.get(Project, binding.project_id)
+        out.append(
+            {
+                "binding": binding,
+                "status": "connected" if is_connected else "recoverable",
+                "project_name": project.name if project else binding.project_id,
+                "project_exists": project is not None,
+            }
+        )
+    return out
+
+
+def _notice_text(value: str | None) -> str | None:
+    notices = {
+        "repo-bound": "Repository binding saved.",
+        "repo-claimed": "Existing repository binding claimed for this account.",
+    }
+    if not value:
+        return None
+    return notices.get(value, value)
 
 
 def _dashboard_context(
@@ -136,23 +172,25 @@ def _dashboard_context(
 ) -> dict:
     settings = request.app.state.settings
     projects = _project_rows(db, account.id)
-    project_names = {project.id: project.name for project in projects}
-    bindings = _repo_binding_rows(db, account.id)
+    binding_views = _visible_repo_binding_rows(db, account)
+    connected_count = sum(1 for row in binding_views if row["status"] == "connected")
+    recoverable_count = sum(1 for row in binding_views if row["status"] == "recoverable")
     return {
         "body_class": "dashboard-page",
         "title": "brnrd dashboard",
         "logged_in": True,
         "account": account,
         "projects": projects,
-        "bindings": bindings,
-        "project_names": project_names,
+        "binding_views": binding_views,
+        "connected_count": connected_count,
+        "recoverable_count": recoverable_count,
         "install_url": settings.github_install_url,
         "github_app_slug": settings.github_app_slug,
         "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
         "github_trigger_aliases": settings.github_trigger_aliases,
         "setup_installation_id": installation_id or "",
         "setup_action": setup_action,
-        "notice": notice,
+        "notice": _notice_text(notice),
     }
 
 
@@ -161,6 +199,7 @@ def dashboard(
     request: Request,
     installation_id: str | None = None,
     setup_action: str | None = None,
+    notice: str | None = None,
     db: Session = Depends(get_db),
 ):
     account_id = _account_id(request, db)
@@ -191,6 +230,7 @@ def dashboard(
             account,
             installation_id=installation_id,
             setup_action=setup_action,
+            notice=notice,
         ),
     )
 
@@ -248,18 +288,20 @@ def bind_repo_submit(
         select(RepoBinding).where(RepoBinding.repo_full_name == repo)
     ).scalar_one_or_none()
     if existing is not None and existing.account_id != account.id:
-        return _render(
-            request,
-            "dashboard.html",
-            _dashboard_context(
+        if not _repo_owner_matches(account, existing.repo_full_name):
+            return _render(
                 request,
-                db,
-                account,
-                installation_id=install,
-                notice=f"{repo} is already bound to another brnrd account.",
-            ),
-            status_code=409,
-        )
+                "dashboard.html",
+                _dashboard_context(
+                    request,
+                    db,
+                    account,
+                    installation_id=install,
+                    notice=f"{repo} is already bound to another brnrd account.",
+                ),
+                status_code=409,
+            )
+        existing.account_id = account.id
     if existing is None:
         existing = RepoBinding(
             id=ids.repo_binding_id(),
@@ -275,6 +317,56 @@ def bind_repo_submit(
     db.commit()
 
     return RedirectResponse(url="/?notice=repo-bound", status_code=303)
+
+
+@router.post("/bindings/repo/{binding_id}/claim", response_class=HTMLResponse)
+def claim_repo_binding(
+    binding_id: str,
+    request: Request,
+    project_id: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+
+    binding = db.get(RepoBinding, binding_id)
+    if binding is None or not _repo_owner_matches(account, binding.repo_full_name):
+        return _render(
+            request,
+            "dashboard.html",
+            _dashboard_context(
+                request,
+                db,
+                account,
+                notice="That repository binding cannot be claimed by this GitHub account.",
+            ),
+            status_code=404,
+        )
+
+    project = db.execute(
+        select(Project).where(Project.id == project_id, Project.account_id == account.id)
+    ).scalar_one_or_none()
+    if project is None:
+        return _render(
+            request,
+            "dashboard.html",
+            _dashboard_context(
+                request,
+                db,
+                account,
+                notice="Select one of your brnrd projects before claiming the repo.",
+            ),
+            status_code=404,
+        )
+
+    binding.account_id = account.id
+    binding.project_id = project.id
+    db.commit()
+    return RedirectResponse(url="/?notice=repo-claimed", status_code=303)
 
 
 @router.get("/login", response_class=HTMLResponse)
