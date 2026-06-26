@@ -1,11 +1,12 @@
-# Plan: the streaming runner — claude Tier-2 boundary injection
+# Plan: the streaming runner — Claude and Codex boundary injection
 
 Status: in flight 2026-06-26 (evt vtyq; reviewed + live-driven evt 8f8y; step 2
-shipped evt wcxs; **step 3 shipped + claude default-on** evt wlap) — steps 1–3
-done in `src/brr/runner_stream.py`; only step 4 (retire the pull-reliance fallback)
+shipped evt wcxs; **step 3 shipped + claude default-on** evt wlap; **Codex
+JSONL stream shipped** evt 47ew) — steps 1–3 are done in
+`src/brr/runner_stream.py`; only step 4 (retire the pull-reliance fallback)
 remains. **Step 1** = the stream-json client, re-verified against the live claude
 v2.1.191 CLI. **Step 2** = the persistent (no-`--print`) driver with boundary
-injection: `build_stream_cmd` strips `--print`/`-p` (`_DROP_FLAGS`);
+injection: `build_stream_cmd` strips `--print`/`-p` (`_DROP_FLAGS_BY_FLAVOUR`);
 `consume_stream` grew an `on_result` stop-control seam; `run_stream` binds a stdin
 `Injector` to the boundary/result callbacks and, when none are wired, builds a
 default `StreamInjectionPolicy` from the run env's `BRR_PORTAL_STATE`. **Step 3** =
@@ -23,6 +24,17 @@ env (own invoke) stays blocking. This is the concrete build behind
 [`design-runner-back-channel.md`](design-runner-back-channel.md)
 §Streaming-driven injection. Parent: [#159](https://github.com/Gurio/brr/issues/159),
 [#171](https://github.com/Gurio/brr/issues/171).
+
+**Codex extension (evt 47ew).** `codex exec --json` is now routed through the
+same module with `stream: codex`. Its CLI stream is single-turn, not a persistent
+stdin loop: live probes on codex-cli 0.141.0 showed `item.completed`
+`command_execution` events as tool boundaries, `item.completed` `agent_message`
+as final text, `turn.completed` as the terminal seam, and `thread.started` as
+the resumable id. The driver therefore flushes outbound work at completed
+command items and, when a pending follow-up is still live at terminal turn,
+launches one `codex exec resume --json <thread_id> <verbatim follow-up>` turn.
+That gives Codex the same user-visible closeout fold-in without advertising a
+native hook path we have not made fire.
 
 ## Why this build (the responsiveness gap it closes)
 
@@ -114,31 +126,32 @@ model (outbound flush only); the persistent-session path is the Tier-2 ceiling.
 
 ## Architecture — a parallel runner path, not a rewrite of the old one
 
-Keep `invoke_runner` (the blocking `--print` Popen) as the Tier-0/1 path for
-codex / gemini / `runner_cmd` / `--bare` and as claude's fallback. **Add** a
-streaming driver alongside it; route to it only for a profile that opts in.
+Keep `invoke_runner` (the blocking Popen) as the Tier-0/1 path for gemini /
+`runner_cmd` / `--bare` and as the fallback for stream-capable runners. Route to
+the streaming driver only for a profile that opts in.
 
-- **Opt-in flag.** A profile field, e.g. `stream: claude`, names the streaming
-  dialect (today only `claude`). Absent → today's path, unchanged. This keeps the
+- **Opt-in flag.** A profile field, e.g. `stream: claude` or `stream: codex`,
+  names the streaming dialect. Absent → today's path, unchanged. This keeps the
   most load-bearing surface (every run) safe and the new path behind a switch.
 - **`StreamingRunner`** (new module, e.g. `runner_stream.py`):
-  - Popen with the stream-json flags; stdin kept open; `_active_proc` registered
-    so `kill_active()` (budget/shutdown) still works unchanged.
-  - A reader loop parses events: `system/init`, `assistant` (may carry
-    `tool_use`), `user` (carries `tool_result`), `result` (terminal). Detect a
-    **tool boundary** = an assistant `tool_use` followed by its `tool_result`.
-  - At each boundary, **in-process** (the driver runs in the daemon's TaskRunner
-    thread — no separate `brr hook` subprocess): (a) drain the outbox via the
-    existing daemon drain path (the threading-lock concurrency worry from the
-    hook design dissolves — same process, same locks); (b) if `change_token`
-    moved, render the delta via `hooks.format_delta` and write it as a user
-    message on stdin. `change_token`-gate it so unchanged state injects nothing.
+  - Claude: Popen with the stream-json flags; stdin kept open; `_active_proc`
+    registered so `kill_active()` (budget/shutdown) still works unchanged.
+  - Codex: Popen with `--json`; stdin is closed, the prompt rides argv, and a
+    terminal fold-in resumes the emitted `thread_id` once.
+  - A reader loop parses both schemas: Claude `assistant`/`user`/`result` and
+    Codex `item.started`/`item.completed`/`turn.completed`. Detect a **tool
+    boundary** as Claude tool result completion or Codex command item completion.
+  - At each Claude boundary, if `change_token` moved, render the delta via
+    `hooks.format_delta` and write it as a user message on stdin. At each Codex
+    command boundary, touch the shared `.flush` signal; there is no live stdin
+    channel, so inbound user follow-ups are handled at terminal resume.
   - Pending user follow-ups (foldable events) get relayed **as the user's own
     words**; operational meta stays informational.
-  - Terminal `result` → capture as the response (same `response_path` contract as
+  - Terminal result (`result` for Claude, `turn.completed` after Codex
+    `agent_message`) → capture as the response (same `response_path` contract as
     Tier 1).
 - **Reuse, don't fork:** `hooks.format_delta` / the capsule renderer is
-  mechanism-neutral; the streaming path and the (codex/gemini) hook path render
+  mechanism-neutral; the streaming path and the gemini hook path render
   the same capsule. Don't duplicate the rendering.
 
 ## Sequencing (each step shippable, firing-tested before the next)
@@ -164,12 +177,18 @@ streaming driver alongside it; route to it only for a profile that opts in.
    verbatim relay wants the event body the daemon holds). Framing rules from the
    spike still apply (relayed follow-ups as the user's words; operational deltas
    informational).
-3. **Flag claude onto it + daemon wiring** — `stream: claude` in the profile; route
+3. **Flag claude onto it + daemon wiring** — ✅ **shipped**. `stream: claude` in the profile; route
    `_invoke_with_heartbeat` to `run_stream` when `stream_flavour` is set (keeping the
    heartbeat/budget/`kill_active` contract); run a real daemon wake through it; confirm
    a mid-thought follow-up is perceived without a poll. Fold in the step-2 deferrals
    here: in-process outbox drain at the boundary, and relaying a folded event's body
    verbatim (the daemon holds the event body) rather than only the portal summary.
+3b. **Flag codex onto JSONL streaming** — ✅ **shipped**. `stream: codex` in the
+   profile; `build_stream_cmd` adds `--json`; `consume_stream` understands
+   Codex `thread.started`, command `item.*`, `agent_message`, and
+   `turn.completed`; `run_stream` flushes on command completion and resumes the
+   thread once for a pending follow-up. Live probes validated the schema and a
+   real `codex exec --json` run.
 4. **Retire the claude pull-reliance** — once stable, the heartbeat poll becomes
    claude's *fallback*, not its primary inbound channel. Revisit `.keepalive` and
    the tail-injection capsule (both were blocked on "claude has no push channel"

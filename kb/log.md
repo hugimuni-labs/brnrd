@@ -8034,3 +8034,30 @@ live work-status info, plus a reconciliation on "drop --print from the other run
 
 Full suite 1047 green. Plan page → step 3 shipped (only step-4 fallback-retirement remains);
 `design-runner-back-channel.md` and `runners.md` reconciled to "built and default-on".
+
+## [2026-06-26] implement | Codex JSONL streaming runner default-on
+
+Implemented the Codex sibling of the streaming runner after Claude quota forced the
+dogfood path onto Codex (evt 47ew). The important reconciliation: Codex should not
+stay described as native-hook intent. Live `codex exec --json` probes on codex-cli
+0.141.0 showed the real stream shape: `thread.started` carries the resumable id,
+`item.completed`/`command_execution` is the command boundary, `item.completed`/
+`agent_message` is the final text, and `turn.completed` is the terminal seam.
+
+What shipped: the bundled `codex` profile now declares `stream: codex`; `runner_stream`
+adds Codex JSONL parsing, final-text capture, command-boundary flush, and a Codex
+driver that appends `--json`, runs `codex exec` with the prompt on argv, and when the
+default policy sees a pending follow-up at terminal turn, launches one
+`codex exec resume --json <thread_id> <verbatim follow-up>` turn. Direct
+`run_stream("codex")` also infers the Codex dialect from the runner name so a stale
+project-owned runner override does not accidentally put Codex on Claude's stdin loop.
+Codex structured `error` / `turn.failed` messages are now surfaced in `stderr` so an
+unsupported model or API failure is visible through `RunnerResult.error_detail`.
+
+Docs/kb reconciled the concept/mechanism split: Claude = persistent stream-json,
+Codex = JSONL stream + resume, Gemini = future hook-backed runner after a firing test.
+Validation: raw live Codex JSONL probes passed (plain reply + shell command boundary);
+after the operator nudged the live smoke onto a cheaper model, a real
+`runner_stream.run_stream("codex")` smoke passed on `gpt-5.4-mini` in a temp dir
+(return 0, final stdout captured, response file written, one command boundary
+detected). Focused tests 96 green; full suite 1056 green.

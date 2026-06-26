@@ -16,7 +16,7 @@ claude-bare-api-only-fable:
   cmd: 'claude --model "claude-fable-5" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
 codex:
   cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
-  hooks: codex
+  stream: codex
 gemini:
   cmd: gemini -p --yolo
   hooks: gemini
@@ -57,9 +57,13 @@ with the concept:
     --output-format stream-json`) and injects the delta as a message itself. No
     `hooks:` field; opts in with `stream: claude`. (Built and default-on —
     `src/brr/runner_stream.py`, `kb/plan-streaming-runner-injection.md`.)
-  - **codex / gemini** — their native lifecycle hooks: the runner invokes a
-    brr callback (`brr hook <phase>`) consuming a JSON result. A profile opts in
-    with a `hooks: <flavour>` field; brr renders the native config and a runtime
+  - **codex** — brr reads `codex exec --json` JSONL. The CLI is single-turn,
+    so command-completion boundaries flush outbound work and a terminal pending
+    user follow-up resumes the recorded `thread_id` once with the folded-in
+    body. No `hooks:` field; opts in with `stream: codex`.
+  - **gemini** — native lifecycle hooks: the runner invokes a brr callback
+    (`brr hook <phase>`) consuming a JSON result. A profile opts in with a
+    `hooks: <flavour>` field; brr renders the native config and a runtime
     precheck gates activation. The field is *intent*; firing is unverified until
     a live test (the precheck asserts prerequisites, not firing).
 
@@ -81,11 +85,14 @@ collateral damage of `--safe-mode`, which sets `CLAUDE_CODE_SAFE_MODE=1` and
 disables CLAUDE.md, skills, plugins, and MCP. The `--bare` alias profiles
 declare neither `hooks:` nor `stream:`.
 
-`codex` and `gemini` keep their `hooks:` declarations as *intent*: brr can
-render their native hook config and the runtime capability precheck still
-gates activation. Whether their hooks fire end-to-end under brr's headless
-invocation is unverified — treat Tier 2 as confirmed only after a live
-firing test on each runner, not assumed from the declaration.
+`codex` uses the verified JSONL streaming surface (`stream: codex`) rather
+than a native hook declaration. Live probes on codex-cli 0.141.0 showed
+`item.completed` command events for boundaries, `item.completed`
+`agent_message` for final text, `turn.completed` for the terminal seam, and
+`thread.started` for the resumable session id. `gemini` keeps its `hooks:`
+declaration as *intent*: brr can render native hook config once supported and
+the runtime capability precheck will gate activation. Treat Gemini Tier 2 as
+confirmed only after a live firing test, not assumed from the declaration.
 
 These bundled profiles are defaults, not the user's source of truth. To
 manage runner profiles for a project, create `.brr/runners.md` with the
