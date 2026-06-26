@@ -472,6 +472,21 @@ def invoke_runner(
     """
     global _active_proc
     cfg = cfg or {}
+
+    # Tier-2 streaming opt-in: a profile that declares ``stream: <flavour>``
+    # runs the persistent stream-json driver (brr drives the loop and weaves
+    # portal deltas / folded-in events back in at tool boundaries) instead of
+    # the blocking ``--print`` Popen below. Gated to the profile path — a
+    # ``runner_cmd`` override means the user pinned an exact command, so honour
+    # it on the plain path rather than rewriting it for streaming. The driver
+    # registers ``_active_proc`` under ``_proc_lock`` itself, so the daemon's
+    # budget/shutdown ``kill_active`` still works unchanged.
+    if not cfg.get("runner_cmd"):
+        from . import runner_stream
+
+        if runner_stream.stream_flavour(runner_name, invocation.repo_root):
+            return runner_stream.run_stream(runner_name, invocation, cfg)
+
     cmd = _build_cmd(runner_name, invocation.prompt, cfg, invocation.repo_root)
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
     proc_env = None
