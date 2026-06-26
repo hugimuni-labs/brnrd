@@ -323,6 +323,10 @@ def _format_portal_state(payload: dict) -> str:
     )
     budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
     card = payload.get("card") if isinstance(payload.get("card"), dict) else {}
+    resources = (
+        payload.get("resources")
+        if isinstance(payload.get("resources"), dict) else {}
+    )
     lines = [
         "[brr portal state] "
         f"run={run.get('id') or '-'} "
@@ -342,6 +346,19 @@ def _format_portal_state(payload: dict) -> str:
         f"limit={_fmt_duration(budget.get('budget_seconds'))} "
         f"keepalive={(budget.get('keepalive') or {}).get('status', '-')}",
     ]
+    if resources:
+        def _facet(key: str) -> str:
+            f = resources.get(key) if isinstance(resources.get(key), dict) else {}
+            if f.get("status") == "known":
+                return str(f.get("summary") or "known").strip() or "known"
+            return "unavailable"
+        lines.append(
+            "resources: "
+            f"quota={_facet('quota')} "
+            f"cost={_facet('cost')} "
+            f"coexisting-runs={_facet('coexisting_runs')} "
+            f"remote-scm={_facet('remote_scm')}"
+        )
     card_text = str(card.get("text") or "").strip()
     if card_text:
         lines.append(f"card: {card_text.splitlines()[0][:160]}")

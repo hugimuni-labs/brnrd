@@ -57,17 +57,21 @@ surfaces it owns: `BRR_RUN_ID`, `BRR_EVENT_ID`, `BRR_OUTBOX_DIR`,
 file remains the universal portal contract; the env vars are discovery
 handles so a runner does not have to copy paths out of prose.
 
-Fresh state reaches the runner two ways. A **Tier 2 runner with the
-hooks back channel** gets it pushed automatically: at each tool boundary
-the `post-tool` hook flushes the outbox and `.card` immediately (no
-heartbeat wait) and weaves a compact `portal-state` delta back into
-context, so the INBOUND-CHECK is automatic rather than "remember to read
-`inbox.json`." Any runner can also pull it directly — read
-`portal-state.json` / `inbox.json`, or run `brr portal state` for the
-text view. (The earlier `brr portal wrap -- <command>` shell wrapper was
-retired when the hooks back channel landed — it only fired around shell
-calls the resident remembered to prefix, was opt-in per command, and was
-one-directional; the back channel strictly dominates it.)
+Fresh state reaches the runner two ways. A **Tier 2 runner with a
+boundary back channel** gets it pushed automatically: at each runner
+boundary brr flushes the outbox and `.card` immediately (no heartbeat
+wait) and, when the runner supports live injection, weaves a compact
+`portal-state` delta back into context, so the INBOUND-CHECK is automatic
+rather than "remember to read `inbox.json`." Today that mechanism is
+runner-specific: Claude is stream-driven, Codex flushes on JSONL command
+events and can fold in one terminal follow-up through `exec resume`, and
+future hook-backed runners use `brr hook`. Any runner can also pull state
+directly — read `portal-state.json` / `inbox.json`, or run `brr portal
+state` for the text view. (The earlier `brr portal wrap -- <command>`
+shell wrapper was retired when the boundary back channel landed — it
+only fired around shell calls the resident remembered to prefix, was
+opt-in per command, and was one-directional; the back channel strictly
+dominates it.)
 
 The two reconcile semantics in the *Portal* column — append-log
 (ordered, additive) and desired-state (one surface reconciled in place,
@@ -166,10 +170,10 @@ Two more run surfaces live outside the outbox:
    posture when the bundle gives one, and whether you are chunking for
    cost or resilience. Do not prefix the content with `note:` — the gate
    renderer supplies that label. Send an outbox trajectory note before a
-   long stretch or at a fork. A Tier 2 hooks runner gets fresh
-   `portal-state` woven in automatically at tool boundaries; otherwise
-   re-read `portal-state.json` (or run `brr portal state`) at natural
-   seams. `inbox.json` remains the focused
+   long stretch or at a fork. A Tier 2 boundary-back-channel runner gets
+   fresh `portal-state` surfaced automatically at its supported seams;
+   otherwise re-read `portal-state.json` (or run `brr portal state`) at
+   natural seams. `inbox.json` remains the focused
    pending-events view when you only need that list. A related follow-up
    that appears while you are still thinking should fold into this wake
    when that is the healthiest path. Bound long commands; write
