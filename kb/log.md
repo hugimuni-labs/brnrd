@@ -8061,3 +8061,22 @@ after the operator nudged the live smoke onto a cheaper model, a real
 `runner_stream.run_stream("codex")` smoke passed on `gpt-5.4-mini` in a temp dir
 (return 0, final stdout captured, response file written, one command boundary
 detected). Focused tests 96 green; full suite 1056 green.
+
+## [2026-06-26] fix | Boundary back-channel language reconciled
+
+Reconciled the portal/back-channel prose after the maintainer asked whether
+"boundary injection" was the right semantic frame. No behavior changed. The
+current code already matches the concept/mechanism split: Claude gets Tier 2
+through a stream brr drives, Codex gets command-boundary flush plus one terminal
+resume turn through `codex exec --json`, and native hooks remain only one future
+mechanism (Gemini intent until a firing test proves it).
+
+What changed: `src/brr/docs/portals.md`, `kb/design-portal-grammar.md`, and
+`kb/design-runner-back-channel.md` now call the generic thing the **boundary
+back channel**, not the hooks back channel; lower sections no longer ask readers
+to mentally override "one hook endpoint" with the newer stream-backed reality.
+Daemon comments were updated to describe `.flush` as a boundary signal that can
+come from a stream driver or a native hook. The useful semantic frame that fell
+out: portals are the grammar of world-turning, state interweave is the dataflow
+across that grammar, boundary injection is the inbound half at runner seams, and
+hooks are only one transport.

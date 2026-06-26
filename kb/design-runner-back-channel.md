@@ -192,36 +192,43 @@ mechanism field the runner actually uses: `stream:` for Claude/Codex today,
 `hooks:` for hook-backed runners such as future Gemini.
 
 **Tier 2 is not merely "latency and richness."** An earlier draft framed it that
-way; the maintainer corrected it and the correction is load-bearing. The hooks
-channel is the substrate of a **holistically aware resident**: it carries the
-operational meta — events arriving, execution time, accrued run cost, funds and
-quotas available (combined and per-runner) — that lets the resident run a
-*balanced proactive-and-reactive* flow instead of a purely reactive one. A runner
-without it is not "the same offering, slightly less responsive"; it is a
+way; the maintainer corrected it and the correction is load-bearing. The
+boundary back channel is the substrate of a **holistically aware resident**: it
+carries the operational meta — events arriving, execution time, accrued run
+cost, funds and quotas available (combined and per-runner) — that lets the
+resident run a *balanced proactive-and-reactive* flow instead of a purely
+reactive one. A runner without it is not "the same offering, slightly less
+responsive"; it is a
 **different, thinner offering**. So Tier 2 stays non-load-bearing for
 *correctness* (a Tier-0/1 runner still completes every task), but it is
 load-bearing for the *class of product* brr can be on top of that runner.
 
 **The lean case stays first-class — and should get easier.** A plain
-"Telegram wrapper on top of a local CLI agent" (Tier 0/1, no hooks, no holistic
-awareness) must remain a fully supported shape, *more* than today: the current
-mandatory `brr init` + KB setup + usage onboarding is heavier than that case
-needs. The two ends are deliberate: a frictionless reactive wrapper at one end,
-a fully self-aware resident at the other, with hooks as the seam between them.
+"Telegram wrapper on top of a local CLI agent" (Tier 0/1, no boundary back
+channel, no holistic awareness) must remain a fully supported shape, *more*
+than today: the current mandatory `brr init` + KB setup + usage onboarding is
+heavier than that case needs. The two ends are deliberate: a frictionless
+reactive wrapper at one end, a fully self-aware resident at the other, with the
+boundary back channel as the seam between them.
 
 A Tier-0/1 runner **degrades cleanly to today's heartbeat-polled model**: the
 daemon keeps draining the outbox and refreshing `portal-state.json` on its timer.
 
-## The back channel contract (transport-neutral)
+## The boundary back channel contract (transport-neutral)
 
-brr exposes **one** hook endpoint, e.g. `brr hook <phase>`, reading a JSON event
-on stdin and writing a JSON result on stdout. brr owns the abstract phases; each
-runner profile maps its native hook names onto them. The phases brr cares about:
+The transport-neutral contract is a small set of **boundary phases**. brr owns
+the phase semantics; each runner mechanism implements them differently. A
+hook-backed runner reaches them through `brr hook <phase>` (JSON event on stdin,
+JSON result on stdout). A stream-backed runner such as Claude or Codex executes
+the same policy in the streaming driver and bypasses the hook endpoint.
+
+The phases brr cares about:
 
 - **post-tool** (a tool call just completed) → the outbound flush point. brr
   drains the outbox and `.card` *immediately* instead of waiting for the next
-  heartbeat tick, and, when `change_token` moved, returns a compact
-  portal-state delta for the runner to inject as additional context.
+  heartbeat tick, and, when the mechanism supports live context injection and
+  `change_token` moved, surfaces a compact portal-state delta for the runner to
+  weave in.
 - **pre-stop / stop** (the agent is about to end its turn) → final drain, plus
   the decision point for whether a still-pending, foldable event should block a
   premature stop (return a "you still have pending input" nudge) or let the run
@@ -229,16 +236,16 @@ runner profile maps its native hook names onto them. The phases brr cares about:
 - **session-start / notification** (optional) → seed the run with the initial
   portal-state capsule, or relay a runner-side notification.
 
-Two directions across that single endpoint:
+Two directions across the boundary seam:
 
-- **Outbound flush** (runner → daemon): the hook tells the daemon "a boundary
-  happened," letting delivery be **event-driven** rather than heartbeat-polled.
-  This is what makes mid-thought replies land promptly.
-- **Inbound injection** (daemon → runner): the hook's JSON result carries a
-  fresh portal-state delta (new pending events, delivery acks, budget shifts,
-  the operational meta above) that the runner weaves into context — the
-  INBOUND-CHECK portal becomes *automatic* instead of "remember to read
-  `inbox.json`."
+- **Outbound flush** (runner → daemon): the mechanism tells the daemon "a
+  boundary happened," letting delivery be **event-driven** rather than
+  heartbeat-polled. This is what makes mid-thought replies land promptly.
+- **Inbound injection** (daemon → runner): when the mechanism supports a live
+  context channel, brr carries a fresh portal-state delta (new pending events,
+  delivery acks, budget shifts, the operational meta above) that the runner
+  weaves into context — the INBOUND-CHECK portal becomes *automatic* instead of
+  "remember to read `inbox.json`."
 
 Per-runner mapping for the native hook mechanism (stream-backed runners bypass
 this endpoint; brr generates hook config only for hook-backed profiles, so the
@@ -327,12 +334,12 @@ respawn).
 
 So "let me update you while I work, without interruption" already exists; it is
 the outbox. What it lacks is **immediacy** (delivery waits for the next heartbeat
-tick) and a **reverse channel**. The boundary back channel fixes exactly those: a
-`post-tool` hook flushes the just-written outbox file at the tool boundary, and
-the same hook hands back fresh state. No new "halt-free write" primitive is
-needed — the back channel *is* the answer. (Nudging the user without even a
-tool-call boundary would be a streaming-stdout-tap problem; separate, not worth
-it now.)
+tick) and a **reverse channel**. The boundary back channel fixes exactly those:
+the runner boundary mechanism flushes the just-written outbox file at the tool
+boundary, and, where supported, the same seam hands back fresh state. No new
+"halt-free write" primitive is needed — the back channel *is* the answer.
+(Nudging the user without even a tool-call boundary would be a
+streaming-stdout-tap problem; separate, not worth it now.)
 
 ## Retiring `portal wrap` and the keepalive
 
@@ -345,13 +352,13 @@ Two control surfaces become redundant once the back channel lands.
   tests — removed.
 - The `brr portal wrap` paragraph in `src/brr/docs/portals.md` and the wrapper
   line in the Run Context Bundle wording (`prompts.py`) — removed; the docs now
-  describe hook-pushed injection (Tier 2) with a `portal-state.json` /
+  describe boundary-pushed surfacing (Tier 2) with a `portal-state.json` /
   `brr portal state` pull fallback.
 - The portal-grammar implementation-sequence framing of #2 — rewritten to:
   superseded by the boundary back channel, wrapper retired.
 
 **Keep** `brr portal state` — it stays useful as the inspected text view *and* as
-the source the hook renders for injection. The retirement is the *manual wrapper*,
+the source the boundary renderer reads. The retirement is the *manual wrapper*,
 not the state portal.
 
 **The `.keepalive` budget-extension control file** should likely retire too, along
@@ -362,9 +369,9 @@ confirmed when the slice lands):
   back channel, so the resident already knows its standing and the daemon can act
   on a live signal — there is nothing left for a one-way "please don't kill me
   yet" file to do.
-- **No-hook (Tier 0/1) runners** can simply *not impose* a hard daemon timeout;
-  bounding the run becomes the user's responsibility (as it effectively is for a
-  plain local CLI agent). That removes the other reason `.keepalive` exists.
+- **Tier-0/1 runners** can simply *not impose* a hard daemon timeout; bounding
+  the run becomes the user's responsibility (as it effectively is for a plain
+  local CLI agent). That removes the other reason `.keepalive` exists.
 
 Either way the keepalive — a one-directional liveness hack — is dominated by the
 bidirectional channel for Tier-2 runners and unnecessary for the lean case. Fold its
@@ -458,7 +465,7 @@ decisions), so the slice begins from a position, not a blank page.
 
 - [`design-portal-grammar.md`](design-portal-grammar.md) — parent #159 design;
   this page is the runner-surfacing slice (its §Implementation sequence #2/#4),
-  reshaped from shell-wrapper to hooks.
+  reshaped from shell-wrapper to the boundary back channel.
 - [`src/brr/docs/portals.md`](../src/brr/docs/portals.md) — shipped control-file
   manual; loses the `portal wrap` paragraph (and likely the `.keepalive` budget
   paragraph) on retirement.
