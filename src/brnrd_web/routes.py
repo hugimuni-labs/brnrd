@@ -18,9 +18,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from brnrd import oauth
+from brnrd import ids, oauth
 from brnrd.auth import get_db
-from brnrd.models import Project, Token
+from brnrd.models import Account, Project, RepoBinding, Token
 from brnrd.routers.accounts import (
     SESSION_TTL,
     account_for_github_identity,
@@ -103,6 +103,178 @@ def _account_id(request: Request, db: Session) -> str | None:
         if expires < datetime.now(timezone.utc):
             return None
     return token.account_id
+
+
+def _project_rows(db: Session, account_id: str) -> list[Project]:
+    return list(
+        db.execute(
+            select(Project)
+            .where(Project.account_id == account_id)
+            .order_by(Project.created_at)
+        ).scalars()
+    )
+
+
+def _repo_binding_rows(db: Session, account_id: str) -> list[RepoBinding]:
+    return list(
+        db.execute(
+            select(RepoBinding)
+            .where(RepoBinding.account_id == account_id)
+            .order_by(RepoBinding.created_at)
+        ).scalars()
+    )
+
+
+def _dashboard_context(
+    request: Request,
+    db: Session,
+    account: Account,
+    *,
+    installation_id: str | None = None,
+    setup_action: str | None = None,
+    notice: str | None = None,
+) -> dict:
+    settings = request.app.state.settings
+    projects = _project_rows(db, account.id)
+    project_names = {project.id: project.name for project in projects}
+    bindings = _repo_binding_rows(db, account.id)
+    return {
+        "body_class": "dashboard-page",
+        "title": "brnrd dashboard",
+        "logged_in": True,
+        "account": account,
+        "projects": projects,
+        "bindings": bindings,
+        "project_names": project_names,
+        "install_url": settings.github_install_url,
+        "github_app_slug": settings.github_app_slug,
+        "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
+        "github_trigger_aliases": settings.github_trigger_aliases,
+        "setup_installation_id": installation_id or "",
+        "setup_action": setup_action,
+        "notice": notice,
+    }
+
+
+@router.get("/", response_class=HTMLResponse)
+def dashboard(
+    request: Request,
+    installation_id: str | None = None,
+    setup_action: str | None = None,
+    db: Session = Depends(get_db),
+):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return _render(
+            request,
+            "dashboard.html",
+            {
+                "body_class": "dashboard-page",
+                "title": "brnrd dashboard",
+                "logged_in": False,
+                "signin_url": "/login?next=/",
+                "install_url": request.app.state.settings.github_install_url,
+                "github_app_slug": request.app.state.settings.github_app_slug,
+                "github_bot_login": request.app.state.settings.github_bot_login.strip().lstrip("@"),
+            },
+        )
+
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+    return _render(
+        request,
+        "dashboard.html",
+        _dashboard_context(
+            request,
+            db,
+            account,
+            installation_id=installation_id,
+            setup_action=setup_action,
+        ),
+    )
+
+
+@router.post("/bindings/repo", response_class=HTMLResponse)
+def bind_repo_submit(
+    request: Request,
+    repo_full_name: str = Form(...),
+    installation_id: str = Form(...),
+    project_id: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+
+    repo = repo_full_name.strip()
+    install = installation_id.strip()
+    if not repo or "/" not in repo or not install:
+        return _render(
+            request,
+            "dashboard.html",
+            _dashboard_context(
+                request,
+                db,
+                account,
+                installation_id=install,
+                notice="Enter a repository like owner/name and a GitHub App installation id.",
+            ),
+            status_code=400,
+        )
+
+    project = db.execute(
+        select(Project).where(Project.id == project_id, Project.account_id == account.id)
+    ).scalar_one_or_none()
+    if project is None:
+        return _render(
+            request,
+            "dashboard.html",
+            _dashboard_context(
+                request,
+                db,
+                account,
+                installation_id=install,
+                notice="Select one of your brnrd projects before binding a repo.",
+            ),
+            status_code=404,
+        )
+
+    existing = db.execute(
+        select(RepoBinding).where(RepoBinding.repo_full_name == repo)
+    ).scalar_one_or_none()
+    if existing is not None and existing.account_id != account.id:
+        return _render(
+            request,
+            "dashboard.html",
+            _dashboard_context(
+                request,
+                db,
+                account,
+                installation_id=install,
+                notice=f"{repo} is already bound to another brnrd account.",
+            ),
+            status_code=409,
+        )
+    if existing is None:
+        existing = RepoBinding(
+            id=ids.repo_binding_id(),
+            installation_id=install,
+            repo_full_name=repo,
+            account_id=account.id,
+            project_id=project.id,
+        )
+        db.add(existing)
+    else:
+        existing.installation_id = install
+        existing.project_id = project.id
+    db.commit()
+
+    return RedirectResponse(url="/?notice=repo-bound", status_code=303)
 
 
 @router.get("/login", response_class=HTMLResponse)
