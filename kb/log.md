@@ -8128,3 +8128,21 @@ come from a stream driver or a native hook. The useful semantic frame that fell
 out: portals are the grammar of world-turning, state interweave is the dataflow
 across that grammar, boundary injection is the inbound half at runner seams, and
 hooks are only one transport.
+
+## [2026-06-26] research | Runner interweave validated across transports
+
+Answered the maintainer's confusion around state interweave and the Claude/Codex
+runner split. The durable synthesis is
+`kb/research-runner-interweave-2026-06-26.md`: the common concept is boundary
+interweave, not hooks and not "stop/resume between tool calls." Claude's stream
+path is a persistent stdin loop; Codex `exec --json` is a single non-interactive
+turn with command-boundary flush and at most one terminal `exec resume` fold-in;
+Gemini and Codex native hooks remain docs-backed intent until fired; Codex
+app-server is the richer future candidate for true active-turn steering.
+
+The validation found and fixed one code drift: the daemon still inferred native
+hook config from the runner name, so bundled Claude installed hook config despite
+using `stream: claude`. Native hook config now installs only for profiles that
+explicitly declare `hooks:`; `stream:` profiles use the streaming driver, and
+profiles with neither field stay on the heartbeat-polled fallback. Full suite
+passed.

@@ -279,7 +279,11 @@ dive-in map) and are stable until something contradicts them.
   while the lean Telegram-wrapper-on-a-local-CLI case stays first-class. A
   transport-neutral `brr hook <phase>` endpoint does **outbound flush** +
   **inbound injection** + **stop-control** (all one slice), the daemon stays sole
-  drainer (hook only signals); `portal wrap` is **retired** and `.keepalive`
+  drainer (hook only signals); native hook config is now installed only for
+  explicit `hooks:` profiles, while `stream:` profiles use the streaming driver.
+  Companion validation:
+  [runner interweave research](research-runner-interweave-2026-06-26.md).
+  `portal wrap` is **retired** and `.keepalive`
   retirement stays **gated** on the no-timeout-for-Tier-0/1 behaviour.
   Also separates **halt** (an LLM-streaming concept, inherent to tool-call
   streaming) from **respawn** (a brr-resident lifecycle act): mid-thought updates
@@ -882,6 +886,15 @@ dive-in map) and are stable until something contradicts them.
   axis confusion, the missing Mode block on the Run Context
   Bundle, and the run-context-file duplication. Converged
   independently with the Cursor review.
+- [Runner interweave validation, 2026-06-26](research-runner-interweave-2026-06-26.md) —
+  *active*. Cross-runner check of state interweave after the Claude/Codex
+  streaming work: Claude has live stream-json injection, Codex `exec --json`
+  has command-boundary flush plus one terminal `resume` fold-in, Gemini and
+  Codex native hooks remain docs-backed intent until fired, and Codex app-server
+  is the richer future candidate for true active-turn steering. Recommends a
+  capability-flag abstraction (`flush_at_boundary`, `inject_at_boundary`,
+  `fold_at_result`, `stop_control`, proof string) rather than treating hooks as
+  the common mechanism.
 - [Test suite grooming, 2026-05-16](research-test-suite-grooming-2026-05-16.md) —
   *shipped*. Map of bloat, cross-file helper duplication, and
   intent-quality gaps in `tests/`; the high-leverage moves

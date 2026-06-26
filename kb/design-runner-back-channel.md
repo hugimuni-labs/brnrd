@@ -108,6 +108,15 @@ native hooks. The hooks machinery — `src/brr/hooks.py`, the `brr hook` endpoin
 hook-backed runners. `hooks.format_delta` remains the mechanism-neutral capsule
 renderer reused by both hook and stream paths.
 
+**Activation invariant (tightened 2026-06-26).** Native hook config is installed
+only when a profile explicitly declares `hooks:`. A validation pass found the
+daemon still inferred hook capability from the runner name, which made bundled
+Claude install `.claude/settings.local.json` despite its stream-backed profile.
+That fallback is gone: `stream:` and `hooks:` are separate mechanism declarations,
+and "docs say hooks exist" remains intent until brr fires that runner's hook path.
+See the cross-runner research in
+[`research-runner-interweave-2026-06-26.md`](research-runner-interweave-2026-06-26.md).
+
 **The streaming runner is built and default-on for Claude and Codex**
 (`src/brr/runner_stream.py`, profile flags `stream: claude` / `stream: codex`;
 shipped 2026-06-26, see
