@@ -1145,3 +1145,24 @@ def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
     assert facet["branch"] == "brr/run-x"
     assert facet["unpushed_commits"] == 1
     assert facet["modified_files"] == 1
+
+
+# ── _resources_facet (portal-state work-status posture) ──────────────
+
+
+def test_resources_facet_quota_known_when_summary_present():
+    facet = daemon._resources_facet("weekly 42% - resets 3d")
+    assert facet["quota"] == {
+        "status": "known", "summary": "weekly 42% - resets 3d",
+    }
+    # The not-yet-built capabilities advertise themselves honestly.
+    assert facet["cost"] == {"status": "unavailable"}
+    assert facet["coexisting_runs"] == {"status": "unavailable"}
+    assert facet["remote_scm"] == {"status": "unavailable"}
+
+
+def test_resources_facet_quota_unavailable_without_summary():
+    facet = daemon._resources_facet(None)
+    assert facet["quota"] == {"status": "unavailable", "summary": None}
+    facet_blank = daemon._resources_facet("   ")
+    assert facet_blank["quota"]["status"] == "unavailable"
