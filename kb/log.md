@@ -7880,3 +7880,157 @@ Still open (part 3 of the feedback, not code): the conceptual reconciliation of
 with "hooks as the necessary ornamentation" — tracked in dominion
 `portal-reshape-synthesis.md` (perception=injection, action=emission), left for a
 design wake.
+
+## [2026-06-26] refactor | Demote claude hooks; reconcile back-channel page; address the open-decisions ledger
+
+Maintainer green-lit the open-decisions ledger surfaced 2026-06-25 ("findings
+read coherently, time to address them, in one go, where it makes sense for the
+product"). The one item that was *ready* — finding #1, the hooks back channel —
+shipped on branch `brr/demote-claude-hooks`.
+
+The cut: the `claude` profile declared `hooks: claude`, but Claude Code v2.1.185
+never fires settings-file lifecycle hooks in the headless `claude --print` mode
+brr uses (isolated by elimination 2026-06-23, recorded in the resident's
+dominion; the kb page had stayed optimistic and stale). `hook_capability()`
+asserted prerequisites but not *firing* — a rung-1 assumption dressed as a check,
+reporting Tier 2 while claude was silently Tier 0. Per the 2026-06-25 "reactive
+agent, not safety-net pile" reframe, the streaming-SDK `runner.py` rewrite that
+might force text-mode hooks is **dropped**, not parked — it chased a guardrail the
+heartbeat-polled reactive model (the thing that actually carries mid-thought
+responsiveness) never needed. Dropped `hooks: claude`; kept `--setting-sources
+local` for settings isolation; kept the hooks machinery for codex/gemini as
+declared-but-unverified intent (Tier 2 only after a live firing test). Reconciled
+`kb/design-runner-back-channel.md` to current state (both activation failures +
+the demotion + the dropped rewrite + the ladder lesson). 201 tests green.
+
+The rest of the ledger is decision/build-sized, not one-wake-shippable, so it was
+resolved as recommendations rather than half-fitting commits (see the run reply):
+`.keepalive` → injected budget capsule and the standing "granted-permissions"
+capsule are blocked on the same fact this cut establishes (claude has no
+push-injection channel; tail-injection-via-hook is dark) — so they wait on the
+heartbeat-polled tail-capsule path, not hooks. Permission envelope, forge
+synced-directory north star, and #148 Tier B remain genuine forks for the
+maintainer's call. Burst fold-window: recommend calling it done (the reactive
+loop subsumes it). Recurring standing-portal candidate, named again: an injected
+"open forks / awaiting-your-call" capsule, because that ledger keeps living in
+dominion prose the maintainer can't see.
+
+Separately, the maintainer opened a values fork — how to frame ownership /
+co-ownership / interactivity for a "self-building scroll" (living agency).
+Engaged in the reply as a proposal (shared/relational agency: the resident owns
+its dominion and its own becoming, *co*-owns the project and kb with the humans,
+and is co-owned-*with* rather than owned-*by*); planted a draft note in the
+dominion, held the shared seed edit for his nod since PR #178 is already
+reshaping that exact self-definition section.
+
+## [2026-06-26] review | Live-drive the streaming runner: claude --print is single-turn, persistent session is the right architecture
+
+Reviewed step 1 of the streaming runner (`runner_stream.py`, the salvaged in-flight
+work from the session-limit-interrupted run run-260626-0023) and **live-drove it
+against a real claude-haiku v2.1.191 stream-json session** (maintainer asked for
+thorough review + ideally a test; ran haiku to stay within quota). The parser and
+boundary detector are correct against the real CLI — `consume_stream` replayed over
+the captured live stream gave identical boundary/result counts, and the live
+schema's interleaved noise (`rate_limit_event`, `system/thinking_tokens`, assistant
+`thinking` blocks) is skipped cleanly. Hardened the test fixture to pin that
+real-CLI tolerance (synthetic fixture never exercised the `thinking` interleaving):
+22 tests, green.
+
+The live drive found a **load-bearing correction the spike framing missed**:
+`claude --print` + stream-json is **single-turn**. Mid-loop injection works only
+while tool calls are still pending (a 1-tool task dropped a post-boundary
+injection; a 3-tool task acted on the same injection between calls), and the
+process **exits on the first `result`** — so `--print` has **no stop-control**. A
+**persistent session (drop `--print`)** is multi-turn and is the architecture
+steps 2/3 should build on: verified in one process that tool calls run without
+`--print`, mid-loop injection is attended, and after a `result` a new user message
+starts a fresh turn the model addresses (`echo FOLD-INJECT` ran after "Done!").
+That post-result fold-in *is* the Stop-control seam — same stdin-write mechanism as
+post-tool injection, differing only in whether a tool call or a `result` preceded
+it. Three concrete edits captured in `plan-streaming-runner-injection.md` §Driver
+re-verification: (1) `build_stream_cmd` must strip `--print` (it currently inherits
+it from the profile cmd → strictly-weaker single-turn channel); (2) the §Stop-control
+claim only holds in persistent mode; (3) `run_stream`'s `on_boundary` can't inject
+(no stdin handle) — the boundary seam needs an injector. Step 2 (the persistent
+driver + injection wiring) is the next chunk; held it for the maintainer's nod
+since it touches the most load-bearing surface (every claude run) and settles the
+single-turn-vs-persistent architecture, not just a one-liner. Findings written to
+the plan + `design-runner-back-channel.md` §Persistence correction.
+
+## [2026-06-26] implement | Streaming runner step 2: persistent session + boundary injection (strip --print, pass injector)
+
+Implemented step 2 of the claude streaming runner (`runner_stream.py`) after the
+maintainer approved the three review corrections and reframed the goal (evt wcxs).
+The three points and what shipped:
+
+1. **Strip `--print`** — `build_stream_cmd` now drops `--print`/`-p` (`_DROP_FLAGS`)
+   before adding the stream flags. `--print` forces a *single-turn* session (exits on
+   first `result`, no stop-control); the driver runs a persistent multi-turn session
+   instead. Verified the daemon "handles that alright" (the maintainer's caveat):
+   `_result_satisfied_delivery` already counts `outbound`/`commit`/folded-in replies,
+   so a run that delivers via the outbox and returns empty stdout is a *successful*
+   run — stdout result-capture is the compat fallback, not the delivery model.
+2. **Pass an injector** — `run_stream` binds an `Injector` (`Callable[[str],None]`)
+   to the live `proc.stdin` and hands it to the boundary/result callbacks. New seam
+   on the pure consumer: `consume_stream(..., on_result=...)` fires at each `result`;
+   returning `False` stops consuming (driver then closes stdin), else keeps reading
+   the folded-in turn. This is what makes stripping `--print` *safe* — without a
+   result seam the persistent process would block `consume_stream` forever after the
+   first `result`. The two are one change, not three.
+3. **No close-and-capture-by-stdout** — the new default `StreamInjectionPolicy`
+   (built from the run env's `BRR_PORTAL_STATE`) is the inbound-delivery channel the
+   maintainer asked for: change_token-gated `hooks.format_delta` at each boundary
+   (pending events reach the resident without it polling `inbox.json`), fold-pending-
+   once at each result (stop-control mirroring the hook `Stop` block), else close.
+   Primed from the run-start portal so the seed already in the prompt isn't re-injected.
+
+Reuses `hooks.format_delta` so streaming and hook paths render the same capsule.
+**Not yet daemon-routed** — no profile sets `stream:`, so every run still takes the
+blocking `invoke_runner` path; step 3 flips claude onto it behind the flag, wires
+`_invoke_with_heartbeat → run_stream`, and validates a real wake. Deferred to step 3:
+in-process outbox drain at the boundary, and relaying a folded event's body verbatim
+(today the policy injects the portal delta/summaries). 43 tests in
+`test_runner_stream.py` (full suite 1039 green). Plan page updated.
+
+## [2026-06-26] implement | Streaming runner step 3: claude default-on + work-status portal facet
+
+Step 3 of the claude streaming runner (`runner_stream.py`), plus the operator-requested
+live work-status info, plus a reconciliation on "drop --print from the other runners"
+(evt wlap). Three shipped pieces:
+
+1. **claude routed onto streaming, default-on.** The bundled `claude` profile declares
+   `stream: claude`; `runner.invoke_runner` delegates a `stream:`-declaring profile (with
+   no `runner_cmd` override) to `runner_stream.run_stream`. The driver registers
+   `_active_proc` itself, so the daemon's heartbeat/budget/`kill_active` contract is
+   unchanged — host + worktree envs stream; the docker env (own invoke) stays blocking.
+   The two step-2 deferrals folded in: (a) **boundary outbox drain** — the policy touches
+   the shared `.flush` signal at each boundary/result, so the heartbeat fast-poll drains
+   outbound promptly, reusing the existing flush mechanism with zero daemon coupling in
+   the driver; (b) **verbatim event fold-in** — at the terminal result a still-pending
+   event is folded in by its **body verbatim** under a neutral relay header (the user's
+   own words, per the spike's framing rule that coercive framing is refused), not the op
+   summary; the portal-state event record already carries the full body. Validated live
+   against claude v2.1.191 (haiku; real profile flags `--system-prompt` / `--setting-sources
+   local` survive stream-json mode; persistent session captures the result and exits clean).
+   Default-on is reversible — drop the `stream: claude` line to fall back to `--print`.
+
+2. **Work-status `resources` portal facet.** New `resources` facet in portal-state so the
+   running resident can read its live operating posture off `BRR_PORTAL_STATE`. Each
+   sub-field is `known` (quota, via the existing per-run `runner_quota` snapshot) or an
+   honest `unavailable` placeholder (cost metering, coexisting/shadow runs, cross-repo
+   remote SCM — not built yet). The per-run worktree's local SCM posture already rides the
+   `scm` facet. Rendered as a compact `resources:` line at seed/stop in `hooks.format_delta`
+   (boundary signal like `scm:`, never mid-run noise) and in `brr portal state`. Placeholders
+   are deliberate: a future wake sees the slot and what would fill it.
+
+3. **"Drop --print from the other runners" — reconciled, nothing to drop.** claude's `--print`
+   is the single-turn trap that streaming strips. codex (`codex exec`) and gemini (`gemini -p`)
+   carry no separable/redundant print flag — their non-interactive modes are *required* for
+   headless operation, not the single-turn trap. So there is nothing to drop there without
+   breaking them. Verified **codex works** end-to-end (`codex exec` → PONG, exit 0, codex-cli
+   0.141.0). gemini postponed (unauthenticated, per the operator). codex/gemini remain on the
+   blocking path with their `hooks:` intent; stream-driving codex via its `--json` event mode
+   would be a separate build, not a flag drop.
+
+Full suite 1047 green. Plan page → step 3 shipped (only step-4 fallback-retirement remains);
+`design-runner-back-channel.md` and `runners.md` reconciled to "built and default-on".

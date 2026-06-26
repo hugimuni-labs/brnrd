@@ -260,11 +260,16 @@ dive-in map) and are stable until something contradicts them.
   forge desired-state, deeper runner-adapter surfacing, outbound portal
   ergonomics, resident-authored deferral, run-keyed response/outbox paths,
   mailbox records, and later parallel-compatibility work.
-- [The runner back channel (hooks) & the minimal runner interface](design-runner-back-channel.md) —
+- [The runner back channel & the minimal runner interface](design-runner-back-channel.md) —
   *accepted 2026-06-22; #171/#175 shipped on `main`; `portal wrap` retired
-  2026-06-23, `.keepalive` retirement still gated*. The runner-surfacing slice of
-  #159, reshaped from the `brr portal wrap` shell wrapper to runner-native
-  **hooks** — verified bidirectional on **claude, codex, and gemini**. Defines
+  2026-06-23; concept/mechanism split + streaming-injection verified 2026-06-26*.
+  The core is **boundary injection** (perception=injection at tool boundaries),
+  not hooks specifically; the *mechanism* is runner-specific — **stream-driving**
+  for claude (Claude Code's settings-hooks don't fire under `--print`; brr drives
+  `--input-format stream-json` and weaves the delta itself — firing **verified**),
+  native **hooks** for codex/gemini (declared, firing unverified). Build plan:
+  [streaming runner](plan-streaming-runner-injection.md). The runner-surfacing
+  slice of #159, reshaped from the `brr portal wrap` shell wrapper. Defines
   the **tiered minimal runner interface** (Tier 0 file-operating process · Tier 1
   stdout reply · Tier 2 optional hooks back channel); Tier 2 is the substrate of
   a **holistically aware resident** (cost/quota/event meta), not just latency,
@@ -277,6 +282,18 @@ dive-in map) and are stable until something contradicts them.
   streaming) from **respawn** (a brr-resident lifecycle act): mid-thought updates
   need neither — the outbox is already halt-free; hooks add immediacy + reverse
   channel.
+- [Streaming runner — claude boundary injection](plan-streaming-runner-injection.md) —
+  *proposed 2026-06-26; firing-test passed, build not started*. The concrete build
+  for claude's Tier-2 boundary injection: brr drives `claude --input-format
+  stream-json --output-format stream-json`, keeps stdin open, and at each tool
+  boundary drains the outbox + injects the `change_token`-gated portal delta as a
+  message — closing the **inbound** responsiveness gap (`--print` carries outbound
+  flush but not inbound injection). Parallel path behind a `stream:` opt-in flag
+  (the blocking `--print` `invoke_runner` stays untouched for codex/gemini/
+  fallback); reuses `hooks.format_delta`. Spike finding baked in: **framing is
+  load-bearing** — relay user follow-ups verbatim, keep operational deltas
+  informational (coercive framing trips the model's injection-defense). Unblocks
+  the `.keepalive`→budget-capsule and tail-injection relocations.
 
 ## Conversations & responses
 
