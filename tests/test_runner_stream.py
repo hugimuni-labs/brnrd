@@ -294,31 +294,59 @@ def test_injection_policy_prime_suppresses_unchanged_then_injects_on_move(tmp_pa
     assert len(injected) == 1 and "later" in injected[0]
 
 
-def test_injection_policy_folds_pending_once_then_closes(tmp_path):
+def test_injection_policy_folds_pending_body_verbatim_once(tmp_path):
     portal = tmp_path / "portal.json"
     _write_portal(
         portal,
         change_token="t1",
         attention={"pending_event_count": 2, "pending_outbox_file_count": 0},
-        inbound={"events": [{"id": "e1", "source": "telegram", "summary": "do x"}]},
+        inbound={"events": [
+            {"id": "e1", "source": "telegram",
+             "summary": "do x truncated...", "body": "please also do x in full"},
+        ]},
     )
     policy = runner_stream.StreamInjectionPolicy(portal)
     injected: list[str] = []
     outcome = runner_stream.StreamOutcome(result_text="done")
     assert policy.on_result(outcome, injected.append) is True  # fold the turn
-    assert len(injected) == 1 and "pending" in injected[0]
+    assert len(injected) == 1
+    # The verbatim body is relayed as the user's words (not the op summary),
+    # under a neutral non-imperative header.
+    assert "please also do x in full" in injected[0]
+    assert "via telegram" in injected[0]
     # Once-only: the next result closes the session even with work pending.
     assert policy.on_result(outcome, injected.append) is False
     assert len(injected) == 1
 
 
-def test_injection_policy_no_pending_closes(tmp_path):
+def test_injection_policy_no_foldable_body_closes(tmp_path):
+    # A pending event with no body (or none at all) is not folded — there's no
+    # verbatim user message to relay, so the driver closes the session.
     portal = tmp_path / "portal.json"
-    _write_portal(portal, change_token="t1", attention={"pending_event_count": 0})
+    _write_portal(
+        portal, change_token="t1",
+        attention={"pending_event_count": 1},
+        inbound={"events": [{"id": "e1", "source": "telegram", "summary": "s"}]},
+    )
     policy = runner_stream.StreamInjectionPolicy(portal)
     injected: list[str] = []
     assert policy.on_result(runner_stream.StreamOutcome(), injected.append) is False
     assert injected == []
+
+
+def test_injection_policy_touches_flush_at_boundary_and_result(tmp_path):
+    # Both seams ask the daemon to drain the outbox promptly via the shared
+    # .flush signal (the daemon stays the sole drainer).
+    portal = tmp_path / "portal.json"
+    _write_portal(portal, change_token="t1", attention={"pending_event_count": 0})
+    flush = tmp_path / ".flush"
+    policy = runner_stream.StreamInjectionPolicy(portal, flush_signal_path=flush)
+    assert not flush.exists()
+    policy.on_boundary(_bnd(), lambda _t: None)
+    assert flush.exists()
+    flush.unlink()
+    policy.on_result(runner_stream.StreamOutcome(), lambda _t: None)
+    assert flush.exists()
 
 
 def test_injection_policy_missing_portal_is_quiet(tmp_path):
@@ -384,9 +412,14 @@ def test_build_stream_cmd_strips_short_print_flag():
 # ── stream_flavour ───────────────────────────────────────────────────────
 
 
-def test_stream_flavour_absent_on_bundled_profiles():
-    # No bundled profile declares stream: yet (step 3 wires claude onto it).
-    assert runner_stream.stream_flavour("claude") is None
+def test_stream_flavour_on_bundled_claude_profile():
+    # Step 3 wired claude onto the streaming path: the bundled profile opts in.
+    assert runner_stream.stream_flavour("claude") == "claude"
+
+
+def test_stream_flavour_absent_on_bare_alias_profiles():
+    # The --bare API-only aliases stay on the blocking path (no stream:).
+    assert runner_stream.stream_flavour("claude-bare-api-only") is None
 
 
 def test_stream_flavour_reads_field(monkeypatch):
