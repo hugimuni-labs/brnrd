@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title|default("brnrd") }}</title>
     <link rel="stylesheet" href="{{ url_for('brnrd_static', path='app.css') }}">
+    <link rel="stylesheet" href="{{ url_for('brnrd_static', path='dashboard.css') }}">
   </head>
   <body class="{{ body_class|default('app-page') }}">
     {% block body %}{% endblock %}
