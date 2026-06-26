@@ -7,7 +7,8 @@ import json
 from brr import hooks
 
 
-def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None):
+def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
+            resources=None):
     payload = {
         "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
         "attention": {
@@ -25,6 +26,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None):
     }
     if scm is not None:
         payload["scm"] = scm
+    if resources is not None:
+        payload["resources"] = resources
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -170,6 +173,40 @@ def test_scm_unknown_is_silent(tmp_path):
     assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
 
 
+def test_seed_surfaces_resources_with_known_quota_and_placeholders(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        resources={
+            "quota": {"status": "known", "summary": "weekly 42% - resets 3d"},
+            "cost": {"status": "unavailable"},
+            "coexisting_runs": {"status": "unavailable"},
+            "remote_scm": {"status": "unavailable"},
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "resources:" in ctx
+    assert "quota=weekly 42% - resets 3d" in ctx
+    assert "cost=unavailable" in ctx
+    assert "coexisting-runs=unavailable" in ctx
+    assert "remote-scm=unavailable" in ctx
+
+
+def test_post_tool_never_renders_resources(tmp_path):
+    # Like scm:, the work-status line is a seed/stop boundary signal — mid-run
+    # it must stay quiet even when the token moves.
+    _portal(
+        tmp_path, token="t1", pending=1,
+        events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
+        resources={"quota": {"status": "unavailable"},
+                   "cost": {"status": "unavailable"},
+                   "coexisting_runs": {"status": "unavailable"},
+                   "remote_scm": {"status": "unavailable"}},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert "resources:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
 def test_codex_block_renders_continue_false(tmp_path):
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
@@ -214,7 +251,7 @@ def test_missing_portal_state_is_graceful(tmp_path):
 
 def test_hook_config_supported_only_claude_today():
     assert hooks.hook_config_supported("claude") is True
-    # codex / gemini declare the capability but have no emitter yet.
+    # Codex now uses the JSONL stream path; Gemini has no emitter yet.
     assert hooks.hook_config_supported("codex") is False
     assert hooks.hook_config_supported("gemini") is False
     assert hooks.hook_config_supported(None) is False
