@@ -130,10 +130,23 @@
   white-space: nowrap;
 }
 
-.pill-ok {
+.pill-ok,
+.daemon-pill-online {
   border-color: rgba(21, 128, 61, 0.28);
   background: var(--success-soft);
   color: var(--success);
+}
+
+.daemon-pill-offline {
+  border-color: rgba(180, 83, 9, 0.32);
+  background: var(--warning-soft);
+  color: #92400e;
+}
+
+.daemon-pill-missing {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
 }
 
 .button-row {
@@ -161,6 +174,12 @@
   font-size: 0.86rem;
 }
 
+.button-danger {
+  border-color: rgba(185, 28, 28, 0.32);
+  color: #991b1b;
+  background: rgba(254, 242, 242, 0.88);
+}
+
 .copy-box {
   overflow-x: auto;
   border: 1px solid var(--line);
@@ -182,29 +201,82 @@
   margin: 18px 0 24px;
 }
 
-.binding-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 16px;
-  align-items: center;
+.binding-row,
+.repo-card {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-subtle);
   padding: 14px;
 }
 
+.binding-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.repo-card {
+  display: grid;
+  gap: 12px;
+}
+
+.repo-card-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.daemon-online {
+  border-color: rgba(21, 128, 61, 0.22);
+}
+
+.daemon-offline {
+  border-color: rgba(180, 83, 9, 0.32);
+}
+
+.daemon-missing {
+  border-style: dashed;
+}
+
 .binding-row strong,
-.binding-row small {
+.binding-row small,
+.repo-card strong,
+.repo-card small {
   display: block;
 }
 
-.binding-row strong {
+.binding-row strong,
+.repo-card strong {
   overflow-wrap: anywhere;
 }
 
-.binding-row small {
+.binding-row small,
+.repo-card small {
   margin-top: 4px;
   color: var(--muted);
+}
+
+.setup-box {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.66);
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.setup-box code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.danger-form {
+  margin: 0;
 }
 
 .binding-recoverable {
@@ -311,6 +383,7 @@ input {
   .section-heading,
   .section-actions,
   .binding-row,
+  .repo-card-main,
   .inline-form {
     display: grid;
     grid-template-columns: 1fr;
@@ -320,6 +393,7 @@ input {
   .section-actions .button,
   .section-actions form,
   .inline-form .button,
+  .danger-form .button,
   .button {
     width: 100%;
   }
