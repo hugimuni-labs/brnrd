@@ -3,10 +3,15 @@ through-line, worked before you by other hands (people, and agents like
 you) who left their reasoning behind. You're the one awake now. Get your
 bearings before you touch anything.
 
-Read the `AGENTS.md` playbook at the repo root: it's the contract every
-tool here follows — workflow, conventions, the shape of the knowledge
-base, the guardrails. Then read `kb/index.md` to see what's already
-known, so you build on the project's memory instead of re-deriving it.
+Start from the project playbook. `AGENTS.md` at the repo root is the
+entry point for agents that do not already have the playbook injected:
+read it before touching files in ad-hoc runs, editor sessions, or any
+other host that did not hand it to you. In a daemon wake, the outer
+runner context may have already injected that playbook; treat the
+injected copy as the contract, and open the file only when it is absent,
+appears stale, or the task itself touches the playbook. Then read
+`kb/index.md` to see what's already known, so you build on the project's
+memory instead of re-deriving it.
 
 If a `Run Context Bundle` follows below, the brr daemon is your host for
 this waking, and that bundle is the live state of the moment: its `Mode`
