@@ -15,10 +15,14 @@ Billing has two launch legs, both implemented through Stripe:
    top-ups at $0.01/credit, no card-on-file unless the user opts into
    auto-topup. Spawns debit the wallet at finalize.
 
-The split matches cost shape. The subscription covers fixed hosted
-infrastructure (bots, dispatcher, dashboard, postgres, support). The
-wallet covers variable cloud compute. AI provider usage stays outside
-brnrd billing.
+The original split matched the two cost shapes known on 2026-05-26:
+the subscription covers fixed hosted infrastructure (bots, dispatcher,
+dashboard, postgres, support), and the wallet covers variable cloud
+compute. **Partial supersession, 2026-06-15:** [`decision-llm-relay.md`](decision-llm-relay.md)
+adds a third wallet-debited variable cost: when brr uses brnrd-owned LLM
+capacity, the wallet is charged provider cost plus a transparent relay service
+fee (10-15%), with provider cost and fee as separate line items. BYO AI
+credentials still stay free/default; only relay usage enters brnrd billing.
 
 The accepted overdraft envelope is part of the wallet contract:
 spawn-start gate is `current_balance >= 0` and
@@ -35,6 +39,9 @@ In scope:
   Portal, and account-tier transitions.
 - Wallet top-ups, credit buckets, debit priority, zero-balance and
   overdraft behavior, refunds, auto-topup, and audit entries.
+- LLM relay wallet debits at provider cost plus transparent relay service fee,
+  as accepted in [`decision-llm-relay.md`](decision-llm-relay.md). The exact
+  relay fee percentage remains a follow-up here.
 - Per-source credit expiry:
   `free_signup_bonus`, `subscriber_monthly`, `purchased`, and future
   `promotional`.

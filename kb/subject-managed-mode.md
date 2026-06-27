@@ -462,6 +462,12 @@ Two billing legs match the two cost shapes:
   one-shot Stripe Checkout top-ups at $0.01/credit, no
   card-on-file unless auto-topup is enabled, debit at spawn
   finalize.
+- **LLM relay wallet debits** cover brnrd-owned AI fallback
+  when user-owned runner credentials are unavailable or
+  quota-exhausted. BYO AI credentials remain free/default; relay
+  charges are provider cost plus a transparent relay service fee
+  (10-15%) as separate audit/billing line items, per
+  [`decision-llm-relay.md`](decision-llm-relay.md).
 
 The canonical tier policy lives in
 [`decision-pricing-shape.md`](decision-pricing-shape.md): Free
@@ -484,6 +490,12 @@ remaining paid balance. The pricing rate published in
 [`decision-pricing-shape.md`](decision-pricing-shape.md) carries
 a small margin over wholesale Fly Machines pricing —
 sustainable, transparent, no surprises.
+
+LLM relay cost is tracked separately from managed compute: provider,
+model, token counts where available, provider cost, relay service fee,
+total, and per-run cap outcome. The dispatch/cost-policy design lives in
+[`design-runner-media.md`](design-runner-media.md); the pricing decision lives
+in [`decision-llm-relay.md`](decision-llm-relay.md).
 
 ## BYO compute (subscriber sub-option of Surface B)
 

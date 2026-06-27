@@ -242,6 +242,13 @@ dive-in map) and are stable until something contradicts them.
   (Loop C) — plus a budget-aware self-chunking discipline. Ships A1
   (medium in the wake bundle), the first A2 quota snapshot ingress, and
   the diffense de-firehose first.
+- [Runner media, cost policy, and brnrd relay fallback](design-runner-media.md) —
+  *active on 2026-06-27*. Splits static runner profiles from **runner media**
+  (profile + model + owner + auth/quota source + hook capability + billing
+  posture), so simple tasks can default to cheaper local media, expensive
+  respawns can move to stronger media, and brnrd-owned LLM relay can sit behind
+  a spend-plan consent checkpoint with wallet/audit line items instead of an
+  opaque command-string convention.
 - [Portal grammar & the reconcile/projection layer](design-portal-grammar.md) —
   *active; #159 design contract revised 2026-06-21 after live dogfood*.
   Names the **reconcile/projection layer** above gates (append-log vs

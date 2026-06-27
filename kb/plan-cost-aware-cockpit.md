@@ -279,19 +279,32 @@ least I can get away with."
 
 ## Sequence after this run (pickup list)
 
-1. **A2 provider collectors** — populate the shipped quota snapshot from
+2026-06-27 refinement: runner selection needs an explicit **runner-medium**
+layer, not only provider collectors. The current design home is
+[`design-runner-media.md`](design-runner-media.md): profiles remain the CLI
+invocation, while media record model, owner, cost class, quota source, hook
+capability, fallback eligibility, and billing posture.
+
+1. **Runner-medium schema and resolver** — turn legacy `runner=` into an
+   implicit medium, then let projects/accounts declare cheap, strong, and
+   brnrd-relay media without burying that policy in command strings.
+2. **A2 provider collectors** — populate the shipped quota snapshot from
    real Codex / Claude / Gemini signals (headers, errors, usage APIs, or
    a host wrapper) without adding slow network work to prompt assembly.
-2. **C1 — `.card` cost frame habit in resident memory** (repo prompt
+3. **C1 — `.card` cost frame habit in resident memory** (repo prompt
    framing shipped; the dominion playbook still needs the same trim).
-3. **C3 — operator notification + `brr docs operator` doc** (the
+4. **C3 — operator notification + `brr docs operator` doc** (the
    user-facing acknowledge contract; the maintainer's explicit ask).
-4. **B1/B2 — fallback chain + quota deferral** (highest reliability
-   leverage; wants #128's run/event substrate).
-5. **C2 — plan→approve with a historical cost pre-analysis** (the
+5. **B1/B2 — fallback chain + quota deferral** (highest reliability
+   leverage; wants runner media plus #128's run/event substrate).
+6. **C2 — plan→approve with a historical cost pre-analysis** (the
    duo-loop primitive; wants #128 threading).
-6. **A3 — per-run historical spend analysis** (feeds C1/C2; coarse first).
-7. **Finish the one-shot framing cleanup in the dominion playbook** —
+7. **A3 — per-run historical spend analysis** (feeds C1/C2; coarse first).
+8. **brnrd relay spend-plan implementation** — apply
+   [`decision-llm-relay.md`](decision-llm-relay.md): BYO remains free/default,
+   relay uses provider cost plus transparent service fee, and paid relay runs
+   require a cap/consent envelope before spend.
+9. **Finish the one-shot framing cleanup in the dominion playbook** —
    repo prompts/docs now say "stay in the conversation"; the resident's
    own playbook still carries some older protocol re-narration and should
    be trimmed to point at `brr docs portals`.
@@ -305,5 +318,8 @@ least I can get away with."
   `defer_until` + per-run claim, the substrate B1/B2/C2 lean on.
 - [`design-co-maintainer.md`](design-co-maintainer.md) — §11 continuity
   spine, §4.2 firehose-vs-synthesis (the diffense de-firehose applies it).
+- [`design-runner-media.md`](design-runner-media.md) — runner profile vs
+  runner medium, deterministic cheap/strong dispatch policy, and brnrd LLM
+  relay as a spend-gated fallback medium.
 - [`plan-failover-compute.md`](plan-failover-compute.md) — *compute-host*
   failover, the sibling axis to Loop B's *medium* failover.

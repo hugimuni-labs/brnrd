@@ -61,9 +61,10 @@ no design home yet. That gap is itself the finding.
    retry that will also fail. The human gets "deferred to Jun 17 01:29,"
    not a dead card.
 
-**Home:** new short design page `design-runner-media.md` (or a § in
-[`design-run-event-model.md`](design-run-event-model.md), since
-`defer_until` and the per-run claim already live there).
+**Home:** [`design-runner-media.md`](design-runner-media.md) now owns the
+runner profile vs runner medium split, cheap/strong dispatch policy, quota
+signals, and brnrd LLM relay fallback. [`design-run-event-model.md`](design-run-event-model.md)
+still owns `defer_until`, per-run claims, and run-granularity cost attribution.
 
 ## G2 — Plan → approve → execute (the duo loop)
 

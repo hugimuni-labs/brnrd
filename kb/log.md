@@ -8209,3 +8209,35 @@ the retired stream driver as current. Focused runner-hook, daemon, prompt, CLI,
 and env suites pass. Full `pytest` is still blocked by unrelated brnrd test
 collection drift (`Project` / `ChatBinding` imports no longer exist in
 `brnrd.models`).
+
+## [2026-06-27] fix | Run prompt stops re-reading injected AGENTS context
+
+The context-shape review found one real layering contradiction in the daemon
+wake preamble: brr runs often already receive `AGENTS.md` as injected outer
+context, but `prompts/run.md` still opened by telling every runner to read the
+repo file before anything else. That turned a present contract back into a
+filesystem chore and made the hot-path bundle feel secondary.
+
+`run.md` now states the split directly: `AGENTS.md` is the entry point for
+hosts that did not inject the playbook; daemon wakes treat an injected copy as
+the contract and open the file only when it is absent, appears stale, or the
+task touches the playbook. A prompt guardrail test pins the distinction, and
+`plan-agent-orientation-layering.md` carries the breadcrumb.
+
+## [2026-06-27] plan | Runner media and brnrd relay fallback design
+
+The cost-aware execution ask clarified the next missing abstraction: brr has
+static runner profiles, but cost-aware dispatch needs **runner media**: profile,
+model, owner, auth/quota source, hook capability, and billing posture. Filed
+`design-runner-media.md` with the recommended shape: cheap/default local media
+for small work, stronger media for respawns/escalation, and `brnrd` LLM relay as
+a spend-plan-gated fallback when user-owned runner quota or credentials cannot
+carry the run.
+
+The design reconciles local CLI probes (Codex 0.141.0, Claude Code 2.1.191, no
+Gemini binary here), official provider docs, and existing brnrd pricing:
+provider collectors must be provenance-tagged; ChatGPT/Codex subscription quota
+is not assumed to be API-visible; brnrd relay debits provider cost plus the
+transparent relay service fee from `decision-llm-relay.md`. The older billing
+and managed-mode pages now carry the partial supersession so they no longer
+read as compute-wallet-only.
