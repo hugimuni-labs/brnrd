@@ -85,3 +85,24 @@ def list_installation_repositories(settings, installation_id: str) -> list[dict[
             repos.extend(data.get("repositories") or [])
             url = response.links.get("next", {}).get("url")
     return repos
+
+
+def create_issue(settings, installation_id: str, repo_full_name: str, *, title: str, body: str) -> dict[str, Any]:
+    """Create an issue as the installed GitHub App.
+
+    This deliberately uses an installation token rather than a user/machine PAT so
+    the visible actor is the GitHub App bot identity, for example
+    ``brnrd-dev[bot]``. We use it experimentally to seed the App as a visible
+    participant after a repo is enabled in brnrd.
+    """
+    token = installation_access_token(settings, installation_id)
+    url = f"{settings.github_api_base_url.rstrip('/')}/repos/{repo_full_name}/issues"
+    with httpx.Client(timeout=20) as client:
+        response = client.post(
+            url,
+            headers=_headers(settings, token),
+            json={"title": title, "body": body},
+        )
+        response.raise_for_status()
+        data = response.json()
+    return data if isinstance(data, dict) else {}
