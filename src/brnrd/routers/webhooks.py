@@ -1,28 +1,4 @@
-"""Platform webhook ingress.
-
-``POST /v1/webhooks/telegram`` and ``POST /v1/webhooks/github`` are the
-real producer side of the spine (superseding ``_dev/enqueue``).
-Telegram is authenticated by the
-secret-token header Telegram echoes from ``setWebhook`` — not a bearer
-— and multiplexes a single managed bot across accounts by chat_id:
-
-- ``/start <code>`` binds the chat to a project (Telegram pairing).
-- ``/project <name>`` selects the active project for the chat.
-- ``/project <name> <task>`` routes one task without changing the
-  active project.
-- a message from a bound chat is enqueued for that project's daemon,
-  carrying an opaque ``reply_to`` so the response routes home.
-- a message from an unbound chat gets a friendly setup error.
-
-GitHub is authenticated by ``X-Hub-Signature-256`` and routes an
-addressed issue comment through a repo binding:
-
-- an unbound but addressed repo gets a setup comment instead of a silent
-  drop.
-- a bound repo comment is enqueued for that project's daemon, carrying
-  GitHub reply metadata in ``reply_to`` so the managed response posts
-  back to the issue/PR thread.
-"""
+"""Platform webhook ingress."""
 
 from __future__ import annotations
 
@@ -37,253 +13,117 @@ from sqlalchemy.orm import Session
 
 from brr.gates.github import parse as gh_parse
 
-from .. import ids
-from .. import inbox as inbox_service
-from ..models import ChatBinding, Project, RepoBinding, TgPairCode
+from .. import ids, inbox as inbox_service
+from ..models import ChannelRoute, Repo, TgPairCode
 from ..platforms import github as gh
 from ..platforms import telegram as tg
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 
-_UNPAIRED_TEXT = (
-    "This chat is not paired to a brnrd account yet. Pair it from brnrd, "
-    "then send /projects or /project <name>."
-)
-_UNBOUND_REPO_TEXT = (
-    "This repository is not connected to a brnrd project yet. "
-    "Open brnrd.dev, bind this repository to a project, then call the bot again."
-)
+_UNPAIRED_TEXT = "This chat is paired to your brnrd account, but no active repo is selected. Send /repos or /repo owner/name."
+_UNBOUND_REPO_TEXT = "This repository is not connected to brnrd yet. Open brnrd.dev, connect the repo, then call the bot again."
 
 
 def _reply(settings, parsed: tg.ParsedMessage, text: str) -> None:
     if not settings.telegram_bot_token:
         return
     try:
-        tg.send_message(
-            settings.telegram_bot_token,
-            parsed.chat_id,
-            text,
-            topic_id=parsed.topic_id,
-            reply_to_message_id=parsed.message_id,
-        )
-    except Exception as e:  # noqa: BLE001 - a failed reply must not 500 the webhook
+        tg.send_message(settings.telegram_bot_token, parsed.chat_id, text, topic_id=parsed.topic_id, reply_to_message_id=parsed.message_id)
+    except Exception as e:
         print(f"[brnrd] telegram reply failed: {e}")
 
 
 def _slash_command(text: str) -> tuple[str, str] | None:
-    """Return a normalized Telegram slash command and its argument text."""
     if not text.startswith("/"):
         return None
     head, _, rest = text.partition(" ")
-    name = head[1:].split("@", 1)[0].lower()
-    return name, rest.strip()
+    return head[1:].split("@", 1)[0].lower(), rest.strip()
 
 
-def _chat_binding(db: Session, parsed: tg.ParsedMessage) -> ChatBinding | None:
-    return db.execute(
-        select(ChatBinding).where(
-            ChatBinding.platform == "telegram",
-            ChatBinding.chat_id == parsed.chat_id,
-        )
-    ).scalar_one_or_none()
+def _topic_key(parsed: tg.ParsedMessage) -> str | None:
+    return None if parsed.topic_id in (None, "") else str(parsed.topic_id)
 
 
-def _account_projects(db: Session, account_id: str) -> list[Project]:
-    return list(
-        db.execute(
-            select(Project)
-            .where(Project.account_id == account_id)
-            .order_by(Project.created_at)
-        ).scalars()
-    )
+def _channel_route(db: Session, parsed: tg.ParsedMessage) -> ChannelRoute | None:
+    topic_id = _topic_key(parsed)
+    if topic_id is not None:
+        route = db.execute(select(ChannelRoute).where(ChannelRoute.platform == "telegram", ChannelRoute.channel_id == parsed.chat_id, ChannelRoute.topic_id == topic_id)).scalar_one_or_none()
+        if route is not None:
+            return route
+    return db.execute(select(ChannelRoute).where(ChannelRoute.platform == "telegram", ChannelRoute.channel_id == parsed.chat_id, ChannelRoute.topic_id.is_(None))).scalar_one_or_none()
 
 
-def _find_project(projects: list[Project], name: str) -> Project | None:
+def _account_repos(db: Session, account_id: str) -> list[Repo]:
+    return list(db.execute(select(Repo).where(Repo.account_id == account_id).order_by(Repo.repo_full_name)).scalars())
+
+
+def _find_repo(repos: list[Repo], name: str) -> Repo | None:
     wanted = name.strip()
     if not wanted:
         return None
-    for project in projects:
-        if project.name == wanted:
-            return project
-    matches = [p for p in projects if p.name.casefold() == wanted.casefold()]
+    matches = [r for r in repos if r.repo_full_name.casefold() == wanted.casefold()]
+    if len(matches) == 1:
+        return matches[0]
+    matches = [r for r in repos if r.repo_name.casefold() == wanted.casefold()]
     return matches[0] if len(matches) == 1 else None
 
 
-def _split_project_task(
-    projects: list[Project], arg: str
-) -> tuple[Project | None, str | None]:
-    """Resolve the longest project-name prefix from ``arg``.
-
-    Project names are account-scoped and can contain spaces. Treating the
-    longest matching project name as the selector lets
-    ``/project work laptop check logs`` route to project ``work laptop``
-    with task ``check logs``.
-    """
-    text = arg.strip()
-    if not text:
-        return None, None
-
-    candidates: list[tuple[int, Project, str]] = []
-    folded = text.casefold()
-    for project in projects:
-        name = project.name
-        name_folded = name.casefold()
-        if folded == name_folded:
-            candidates.append((len(name), project, ""))
-        elif folded.startswith(name_folded + " "):
-            candidates.append((len(name), project, text[len(name) :].strip()))
-    if not candidates:
-        return None, None
-
-    _, project, task = max(candidates, key=lambda item: item[0])
-    return project, task
-
-
-def _project_list_text(projects: list[Project], current_id: str | None) -> str:
-    if not projects:
-        return "No projects are available for this account yet."
-    lines = ["Projects:"]
-    for project in projects:
-        suffix = " (current)" if project.id == current_id else ""
-        lines.append(f"- {project.name}{suffix}")
+def _repo_list_text(repos: list[Repo], current_id: str | None) -> str:
+    if not repos:
+        return "No repos are connected to this brnrd account yet. Open brnrd.dev to connect one."
+    lines = ["Repos:"]
+    for repo in repos:
+        suffix = " (active)" if repo.id == current_id else ""
+        lines.append(f"- {repo.repo_full_name}{suffix}")
     lines.append("")
-    lines.append("Use /project <name> to select one.")
+    lines.append("Use /repo owner/name to select the active repo for this chat or topic.")
     return "\n".join(lines)
 
 
-def _enqueue_telegram_event(
-    db: Session,
-    parsed: tg.ParsedMessage,
-    *,
-    project_id: str,
-    body: str,
-) -> None:
-    inbox_service.enqueue(
-        db,
-        project_id=project_id,
-        body=body,
-        source="telegram",
-        reply_to={
-            "platform": "telegram",
-            "chat_id": parsed.chat_id,
-            "topic_id": parsed.topic_id,
-            "message_id": parsed.message_id,
-            "user": parsed.user,
-            "user_id": parsed.user_id,
-            "username": parsed.username,
-        },
-    )
-
-
-def _github_mention(settings) -> str:
-    login = settings.github_bot_login.strip().lstrip("@")
-    return f"@{login}" if login else ""
+def _enqueue_telegram_event(db: Session, parsed: tg.ParsedMessage, *, repo_id: str, body: str) -> None:
+    inbox_service.enqueue(db, repo_id=repo_id, body=body, source="telegram", reply_to={"platform": "telegram", "chat_id": parsed.chat_id, "topic_id": parsed.topic_id, "message_id": parsed.message_id, "user": parsed.user, "user_id": parsed.user_id, "username": parsed.username})
 
 
 def _github_mention_candidates(settings) -> list[str]:
-    """Return mention handles that should trigger brnrd.
-
-    ``github_bot_login`` is the user-facing call sign. ``github_app_slug`` is
-    accepted too because beta installs often expose the App slug before the
-    machine-user identity is fully polished. The old brr-bot default remains
-    as a temporary compatibility alias for already-configured test installs.
-    """
-    handles = [
-        settings.github_bot_login,
-        getattr(settings, "github_app_slug", ""),
-        "brr-bot",
-    ]
-    out: list[str] = []
-    folded: set[str] = set()
-    for handle in handles:
+    out, seen = [], set()
+    for handle in [settings.github_bot_login, getattr(settings, "github_app_slug", ""), "brr-bot"]:
         login = str(handle or "").strip().lstrip("@")
-        if not login:
-            continue
-        mention = f"@{login}"
-        key = mention.casefold()
-        if key not in folded:
-            out.append(mention)
-            folded.add(key)
+        if login:
+            mention = f"@{login}"
+            key = mention.casefold()
+            if key not in seen:
+                out.append(mention)
+                seen.add(key)
     return out
 
 
 def _github_command_candidates(settings) -> list[str]:
-    aliases = str(getattr(settings, "github_trigger_aliases", "") or "")
-    out: list[str] = []
-    folded: set[str] = set()
-    for alias in aliases.split(","):
-        name = alias.strip().lstrip("/").rstrip(":")
-        if not name:
-            continue
-        key = name.casefold()
-        if key not in folded:
-            out.append(name)
-            folded.add(key)
-    return out
+    return [a.strip().lstrip("/").rstrip(":") for a in str(settings.github_trigger_aliases or "").split(",") if a.strip()]
 
 
 def _github_trigger(settings, body: str) -> tuple[str, str] | None:
-    """Return the trigger kind and text when a GitHub comment addresses brnrd.
-
-    This keeps the pleasant ``@brnrd-bot`` path while also allowing command
-    fallbacks such as ``/brnrd`` and ``brnrd:`` in repositories where GitHub
-    autocomplete lags behind the desired bot identity.
-    """
-    text = body or ""
-    folded = text.casefold()
+    folded = (body or "").casefold()
     for mention in _github_mention_candidates(settings):
         if mention.casefold() in folded:
             return "mention", mention
-
-    stripped = text.strip()
-    folded_stripped = stripped.casefold()
+    stripped = (body or "").strip().casefold()
     for alias in _github_command_candidates(settings):
-        alias_folded = alias.casefold()
-        if (
-            folded_stripped == f"/{alias_folded}"
-            or folded_stripped.startswith(f"/{alias_folded} ")
-            or folded_stripped == f"{alias_folded}:"
-            or folded_stripped.startswith(f"{alias_folded}:")
-        ):
+        a = alias.casefold()
+        if stripped == f"/{a}" or stripped.startswith(f"/{a} ") or stripped == f"{a}:" or stripped.startswith(f"{a}:"):
             return "command", alias
-
     return None
 
 
 def _github_signature_ok(secret: str, body: bytes, signature: str | None) -> bool:
     if not secret or not signature:
         return False
-    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    expected = f"sha256={digest}"
+    expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature, expected)
 
 
-def _github_repo(payload: dict[str, Any]) -> tuple[str, str]:
-    repo = ((payload.get("repository") or {}).get("full_name") or "").strip()
-    installation = payload.get("installation") or {}
-    installation_id = str(installation.get("id") or "").strip()
-    return repo, installation_id
-
-
-def _repo_binding(
-    db: Session, repo_full_name: str, installation_id: str
-) -> RepoBinding | None:
-    binding = db.execute(
-        select(RepoBinding).where(RepoBinding.repo_full_name == repo_full_name)
-    ).scalar_one_or_none()
-    if binding is None:
-        return None
-    if binding.installation_id and installation_id \
-            and binding.installation_id != installation_id:
-        return None
-    return binding
-
-
 def _coerce_int(value: object) -> int | None:
-    if value in (None, ""):
-        return None
     try:
-        return int(value)
+        return int(value) if value not in (None, "") else None
     except (TypeError, ValueError):
         return None
 
@@ -296,15 +136,8 @@ def _github_reply(settings, reply_to: dict[str, Any], text: str) -> None:
     if not repo or issue_number is None:
         return
     try:
-        gh.post_issue_comment(
-            settings.github_bot_token,
-            settings.github_api_base_url,
-            settings.github_api_version,
-            repo,
-            issue_number,
-            text,
-        )
-    except Exception as e:  # noqa: BLE001 - a failed reply must not 500 webhook
+        gh.post_issue_comment(settings.github_bot_token, settings.github_api_base_url, settings.github_api_version, repo, issue_number, text)
+    except Exception as e:
         print(f"[brnrd] github reply failed: {e}")
 
 
@@ -312,306 +145,132 @@ def _maybe_pr_branch(settings, repo: str, pr_number: int | None) -> str | None:
     if pr_number is None or not settings.github_bot_token:
         return None
     try:
-        return gh.fetch_pull_head_ref(
-            settings.github_bot_token,
-            settings.github_api_base_url,
-            settings.github_api_version,
-            repo,
-            pr_number,
-        )
-    except Exception as e:  # noqa: BLE001 - branch hint is helpful, not required
+        return gh.fetch_pull_head_ref(settings.github_bot_token, settings.github_api_base_url, settings.github_api_version, repo, pr_number)
+    except Exception as e:
         print(f"[brnrd] github branch lookup failed: {e}")
         return None
 
 
-def _enqueue_github_event(
-    db: Session,
-    *,
-    project_id: str,
-    body: str,
-    reply_to: dict[str, Any],
-) -> None:
-    inbox_service.enqueue(
-        db,
-        project_id=project_id,
-        body=body,
-        source="github",
-        reply_to=reply_to,
-    )
-
-
-def _handle_github_issue_comment(
-    db: Session, settings, payload: dict[str, Any]
-) -> None:
+def _handle_github_issue_comment(db: Session, settings, payload: dict[str, Any]) -> None:
     if payload.get("action") not in {"created", "edited"}:
         return
-
-    repo, installation_id = _github_repo(payload)
+    repo_name = ((payload.get("repository") or {}).get("full_name") or "").strip()
     issue = payload.get("issue") or {}
     comment = payload.get("comment") or {}
     issue_number = _coerce_int(issue.get("number"))
     comment_id = _coerce_int(comment.get("id"))
     body = str(comment.get("body") or "")
     trigger = _github_trigger(settings, body)
-    if not repo or issue_number is None or comment_id is None:
+    if not repo_name or issue_number is None or comment_id is None or trigger is None:
         return
-    if trigger is None:
-        return
-
     trigger_kind, trigger_text = trigger
     author = str(((comment.get("user") or {}).get("login") or "")).strip()
-    if gh_parse._skip_mention_comment_author(
-        author, trigger_text, settings.github_bot_login
-    ):
+    if gh_parse._skip_mention_comment_author(author, trigger_text, settings.github_bot_login):
         return
-
-    is_pr = bool(issue.get("pull_request")) or "/pull/" in str(
-        comment.get("html_url") or ""
-    )
-    pr_number = issue_number if is_pr else None
-    kind = "pr-comment" if is_pr else "issue-comment"
-    reply_to: dict[str, Any] = {
-        "platform": "github",
-        "repo": repo,
-        "issue_number": issue_number,
-        "comment_id": comment_id,
-        "kind": kind,
-        "author": author,
-        "html_url": str(comment.get("html_url") or ""),
-        "trigger": trigger_kind,
-        "mention": trigger_text,
-    }
-    binding = _repo_binding(db, repo, installation_id)
-    if binding is None:
+    is_pr = bool(issue.get("pull_request")) or "/pull/" in str(comment.get("html_url") or "")
+    reply_to: dict[str, Any] = {"platform": "github", "repo": repo_name, "issue_number": issue_number, "comment_id": comment_id, "kind": "pr-comment" if is_pr else "issue-comment", "author": author, "html_url": str(comment.get("html_url") or ""), "trigger": trigger_kind, "mention": trigger_text}
+    repo = db.execute(select(Repo).where(Repo.repo_full_name == repo_name)).scalar_one_or_none()
+    if repo is None:
         _github_reply(settings, reply_to, _UNBOUND_REPO_TEXT)
         return
-
-    if pr_number is not None:
-        reply_to["pr_number"] = pr_number
-        branch = _maybe_pr_branch(settings, repo, pr_number)
+    if is_pr:
+        reply_to["pr_number"] = issue_number
+        branch = _maybe_pr_branch(settings, repo_name, issue_number)
         if branch:
             reply_to["branch_target"] = branch
-
-    _enqueue_github_event(
-        db,
-        project_id=binding.project_id,
-        body=gh_parse._format_event_body("", body),
-        reply_to=reply_to,
-    )
+    inbox_service.enqueue(db, repo_id=repo.id, body=gh_parse._format_event_body("", body), source="github", reply_to=reply_to)
 
 
 def _handle_start(db: Session, settings, parsed: tg.ParsedMessage, code: str) -> None:
-    pc = db.execute(
-        select(TgPairCode).where(TgPairCode.code == code)
-    ).scalar_one_or_none()
+    pc = db.execute(select(TgPairCode).where(TgPairCode.code == code)).scalar_one_or_none()
     expires = pc.expires_at if pc else None
     if expires is not None and expires.tzinfo is None:
         expires = expires.replace(tzinfo=timezone.utc)
     if pc is None or pc.consumed or (expires and expires < datetime.now(timezone.utc)):
         _reply(settings, parsed, "Invalid or expired pair code.")
         return
-
-    existing = db.execute(
-        select(ChatBinding).where(
-            ChatBinding.platform == "telegram", ChatBinding.chat_id == parsed.chat_id
-        )
-    ).scalar_one_or_none()
+    topic_id = _topic_key(parsed)
+    existing = db.execute(select(ChannelRoute).where(ChannelRoute.platform == "telegram", ChannelRoute.channel_id == parsed.chat_id, ChannelRoute.topic_id == topic_id)).scalar_one_or_none()
     if existing is not None and existing.account_id != pc.account_id:
-        _reply(
-            settings,
-            parsed,
-            "This chat is already paired to another account. "
-            "Have the current owner unbind it first.",
-        )
+        _reply(settings, parsed, "This chat/topic is already paired to another account.")
         return
-    if existing is not None:
-        existing.account_id = pc.account_id
-        existing.project_id = pc.project_id
+    if existing is None:
+        existing = ChannelRoute(id=ids.channel_route_id(), platform="telegram", channel_id=parsed.chat_id, topic_id=topic_id, account_id=pc.account_id, repo_id=pc.repo_id)
+        db.add(existing)
     else:
-        db.add(
-            ChatBinding(
-                id=ids.chat_binding_id(),
-                platform="telegram",
-                chat_id=parsed.chat_id,
-                account_id=pc.account_id,
-                project_id=pc.project_id,
-            )
-        )
+        existing.account_id = pc.account_id
+        existing.repo_id = pc.repo_id
     pc.consumed = True
-    project = db.get(Project, pc.project_id)
+    repo = db.get(Repo, pc.repo_id)
     db.commit()
-    name = project.name if project else pc.project_id
-    _reply(settings, parsed, f"Paired with project '{name}'. Send me tasks anytime.")
+    _reply(settings, parsed, f"Paired with repo '{repo.repo_full_name if repo else pc.repo_id}'. Send me tasks anytime.")
 
 
-def _handle_command(
-    db: Session,
-    settings,
-    parsed: tg.ParsedMessage,
-    command: str,
-    args: str,
-    binding: ChatBinding | None,
-) -> bool:
-    """Handle a chat-management command.
-
-    Returns True when the message was consumed as a command; False lets the
-    caller route it as a normal task.
-    """
-    if command not in {"connect", "project", "projects", "status"}:
+def _handle_command(db: Session, settings, parsed: tg.ParsedMessage, command: str, args: str, route: ChannelRoute | None) -> bool:
+    if command not in {"repo", "repos", "status"}:
         return False
-    if binding is None:
+    if route is None:
         _reply(settings, parsed, _UNPAIRED_TEXT)
         return True
-
-    projects = _account_projects(db, binding.account_id)
-    current = db.get(Project, binding.project_id)
-
-    if command == "projects":
-        _reply(settings, parsed, _project_list_text(projects, binding.project_id))
+    repos = _account_repos(db, route.account_id)
+    current = db.get(Repo, route.repo_id)
+    if command == "repos":
+        _reply(settings, parsed, _repo_list_text(repos, route.repo_id))
         return True
-
     if command == "status":
-        if current is None:
-            _reply(
-                settings,
-                parsed,
-                "This chat's selected project no longer exists. "
-                "Use /project <name> to select another one.",
-            )
-        else:
-            _reply(
-                settings,
-                parsed,
-                f"Current project: {current.name}. Use /project <name> to switch.",
-            )
+        _reply(settings, parsed, f"Active repo: {current.repo_full_name if current else '<missing>'}. Use /repo owner/name to switch.")
         return True
-
-    if command == "connect":
-        project = _find_project(projects, args)
-        if project is None:
-            _reply(
-                settings,
-                parsed,
-                f"Project '{args or '<missing>'}' was not found for this account. "
-                "Send /projects to see available projects.",
-            )
-            return True
-        binding.project_id = project.id
-        db.commit()
-        _reply(
-            settings,
-            parsed,
-            f"Selected project '{project.name}' for this chat. "
-            "Send me tasks anytime.",
-        )
+    repo = _find_repo(repos, args)
+    if repo is None:
+        _reply(settings, parsed, f"Repo '{args or '<missing>'}' was not found. Send /repos to see connected repos.")
         return True
-
-    project, task = _split_project_task(projects, args)
-    if project is None:
-        if args:
-            text = (
-                f"No project matched '{args}'. "
-                "Send /projects to see available projects."
-            )
-        else:
-            text = (
-                "Usage: /project <project-name> [task]. "
-                "Send /projects to see available projects."
-            )
-        _reply(settings, parsed, text)
-        return True
-
-    if task:
-        _enqueue_telegram_event(db, parsed, project_id=project.id, body=task)
-        return True
-
-    binding.project_id = project.id
+    route.repo_id = repo.id
     db.commit()
-    _reply(
-        settings,
-        parsed,
-        f"Selected project '{project.name}' for this chat. Send me tasks anytime.",
-    )
+    _reply(settings, parsed, f"Active repo set to '{repo.repo_full_name}'. Send me tasks anytime.")
     return True
 
 
 @router.post("/telegram")
-def telegram_webhook(
-    request: Request,
-    payload: dict,
-    x_telegram_bot_api_secret_token: str | None = Header(default=None),
-):
+def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_token: str | None = Header(default=None)):
     settings = request.app.state.settings
-    secret = settings.telegram_webhook_secret
-    if not secret or not hmac.compare_digest(
-        x_telegram_bot_api_secret_token or "", secret
-    ):
+    if not settings.telegram_webhook_secret or not hmac.compare_digest(x_telegram_bot_api_secret_token or "", settings.telegram_webhook_secret):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad secret")
-
     parsed = tg.parse_update(payload)
     if parsed is None:
         return {"ok": True}
-
-    session_factory = request.app.state.SessionLocal
-    with session_factory() as db:
+    with request.app.state.SessionLocal() as db:
         code = tg.pair_code_from_text(parsed.text)
         if code:
             _handle_start(db, settings, parsed, code)
             return {"ok": True}
-
-        binding = _chat_binding(db, parsed)
+        route = _channel_route(db, parsed)
         command = _slash_command(parsed.text)
-        if command is not None and _handle_command(
-            db, settings, parsed, command[0], command[1], binding
-        ):
+        if command is not None and _handle_command(db, settings, parsed, command[0], command[1], route):
             return {"ok": True}
-
-        if binding is None:
+        if route is None:
             _reply(settings, parsed, _UNPAIRED_TEXT)
             return {"ok": True}
-
-        project = db.get(Project, binding.project_id)
-        if project is None:
-            _reply(
-                settings,
-                parsed,
-                "This chat's selected project no longer exists. "
-                "Use /project <name> to select another one.",
-            )
+        repo = db.get(Repo, route.repo_id)
+        if repo is None:
+            _reply(settings, parsed, "This chat's active repo no longer exists. Use /repo owner/name to select another one.")
             return {"ok": True}
-
-        _enqueue_telegram_event(
-            db, parsed, project_id=binding.project_id, body=parsed.text
-        )
+        _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=parsed.text)
     return {"ok": True}
 
 
 @router.post("/github")
-async def github_webhook(
-    request: Request,
-    x_hub_signature_256: str | None = Header(default=None),
-    x_github_event: str | None = Header(default=None),
-):
+async def github_webhook(request: Request, x_hub_signature_256: str | None = Header(default=None), x_github_event: str | None = Header(default=None)):
     settings = request.app.state.settings
     raw = await request.body()
-    if not _github_signature_ok(
-        settings.github_webhook_secret, raw, x_hub_signature_256
-    ):
+    if not _github_signature_ok(settings.github_webhook_secret, raw, x_hub_signature_256):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad secret")
-
     try:
         payload = await request.json()
-    except Exception:  # noqa: BLE001 - malformed webhook body is a no-op
+    except Exception:
         return {"ok": True}
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or x_github_event == "ping":
         return {"ok": True}
-
-    if x_github_event == "ping":
-        return {"ok": True}
-    if x_github_event != "issue_comment":
-        return {"ok": True}
-
-    session_factory = request.app.state.SessionLocal
-    with session_factory() as db:
-        _handle_github_issue_comment(db, settings, payload)
+    if x_github_event == "issue_comment":
+        with request.app.state.SessionLocal() as db:
+            _handle_github_issue_comment(db, settings, payload)
     return {"ok": True}
