@@ -304,23 +304,34 @@ def _format_portal_state(payload: dict) -> str:
         "delivery: "
         f"current={outbound.get('replies_current', 0)} "
         f"other={outbound.get('replies_other', 0)} "
-        f"outbound={outbound.get('outbound_messages', 0)}",
+        f"outbound={outbound.get('outbound_messages', 0)}"
+        + ("" if outbound.get("any_sent") else "  ⚠ nothing sent yet"),
         "budget: "
         f"elapsed={_fmt_duration(budget.get('elapsed_seconds'))} "
         f"limit={_fmt_duration(budget.get('budget_seconds'))} "
-        f"keepalive={(budget.get('keepalive') or {}).get('status', '-')}",
+        f"keepalive={(budget.get('keepalive') or {}).get('status', '-')}"
+        + ("  ⚠ running long" if budget.get("long_running") else ""),
     ]
     if resources:
+        # Three-state honesty (evt-go5z): a 'known' facet shows its value; an
+        # 'absent' or 'unimplemented' one names the state and its reason so the
+        # gaps read as data, not as a flat "unavailable".
         def _facet(key: str) -> str:
             f = resources.get(key) if isinstance(resources.get(key), dict) else {}
-            if f.get("status") == "known":
+            status = f.get("status")
+            if status == "known":
+                pr_state = str(f.get("pr_state") or "").strip()
+                if pr_state == "open" and f.get("pr_number"):
+                    return f"PR #{f.get('pr_number')}"
                 return str(f.get("summary") or "known").strip() or "known"
-            return "unavailable"
+            note = str(f.get("note") or "").strip()
+            state = status if status in {"absent", "unimplemented"} else "unavailable"
+            return f"{state} ({note})" if note else state
         lines.append(
             "resources: "
-            f"quota={_facet('quota')} "
-            f"cost={_facet('cost')} "
-            f"coexisting-runs={_facet('coexisting_runs')} "
+            f"quota={_facet('quota')} | "
+            f"cost={_facet('cost')} | "
+            f"coexisting-runs={_facet('coexisting_runs')} | "
             f"remote-scm={_facet('remote_scm')}"
         )
     card_text = str(card.get("text") or "").strip()

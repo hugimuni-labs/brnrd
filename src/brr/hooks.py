@@ -189,12 +189,29 @@ def format_delta(
     limit = budget.get("budget_seconds")
     if elapsed is not None and limit is not None:
         lines.append(f"- budget: {elapsed}s of {limit}s used.")
+        # "Running so long" is a missing-data signal worth surfacing the
+        # moment it is true (evt-go5z): a run past its soft budget is either
+        # legitimately deep or quietly stuck, and the resident should see the
+        # fact rather than have to compute it from two numbers.
+        if budget.get("long_running"):
+            lines.append(
+                f"- running long: past the {limit}s soft budget — extend via "
+                ".keepalive if the work needs it, else wind down."
+            )
     acked = outbound.get("replies_current") or outbound.get("outbound_messages")
     if acked:
         lines.append(
             f"- delivery so far: current={outbound.get('replies_current', 0)} "
             f"other={outbound.get('replies_other', 0)} "
             f"outbound={outbound.get('outbound_messages', 0)}."
+        )
+    elif stop:
+        # Affirmative-empty: an addressed run that reaches closeout having
+        # sent nothing is suspicious, not silent. Surface the absence at the
+        # boundary so a forgotten reply is caught before the slot is gone.
+        lines.append(
+            "- delivery: no outbound messages sent yet — confirm this run "
+            "left the signal it owed before ending."
         )
     # SCM posture is a boundary signal (seed / stop only): the commit/push
     # reminder a wake about to end needs. Rendered only when there is
@@ -227,13 +244,30 @@ def format_delta(
 
 
 def _format_resources(resources: dict[str, Any]) -> str | None:
-    """One compact 'work status' line: quota/cost/coexisting/remote posture."""
+    """One 'work status' line: quota/cost/coexisting/remote posture.
+
+    Renders the three-state honesty of the facets so the gaps read as data,
+    not omissions (evt-go5z): ``known`` carries its value; ``absent`` says
+    what is genuinely empty (no PR yet, no quota snapshot); ``unimplemented``
+    names a not-yet-built collector. The note rides along when present so the
+    resident sees *why* a slot is empty without opening the JSON.
+    """
     def _facet_text(key: str, label: str) -> str:
         facet = resources.get(key) if isinstance(resources.get(key), dict) else {}
-        if facet.get("status") == "known":
+        status = facet.get("status")
+        note = str(facet.get("note") or "").strip()
+        if status == "known":
+            # PR posture carries a structured value; quota carries a summary.
+            pr_state = str(facet.get("pr_state") or "").strip()
+            if pr_state == "open" and facet.get("pr_number"):
+                return f"{label}=PR #{facet.get('pr_number')}"
             summary = str(facet.get("summary") or "").strip()
             return f"{label}={summary}" if summary else f"{label}=known"
-        return f"{label}=unavailable"
+        # absent / unimplemented (or anything unexpected): name the state and,
+        # when carried, the reason — substantially more legible than a flat
+        # "unavailable".
+        state = status if status in {"absent", "unimplemented"} else "unavailable"
+        return f"{label}={state} ({note})" if note else f"{label}={state}"
 
     parts = [
         _facet_text("quota", "quota"),
