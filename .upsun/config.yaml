@@ -49,6 +49,3 @@ routes:
   "https://{default}/":
     type: upstream
     upstream: "brnrd:http"
-  "https://www.{default}/":
-    type: redirect
-    to: "https://{default}/"
