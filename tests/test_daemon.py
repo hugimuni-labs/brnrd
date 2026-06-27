@@ -1249,17 +1249,39 @@ def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
 
 def test_resources_facet_quota_known_when_summary_present():
     facet = daemon._resources_facet("weekly 42% - resets 3d")
-    assert facet["quota"] == {
-        "status": "known", "summary": "weekly 42% - resets 3d",
-    }
-    # The not-yet-built capabilities advertise themselves honestly.
-    assert facet["cost"] == {"status": "unavailable"}
-    assert facet["coexisting_runs"] == {"status": "unavailable"}
-    assert facet["remote_scm"] == {"status": "unavailable"}
+    assert facet["quota"]["status"] == "known"
+    assert facet["quota"]["summary"] == "weekly 42% - resets 3d"
+    # The not-yet-built collectors advertise themselves as unimplemented and
+    # whether they are required, so a future wake sees the slot and its weight.
+    assert facet["cost"]["status"] == "unimplemented"
+    assert facet["cost"]["required"] is True
+    assert facet["coexisting_runs"]["status"] == "unimplemented"
+    assert facet["coexisting_runs"]["required"] is False
 
 
-def test_resources_facet_quota_unavailable_without_summary():
+def test_resources_facet_quota_absent_without_summary():
+    # Quota's collector exists but proved nothing for this medium: that is an
+    # affirmative-empty 'absent', not an unbuilt 'unimplemented'.
     facet = daemon._resources_facet(None)
-    assert facet["quota"] == {"status": "unavailable", "summary": None}
+    assert facet["quota"]["status"] == "absent"
+    assert facet["quota"]["summary"] is None
+    assert facet["quota"]["note"]
     facet_blank = daemon._resources_facet("   ")
-    assert facet_blank["quota"]["status"] == "unavailable"
+    assert facet_blank["quota"]["status"] == "absent"
+
+
+def test_resources_facet_remote_scm_pr_not_created_is_absent():
+    facet = daemon._resources_facet(None, branch="brr/feature")
+    assert facet["remote_scm"]["status"] == "absent"
+    assert facet["remote_scm"]["pr_state"] == "none"
+    assert facet["remote_scm"]["branch"] == "brr/feature"
+    assert facet["remote_scm"]["pr_number"] is None
+    assert "no PR" in facet["remote_scm"]["note"]
+
+
+def test_resources_facet_remote_scm_known_when_pr_recorded():
+    facet = daemon._resources_facet(None, branch="brr/feature", pr_number="207")
+    assert facet["remote_scm"]["status"] == "known"
+    assert facet["remote_scm"]["pr_state"] == "open"
+    assert facet["remote_scm"]["pr_number"] == "207"
+    assert facet["remote_scm"]["note"] is None
