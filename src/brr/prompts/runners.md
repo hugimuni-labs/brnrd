@@ -72,15 +72,21 @@ brr only generates native hook config for a profile that explicitly declares
 its back channel from the streaming driver, and a profile with neither field
 uses the heartbeat-polled fallback.
 
-The `claude` profile declares **no** `hooks:` field — because claude's Tier-2
-mechanism is **not** hooks. Empirically (Claude Code v2.1.185+) the headless
-`claude --print "<prompt>"` mode does not run settings-file lifecycle hooks at
-all, so a `hooks: claude` declaration would advertise a callback that never
-fires. Instead the profile opts into boundary injection with `stream: claude`:
-brr drives a persistent stream-json session (`--print`/`-p` is **stripped** —
-it forces a single-turn session with no stop-control), weaving the portal delta
-in at each tool boundary and folding a still-pending event's body in verbatim at
-the terminal result (`src/brr/runner_stream.py`). A profile **without**
+The `claude` profile currently opts into boundary injection with
+`stream: claude`, but **this is being migrated to `hooks: claude`** (decision
+2026-06-27, see `kb/design-runner-back-channel.md`). Direct firing tests on
+Claude Code 2.1.191 disproved the earlier claim that settings-file hooks don't
+run under `claude --print`: `PostToolUse`, `PostToolBatch`, and `Stop`
+(`decision:block` continues the turn) **all fire under `--print`**, with
+`additionalContext` injection landing. That earlier "hooks never fire headless"
+conclusion was a false negative from a contaminated test env — a parent Claude
+session leaking `CLAUDE_CODE_SAFE_MODE=1` into the spawned child, which silently
+disables settings-file hooks. brr now strips that contaminant from every runner
+subprocess env (`runner.clean_runner_environ()`), so hooks are reliable. Until
+the rip-out lands, the stream path still drives a persistent stream-json session
+(`--print`/`-p` **stripped**), weaving the portal delta in at each tool boundary
+and folding a still-pending event's body in verbatim at the terminal result
+(`src/brr/runner_stream.py`). A profile **without**
 `stream:` (the `--bare` aliases, a `runner_cmd` override) runs Tier 0/1 on the
 daemon's heartbeat-polled model (outbox drain + `portal-state.json` refresh on
 the timer), which carries *outbound* mid-thought flush but not *inbound*
