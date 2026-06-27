@@ -5,15 +5,13 @@
   <section class="panel connect-panel">
     <p class="eyebrow">Daemon approval</p>
     <h1 id="connect-title">Approve daemon</h1>
-    <p class="panel-copy">
-      Pair code <code>{{ code }}</code> is waiting for a project binding.
-    </p>
+    <p class="panel-copy">Pair code <code>{{ code }}</code> is waiting for a repo binding.</p>
 
     <form class="stack-form" method="post" action="/connect/{{ code }}">
-      <label for="project_id">Project</label>
-      <select id="project_id" name="project_id">
-        {% for project in projects %}
-          <option value="{{ project.id }}">{{ project.name }}</option>
+      <label for="repo_id">Repo</label>
+      <select id="repo_id" name="repo_id">
+        {% for repo in repos %}
+          <option value="{{ repo.id }}">{{ repo.repo_full_name }}</option>
         {% endfor %}
       </select>
       <button class="button button-primary" type="submit">Approve daemon</button>
