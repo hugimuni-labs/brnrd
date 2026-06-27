@@ -105,6 +105,18 @@
   margin-bottom: 18px;
 }
 
+.section-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.section-actions form {
+  margin: 0;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -139,6 +151,14 @@
   width: 100%;
   min-height: 48px;
   margin: 0;
+}
+
+.button-compact {
+  width: auto;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 12px;
+  font-size: 0.86rem;
 }
 
 .copy-box {
@@ -289,12 +309,16 @@ input {
 
   .button-row,
   .section-heading,
+  .section-actions,
   .binding-row,
   .inline-form {
     display: grid;
     grid-template-columns: 1fr;
   }
 
+  .section-actions .pill,
+  .section-actions .button,
+  .section-actions form,
   .inline-form .button,
   .button {
     width: 100%;
