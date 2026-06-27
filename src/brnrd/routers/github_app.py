@@ -39,6 +39,15 @@ def _account_id_from_cookie(request: Request, db: Session) -> str | None:
     return token.account_id
 
 
+def _github_dt(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def sync_installation(db: Session, settings, installation_id: str, account_id: str | None = None) -> GitHubInstallation:
     installation = db.execute(select(GitHubInstallation).where(GitHubInstallation.installation_id == installation_id)).scalar_one_or_none()
     if installation is None:
@@ -51,12 +60,10 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
     repos = gh_app.list_installation_repositories(settings, installation_id)
     target_login = ""
     target_type = ""
-    seen: set[str] = set()
     for item in repos:
         full_name = str(item.get("full_name") or "")
         if not full_name:
             continue
-        seen.add(full_name)
         owner = item.get("owner") or {}
         if not target_login:
             target_login = str(owner.get("login") or "")
@@ -68,6 +75,8 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
         row.forge_repo_id = str(item.get("id") or "") or None
         row.is_private = bool(item.get("private"))
         row.default_branch = str(item.get("default_branch") or "") or None
+        row.github_pushed_at = _github_dt(item.get("pushed_at"))
+        row.github_updated_at = _github_dt(item.get("updated_at"))
         row.last_seen_at = datetime.now(timezone.utc)
     installation.target_login = target_login or installation.target_login
     installation.target_type = target_type or installation.target_type
