@@ -3,8 +3,8 @@
 <main class="dashboard-shell">
   <header class="dashboard-hero">
     <p class="eyebrow">brnrd</p>
-    <h1>Project control plane</h1>
-    <p class="lede">Connect GitHub repositories to brnrd projects, then call the bot from issues or pull requests.</p>
+    <h1>Repos through brnrd</h1>
+    <p class="lede">Install the GitHub App, connect repos, and route GitHub or Telegram prompts into local brr agents.</p>
   </header>
 
   {% if logged_in %}
@@ -12,17 +12,16 @@
     <section class="status-grid" aria-label="Setup status">
       <article class="status-card status-ok"><span>Signed in</span><strong>@{{ account.github_login }}</strong></article>
       <article class="status-card"><span>GitHub App</span><strong>{{ github_app_slug }}</strong></article>
-      <article class="status-card"><span>Repositories</span><strong>{{ connected_count }} connected</strong>{% if recoverable_count %}<small>{{ recoverable_count }} recoverable</small>{% endif %}</article>
+      <article class="status-card"><span>Connected repos</span><strong>{{ connected_count }}</strong></article>
       <article class="status-card"><span>Call sign</span><strong>@{{ github_bot_login }}</strong></article>
     </section>
 
     <section class="dashboard-grid">
       <article class="panel dashboard-panel">
-        <p class="eyebrow">Install</p>
+        <p class="eyebrow">GitHub installation</p>
         <h2>Repository access</h2>
-        <p class="panel-copy">Install <strong>{{ github_app_slug }}</strong> on the GitHub account or organization that owns the repositories.</p>
+        <p class="panel-copy">Install <strong>{{ github_app_slug }}</strong> on your user or organization account. brnrd syncs the repositories GitHub exposes to that installation.</p>
         <a class="button button-primary" href="{{ install_url }}">Install or update App</a>
-        {% if setup_installation_id %}<p class="form-note">Installation id from GitHub: <code>{{ setup_installation_id }}</code></p>{% endif %}
       </article>
 
       <article class="panel dashboard-panel">
@@ -36,56 +35,68 @@
 
     <section class="panel dashboard-panel full-width">
       <div class="section-heading">
-        <div><p class="eyebrow">Repositories</p><h2>Connected repositories</h2></div>
-        <span class="pill">{{ connected_count }} active</span>
+        <div><p class="eyebrow">Repos</p><h2>Connected repos</h2></div>
+        <span class="pill">{{ connected_count }} connected</span>
       </div>
 
-      {% if binding_views %}
+      {% if repos %}
         <div class="binding-list">
-          {% for row in binding_views %}
-            {% set binding = row.binding %}
-            <div class="binding-row binding-{{ row.status }}">
+          {% for repo in repos %}
+            <div class="binding-row">
               <div>
-                <strong>{{ binding.repo_full_name }}</strong>
-                <small>installation {{ binding.installation_id }} · project {{ row.project_name }}</small>
+                <strong>{{ repo.repo_full_name }}</strong>
+                <small>{{ repo.forge }}{% if repo.default_branch %} · {{ repo.default_branch }}{% endif %}</small>
               </div>
-              {% if row.status == "recoverable" %}
-                <form method="post" action="/bindings/repo/{{ binding.id }}/claim" class="inline-form">
-                  <select name="project_id" aria-label="Project">
-                    {% for project in projects %}<option value="{{ project.id }}">{{ project.name }}</option>{% endfor %}
-                  </select>
-                  <button class="button button-secondary" type="submit">Claim</button>
-                </form>
-              {% else %}
+              <span class="pill pill-ok">Connected</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state">
+          <strong>No repos connected yet.</strong>
+          <p>Install the GitHub App, then connect one of the synced repositories below.</p>
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="panel dashboard-panel full-width">
+      <div class="section-heading">
+        <div><p class="eyebrow">Available from GitHub</p><h2>Installed repositories</h2></div>
+        <span class="pill">{{ installed_repos|length }} synced</span>
+      </div>
+      {% if installed_repos %}
+        <div class="binding-list">
+          {% for repo in installed_repos %}
+            <div class="binding-row">
+              <div>
+                <strong>{{ repo.repo_full_name }}</strong>
+                <small>{% if repo.default_branch %}default {{ repo.default_branch }}{% else %}default branch unknown{% endif %}</small>
+              </div>
+              {% if repo.repo_full_name|lower in connected_repo_names %}
                 <span class="pill pill-ok">Connected</span>
+              {% else %}
+                <form method="post" action="/repos" class="inline-form">
+                  <input type="hidden" name="repo_full_name" value="{{ repo.repo_full_name }}">
+                  <input type="hidden" name="forge_repo_id" value="{{ repo.forge_repo_id or '' }}">
+                  <input type="hidden" name="default_branch" value="{{ repo.default_branch or '' }}">
+                  <button class="button button-secondary" type="submit">Connect</button>
+                </form>
               {% endif %}
             </div>
           {% endfor %}
         </div>
       {% else %}
         <div class="empty-state">
-          <strong>No repository bindings yet.</strong>
-          <p>Add a repository below. If an older local/API account created a binding for a repo owned by @{{ account.github_login }}, it will appear here as recoverable.</p>
+          <strong>No GitHub installation repos synced yet.</strong>
+          <p>Use the install button above. If the app is already installed, reconfigure it once so GitHub redirects back to brnrd.</p>
         </div>
       {% endif %}
-
-      <form class="stack-form binding-form" method="post" action="/bindings/repo">
-        <label for="repo_full_name">Repository</label>
-        <input id="repo_full_name" name="repo_full_name" placeholder="Gurio/brr" autocomplete="off">
-        <label for="installation_id">Installation id</label>
-        <input id="installation_id" name="installation_id" value="{{ setup_installation_id }}" autocomplete="off">
-        <label for="project_id">Project</label>
-        <select id="project_id" name="project_id">
-          {% for project in projects %}<option value="{{ project.id }}">{{ project.name }}</option>{% endfor %}
-        </select>
-        <button class="button button-primary" type="submit">Bind repository</button>
-      </form>
     </section>
   {% else %}
     <section class="panel dashboard-panel login-panel">
       <p class="eyebrow">GitHub identity</p>
       <h2>Sign in to continue</h2>
-      <p class="panel-copy">Install the App and manage repository bindings after GitHub login.</p>
+      <p class="panel-copy">Install the App and manage repos after GitHub login.</p>
       <a class="button button-primary" href="{{ signin_url }}">Sign in with GitHub</a>
     </section>
   {% endif %}
