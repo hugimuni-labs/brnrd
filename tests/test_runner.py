@@ -154,9 +154,8 @@ class TestCommandBuilding:
             "--dangerously-skip-permissions",
             # local settings source isolates the run from the user's global
             # and the project's committed settings — NOT --safe-mode, which
-            # would also nuke CLAUDE.md / skills / plugins / MCP. The claude
-            # profile declares no `hooks:` field (--print doesn't fire
-            # settings-file lifecycle hooks; see runners.md).
+            # would also silently disable the per-run hook settings brr
+            # installs for the `hooks: claude` profile.
             "--setting-sources",
             "local",
             "--system-prompt",
