@@ -81,10 +81,19 @@ def _repos(db: Session, account_id: str) -> list[Repo]:
     return list(db.execute(select(Repo).where(Repo.account_id == account_id).order_by(Repo.repo_full_name)).scalars())
 
 
+def _installations(db: Session, account_id: str) -> list[GitHubInstallation]:
+    return list(
+        db.execute(
+            select(GitHubInstallation)
+            .where(GitHubInstallation.account_id == account_id)
+            .order_by(GitHubInstallation.target_login)
+        ).scalars()
+    )
+
+
 def _installed_repos(db: Session, account_id: str) -> list[GitHubInstalledRepo]:
-    installations = list(db.execute(select(GitHubInstallation).where(GitHubInstallation.account_id == account_id)).scalars())
     out: list[GitHubInstalledRepo] = []
-    for installation in installations:
+    for installation in _installations(db, account_id):
         out.extend(db.execute(select(GitHubInstalledRepo).where(GitHubInstalledRepo.github_installation_id == installation.id).order_by(GitHubInstalledRepo.repo_full_name)).scalars())
     return out
 
@@ -92,15 +101,17 @@ def _installed_repos(db: Session, account_id: str) -> list[GitHubInstalledRepo]:
 def _notice_text(value: str | None) -> str | None:
     return {
         "repo-connected": "Repo connected.",
-        "github-synced": "GitHub installation synced.",
+        "github-synced": "GitHub installations synced.",
         "github-installed": "GitHub installation received.",
-        "github-sync-failed": "GitHub installation was received, but repo sync failed. Check app private-key config and logs.",
+        "github-sync-empty": "No GitHub App installations were found for this app.",
+        "github-sync-failed": "GitHub installation sync failed. Check app id/private-key config and logs.",
     }.get(value or "", value)
 
 
 def _dashboard_context(request: Request, db: Session, account: Account, *, notice: str | None = None, installation_id: str | None = None) -> dict:
     settings = request.app.state.settings
     repos = _repos(db, account.id)
+    installations = _installations(db, account.id)
     installed = _installed_repos(db, account.id)
     connected = {r.repo_full_name.casefold() for r in repos}
     return {
@@ -109,6 +120,7 @@ def _dashboard_context(request: Request, db: Session, account: Account, *, notic
         "logged_in": True,
         "account": account,
         "repos": repos,
+        "installations": installations,
         "installed_repos": installed,
         "connected_repo_names": connected,
         "connected_count": len(repos),
