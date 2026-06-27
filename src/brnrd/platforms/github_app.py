@@ -37,6 +37,29 @@ def _headers(settings, token: str) -> dict[str, str]:
     }
 
 
+def list_app_installations(settings) -> list[dict[str, Any]]:
+    """List installations visible to this GitHub App.
+
+    This uses the App JWT, not a user OAuth token. It lets brnrd recover when
+    GitHub sends an already-installed user to the GitHub permissions page
+    instead of back through the setup callback.
+    """
+    jwt_token = app_jwt(settings)
+    installations: list[dict[str, Any]] = []
+    url = f"{settings.github_api_base_url.rstrip('/')}/app/installations"
+    with httpx.Client(timeout=20) as client:
+        while url:
+            response = client.get(
+                url,
+                headers=_headers(settings, jwt_token),
+                params={"per_page": 100} if "?" not in url else None,
+            )
+            response.raise_for_status()
+            installations.extend(response.json() or [])
+            url = response.links.get("next", {}).get("url")
+    return installations
+
+
 def installation_access_token(settings, installation_id: str) -> str:
     jwt_token = app_jwt(settings)
     url = f"{settings.github_api_base_url.rstrip('/')}/app/installations/{installation_id}/access_tokens"
