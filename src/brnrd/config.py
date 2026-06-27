@@ -1,8 +1,4 @@
-"""Runtime settings for the brnrd backend.
-
-Sourced from the environment with prototype-friendly defaults
-(SQLite, dev endpoints on). Production overrides ``BRNRD_*``.
-"""
+"""Runtime settings for the brnrd backend."""
 
 from __future__ import annotations
 
@@ -24,96 +20,54 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_first(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
-    """Immutable settings bundle. Pass a custom one to ``create_app``."""
-
     database_url: str = os.environ.get("BRNRD_DATABASE_URL", "sqlite:///./brnrd.db")
-    # Public base URL, used to build the pair_url the CLI prints during
-    # the device-flow connect handshake.
-    public_base_url: str = os.environ.get(
-        "BRNRD_PUBLIC_BASE_URL", "http://localhost:8000"
-    )
-    # Long-poll: the inbox GET blocks up to this many seconds waiting
-    # for a queued event before returning empty. A client may request
-    # less via ``?wait=`` but never more than this cap.
+    public_base_url: str = os.environ.get("BRNRD_PUBLIC_BASE_URL", "http://localhost:8000")
     inbox_long_poll_max_s: float = _env_float("BRNRD_INBOX_LONGPOLL_MAX_S", 25.0)
     inbox_poll_interval_s: float = _env_float("BRNRD_INBOX_POLL_INTERVAL_S", 0.5)
-    # Pair requests (device-flow connect codes) expire after this long.
     pair_ttl_s: int = _env_int("BRNRD_PAIR_TTL_S", 600)
-    # Relayed diffense review packs live in RAM behind a capability token
-    # for this long, then drop. Never persisted (see pack_relay.py).
     pack_relay_ttl_s: int = _env_int("BRNRD_PACK_RELAY_TTL_S", 3600)
-    # The dev enqueue ingress stands in for real platform webhooks.
-    # Off in production; on by default for the prototype.
     enable_dev_endpoints: bool = os.environ.get("BRNRD_ENABLE_DEV", "1") != "0"
-    # Telegram: a single managed bot, multiplexed by chat_id. The
-    # webhook is authenticated by the secret-token header Telegram
-    # echoes back from setWebhook (not a bearer).
+
     telegram_bot_token: str = os.environ.get("BRNRD_TELEGRAM_BOT_TOKEN", "")
     telegram_webhook_secret: str = os.environ.get("BRNRD_TELEGRAM_WEBHOOK_SECRET", "")
-    # Bot @username (without the leading @), used to build t.me deep-links
-    # so a user can tap to open the bot with the pair code prefilled
-    # instead of copy-pasting ``/start <code>``. Empty → no deep-link.
     telegram_bot_username: str = os.environ.get("BRNRD_TELEGRAM_BOT_USERNAME", "")
-    # Web dashboard session cookie name.
+
     session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
-    # GitHub OAuth / GitHub App user-authorization settings. The same
-    # managed GitHub App that receives webhooks can serve as brnrd's
-    # identity provider; self-hosters can point these at their own app.
-    github_oauth_client_id: str = os.environ.get("BRNRD_GITHUB_OAUTH_CLIENT_ID", "")
-    github_oauth_client_secret: str = os.environ.get(
-        "BRNRD_GITHUB_OAUTH_CLIENT_SECRET", ""
-    )
-    # Minimal scope: identity (`/user` id + login) needs none, but the
-    # verified-email endpoint requires `user:email`. GitHub Apps ignore
-    # scope and gate email via the app's "Email addresses" permission,
-    # where this param is harmless. Self-hosters can override or clear it.
-    github_oauth_scope: str = os.environ.get(
-        "BRNRD_GITHUB_OAUTH_SCOPE", "user:email"
-    )
-    github_oauth_authorize_url: str = os.environ.get(
-        "BRNRD_GITHUB_OAUTH_AUTHORIZE_URL",
-        "https://github.com/login/oauth/authorize",
-    )
-    github_oauth_token_url: str = os.environ.get(
-        "BRNRD_GITHUB_OAUTH_TOKEN_URL",
-        "https://github.com/login/oauth/access_token",
-    )
-    github_api_base_url: str = os.environ.get(
-        "BRNRD_GITHUB_API_BASE_URL", "https://api.github.com"
-    )
-    github_api_version: str = os.environ.get(
-        "BRNRD_GITHUB_API_VERSION", "2026-03-10"
-    )
-    # GitHub App installation settings. The app slug is the installable
-    # integration identity (for example, brnrd-dev during the private beta).
-    github_app_slug: str = os.environ.get("BRNRD_GITHUB_APP_SLUG", "brnrd-dev")
-    github_install_url: str = os.environ.get(
+
+    github_oauth_client_id: str = _env_first("BRNRD_GITHUB_OAUTH_CLIENT_ID", "GITHUB_CLIENT_ID")
+    github_oauth_client_secret: str = _env_first("BRNRD_GITHUB_OAUTH_CLIENT_SECRET", "GITHUB_CLIENT_SECRET")
+    github_oauth_scope: str = os.environ.get("BRNRD_GITHUB_OAUTH_SCOPE", "user:email")
+    github_oauth_authorize_url: str = os.environ.get("BRNRD_GITHUB_OAUTH_AUTHORIZE_URL", "https://github.com/login/oauth/authorize")
+    github_oauth_token_url: str = os.environ.get("BRNRD_GITHUB_OAUTH_TOKEN_URL", "https://github.com/login/oauth/access_token")
+    github_api_base_url: str = os.environ.get("BRNRD_GITHUB_API_BASE_URL", "https://api.github.com")
+    github_api_version: str = os.environ.get("BRNRD_GITHUB_API_VERSION", "2026-03-10")
+
+    github_app_id: str = _env_first("BRNRD_GITHUB_APP_ID", "GITHUB_APP_ID")
+    github_app_private_key_b64: str = _env_first("BRNRD_GITHUB_APP_PRIVATE_KEY_B64", "GITHUB_APP_PRIVATE_KEY_B64")
+    github_app_slug: str = _env_first("BRNRD_GITHUB_APP_SLUG", "GITHUB_APP_SLUG", default="brnrd-dev")
+    github_install_url: str = _env_first(
         "BRNRD_GITHUB_INSTALL_URL",
-        "https://github.com/apps/brnrd-dev/installations/new",
+        "GITHUB_INSTALL_URL",
+        default="https://github.com/apps/brnrd-dev/installations/new",
     )
-    # Managed GitHub App webhook / posting settings. ``github_bot_token``
-    # is the narrow transport seam for this prototype slice; production
-    # replaces it with an installation token minted from the App private key.
-    github_webhook_secret: str = os.environ.get("BRNRD_GITHUB_WEBHOOK_SECRET", "")
-    # Human-facing call sign. This is intentionally distinct from the App
-    # slug because GitHub App names cannot collide with existing accounts;
-    # the mentionable face can be a machine user such as @brnrd-bot.
+    github_webhook_secret: str = _env_first("BRNRD_GITHUB_WEBHOOK_SECRET", "GITHUB_WEBHOOK_SECRET")
     github_bot_login: str = os.environ.get("BRNRD_GITHUB_BOT_LOGIN", "brnrd-bot")
-    github_trigger_aliases: str = os.environ.get(
-        "BRNRD_GITHUB_TRIGGER_ALIASES", "brnrd,brr"
-    )
+    github_trigger_aliases: str = os.environ.get("BRNRD_GITHUB_TRIGGER_ALIASES", "brnrd,brr")
     github_bot_token: str = os.environ.get("BRNRD_GITHUB_BOT_TOKEN", "")
-    oauth_state_cookie: str = os.environ.get(
-        "BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state"
-    )
-    oauth_pkce_cookie: str = os.environ.get(
-        "BRNRD_OAUTH_PKCE_COOKIE", "brnrd_oauth_pkce"
-    )
-    oauth_next_cookie: str = os.environ.get(
-        "BRNRD_OAUTH_NEXT_COOKIE", "brnrd_oauth_next"
-    )
+
+    oauth_state_cookie: str = os.environ.get("BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state")
+    oauth_pkce_cookie: str = os.environ.get("BRNRD_OAUTH_PKCE_COOKIE", "brnrd_oauth_pkce")
+    oauth_next_cookie: str = os.environ.get("BRNRD_OAUTH_NEXT_COOKIE", "brnrd_oauth_next")
     oauth_state_ttl_s: int = _env_int("BRNRD_OAUTH_STATE_TTL_S", 600)
 
 
