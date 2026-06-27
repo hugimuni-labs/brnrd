@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> None:
     brnrd_sub = brnrd_p.add_subparsers(dest="brnrd_command", required=True)
 
     p = brnrd_sub.add_parser(
-        "connect", help="link this daemon to a brnrd project (device-flow)")
+        "connect", help="link this daemon to a brnrd repo (device-flow)")
     p.add_argument("--url", default=None,
                    help="brnrd base URL (default: $BRNRD_URL or https://brnrd.dev)")
     p.add_argument("--daemon-name", default=None,
@@ -258,45 +258,9 @@ def cmd_docs(args):
     if text is None:
         print(f"[brr docs] unknown topic: {args.topic}", file=sys.stderr)
         print(docs.format_listing(repo_root), file=sys.stderr)
-        return 1
+        return 2
     print(text)
     return 0
-
-
-def _latest_portal_state_path() -> Path | None:
-    import os
-
-    env_path = os.environ.get("BRR_PORTAL_STATE")
-    if env_path:
-        return Path(env_path)
-    brr_dir = _maybe_brr_dir()
-    if brr_dir is None:
-        return None
-    candidates = list((brr_dir / "outbox").glob("*/portal-state.json"))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda path: path.stat().st_mtime_ns)
-
-
-def _portal_state_path(path_arg: str | None) -> Path | None:
-    return Path(path_arg) if path_arg else _latest_portal_state_path()
-
-
-def _read_portal_state(
-    path: Path | None,
-) -> tuple[dict | None, str | None, str | None]:
-    import json
-
-    if path is None or not path.exists():
-        return None, None, None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return None, None, str(exc)
-    if not isinstance(payload, dict):
-        return None, None, "portal state root is not an object"
-    token = payload.get("change_token")
-    return payload, str(token) if token else None, None
 
 
 def _fmt_duration(seconds: object) -> str:
@@ -411,8 +375,6 @@ def cmd_hook(args):
 
     phase = str(args.phase or "").strip()
     if phase not in hooks.PHASES:
-        # Tolerant: an unknown phase is a no-op success so a runner mapping
-        # an extra native hook onto brr never hard-fails the agent's turn.
         print("{}", end="")
         return 0
     return hooks.main(phase)
@@ -613,7 +575,7 @@ def cmd_brnrd_connect(args):
     url = args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
     daemon_name = args.daemon_name or socket.gethostname()
     cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
-    print("[brr] Start the daemon with `brr up` to begin draining the brnrd inbox.")
+    print("[brr] Start the daemon with `brr daemon up` to begin draining the brnrd inbox.")
 
 
 def _fmt_ts(epoch: float) -> str:
@@ -658,9 +620,12 @@ def cmd_ergonomics_summary(args):
     print(f"[brr ergonomics] {len(records)} record(s) over {args.days}d, "
           f"{len(summaries)} issue(s):")
     for s in summaries:
-        envs = ",".join(sorted(s.envs)) or "-"
-        print(f"  {s.severity:5}  {s.count:4}x  {s.issue:22}  "
-              f"last={_fmt_ts(s.last_seen)}  env={envs}")
+        print(
+            f"- {s.issue_id}: {s.count}×, first { _fmt_ts(s.first_seen) }, "
+            f"last { _fmt_ts(s.last_seen) }"
+        )
+        for msg in s.examples:
+            print(f"    · {msg}")
     return 0
 
 
@@ -670,11 +635,12 @@ def cmd_ergonomics_list(args):
     from . import ergonomics
 
     brr_dir = _brr_dir()
-    records = ergonomics.read_records(brr_dir, days=args.days, issue=args.issue)
-    records = records[-args.limit:] if args.limit else records
+    records = ergonomics.read_records(brr_dir, days=args.days, limit=args.limit)
+    if args.issue:
+        records = [r for r in records if r.issue_id == args.issue]
 
     if args.json:
-        print(_json.dumps([r.__dict__ for r in records], indent=2, default=str))
+        print(_json.dumps([r.as_dict() for r in records], indent=2))
         return 0
 
     if not records:
@@ -682,36 +648,57 @@ def cmd_ergonomics_list(args):
         return 0
 
     for r in records:
-        hint = r.detail.get("hint") if isinstance(r.detail, dict) else None
-        line = (f"  {_fmt_ts(r.timestamp)}  {r.severity:5}  {r.issue:22}  "
-                f"env={r.env or '-'}")
-        if r.run_id:
-            line += f"  run={r.run_id}"
-        print(line)
-        if hint:
-            print(f"      {hint}")
+        print(f"{ _fmt_ts(r.ts) } {r.issue_id} {r.message}")
     return 0
 
 
 def cmd_ergonomics_clear(args):
+    from datetime import datetime, timezone
+
     from . import ergonomics
 
-    brr_dir = _brr_dir()
-    removed = ergonomics.clear(brr_dir, before=args.before)
-    scope = f"before {args.before}" if args.before else "all"
-    print(f"[brr ergonomics] cleared {len(removed)} day-file(s) ({scope}).")
+    before_ts = None
+    if args.before:
+        before_ts = datetime.fromisoformat(args.before).replace(tzinfo=timezone.utc).timestamp()
+    removed = ergonomics.clear_records(_brr_dir(), before_ts=before_ts)
+    print(f"[brr ergonomics] removed {removed} record(s)")
     return 0
 
 
+def _portal_state_path(explicit: str | None) -> Path | None:
+    if explicit:
+        return Path(explicit)
+    brr_dir = _maybe_brr_dir()
+    if brr_dir is None:
+        return None
+    for candidate in (brr_dir / "portal-state.json", brr_dir / "state" / "portal-state.json"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _read_portal_state(path: Path | None):
+    if path is None:
+        return None, None, None
+    import json
+    try:
+        raw = path.read_text(encoding="utf-8")
+        return json.loads(raw), None, None
+    except Exception as e:
+        return None, None, e
+
+
 def _load_gate(name: str):
-    gate_map = {
-        "telegram": "telegram",
-        "slack": "slack",
-        "github": "github",
-        "cloud": "cloud",
-    }
-    mod_name = gate_map.get(name)
-    if not mod_name:
-        raise SystemExit(f"[brr] unknown gate: {name} (available: {', '.join(gate_map)})")
-    from .gates import import_gate
-    return import_gate(mod_name)
+    if name == "github":
+        from .gates import github
+        return github
+    if name == "cloud":
+        from .gates import cloud
+        return cloud
+    if name == "telegram":
+        from .gates import telegram
+        return telegram
+    if name == "slack":
+        from .gates import slack
+        return slack
+    raise SystemExit(f"unknown gate: {name}")
