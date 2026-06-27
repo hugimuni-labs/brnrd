@@ -168,6 +168,11 @@ class RunnerInvocation:
     # BRR_OUTBOX_DIR, etc.) without making the resident copy them out of
     # prose.
     env: dict[str, str] = field(default_factory=dict)
+    # Extra argv tokens injected before the prompt on the profile path. The
+    # daemon uses this for codex's argv-installed hooks (``-c hooks.*=…``);
+    # ignored on the ``runner_cmd`` override path (a pinned command is honoured
+    # verbatim).
+    extra_runner_args: list[str] = field(default_factory=list)
 
     @property
     def trace_root(self) -> Path:
@@ -389,6 +394,7 @@ def _build_cmd(
     prompt: str,
     cfg: dict[str, Any],
     repo_root: Path | None = None,
+    extra_args: list[str] | None = None,
 ) -> list[str]:
     """Build subprocess argv for a built-in or named runner.
 
@@ -396,9 +402,16 @@ def _build_cmd(
     bundled/default runner profiles) and prints its final reply on stdout. brr
     captures stdout and writes it to the invocation's response file —
     runners do not need to be told where the response file lives.
+
+    *extra_args* (e.g. codex's argv-installed hook overrides) are inserted
+    before the prompt on the profile / bare path. A ``runner_cmd`` override is
+    honoured verbatim — a pinned command is the user's, so extra args are not
+    injected into it.
     """
     def _replace_placeholders(parts: list[str]) -> list[str]:
         return [s.replace("{prompt}", prompt) for s in parts]
+
+    extra = list(extra_args or [])
 
     custom = cfg.get("runner_cmd")
     if custom:
@@ -409,10 +422,11 @@ def _build_cmd(
     profile = _load_profiles(repo_root).get(runner_name)
     if profile:
         cmd = shlex.split(str(profile.get("cmd", runner_name)))
+        cmd.extend(extra)
         cmd.append(prompt)
         return cmd
 
-    return [runner_name, prompt]
+    return [runner_name, *extra, prompt]
 
 
 def _write_response_file(response_path: str, stdout: str) -> None:
@@ -512,27 +526,13 @@ def invoke_runner(
     global _active_proc
     cfg = cfg or {}
 
-    # Tier-2 streaming opt-in: a profile that declares ``stream: <flavour>``
-    # runs the persistent stream-json driver (brr drives the loop and weaves
-    # portal deltas / folded-in events back in at tool boundaries) instead of
-    # the blocking ``--print`` Popen below. Gated to the profile path — a
-    # ``runner_cmd`` override means the user pinned an exact command, so honour
-    # it on the plain path rather than rewriting it for streaming. The driver
-    # registers ``_active_proc`` under ``_proc_lock`` itself, so the daemon's
-    # budget/shutdown ``kill_active`` still works unchanged.
-    if not cfg.get("runner_cmd"):
-        from . import runner_stream
-
-        if runner_stream.stream_flavour(runner_name, invocation.repo_root):
-            result = runner_stream.run_stream(runner_name, invocation, cfg)
-            # Keep the trace artifact the blocking path writes — observability
-            # for the (now default-on) streaming path. _write_trace is generic
-            # over RunnerResult, so the driver stays trace-agnostic.
-            if trace:
-                result.trace_dir = _write_trace(result)
-            return result
-
-    cmd = _build_cmd(runner_name, invocation.prompt, cfg, invocation.repo_root)
+    cmd = _build_cmd(
+        runner_name,
+        invocation.prompt,
+        cfg,
+        invocation.repo_root,
+        extra_args=invocation.extra_runner_args,
+    )
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
     # Always start from a cleaned base env so a parent agent session's
     # safe-mode / identity vars never leak into the runner (and silently

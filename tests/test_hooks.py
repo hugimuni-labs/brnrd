@@ -50,9 +50,10 @@ def test_post_tool_touches_flush_and_injects_on_change(tmp_path):
     assert code == 0
     # Flush signal dropped for the daemon to drain on.
     assert (tmp_path / hooks.FLUSH_SIGNAL_NAME).exists()
-    # Claude rendering carries the injected delta.
+    # Claude rendering carries the injected delta. Post-tool maps to
+    # PostToolBatch for claude (once per tool batch).
     ctx = out["hookSpecificOutput"]
-    assert ctx["hookEventName"] == "PostToolUse"
+    assert ctx["hookEventName"] == "PostToolBatch"
     assert "pending" in ctx["additionalContext"]
     assert "evt-2" in ctx["additionalContext"]
 
@@ -216,6 +217,48 @@ def test_codex_block_renders_continue_false(tmp_path):
     assert code == 0
 
 
+def test_codex_injects_via_hookspecificoutput(tmp_path):
+    # Codex accepts the same hookSpecificOutput.additionalContext envelope as
+    # claude (fire-verified 2026-06-27), and post-tool maps to PostToolUse
+    # (codex has no PostToolBatch).
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, code = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path, "codex"))
+    ctx = out["hookSpecificOutput"]
+    assert ctx["hookEventName"] == "PostToolUse"
+    assert "evt-2" in ctx["additionalContext"]
+    assert code == 0
+
+
+def test_stop_folds_pending_body_verbatim(tmp_path):
+    # A foldable pending event (carries a body) makes the Stop block relay the
+    # body verbatim as the user's words, not the generic nudge.
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-2", "source": "telegram", "summary": "do the thing",
+        "body": "please also rename the widget",
+    }])
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    assert out["decision"] == "block"
+    assert "please also rename the widget" in out["reason"]
+    assert "folded-in follow-up" in out["reason"]
+
+
+def test_codex_hook_args_wellformed(tmp_path, monkeypatch):
+    monkeypatch.setattr(hooks.shutil, "which", lambda _name: "/usr/bin/brr")
+    assert hooks.codex_hook_capability() is True
+    args = hooks.codex_hook_args("brr")
+    # Three -c overrides, one per phase, each a single argv token.
+    assert args.count("-c") == 3
+    joined = " ".join(args)
+    assert "hooks.PostToolUse=" in joined
+    assert "hooks.Stop=" in joined
+    assert "hooks.SessionStart=" in joined
+    # Omitted matcher is intentional: Codex treats it as match-all for
+    # supported events, so every tool/stop/session boundary reaches brr.
+    assert "matcher" not in joined
+    assert 'command="brr hook post-tool"' in joined
+
+
 def test_gemini_block_uses_deny_exit_2(tmp_path):
     _portal(tmp_path, token="t1", pending=1,
             events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
@@ -250,8 +293,10 @@ def test_missing_portal_state_is_graceful(tmp_path):
 
 
 def test_hook_config_supported_only_claude_today():
+    # ``hook_config_supported`` is the *settings-file* install gate. Codex is
+    # hooks-capable but installs via argv (codex_hook_args), so it is excluded
+    # here; Gemini has no emitter yet.
     assert hooks.hook_config_supported("claude") is True
-    # Codex now uses the JSONL stream path; Gemini has no emitter yet.
     assert hooks.hook_config_supported("codex") is False
     assert hooks.hook_config_supported("gemini") is False
     assert hooks.hook_config_supported(None) is False
@@ -265,12 +310,12 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     hook_block = settings["hooks"]
     # All three abstract phases map to their native claude event names,
     # each invoking ``brr hook <phase>`` — the keystone the wiring relies on.
-    assert set(hook_block) == {"PostToolUse", "Stop", "SessionStart"}
+    assert set(hook_block) == {"PostToolBatch", "Stop", "SessionStart"}
     cmds = {
         name: entries[0]["hooks"][0]["command"]
         for name, entries in hook_block.items()
     }
-    assert cmds["PostToolUse"] == "brr hook post-tool"
+    assert cmds["PostToolBatch"] == "brr hook post-tool"
     assert cmds["Stop"] == "brr hook stop"
     assert cmds["SessionStart"] == "brr hook session-start"
 
@@ -293,7 +338,7 @@ def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):
     assert settings["permissions"] == {"allow": ["Bash(ls)"]}
     # ...a user hook brr doesn't own is preserved alongside brr's phases.
     assert "PreToolUse" in settings["hooks"]
-    assert "PostToolUse" in settings["hooks"]
+    assert "PostToolBatch" in settings["hooks"]
 
 
 def test_install_hook_config_unsupported_flavour_is_noop(tmp_path):
