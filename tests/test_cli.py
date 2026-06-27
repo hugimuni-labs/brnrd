@@ -128,6 +128,31 @@ def test_portal_state_prints_json_from_env(tmp_path, capsys, monkeypatch):
     assert payload["run"]["id"] == "run-env"
 
 
+def test_format_portal_state_surfaces_missing_data():
+    from brr.cli import _format_portal_state
+
+    out = _format_portal_state({
+        "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
+        "attention": {"pending_event_count": 0, "pending_outbox_file_count": 0},
+        "outbound": {"replies_current": 0, "replies_other": 0,
+                     "outbound_messages": 0, "any_sent": False},
+        "budget": {"elapsed_seconds": 4000, "budget_seconds": 3600,
+                   "long_running": True, "keepalive": {"status": "-"}},
+        "resources": {
+            "quota": {"status": "absent", "note": "no snapshot for this medium"},
+            "cost": {"status": "unimplemented", "note": "not metered yet"},
+            "coexisting_runs": {"status": "unimplemented"},
+            "remote_scm": {"status": "absent",
+                           "note": "no PR recorded for this branch yet"},
+        },
+    })
+    assert "nothing sent yet" in out
+    assert "running long" in out
+    assert "cost=unimplemented (not metered yet)" in out
+    assert "remote-scm=absent (no PR recorded for this branch yet)" in out
+    assert "unavailable" not in out
+
+
 def test_portal_state_errors_without_file(capsys, monkeypatch):
     monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
     monkeypatch.setattr("brr.cli._maybe_brr_dir", lambda: None)
