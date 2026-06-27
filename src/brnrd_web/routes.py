@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hmac
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -17,11 +17,13 @@ from brnrd import ids, oauth
 from brnrd.auth import get_db
 from brnrd.models import Account, GitHubInstallation, GitHubInstalledRepo, Repo, Token
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
+from brnrd.routers.github_app import sync_app_installations_for_account
 from brnrd.routers.pairing import approve_core
 from brnrd.security import hash_token
 
 router = APIRouter(tags=["web"])
 _TEMPLATES = Jinja2Templates(directory=Path(__file__).with_name("templates"))
+_GITHUB_AUTO_SYNC_AFTER = timedelta(minutes=15)
 
 
 def _render(request: Request, template: str, context: dict | None = None, *, status_code: int = 200) -> HTMLResponse:
@@ -98,6 +100,39 @@ def _installed_repos(db: Session, account_id: str) -> list[GitHubInstalledRepo]:
     return out
 
 
+def _dt(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _github_sync_configured(request: Request) -> bool:
+    settings = request.app.state.settings
+    return bool(settings.github_app_id and settings.github_app_private_key_b64)
+
+
+def _github_auto_sync_if_needed(request: Request, db: Session, account_id: str) -> str | None:
+    if not _github_sync_configured(request):
+        return None
+    installations = _installations(db, account_id)
+    installed_repos = _installed_repos(db, account_id)
+    now = datetime.now(timezone.utc)
+    needs_sync = not installed_repos or not installations
+    if not needs_sync:
+        needs_sync = any(
+            _dt(i.last_synced_at) is None or now - _dt(i.last_synced_at) > _GITHUB_AUTO_SYNC_AFTER
+            for i in installations
+        )
+    if not needs_sync:
+        return None
+    try:
+        count = sync_app_installations_for_account(db, request.app.state.settings, account_id)
+    except Exception as e:
+        print(f"[brnrd] github dashboard auto-sync failed: {e}")
+        return "github-sync-failed"
+    return "github-synced" if count else "github-sync-empty"
+
+
 def _notice_text(value: str | None) -> str | None:
     return {
         "repo-connected": "Repo connected.",
@@ -127,6 +162,7 @@ def _dashboard_context(request: Request, db: Session, account: Account, *, notic
         "install_url": settings.github_install_url,
         "github_app_slug": settings.github_app_slug,
         "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
+        "github_sync_configured": _github_sync_configured(request),
         "notice": _notice_text(notice),
         "setup_installation_id": installation_id or "",
     }
@@ -140,6 +176,7 @@ def dashboard(request: Request, installation_id: str | None = None, notice: str 
     account = db.get(Account, account_id)
     if account is None:
         return RedirectResponse(url="/login?next=/", status_code=303)
+    notice = notice or _github_auto_sync_if_needed(request, db, account.id)
     return _render(request, "dashboard.html", _dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
 
 
