@@ -1,6 +1,6 @@
 # Repo-first brnrd model
 
-Status: proposed
+Status: accepted
 Date: 2026-06-27
 
 brnrd is not a generic project dashboard. It is a control plane for local repo agents.
