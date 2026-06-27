@@ -62,6 +62,11 @@ class Settings:
     )
     github_webhook_secret: str = _env_first("BRNRD_GITHUB_WEBHOOK_SECRET", "GITHUB_WEBHOOK_SECRET")
     github_bot_login: str = os.environ.get("BRNRD_GITHUB_BOT_LOGIN", "brnrd-bot")
+    github_bot_user_login: str = _env_first(
+        "BRNRD_GITHUB_BOT_USER_LOGIN",
+        default=os.environ.get("BRNRD_GITHUB_BOT_LOGIN", "brnrd-bot"),
+    )
+    github_bot_collaborator_permission: str = os.environ.get("BRNRD_GITHUB_BOT_COLLABORATOR_PERMISSION", "triage")
     github_trigger_aliases: str = os.environ.get("BRNRD_GITHUB_TRIGGER_ALIASES", "brnrd,brr")
     github_bot_token: str = os.environ.get("BRNRD_GITHUB_BOT_TOKEN", "")
 
