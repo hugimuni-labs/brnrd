@@ -76,6 +76,25 @@ def sync_installation(db: Session, settings, installation_id: str, account_id: s
     return installation
 
 
+def sync_app_installations_for_account(db: Session, settings, account_id: str) -> int:
+    """Sync installations visible to this GitHub App for the logged-in account.
+
+    GitHub does not always redirect an already-installed App through the setup
+    callback. This manual sync lets the dashboard recover by asking GitHub for
+    App installations directly. Pre-launch, discovered installations are attached
+    to the current brnrd account; org-membership-aware filtering can replace that
+    once multiple external users exist.
+    """
+    count = 0
+    for installation in gh_app.list_app_installations(settings):
+        installation_id = str(installation.get("id") or "")
+        if not installation_id:
+            continue
+        sync_installation(db, settings, installation_id, account_id)
+        count += 1
+    return count
+
+
 @router.get("/callback")
 def github_app_callback(code: str | None = None, state: str | None = None, error: str | None = None, error_description: str | None = None) -> dict[str, str | None]:
     if error:
@@ -96,6 +115,20 @@ def github_app_setup(request: Request, installation_id: str | None = None, setup
             notice = "github-sync-failed"
     params = {k: v for k, v in {"installation_id": installation_id, "setup_action": setup_action, "notice": notice}.items() if v}
     return RedirectResponse(url=f"/?{urlencode(params)}", status_code=303)
+
+
+@router.post("/sync")
+def github_installation_sync(request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+    account_id = _account_id_from_cookie(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+    try:
+        count = sync_app_installations_for_account(db, request.app.state.settings, account_id)
+        notice = "github-synced" if count else "github-sync-empty"
+    except Exception as e:
+        print(f"[brnrd] github manual installation sync failed: {e}")
+        notice = "github-sync-failed"
+    return RedirectResponse(url=f"/?notice={notice}", status_code=303)
 
 
 @router.post("/webhook")
