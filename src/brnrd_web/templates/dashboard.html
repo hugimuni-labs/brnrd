@@ -16,32 +16,31 @@
       <article class="status-card"><span>Call sign</span><strong>@{{ github_bot_login }}</strong></article>
     </section>
 
-    <section class="dashboard-grid">
-      <article class="panel dashboard-panel">
-        <p class="eyebrow">GitHub installation</p>
-        <h2>Repository access</h2>
-        <p class="panel-copy">Manage <strong>{{ github_app_slug }}</strong> on GitHub, then sync installations here. GitHub may open its permissions page for an already-installed app instead of redirecting back to brnrd.</p>
-        <div class="button-row">
-          <a class="button button-primary" href="{{ install_url }}">Manage App on GitHub</a>
-          <form method="post" action="/api/github/sync">
-            <button class="button button-secondary" type="submit">Sync from GitHub</button>
-          </form>
-        </div>
-        {% if installations %}
-          <p class="form-note">Synced installations: {% for installation in installations %}<code>{{ installation.target_login or installation.installation_id }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
-        {% else %}
-          <p class="form-note">Already installed? Press <strong>Sync from GitHub</strong> after returning from the GitHub permissions page.</p>
-        {% endif %}
-      </article>
+    {% if not installations and not installed_repos %}
+      <section class="dashboard-grid">
+        <article class="panel dashboard-panel">
+          <p class="eyebrow">GitHub installation</p>
+          <h2>Repository access</h2>
+          <p class="panel-copy">Install <strong>{{ github_app_slug }}</strong> once on your user or organization account. brnrd will sync repositories automatically after login and page refresh.</p>
+          <div class="button-row">
+            <a class="button button-primary" href="{{ install_url }}">Manage App on GitHub</a>
+            {% if github_sync_configured %}
+              <form method="post" action="/api/github/sync">
+                <button class="button button-secondary" type="submit">Sync from GitHub</button>
+              </form>
+            {% endif %}
+          </div>
+        </article>
 
-      <article class="panel dashboard-panel">
-        <p class="eyebrow">Call sign</p>
-        <h2>@{{ github_bot_login }}</h2>
-        <p class="panel-copy">The installable App and the mentionable bot account are separate identities.</p>
-        <div class="copy-box"><code>@{{ github_bot_login }} summarize this thread</code></div>
-        <p class="form-note">Fallbacks: <code>/brnrd</code> and <code>brnrd:</code>.</p>
-      </article>
-    </section>
+        <article class="panel dashboard-panel">
+          <p class="eyebrow">Call sign</p>
+          <h2>@{{ github_bot_login }}</h2>
+          <p class="panel-copy">The installable App and the mentionable bot account are separate identities.</p>
+          <div class="copy-box"><code>@{{ github_bot_login }} summarize this thread</code></div>
+          <p class="form-note">Fallbacks: <code>/brnrd</code> and <code>brnrd:</code>.</p>
+        </article>
+      </section>
+    {% endif %}
 
     <section class="panel dashboard-panel full-width">
       <div class="section-heading">
@@ -64,15 +63,29 @@
       {% else %}
         <div class="empty-state">
           <strong>No repos connected yet.</strong>
-          <p>Install the GitHub App, sync from GitHub, then connect one of the synced repositories below.</p>
+          <p>Connect one of the synced GitHub repositories below.</p>
         </div>
       {% endif %}
     </section>
 
     <section class="panel dashboard-panel full-width">
       <div class="section-heading">
-        <div><p class="eyebrow">Available from GitHub</p><h2>Installed repositories</h2></div>
-        <span class="pill">{{ installed_repos|length }} synced</span>
+        <div>
+          <p class="eyebrow">Available from GitHub</p>
+          <h2>Installed repositories</h2>
+          {% if installations %}
+            <p class="form-note">Synced from {% for installation in installations %}<code>{{ installation.target_login or installation.installation_id }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+          {% endif %}
+        </div>
+        <div class="section-actions">
+          <span class="pill">{{ installed_repos|length }} synced</span>
+          {% if github_sync_configured %}
+            <form method="post" action="/api/github/sync">
+              <button class="button button-secondary button-compact" type="submit">Sync</button>
+            </form>
+          {% endif %}
+          <a class="button button-secondary button-compact" href="{{ install_url }}">Manage</a>
+        </div>
       </div>
       {% if installed_repos %}
         <div class="binding-list">
@@ -98,7 +111,7 @@
       {% else %}
         <div class="empty-state">
           <strong>No GitHub installation repos synced yet.</strong>
-          <p>Use <strong>Manage App on GitHub</strong> to install or reconfigure access, then return here and press <strong>Sync from GitHub</strong>.</p>
+          <p>Use <strong>Manage</strong> to install or reconfigure access, then return here. The dashboard will sync automatically; the <strong>Sync</strong> button is a manual fallback.</p>
         </div>
       {% endif %}
     </section>
