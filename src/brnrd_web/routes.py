@@ -10,12 +10,23 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from brnrd import ids, oauth
 from brnrd.auth import get_db
-from brnrd.models import Account, GitHubInstallation, GitHubInstalledRepo, Repo, Token
+from brnrd.models import (
+    Account,
+    ChannelRoute,
+    Daemon,
+    Event,
+    GitHubInstallation,
+    GitHubInstalledRepo,
+    PairRequest,
+    Repo,
+    TgPairCode,
+    Token,
+)
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.github_app import sync_app_installations_for_account
 from brnrd.routers.pairing import approve_core
@@ -24,6 +35,7 @@ from brnrd.security import hash_token
 router = APIRouter(tags=["web"])
 _TEMPLATES = Jinja2Templates(directory=Path(__file__).with_name("templates"))
 _GITHUB_AUTO_SYNC_AFTER = timedelta(minutes=15)
+_DAEMON_ONLINE_AFTER = timedelta(minutes=2)
 
 
 def _render(request: Request, template: str, context: dict | None = None, *, status_code: int = 200) -> HTMLResponse:
@@ -79,8 +91,31 @@ def _repo_parts(repo_full_name: str) -> tuple[str, str]:
     return owner, name
 
 
+def _dt(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _age_label(value: datetime | None) -> str:
+    value = _dt(value)
+    if value is None:
+        return "never"
+    seconds = max(0, int((datetime.now(timezone.utc) - value).total_seconds()))
+    if seconds < 90:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 90:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
+
+
 def _repos(db: Session, account_id: str) -> list[Repo]:
-    return list(db.execute(select(Repo).where(Repo.account_id == account_id).order_by(Repo.repo_full_name)).scalars())
+    return list(db.execute(select(Repo).where(Repo.account_id == account_id)).scalars())
 
 
 def _installations(db: Session, account_id: str) -> list[GitHubInstallation]:
@@ -96,14 +131,49 @@ def _installations(db: Session, account_id: str) -> list[GitHubInstallation]:
 def _installed_repos(db: Session, account_id: str) -> list[GitHubInstalledRepo]:
     out: list[GitHubInstalledRepo] = []
     for installation in _installations(db, account_id):
-        out.extend(db.execute(select(GitHubInstalledRepo).where(GitHubInstalledRepo.github_installation_id == installation.id).order_by(GitHubInstalledRepo.repo_full_name)).scalars())
-    return out
+        out.extend(db.execute(select(GitHubInstalledRepo).where(GitHubInstalledRepo.github_installation_id == installation.id)).scalars())
+    return sorted(
+        out,
+        key=lambda r: (_dt(r.github_pushed_at) or _dt(r.github_updated_at) or _dt(r.last_seen_at) or datetime.min.replace(tzinfo=timezone.utc), r.repo_full_name.casefold()),
+        reverse=True,
+    )
 
 
-def _dt(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
+    repo_ids = [r.id for r in repos]
+    daemons_by_repo: dict[str, list[Daemon]] = {r.id: [] for r in repos}
+    if repo_ids:
+        for daemon in db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars():
+            daemons_by_repo.setdefault(daemon.repo_id, []).append(daemon)
+
+    now = datetime.now(timezone.utc)
+    views: list[dict] = []
+    for repo in repos:
+        daemons = daemons_by_repo.get(repo.id, [])
+        latest = max(daemons, key=lambda d: _dt(d.last_seen_at) or datetime.min.replace(tzinfo=timezone.utc), default=None)
+        online = any(d.online and _dt(d.last_seen_at) and now - _dt(d.last_seen_at) <= _DAEMON_ONLINE_AFTER for d in daemons)
+        if online:
+            daemon_status = "online"
+            daemon_label = "Daemon online"
+        elif latest is not None:
+            daemon_status = "offline"
+            daemon_label = "Daemon offline"
+        else:
+            daemon_status = "missing"
+            daemon_label = "Set up local daemon"
+        last_activity = _dt(latest.last_seen_at if latest else None) or _dt(repo.updated_at) or _dt(repo.created_at)
+        views.append(
+            {
+                "repo": repo,
+                "daemon_count": len(daemons),
+                "daemon_status": daemon_status,
+                "daemon_label": daemon_label,
+                "daemon_last_seen": _age_label(latest.last_seen_at if latest else None),
+                "latest_daemon_name": latest.daemon_name if latest else "",
+                "sort_time": last_activity or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+    return sorted(views, key=lambda v: (v["daemon_status"] == "online", v["sort_time"], v["repo"].repo_full_name.casefold()), reverse=True)
 
 
 def _github_sync_configured(request: Request) -> bool:
@@ -119,10 +189,7 @@ def _github_auto_sync_if_needed(request: Request, db: Session, account_id: str) 
     now = datetime.now(timezone.utc)
     needs_sync = not installed_repos or not installations
     if not needs_sync:
-        needs_sync = any(
-            _dt(i.last_synced_at) is None or now - _dt(i.last_synced_at) > _GITHUB_AUTO_SYNC_AFTER
-            for i in installations
-        )
+        needs_sync = any(_dt(i.last_synced_at) is None or now - _dt(i.last_synced_at) > _GITHUB_AUTO_SYNC_AFTER for i in installations)
     if not needs_sync:
         return None
     try:
@@ -135,7 +202,8 @@ def _github_auto_sync_if_needed(request: Request, db: Session, account_id: str) 
 
 def _notice_text(value: str | None) -> str | None:
     return {
-        "repo-connected": "Repo connected.",
+        "repo-connected": "Repo enabled. Set up a local brr daemon to start draining work.",
+        "repo-disconnected": "Repo disconnected from brnrd.",
         "github-synced": "GitHub installations synced.",
         "github-installed": "GitHub installation received.",
         "github-sync-empty": "No GitHub App installations were found for this app.",
@@ -146,6 +214,7 @@ def _notice_text(value: str | None) -> str | None:
 def _dashboard_context(request: Request, db: Session, account: Account, *, notice: str | None = None, installation_id: str | None = None) -> dict:
     settings = request.app.state.settings
     repos = _repos(db, account.id)
+    repo_views = _repo_views(db, repos)
     installations = _installations(db, account.id)
     installed = _installed_repos(db, account.id)
     connected = {r.repo_full_name.casefold() for r in repos}
@@ -155,6 +224,7 @@ def _dashboard_context(request: Request, db: Session, account: Account, *, notic
         "logged_in": True,
         "account": account,
         "repos": repos,
+        "repo_views": repo_views,
         "installations": installations,
         "installed_repos": installed,
         "connected_repo_names": connected,
@@ -195,8 +265,24 @@ def connect_repo_submit(request: Request, repo_full_name: str = Form(...), forge
         db.add(repo)
     repo.forge_repo_id = forge_repo_id or repo.forge_repo_id
     repo.default_branch = default_branch or repo.default_branch
+    repo.updated_at = datetime.now(timezone.utc)
     db.commit()
     return RedirectResponse(url="/?notice=repo-connected", status_code=303)
+
+
+@router.post("/repos/{repo_id}/disconnect", response_class=HTMLResponse)
+def disconnect_repo(repo_id: str, request: Request, db: Session = Depends(get_db)):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+    repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repo not found")
+    for model in (Daemon, Event, ChannelRoute, TgPairCode, PairRequest, Token):
+        db.execute(delete(model).where(model.repo_id == repo.id))
+    db.delete(repo)
+    db.commit()
+    return RedirectResponse(url="/?notice=repo-disconnected", status_code=303)
 
 
 @router.get("/login", response_class=HTMLResponse)
