@@ -1,9 +1,4 @@
-"""Request / response bodies for the brnrd API.
-
-Pydantic models kept deliberately thin — the spine carries task
-text and an opaque ``reply_to`` routing blob, nothing platform-
-specific. Field names track ``design-brnrd-protocol.md``.
-"""
+"""Request / response bodies for the brnrd API."""
 
 from __future__ import annotations
 
@@ -13,41 +8,45 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-# ── Accounts / projects ─────────────────────────────────────────────
+class RepoCreate(BaseModel):
+    repo_full_name: str = Field(min_length=1, max_length=255)
+    forge: str = Field(default="github", min_length=1, max_length=32)
+    forge_repo_id: str | None = Field(default=None, max_length=64)
+    default_branch: str | None = Field(default=None, max_length=255)
 
 
-class ProjectCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
-
-
-class ProjectOut(BaseModel):
-    project_id: str
-    name: str
+class RepoOut(BaseModel):
+    repo_id: str
+    forge: str
+    repo_full_name: str
+    repo_owner: str
+    repo_name: str
+    forge_repo_id: str | None = None
+    default_branch: str | None = None
     created_at: datetime
 
 
-class ProjectList(BaseModel):
-    projects: list[ProjectOut]
+class RepoList(BaseModel):
+    repos: list[RepoOut]
 
 
-class RepoBindingCreate(BaseModel):
-    installation_id: str = Field(min_length=1, max_length=64)
-    repo_full_name: str = Field(min_length=1, max_length=255)
-    project_id: str
-
-
-class RepoBindingOut(BaseModel):
-    binding_id: str
+class GitHubInstallationOut(BaseModel):
     installation_id: str
+    target_login: str
+    target_type: str
+    last_synced_at: datetime | None = None
+
+
+class GitHubInstalledRepoOut(BaseModel):
     repo_full_name: str
-    project_id: str
+    forge_repo_id: str | None = None
+    default_branch: str | None = None
+    is_private: bool = False
 
 
-class RepoBindingList(BaseModel):
-    bindings: list[RepoBindingOut]
-
-
-# ── Device-flow connect ─────────────────────────────────────────────
+class GitHubInstallationsList(BaseModel):
+    installations: list[GitHubInstallationOut]
+    installed_repos: list[GitHubInstalledRepoOut]
 
 
 class PairStarted(BaseModel):
@@ -58,28 +57,23 @@ class PairStarted(BaseModel):
 
 
 class PairApprove(BaseModel):
-    project_id: str
+    repo_id: str
 
 
 class TelegramPairStart(BaseModel):
-    project_id: str
+    repo_id: str
 
 
 class TelegramPairStarted(BaseModel):
     pair_code: str
     instructions: str
-    # ``https://t.me/<bot>?start=<code>`` when the bot username is
-    # configured; None otherwise (fall back to the ``/start`` instructions).
     deep_link: str | None = None
 
 
 class PairStatus(BaseModel):
     status: str
-    project_id: str | None = None
+    repo_id: str | None = None
     daemon_token: str | None = None
-
-
-# ── Daemon-facing ───────────────────────────────────────────────────
 
 
 class DaemonRegister(BaseModel):
@@ -89,7 +83,7 @@ class DaemonRegister(BaseModel):
 
 class DaemonRegistered(BaseModel):
     daemon_id: str
-    project_id: str
+    repo_id: str
 
 
 class DaemonDeregister(BaseModel):
@@ -124,8 +118,6 @@ class ResponseAck(BaseModel):
 class CardPost(BaseModel):
     event_id: str
     text: str
-    # None → send a new card and return its id; set → edit that message
-    # in place. The daemon's card driver owns this id; brnrd stores none.
     message_id: int | None = None
 
 
@@ -135,8 +127,6 @@ class CardAck(BaseModel):
 
 
 class PackRelayPost(BaseModel):
-    # The full diffense review pack to render. Held transiently in RAM
-    # behind a capability token; never persisted (see pack_relay.py).
     pack: dict[str, Any]
     ttl_s: int | None = None
 
@@ -147,11 +137,8 @@ class PackRelayAck(BaseModel):
     expires_at: float
 
 
-# ── Dev ingress (webhook stand-in) ──────────────────────────────────
-
-
 class DevEnqueue(BaseModel):
-    project_id: str
+    repo_id: str
     body: str
     source: str = "dev"
     reply_to: dict[str, Any] = Field(default_factory=dict)
