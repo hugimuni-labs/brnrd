@@ -32,3 +32,16 @@ project_id -> repo_id
 ```
 
 The UI should say **Repo**, **Channel**, **Runtime**, and **Account**. It should not ask users to understand generic brnrd projects.
+
+## Consequences
+
+- The dashboard becomes repo-card-first.
+- Daemon pairing approves a local daemon against a repo.
+- Telegram route selection becomes active repo selection.
+- GitHub issue/PR comments route by repo identity.
+- `Project` compatibility is deliberately not preserved before launch.
+
+## Companion pages
+
+- [`design-brnrd-channel-routing.md`](design-brnrd-channel-routing.md) — account-owned channels that route into repos.
+- [`design-brnrd-github-installation-sync.md`](design-brnrd-github-installation-sync.md) — GitHub App installation auth and installed-repo sync.
