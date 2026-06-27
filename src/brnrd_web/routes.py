@@ -154,13 +154,13 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
         online = any(d.online and _dt(d.last_seen_at) and now - _dt(d.last_seen_at) <= _DAEMON_ONLINE_AFTER for d in daemons)
         if online:
             daemon_status = "online"
-            daemon_label = "Daemon online"
+            daemon_label = "Local daemon online"
         elif latest is not None:
             daemon_status = "offline"
-            daemon_label = "Daemon offline"
+            daemon_label = "Local daemon not running"
         else:
             daemon_status = "missing"
-            daemon_label = "Set up local daemon"
+            daemon_label = "Waiting for local daemon"
         last_activity = _dt(latest.last_seen_at if latest else None) or _dt(repo.updated_at) or _dt(repo.created_at)
         views.append(
             {
@@ -170,6 +170,7 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
                 "daemon_label": daemon_label,
                 "daemon_last_seen": _age_label(latest.last_seen_at if latest else None),
                 "latest_daemon_name": latest.daemon_name if latest else "",
+                "setup_command": f"cd {repo.repo_name}\nbrr brnrd connect --url https://brnrd.dev\nbrr daemon up",
                 "sort_time": last_activity or datetime.min.replace(tzinfo=timezone.utc),
             }
         )
