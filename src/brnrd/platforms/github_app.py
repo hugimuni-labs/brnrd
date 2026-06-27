@@ -87,22 +87,23 @@ def list_installation_repositories(settings, installation_id: str) -> list[dict[
     return repos
 
 
-def create_issue(settings, installation_id: str, repo_full_name: str, *, title: str, body: str) -> dict[str, Any]:
-    """Create an issue as the installed GitHub App.
+def invite_collaborator(settings, installation_id: str, repo_full_name: str, username: str, *, permission: str = "triage") -> dict[str, Any]:
+    """Invite a GitHub user as a repository collaborator using the App installation.
 
-    This deliberately uses an installation token rather than a user/machine PAT so
-    the visible actor is the GitHub App bot identity, for example
-    ``brnrd-dev[bot]``. We use it experimentally to seed the App as a visible
-    participant after a repo is enabled in brnrd.
+    This is for the human-facing bot user identity such as ``brnrd-bot``. It is
+    distinct from the GitHub App identity such as ``brnrd-dev[bot]``.
     """
     token = installation_access_token(settings, installation_id)
-    url = f"{settings.github_api_base_url.rstrip('/')}/repos/{repo_full_name}/issues"
+    url = f"{settings.github_api_base_url.rstrip('/')}/repos/{repo_full_name}/collaborators/{username}"
     with httpx.Client(timeout=20) as client:
-        response = client.post(
+        response = client.put(
             url,
             headers=_headers(settings, token),
-            json={"title": title, "body": body},
+            json={"permission": permission},
         )
-        response.raise_for_status()
-        data = response.json()
-    return data if isinstance(data, dict) else {}
+        # 201 = invitation created, 204 = already collaborator or permission updated
+        if response.status_code not in (201, 204):
+            response.raise_for_status()
+        data = response.json() if response.content else {}
+    data["status_code"] = response.status_code
+    return data
