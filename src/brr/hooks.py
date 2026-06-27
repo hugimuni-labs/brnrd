@@ -484,9 +484,11 @@ def codex_hook_args(brr_bin: str = "brr") -> list[str]:
     Returns ``-c hooks.<Event>=[…]`` overrides for each phase, to append to a
     ``codex exec`` command (the profile cmd carries
     ``--dangerously-bypass-hook-trust``). Each override is one argv token, so
-    the embedded command string's spaces survive without shell quoting. Codex
-    exposes ``PostToolUse`` / ``Stop`` / ``SessionStart``; fire-verified
-    ``PostToolUse`` + ``additionalContext`` injection on codex-cli 0.141.0.
+    the embedded command string's spaces survive without shell quoting. The
+    matcher field is deliberately omitted: current Codex docs define omitted
+    matcher as "match every occurrence" for supported events. Codex exposes
+    ``PostToolUse`` / ``Stop`` / ``SessionStart``; fire-verified ``PostToolUse``
+    + ``additionalContext`` injection on codex-cli 0.141.0.
     """
     def _override(event: str, phase: str) -> str:
         cmd = hook_command(phase, brr_bin)
