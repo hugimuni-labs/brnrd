@@ -70,6 +70,10 @@ tool-call cost without touching the adopter-facing template.
   bundle's `Recent in this conversation` block satisfies the
   AGENTS.md kb/log.md startup step; treat the generated run context
   file as recovery detail rather than routine reading.
+  A 2026-06-27 follow-up tightened the first step too: `AGENTS.md`
+  remains the entry point for hosts that did not inject the playbook,
+  while daemon wakes treat an injected copy as the contract and only
+  open the file when it is absent, stale, or itself under change.
 - [`run_context.py`](../src/brr/run_context.py) header rewritten to
   match: the bundle is the hot path, this file is for when the
   bundle didn't include what's needed.

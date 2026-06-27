@@ -8209,3 +8209,17 @@ the retired stream driver as current. Focused runner-hook, daemon, prompt, CLI,
 and env suites pass. Full `pytest` is still blocked by unrelated brnrd test
 collection drift (`Project` / `ChatBinding` imports no longer exist in
 `brnrd.models`).
+
+## [2026-06-27] fix | Run prompt stops re-reading injected AGENTS context
+
+The context-shape review found one real layering contradiction in the daemon
+wake preamble: brr runs often already receive `AGENTS.md` as injected outer
+context, but `prompts/run.md` still opened by telling every runner to read the
+repo file before anything else. That turned a present contract back into a
+filesystem chore and made the hot-path bundle feel secondary.
+
+`run.md` now states the split directly: `AGENTS.md` is the entry point for
+hosts that did not inject the playbook; daemon wakes treat an injected copy as
+the contract and open the file only when it is absent, appears stale, or the
+task touches the playbook. A prompt guardrail test pins the distinction, and
+`plan-agent-orientation-layering.md` carries the breadcrumb.
