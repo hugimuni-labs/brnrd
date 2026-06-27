@@ -48,22 +48,44 @@
         <span class="pill">{{ connected_count }} connected</span>
       </div>
 
-      {% if repos %}
+      {% if repo_views %}
         <div class="binding-list">
-          {% for repo in repos %}
-            <div class="binding-row">
-              <div>
-                <strong>{{ repo.repo_full_name }}</strong>
-                <small>{{ repo.forge }}{% if repo.default_branch %} · {{ repo.default_branch }}{% endif %}</small>
+          {% for row in repo_views %}
+            {% set repo = row.repo %}
+            <div class="repo-card daemon-{{ row.daemon_status }}">
+              <div class="repo-card-main">
+                <div>
+                  <strong>{{ repo.repo_full_name }}</strong>
+                  <small>{{ repo.forge }}{% if repo.default_branch %} · {{ repo.default_branch }}{% endif %}</small>
+                </div>
+                <span class="pill daemon-pill daemon-pill-{{ row.daemon_status }}">{{ row.daemon_label }}</span>
               </div>
-              <span class="pill pill-ok">Connected</span>
+              <p class="form-note">
+                {% if row.daemon_status == "online" %}
+                  {{ row.latest_daemon_name }} checked in {{ row.daemon_last_seen }}.
+                {% elif row.daemon_status == "offline" %}
+                  {{ row.latest_daemon_name }} was last seen {{ row.daemon_last_seen }}. Start the local daemon to drain queued work.
+                {% else %}
+                  Enablement only creates the brnrd repo record. Run brr locally from a checkout to pair a daemon.
+                {% endif %}
+              </p>
+              {% if row.daemon_status != "online" %}
+                <div class="setup-box">
+                  <code>cd {{ repo.repo_name }}</code>
+                  <code>brr brnrd connect --url https://brnrd.dev</code>
+                  <code>brr daemon up</code>
+                </div>
+              {% endif %}
+              <form method="post" action="/repos/{{ repo.id }}/disconnect" class="danger-form">
+                <button class="button button-danger button-compact" type="submit">Disconnect repo</button>
+              </form>
             </div>
           {% endfor %}
         </div>
       {% else %}
         <div class="empty-state">
           <strong>No repos connected yet.</strong>
-          <p>Connect one of the synced GitHub repositories below.</p>
+          <p>Enable one of the synced GitHub repositories below, then pair a local brr daemon from that repo's checkout.</p>
         </div>
       {% endif %}
     </section>
@@ -74,7 +96,7 @@
           <p class="eyebrow">Available from GitHub</p>
           <h2>Installed repositories</h2>
           {% if installations %}
-            <p class="form-note">Synced from {% for installation in installations %}<code>{{ installation.target_login or installation.installation_id }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.</p>
+            <p class="form-note">Synced from {% for installation in installations %}<code>{{ installation.target_login or installation.installation_id }}</code>{% if not loop.last %}, {% endif %}{% endfor %}. Most recently pushed repos appear first.</p>
           {% endif %}
         </div>
         <div class="section-actions">
@@ -96,13 +118,13 @@
                 <small>{% if repo.default_branch %}default {{ repo.default_branch }}{% else %}default branch unknown{% endif %}</small>
               </div>
               {% if repo.repo_full_name|lower in connected_repo_names %}
-                <span class="pill pill-ok">Connected</span>
+                <span class="pill pill-ok">Enabled</span>
               {% else %}
                 <form method="post" action="/repos" class="inline-form">
                   <input type="hidden" name="repo_full_name" value="{{ repo.repo_full_name }}">
                   <input type="hidden" name="forge_repo_id" value="{{ repo.forge_repo_id or '' }}">
                   <input type="hidden" name="default_branch" value="{{ repo.default_branch or '' }}">
-                  <button class="button button-secondary" type="submit">Connect</button>
+                  <button class="button button-secondary" type="submit">Enable brnrd</button>
                 </form>
               {% endif %}
             </div>
