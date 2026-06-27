@@ -1,7 +1,7 @@
 ---
 claude:
   cmd: 'claude --print --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
-  stream: claude
+  hooks: claude
 claude-bare-api-only:
   binary: claude
   cmd: 'claude --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
@@ -15,8 +15,8 @@ claude-bare-api-only-fable:
   binary: claude
   cmd: 'claude --model "claude-fable-5" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
 codex:
-  cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
-  stream: codex
+  cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
+  hooks: codex
 gemini:
   cmd: gemini -p --yolo
   hooks: gemini
@@ -51,59 +51,46 @@ works. See `kb/design-runner-back-channel.md` for the full design.
   outbox and refreshing `portal-state.json` on its timer). Tier 2 is never
   load-bearing for *correctness*, but it is the substrate of a fuller resident.
 
-The *mechanism* for boundary injection is **runner-specific** — don't confuse it
-with the concept:
-  - **claude** — brr **drives the stream** (`--input-format stream-json
-    --output-format stream-json`) and injects the delta as a message itself. No
-    `hooks:` field; opts in with `stream: claude`. (Built and default-on —
-    `src/brr/runner_stream.py`, `kb/plan-streaming-runner-injection.md`.)
-  - **codex** — brr reads `codex exec --json` JSONL. The CLI is single-turn,
-    so command-completion boundaries flush outbound work and a terminal pending
-    user follow-up resumes the recorded `thread_id` once with the folded-in
-    body. No `hooks:` field; opts in with `stream: codex`.
-  - **gemini** — native lifecycle hooks: the runner invokes a brr callback
-    (`brr hook <phase>`) consuming a JSON result. A profile opts in with a
-    `hooks: <flavour>` field; brr renders the native config and a runtime
-    precheck gates activation. The field is *intent*; firing is unverified until
-    a live test (the precheck asserts prerequisites, not firing).
+Boundary injection rides each runner's **native lifecycle hooks**: the runner
+invokes a brr callback (`brr hook <phase>`) at tool/turn boundaries and weaves
+the JSON result back into its context. A profile opts in with a `hooks:
+<flavour>` field. brr owns the abstract phases (`post-tool` / `stop` /
+`session-start`) and renders one neutral result into each flavour's native
+fields. The *config-install mechanism* is runner-specific:
+  - **claude** — `hooks: claude`. brr writes a per-run
+    `.claude/settings.local.json` registering `PostToolBatch` / `Stop` /
+    `SessionStart` → `brr hook <phase>`. Injection lands via
+    `hookSpecificOutput.additionalContext`; `Stop` `decision:block` continues
+    the turn for premature-stop control. **Fire-verified** on Claude Code
+    2.1.191. `PostToolBatch` (not `PostToolUse`) is the post-tool seam — once
+    per tool batch, after every result, before the next model call.
+  - **codex** — `hooks: codex`. Codex's project-`.codex/config.toml` install
+    hangs under repo-trust, so brr injects the hook config as runner argv
+    (`-c hooks.<Event>=[…]`) paired with `--dangerously-bypass-hook-trust` in
+    the profile cmd. Codex exposes `PostToolUse` / `Stop` / `SessionStart` (no
+    `PostToolBatch`) and accepts the same `hookSpecificOutput` injection
+    envelope. **Fire-verified** `PostToolUse` + injection on codex-cli 0.141.0.
+  - **gemini** — `hooks: gemini` as *intent*. brr can render native hook config
+    once an emitter exists and a runtime precheck gates activation; firing is
+    unverified until a live test (the precheck asserts prerequisites, not
+    firing).
 
-brr only generates native hook config for a profile that explicitly declares
-`hooks:`. It does not infer hooks from the runner name; a `stream:` runner gets
-its back channel from the streaming driver, and a profile with neither field
-uses the heartbeat-polled fallback.
+brr only installs hook config for a profile that explicitly declares `hooks:`.
+It never infers hooks from the runner name; a profile with no `hooks:` field
+(the `--bare` aliases, a `runner_cmd` override) uses the heartbeat-polled
+fallback (outbox drain + `portal-state.json` refresh on the daemon timer),
+which carries *outbound* mid-thought flush but not *inbound* injection.
 
-The `claude` profile currently opts into boundary injection with
-`stream: claude`, but **this is being migrated to `hooks: claude`** (decision
-2026-06-27, see `kb/design-runner-back-channel.md`). Direct firing tests on
-Claude Code 2.1.191 disproved the earlier claim that settings-file hooks don't
-run under `claude --print`: `PostToolUse`, `PostToolBatch`, and `Stop`
-(`decision:block` continues the turn) **all fire under `--print`**, with
-`additionalContext` injection landing. That earlier "hooks never fire headless"
-conclusion was a false negative from a contaminated test env — a parent Claude
-session leaking `CLAUDE_CODE_SAFE_MODE=1` into the spawned child, which silently
-disables settings-file hooks. brr now strips that contaminant from every runner
-subprocess env (`runner.clean_runner_environ()`), so hooks are reliable. Until
-the rip-out lands, the stream path still drives a persistent stream-json session
-(`--print`/`-p` **stripped**), weaving the portal delta in at each tool boundary
-and folding a still-pending event's body in verbatim at the terminal result
-(`src/brr/runner_stream.py`). A profile **without**
-`stream:` (the `--bare` aliases, a `runner_cmd` override) runs Tier 0/1 on the
-daemon's heartbeat-polled model (outbox drain + `portal-state.json` refresh on
-the timer), which carries *outbound* mid-thought flush but not *inbound*
-injection. `--setting-sources local` is kept for settings **isolation**: it
+Reliability rests on a clean child env. A parent agent session can leak
+`CLAUDE_CODE_SAFE_MODE=1` into a spawned `claude`, which **silently disables
+settings-file hooks** while logging a reassuring "managed settings-file hooks
+still run" — the false negative that earlier made hooks look unfireable under
+`--print` and drove a now-retired streaming workaround. brr strips that
+contaminant (and parent session-identity vars) from every runner subprocess env
+via `runner.clean_runner_environ()`, so hooks fire as they would for a normal
+top-level run. `--setting-sources local` is kept for settings **isolation**: it
 excludes the user's global and the project's committed settings without the
-collateral damage of `--safe-mode`, which sets `CLAUDE_CODE_SAFE_MODE=1` and
-disables CLAUDE.md, skills, plugins, and MCP. The `--bare` alias profiles
-declare neither `hooks:` nor `stream:`.
-
-`codex` uses the verified JSONL streaming surface (`stream: codex`) rather
-than a native hook declaration. Live probes on codex-cli 0.141.0 showed
-`item.completed` command events for boundaries, `item.completed`
-`agent_message` for final text, `turn.completed` for the terminal seam, and
-`thread.started` for the resumable session id. `gemini` keeps its `hooks:`
-declaration as *intent*: brr can render native hook config once supported and
-the runtime capability precheck will gate activation. Treat Gemini Tier 2 as
-confirmed only after a live firing test, not assumed from the declaration.
+collateral damage of `--safe-mode`.
 
 These bundled profiles are defaults, not the user's source of truth. To
 manage runner profiles for a project, create `.brr/runners.md` with the
