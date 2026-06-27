@@ -8,7 +8,8 @@ from typing import Any, Callable
 
 import requests
 
-from .. import protocol, run_progress
+from .. import gitops, protocol, run_progress
+from ..gates.github.parse import parse_origin_url
 from ..run import Run, run_manifest_path
 from . import delivery, runtime
 
@@ -42,6 +43,27 @@ def _load_state(brr_dir: Path) -> dict:
 
 def _save_state(brr_dir: Path, state: dict) -> None:
     runtime.save_state(brr_dir, "cloud", state)
+
+
+def _repo_capabilities(brr_dir: Path) -> dict:
+    repo_root = brr_dir.parent
+    caps: dict[str, object] = {"repo_root": str(repo_root)}
+    try:
+        remote = gitops.default_remote(repo_root)
+        if remote:
+            url = gitops.remote_url(repo_root, remote)
+            if url:
+                caps["git_remote"] = url
+                repo_full_name = parse_origin_url(url)
+                if repo_full_name:
+                    caps["repo_full_name"] = repo_full_name
+        caps["branch"] = gitops.current_branch(repo_root)
+        default_branch = gitops.default_branch(repo_root)
+        if default_branch:
+            caps["default_branch"] = default_branch
+    except Exception:
+        pass
+    return caps
 
 
 def is_configured(brr_dir: Path) -> bool:
@@ -78,7 +100,9 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
             raise TimeoutError("pairing timed out — re-run `brr brnrd connect`")
         time.sleep(poll_interval_s)
     state = _load_state(brr_dir)
-    state.update({"brnrd_url": brnrd_url.rstrip("/"), "token": status["daemon_token"], "repo_id": status["repo_id"], "daemon_name": daemon_name, "since": state.get("since", 0)})
+    capabilities = dict(state.get("capabilities") or {})
+    capabilities.update(_repo_capabilities(brr_dir))
+    state.update({"brnrd_url": brnrd_url.rstrip("/"), "token": status["daemon_token"], "repo_id": status["repo_id"], "daemon_name": daemon_name, "capabilities": capabilities, "since": state.get("since", 0)})
     _save_state(brr_dir, state)
     out(f"[brr] Connected to brnrd repo {status['repo_id']}.")
     return state
@@ -99,7 +123,7 @@ def bind(brr_dir: Path) -> None:
 def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     state = _load_state(brr_dir)
     try:
-        _register(state)
+        _register(brr_dir, state)
     except BrnrdAuthError as e:
         print(f"[brr:cloud] auth failed: {e}")
         return
@@ -119,8 +143,10 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             backoff = min(backoff * 2, 120)
 
 
-def _register(state: dict) -> None:
-    _request(state["brnrd_url"], "POST", "/v1/daemons/register", token=state["token"], json={"daemon_name": state.get("daemon_name", _DEFAULT_DAEMON_NAME), "capabilities": state.get("capabilities") or {}})
+def _register(brr_dir: Path, state: dict) -> None:
+    caps = dict(state.get("capabilities") or {})
+    caps.update(_repo_capabilities(brr_dir))
+    _request(state["brnrd_url"], "POST", "/v1/daemons/register", token=state["token"], json={"daemon_name": state.get("daemon_name", _DEFAULT_DAEMON_NAME), "capabilities": caps})
 
 
 def _origin_meta(reply_to: dict) -> dict:
