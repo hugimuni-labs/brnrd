@@ -244,6 +244,33 @@ def _format_resources(resources: dict[str, Any]) -> str | None:
     return "- resources: " + "; ".join(parts) + "."
 
 
+# ── Stop fold-in (verbatim, framed as the user's words) ──────────────────
+
+
+def _first_pending_event(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The first foldable pending event (one carrying a body), or None."""
+    inbound = payload.get("inbound") if isinstance(payload.get("inbound"), dict) else {}
+    events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
+    for ev in events:
+        if isinstance(ev, dict) and str(ev.get("body") or "").strip():
+            return ev
+    return None
+
+
+def _fold_in_message(event: dict[str, Any]) -> str:
+    """Frame a newly-arrived event as the user's own relayed words.
+
+    The 2026-06-26 spike found framing is load-bearing: a coercive daemon
+    interrupt is perceived but *refused* (correct injection defense), while the
+    same content relayed as the user's genuine words is acted on. So the Stop
+    block carries the event **body verbatim** under a neutral, non-imperative
+    relay header — not an operational summary.
+    """
+    source = str(event.get("source") or "user").strip() or "user"
+    body = str(event.get("body") or "").strip()
+    return f"(folded-in follow-up from the user via {source}:)\n\n{body}"
+
+
 # ── Phase logic (neutral result) ─────────────────────────────────────────
 
 
@@ -292,11 +319,17 @@ def compute_neutral(
         pending = int(attention.get("pending_event_count", 0) or 0)
         if pending > 0 and not state.get("stop_blocked"):
             block = True
-            block_reason = (
-                f"{pending} pending event(s) are still waiting — fold the "
-                "foldable ones into this wake (read inbox.json) before "
-                "ending, or say why they should wait."
-            )
+            event = _first_pending_event(portal)
+            if event is not None:
+                # Fold the waiting follow-up in verbatim, as the user's words —
+                # the resident addresses it in this same thought.
+                block_reason = _fold_in_message(event)
+            else:
+                block_reason = (
+                    f"{pending} pending event(s) are still waiting — fold the "
+                    "foldable ones into this wake (read inbox.json) before "
+                    "ending, or say why they should wait."
+                )
             state["stop_blocked"] = True
 
     _write_hook_state(ctx, state)
@@ -305,11 +338,23 @@ def compute_neutral(
 
 # ── Native rendering (neutral → runner flavour) ──────────────────────────
 
-_CLAUDE_EVENT_NAME = {
-    PHASE_POST_TOOL: "PostToolUse",
-    PHASE_STOP: "Stop",
-    PHASE_SESSION_START: "SessionStart",
-}
+# Post-tool boundary event name per flavour. Claude's ``PostToolBatch`` fires
+# once after a batch of (possibly parallel) tool calls completes — the right
+# seam (it sees every tool result before the next model call) and cheaper than
+# per-tool ``PostToolUse``. Codex exposes ``PostToolUse`` only (no
+# ``PostToolBatch`` in codex-cli 0.141.0). Both inject via
+# ``hookSpecificOutput.additionalContext`` — fire-verified 2026-06-27 on Claude
+# Code 2.1.191 (haiku) and codex-cli 0.141.0 (gpt-5.4-mini).
+_POST_TOOL_EVENT = {"claude": "PostToolBatch", "codex": "PostToolUse"}
+
+
+def native_event_name(flavour: str | None, phase: str) -> str:
+    """The runner-native hook event name for *phase* under *flavour*."""
+    if phase == PHASE_POST_TOOL:
+        return _POST_TOOL_EVENT.get(flavour or "", "PostToolUse")
+    if phase == PHASE_STOP:
+        return "Stop"
+    return "SessionStart"
 
 
 def render_native(
@@ -326,29 +371,28 @@ def render_native(
     block = bool(neutral.get("block"))
     reason = neutral.get("block_reason")
 
-    if flavour == "claude":
-        event_name = _CLAUDE_EVENT_NAME.get(phase, "PostToolUse")
+    if flavour in ("claude", "codex"):
+        # Both Claude and Codex accept the same ``hookSpecificOutput``
+        # injection envelope (fire-verified). They diverge only on stop-control:
+        # Claude blocks a premature stop with ``decision: block`` (continues the
+        # turn, verified); Codex uses the documented ``continue: false`` /
+        # ``stopReason`` shape.
+        event_name = native_event_name(flavour, phase)
         out: dict[str, Any] = {}
         if block:
-            # `decision: block` prevents the stop and feeds the reason back.
-            out["decision"] = "block"
-            if reason:
-                out["reason"] = reason
+            if flavour == "claude":
+                out["decision"] = "block"
+                if reason:
+                    out["reason"] = reason
+            else:  # codex
+                out["continue"] = False
+                if reason:
+                    out["stopReason"] = reason
         if inject:
             out["hookSpecificOutput"] = {
                 "hookEventName": event_name,
                 "additionalContext": inject,
             }
-        return out, 0
-
-    if flavour == "codex":
-        out = {}
-        if inject:
-            out["additionalContext"] = inject
-        if block:
-            out["continue"] = False
-            if reason:
-                out["stopReason"] = reason
         return out, 0
 
     if flavour == "gemini":
@@ -374,24 +418,34 @@ def render_native(
     }, 0
 
 
-# ── Config generation (brr-managed, per-run, worktree-scoped) ────────────
+# ── Config generation (brr-managed, per-run) ─────────────────────────────
 #
-# brr generates the runner's *native* hook config into the run's working
-# directory each run so the user never hand-writes it, and so it disappears
-# with the worktree (nothing touches the user's global config). A runner is
-# only treated as hooks-capable after a runtime precheck confirms the
-# prerequisites — the profile's ``hooks:`` field is the *intent*, the
+# brr generates the runner's *native* hook config each run so the user never
+# hand-writes it. Two install mechanisms, by flavour:
+#   - **claude** — a settings file written into the run's working directory
+#     (``.claude/settings.local.json``), so it disappears with the worktree and
+#     never touches the user's global config. Gated by :func:`hook_capability`.
+#   - **codex** — config-override argv (``-c hooks.<Event>=[…]``) injected into
+#     the runner command, because the project-level ``.codex/config.toml``
+#     install hung under codex's repo-trust gate (2026-06-27). Paired with the
+#     ``--dangerously-bypass-hook-trust`` flag carried by the profile cmd.
+# A runner is only treated as hooks-capable after a runtime precheck confirms
+# the prerequisites — the profile's ``hooks:`` field is the *intent*, the
 # precheck is the *assertion* (kb/design-runner-back-channel.md §Resolutions).
 
-# Flavours brr can currently emit native hook config for. Codex uses the
-# JSONL streaming path instead of native hooks; gemini's config emitter is a
-# follow-up, so it degrades to Tier 0/1 until that exists.
-_CONFIG_SUPPORTED = {"claude"}
+# Flavours brr writes a native hook *settings file* for. Codex installs via
+# argv (:func:`codex_hook_args`); gemini's emitter is a follow-up, so it
+# degrades to Tier 0/1 until that exists.
+_FILE_CONFIG_FLAVOURS = {"claude"}
 
 
 def hook_config_supported(flavour: str | None) -> bool:
-    """True when brr can generate native hook config for *flavour* today."""
-    return bool(flavour) and flavour in _CONFIG_SUPPORTED
+    """True when brr writes a native hook *settings file* for *flavour*.
+
+    Codex is hooks-capable but installs via argv, not a file — see
+    :func:`codex_hook_args` — so it is deliberately excluded here.
+    """
+    return bool(flavour) and flavour in _FILE_CONFIG_FLAVOURS
 
 
 def hook_command(phase: str, brr_bin: str = "brr") -> str:
@@ -403,13 +457,51 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
     def _entry(phase: str) -> dict[str, Any]:
         return {"hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}]}
 
+    # PostToolBatch (not PostToolUse): one injection per tool batch, after every
+    # result lands — see ``_POST_TOOL_EVENT``.
     return {
         "hooks": {
-            "PostToolUse": [_entry(PHASE_POST_TOOL)],
+            native_event_name("claude", PHASE_POST_TOOL): [_entry(PHASE_POST_TOOL)],
             "Stop": [_entry(PHASE_STOP)],
             "SessionStart": [_entry(PHASE_SESSION_START)],
         }
     }
+
+
+def codex_hook_capability(*, brr_bin: str = "brr") -> bool:
+    """Runtime precheck for codex's argv-injected hooks: brr on PATH.
+
+    Codex needs no writable config file (the config rides on the runner argv),
+    so the only prerequisite is that the ``brr hook`` endpoint each hook command
+    invokes is resolvable.
+    """
+    return shutil.which(brr_bin) is not None
+
+
+def codex_hook_args(brr_bin: str = "brr") -> list[str]:
+    """Argv tokens that install codex's native hook config inline.
+
+    Returns ``-c hooks.<Event>=[…]`` overrides for each phase, to append to a
+    ``codex exec`` command (the profile cmd carries
+    ``--dangerously-bypass-hook-trust``). Each override is one argv token, so
+    the embedded command string's spaces survive without shell quoting. The
+    matcher field is deliberately omitted: current Codex docs define omitted
+    matcher as "match every occurrence" for supported events. Codex exposes
+    ``PostToolUse`` / ``Stop`` / ``SessionStart``; fire-verified ``PostToolUse``
+    + ``additionalContext`` injection on codex-cli 0.141.0.
+    """
+    def _override(event: str, phase: str) -> str:
+        cmd = hook_command(phase, brr_bin)
+        return f'hooks.{event}=[{{hooks=[{{type="command",command="{cmd}"}}]}}]'
+
+    args: list[str] = []
+    for event, phase in (
+        ("PostToolUse", PHASE_POST_TOOL),
+        ("Stop", PHASE_STOP),
+        ("SessionStart", PHASE_SESSION_START),
+    ):
+        args.extend(["-c", _override(event, phase)])
+    return args
 
 
 def hook_capability(

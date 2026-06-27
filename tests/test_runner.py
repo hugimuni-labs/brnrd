@@ -132,6 +132,7 @@ class TestCommandBuilding:
             "codex",
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
+            "--dangerously-bypass-hook-trust",
             "-c",
             f"base_instructions={_RUNNER_BASE}",
             "-c",
@@ -153,9 +154,8 @@ class TestCommandBuilding:
             "--dangerously-skip-permissions",
             # local settings source isolates the run from the user's global
             # and the project's committed settings — NOT --safe-mode, which
-            # would also nuke CLAUDE.md / skills / plugins / MCP. The claude
-            # profile declares no `hooks:` field (--print doesn't fire
-            # settings-file lifecycle hooks; see runners.md).
+            # would also silently disable the per-run hook settings brr
+            # installs for the `hooks: claude` profile.
             "--setting-sources",
             "local",
             "--system-prompt",
@@ -357,78 +357,31 @@ class TestInvocationTracing:
         assert result.missing_artifacts[0].path == missing
 
 
-class TestStreamRouting:
-    """invoke_runner delegates to the streaming driver for stream: profiles."""
+class TestExtraRunnerArgs:
+    """``RunnerInvocation.extra_runner_args`` injects argv before the prompt
+    on the profile path (codex's argv-installed hooks), but never rewrites a
+    pinned ``runner_cmd``."""
 
-    def test_routes_to_run_stream_when_profile_opts_in(self, tmp_path, monkeypatch):
-        from brr import runner_stream
+    def test_profile_path_inserts_extra_args_before_prompt(self, tmp_path):
+        from brr.runner import _build_cmd
 
-        seen = {}
-        monkeypatch.setattr(
-            runner_stream, "stream_flavour", lambda name, root=None: "claude"
+        cmd = _build_cmd(
+            "codex", "the-prompt", {}, tmp_path,
+            extra_args=["-c", "hooks.PostToolUse=[…]"],
         )
-        sentinel = RunnerResult(
-            invocation=None, runner_name="claude", command=["claude"],
-            stdout="streamed", stderr="", returncode=0,
-            trace_dir=None, artifacts=[],
-        )
+        assert cmd[-1] == "the-prompt"
+        assert "-c" in cmd and "hooks.PostToolUse=[…]" in cmd
+        # extra args sit before the prompt, after the base command tokens.
+        assert cmd.index("hooks.PostToolUse=[…]") < cmd.index("the-prompt")
 
-        def _fake_run_stream(name, inv, cfg=None, **kw):
-            seen["name"] = name
-            return sentinel
+    def test_runner_cmd_override_ignores_extra_args(self, tmp_path):
+        from brr.runner import _build_cmd
 
-        monkeypatch.setattr(runner_stream, "run_stream", _fake_run_stream)
-        invocation = RunnerInvocation(
-            kind="daemon-run", label="e", prompt="hi",
-            cwd=tmp_path, repo_root=tmp_path,
-        )
-        result = invoke_runner("claude", invocation, cfg={})
-        assert result is sentinel
-        assert seen["name"] == "claude"
-
-    def test_streaming_run_still_writes_trace(self, tmp_path, monkeypatch):
-        # The streaming path keeps the trace artifact the blocking path writes.
-        from brr import runner_stream
-
-        monkeypatch.setattr(
-            runner_stream, "stream_flavour", lambda name, root=None: "claude"
-        )
-        invocation = RunnerInvocation(
-            kind="daemon-run", label="e", prompt="hi",
-            cwd=tmp_path, repo_root=tmp_path,
-        )
-        streamed = RunnerResult(
-            invocation=invocation, runner_name="claude", command=["claude"],
-            stdout="reply", stderr="err", returncode=0,
-            trace_dir=None, artifacts=[],
-        )
-        monkeypatch.setattr(
-            runner_stream, "run_stream", lambda *a, **k: streamed
-        )
-        result = invoke_runner("claude", invocation, cfg={}, trace=True)
-        assert result.trace_dir is not None
-        assert (result.trace_dir / "prompt.md").read_text() == "hi"
-        assert (result.trace_dir / "stdout.txt").read_text() == "reply"
-
-    def test_runner_cmd_override_stays_on_blocking_path(self, tmp_path, monkeypatch):
-        from brr import runner_stream
-
-        # A pinned runner_cmd must not be rewritten for streaming even if the
-        # profile would opt in — the user chose an exact command.
-        monkeypatch.setattr(
-            runner_stream, "stream_flavour", lambda name, root=None: "claude"
-        )
-        monkeypatch.setattr(
-            runner_stream, "run_stream",
-            lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not stream")),
-        )
         cfg = {"runner_cmd": [sys.executable, "-c", "print('plain')", "{prompt}"]}
-        invocation = RunnerInvocation(
-            kind="daemon-run", label="e", prompt="hi",
-            cwd=tmp_path, repo_root=tmp_path,
+        cmd = _build_cmd(
+            "codex", "hi", cfg, tmp_path, extra_args=["-c", "should-not-appear"],
         )
-        result = invoke_runner("claude", invocation, cfg=cfg)
-        assert result.stdout.strip() == "plain"
+        assert "should-not-appear" not in cmd
 
 
 class TestTimeoutConfig:
