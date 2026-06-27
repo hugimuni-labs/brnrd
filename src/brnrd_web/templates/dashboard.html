@@ -20,8 +20,18 @@
       <article class="panel dashboard-panel">
         <p class="eyebrow">GitHub installation</p>
         <h2>Repository access</h2>
-        <p class="panel-copy">Install <strong>{{ github_app_slug }}</strong> on your user or organization account. brnrd syncs the repositories GitHub exposes to that installation.</p>
-        <a class="button button-primary" href="{{ install_url }}">Install or update App</a>
+        <p class="panel-copy">Manage <strong>{{ github_app_slug }}</strong> on GitHub, then sync installations here. GitHub may open its permissions page for an already-installed app instead of redirecting back to brnrd.</p>
+        <div class="button-row">
+          <a class="button button-primary" href="{{ install_url }}">Manage App on GitHub</a>
+          <form method="post" action="/api/github/sync">
+            <button class="button button-secondary" type="submit">Sync from GitHub</button>
+          </form>
+        </div>
+        {% if installations %}
+          <p class="form-note">Synced installations: {% for installation in installations %}<code>{{ installation.target_login or installation.installation_id }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+        {% else %}
+          <p class="form-note">Already installed? Press <strong>Sync from GitHub</strong> after returning from the GitHub permissions page.</p>
+        {% endif %}
       </article>
 
       <article class="panel dashboard-panel">
@@ -54,7 +64,7 @@
       {% else %}
         <div class="empty-state">
           <strong>No repos connected yet.</strong>
-          <p>Install the GitHub App, then connect one of the synced repositories below.</p>
+          <p>Install the GitHub App, sync from GitHub, then connect one of the synced repositories below.</p>
         </div>
       {% endif %}
     </section>
@@ -88,7 +98,7 @@
       {% else %}
         <div class="empty-state">
           <strong>No GitHub installation repos synced yet.</strong>
-          <p>Use the install button above. If the app is already installed, reconfigure it once so GitHub redirects back to brnrd.</p>
+          <p>Use <strong>Manage App on GitHub</strong> to install or reconfigure access, then return here and press <strong>Sync from GitHub</strong>.</p>
         </div>
       {% endif %}
     </section>
