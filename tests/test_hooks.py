@@ -253,6 +253,9 @@ def test_codex_hook_args_wellformed(tmp_path, monkeypatch):
     assert "hooks.PostToolUse=" in joined
     assert "hooks.Stop=" in joined
     assert "hooks.SessionStart=" in joined
+    # Omitted matcher is intentional: Codex treats it as match-all for
+    # supported events, so every tool/stop/session boundary reaches brr.
+    assert "matcher" not in joined
     assert 'command="brr hook post-tool"' in joined
 
 

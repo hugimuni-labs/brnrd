@@ -5,90 +5,77 @@ for state interweave across Claude, Codex, and Gemini; whether the current shape
 is sound; and what common abstraction should survive the runner-specific
 mechanisms.
 
-> **Superseding correction (2026-06-27, evt o538).** This page's premise — that
-> Claude's mechanism must be stream-driving because settings-file hooks "do not
-> fire under `claude --print`" — is **disproven**. Live firing tests on Claude
-> Code 2.1.191 show `PostToolUse` / `PostToolBatch` / `Stop` (block-continues)
-> all fire under `--print` with `additionalContext` injection; Codex
-> `PostToolUse` fires too. The earlier failures were a contaminated test env (a
-> parent Claude session leaking `CLAUDE_CODE_SAFE_MODE=1` into the spawned
-> child, silently disabling settings-file hooks). Decision: retire the streaming
-> path and unify on native hooks for both runners. brr now strips that env
-> contaminant (`runner.clean_runner_environ()`). Full detail + migration plan:
-> [`design-runner-back-channel.md`](design-runner-back-channel.md) top block.
-> Read the capability tables below as the *old* posture, not the target.
+> **Superseding correction (2026-06-27, evt o538 / 1tqp).** The original
+> conclusion that Claude needed stream-driving was disproven: a parent Claude
+> session leaked `CLAUDE_CODE_SAFE_MODE=1` into child runner probes and silently
+> disabled settings-file hooks. With that contaminant stripped,
+> `PostToolBatch` / `Stop` / `SessionStart` fire under `claude --print`, and
+> Codex `PostToolUse` fires with the same `hookSpecificOutput.additionalContext`
+> envelope. brr now strips the parent-session env (`runner.clean_runner_environ()`)
+> and has retired the streaming driver. This page is rewritten to current state;
+> the abandoned streaming plan remains as lineage in
+> [`plan-streaming-runner-injection.md`](plan-streaming-runner-injection.md).
 
 ## Short answer
 
-The common concept should be **boundary interweave**, not hooks and not "stop and
-resume between tool calls." brr needs the same policy at each runner seam:
+The common concept is **boundary interweave**: brr applies the same policy at
+runner seams without making the resident remember to poll side files:
 
 - flush outbound work promptly (`.card`, outbox replies);
-- surface fresh live state when the runner can perceive it;
-- fold a late user follow-up at the terminal boundary when it belongs in the
-  same wake;
+- surface fresh live state through the runner-native context channel;
+- fold a late user follow-up at the terminal boundary when it belongs in this
+  wake, using the hook's stop-control surface;
 - keep the fallback path correct when none of that fires.
 
-The mechanisms differ:
+The active mechanism is native lifecycle hooks:
 
-- **Claude**: a persistent stream-json process with stdin open. brr writes the
-  prompt as a JSON user message, reads event JSON, and can write another user
-  message at a tool boundary or after a `result`. This is the closest fit to
-  perception-as-injection.
-- **Codex exec**: a single non-interactive JSONL turn. brr can observe command
-  boundaries and flush outbound work, but it cannot write into the active turn.
-  At the terminal boundary it can resume the emitted thread once with a folded
-  follow-up. That is continuation after a turn, not a stop/resume between tools.
-- **Gemini**: native hooks are the likely path, but brr has not implemented a
-  Gemini hook-config emitter or run a live firing test, so it is intent only.
+- **Claude**: `hooks: claude`; brr writes per-run `.claude/settings.local.json`
+  with `PostToolBatch`, `Stop`, and `SessionStart` mapped to
+  `brr hook <phase>`.
+- **Codex**: `hooks: codex`; brr injects `hooks.<Event>` config as `codex exec`
+  argv (`-c …`) and pairs it with `--dangerously-bypass-hook-trust`, avoiding
+  the project `.codex/config.toml` trust hang.
+- **Gemini**: `hooks: gemini` remains declared intent; no emitter or live firing
+  test has shipped, so it degrades to the heartbeat-polled floor.
 
 ## What the current code does
 
-`src/brr/runner_stream.py` implements two stream flavours behind profile
-`stream:` fields:
+`src/brr/hooks.py` owns the neutral policy. `compute_neutral()` reads live
+`portal-state.json`, touches `.flush` for event-driven daemon drain, renders a
+compact `hooks.format_delta()` capsule, and blocks `Stop` once when a foldable
+pending event exists. `render_native()` maps the neutral result to each flavour:
+Claude gets `decision: "block"` plus `hookSpecificOutput`; Codex gets
+`continue: false` / `stopReason` plus the same `hookSpecificOutput`; Gemini gets
+`decision: "deny"` + exit 2 for the unshipped emitter.
 
-- `stream: claude` builds a stream-json command, strips `--print`, sends the
-  prompt through stdin with `user_message_json()`, detects Claude tool-result
-  boundaries, and uses `StreamInjectionPolicy` to inject portal deltas or folded
-  follow-ups through the same stdin channel.
-- `stream: codex` builds `codex exec --json`, closes stdin, parses JSONL events,
-  treats completed command-execution items as boundaries for outbound flush, and
-  runs at most one `codex exec resume --json <thread_id> <follow-up>` after a
-  terminal turn when a pending event body is still live.
-
-The fix in this wake tightened the native-hook side: daemon hook config is now
-installed only when a profile explicitly declares `hooks:`. The previous fallback
-from "no hooks field" to runner name made bundled Claude install native hook
-config even though the current design says Claude's mechanism is stream-driving,
-not hooks.
+`src/brr/prompts/runners.md` declares `hooks: claude` and `hooks: codex`.
+`daemon._run_worker()` installs per-run Claude settings files when the profile
+declares `hooks: claude`; for Codex it threads `hooks.codex_hook_args()` through
+`RunnerInvocation.extra_runner_args`. `runner.invoke_runner()` always starts from
+`runner.clean_runner_environ()` so parent agent safe-mode/session identity cannot
+poison child runner hooks. `runner_stream.py` and `test_runner_stream.py` are
+deleted.
 
 ## Validation notes
 
-Primary docs and local probes line up with the split above:
+Primary docs and local probes now line up with the hook path:
 
-- Claude Code documents hook `additionalContext` and Stop continuation, but its
-  CLI reference still frames `--input-format stream-json` and
-  `--output-format stream-json` as print-mode options. Local Claude Code 2.1.191
-  nevertheless accepted those flags without `--print` and emitted stream-json
-  events before hitting the session quota. The repo's earlier live persistent
-  multi-turn proof remains the load-bearing evidence; keep a small firing test
-  around this seam because the public wording is narrower than the observed
-  behaviour.
-- Codex CLI 0.141.0 documents `exec --json` as newline-delimited JSON events and
-  `exec resume [SESSION_ID] [PROMPT]` as the non-interactive continuation path.
-  A local smoke on `gpt-5.4-mini` emitted `thread.started`, `turn.started`,
-  `item.completed`/`agent_message`, and `turn.completed`, matching the parser's
-  assumptions for final-text capture. The earlier command-boundary live probe is
-  what pins `command_execution` item boundaries.
-- Codex native hooks now document `PostToolUse` `additionalContext`, `Stop`
-  continuation, and `continue: false` flow control. That makes native Codex hooks
-  a plausible future adapter, but brr's current Codex path should remain JSONL +
-  resume until a native-hook firing test beats it.
+- Claude Code 2.1.191 fires settings-file `PostToolUse` and `PostToolBatch`
+  under `--print`, injects `hookSpecificOutput.additionalContext`, and honours
+  `Stop` `decision:block` by continuing the same turn. The brr-exact setup
+  (`.claude/settings.local.json` + `--setting-sources local`) fired once
+  `CLAUDE_CODE_SAFE_MODE` stopped leaking from the parent session.
+- Codex CLI 0.141.0 fires native `PostToolUse` via inline `-c hooks.PostToolUse`
+  config and `--dangerously-bypass-hook-trust`; it accepts
+  `hookSpecificOutput.additionalContext`. The Codex docs say omitting `matcher`
+  matches every occurrence of the supported event, so brr's inline all-event
+  hook config is intentional. `Stop` and `SessionStart` are wired from the same
+  emitter but still deserve a cheap live smoke when quota permits.
 - Codex app-server is a stronger future candidate for true Codex live steering:
   the official app-server protocol is bidirectional JSON-RPC, exposes threads,
   turns, streamed item notifications, and `turn/steer` for appending input to an
-  active turn. It is a larger integration than `codex exec`, but it is the first
-  Codex surface that looks conceptually comparable to Claude's live stdin loop.
+  active turn. It is a larger integration than hooks and not needed for this
+  slice.
 - Gemini CLI documents synchronous hooks, context injection at `SessionStart`,
   tool and agent hooks, and deny/retry controls. brr should not present Gemini as
   Tier 2 until it has a config emitter and a live firing test.
@@ -97,9 +84,9 @@ Primary docs and local probes line up with the split above:
 
 | Option | Claude | Codex | Gemini | Fit |
 | --- | --- | --- | --- | --- |
-| Keep the current transport-neutral policy with runner adapters | Strong: current stream path gives live injection and terminal fold-in | Sound but partial: JSONL observes boundaries; resume folds terminal follow-up | Future: native hooks after firing test | Best near-term shape. Honest about capability differences while sharing the policy. |
-| Force "native hooks" as the common mechanism | Weak for brr today: prior Claude hook firing failed under headless `--print`, and stream-driving is already working | Plausible, now documented, but unproven in brr | Plausible, documented, unproven in brr | Wrong abstraction. Hooks are an adapter, not the concept. |
-| Move Codex from `exec --json` to app-server / SDK | Not relevant | Potentially strong: bidirectional transport, streamed turn/item events, active-turn steering | Not relevant | Best research spike for "Claude-like Codex" if true live Codex input matters enough. Higher integration cost. |
+| Native hooks as the common mechanism | Strong: firing + injection + stop continuation verified after env cleanup | Strong enough for this slice: `PostToolUse` + injection verified, stop/session wired from docs | Intent only until emitter + firing test | Chosen. Smallest current shape, deletes the streaming driver, keeps one endpoint. |
+| Keep stream-driving for Claude/Codex | Possible but now unjustified | Possible but now unjustified | Not relevant | Abandoned. It solved a false negative and carried too much bespoke runner code. |
+| Move Codex from hooks to app-server / SDK | Not relevant | Potentially richer: bidirectional transport, streamed turn/item events, active-turn steering | Not relevant | Future research only if Codex needs active-turn steering beyond lifecycle hooks. |
 | Stay poll-only with `portal-state.json` / `inbox.json` | Correct fallback | Correct fallback | Correct fallback | Product floor only. It preserves correctness but loses the responsive resident shape. |
 | brr-owned provider API/tool loop | Possible but large | Possible but large | Possible but large | Too much for this slice; would replace runner CLIs rather than integrate them. |
 
@@ -121,33 +108,32 @@ Today that would classify the built-ins as:
 
 | Runner path | `flush_at_boundary` | `inject_at_boundary` | `fold_at_result` | `stop_control` | Proof posture |
 | --- | --- | --- | --- | --- | --- |
-| Claude stream | Yes | Yes | Yes | Yes, by keeping stdin open after `result` | Proven locally before this wake; this wake reconfirmed non-`--print` stream-json starts, but quota blocked a full replay. |
-| Codex exec JSONL | Yes, for command completions | No | Yes, via one `exec resume` | Partial: continuation turn, not same active turn | Proven on codex-cli 0.141.0; local smoke reconfirmed JSONL final event shape. |
-| Codex native hooks | Likely | Likely, via `additionalContext` | Likely, via `Stop` block | Likely | Docs-only until brr fires it. |
-| Codex app-server | Likely | Possibly, through `turn/steer` | Likely | Possibly | Docs-only; deserves a spike if we want true Codex live input. |
+| Claude native hooks | Yes, via `.flush` from `PostToolBatch` / `Stop` | Yes, via `additionalContext` | Yes, via `Stop` block reason | Yes | Fire-verified on Claude Code 2.1.191 after env cleanup. |
+| Codex native hooks | Yes, via `.flush` from `PostToolUse` / `Stop` | Yes, via `additionalContext` | Yes, via `Stop` `stopReason` | Partly live: `PostToolUse` verified; `Stop`/`SessionStart` docs-backed until smoked | Fire-verified `PostToolUse` on codex-cli 0.141.0; argv config shipped. |
 | Gemini native hooks | Likely | Likely | Likely | Likely | Docs-only until brr emits config and fires it. |
+| Codex app-server | Likely | Possibly, through `turn/steer` | Likely | Possibly | Docs-only; future spike only if hooks are insufficient. |
 | Tier 0/1 blocking runner | No | No | No | No | Correct fallback. |
 
-This points to a small future refactor: move `StreamInjectionPolicy` and
-`hooks.compute_neutral()` toward one shared boundary-policy module, with adapters
-for stream stdin, JSONL resume, and native hook JSON. Do not do that before the
-next runner adapter lands; the current duplication is still small enough.
+This points to one small future refactor only after Gemini or another adapter
+lands: split `hooks.compute_neutral()` into a runner-neutral boundary-policy
+module and keep `hooks.py` as the native-hook adapter. Do not do that now; with
+streaming deleted, the duplication is gone.
 
 ## Standing portal candidates
 
 Several facts should become live portal state rather than prose the resident has
 to rediscover:
 
-- the active runner interweave mechanism for this run (`stream: claude`,
-  `stream: codex`, `hooks: gemini`, or fallback);
+- the active runner interweave mechanism for this run (`hooks: claude`,
+  `hooks: codex`, `hooks: gemini` intent, or fallback);
 - the capability flags above plus their proof/version string;
-- the last observed boundary and whether the last `.flush` was drained;
-- whether terminal fold-in is still available or already consumed;
+- the last observed hook phase and whether the last `.flush` was drained;
+- whether stop fold-in was already consumed;
 - any queued pending-event bodies that are foldable versus events that should
   stay for a fresh wake.
 
-That would let a wake start from a live surface: "Codex exec JSONL, flush yes,
-live injection no, terminal resume once" instead of reconstructing it from the
+That would let a wake start from a live surface: "Codex hooks, PostToolUse
+verified, Stop wired docs-backed, fold-in unused" instead of reconstructing it from the
 Run Context Bundle, docs, and memory.
 
 ## Sources

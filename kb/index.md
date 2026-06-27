@@ -262,25 +262,23 @@ dive-in map) and are stable until something contradicts them.
   mailbox records, and later parallel-compatibility work.
 - [The runner back channel & the minimal runner interface](design-runner-back-channel.md) —
   *accepted 2026-06-22; #171/#175 shipped on `main`; `portal wrap` retired
-  2026-06-23; concept/mechanism split + Claude/Codex streaming verified
-  2026-06-26*.
+  2026-06-23; unified on native hooks 2026-06-27 after the streaming false
+  negative was traced to parent safe-mode env leakage*.
   The core is **boundary injection** (perception=injection at tool boundaries),
-  not hooks specifically; the *mechanism* is runner-specific — **stream-driving**
-  for claude (Claude Code's settings-hooks don't fire under `--print`; brr drives
-  `--input-format stream-json` and weaves the delta itself — firing **verified**),
-  **JSONL stream + resume** for codex (`codex exec --json` command boundaries,
-  `thread_id` terminal fold-in — verified on codex-cli 0.141.0), and native
-  **hooks** remain only for future hook-backed runners such as gemini. Build plan:
-  [streaming runner](plan-streaming-runner-injection.md). The runner-surfacing
-  slice of #159, reshaped from the `brr portal wrap` shell wrapper. Defines
-  the **tiered minimal runner interface** (Tier 0 file-operating process · Tier 1
-  stdout reply · Tier 2 optional boundary back channel); Tier 2 is the substrate of
-  a **holistically aware resident** (cost/quota/event meta), not just latency,
-  while the lean Telegram-wrapper-on-a-local-CLI case stays first-class. A
+  implemented through native lifecycle hooks for Tier-2 runners. `claude`
+  declares `hooks: claude` and gets a per-run `.claude/settings.local.json`
+  (`PostToolBatch` / `Stop` / `SessionStart`); `codex` declares `hooks: codex`
+  and gets inline `-c hooks.<Event>=…` argv config paired with
+  `--dangerously-bypass-hook-trust`; `gemini` remains declared intent until an
+  emitter and firing test land. The runner-surfacing slice of #159, reshaped
+  from the retired `brr portal wrap` shell wrapper, defines the **tiered minimal
+  runner interface** (Tier 0 file-operating process · Tier 1 stdout reply ·
+  Tier 2 optional boundary back channel); Tier 2 is the substrate of a
+  **holistically aware resident** (cost/quota/event meta), not just latency,
+  while the lean Telegram-wrapper-on-a-local-CLI case stays first-class. The
   transport-neutral `brr hook <phase>` endpoint does **outbound flush** +
   **inbound injection** + **stop-control** (all one slice), the daemon stays sole
-  drainer (hook only signals); native hook config is now installed only for
-  explicit `hooks:` profiles, while `stream:` profiles use the streaming driver.
+  drainer (hook only signals), and brr never infers hooks from the runner name.
   Companion validation:
   [runner interweave research](research-runner-interweave-2026-06-26.md).
   `portal wrap` is **retired** and `.keepalive`
@@ -290,18 +288,13 @@ dive-in map) and are stable until something contradicts them.
   need neither — the outbox is already halt-free; hooks add immediacy + reverse
   channel.
 - [Streaming runner — Claude and Codex boundary injection](plan-streaming-runner-injection.md) —
-  *in flight 2026-06-26; Claude default-on and Codex JSONL streaming shipped*.
-  The concrete build for Tier-2 boundary injection: brr drives Claude's
-  persistent stream-json session (stdin open, `--print` stripped) and Codex's
-  `exec --json` event stream (`thread_id` resume for one terminal fold-in).
-  Claude can receive change-token-gated portal deltas mid-tool-loop; Codex flushes
-  at command completion and folds pending user follow-ups at terminal resume.
-  Both paths sit behind `stream:` profile opt-ins, leave `runner_cmd`/fallback on
-  the blocking path, and reuse `hooks.format_delta` for the shared capsule.
-  Spike finding baked in: **framing is load-bearing** — relay user follow-ups
-  verbatim, keep operational deltas informational (coercive framing trips the
-  model's injection-defense). Unblocks the `.keepalive`→budget-capsule and
-  tail-injection relocations.
+  *abandoned 2026-06-27*. Historical plan for the streaming detour that built
+  and then deleted `runner_stream.py`. It existed because Claude settings-file
+  hooks looked unfireable under `--print`; live tests later showed the failure was
+  a contaminated parent env (`CLAUDE_CODE_SAFE_MODE=1`), so brr unified on native
+  hooks and removed the streaming driver. Kept for the lineage and the durable
+  lesson: **fire the runner mechanism before ruling on it**, and relay folded
+  user follow-ups verbatim while keeping operational deltas informational.
 
 ## Conversations & responses
 
@@ -887,14 +880,15 @@ dive-in map) and are stable until something contradicts them.
   Bundle, and the run-context-file duplication. Converged
   independently with the Cursor review.
 - [Runner interweave validation, 2026-06-26](research-runner-interweave-2026-06-26.md) —
-  *active*. Cross-runner check of state interweave after the Claude/Codex
-  streaming work: Claude has live stream-json injection, Codex `exec --json`
-  has command-boundary flush plus one terminal `resume` fold-in, Gemini and
-  Codex native hooks remain docs-backed intent until fired, and Codex app-server
-  is the richer future candidate for true active-turn steering. Recommends a
-  capability-flag abstraction (`flush_at_boundary`, `inject_at_boundary`,
-  `fold_at_result`, `stop_control`, proof string) rather than treating hooks as
-  the common mechanism.
+  *active; corrected 2026-06-27*. Cross-runner check of state interweave after
+  the false streaming premise was retired: Claude reaches Tier 2 through
+  `hooks: claude` (`PostToolBatch` / `Stop` / `SessionStart`), Codex through
+  `hooks: codex` with argv-injected `hooks.<Event>` config, Gemini remains
+  docs-backed intent until an emitter and live firing test land, and Codex
+  app-server is only future research if lifecycle hooks prove insufficient.
+  Keeps the capability-flag abstraction (`flush_at_boundary`,
+  `inject_at_boundary`, `fold_at_result`, `stop_control`, proof string) as the
+  standing way to describe runner mechanisms.
 - [Test suite grooming, 2026-05-16](research-test-suite-grooming-2026-05-16.md) —
   *shipped*. Map of bloat, cross-file helper duplication, and
   intent-quality gaps in `tests/`; the high-leverage moves

@@ -34,9 +34,9 @@ Superseded the `brr portal wrap` shell-wrapper slice of
 > guardrail (`runner.clean_runner_environ()`) is the precondition that makes
 > settings-file hooks reliable. `runner_stream.py` and its test are deleted; the
 > plan that built them is [`plan-streaming-runner-injection.md`](plan-streaming-runner-injection.md)
-> (abandoned 2026-06-27). **Everything below this block is the historical record
-> of how the streaming detour happened and was reversed — read it as lineage, not
-> current shape.**
+> (abandoned 2026-06-27). The shorter lineage note below records how the
+> streaming detour happened and was reversed; the rest of this page describes
+> the current hook-based design.
 
 > ## ⚠ Load-bearing correction — Claude hooks DO fire under `--print` (2026-06-27, evt o538)
 >
@@ -89,148 +89,51 @@ Superseded the `brr portal wrap` shell-wrapper slice of
 > `runner_stream.py` + `test_runner_stream.py` deleted; the `invoke_runner`
 > stream-routing branch is gone. The codex hook schema was reverse-engineered via
 > `codex exec --strict-config` probes — it mirrors Claude's
-> `hooks.<Event>=[{matcher,hooks=[{type="command",command="…"}]}]`, events
+> `hooks.<Event>=[{hooks=[{type="command",command="…"}]}]` shape, with omitted
+> matcher intentionally matching every supported occurrence; events are
 > `PostToolUse` / `Stop` / `SessionStart` (no `PostToolBatch`). See the Current
-> shape block at the very top of this page for the settled state. Everything
-> below is the historical streaming detour, not current code.
+> shape block at the very top of this page for the settled state.
 >
-> **Concept vs mechanism — the load-bearing correction (2026-06-26, evt ckc3).**
-> An earlier framing fused two things under the word *hooks* and the fusion sent
-> the design wrong. They are distinct:
->
-> - **Boundary injection** is the *concept* and the **core of portals**, not a
->   tier-2 "add-on." It is the perception=injection rung: at each tool boundary
->   the resident's outbound messages flush *and* fresh portal state is woven into
->   its context — so responsiveness stops depending on the resident *remembering
->   to poll* `inbox.json`. (The lived failure this fixes: the longer a thought
->   runs, the more it drifts from procedures and forgets to check for the user's
->   follow-ups. Pull defeats drift; injection beats it.)
-> - **Hooks** are *one mechanism* for boundary injection — the runner's own
->   lifecycle-callback feature. The mechanism is **runner-specific**:
->   - **claude** — **not** hooks. Claude Code's settings-file lifecycle hooks do
->     not fire under headless `claude --print` (isolated by elimination
->     2026-06-23). The working channel is **brr driving the stream**
->     (`--input-format stream-json --output-format stream-json`): brr owns the
->     message loop and weaves the portal delta in as a message at each tool
->     boundary. No harness hook needed — brr holds the loom. **Verified firing
->     2026-06-26** (see §Streaming-driven injection for claude).
->   - **codex** — **not native hooks in brr today**. The verified channel is
->     `codex exec --json`: brr streams command-completion events for outbound
->     flush and uses the emitted `thread_id` to run one `codex exec resume --json`
->     fold-in when a pending user follow-up is still live at terminal turn.
->     **Verified 2026-06-26** on codex-cli 0.141.0.
->   - **gemini** — native hooks remain declared intent; firing is still
->     unverified end-to-end, so Tier 2 only exists after a live firing test.
->
-> So the `claude` profile correctly declares **no `hooks:` field** (its mechanism
-> isn't hooks), but that is *not* a demotion of the concept: claude's Tier-2
-> boundary-injection path is real, just stream-driven. The barebones
-> `--print` + Telegram-proxy case stays the honored Tier-0/1 **floor** (degrades
-> cleanly to the heartbeat-polled model) — a supported fallback, not the ceiling.
+**Concept vs mechanism — settled after the false negative.** Boundary injection
+is the *concept* and the core of portals: at each runner boundary, brr flushes
+the resident's outbound messages and, when attention-relevant state moved, weaves
+fresh portal state back into context. The mechanism now used for Tier 2 is native
+lifecycle hooks:
 
-**Why claude's mechanism is stream-driving, not hooks (the two firing failures).**
-§Verification below confirmed hooks are a back channel *in the runners' docs* —
-but a docs check is not a firing test, and for claude's settings-file hooks firing
-broke, twice:
+- **Claude** declares `hooks: claude`. brr writes a per-run
+  `.claude/settings.local.json` that registers `PostToolBatch`, `Stop`, and
+  `SessionStart` against `brr hook <phase>`. `PostToolBatch` is the post-tool
+  seam because it fires once after a batch of tool results, before the next model
+  call.
+- **Codex** declares `hooks: codex`. brr injects the same hook config as runner
+  argv (`-c hooks.<Event>=[…]`) because the project `.codex/config.toml` path
+  hung behind repo trust. Omitting `matcher` in the inline config deliberately
+  matches every supported event.
+- **Gemini** declares `hooks: gemini` as intent only; no config emitter or firing
+  test has shipped yet, so it degrades to the heartbeat-polled floor.
 
-1. *First failure (2026-06-23):* the `claude` profile invoked `--safe-mode`, which
-   sets `CLAUDE_CODE_SAFE_MODE=1` and disables hooks. Fixed by swapping to
-   `--setting-sources local`.
-2. *Second failure (2026-06-23, structural):* even with the local settings source
-   and a provably-correct brr side (`brr hook post-tool` returns the right
-   capsule, env handles present, `settings.local.json` generated), Claude Code
-   v2.1.185 **still** never invokes the hook in `claude --print "<prompt>"` mode —
-   no `.hook-state.json`, no injected delta. Isolated by elimination (a nested
-   `claude --print` experiment with a sentinel-touching hook): not firing under
-   any setting-source, not under a forced-trusted dir, not with `matcher:"*"` + a
-   confirmed tool call, not under `--output-format stream-json` alone. Conclusion:
-   settings-file lifecycle hooks do not run in headless `--print` mode.
+The earlier streaming driver was a detour caused by a contaminated firing test:
+a parent Claude session leaked `CLAUDE_CODE_SAFE_MODE=1` into the child runner,
+silently disabling settings-file hooks and making `claude --print` look
+unhookable. Once `runner.clean_runner_environ()` stripped that inherited safe
+mode, Claude `PostToolBatch` / `Stop` / `SessionStart` and Codex `PostToolUse`
+fired. The streaming plan was abandoned on 2026-06-27 and
+`runner_stream.py` / `test_runner_stream.py` were deleted; see
+[`plan-streaming-runner-injection.md`](plan-streaming-runner-injection.md) for
+the preserved lineage.
 
-So for claude, hooks are a dead mechanism — **but boundary injection is not.** The
-working channel is brr **driving** the stream rather than relying on the harness:
+**Activation invariant.** brr only wires Tier 2 for a profile that explicitly
+declares `hooks:`. It never infers hooks from the runner name, and a
+`runner_cmd` override is honoured verbatim. The `hooks:` field records intent;
+the runtime precheck records whether brr can install that flavour's config for
+this run. Unsupported or failed prechecks fall back to heartbeat-polled outbox
+drain and `portal-state.json` refresh, which preserves correctness without live
+injection.
 
-## Streaming-driven injection for claude (verified 2026-06-26, evt ckc3)
-
-The firing test the whole tier-2 frame rested on but no one had run: brr starts
-claude in `--input-format stream-json --output-format stream-json`, keeps stdin
-open, and after a tool boundary writes a *new user message* carrying the portal
-delta. Result (spike, claude 2.1.191, nested in a temp dir):
-
-- **Mid-loop injection fires and is attended.** The model perceives a message
-  pushed between tool calls — it does not have to remember to poll. This is the
-  drift fix, working, with **no Claude Code hook involved**: brr owns the loop.
-- **Framing is a design parameter (injection-defense is real).** A delta framed
-  as a coercive `"[brr portal update] INTERRUPT FROM THE DAEMON: you MUST …"` was
-  perceived but **refused** — the model correctly treated it as a possible
-  prompt-injection. The *same* content framed as the user's genuine relayed
-  follow-up (`"oh and can you also mention … please, forgot to say"`) was
-  **acted on**. Consequence for the build: relay user follow-ups as the user's
-  own words; keep operational deltas (new-event-waiting, budget, SCM posture)
-  **informational, not imperative** — they inform judgment, they don't command.
-
-This vindicates "retirement without an alternative is too early": the alternative
-exists and is now verified. It is also *truer* to perception=injection than hooks
-were — with hooks brr borrowed the harness's callback; driving the stream, brr is
-the loom that weaves the resident's scroll. Cost note: the per-tool-call halt is
-already how tool-using agents step (5-min prefix cache keeps respawns ~0.1×), so
-stream-driving rides boundaries that exist anyway — see §Halt vs respawn.
-
-> **Persistence correction (2026-06-26, evt 8f8y — live-driven, not spiked).**
-> Driving the step-1 module against a live haiku v2.1.191 session sharpened the
-> mechanism: **`--print` stream-json is single-turn.** Mid-loop injection lands
-> only while tool calls are still pending; once the model decides to finish, the
-> process exits on the first `result` and any late stdin is dropped — so `--print`
-> has **no stop-control**. A **persistent session (drop `--print`)** is multi-turn:
-> after a `result`, a new user message starts a fresh turn the model addresses
-> (verified — an `echo FOLD-INJECT` ran after the model had said "Done!"). So the
-> two seams this design names — post-tool injection and Stop-control — are the
-> *same* stdin-write mechanism in a persistent session, and the streaming runner
-> must run persistent, not `--print`. The build plan
-> ([`plan-streaming-runner-injection.md`](plan-streaming-runner-injection.md)
-> §Driver re-verification) carries the concrete edits.
-
-**Current state of the machinery.** The `claude` and `codex` profiles declare
-**no `hooks:` field** — correct, because their mechanisms are stream-driving, not
-native hooks. The hooks machinery — `src/brr/hooks.py`, the `brr hook` endpoint,
-`render_native`, the capability precheck — stays for Gemini and for future
-hook-backed runners. `hooks.format_delta` remains the mechanism-neutral capsule
-renderer reused by both hook and stream paths.
-
-**Activation invariant (tightened 2026-06-26).** Native hook config is installed
-only when a profile explicitly declares `hooks:`. A validation pass found the
-daemon still inferred hook capability from the runner name, which made bundled
-Claude install `.claude/settings.local.json` despite its stream-backed profile.
-That fallback is gone: `stream:` and `hooks:` are separate mechanism declarations,
-and "docs say hooks exist" remains intent until brr fires that runner's hook path.
-See the cross-runner research in
-[`research-runner-interweave-2026-06-26.md`](research-runner-interweave-2026-06-26.md).
-
-**The streaming runner is built and default-on for Claude and Codex**
-(`src/brr/runner_stream.py`, profile flags `stream: claude` / `stream: codex`;
-shipped 2026-06-26, see
-[`plan-streaming-runner-injection.md`](plan-streaming-runner-injection.md)):
-`invoke_runner` routes a `stream:`-declaring profile to the streaming driver.
-Claude uses a persistent stream-json session: the driver strips `--print`, weaves
-a change-token-gated portal delta in at each tool boundary, touches `.flush`, and
-at terminal `result` folds a still-pending event's body in verbatim. Codex uses
-its single-turn JSONL stream: command `item.completed` events touch `.flush`,
-`agent_message` items capture the final reply, and terminal `turn.completed`
-folds a pending follow-up by launching one `codex exec resume --json <thread_id>`
-turn. The `--bare` aliases, `runner_cmd` overrides, and Gemini stay on the
-Tier-0/1 blocking path unless and until they declare a verified stream/hook
-mechanism.
-
-> **Ladder lesson.** `hook_capability()` was a rung-1 *assumption dressed as a
-> check*: it asserts prerequisites (flavour renderable, endpoint on PATH, cwd
-> writable) but not *firing*, so it reported Tier 2 while claude was silently
-> Tier 0. Until a runner has a live firing test, a `hooks:` declaration is intent,
-> not capability. **Corollary (the deeper miss):** the same untested-firing habit
-> nearly cost the streaming path too — last wake *dropped* it as "a safety-net the
-> reactive model never needed," reasoning from the same docs-not-firing footing,
-> only inverted. The fix in both directions is the same: **fire it before you rule
-> on it.** A 10-minute spike turned "drop the rewrite" into "the rewrite is
-> justified and the mechanism is proven." Don't retire a capability on argument
-> when a firing test is cheap.
+> **Ladder lesson.** Fire a runner mechanism before ruling on it. The same
+> untested-firing habit first made hooks look dead, then made the streaming
+> replacement look more necessary than it was. A cheap live firing test is the
+> only thing that separates a real capability from a plausible doc reading.
 
 **Still open (independent of the above):** `.keepalive` retirement, gated on the
 no-timeout-for-Tier-0/1 behaviour (see §Retiring).
@@ -281,12 +184,12 @@ of the one below, and a runner that only satisfies Tier 0 still works:
 | --- | --- | --- | --- |
 | 0 | A process that, given the assembled prompt as its final argument, **operates files in its working directory** and exits with a status code. | All real work. The irreducible floor. | **Required** |
 | 1 | Prints a **final reply on stdout** (progress/debug on stderr). | Plain current-thread delivery (`response_path` capture). | Optional |
-| 2 | A **boundary back channel**: the runner exposes tool/turn seams through a native hook, a stream brr drives, or a resumable event stream. | Event-driven outbound flush, fresh-context injection or terminal fold-in, premature-stop control, operational meta-awareness. | Optional |
+| 2 | A **boundary back channel**: the runner exposes tool/turn seams through native lifecycle hooks. | Event-driven outbound flush, fresh-context injection, premature-stop control, operational meta-awareness. | Optional |
 
 The interface document of record is `src/brr/prompts/runners.md` (the runner
-contract preamble) plus the profile frontmatter. Tier 2 is declared by the
-mechanism field the runner actually uses: `stream:` for Claude/Codex today,
-`hooks:` for hook-backed runners such as future Gemini.
+contract preamble) plus the profile frontmatter. Tier 2 is declared by
+`hooks:` in the runner profile; Claude and Codex are active, while Gemini is
+declared intent until an emitter and firing test land.
 
 **Tier 2 is not merely "latency and richness."** An earlier draft framed it that
 way; the maintainer corrected it and the correction is load-bearing. The
@@ -314,10 +217,8 @@ daemon keeps draining the outbox and refreshing `portal-state.json` on its timer
 ## The boundary back channel contract (transport-neutral)
 
 The transport-neutral contract is a small set of **boundary phases**. brr owns
-the phase semantics; each runner mechanism implements them differently. A
-hook-backed runner reaches them through `brr hook <phase>` (JSON event on stdin,
-JSON result on stdout). A stream-backed runner such as Claude or Codex executes
-the same policy in the streaming driver and bypasses the hook endpoint.
+the phase semantics; each hook-backed runner maps its native lifecycle event
+names onto `brr hook <phase>` (JSON event on stdin, JSON result on stdout).
 
 The phases brr cares about:
 
@@ -344,35 +245,30 @@ Two directions across the boundary seam:
   weaves into context — the INBOUND-CHECK portal becomes *automatic* instead of
   "remember to read `inbox.json`."
 
-Per-runner mapping for the native hook mechanism (stream-backed runners bypass
-this endpoint; brr generates hook config only for hook-backed profiles, so the
-user does not hand-write it):
-
-- **Claude Code** — `settings.json` `hooks` block: `PostToolUse` → `brr hook
-  post-tool`, `Stop` → `brr hook stop`, optionally `SessionStart` for the seed
-  capsule. The endpoint emits **JSON on stdout (exit 0)**:
+- **Claude Code** — per-run `.claude/settings.local.json` `hooks` block:
+  `PostToolBatch` → `brr hook post-tool`, `Stop` → `brr hook stop`, and
+  `SessionStart` → `brr hook session-start`. The endpoint emits **JSON on stdout
+  (exit 0)**:
   - *post-tool flush + injection* — `{"hookSpecificOutput": {"hookEventName":
-    "PostToolUse", "additionalContext": "<delta>"}}`. **Non-blocking:** woven in
-    alongside the tool result, turn continues.
+    "PostToolBatch", "additionalContext": "<delta>"}}`. **Non-blocking:** woven
+    in alongside the completed tool batch, turn continues.
   - *stop-control* — `{"decision": "block", "reason": "<pending input>",
     "hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": "…"}}`.
     `decision: "block"` prevents the stop and feeds the reason back.
-  - **Mechanism caveat:** for `PostToolUse` / `Stop`, **plain stdout is
+  - **Mechanism caveat:** for `PostToolBatch` / `Stop`, **plain stdout is
     debug-log only** — injection requires the JSON `additionalContext` field
     (only `UserPromptSubmit` / `UserPromptExpansion` / `SessionStart` inject bare
     stdout). So `brr hook` must speak JSON for post-tool/stop.
-- **Codex CLI** — its hook docs describe the same lifecycle event set, with
-  `additionalContext` injection, `continue: false` halt, `stopReason`, and
-  `updatedInput` rewrite. brr no longer declares `hooks: codex` in the bundled
-  profile because the verified in-repo mechanism is `stream: codex`
-  (`codex exec --json` + one `resume` fold-in). Revisit native hooks only after
-  a firing test beats the JSONL path.
+- **Codex CLI** — runner argv carries `-c hooks.PostToolUse=[…]`,
+  `-c hooks.Stop=[…]`, and `-c hooks.SessionStart=[…]` plus
+  `--dangerously-bypass-hook-trust`. The inline TOML shape omits `matcher` to
+  match every supported occurrence. Codex accepts `hookSpecificOutput` for
+  additional context; `Stop` maps block to `continue: false` + `stopReason`.
 - **Gemini CLI** — a richer event taxonomy mapped onto the same three phases:
   `AfterTool` → post-tool (context injection ✓, block-result ✓), `AfterAgent` →
   stop (retry/halt ✓), `SessionStart` → seed (✓); `BeforeTool`/`BeforeModel`
-  carry rewrite/deny if ever needed. Field names: `decision: "deny"` + exit 2
-  for blocking is documented; the exact injection-field schema lives in Gemini's
-  hooks *reference* page (not yet pinned here — see §Resolutions → still open).
+  carry rewrite/deny if ever needed. brr can render a Gemini-shaped block
+  (`decision: "deny"` + exit 2), but no Gemini config emitter is installed yet.
 
 ### What the delta carries by boundary (the injected capsule)
 
@@ -458,9 +354,9 @@ Two control surfaces become redundant once the back channel lands.
 the source the boundary renderer reads. The retirement is the *manual wrapper*,
 not the state portal.
 
-**The `.keepalive` budget-extension control file** should likely retire too, along
-the same logic (maintainer's suggestion, 2026-06-22 — leaning yes, to be
-confirmed when the slice lands):
+**The `.keepalive` budget-extension control file** remains a retirement
+candidate, but it did not ship with the hook unification. It stays gated on the
+no-timeout-for-Tier-0/1 behaviour and a replacement budget/cost channel:
 
 - **Tier-2 runners** carry budget/cost/quota state *bidirectionally* through the
   back channel, so the resident already knows its standing and the daemon can act
@@ -470,28 +366,30 @@ confirmed when the slice lands):
   the run becomes the user's responsibility (as it effectively is for a plain
   local CLI agent). That removes the other reason `.keepalive` exists.
 
-Either way the keepalive — a one-directional liveness hack — is dominated by the
-bidirectional channel for Tier-2 runners and unnecessary for the lean case. Fold its
-removal into this work rather than carrying it forward.
+Either way the keepalive is a one-directional liveness hack. The likely end
+state is still deletion, but until the no-timeout fallback and bidirectional
+budget/cost surface are wired, `.keepalive` remains the working slot-control
+portal.
 
 ## Verification: hook docs promised a back channel (2026-06-22)
 
 The load-bearing claim — hooks push fresh context *into* the running agent, not
-just emit telemetry *out* — was checked against each runner's docs. The docs
-check confirmed bidirectional hook surfaces exist, but later firing tests moved
-the current implementation away from hooks for Claude and Codex:
+just emit telemetry *out* — was checked against each runner's docs and then
+against live firing tests where available:
 
 - **Claude Code** ([hooks reference](https://code.claude.com/docs/en/hooks)):
-  `PostToolUse` accepts `hookSpecificOutput.additionalContext` (non-blocking
-  injection); `Stop` accepts `decision: "block"` + `reason`/`additionalContext`
-  (prevents the stop, continues the turn); `SessionStart` injects bare stdout for
-  the seed. Caveat: post-tool/stop inject only via JSON `additionalContext`, not
-  plain stdout.
+  `PostToolUse` / `PostToolBatch` accept
+  `hookSpecificOutput.additionalContext` (non-blocking injection); `Stop`
+  accepts `decision: "block"` + `reason` / `additionalContext` (prevents the
+  stop, continues the turn); `SessionStart` can seed the run. Fire-verified
+  under `claude --print` once parent safe-mode leakage was stripped.
 - **Codex CLI** ([codex hooks](https://developers.openai.com/codex/hooks)): same
   event set with `additionalContext` injection, `continue: false` halt, and
-  `updatedInput` rewrite. Current brr path is instead the verified JSONL stream
-  (`stream: codex`), because it was cheap to fire and matches the existing
-  streaming driver.
+  `updatedInput` rewrite. Its config accepts inline TOML `hooks.<Event>` arrays;
+  omitted `matcher` matches every occurrence. `PostToolUse` +
+  `additionalContext` is fire-verified on codex-cli 0.141.0; `Stop` and
+  `SessionStart` are wired by the same emitter and should get their own live
+  smoke when the next Codex quota window makes that cheap.
 - **Gemini CLI** ([gemini hooks](https://geminicli.com/docs/hooks/)):
   `SessionStart` / `BeforeAgent` / `AfterTool` inject context; `AfterAgent`,
   `AfterTool`, `BeforeTool` can block/retry; `BeforeTool`/`BeforeModel` can
@@ -503,17 +401,16 @@ the current implementation away from hooks for Claude and Codex:
 What the implementation slice starts from. These are reversible (design-doc
 decisions), so the slice begins from a position, not a blank page.
 
-- **`brr hook` JSON envelope — proposed.** One transport-neutral shape; the
+- **`brr hook` JSON envelope — shipped.** One transport-neutral shape; the
   profile adapter renders it into each runner's native fields:
   - *stdin (event):* `{"phase": "post-tool|stop|session-start", "run_id": …,
     "event_id": …, "tool": {…}|null, "change_token": …}` — plus the raw hook
     payload passed through for runner-native fields.
   - *stdout (result):* neutral `{"inject": "<text|null>", "block": false,
     "block_reason": null}`. Claude: `inject` → `hookSpecificOutput.additionalContext`,
-    `block`+`block_reason` → `{"decision":"block","reason":…}`. A future Codex
-    native-hook adapter would map `inject` → `additionalContext`, `block` →
-    `continue:false`+`stopReason`, but the bundled profile now uses
-    `stream: codex`. Gemini: `inject` → its injection field (TBD from the
+    `block`+`block_reason` → `{"decision":"block","reason":…}`. Codex:
+    `inject` → `hookSpecificOutput.additionalContext`, `block` →
+    `continue:false`+`stopReason`. Gemini: `inject` → its injection field (TBD from the
     reference page), `block` → `decision:"deny"`.
 - **Config installation — brr-managed, per-run, with user overrides + a
   capability precheck.** brr generates the hook config into the run's
@@ -564,10 +461,9 @@ decisions), so the slice begins from a position, not a blank page.
   this page is the runner-surfacing slice (its §Implementation sequence #2/#4),
   reshaped from shell-wrapper to the boundary back channel.
 - [`src/brr/docs/portals.md`](../src/brr/docs/portals.md) — shipped control-file
-  manual; loses the `portal wrap` paragraph (and likely the `.keepalive` budget
-  paragraph) on retirement.
+  manual; loses the `portal wrap` paragraph on retirement and now names the
+  native-hook back channel.
 - [`src/brr/prompts/runners.md`](../src/brr/prompts/runners.md) — the runner
-  contract preamble + profiles; declares `stream:` for Claude/Codex and keeps
-  `hooks:` for hook-backed runners such as future Gemini.
+  contract preamble + profiles; declares `hooks:` for Claude/Codex and Gemini.
 - [`design-co-maintainer.md`](design-co-maintainer.md) §11 — continuity and
   delivery spine the back channel serves.

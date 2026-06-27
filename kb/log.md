@@ -8190,3 +8190,22 @@ argv injection over the project-`.codex/config.toml` install path which hung
 under repo-trust, the verbatim-body `Stop` fold-in port, then delete
 `runner_stream.py`) is its own focused wake; the hook machinery already exists
 and is tested.
+
+## [2026-06-27] implement | Streaming runner retired; native hooks unified
+
+Finished the interrupted `brr/unify-runner-hooks` wake. The salvage commit had
+already removed `runner_stream.py` / `test_runner_stream.py`, flipped the bundled
+Claude and Codex profiles to `hooks:`, threaded Codex hook config through runner
+argv, and ported verbatim Stop fold-in into `hooks.compute_neutral()`. This
+follow-up tightened the remaining drift: Codex's inline hook config now documents
+the intentional omitted `matcher` (match all supported events), tests assert that
+shape, and the stale Claude "no hooks" test comment is gone.
+
+The shared KB is reconciled to state-first prose: `design-runner-back-channel.md`
+now describes native lifecycle hooks as the current Tier-2 mechanism throughout,
+with the streaming path collapsed to a lineage note, and
+`research-runner-interweave-2026-06-26.md` / `kb/index.md` no longer advertise
+the retired stream driver as current. Focused runner-hook, daemon, prompt, CLI,
+and env suites pass. Full `pytest` is still blocked by unrelated brnrd test
+collection drift (`Project` / `ChatBinding` imports no longer exist in
+`brnrd.models`).
