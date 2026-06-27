@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% block body %}
 <main class="dashboard-shell">
-  <header class="dashboard-hero">
+  <header class="dashboard-hero {% if logged_in %}dashboard-hero-compact{% endif %}">
     <p class="eyebrow">brnrd</p>
     <h1>Repos through brnrd</h1>
-    <p class="lede">Install the GitHub App, connect repos, and route GitHub or Telegram prompts into local brr agents.</p>
+    <p class="lede">Install the GitHub App, enable repos, and route GitHub or Telegram prompts into local brr agents.</p>
   </header>
 
   {% if logged_in %}
@@ -12,7 +12,7 @@
     <section class="status-grid" aria-label="Setup status">
       <article class="status-card status-ok"><span>Signed in</span><strong>@{{ account.github_login }}</strong></article>
       <article class="status-card"><span>GitHub App</span><strong>{{ github_app_slug }}</strong></article>
-      <article class="status-card"><span>Connected repos</span><strong>{{ connected_count }}</strong></article>
+      <article class="status-card"><span>Enabled repos</span><strong>{{ connected_count }}</strong></article>
       <article class="status-card"><span>Call sign</span><strong>@{{ github_bot_login }}</strong></article>
     </section>
 
@@ -35,7 +35,7 @@
         <article class="panel dashboard-panel">
           <p class="eyebrow">Call sign</p>
           <h2>@{{ github_bot_login }}</h2>
-          <p class="panel-copy">The installable App and the mentionable bot account are separate identities.</p>
+          <p class="panel-copy">Mention autocomplete depends on GitHub repo visibility. brnrd also accepts command fallbacks.</p>
           <div class="copy-box"><code>@{{ github_bot_login }} summarize this thread</code></div>
           <p class="form-note">Fallbacks: <code>/brnrd</code> and <code>brnrd:</code>.</p>
         </article>
@@ -44,8 +44,8 @@
 
     <section class="panel dashboard-panel full-width">
       <div class="section-heading">
-        <div><p class="eyebrow">Repos</p><h2>Connected repos</h2></div>
-        <span class="pill">{{ connected_count }} connected</span>
+        <div><p class="eyebrow">Repos</p><h2>Enabled repos</h2></div>
+        <span class="pill">{{ connected_count }} enabled</span>
       </div>
 
       {% if repo_views %}
@@ -53,38 +53,45 @@
           {% for row in repo_views %}
             {% set repo = row.repo %}
             <div class="repo-card daemon-{{ row.daemon_status }}">
-              <div class="repo-card-main">
-                <div>
-                  <strong>{{ repo.repo_full_name }}</strong>
-                  <small>{{ repo.forge }}{% if repo.default_branch %} · {{ repo.default_branch }}{% endif %}</small>
+              <div class="repo-card-topline">
+                <div class="repo-card-main">
+                  <div>
+                    <strong>{{ repo.repo_full_name }}</strong>
+                    <small>{{ repo.forge }}{% if repo.default_branch %} · {{ repo.default_branch }}{% endif %}</small>
+                  </div>
+                  <span class="pill daemon-pill daemon-pill-{{ row.daemon_status }}">{{ row.daemon_label }}</span>
                 </div>
-                <span class="pill daemon-pill daemon-pill-{{ row.daemon_status }}">{{ row.daemon_label }}</span>
+                <details class="repo-menu">
+                  <summary aria-label="Repo actions">⋯</summary>
+                  <div class="repo-menu-popover">
+                    <form method="post" action="/repos/{{ repo.id }}/disconnect" onsubmit="return confirm('Disconnect {{ repo.repo_full_name }} from brnrd? This removes repo-scoped daemon tokens, events, and channel routes.');">
+                      <button class="menu-danger" type="submit">Disconnect repo</button>
+                    </form>
+                  </div>
+                </details>
               </div>
               <p class="form-note">
                 {% if row.daemon_status == "online" %}
-                  {{ row.latest_daemon_name }} checked in {{ row.daemon_last_seen }}.
+                  Last heartbeat {{ row.daemon_last_seen }}{% if row.latest_daemon_name %} from <code>{{ row.latest_daemon_name }}</code>{% endif %}.
                 {% elif row.daemon_status == "offline" %}
-                  {{ row.latest_daemon_name }} was last seen {{ row.daemon_last_seen }}. Start the local daemon to drain queued work.
+                  Last heartbeat {{ row.daemon_last_seen }}{% if row.latest_daemon_name %} from <code>{{ row.latest_daemon_name }}</code>{% endif %}. Start the local daemon to drain queued work.
                 {% else %}
-                  Enablement only creates the brnrd repo record. Run brr locally from a checkout to pair a daemon.
+                  This repo is enabled in brnrd. Pair a local daemon from a checkout when you want it to drain work.
                 {% endif %}
               </p>
               {% if row.daemon_status != "online" %}
-                <div class="setup-box">
-                  <code>cd {{ repo.repo_name }}</code>
-                  <code>brr brnrd connect --url https://brnrd.dev</code>
-                  <code>brr daemon up</code>
-                </div>
+                <details class="setup-details">
+                  <summary>Set up local daemon</summary>
+                  <p class="form-note">Run from the local checkout for this repo.</p>
+                  <pre class="setup-box"><code>{{ row.setup_command }}</code></pre>
+                </details>
               {% endif %}
-              <form method="post" action="/repos/{{ repo.id }}/disconnect" class="danger-form">
-                <button class="button button-danger button-compact" type="submit">Disconnect repo</button>
-              </form>
             </div>
           {% endfor %}
         </div>
       {% else %}
         <div class="empty-state">
-          <strong>No repos connected yet.</strong>
+          <strong>No repos enabled yet.</strong>
           <p>Enable one of the synced GitHub repositories below, then pair a local brr daemon from that repo's checkout.</p>
         </div>
       {% endif %}

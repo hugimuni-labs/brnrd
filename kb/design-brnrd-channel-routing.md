@@ -48,6 +48,30 @@ GitHub issue / PR comment
 
 The user-facing trigger remains `@brnrd-bot`, with slash/text fallbacks for repos where mention autocomplete is not available yet.
 
+### Callsign autocomplete
+
+GitHub App installation does not make the separate mentionable user account discoverable as a repository participant.
+
+That means `@brnrd-bot` can be a valid brnrd trigger string while still not appearing in GitHub's mention autocomplete for a given repository. The fallback commands (`/brnrd`, `brnrd:`) stay necessary until the bot user is visible to that repo.
+
+Possible future shapes:
+
+```text
+Minimum product path
+  Keep raw @brnrd-bot matching + /brnrd + brnrd: fallbacks.
+
+Better UX path
+  Add an explicit “Invite bot user” action for repo owners/admins.
+  This likely requires GitHub administration permission and creates an invitation
+  that the bot user/account must be able to accept.
+
+Organization path
+  Make brnrd-bot an org member or team member where appropriate,
+  then repo visibility/autocomplete becomes a GitHub access-management concern.
+```
+
+Do not imply that enabling brnrd for a repo automatically adds the bot user to the repo. Those are separate identities and separate GitHub permission flows.
+
 ## Web dashboard
 
 The web dashboard should mirror the same routing model:
