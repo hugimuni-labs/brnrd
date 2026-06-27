@@ -35,7 +35,7 @@
         <article class="panel dashboard-panel">
           <p class="eyebrow">Call sign</p>
           <h2>@{{ github_bot_login }}</h2>
-          <p class="panel-copy">Mention autocomplete depends on GitHub repo visibility. brnrd also accepts command fallbacks.</p>
+          <p class="panel-copy">brnrd invites <code>@{{ github_bot_user_login }}</code> into enabled repos so GitHub can show native mentions and collaborator UI.</p>
           <div class="copy-box"><code>@{{ github_bot_login }} summarize this thread</code></div>
           <p class="form-note">Fallbacks: <code>/brnrd</code> and <code>brnrd:</code>.</p>
         </article>
@@ -64,6 +64,9 @@
                 <details class="repo-menu">
                   <summary aria-label="Repo actions">⋯</summary>
                   <div class="repo-menu-popover">
+                    <form method="post" action="/repos/{{ repo.id }}/invite-bot">
+                      <button class="menu-action" type="submit">Invite @{{ github_bot_user_login }}</button>
+                    </form>
                     <form method="post" action="/repos/{{ repo.id }}/disconnect" onsubmit="return confirm('Disconnect {{ repo.repo_full_name }} from brnrd? This removes repo-scoped daemon tokens, events, and channel routes.');">
                       <button class="menu-danger" type="submit">Disconnect repo</button>
                     </form>
