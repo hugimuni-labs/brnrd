@@ -27,6 +27,25 @@ _RUNNER_BASE = (
 )
 
 
+def test_clean_runner_environ_strips_parent_agent_session_leakage(monkeypatch):
+    """A runner subprocess must not inherit the parent agent session's
+    safe-mode flag, which silently disables settings-file hooks."""
+    monkeypatch.setenv("CLAUDE_CODE_SAFE_MODE", "1")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "abc")
+    monkeypatch.setenv("AI_AGENT", "claude-code_agent")
+    monkeypatch.setenv("BRR_KEEP_ME", "yes")
+
+    cleaned = runner_mod.clean_runner_environ()
+
+    assert "CLAUDE_CODE_SAFE_MODE" not in cleaned
+    assert "CLAUDECODE" not in cleaned
+    assert "CLAUDE_CODE_SESSION_ID" not in cleaned
+    assert "AI_AGENT" not in cleaned
+    # Unrelated env is preserved.
+    assert cleaned.get("BRR_KEEP_ME") == "yes"
+
+
 def test_detect_runner_returns_string_or_none():
     result = detect_runner()
     assert result is None or isinstance(result, str)
