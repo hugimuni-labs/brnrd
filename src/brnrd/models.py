@@ -119,6 +119,8 @@ class GitHubInstalledRepo(Base):
     forge_repo_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
     default_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    github_pushed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    github_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
