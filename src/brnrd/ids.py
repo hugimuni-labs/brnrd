@@ -1,17 +1,9 @@
-"""Opaque identifier and secret minting.
-
-Resource ids are prefixed for readability in logs / responses.
-Secrets (API keys, daemon tokens, session tokens) are returned to
-the client once in plaintext; only their hashes are persisted
-(see ``security.py``).
-"""
+"""Opaque identifier and secret minting."""
 
 from __future__ import annotations
 
 import secrets
 
-# Pair codes are typed by a human ("/start BR-7F3K"), so the
-# alphabet drops easily-confused glyphs (0/O, 1/I/L).
 _PAIR_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 
@@ -23,8 +15,8 @@ def account_id() -> str:
     return _rid("acc")
 
 
-def project_id() -> str:
-    return _rid("proj")
+def repo_id() -> str:
+    return _rid("repo")
 
 
 def token_id() -> str:
@@ -43,12 +35,16 @@ def pair_request_id() -> str:
     return _rid("pair")
 
 
-def chat_binding_id() -> str:
-    return _rid("chat")
+def channel_route_id() -> str:
+    return _rid("chan")
 
 
-def repo_binding_id() -> str:
-    return _rid("repo")
+def github_installation_id() -> str:
+    return _rid("ghinst")
+
+
+def github_installed_repo_id() -> str:
+    return _rid("ghrepo")
 
 
 def tg_pair_code_id() -> str:
@@ -76,6 +72,4 @@ def pair_code() -> str:
 
 
 def tg_pair_code() -> str:
-    # Distinct prefix from the daemon pair code so a `/start TG-…`
-    # never collides with a device-flow `BR-…`.
     return "TG-" + "".join(secrets.choice(_PAIR_ALPHABET) for _ in range(4))
