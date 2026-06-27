@@ -521,10 +521,14 @@ class StreamInjectionPolicy:
 
 
 def _proc_env(invocation: "Any") -> dict[str, str] | None:
-    if not invocation.env:
-        return None
-    proc_env = os.environ.copy()
-    proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
+    from . import runner
+
+    # Start from the cleaned base env (no parent agent-session leakage) even
+    # when the run adds no env of its own, so a spawned runner never inherits
+    # the parent's safe-mode flag.
+    proc_env = runner.clean_runner_environ()
+    if invocation.env:
+        proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
     return proc_env
 
 

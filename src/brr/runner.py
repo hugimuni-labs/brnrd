@@ -34,6 +34,45 @@ _active_proc: subprocess.Popen | None = None
 _proc_lock = threading.Lock()
 
 
+# Environment variables an agent CLI sets for *its own* session that must not
+# leak into a runner subprocess brr spawns. The killer is
+# ``CLAUDE_CODE_SAFE_MODE``: when a Claude session spawns a child ``claude``
+# (e.g. the daemon was launched from inside Claude Code, or the runner itself
+# probes the CLI), the child inherits safe mode, which *silently drops
+# settings-file hooks* while logging a reassuring "managed settings-file hooks
+# still run". That single inherited var is what made earlier firing tests
+# conclude "Claude hooks don't fire under --print" — a false negative from a
+# contaminated env (verified 2026-06-27; see kb/design-runner-back-channel.md).
+# The session-identity vars are stripped too so a spawned runner starts as a
+# fresh top-level session rather than a confused nested child.
+_RUNNER_ENV_CONTAMINANTS: frozenset[str] = frozenset(
+    {
+        "CLAUDE_CODE_SAFE_MODE",
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_DISABLE_CLAUDE_MDS",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+    }
+)
+
+
+def clean_runner_environ() -> dict[str, str]:
+    """A copy of ``os.environ`` with parent-agent-session leakage removed.
+
+    The base env every runner subprocess starts from. Stripping the
+    contaminants above keeps a spawned agent CLI from inheriting the *parent*
+    agent's session identity and, critically, its safe-mode flag — so hooks,
+    skills, and plugins behave as they would for a normal top-level run.
+    """
+    return {
+        k: v for k, v in os.environ.items() if k not in _RUNNER_ENV_CONTAMINANTS
+    }
+
+
 def kill_active() -> bool:
     """Terminate the in-flight runner subprocess, if one is running.
 
@@ -495,9 +534,11 @@ def invoke_runner(
 
     cmd = _build_cmd(runner_name, invocation.prompt, cfg, invocation.repo_root)
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
-    proc_env = None
+    # Always start from a cleaned base env so a parent agent session's
+    # safe-mode / identity vars never leak into the runner (and silently
+    # disable its hooks); layer the run's own env on top.
+    proc_env = clean_runner_environ()
     if invocation.env:
-        proc_env = os.environ.copy()
         proc_env.update({str(k): str(v) for k, v in invocation.env.items()})
     stdout = ""
     stderr = ""
