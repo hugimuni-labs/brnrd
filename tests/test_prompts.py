@@ -867,6 +867,16 @@ class TestDaemonModeGuardrails:
 
     def test_run_prompt_names_mode_block_and_recovery_role(self):
         prompt = _read_bundled_run_prompt()
+        # AGENTS.md remains the entry point when the host did not inject
+        # the playbook, but daemon wakes should not be told to re-open a
+        # contract already present in their outer context.
+        assert (
+            "entry point for agents that do not already have the playbook injected"
+            in prompt
+        )
+        assert "daemon wake" in prompt
+        assert "injected copy as the contract" in prompt
+        assert "Read the `AGENTS.md` playbook at the repo root" not in prompt
         # The bundle's Mode section is the authoritative "where am I?".
         assert "Mode" in prompt
         # Injected Recent Activity counts toward the kb/log.md step so
