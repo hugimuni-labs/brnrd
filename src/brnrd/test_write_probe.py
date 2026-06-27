@@ -1,2 +1,0 @@
-token_hash
-private
