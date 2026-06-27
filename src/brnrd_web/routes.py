@@ -27,6 +27,7 @@ from brnrd.models import (
     TgPairCode,
     Token,
 )
+from brnrd.platforms import github_app as gh_app_client
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.github_app import sync_app_installations_for_account
 from brnrd.routers.pairing import approve_core
@@ -201,9 +202,53 @@ def _github_auto_sync_if_needed(request: Request, db: Session, account_id: str) 
     return "github-synced" if count else "github-sync-empty"
 
 
+def _installation_id_for_repo(db: Session, account_id: str, repo_full_name: str) -> str | None:
+    return db.execute(
+        select(GitHubInstallation.installation_id)
+        .join(GitHubInstalledRepo, GitHubInstalledRepo.github_installation_id == GitHubInstallation.id)
+        .where(GitHubInstallation.account_id == account_id, GitHubInstalledRepo.repo_full_name == repo_full_name)
+    ).scalar_one_or_none()
+
+
+def _seed_github_app_presence(request: Request, db: Session, account_id: str, repo: Repo) -> str:
+    """Experimentally create one issue as the installed GitHub App.
+
+    The goal is to see whether GitHub starts suggesting the App/bot identity in
+    mention autocomplete after it has authored repository activity.
+    """
+    if repo.forge != "github":
+        return "repo-connected"
+    installation_id = _installation_id_for_repo(db, account_id, repo.repo_full_name)
+    if not installation_id:
+        return "repo-connected-seed-skipped"
+    settings = request.app.state.settings
+    login = settings.github_bot_login.strip().lstrip("@") or settings.github_app_slug
+    title = "brnrd is enabled"
+    body = (
+        f"brnrd is enabled for `{repo.repo_full_name}`.\n\n"
+        f"Try calling `{login}` with `@{login}` in an issue or pull request comment. "
+        "If GitHub does not suggest the mention yet, use `/brnrd` or `brnrd:` as fallbacks.\n\n"
+        "Next, pair a local daemon from a checkout of this repo:\n\n"
+        "```bash\n"
+        f"cd {repo.repo_name}\n"
+        "brr brnrd connect --url https://brnrd.dev\n"
+        "brr daemon up\n"
+        "```"
+    )
+    try:
+        gh_app_client.create_issue(settings, installation_id, repo.repo_full_name, title=title, body=body)
+    except Exception as e:
+        print(f"[brnrd] github app presence seed failed for {repo.repo_full_name}: {e}")
+        return "repo-connected-seed-failed"
+    return "repo-connected-seeded"
+
+
 def _notice_text(value: str | None) -> str | None:
     return {
         "repo-connected": "Repo enabled. Set up a local brr daemon to start draining work.",
+        "repo-connected-seeded": "Repo enabled. brnrd opened a GitHub issue from the App to test mention visibility.",
+        "repo-connected-seed-skipped": "Repo enabled. Could not find a synced GitHub installation for the App presence test.",
+        "repo-connected-seed-failed": "Repo enabled, but the GitHub App could not open the test issue. Check installation permissions/logs.",
         "repo-disconnected": "Repo disconnected from brnrd.",
         "github-synced": "GitHub installations synced.",
         "github-installed": "GitHub installation received.",
@@ -261,6 +306,7 @@ def connect_repo_submit(request: Request, repo_full_name: str = Form(...), forge
         return RedirectResponse(url="/login?next=/", status_code=303)
     owner, name = _repo_parts(repo_full_name)
     repo = db.execute(select(Repo).where(Repo.account_id == account.id, Repo.repo_full_name == repo_full_name)).scalar_one_or_none()
+    created = repo is None
     if repo is None:
         repo = Repo(id=ids.repo_id(), account_id=account.id, forge="github", repo_full_name=repo_full_name, repo_owner=owner, repo_name=name)
         db.add(repo)
@@ -268,7 +314,8 @@ def connect_repo_submit(request: Request, repo_full_name: str = Form(...), forge
     repo.default_branch = default_branch or repo.default_branch
     repo.updated_at = datetime.now(timezone.utc)
     db.commit()
-    return RedirectResponse(url="/?notice=repo-connected", status_code=303)
+    notice = _seed_github_app_presence(request, db, account.id, repo) if created else "repo-connected"
+    return RedirectResponse(url=f"/?notice={notice}", status_code=303)
 
 
 @router.post("/repos/{repo_id}/disconnect", response_class=HTMLResponse)
