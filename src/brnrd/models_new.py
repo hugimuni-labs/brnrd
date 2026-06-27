@@ -24,3 +24,21 @@ class Account(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     repos: Mapped[list["Repo"]] = relationship(back_populates="account")
+
+
+class Repo(Base):
+    __tablename__ = "repos"
+    __table_args__ = (UniqueConstraint("account_id", "repo_full_name", name="uq_repo_name"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    forge: Mapped[str] = mapped_column(String(32), default="github")
+    repo_full_name: Mapped[str] = mapped_column(String(255), index=True)
+    repo_owner: Mapped[str] = mapped_column(String(255), index=True)
+    repo_name: Mapped[str] = mapped_column(String(255), index=True)
+    forge_repo_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    default_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    account: Mapped["Account"] = relationship(back_populates="repos")
