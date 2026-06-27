@@ -16,6 +16,20 @@ from ..models import Daemon, Event
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
 
 
+def _touch_daemon(db: Session, principal: Principal) -> None:
+    daemon = db.execute(
+        select(Daemon).where(
+            Daemon.repo_id == principal.repo_id,
+            Daemon.token_id == principal.token.id,
+        )
+    ).scalar_one_or_none()
+    if daemon is None:
+        return
+    daemon.online = True
+    daemon.last_seen_at = datetime.now(timezone.utc)
+    db.commit()
+
+
 @router.post("/register", response_model=schemas.DaemonRegistered)
 def register(payload: schemas.DaemonRegister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     repo_id = principal.repo_id
@@ -41,6 +55,8 @@ def inbox(request: Request, since: int | None = Query(default=None), wait: float
     max_wait = settings.inbox_long_poll_max_s if wait is None else max(0.0, min(wait, settings.inbox_long_poll_max_s))
     events = inbox_service.long_poll(request.app.state.SessionLocal, principal.repo_id, since_seq, max_wait_s=max_wait, interval_s=settings.inbox_poll_interval_s)
     cursor = max((e.seq for e in events), default=since_seq)
+    with request.app.state.SessionLocal() as db:
+        _touch_daemon(db, principal)
     return schemas.InboxResponse(events=[schemas.EventOut(**inbox_service.event_to_dict(e)) for e in events], cursor=cursor)
 
 
@@ -52,6 +68,7 @@ def post_response(request: Request, payload: schemas.ResponsePost, principal: Pr
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"forward to platform failed: {e}") from e
     if event is None:
         raise HTTPException(status_code=404, detail="event not found for this repo")
+    _touch_daemon(db, principal)
     return schemas.ResponseAck(event_id=payload.event_id, forwarded=True)
 
 
@@ -70,8 +87,10 @@ def post_card(request: Request, payload: schemas.CardPost, principal: Principal 
     try:
         if payload.message_id is None:
             mid = tg.send_card(settings.telegram_bot_token, reply_to["chat_id"], payload.text, topic_id=reply_to.get("topic_id") or None, reply_to_message_id=reply_to.get("message_id") or None)
+            _touch_daemon(db, principal)
             return schemas.CardAck(event_id=payload.event_id, message_id=mid)
         tg.edit_card(settings.telegram_bot_token, reply_to["chat_id"], payload.message_id, payload.text)
+        _touch_daemon(db, principal)
         return schemas.CardAck(event_id=payload.event_id, message_id=payload.message_id)
     except tg.CardGone as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"card not editable: {e}") from e
