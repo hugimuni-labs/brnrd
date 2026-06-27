@@ -6,6 +6,62 @@ Status: accepted on 2026-06-22 — the back-channel *machinery* shipped on `main
 shell-wrapper slice of [`design-portal-grammar.md`](design-portal-grammar.md)
 §Implementation sequence #2 — that wrapper is deleted.
 
+> ## ⚠ Load-bearing correction — Claude hooks DO fire under `--print` (2026-06-27, evt o538)
+>
+> **The central empirical claim of this page was wrong, and the error was a
+> contaminated test environment.** Direct firing tests on Claude Code 2.1.191
+> and codex-cli 0.141.0 (haiku / gpt-5.4-mini) establish:
+>
+> - **Claude settings-file `PostToolUse` *and* `PostToolBatch` hooks fire under
+>   headless `claude --print`**, and `hookSpecificOutput.additionalContext`
+>   injection lands — the model read back a secret word injected through the
+>   hook. The brr-exact config (hooks in `.claude/settings.local.json` +
+>   `--setting-sources local`) fired cleanly.
+> - **`Stop` `decision:block` continues the turn under `--print`** — a blocked
+>   stop folded a follow-up instruction into the same turn (model output carried
+>   the injected word). So `--print` is **not** "single-turn with no
+>   stop-control"; the earlier *persistence correction* was also a contamination
+>   artifact.
+> - **Codex native `PostToolUse` hooks fire** (same `additionalContext` schema)
+>   via inline-TOML `[hooks]` + `--dangerously-bypass-hook-trust`.
+>
+> **Root cause of the false negative:** the prior firing tests were run *from
+> inside a Claude Code session* (the resident agent spawning `claude`). A Claude
+> session exports `CLAUDE_CODE_SAFE_MODE=1`, and brr built the runner env with
+> `os.environ.copy()`, so the child `claude` inherited safe mode — which
+> **silently drops settings-file hooks** while logging the reassuring
+> `safe mode disables plugins (managed settings-file hooks still run)`. The
+> moment the contaminant is stripped from the child env, hooks fire. The whole
+> "Claude's mechanism is stream-driving, not hooks" conclusion rests on that
+> leak. (The same safe-mode the §two-firing-failures section already blamed once
+> for the `--safe-mode` flag — it just came back via env inheritance.)
+>
+> **Decision (maintainer, evt o538): retire the managed streaming path and unify
+> on the simple hooks injection protocol for Claude and Codex.** The streaming
+> driver was an over-complication justified by a false negative. `PostToolBatch`
+> is the right Claude seam (once per batch, sees all tool results before the next
+> model call), exactly as proposed.
+>
+> **Landed 2026-06-27 (this evt):** the env-contamination guardrail —
+> `runner.clean_runner_environ()` strips `CLAUDE_CODE_SAFE_MODE` and the
+> parent-session identity vars from every runner subprocess env, so a daemon
+> launched from inside an agent session can no longer silently disable runner
+> hooks. This is the precondition for hooks-as-mechanism to be *reliable*.
+>
+> **Queued (the rip-out, its own focused wake):** flip the `claude` profile to
+> `hooks: claude` (post-tool → `PostToolBatch`) and the `codex` profile to
+> `hooks: codex` (+ `--dangerously-bypass-hook-trust`); add a Codex hook-config
+> emitter to `install_hook_config` (Codex hooks fire via `-c` inline TOML — the
+> *project `.codex/config.toml`* install path hung under repo-trust and needs
+> nailing, so prefer the proven `-c hooks={…}` argv injection); port the
+> verbatim event-body fold-in (framed as the user's own words — injection-defense
+> still applies) into the `Stop` phase's `block_reason`; then delete
+> `src/brr/runner_stream.py` and its tests. The hook machinery (`brr hook`
+> endpoint, `compute_neutral`, `render_native`, `format_delta`, claude config
+> emitter) already exists and is tested — the rip-out is mostly profile flips +
+> a Codex emitter + deletions. Everything below this block still describes the
+> pre-rip-out streaming state; read it as current-code, not as the target shape.
+>
 > **Concept vs mechanism — the load-bearing correction (2026-06-26, evt ckc3).**
 > An earlier framing fused two things under the word *hooks* and the fusion sent
 > the design wrong. They are distinct:

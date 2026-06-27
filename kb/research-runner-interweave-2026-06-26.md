@@ -5,6 +5,19 @@ for state interweave across Claude, Codex, and Gemini; whether the current shape
 is sound; and what common abstraction should survive the runner-specific
 mechanisms.
 
+> **Superseding correction (2026-06-27, evt o538).** This page's premise — that
+> Claude's mechanism must be stream-driving because settings-file hooks "do not
+> fire under `claude --print`" — is **disproven**. Live firing tests on Claude
+> Code 2.1.191 show `PostToolUse` / `PostToolBatch` / `Stop` (block-continues)
+> all fire under `--print` with `additionalContext` injection; Codex
+> `PostToolUse` fires too. The earlier failures were a contaminated test env (a
+> parent Claude session leaking `CLAUDE_CODE_SAFE_MODE=1` into the spawned
+> child, silently disabling settings-file hooks). Decision: retire the streaming
+> path and unify on native hooks for both runners. brr now strips that env
+> contaminant (`runner.clean_runner_environ()`). Full detail + migration plan:
+> [`design-runner-back-channel.md`](design-runner-back-channel.md) top block.
+> Read the capability tables below as the *old* posture, not the target.
+
 ## Short answer
 
 The common concept should be **boundary interweave**, not hooks and not "stop and

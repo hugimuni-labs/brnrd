@@ -8146,3 +8146,47 @@ using `stream: claude`. Native hook config now installs only for profiles that
 explicitly declare `hooks:`; `stream:` profiles use the streaming driver, and
 profiles with neither field stay on the heartbeat-polled fallback. Full suite
 passed.
+
+## [2026-06-27] research | Claude hooks DO fire under --print — streaming premise was contaminated
+
+The maintainer pushed back on the streams-for-Claude / hooks-for-Codex split,
+arguing a simple `PostToolBatch` hook injection is the right unified boundary
+interweave and that the streaming complication smelled like preserving text
+output. He invited live firing tests (haiku / gpt-5.4-mini). The tests flipped
+the design in his favour and exposed an ugly methodology bug.
+
+**Findings (Claude Code 2.1.191, codex-cli 0.141.0):** Claude settings-file
+`PostToolUse` *and* `PostToolBatch` hooks fire under headless `claude --print`,
+and `hookSpecificOutput.additionalContext` injection lands (model read back an
+injected secret word) — including the brr-exact config (hooks in
+`.claude/settings.local.json` + `--setting-sources local`). `Stop`
+`decision:block` *continues the turn* under `--print` (a blocked stop folded a
+follow-up instruction into the same turn), so `--print` is not "single-turn with
+no stop-control" — that earlier "persistence correction" was also wrong. Codex
+native `PostToolUse` fires with the same `additionalContext` schema via inline
+`-c hooks={…}` TOML + `--dangerously-bypass-hook-trust`.
+
+**Root cause of the false negative:** the prior firing tests ran *from inside a
+Claude Code session* (the resident spawning `claude`). A Claude session exports
+`CLAUDE_CODE_SAFE_MODE=1`, and brr built the runner env with
+`os.environ.copy()`, so the child inherited safe mode — which silently drops
+settings-file hooks while logging a reassuring "managed settings-file hooks
+still run". Strip the contaminant and hooks fire. The entire "Claude's mechanism
+is stream-driving, not hooks" conclusion rested on that leak.
+
+**Landed this wake:** `runner.clean_runner_environ()` strips
+`CLAUDE_CODE_SAFE_MODE` and parent-session identity vars from every runner
+subprocess env (both the blocking and streaming paths), so a daemon launched
+from inside an agent session can't silently disable runner hooks — the
+precondition for hooks-as-mechanism to be reliable. Unit-tested; focused suites
+green. Reconciled the poisoned conclusions in `design-runner-back-channel.md`
+(top correction + migration plan), `research-runner-interweave-2026-06-26.md`,
+and the user-facing `runners.md`.
+
+**Decision + queued:** retire the managed streaming driver and unify on the
+simple hooks injection protocol for Claude (`PostToolBatch`) and Codex. The
+rip-out (profile flips, a Codex hook-config emitter — prefer proven `-c`
+argv injection over the project-`.codex/config.toml` install path which hung
+under repo-trust, the verbatim-body `Stop` fold-in port, then delete
+`runner_stream.py`) is its own focused wake; the hook machinery already exists
+and is tested.
