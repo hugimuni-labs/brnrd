@@ -62,10 +62,11 @@ boundary back channel** gets it pushed automatically: at each runner
 boundary brr flushes the outbox and `.card` immediately (no heartbeat
 wait) and, when the runner supports live injection, weaves a compact
 `portal-state` delta back into context, so the INBOUND-CHECK is automatic
-rather than "remember to read `inbox.json`." Today that mechanism is
-runner-specific: Claude is stream-driven, Codex flushes on JSONL command
-events and can fold in one terminal follow-up through `exec resume`, and
-future hook-backed runners use `brr hook`. Any runner can also pull state
+rather than "remember to read `inbox.json`." That mechanism is the runner's
+native lifecycle hooks calling `brr hook <phase>`: Claude registers a per-run
+settings file (`PostToolBatch` / `Stop` / `SessionStart`), Codex takes the
+same hook config as runner argv, and a `Stop` block folds a still-pending
+follow-up into the same thought. Any runner can also pull state
 directly — read `portal-state.json` / `inbox.json`, or run `brr portal
 state` for the text view. (The earlier `brr portal wrap -- <command>`
 shell wrapper was retired when the boundary back channel landed — it
