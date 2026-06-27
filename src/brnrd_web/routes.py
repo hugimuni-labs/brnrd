@@ -210,45 +210,44 @@ def _installation_id_for_repo(db: Session, account_id: str, repo_full_name: str)
     ).scalar_one_or_none()
 
 
-def _seed_github_app_presence(request: Request, db: Session, account_id: str, repo: Repo) -> str:
-    """Experimentally create one issue as the installed GitHub App.
+def _ensure_bot_collaborator(request: Request, db: Session, account_id: str, repo: Repo) -> str:
+    """Invite the human-facing GitHub bot user into the repo.
 
-    The goal is to see whether GitHub starts suggesting the App/bot identity in
-    mention autocomplete after it has authored repository activity.
+    The GitHub App is the backend actor. The bot user is the GitHub UI actor that
+    can appear in collaborators, mention autocomplete, assignments, and review
+    requests once GitHub grants it repository visibility.
     """
     if repo.forge != "github":
         return "repo-connected"
+    settings = request.app.state.settings
+    username = settings.github_bot_user_login.strip().lstrip("@")
+    if not username:
+        return "repo-connected-bot-invite-skipped"
     installation_id = _installation_id_for_repo(db, account_id, repo.repo_full_name)
     if not installation_id:
-        return "repo-connected-seed-skipped"
-    settings = request.app.state.settings
-    login = settings.github_bot_login.strip().lstrip("@") or settings.github_app_slug
-    title = "brnrd is enabled"
-    body = (
-        f"brnrd is enabled for `{repo.repo_full_name}`.\n\n"
-        f"Try calling `{login}` with `@{login}` in an issue or pull request comment. "
-        "If GitHub does not suggest the mention yet, use `/brnrd` or `brnrd:` as fallbacks.\n\n"
-        "Next, pair a local daemon from a checkout of this repo:\n\n"
-        "```bash\n"
-        f"cd {repo.repo_name}\n"
-        "brr brnrd connect --url https://brnrd.dev\n"
-        "brr daemon up\n"
-        "```"
-    )
+        return "repo-connected-bot-invite-skipped"
+    permission = (settings.github_bot_collaborator_permission or "triage").strip() or "triage"
     try:
-        gh_app_client.create_issue(settings, installation_id, repo.repo_full_name, title=title, body=body)
+        result = gh_app_client.invite_collaborator(settings, installation_id, repo.repo_full_name, username, permission=permission)
     except Exception as e:
-        print(f"[brnrd] github app presence seed failed for {repo.repo_full_name}: {e}")
-        return "repo-connected-seed-failed"
-    return "repo-connected-seeded"
+        print(f"[brnrd] github bot user invite failed for {repo.repo_full_name}: {e}")
+        return "repo-connected-bot-invite-failed"
+    if result.get("status_code") == 204:
+        return "repo-connected-bot-present"
+    return "repo-connected-bot-invited"
 
 
 def _notice_text(value: str | None) -> str | None:
     return {
         "repo-connected": "Repo enabled. Set up a local brr daemon to start draining work.",
-        "repo-connected-seeded": "Repo enabled. brnrd opened a GitHub issue from the App to test mention visibility.",
-        "repo-connected-seed-skipped": "Repo enabled. Could not find a synced GitHub installation for the App presence test.",
-        "repo-connected-seed-failed": "Repo enabled, but the GitHub App could not open the test issue. Check installation permissions/logs.",
+        "repo-connected-bot-invited": "Repo enabled. brnrd invited the bot user for native GitHub mentions; accept the invitation as the bot user if needed.",
+        "repo-connected-bot-present": "Repo enabled. The bot user is already visible to this repo.",
+        "repo-connected-bot-invite-skipped": "Repo enabled. Could not find a synced installation for the bot-user invite.",
+        "repo-connected-bot-invite-failed": "Repo enabled, but brnrd could not invite the bot user. Check GitHub App administration permission and logs.",
+        "repo-bot-invited": "brnrd invited the bot user for this repo; accept the invitation as the bot user if needed.",
+        "repo-bot-present": "The bot user is already visible to this repo.",
+        "repo-bot-invite-skipped": "Could not find a synced installation for the bot-user invite.",
+        "repo-bot-invite-failed": "Could not invite the bot user. Check GitHub App administration permission and logs.",
         "repo-disconnected": "Repo disconnected from brnrd.",
         "github-synced": "GitHub installations synced.",
         "github-installed": "GitHub installation received.",
@@ -278,6 +277,7 @@ def _dashboard_context(request: Request, db: Session, account: Account, *, notic
         "install_url": settings.github_install_url,
         "github_app_slug": settings.github_app_slug,
         "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
+        "github_bot_user_login": settings.github_bot_user_login.strip().lstrip("@"),
         "github_sync_configured": _github_sync_configured(request),
         "notice": _notice_text(notice),
         "setup_installation_id": installation_id or "",
@@ -314,7 +314,19 @@ def connect_repo_submit(request: Request, repo_full_name: str = Form(...), forge
     repo.default_branch = default_branch or repo.default_branch
     repo.updated_at = datetime.now(timezone.utc)
     db.commit()
-    notice = _seed_github_app_presence(request, db, account.id, repo) if created else "repo-connected"
+    notice = _ensure_bot_collaborator(request, db, account.id, repo) if created else "repo-connected"
+    return RedirectResponse(url=f"/?notice={notice}", status_code=303)
+
+
+@router.post("/repos/{repo_id}/invite-bot", response_class=HTMLResponse)
+def invite_repo_bot(repo_id: str, request: Request, db: Session = Depends(get_db)):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+    repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repo not found")
+    notice = _ensure_bot_collaborator(request, db, account_id, repo).replace("repo-connected-bot", "repo-bot")
     return RedirectResponse(url=f"/?notice={notice}", status_code=303)
 
 
