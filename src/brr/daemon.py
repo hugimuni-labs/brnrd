@@ -836,9 +836,9 @@ def _run_worker(
         quota_summary=quota_summary,
     )
     # Native hook config is opt-in through a profile's explicit ``hooks:``
-    # field. ``stream:`` runners such as bundled Claude/Codex get their
-    # boundary back channel from ``runner_stream`` instead, so don't infer
-    # hooks from the runner name.
+    # field — brr never infers hooks from the runner name. A profile with no
+    # ``hooks:`` field uses the heartbeat-polled fallback (outbound flush, no
+    # inbound injection).
     declared_hooks_flavour = runner.profile_hooks_flavour(runner_name, repo_root)
     hooks_flavour = declared_hooks_flavour or runner_name
     runner_env = {
@@ -855,11 +855,24 @@ def _run_worker(
         runner_env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
         runner_env["BRR_INBOX_PATH"] = str(env_ctx.outbox_env / _LIVE_INBOX_NAME)
 
-    # Tier 2 native hooks: generate per-run hook config only for profiles that
-    # explicitly declare a hook flavour. Stream-backed runners still get Tier 2
-    # through the streaming driver; runners without either mechanism degrade to
-    # the heartbeat-polled portal model.
-    if (
+    # Tier 2 native hooks: install per-run hook config only for profiles that
+    # explicitly declare a hook flavour. Two mechanisms by flavour — a settings
+    # file written into the worktree (claude), or config-override argv injected
+    # into the runner command (codex). Runners with no ``hooks:`` field degrade
+    # to the heartbeat-polled portal model.
+    extra_runner_args: list[str] = []
+    if declared_hooks_flavour == "codex":
+        if hooks_mod.codex_hook_capability():
+            extra_runner_args = hooks_mod.codex_hook_args()
+            emit(
+                "hooks_installed",
+                run_id=task.id,
+                event_id=eid,
+                flavour=declared_hooks_flavour,
+                path="<argv -c hooks.*>",
+            )
+            print(f"[brr] worker {eid}: installed codex hook config via argv")
+    elif (
         declared_hooks_flavour
         and hooks_mod.hook_capability(declared_hooks_flavour, run_root)
     ):
@@ -1039,6 +1052,7 @@ def _run_worker(
                 response_path=str(env_ctx.response_path_host),
                 timeout_seconds=hard_cap_seconds,
                 env=runner_env,
+                extra_runner_args=extra_runner_args,
             ),
             cfg=cfg,
             trace=True,
