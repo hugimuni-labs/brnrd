@@ -1581,34 +1581,66 @@ def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
     return {"status": status, "until": _iso_utc(until)}
 
 
-def _resources_facet(quota_summary: str | None) -> dict[str, object]:
+def _resources_facet(
+    quota_summary: str | None,
+    *,
+    branch: str | None = None,
+    pr_number: str | None = None,
+) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
-    One facet for the live cost/quota/parallelism picture. Each sub-field
-    is either ``known`` (the daemon can prove it cheaply today) or
-    ``unavailable`` (the capability isn't built yet) — an honest placeholder
-    is more useful to the resident than a silently-missing field, so a future
-    wake knows the slot exists and what would fill it.
+    One facet for the live cost/quota/parallelism picture. The honesty here
+    is three-state, because "missing" means two different things the resident
+    should not conflate (the distinction the maintainer drew, evt-go5z):
 
-    - ``quota`` — known when the daemon proved a runner-quota snapshot
-      (``runner_quota.describe_runner_quota``); else unavailable.
-    - ``cost`` — per-run token/$ accounting: not metered yet.
-    - ``coexisting_runs`` — other concurrent runs (incl. cheaper-model
-      shadow runs with their own ranking/pricing): brr is single-flight
-      today, so not implemented.
-    - ``remote_scm`` — unpushed-branch / open-PR posture across the repo:
-      the per-run worktree's local posture already rides the ``scm`` facet;
-      the cross-repo remote view is not wired into the heartbeat yet.
+    - ``known`` — the daemon proved a value cheaply this heartbeat.
+    - ``absent`` — the collector exists and ran, but there is genuinely
+      nothing yet: no PR opened for this branch, no quota snapshot the
+      medium would expose. This is the *affirmative-empty* signal — the same
+      logic the closeout capsule uses for "0 pending events". An absent slot
+      is data, not a gap; surfacing it is the point.
+    - ``unimplemented`` — the collector is not built yet. ``required`` flags
+      whether the missing capability is one the boundary is *expected* to
+      grow (cost metering) versus a someday-nicety (coexisting runs while
+      brr stays single-flight). An honest placeholder beats a silent omission
+      so a future wake sees the slot and what would fill it.
+
+    PR posture (``remote_scm``) is derived network-free from run metadata:
+    a recorded ``github_pr_number`` means a PR is in play; its absence is the
+    *not-yet-created* receipt — most valuable exactly when the work has a
+    branch but no PR, because that is when it is at risk of being invisible
+    (``kb/design-resident-boundary.md`` §5).
     """
     quota_known = bool(quota_summary and str(quota_summary).strip())
+    pr = str(pr_number or "").strip()
+    pr_recorded = bool(pr)
     return {
         "quota": {
-            "status": "known" if quota_known else "unavailable",
+            "status": "known" if quota_known else "absent",
+            "required": True,
             "summary": quota_summary if quota_known else None,
+            "note": None if quota_known
+            else "no quota snapshot available for this medium",
         },
-        "cost": {"status": "unavailable"},
-        "coexisting_runs": {"status": "unavailable"},
-        "remote_scm": {"status": "unavailable"},
+        "cost": {
+            "status": "unimplemented",
+            "required": True,
+            "note": "per-run token/$ accounting not metered yet",
+        },
+        "coexisting_runs": {
+            "status": "unimplemented",
+            "required": False,
+            "note": "single-flight per dominion; no concurrent-run view yet",
+        },
+        "remote_scm": {
+            "status": "known" if pr_recorded else "absent",
+            "required": True,
+            "branch": branch,
+            "pr_number": pr if pr_recorded else None,
+            "pr_state": "open" if pr_recorded else "none",
+            "note": None if pr_recorded
+            else "no PR recorded for this branch yet",
+        },
     }
 
 
@@ -1727,6 +1759,11 @@ def _write_live_portal_state(
                 "replies_current": int(stats.get("current", 0)),
                 "replies_other": int(stats.get("other", 0)),
                 "outbound_messages": int(stats.get("outbound", 0)),
+                "any_sent": bool(
+                    stats.get("current")
+                    or stats.get("other")
+                    or stats.get("outbound")
+                ),
                 "pending_outbox_files": pending_files,
             },
             "card": {
@@ -1737,10 +1774,19 @@ def _write_live_portal_state(
                 "elapsed_seconds": elapsed,
                 "budget_seconds": budget_seconds,
                 "hard_cap_seconds": hard_cap_seconds,
+                "long_running": bool(
+                    elapsed is not None
+                    and budget_seconds is not None
+                    and elapsed > budget_seconds
+                ),
                 "keepalive": _keepalive_state(keepalive_path),
             },
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
-            "resources": _resources_facet(quota_summary),
+            "resources": _resources_facet(
+                quota_summary,
+                branch=task.meta.get("branch_name"),
+                pr_number=task.meta.get("github_pr_number"),
+            ),
         }
         payload["change_token"] = _change_token(payload)
         path = outbox_dir / _LIVE_PORTAL_STATE_NAME
