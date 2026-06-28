@@ -179,8 +179,8 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser(
         "statusline",
-        help="Claude statusLine level collector (spend/quota/context); reads "
-             "session JSON on stdin, called by Claude's statusLine, not by hand")
+        help="Claude statusLine helper for interactive sessions; reads session "
+             "JSON on stdin when wired into Claude's TUI footer")
     p.set_defaults(func=cmd_statusline)
 
     agent_p = sub.add_parser(
