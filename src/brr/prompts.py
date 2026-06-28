@@ -543,10 +543,10 @@ def _build_run_context_bundle(
         if runner_quota:
             runner_label = f"{runner_label} ({runner_quota})"
         sections.append(
-            f"- Runner: {runner_label} — the compute medium this thought runs "
-            "on. A failure here (quota exhausted, provider error) costs the user "
-            "a manual reroute, so chunk work and commit early when the budget is "
-            "tight; see plan-cost-aware-cockpit.md."
+            f"- Runner: {runner_label} — the Shell+Core this thought runs in. "
+            "A failure here (quota exhausted, provider error) costs the user "
+            "a manual reroute, so chunk work and commit early when the budget "
+            "is tight."
         )
     sections.append(
         "- Delivery: situational outputs captured by brr "
@@ -604,16 +604,15 @@ def _build_run_context_bundle(
         "These are the per-run *values* and the operative rules. The surfaces "
         "below are **portals** — the seams where this run turns to the world: "
         "*inbound* (input flows in, like `portal-state.json` / `inbox.json`), "
-        "*outbound* (you emit to "
-        "a surface — a chat reply, the `.card`), and *parked* (you emit and "
-        "park the continuation until something refluxes back, like the "
-        "PLAN→approve handoff). This list is the injected summary of that "
-        "grammar; the full control-file protocol and the shape of an average "
-        "daemon run live in the portals manual — run `brr docs portals` when a "
-        "step is unfamiliar. Use these portals to stay in the conversation: "
-        "keep visible state honest, fold queued input at plan boundaries "
-        "when it belongs in this run, and check for a last-minute follow-up "
-        "before terminal delivery."
+        "*outbound* (you emit to a surface — a chat reply, the `.card`), and "
+        "*parked* (you emit and park the continuation until something refluxes "
+        "back, like the PLAN→approve handoff). This list is the injected "
+        "summary of that grammar; the full control-file protocol and the shape "
+        "of an average daemon run live in the portals manual — run "
+        "`brr docs portals` when a step is unfamiliar. Use these portals to "
+        "stay in the conversation: keep visible state honest, fold queued "
+        "input at plan boundaries when it belongs in this run, and check for a "
+        "last-minute follow-up before terminal delivery."
     )
     sections.append(
         "- Stdout is the compatibility/current-thread fallback, not the "
@@ -648,11 +647,12 @@ def _build_run_context_bundle(
             "delivers to a *different* pending event's thread and marks it "
             "handled (one complete reply per folded-in event); `gate: <name>` "
             "(e.g. `gate: telegram`) sends to a destination with no waiting "
-            "event. `gate: forge` is the explicit PR handoff: when a "
-            "pushed branch should become or refresh a PR, write `head`, "
-            "`base`, and `title` frontmatter and put the PR body in the "
-            "message. Diffense can supply that title/body when a checked "
-            "review pack exists, but it does not own PR creation."
+            "event. `gate: forge` is the explicit PR handoff: when a pushed "
+            "branch should become or refresh a PR, write `head`, `base`, and "
+            "`title` frontmatter and put the PR body in the message. Diffense "
+            "can supply that title/body when a checked review pack exists, but "
+            "it does not own PR creation. See `brr docs portals` for the "
+            "full field list and choreography."
         )
         sections.append(
             f"- A live inbox view at `{outbox_path}/inbox.json` is refreshed "
@@ -703,8 +703,8 @@ def _build_run_context_bundle(
         "`.brr/worktrees/<run-id>/kb/foo.md`. Those paths exist on the "
         "host running brr, not on the user's machine, and chat clients "
         "won't render or link them. brr already appends a "
-        "forge-hosted branch URL to the response card when one is "
-        "available; you don't need to fabricate a link."
+        "forge-hosted branch URL to the response card when one is available; "
+        "you don't need to fabricate a link."
     )
     sections.append(
         "- If you wrote files (kb pages, code, fixtures, anything), commit "
