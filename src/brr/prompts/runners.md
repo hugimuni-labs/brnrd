@@ -2,24 +2,57 @@
 claude:
   cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
   hooks: claude
+  provider: anthropic
+  owner: user
+  class: balanced
+  cost_rank: 30
+  quota_source: claude-local
 claude-bare-api-only:
   binary: claude
   cmd: 'claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  provider: anthropic
+  owner: user
+  class: balanced
+  cost_rank: 30
 claude-bare-api-only-sonnet:
   binary: claude
   cmd: 'claude --model "claude-sonnet-4-6" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  provider: anthropic
+  owner: user
+  model: claude-sonnet-4-6
+  class: balanced
+  cost_rank: 30
 claude-bare-api-only-opus:
   binary: claude
   cmd: 'claude --model "claude-opus-4-8" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  provider: anthropic
+  owner: user
+  model: claude-opus-4-8
+  class: strong
+  cost_rank: 50
 claude-bare-api-only-fable:
   binary: claude
   cmd: 'claude --model "claude-fable-5" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  provider: anthropic
+  owner: user
+  model: claude-fable-5
+  class: economy
+  cost_rank: 15
 codex:
   cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
   hooks: codex
+  provider: openai
+  owner: user
+  class: balanced
+  cost_rank: 25
+  quota_source: codex-local
 gemini:
   cmd: gemini -p --yolo
   hooks: gemini
+  provider: google
+  owner: user
+  class: economy
+  cost_rank: 10
 ---
 Bundled runner profiles for brr.
 
@@ -116,6 +149,25 @@ these command strings.
 - `cmd` — base command. brr appends the prompt as the final argument.
 - `binary` — optional PATH binary for alias profiles. When set, the
   profile is opt-in via `runner=` in `.brr/config` (not auto-detected).
+
+Optional **runner-medium** metadata (read by `runner_media.py`, the
+cost-aware vessel-selection layer) also rides these keys. None is required;
+a profile with none is an uncosted medium the selector uses as-is:
+
+- `provider` / `model` / `owner` — who runs the vessel (`owner: user` for a
+  local subscription/API key, `owner: brnrd` for a paid relay medium).
+- `class` — cost class: `economy` < `balanced` < `strong`, or `relay` for a
+  paid brnrd-owned fallback (never auto-selected; needs spend-plan consent).
+- `cost_rank` — a coarse, **tunable relative ordering hint** (cheapest first),
+  *not* a dollar figure and not a promise of price. The selector sorts by it
+  within a class; projects retune it freely in their own `.brr/runners.md`.
+- `quota_source` — which collector reads this medium's quota (`codex-local`
+  reads the session rollout; `claude-local` is terminal spend/context only).
+
+The selection *policy* is brr's, not a table the user hand-tunes: the user
+sets `runner=` (or `auto`) and optional `runner_policy=` (`cost-aware` |
+`fixed`) in `.brr/config`, and the resident picks the cheapest adequate
+available medium from there. See `kb/design-runner-media.md`.
 
 Alias profiles with `binary` are for variants of the same CLI, for example
 `claude-bare-api-only` uses `--bare` and requires `ANTHROPIC_API_KEY`
