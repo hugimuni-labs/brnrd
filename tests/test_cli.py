@@ -496,3 +496,100 @@ def test_setup_falls_back_to_auth_then_bind(monkeypatch, tmp_path):
         ("auth", tmp_path / ".brr"),
         ("bind", tmp_path / ".brr"),
     ]
+
+
+# ── brr runners list (step 2, design-runner-cores.md) ───────────────────────
+
+
+def test_runners_list_text_output(monkeypatch, capsys):
+    """Text output shows declared profiles and bundled Core registry."""
+    import shutil as _shutil
+
+    from brr import runner as runner_mod, runner_cores
+
+    monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: None)
+    # Pretend claude is on PATH, codex and gemini are not
+    monkeypatch.setattr(
+        runner_cores.shutil, "which",
+        lambda name: f"/usr/bin/{name}" if name == "claude" else None,
+    )
+    monkeypatch.setattr(
+        _shutil, "which",
+        lambda name: f"/usr/bin/{name}" if name == "claude" else None,
+    )
+
+    assert main(["runners", "list"]) == 0
+    out = capsys.readouterr().out
+
+    # Declared-profiles section header present
+    assert "declared profiles" in out
+    # Bundled Core registry section
+    assert "bundled Core registry" in out
+    # Claude cores appear (Shell is on PATH)
+    assert "claude-haiku" in out or "claude-sonnet" in out
+    # codex/gemini cores filtered out (Shell not on PATH)
+    assert "codex-mini" not in out
+    assert "gemini-flash" not in out
+
+
+def test_runners_list_all_includes_unavailable(monkeypatch, capsys):
+    """--all flag includes Cores whose Shell isn't on PATH."""
+    import shutil as _shutil
+
+    from brr import runner_cores
+
+    monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: None)
+    monkeypatch.setattr(runner_cores.shutil, "which", lambda name: None)
+    monkeypatch.setattr(_shutil, "which", lambda name: None)
+
+    assert main(["runners", "list", "--all"]) == 0
+    out = capsys.readouterr().out
+    # With --all, even unavailable Shells appear in the registry section
+    assert "claude-haiku" in out or "claude-sonnet" in out
+
+
+def test_runners_list_json_output(monkeypatch, capsys):
+    """--json emits machine-readable JSON with declared + bundled sections."""
+    import shutil as _shutil
+
+    from brr import runner_cores
+
+    monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: None)
+    monkeypatch.setattr(runner_cores.shutil, "which",
+                        lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    assert main(["runners", "list", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "declared" in payload
+    assert "bundled_cores" in payload
+    assert isinstance(payload["declared"], list)
+    assert isinstance(payload["bundled_cores"], list)
+    # All bundled cores visible when all Shells are on PATH
+    names = [r["name"] for r in payload["bundled_cores"]]
+    assert "claude-haiku" in names
+    assert "codex-mini" in names
+
+
+def test_runners_list_marks_current_runner(monkeypatch, capsys, tmp_path):
+    """Currently resolved runner is marked with ★ in the text view."""
+    import shutil as _shutil
+
+    from brr import runner as runner_mod, runner_cores
+
+    monkeypatch.setattr("brr.cli._maybe_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(runner_mod, "resolve_runner", lambda _root: "claude")
+    monkeypatch.setattr(runner_mod, "_load_profiles", lambda _root=None: {
+        "claude": {"class": "balanced", "cost_rank": 30},
+        "codex": {"class": "balanced", "cost_rank": 25},
+    })
+    monkeypatch.setattr(
+        runner_cores.shutil, "which", lambda name: f"/usr/bin/{name}"
+    )
+    monkeypatch.setattr(_shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    assert main(["runners", "list"]) == 0
+    out = capsys.readouterr().out
+    # The ★ marker should appear next to the currently selected runner
+    assert "★" in out
+    assert "claude" in out
