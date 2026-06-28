@@ -22,8 +22,8 @@ identical at every instant.**
 
 The *boundary* is the resident's perception of its operating envelope: pending
 events, delivery/budget posture, SCM state, and the work-status resources facet
-(quota / cost / coexisting runs / remote SCM). There is one concept and one
-source of truth. It reaches the resident on two rails:
+(quota / spend / context window / coexisting runs / remote SCM). There is one
+concept and one source of truth. It reaches the resident on two rails:
 
 - **The snapshot rail** — `portal-state.json` / `inbox.json`, daemon-written
   every heartbeat. *Always complete*, queryable, daemon-owned. It is (a) the
@@ -33,9 +33,10 @@ source of truth. It reaches the resident on two rails:
 - **The injection rail** — the hook capsule (`brr hook <phase>` →
   `format_delta`), woven into the scroll at runner boundaries. It is a
   **salience-gated delta**: it renders only what is worth spending a turn on,
-  and (mid-run) only when `change_token` moved. The resources line is rendered
-  only at the **seed/stop** boundaries, not on every post-tool tick, precisely
-  so editing churn injects no noise.
+  and (mid-run) only when `change_token` moved. The resources line is always
+  present at seed/stop and also rides post-tool injections when portal-state
+  changed, so a quota/spend/context wall can enter the weave without turning
+  every tool boundary into a dashboard repaint.
 
 So the file is **not** "the same data, just more live." It is the complete-state
 rail; the hook is the gated-projection rail. Collapsing them into one
@@ -49,22 +50,23 @@ gated injection reads from and the no-hook fallback.
 **The concrete divergence the maintainer spotted is real but expected.** Today
 two renderers project the same resources data: `daemon._resources_facet` builds
 the JSON snapshot; `hooks._format_resources` builds the woven one-liner. They
-already agree on the four facets (quota / cost / coexisting-runs / remote-scm),
-but the woven line is seed/stop-gated, so a mid-run boundary shows the rich
-snapshot in the file and a quieter capsule in the scroll. That asymmetry is the
-tier-2/tier-3 design, not a bug.
+already agree on the facet schema (quota / spend / context-window /
+coexisting-runs / remote-scm), but the woven line is gated by the boundary
+projection rather than byte-identical to the file. A mid-run boundary shows it
+only when there is an injected portal update. That asymmetry is the tier-2/tier-3
+design, not a bug.
 
 **The genuine improvement** is not "make them identical" but **"let a
 *salience-relevant* resource change ride the post-tool delta"** — e.g. quota
 crossing near-empty, a coexisting run appearing, a relay cap approaching. Those
 are exactly the moments the boundary should interrupt with the resource line
 mid-run. The plumbing already supports it (`change_token` gating); what is
-missing is the collectors that make any resource facet move at all. So the work
-is *populate the facets*, not *merge the rails*. The one cheap hardening worth
-doing regardless: keep the JSON and the woven projection reading from a **single
-projection helper** so they can never drift in *which* facets they carry (still
-open — there are now three renderers: `_resources_facet`, `_format_resources`,
-`_format_portal_state`, agreeing on the same four keys by convention).
+now shipped is the first version of that rule: resources ride post-tool
+injections when portal-state changed, and the wall facets are populated by real
+collectors for Codex + Claude. So the work is *keep populating the facets*, not
+*merge the rails*. The cheap hardening also shipped: JSON and woven projections
+read from the single `facets.py` schema, so they do not drift in *which* facets
+they carry.
 
 **How to choose the facets — the selection principle (evt-e1gl, 2026-06-28).**
 The maintainer asked, fairly: "agreeing by convention — I don't understand how to
@@ -76,9 +78,10 @@ iff it is one of:
 - **a wall** the run can hit, with a distance the resident plans against —
   wall-clock `budget`, `spend`, subscription `quota`, and `context_window`. These
   are the *level* facets; the card headline is the minimum distance across them.
-  Which level a given vessel can actually read head-less is per-vessel (§8): Codex
-  exposes `quota` + `context_window` (wired); Claude exposes `spend` + `context`
-  via its result JSON (wired 2026-06-28) but **not** quota head-less.
+  Which level a given vessel can actually read is per-vessel (§8): Codex exposes
+  `quota` + `context_window` from its rollout file (wired); Claude exposes
+  `spend` + `context_window` via result JSON and subscription `quota` via a
+  cached interactive `/usage` PTY scrape (wired 2026-06-28).
 - **an actionable operational state** that changes a decision without being a wall
   — `coexisting_runs` (presence/liveness), `remote_scm` (PR/push posture).
 
@@ -89,9 +92,9 @@ helper defines the facet list, each as a uniform three-state record
 `required?`); the three renderers project from it rather than re-listing keys. So
 "by convention" (implicit agreement) → "by schema" (one definition). My
 preference, concretely: the wall-derived set above, which **adds `context_window`
-and makes subscription `quota` a real level facet — head-less-readable for the
-Codex vessel** (§8; the Claude statusLine route that earlier promised this does
-not fire under `--print`).
+and makes subscription `quota` a real level facet — natively readable for Codex
+and best-effort probeable for Claude** (§8; the Claude `statusLine` route that
+earlier promised this still does not fire under `--print`).
 
 **Shipped 2026-06-27 (evt-go5z): three-state facet honesty.** The maintainer
 agreed the rails are not identical *but* asked the boundary to "show
@@ -242,10 +245,10 @@ that killed `portal wrap`.
 has several walls — wall-clock budget, quota, spend cap — and the card's headline
 should be the *minimum distance across the active walls*: whichever wall you'll
 hit first. That's the single decision-useful number ("you have ~18m of runtime
-and ~2 strong respawns before *some* wall"). The current woven line already has
-the budget half (`budget: Xs of Ys used` + `running long`, seed/stop-gated in
-`hooks._format_resources`); the card is that line *reframed as distance-to-wall*
-and extended to the other dimensions as their collectors land.
+and ~2 strong respawns before *some* wall"). The current woven capsule already
+carries the wall ingredients (`budget: Xs of Ys used` plus `resources:` for
+quota/spend/context when injected); the card is that data *reframed as
+distance-to-wall* and extended as more collectors land.
 
 **The brr-specific catch on "still exists":** a coexisting run that *persists*
 requires **sibling-liveness tracking** (heartbeat freshness of other runs), which
@@ -262,33 +265,45 @@ we can get from the medium re: live cost and quota. This is load-bearing for the
 card (§7), because a card promising a smooth quota gauge it can't fill is a lie
 the resident learns to distrust.
 
-**Fire-verified 2026-06-28 (this is the current state; (b)/(c) below are the
-corrected reality).** An earlier pass (evt-e1gl) recorded the *opposite*
-asymmetry — "Claude statusLine hands over quota head-less; Codex quota is
-edge-only" — and built `statusline.py` on it. A live probe overturned both
-halves (see breadcrumb at end of §8). The true map:
+**Fire-verified 2026-06-28 (current state).** Two earlier conclusions were
+partly wrong in opposite directions. First, evt-e1gl recorded "Claude
+`statusLine` hands over quota head-less; Codex quota is edge-only" and built
+`statusline.py` on it. A live probe overturned both halves: Claude `statusLine`
+does not fire under `--print`, while Codex writes subscription quota to its
+rollout file. Later the maintainer pushed on `/usage`: the Claude quota surface
+is indeed reachable, but only by driving the interactive TUI through a PTY and
+scraping the `/usage` panel. The true map:
 
 **(a) The `stream-json` loom stays retired** (abandoned 2026-06-27; see
 [`plan-streaming-runner-injection.md`](plan-streaming-runner-injection.md),
 [`design-runner-media.md`](design-runner-media.md) §Reconciled). Cost/quota does
-**not** ride hooks either — hook payloads carry no usage. The real head-less
-source is per-vessel **post-result / on-disk** data, below.
+**not** ride native hook payloads — hooks carry portal-state, not provider usage
+internals. The real source is per-vessel **post-result / on-disk / PTY-scraped**
+data, below; hooks then inject the portal-state projection of that data.
 
 **(b) Claude `statusLine` does NOT fire head-less — the Claude quota path is
-broken in brr today.** `statusLine` is a TUI footer; under `claude --print` (the
+not the quota path.** `statusLine` is a TUI footer; under `claude --print` (the
 mode brr's runner uses) it is **never invoked** (probe: a statusLine command set
 in `.claude/settings.local.json` never fired under `--print`, while settings-file
 *hooks* fired the same run with a clean env). So the `rate_limits` / `cost` /
-`context_window` JSON it would carry never reaches brr. `statusline.py` is
-therefore dead in production — it only populates anything in an interactive TUI
-session, which the daemon never runs. The head-less Claude cost source is instead
-`claude --print --output-format json`, whose result object carries
-`total_cost_usd` (spend), token `usage`, and `modelUsage[model].contextWindow`
-(context) — but **not** subscription 5h/weekly `rate_limits`. brr now opts the
-bundled Claude profiles into result JSON and unwraps `.result` back into the
-plain response file while writing `spend` + `context_window` levels to the
-portal at the terminal refresh. This is terminal accounting, not mid-thought
-quota guidance.
+`context_window` JSON it would carry never reaches brr. `statusline.py` is only
+for a human-watched interactive footer.
+
+Claude has two other usable seams:
+
+- `claude --print --output-format json` carries `total_cost_usd` (spend), token
+  `usage`, and `modelUsage[model].contextWindow` (context), but **not**
+  subscription reset windows. brr opts bundled Claude profiles into result JSON,
+  unwraps `.result` back into the plain response file, and writes `spend` +
+  `context_window` levels to the portal at terminal refresh.
+- `claude_usage.py` starts a short-lived interactive Claude in `--safe-mode`,
+  types `/usage` in a PTY, captures the terminal screen, and parses Claude's own
+  **Current session** + **Current week (all models)** buckets into a quota
+  snapshot. The probe does not send a model prompt, but it is still a TUI scrape
+  (~15s in live tests), so the daemon caches it (`.claude-usage-levels.json`,
+  5-minute TTL) and hooks merely read the portal-state projection. This is
+  best-effort local telemetry, not a first-class head-less API; preserve
+  Claude's labels rather than relabelling them as "5h" unless Claude does.
 
 **(c) Codex DOES expose subscription quota head-less — and brr now reads it.**
 Every `token_count` event in a Codex session rollout
@@ -304,41 +319,43 @@ handed over (subscription), so Codex `spend` is honestly `unimplemented`. The
 `usage`) that does **not** carry `rate_limits` — the quota lives only in the
 rollout file, so the on-disk path is the one that works.
 
-**Corrected data map** (head-less, i.e. what brr's daemon can actually read):
+**Corrected data map** (what brr's daemon can actually read):
 
-| Vessel | Spend ($) | Subscription quota (5h/weekly) | Context window | Head-less source |
+| Vessel | Spend ($) | Subscription quota | Context window | Source |
 | --- | --- | --- | --- | --- |
-| Claude Code (subscription) | `total_cost_usd` ✓ | ✗ (statusLine TUI-only, never fires under `--print`) | `modelUsage.contextWindow` ✓ | `claude --print --output-format json` **result** — *wired* (`claude_status.py`; terminal refresh only) |
+| Claude Code (subscription) | `total_cost_usd` ✓ | ✓ best-effort `Current session` + `Current week` from `/usage` TUI | `modelUsage.contextWindow` ✓ | Result JSON for spend/context (`claude_status.py`) + cached interactive `/usage` PTY scrape for quota (`claude_usage.py`) |
 | Codex (subscription) | ✗ (no $ gauge; tokens only) | ✓ `rate_limits.{primary,secondary}` | ✓ `model_context_window` + last `input_tokens` (est) | **session rollout `token_count` events** — *wired* (`codex_status.py`) |
 | Any API-key auth | response usage | `anthropic-ratelimit-*` headers | — | per-call headers |
 | brnrd-owned key | authoritative | authoritative | — | brnrd reads it (§2) |
 
-So the asymmetry is the **inverse** of the earlier note: **Codex's subscription
-quota is head-less-readable (and now live); Claude's is not** (TUI-only). Claude
-gives spend+context head-less (result JSON, wired); Codex gives quota+context
-head-less (rollout, wired). The `facets.build` `levels_collector` arg is now a
-per-slot set, not one bool, so each vessel marks only the slots it truly collects
-(`known`/`absent`) and leaves the rest `unimplemented` — Codex `spend` no longer
-lies as `absent`.
+So the durable asymmetry is no longer "Codex has quota and Claude doesn't"; it is
+**cheap native gauge vs. expensive scraped gauge**. Codex quota is on disk and
+cheap enough to read every boundary. Claude quota is local and useful, but the
+source is a cached PTY scrape, so it should be treated as best-effort telemetry
+with freshness, not as a synchronous hook action. The `facets.build`
+`levels_collector` arg stays a per-slot set, so each vessel marks only the slots
+it truly collects (`known`/`absent`) and leaves the rest `unimplemented` — Codex
+`spend` no longer lies as `absent`.
 
 **Build consequence.** Codex quota collector: **done** (read-only, on-disk, no
 credits). Hardening + the upstream quota-seam ask are tracked in
 [brr#195](https://github.com/Gurio/brr/issues/195). Claude result-JSON collector:
-**done** for `spend` + `context_window` terminal accounting; `quota` remains
-unavailable head-less because the result JSON carries no reset windows. The old
+**done** for `spend` + `context_window` terminal accounting. Claude `/usage` PTY
+collector: **done** for cached subscription quota/reset visibility. The old
 `statusline.py` helper is no longer registered by brr's daemon hooks; it only
-serves a manually wired interactive TUI footer. Keep the §4 guardrail: the card
-shows *consumption-so-far + reset windows when known*, **never a forward dollar
+serves a manually wired interactive TUI footer. Hook deltas now include the
+resources line on post-tool injections too, so a changed quota wall can enter the
+weave before closeout. Keep the §4 guardrail: the card shows
+*consumption-so-far + reset windows when known*, **never a forward dollar
 promise**.
 
-> **Lineage breadcrumb.** 2026-06-28 (this run): live probe overturned the
-> evt-e1gl finding. Claude `statusLine` does not fire under `--print` (so
-> `statusline.py` is dead head-less); Codex *does* expose 5h/weekly quota in its
-> session rollout (so the earlier "Codex quota = edge-only / OpenAI issues
-> #15281/#19555/#17827 not shipped" conclusion was wrong — the data was already
-> on disk). The Codex rollout collector is wired; the Claude result-JSON repoint
-> shipped later the same day for terminal spend/context accounting, without
-> claiming Claude subscription quota/reset support.
+> **Lineage breadcrumb.** 2026-06-28: live probes overturned evt-e1gl in two
+> steps. First, Claude `statusLine` did not fire under `--print` and Codex quota
+> was found in rollout files. Later, the maintainer's `/usage` push proved
+> Claude subscription quota is reachable after all through an interactive PTY
+> scrape, not through a head-less JSON seam. Current code uses Codex rollout
+> (`codex_status.py`), Claude result JSON (`claude_status.py`), and Claude
+> `/usage` PTY (`claude_usage.py`) as separate collectors.
 
 **The rename is now a sanctioned follow-up run, deliberately not folded into the
 boundary work.** `runner` is embedded across config keys (`runner`,
@@ -446,9 +463,9 @@ the free mechanism, always an offered convenience over it."
   distance-from-envelope (min across walls) is its spine. (§7, evt-tw6t)
 - **Cost-data source (corrected 2026-06-28):** the stream-json loom is retired.
   Codex live quota/context comes from session-rollout `token_count` events.
-  Claude spend/context comes from terminal `--output-format json` results.
-  Claude subscription quota/reset windows remain TUI-only (`statusLine` never
-  fires under `--print`). (§8)
+  Claude spend/context comes from terminal `--output-format json` results, while
+  Claude subscription quota/reset windows come from a cached interactive
+  `/usage` PTY scrape (`statusLine` still never fires under `--print`). (§8)
 - **Facet selection (evt-e1gl):** facets are *derived from the walls* (budget,
   spend, quota, context_window) plus actionable state (coexisting_runs,
   remote_scm), defined once in the single projection helper — "by schema," not
@@ -479,13 +496,18 @@ the free mechanism, always an offered convenience over it."
   request `--output-format json`; runner capture unwraps `.result` back into the
   response file and writes terminal `spend` + `context_window` levels for the
   final portal refresh. The old `statusline.py` helper is not daemon-registered.
+- **Claude `/usage` PTY collector** (`claude_usage.py`): daemon-side, cached
+  interactive scrape of Claude's own subscription buckets (`Current session` +
+  `Current week`), projected as the `quota` level. Hook deltas now carry the
+  resources line on post-tool injections too, so a changed wall can enter the
+  weave mid-run.
 
 **Open forks / next builds:**
 - **The rename run** (§3) — `runner` → `medium`/`resident`, its own dedicated run.
 - **Hardening the level collectors:** correlate Codex rollout files to the active
-  session instead of relying on newest-file, confirm context math, and keep
-  watching for a first-class Claude quota/reset seam. Codex spend still needs a
-  price table if it ever graduates beyond `unimplemented`.
+  session instead of relying on newest-file, confirm context math, and replace
+  Claude's PTY scrape if Anthropic exposes a first-class quota/reset seam. Codex
+  spend still needs a price table if it ever graduates beyond `unimplemented`.
 - **The distance-card** (§7) — reframe the budget line as min-distance-across-walls
   now that spend / quota / context_window can carry live levels.
 - **Respawn-on-wall** (§5, deferred evt-1uwp) — see the cautious-deferral note

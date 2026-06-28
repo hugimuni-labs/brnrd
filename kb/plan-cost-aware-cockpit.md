@@ -265,12 +265,13 @@ least I can get away with."
   execution mechanic, not a one-shot reply contract: substantial work
   should keep the live card honest and use mid-thought replies when they
   help.
-- **A2 prompt/snapshot ingress** — the daemon now has a conservative
-  runner-quota snapshot contract (`.brr/runner-quota.json`,
-  `runner.quota.*`, or `BRR_RUNNER_QUOTA_*`) and threads a proven summary
-  into the Mode block as `Runner: <medium> (<quota posture>)`. This ships
-  the run-visible surface without pretending provider-specific collectors
-  exist yet: when no quota signal is present, the line stays compact.
+- **A2 prompt/snapshot ingress + first provider collectors** — the daemon has a
+  conservative runner-quota snapshot contract (`.brr/runner-quota.json`,
+  `runner.quota.*`, or `BRR_RUNNER_QUOTA_*`) for Mode-line summaries, and the
+  live portal facets now read provider-specific local signals where proved:
+  Codex rollout quota/context, Claude result JSON spend/context, and cached
+  Claude `/usage` PTY quota. When no quota signal is present, the line stays
+  compact / the facet reads `absent`.
 - **Run-facing bundle language** — the generated prompt, recovery context,
   and bundled operator docs now frame the live unit as a daemon run/wake
   (`Run Context Bundle`, `Run ID`). The follow-up #128 rename slice now
@@ -288,9 +289,10 @@ capability, fallback eligibility, and billing posture.
 1. **Runner-medium schema and resolver** — turn legacy `runner=` into an
    implicit medium, then let projects/accounts declare cheap, strong, and
    brnrd-relay media without burying that policy in command strings.
-2. **A2 provider collectors** — populate the shipped quota snapshot from
-   real Codex / Claude / Gemini signals (headers, errors, usage APIs, or
-   a host wrapper) without adding slow network work to prompt assembly.
+2. **A2 provider-collector hardening** — correlate Codex rollout files to the
+   active session, keep Claude `/usage` scrape freshness visible, and add Gemini
+   / API-key collectors when a local signal is proved, without adding slow
+   network work to prompt assembly.
 3. **C1 — `.card` cost frame habit in resident memory** (repo prompt
    framing shipped; the dominion playbook still needs the same trim).
 4. **C3 — operator notification + `brr docs operator` doc** (the

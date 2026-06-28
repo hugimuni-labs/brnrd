@@ -8502,3 +8502,27 @@ request first vs. auto-chain (latter wants #128); deterministic selector keys on
 repo default_class only (no event-body heuristic); `cost_rank` is a coarse
 ordering hint not a price; card/portal `runner_media` exposure is the next slice;
 reset windows stay Codex-only by structure.
+
+## [2026-06-28] implement | Claude `/usage` PTY quota collector wired
+
+The maintainer pushed on the earlier "Claude quota is TUI-only" conclusion. A
+live PTY probe on Claude Code 2.1.195 proved interactive `/usage` can be driven
+programmatically without a model prompt: start Claude in `--safe-mode`, type
+`/usage`, capture the terminal, and parse Claude's own `Current session` +
+`Current week (all models)` buckets. This does not make quota head-less-native
+or hook-native; it is a best-effort TUI scrape (~15s live), so brr caches it.
+
+Shipped `claude_usage.py` with the PTY capture, parser, snapshot cache, and
+tests; daemon `_collect_levels` now merges Claude `/usage` quota with Claude
+result-JSON spend/context. Hook deltas now include the `resources:` line on
+post-tool injections too, so a changed quota/spend/context wall can enter the
+weave mid-run rather than only at seed/stop. Reconciled
+`design-resident-boundary.md`, `design-runner-media.md`, and
+`plan-cost-aware-cockpit.md` from "Claude reset windows unavailable" to
+"available as cached, source-tagged PTY telemetry."
+
+Verification: live PTY probe returned `session 100% left` and `week 55% left`
+from the local Claude subscription. Focused suites passed:
+`test_claude_usage`, `test_claude_status`, `test_hooks`, `test_daemon`,
+`test_outbox`, `test_facets`, `test_codex_status`, `test_runner_quota`, plus the
+Claude runner stdout unwrap case.

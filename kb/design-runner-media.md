@@ -35,14 +35,16 @@ brr currently has **runner profiles**, not **runner media**:
 - The daemon resolves that runner before prompt assembly, injects
   `Runner: <medium>` into the Mode block, and can append a trusted quota summary
   from `runner.quota.*`, `BRR_RUNNER_QUOTA_*`, or `.brr/runner-quota.json`.
-- The live `portal-state.json` resource facet has the future slots already:
-  `quota`, `cost`, `coexisting_runs`, and `remote_scm`. Each renders three-state
+- The live `portal-state.json` resource facet has the wall/state slots already:
+  `quota`, `spend`, `context_window`, `coexisting_runs`, and `remote_scm`. Each
+  renders three-state
   (evt-go5z): `known` carries a proven value; `absent` is affirmative-empty (no
   quota snapshot for this medium, no PR for the branch yet); `unimplemented`
-  names a not-yet-built collector (`cost`, `coexisting_runs`). Today `quota`
-  reaches `known` when a snapshot is proved and `remote_scm` reaches `known` when
-  a PR is recorded; the rest render `absent`/`unimplemented` honestly. See
-  `design-resident-boundary.md` §1.
+  names a not-yet-built collector (`spend` for Codex, `coexisting_runs`). Today
+  Codex contributes `quota` + `context_window`; Claude contributes `quota` via a
+  cached `/usage` PTY scrape and `spend` + `context_window` via result JSON; and
+  `remote_scm` reaches `known` when a PR is recorded. See
+  `design-resident-boundary.md` §1/§8.
 - Boundary interweave is now native hooks: Claude and Codex reach the same
   runner boundary via `brr hook <phase>`, so fresh resource state can be woven
   into the resident at seed/stop and, when attention changes, at post-tool.
@@ -59,7 +61,7 @@ Local probes in this repo:
 | CLI | Observed version | Useful selection knobs | Useful cost/quota knobs | Gaps |
 | --- | --- | --- | --- | --- |
 | Codex CLI | `codex-cli 0.142.3` | `codex exec --model`, `-c model=...`, `--profile`, `--json`, `exec resume`, app-server commands | **Session-rollout `token_count` events (fire-verified 2026-06-28):** every `token_count` event in `$CODEX_HOME/sessions/.../rollout-*.jsonl` carries a `rate_limits` block — `primary` (5h: `used_percent`, `window_minutes:300`, `resets_at`), `secondary` (weekly: `10080`), `plan_type` — plus `info.model_context_window` + token usage. **This is exactly `/status`, on disk, no call/credits.** Subscription quota IS head-less-readable; `codex_status.py` reads the newest rollout's last `token_count` → wired into the facets. | Spend in $ is **not** handed over (subscription; tokens only → would need a price table). The `codex exec --json` *stdout stream* does NOT carry `rate_limits` (only `turn.completed` token `usage`) — quota lives only in the rollout file. Newest-rollout heuristic relies on single-flight. |
-| Claude Code | `2.1.195` | `--model`, `--fallback-model`, named/resumable sessions, `--output-format json`, `--max-turns` | **`--print --output-format json` result (fire-verified 2026-06-28):** carries `total_cost_usd` (spend), token `usage`, `modelUsage[model].contextWindow` (context). The head-less spend+context source, now wired by `claude_status.py`: bundled Claude profiles request result JSON, runner capture unwraps `.result` back into the response file, and terminal facets receive `spend` + `context_window`. (`statusLine` is a TUI footer that **does NOT fire under `claude --print`** — verified again on 2.1.195 — so brr no longer registers it.) Also: `--max-budget-usd`, API rate-limit headers, Admin API reports. | Subscription 5h/weekly quota is **not** head-less-readable from this seam; `/usage` is TUI-visible but no reset windows appear in result JSON. Claude level data is terminal accounting, not mid-thought quota guidance. |
+| Claude Code | `2.1.195` | `--model`, `--fallback-model`, named/resumable sessions, `--output-format json`, `--max-turns` | **Two wired seams (fire-verified 2026-06-28):** `--print --output-format json` carries `total_cost_usd` (spend), token `usage`, `modelUsage[model].contextWindow` (context), now wired by `claude_status.py`; interactive `/usage` in a PTY exposes subscription buckets (`Current session`, `Current week`), now cached by `claude_usage.py` and projected as `quota`. (`statusLine` is a TUI footer that **does NOT fire under `claude --print`**, so brr no longer registers it.) Also: `--max-budget-usd`, API rate-limit headers, Admin API reports. | Claude quota is **not head-less-native**: the working path is a best-effort TUI scrape (~15s live), cached by the daemon rather than run inside hooks. Result JSON still has no reset windows. |
 | Gemini CLI | not installed in this environment | Bundled profile intent is `gemini -p --yolo`; docs/repo indicate hooks exist | Gemini API quotas are per project, measured across RPM/TPM/RPD plus spend-based limits, and billing/account caps sit at billing-account level. | No local firing/version probe here, so Gemini remains intent until installed and smoked. |
 
 Implication: provider collectors must be **pluggable and provenance-tagged**.
@@ -173,7 +175,7 @@ Use a three-grade signal model:
 | Authoritative live | brnrd wallet/relay balance; response headers for brnrd-owned API keys; cloud provider quota API for a managed key | daemon collector writes structured snapshot with source, freshness, and reset windows |
 | Provider/account historical | OpenAI organization usage/cost APIs; Anthropic Admin API reports; Google billing/usage views | async collector, never on prompt critical path; feeds historical pre-analysis |
 | Readable local gauge (Codex) | **Codex session-rollout `token_count` events** — `rate_limits.{primary,secondary}` (5h/weekly subscription quota, used% + resets), `model_context_window` | `codex_status.py` reads the newest rollout's last event; on-disk, no `/status` call, no credits. *Wired* 2026-06-28. The real head-less subscription-quota gauge. |
-| Readable local gauge (Claude) | **`claude --print --output-format json` result** — `total_cost_usd` (spend), `usage`, `modelUsage.contextWindow` | spend + context only; NO subscription quota/reset windows (statusLine is TUI-only, never fires under `--print`). *Wired* 2026-06-28 via `claude_status.py`; terminal refresh only. |
+| Readable local gauge (Claude) | **`claude --print --output-format json` result** — `total_cost_usd` (spend), `usage`, `modelUsage.contextWindow`; **interactive `/usage` PTY** — `Current session` + `Current week` subscription buckets | result JSON is terminal spend/context (`claude_status.py`); `/usage` is cached best-effort quota (`claude_usage.py`, 5-minute TTL), then hooks read portal-state rather than scraping directly. |
 | Best effort local | Codex spend (needs a price table — no $ gauge); subscription error text; manually supplied `.brr/runner-quota.json` | snapshot or failure classifier, source marked best-effort |
 
 The live portal state should carry this as structured data, not only a string:
@@ -352,18 +354,17 @@ The foundation is wired; the dispatch/card/respawn slices each carry a call the
 maintainer should make. Each has a recommended default so the next wake can
 proceed unless redirected.
 
-1. **Respawn trigger asymmetry — reactive for Claude, proactive only for Codex.**
+1. **Respawn trigger asymmetry — proactive is strongest for Codex; Claude is
+   usable but cached.**
    Cost-aware *vessel change* wants to fire before a wall, but the level seams
-   are asymmetric: Codex exposes **live** subscription quota (session rollout,
-   read at wake-start), while Claude exposes **terminal** spend/context only
-   (result JSON, known after the run exits — no head-less subscription quota at
-   all). So a Claude-first run cannot read mid-run that it is near a quota wall;
-   its respawn must be *reactive* — triggered by a classified quota/auth/provider
-   **failure** (sequence step 5), not by a pre-run gauge. Proactive "chunk or
-   defer before the wall" is possible only where a live gauge exists (Codex
-   today). *Recommend:* accept this as v1 — reactive respawn everywhere, proactive
-   where a live gauge exists — rather than blocking on a Claude quota source that
-   does not exist head-less.
+   are asymmetric: Codex exposes **cheap live** subscription quota (session
+   rollout), while Claude exposes subscription quota through a cached
+   interactive `/usage` PTY scrape. So a Claude-first run can see a quota wall
+   before failure, but the probe is too heavy to run synchronously inside every
+   hook. Its v1 posture should be proactive when the cached reading is fresh and
+   reactive on classified quota/auth/provider **failure** when it is stale or
+   absent. *Recommend:* accept this as v1 — cheap proactive for Codex, cached
+   proactive for Claude, reactive fallback everywhere.
 
 2. **Auto-respawn loop vs. parked request — depends on #128.** Fully automatic
    fallback (`runner_media: [a, b]`, retry on next medium) wants the run/event
@@ -397,11 +398,11 @@ proceed unless redirected.
    freshness) and let the hook line carry a compact projection — the next slice,
    once the dispatch wiring chooses a medium to display.
 
-6. **Reset windows (maintainer: "leave for now").** Already satisfied for Codex
-   (rollout `rate_limits.*.resets_at`, wired); **structurally unavailable** for
-   Claude head-less (no subscription quota in result JSON; `/usage` is TUI-only).
-   *Confirm:* we accept this asymmetry rather than chasing an Anthropic source
-   that the head-less seam does not expose.
+6. **Reset windows (maintainer: "leave for now").** Satisfied for Codex
+   (rollout `rate_limits.*.resets_at`, wired) and now best-effort for Claude via
+   the `/usage` PTY scrape. *Confirm:* we accept the source-quality asymmetry
+   (Codex native file vs. Claude TUI scrape) unless Anthropic exposes a first-
+   class head-less seam.
 
 ## Sources
 
