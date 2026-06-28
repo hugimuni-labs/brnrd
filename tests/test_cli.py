@@ -128,6 +128,42 @@ def test_portal_state_prints_json_from_env(tmp_path, capsys, monkeypatch):
     assert payload["run"]["id"] == "run-env"
 
 
+def test_portal_facets_schema_only_without_run(capsys, monkeypatch):
+    # Outside a wake the catalogue still prints — the schema is in code, not in
+    # a run — so an operator can always ask "what are the implemented facets?".
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    assert main(["portal", "facets"]) == 0
+    out = capsys.readouterr().out
+    assert "boundary facet catalogue" in out
+    assert "quota [level, required]" in out
+    assert "coexisting-runs [state, optional]" in out
+    assert "no live run detected" in out
+
+
+def test_portal_facets_with_live_status(tmp_path, capsys, monkeypatch):
+    from brr import facets
+
+    res = facets.build(quota_summary="weekly 42%", branch="brr/x")
+    state = tmp_path / "portal-state.json"
+    state.write_text(
+        json.dumps({"version": 1, "resources": res}) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("BRR_PORTAL_STATE", str(state))
+    assert main(["portal", "facets"]) == 0
+    out = capsys.readouterr().out
+    assert "with live status" in out
+    assert "quota [level, required] — known: weekly 42%" in out
+
+
+def test_portal_facets_json(capsys, monkeypatch):
+    monkeypatch.delenv("BRR_PORTAL_STATE", raising=False)
+    assert main(["portal", "facets", "--json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert {r["key"] for r in rows} == {
+        "quota", "spend", "context_window", "coexisting_runs", "remote_scm"
+    }
+
+
 def test_format_portal_state_surfaces_missing_data():
     from brr.cli import _format_portal_state
 
@@ -140,7 +176,9 @@ def test_format_portal_state_surfaces_missing_data():
                    "long_running": True, "keepalive": {"status": "-"}},
         "resources": {
             "quota": {"status": "absent", "note": "no snapshot for this medium"},
-            "cost": {"status": "unimplemented", "note": "not metered yet"},
+            "spend": {"status": "unimplemented", "note": "not metered yet"},
+            "context_window": {"status": "unimplemented",
+                               "note": "not exposed by this medium"},
             "coexisting_runs": {"status": "unimplemented"},
             "remote_scm": {"status": "absent",
                            "note": "no PR recorded for this branch yet"},
@@ -148,7 +186,7 @@ def test_format_portal_state_surfaces_missing_data():
     })
     assert "nothing sent yet" in out
     assert "running long" in out
-    assert "cost=unimplemented (not metered yet)" in out
+    assert "spend=unimplemented (not metered yet)" in out
     assert "remote-scm=absent (no PR recorded for this branch yet)" in out
     assert "unavailable" not in out
 
