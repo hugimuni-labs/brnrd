@@ -34,10 +34,11 @@ different things the resident must not conflate:
   ``required`` separates expected-to-grow (cost metering) from someday-niceties
   (coexisting runs while brr stays single-flight per dominion).
 
-The level collectors are **per-vessel** (§8): Claude Code hands spend / quota /
-context-window over its ``statusLine`` JSON, so those read ``known``/``absent``;
-a medium with no level collector reads ``unimplemented``. That asymmetry is the
-design, surfaced honestly, not a bug.
+The level collectors are **per-vessel** (§8): Codex exposes live quota/context
+through session-rollout ``token_count`` events, while Claude exposes terminal
+spend/context through its result JSON. A medium with no collector for a slot
+reads ``unimplemented``. That asymmetry is the design, surfaced honestly, not a
+bug.
 """
 
 from __future__ import annotations
@@ -77,8 +78,8 @@ class FacetSpec:
 FACETS: tuple[FacetSpec, ...] = (
     FacetSpec(
         "quota", "quota", LEVEL, True,
-        "subscription quota headroom (used% + reset window) from the medium's "
-        "statusLine or a local quota snapshot; absent until one is read",
+        "subscription quota headroom (used% + reset window) from a medium level "
+        "source or local quota snapshot; absent until one is read",
     ),
     FacetSpec(
         "spend", "spend", LEVEL, True,
@@ -87,7 +88,7 @@ FACETS: tuple[FacetSpec, ...] = (
     ),
     FacetSpec(
         "context_window", "context-window", LEVEL, True,
-        "context-window headroom (% remaining) from the medium's statusLine; "
+        "context-window headroom (% remaining) from the medium's level source; "
         "unimplemented on media that do not expose it",
     ),
     FacetSpec(
@@ -150,7 +151,7 @@ def build(
     - ``quota_summary`` — a quota one-liner from the local quota snapshot
       (``runner_quota``), the always-available quota path.
     - ``levels`` — a parsed level snapshot from the medium's level collector
-      (Claude ``statusLine``, Codex session rollout), carrying ``quota`` /
+      (Claude result JSON, Codex session rollout), carrying ``quota`` /
       ``spend`` / ``context_window`` summaries. Its quota wins over
       ``quota_summary`` when present.
     - ``levels_collector`` — which level slots this medium has a *wired*

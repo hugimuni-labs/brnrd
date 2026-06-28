@@ -151,6 +151,8 @@ class TestCommandBuilding:
         assert cmd == [
             "claude",
             "--print",
+            "--output-format",
+            "json",
             "--dangerously-skip-permissions",
             # local settings source isolates the run from the user's global
             # and the project's committed settings — NOT --safe-mode, which
@@ -168,6 +170,8 @@ class TestCommandBuilding:
         assert cmd == [
             "claude",
             "--print",
+            "--output-format",
+            "json",
             "--dangerously-skip-permissions",
             "--bare",
             "--system-prompt",
@@ -183,6 +187,52 @@ class TestCommandBuilding:
             "--yolo",
             "fix it",
         ]
+
+    def test_invoke_runner_unwraps_claude_json_response(self, tmp_path):
+        repo_root = tmp_path
+        (repo_root / ".brr").mkdir()
+        response_path = repo_root / ".brr" / "responses" / "evt-claude.md"
+        outbox = repo_root / ".brr" / "outbox" / "evt-claude"
+        payload = {
+            "type": "result",
+            "result": "final from json\n",
+            "total_cost_usd": 0.01,
+            "modelUsage": {
+                "claude-haiku": {
+                    "inputTokens": 1000,
+                    "cacheReadInputTokens": 0,
+                    "cacheCreationInputTokens": 0,
+                    "contextWindow": 200000,
+                }
+            },
+        }
+        cfg = {
+            "runner_cmd": [
+                sys.executable,
+                "-c",
+                "import json, sys; sys.stdout.write(json.dumps(json.loads(sys.argv[1])))",
+                json.dumps(payload),
+            ]
+        }
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="evt-claude-attempt-1",
+            prompt="ignored",
+            cwd=repo_root,
+            repo_root=repo_root,
+            response_path=str(response_path),
+            env={"BRR_OUTBOX_DIR": str(outbox)},
+        )
+
+        result = invoke_runner("claude", invocation, cfg=cfg)
+
+        assert result.ok
+        assert result.stdout == "final from json\n"
+        assert response_path.read_text(encoding="utf-8") == "final from json\n"
+        snap = json.loads(
+            (outbox / ".claude-result-levels.json").read_text(encoding="utf-8")
+        )
+        assert snap["spend"]["summary"] == "$0.0100 this session (estimated)"
 
     def test_build_cmd_runner_cmd_override_substitutes_prompt_only(self):
         cfg = {"runner_cmd": ["mock", "--flag", "{prompt}"]}

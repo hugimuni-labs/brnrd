@@ -1,27 +1,25 @@
-"""Claude Code statusLine collector — the level-facet source for the Claude vessel.
+"""Claude Code statusLine helper for interactive Claude sessions.
 
 Claude Code's ``statusLine`` feature invokes a configured command every time it
-refreshes the footer, handing it **session JSON on stdin**. brr registers
-``brr statusline`` as that command (in the same ``.claude/settings.local.json``
-it writes the hooks into), so the same boundary-abstraction-over-vessels that
-carries hooks also carries live cost/quota — no streaming, no API key, no brnrd
-ownership required for a subscription run (``kb/design-resident-boundary.md``
-§8). The command does two things on each fire:
+refreshes the footer, handing it **session JSON on stdin**. Under brr's daemon
+mode (``claude --print``), that footer is never rendered, so the daemon no
+longer registers this command or treats it as a live level source. The head-less
+Claude source is :mod:`brr.claude_status`, which parses the final
+``--output-format json`` result for spend/context accounting.
+
+This helper remains defensive for users who wire it into an interactive Claude
+session themselves. The command does two things on each fire:
 
 1. **Collect** — parse the session JSON into a normalized *levels* snapshot
    (quota / spend / context_window summaries) and write it to
    ``<outbox>/.statusline.json``, a dotfile the daemon's drain skips. The
-   daemon folds it into the resources facet on the next heartbeat.
+   snapshot.
 2. **Render** — print a short footer string back to stdout so Claude's UI shows
    the same boundary levels to the human watching.
 
-**Schema caveat (smoke-verify before trusting).** The exact field nesting of
-Claude's statusLine JSON is the maintainer's reported finding, not yet
-fire-verified here (pitfall: *fire it before you rule on it*). So the parse is
-deliberately **defensive**: every field is optional, alternative names are
-tolerated, and a shape that does not match degrades to an empty snapshot
-(facets read ``absent``) rather than crashing or fabricating a number. When the
-real schema is confirmed, tighten :func:`parse_session` and drop the fallbacks.
+The parse is deliberately **defensive**: every field is optional, alternative
+names are tolerated, and a shape that does not match degrades to an empty
+snapshot rather than crashing or fabricating a number.
 """
 
 from __future__ import annotations
@@ -36,13 +34,13 @@ from typing import Any
 # Normalized level snapshot the daemon reads (a dotfile; the drain skips it).
 SNAPSHOT_NAME = ".statusline.json"
 
-# Media that expose a statusLine-style level collector. Per-vessel asymmetry
-# (§8): Claude hands spend/quota/context over the footer JSON; Codex does not.
+# Media that can use this helper in an interactive session. The daemon does not
+# use this as a head-less level source.
 _STATUSLINE_FLAVOURS = {"claude"}
 
 
 def supported(runner_name: str | None) -> bool:
-    """True when *runner_name*'s vessel exposes a statusLine level collector."""
+    """True when *runner_name*'s vessel can use the interactive helper."""
     if not runner_name:
         return False
     slug = str(runner_name).strip().lower()
