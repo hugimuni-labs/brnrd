@@ -27,17 +27,17 @@ different things the resident must not conflate:
 
 - ``known`` — a value proven by the configured collector this heartbeat.
 - ``absent`` — the collector ran and there is genuinely nothing yet: no PR for
-  this branch, no quota snapshot this medium exposes. The *affirmative-empty*
+  this branch, no quota snapshot this Shell exposes. The *affirmative-empty*
   signal — the same logic the closeout capsule uses for "0 pending events".
   Absence is data, surfaced on purpose, not a silent gap.
-- ``unimplemented`` — no collector is wired for this slot on this medium.
+- ``unimplemented`` — no collector is wired for this slot on this Shell.
   ``required`` separates expected-to-grow (cost metering) from someday-niceties
   (coexisting runs while brr stays single-flight per dominion).
 
-The level collectors are **per-vessel** (§8): Codex exposes live quota/context
+The level collectors are **per-Shell** (§8): Codex exposes live quota/context
 through session-rollout ``token_count`` events, while Claude exposes terminal
 spend/context through result JSON and cached subscription quota through the
-interactive ``/usage`` PTY collector. A medium with no collector for a slot reads
+interactive ``/usage`` PTY collector. A Shell with no collector for a slot reads
 ``unimplemented``. That asymmetry is the design, surfaced honestly, not a bug.
 """
 
@@ -78,18 +78,18 @@ class FacetSpec:
 FACETS: tuple[FacetSpec, ...] = (
     FacetSpec(
         "quota", "quota", LEVEL, True,
-        "subscription quota headroom (used% + reset window) from a medium level "
+        "subscription quota headroom (used% + reset window) from a Shell-level "
         "source or local quota snapshot; absent until one is read",
     ),
     FacetSpec(
         "spend", "spend", LEVEL, True,
-        "estimated session spend so far ($) handed over by the medium — never a "
-        "forward projection; unimplemented on media with no spend gauge",
+        "estimated session spend so far ($) handed over by the Shell — never a "
+        "forward projection; unimplemented on Shells with no spend gauge",
     ),
     FacetSpec(
         "context_window", "context-window", LEVEL, True,
-        "context-window headroom (% remaining) from the medium's level source; "
-        "unimplemented on media that do not expose it",
+        "context-window headroom (% remaining) from the Shell's level source; "
+        "unimplemented on Shells that do not expose it",
     ),
     FacetSpec(
         "coexisting_runs", "coexisting-runs", STATE, False,
@@ -111,8 +111,8 @@ def _level_record(
 ) -> dict[str, object]:
     """Build a level facet record from an optional proven summary.
 
-    ``has_collector`` is the per-vessel switch: when a collector is wired for
-    this slot on this medium but produced no value this heartbeat, the slot is
+    ``has_collector`` is the per-Shell switch: when a collector is wired for
+    this slot on this Shell but produced no value this heartbeat, the slot is
     ``absent`` (affirmative-empty); when no collector exists, it is
     ``unimplemented`` so the gap reads as "not built" rather than "empty".
     """
@@ -126,12 +126,12 @@ def _level_record(
         return {
             "status": ABSENT, "kind": spec.kind, "required": spec.required,
             "summary": None,
-            "note": f"no {spec.label} reading from this medium yet",
+            "note": f"no {spec.label} reading from this Shell yet",
         }
     return {
         "status": UNIMPLEMENTED, "kind": spec.kind, "required": spec.required,
         "summary": None,
-        "note": f"no {spec.label} collector for this medium yet",
+        "note": f"no {spec.label} collector for this Shell yet",
     }
 
 
@@ -150,15 +150,15 @@ def build(
 
     - ``quota_summary`` — a quota one-liner from the local quota snapshot
       (``runner_quota``), the always-available quota path.
-    - ``levels`` — a parsed level snapshot from the medium's level collector
+    - ``levels`` — a parsed level snapshot from the Shell's level collector
       (Claude result JSON, Codex session rollout), carrying ``quota`` /
       ``spend`` / ``context_window`` summaries. Its quota wins over
       ``quota_summary`` when present.
-    - ``levels_collector`` — which level slots this medium has a *wired*
+    - ``levels_collector`` — which level slots this Shell has a *wired*
       collector for, so an empty slot reads ``absent`` (collector ran, nothing
       yet) rather than ``unimplemented`` (no collector). ``True`` means all
       level slots; ``False`` means none; an iterable names the specific slots
-      (per-vessel asymmetry: Codex collects ``quota`` + ``context_window`` but
+      (per-Shell asymmetry: Codex collects ``quota`` + ``context_window`` but
       has no dollar-spend gauge, so ``spend`` stays ``unimplemented``).
     - ``branch`` / ``pr_number`` — run metadata for the ``remote_scm`` posture.
     """
