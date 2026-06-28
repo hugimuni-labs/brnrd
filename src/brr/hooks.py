@@ -38,6 +38,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import facets
+
 PHASE_POST_TOOL = "post-tool"
 PHASE_STOP = "stop"
 PHASE_SESSION_START = "session-start"
@@ -244,38 +246,16 @@ def format_delta(
 
 
 def _format_resources(resources: dict[str, Any]) -> str | None:
-    """One 'work status' line: quota/cost/coexisting/remote posture.
+    """One 'work status' line: the schema's facets, in order.
 
-    Renders the three-state honesty of the facets so the gaps read as data,
-    not omissions (evt-go5z): ``known`` carries its value; ``absent`` says
-    what is genuinely empty (no PR yet, no quota snapshot); ``unimplemented``
-    names a not-yet-built collector. The note rides along when present so the
-    resident sees *why* a slot is empty without opening the JSON.
+    Delegates to :func:`facets.render_line` so the woven line and the JSON
+    snapshot project from the same facet schema (``kb/design-resident-boundary``
+    §1 — "by schema, not by convention"). Three-state honesty: ``known`` carries
+    its value; ``absent`` names what is genuinely empty; ``unimplemented`` names
+    a not-yet-built collector, with the reason riding along so the resident sees
+    *why* a slot is empty without opening the JSON.
     """
-    def _facet_text(key: str, label: str) -> str:
-        facet = resources.get(key) if isinstance(resources.get(key), dict) else {}
-        status = facet.get("status")
-        note = str(facet.get("note") or "").strip()
-        if status == "known":
-            # PR posture carries a structured value; quota carries a summary.
-            pr_state = str(facet.get("pr_state") or "").strip()
-            if pr_state == "open" and facet.get("pr_number"):
-                return f"{label}=PR #{facet.get('pr_number')}"
-            summary = str(facet.get("summary") or "").strip()
-            return f"{label}={summary}" if summary else f"{label}=known"
-        # absent / unimplemented (or anything unexpected): name the state and,
-        # when carried, the reason — substantially more legible than a flat
-        # "unavailable".
-        state = status if status in {"absent", "unimplemented"} else "unavailable"
-        return f"{label}={state} ({note})" if note else f"{label}={state}"
-
-    parts = [
-        _facet_text("quota", "quota"),
-        _facet_text("cost", "cost"),
-        _facet_text("coexisting_runs", "coexisting-runs"),
-        _facet_text("remote_scm", "remote-scm"),
-    ]
-    return "- resources: " + "; ".join(parts) + "."
+    return facets.render_line(resources)
 
 
 # ── Stop fold-in (verbatim, framed as the user's words) ──────────────────

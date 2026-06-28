@@ -160,6 +160,16 @@ def main(argv: list[str] | None = None) -> None:
                    help="read this portal-state.json path instead of auto-detecting")
     p.set_defaults(func=cmd_portal_state)
 
+    p = portal_sub.add_parser(
+        "facets",
+        help="list the boundary facet catalogue — what the implemented facets "
+             "are, and (inside a wake) which are populated right now")
+    p.add_argument("--json", action="store_true",
+                   help="emit the facet catalogue as JSON")
+    p.add_argument("--path", default=None,
+                   help="read this portal-state.json path for live status")
+    p.set_defaults(func=cmd_portal_facets)
+
     p = sub.add_parser(
         "hook",
         help="runner hooks back channel endpoint (Tier 2; called by the "
@@ -313,26 +323,18 @@ def _format_portal_state(payload: dict) -> str:
         + ("  ⚠ running long" if budget.get("long_running") else ""),
     ]
     if resources:
-        # Three-state honesty (evt-go5z): a 'known' facet shows its value; an
-        # 'absent' or 'unimplemented' one names the state and its reason so the
-        # gaps read as data, not as a flat "unavailable".
-        def _facet(key: str) -> str:
-            f = resources.get(key) if isinstance(resources.get(key), dict) else {}
-            status = f.get("status")
-            if status == "known":
-                pr_state = str(f.get("pr_state") or "").strip()
-                if pr_state == "open" and f.get("pr_number"):
-                    return f"PR #{f.get('pr_number')}"
-                return str(f.get("summary") or "known").strip() or "known"
-            note = str(f.get("note") or "").strip()
-            state = status if status in {"absent", "unimplemented"} else "unavailable"
-            return f"{state} ({note})" if note else state
+        # Three-state honesty: a 'known' facet shows its value; an 'absent' or
+        # 'unimplemented' one names the state and its reason so the gaps read as
+        # data, not as a flat "unavailable". Projects from the shared facet
+        # schema so this view can never drift from the woven line / JSON.
+        from . import facets
+
         lines.append(
             "resources: "
-            f"quota={_facet('quota')} | "
-            f"cost={_facet('cost')} | "
-            f"coexisting-runs={_facet('coexisting_runs')} | "
-            f"remote-scm={_facet('remote_scm')}"
+            + " | ".join(
+                f"{spec.label}={facets.facet_value(resources.get(spec.key))}"
+                for spec in facets.FACETS
+            )
         )
     card_text = str(card.get("text") or "").strip()
     if card_text:
@@ -376,6 +378,52 @@ def cmd_portal_state(args):
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(_format_portal_state(payload))
+    return 0
+
+
+def cmd_portal_facets(args):
+    """List the boundary facet catalogue for an operator.
+
+    The schema is always printable (it is defined in code, not in a run), so
+    this works outside a wake and answers "what are the implemented facets?".
+    Inside a wake — or with ``--path`` — it also folds in the live status of
+    each facet from ``portal-state.json``, answering "which are populated now?".
+    """
+    import json
+    import sys
+
+    from . import facets
+
+    resources = None
+    path = _portal_state_path(args.path)
+    if path is not None:
+        payload, _token, _error = _read_portal_state(path)
+        if isinstance(payload, dict):
+            res = payload.get("resources")
+            resources = res if isinstance(res, dict) else None
+
+    rows = facets.describe_facets(resources)
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+        return 0
+
+    live = resources is not None
+    header = "[brr portal facets] boundary facet catalogue"
+    print(header + (" (with live status)" if live else " (schema only)"))
+    for row in rows:
+        flag = "required" if row["required"] else "optional"
+        head = f"  {row['label']} [{row['kind']}, {flag}]"
+        if live:
+            status = row.get("status") or "unimplemented"
+            value = row.get("value") or status
+            head += f" — {status}: {value}"
+        print(head)
+        print(f"      {row['fills']}")
+    if not live:
+        print(
+            "\n  no live run detected — run inside a daemon wake or pass "
+            "--path to also see which facets are populated right now."
+        )
     return 0
 
 
@@ -679,6 +727,15 @@ def cmd_ergonomics_clear(args):
 def _portal_state_path(explicit: str | None) -> Path | None:
     if explicit:
         return Path(explicit)
+    # Inside a wake the daemon hands the resident the live portal path as
+    # ``BRR_PORTAL_STATE`` (the delivery contract). Honour it first so
+    # ``brr portal state`` / ``brr portal facets`` resolve on demand without a
+    # ``--path``, which is the whole point of "see them on demand".
+    import os
+
+    env_path = os.environ.get("BRR_PORTAL_STATE")
+    if env_path:
+        return Path(env_path)
     brr_dir = _maybe_brr_dir()
     if brr_dir is None:
         return None
