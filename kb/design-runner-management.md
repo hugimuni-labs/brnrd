@@ -15,7 +15,7 @@ mechanics below — the capacity tracker, the reactive/proactive
 `work_class` split, the backoff/fallback chain, the subscription-tier
 headroom table, and the `brnrd_managed` consent gate — are the most
 detailed treatment we have and are the raw material a future
-`design-runner-media.md` (the §G1 "no design home yet" gap) will draw on.
+`design-runner-cores.md` (the §G1 "no design home yet" gap) will draw on.
 Read it for the *how*; take the *framing* from the cockpit plan.
 
 Companions: [`subject-managed-mode.md`](subject-managed-mode.md) (brnrd compute

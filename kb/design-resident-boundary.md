@@ -3,7 +3,7 @@
 Status: active synthesis on 2026-06-27. Reconciles a maintainer design message
 (Telegram, evt-9dp2/slhg) against the three pages shipped the same day —
 [`design-runner-back-channel.md`](design-runner-back-channel.md) (the boundary
-mechanism), [`design-runner-media.md`](design-runner-media.md) (cost/medium
+mechanism), [`design-runner-cores.md`](design-runner-cores.md) (cost/medium
 layer), and [`plan-cost-aware-runner.md`](plan-cost-aware-runner.md) (the
 cost/notification braid). It carries the conversation's settled answers and the
 two open forks that still need a maintainer nod.
@@ -163,7 +163,7 @@ the *executor type* (Codex / Claude / Gemini). Proposed:
 1. The codebase already glosses it that way — the Mode block literally renders
    *"Runner: claude — the compute medium this thought runs on."* The word is
    already drifting into place.
-2. [`design-runner-media.md`](design-runner-media.md) already uses "medium" for
+2. [`design-runner-cores.md`](design-runner-cores.md) already uses "medium" for
    the layer above static profiles.
 3. **Séance resonance.** A medium *channels a spirit*. The maintainer's own
    phrase was "the tools we use to invoke the spirit from remote LLMs," and the
@@ -276,7 +276,7 @@ scraping the `/usage` panel. The true map:
 
 **(a) The `stream-json` loom stays retired** (abandoned 2026-06-27; see
 [`plan-streaming-runner-injection.md`](plan-streaming-runner-injection.md),
-[`design-runner-media.md`](design-runner-media.md) §Reconciled). Cost/quota does
+[`design-runner-cores.md`](design-runner-cores.md) §Reconciled). Cost/quota does
 **not** ride native hook payloads — hooks carry portal-state, not provider usage
 internals. The real source is per-vessel **post-result / on-disk / PTY-scraped**
 data, below; hooks then inject the portal-state projection of that data.
@@ -373,7 +373,7 @@ token, grouped by medium type, noting whether already successfully used,
 followed by the subscription quotas ranked beside the matrix."*
 
 This is the structured `runner_media` portal facet already sketched in
-[`design-runner-media.md`](design-runner-media.md) §Quota and credit signals,
+[`design-runner-cores.md`](design-runner-cores.md) §Quota and credit signals,
 read as a *navigation surface* rather than a flat string. The manifest per
 medium = the medium's row: model, provider, owner, cost class, cost_rank
 (price-per-token proxy), quota source + freshness, hook capability, billing
@@ -424,7 +424,7 @@ cheap to recover from, and make the recovery state *visible on the boundary*.**
   capsule already uses for pending events.
 
 The triage minimum brr *does* need is the failure-class distinction already in
-[`design-runner-media.md`](design-runner-media.md) §Implementation sequence step
+[`design-runner-cores.md`](design-runner-cores.md) §Implementation sequence step
 5 (quota / auth / provider-outage / quality-escalation / no-response) — enough to
 route automatic fallback for the *unambiguous* operational failures, while
 *ambiguous* failures surface to the user with the receipt attached rather than
@@ -521,7 +521,7 @@ lives in the daemon worker loop and, done wrong, is exactly a runaway
 quota-burning loop — the wide-blast/irreversible case that wants a supervised
 wake, not an unattended one. So the shape is recorded here and the active build
 held: **on a wall-class exit** (quota/auth/provider-outage — the failure classes
-already named in `design-runner-media.md` step 5), the daemon spawns one fresh
+already named in `design-runner-cores.md` step 5), the daemon spawns one fresh
 run seeded from the **committed run branch** (the interim work receipt always
 survives, §5), carrying a respawn-depth counter in run meta and a hard cap
 (e.g. ≤2) so a persistently-walling task escalates to the user instead of
@@ -533,7 +533,7 @@ not to retry blindly.
 
 - [`design-runner-back-channel.md`](design-runner-back-channel.md) — the boundary
   mechanism (native hooks; the injection rail).
-- [`design-runner-media.md`](design-runner-media.md) — the medium/cost layer and
+- [`design-runner-cores.md`](design-runner-cores.md) — the medium/cost layer and
   the structured `runner_media` facet behind the matrix.
 - [`plan-cost-aware-runner.md`](plan-cost-aware-runner.md) — cost
   self-awareness, the historical-pre-analysis guardrail, operator legibility.

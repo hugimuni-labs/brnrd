@@ -11,7 +11,7 @@ build a cost-and-capability-aware respawn model. This hub holds four tasks.
   [`plan-initial-context-reweave.md`](plan-initial-context-reweave.md) (the
   detailed file-by-file spec; the maintainer's most-important task).
 - **Task 2 — informed respawn model:** Part 2 below; extends
-  [`design-runner-media.md`](design-runner-media.md).
+  [`design-runner-cores.md`](design-runner-cores.md).
 - **Task 3 — imagery / vocabulary:** Part 3 below (a naming decision; the
   maintainer invited pushback — given here).
 - **Task 4 — kb + code gardening sweep:** Part 4 below.
@@ -98,7 +98,7 @@ this asymmetry as a v1 constraint, not a thing to fix.
 The foundation shipped 2026-06-28 (`runner_media.py`: schema,
 `implicit_medium`, conservative `select_medium`, `RespawnRequest`,
 profile-borne metadata). The maintainer's Task-2 asks add five requirements on
-top of `design-runner-media.md`. Plan each as a slice for the execution run.
+top of `design-runner-cores.md`. Plan each as a slice for the execution run.
 
 ### 2A — Cheap dispatcher runner owns the user-facing knobs, then respawns
 The maintainer's shape: **the initial wake runs on a cheap Shell/Core**; it
@@ -106,7 +106,7 @@ parses the user's intent and execution preferences ("run on Opus", "in half an
 hour on Codex"), then **respawns** the real work onto the chosen Runner.
 - This is the "first selector is deterministic and conservative; the resident
   escalates after reading the repo" principle already in
-  `design-runner-media.md` §Dispatch — but extended: the cheap runner is also
+  `design-runner-cores.md` §Dispatch — but extended: the cheap runner is also
   the **knob parser**, not only a fallback.
 - v1 keeps the *parked* `RespawnRequest` (no auto-chain until #128's
   `defer_until`/re-claim). The cheap runner emits a respawn request naming the
@@ -162,7 +162,7 @@ flag it there so the dashboard plan owns the UI and this plan owns the data
 contract (what a run/scheduled-wake record must expose).
 
 ### 2F — Portal/structured-state upgrade (already sequenced)
-`design-runner-media.md` step 3 ("replace flat `resources.quota` string with
+`design-runner-cores.md` step 3 ("replace flat `resources.quota` string with
 structured `runner_media`") and its "Standing portal candidates" are the
 governance-exposure half (the maintainer's "expose selected medium/cost/quota
 in the card"). Keep that sequence; rename `runner_media` → `runner`/`core` per
@@ -204,7 +204,7 @@ Adopt the Armored Core frame, with one correction to the maintainer's phrasing:
 - A **profile** in `runners.md` names a Runner = a Shell (+ optional pinned
   Core) + selection metadata. The cost-aware layer selects **Cores within
   Shells**. Rename `runner_media.py` → `runner_select.py` (and the page
-  `design-runner-media.md` → `design-runner-cores.md`); `RunnerMedium` →
+  `design-runner-cores.md` → `design-runner-cores.md`); `RunnerMedium` →
   `RunnerProfile` or `Runner`.
 - **Config (maintainer override, evt-zyu6):** the `runner=` *user-facing toggle*
   is **retired**. We don't let the user define a Runner; the user defines
@@ -249,7 +249,7 @@ retired *cockpit* was the polling/queryable surface. Pushing inbound state from
 ### Recommendation 3.3 — Finish the cockpit retirement ✓ done (Task 3.3 commit)
 "cockpit" was disowned in `design-portal-grammar.md` §3 but never swept.
 Files renamed and links swept across index, design-resident-boundary, design-portal-grammar,
-design-runner-media, design-runner-management, decision-bundled-docs, and the plans
+design-runner-cores (née design-runner-media), design-runner-management, decision-bundled-docs, and the plans
 themselves. In-code link in `prompts.py` (D2) was fixed in Task 1 (commit `1ae9202`).
 Remaining: body-prose sweep of "cockpit" within the plan files (historical context —
 low priority) and full vocabulary sweep of vessel/medium/cockpit across kb (Task 4A).
@@ -292,7 +292,7 @@ From this wake's kb-health preflight + greps, the known backlog:
 - `design-runner-management.md` is marked "superseded by the cockpit framing" —
   re-point it at the post-cockpit shape (`design-runner-cores.md` + portals)
   rather than a retired label.
-- Reconcile the runner/medium/vessel framing across `design-runner-media.md`,
+- Reconcile the runner/medium/vessel framing across `design-runner-cores.md`,
   `design-resident-boundary.md`, `design-runner-back-channel.md`,
   `subject-managed-mode.md`, and the index so the graph says Runner/Shell/Core
   with one voice.

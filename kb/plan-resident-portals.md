@@ -61,7 +61,7 @@ no design home yet. That gap is itself the finding.
    retry that will also fail. The human gets "deferred to Jun 17 01:29,"
    not a dead card.
 
-**Home:** [`design-runner-media.md`](design-runner-media.md) now owns the
+**Home:** [`design-runner-cores.md`](design-runner-cores.md) now owns the
 runner profile vs runner medium split, cheap/strong dispatch policy, quota
 signals, and brnrd LLM relay fallback. [`design-run-event-model.md`](design-run-event-model.md)
 still owns `defer_until`, per-run claims, and run-granularity cost attribution.

@@ -186,7 +186,7 @@ new version then replace, checking nothing referenced is orphaned.
 - **New emphasis:** state the Shell/Core split at the top: "a profile names a
   **Shell** (the CLI invocation) and, optionally, a **Core** (the model and its
   cost/quota metadata). A profile with both pinned is one selectable Runner."
-  Rename the conceptual pointer from `design-runner-media.md` accordingly (see
+  Rename the conceptual pointer from `design-runner-cores.md` accordingly (see
   hub Part 2 for the code module rename).
 
 ### F5 — `prompts.py` Run Context Bundle strings (the hottest surface, D3)

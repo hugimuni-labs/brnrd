@@ -1,4 +1,4 @@
-# Design: runner media, cost policy, and brnrd relay fallback
+# Design: runner Shell/Core selection, cost policy, and brnrd relay fallback
 
 Status: active on 2026-06-27 · foundation shipped 2026-06-28
 

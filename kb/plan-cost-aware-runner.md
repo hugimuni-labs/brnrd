@@ -282,7 +282,7 @@ least I can get away with."
 
 2026-06-27 refinement: runner selection needs an explicit **runner-medium**
 layer, not only provider collectors. The current design home is
-[`design-runner-media.md`](design-runner-media.md): profiles remain the CLI
+[`design-runner-cores.md`](design-runner-cores.md): profiles remain the CLI
 invocation, while media record model, owner, cost class, quota source, hook
 capability, fallback eligibility, and billing posture.
 
@@ -320,7 +320,7 @@ capability, fallback eligibility, and billing posture.
   `defer_until` + per-run claim, the substrate B1/B2/C2 lean on.
 - [`design-co-maintainer.md`](design-co-maintainer.md) — §11 continuity
   spine, §4.2 firehose-vs-synthesis (the diffense de-firehose applies it).
-- [`design-runner-media.md`](design-runner-media.md) — runner profile vs
+- [`design-runner-cores.md`](design-runner-cores.md) — runner profile vs
   runner medium, deterministic cheap/strong dispatch policy, and brnrd LLM
   relay as a spend-gated fallback medium.
 - [`plan-failover-compute.md`](plan-failover-compute.md) — *compute-host*

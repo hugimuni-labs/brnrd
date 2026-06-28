@@ -242,11 +242,11 @@ dive-in map) and are stable until something contradicts them.
   (Loop C) — plus a budget-aware self-chunking discipline. Ships A1
   (medium in the wake bundle), the first A2 quota snapshot ingress, and
   the diffense de-firehose first.
-- [Runner media, cost policy, and brnrd relay fallback](design-runner-media.md) —
-  *active on 2026-06-27*. Splits static runner profiles from **runner media**
-  (profile + model + owner + auth/quota source + hook capability + billing
-  posture), so simple tasks can default to cheaper local media, expensive
-  respawns can move to stronger media, and brnrd-owned LLM relay can sit behind
+- [Runner Shell/Core selection, cost policy, and brnrd relay fallback](design-runner-cores.md) —
+  *active on 2026-06-27*. Splits static runner profiles from **RunnerProfiles**
+  (profile + model/Core + owner + auth/quota source + hook capability + billing
+  posture), so simple tasks can default to cheaper local Shells, expensive
+  respawns can move to stronger Cores, and brnrd-owned LLM relay can sit behind
   a spend-plan consent checkpoint with wallet/audit line items instead of an
   opaque command-string convention.
 - [Repo gardening — initial context, respawn model, imagery, kb/code sweep](plan-repo-gardening.md) —
