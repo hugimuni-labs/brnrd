@@ -1,4 +1,4 @@
-"""Codex session-rollout quota collector — the level-facet source for the Codex vessel.
+"""Codex session-rollout quota collector — the level-facet source for the Codex Shell.
 
 Codex's interactive ``/status`` panel (5h + weekly subscription limits, plan
 type, context window) is **not** a CLI subcommand and cannot be invoked
@@ -11,7 +11,7 @@ each as ``used_percent`` + ``window_minutes`` + ``resets_at``, alongside
 
 So brr reads the *same data ``/status`` would print* by tailing the active run's
 rollout file — no ``/status`` call, no extra subscription credits, no API key.
-This is the Codex half of brr's per-vessel level collection, and it inverts the
+This is the Codex half of brr's per-Shell level collection, and it inverts the
 asymmetry recorded earlier: it is Codex, not Claude, whose subscription quota
 brr can read head-less. (Claude's ``statusLine`` is a TUI footer that never
 fires under ``claude --print``; Claude's head-less result JSON carries
@@ -35,17 +35,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-# Media whose vessel exposes a session-rollout quota collector.
+# Shells whose binary exposes a session-rollout quota collector.
 _CODEX_FLAVOURS = {"codex"}
 
 # Level slots this collector can actually populate (per-slot honesty: Codex is a
-# subscription medium with no dollar-spend gauge, so ``spend`` stays
+# subscription Shell with no dollar-spend gauge, so ``spend`` stays
 # unimplemented here — never a fabricated estimate).
 COLLECTED_SLOTS: frozenset[str] = frozenset({"quota", "context_window"})
 
 
 def supported(runner_name: str | None) -> bool:
-    """True when *runner_name*'s vessel exposes the rollout quota collector."""
+    """True when *runner_name*'s Shell exposes the rollout quota collector."""
     if not runner_name:
         return False
     slug = str(runner_name).strip().lower()
@@ -237,5 +237,5 @@ def load_levels(env: dict[str, str] | None = None) -> dict[str, Any] | None:
 
 
 def collected_slots(runner_name: str | None) -> Iterable[str]:
-    """Which level slots this vessel has a wired collector for (per-slot honesty)."""
+    """Which level slots this Shell has a wired collector for (per-slot honesty)."""
     return COLLECTED_SLOTS if supported(runner_name) else frozenset()
