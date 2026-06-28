@@ -11,20 +11,19 @@ each as ``used_percent`` + ``window_minutes`` + ``resets_at``, alongside
 
 So brr reads the *same data ``/status`` would print* by tailing the active run's
 rollout file — no ``/status`` call, no extra subscription credits, no API key.
-This is the Codex analogue of the Claude ``statusLine`` collector
-(:mod:`brr.statusline`), and it inverts the asymmetry recorded earlier: it is
-Codex, not Claude, whose subscription quota brr can read head-less. (Claude's
-``statusLine`` is a TUI footer that never fires under ``claude --print``, the
-mode brr runs it in — fire-verified 2026-06-28; see
-``kb/design-resident-boundary.md`` §8.)
+This is the Codex half of brr's per-vessel level collection, and it inverts the
+asymmetry recorded earlier: it is Codex, not Claude, whose subscription quota
+brr can read head-less. (Claude's ``statusLine`` is a TUI footer that never
+fires under ``claude --print``; Claude's head-less result JSON carries
+spend/context but no quota windows. See ``kb/design-resident-boundary.md`` §8.)
 
 The parse is **defensive** (the rollout schema is OpenAI's, undocumented and
 free to change): every field is optional, an unrecognized shape yields a
 snapshot with no level slots (facets stay ``absent``), never an exception.
 
-Returns the same *levels* snapshot shape :func:`brr.statusline.parse_session`
-produces (``{"quota"|"context_window": {"summary": ...}}``), so the daemon folds
-it into :func:`brr.facets.build` through the identical ``levels=`` seam.
+Returns the shared *levels* snapshot shape
+(``{"quota"|"context_window": {"summary": ...}}``), so the daemon folds it into
+:func:`brr.facets.build` through the identical ``levels=`` seam.
 """
 
 from __future__ import annotations
