@@ -177,6 +177,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("phase", help="abstract phase: post-tool | stop | session-start")
     p.set_defaults(func=cmd_hook)
 
+    p = sub.add_parser(
+        "statusline",
+        help="Claude statusLine level collector (spend/quota/context); reads "
+             "session JSON on stdin, called by Claude's statusLine, not by hand")
+    p.set_defaults(func=cmd_statusline)
+
     agent_p = sub.add_parser(
         "agent", help="resident-agent helpers (wake-context, dominion)")
     agent_sub = agent_p.add_subparsers(dest="agent_command", required=True)
@@ -437,6 +443,12 @@ def cmd_hook(args):
         print("{}", end="")
         return 0
     return hooks.main(phase)
+
+
+def cmd_statusline(args):
+    from . import statusline
+
+    return statusline.main()
 
 
 def cmd_review(args):
