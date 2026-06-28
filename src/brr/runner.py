@@ -369,23 +369,74 @@ def detect_all_runners(repo_root: Path | None = None) -> list[str]:
 def resolve_runner(repo_root: Path) -> str:
     """Determine which runner to use for this repo.
 
-    Reads ``runner`` from ``.brr/config``.  ``auto`` triggers detection.
-    Raises RuntimeError if nothing is found.
+    Resolution order (highest precedence first):
+
+    1. **``shell=``** in ``.brr/config`` — pin a specific profile (Shell or
+       Shell+Core) by name; skips cost-aware selection entirely. This is the
+       new preferred knob (replaces the legacy ``runner=``).
+    2. **``core=``** in ``.brr/config`` — filter available profiles to those
+       whose declared ``model`` matches *core*, then pick the cheapest.
+    3. **Legacy ``runner=``** — same as ``shell=`` for backward compatibility;
+       ``runner=auto`` triggers cost-aware auto-detection.
+    4. **Auto** — cost-aware selection via :func:`runner_select.select_runner`:
+       cheapest available local profile at or below ``economy`` class.
+
+    Raises ``RuntimeError`` when no profile can be resolved.
     """
     from . import config as conf
+    from . import runner_select
+
     cfg = conf.load_config(repo_root)
     profiles = _load_profiles(repo_root)
-    configured = cfg.get("runner", "auto")
-    if configured != "auto":
-        if _runner_available(configured, profiles):
-            return configured
-        raise RuntimeError(f"Runner '{configured}' not found on PATH.")
-    detected = detect_runner(repo_root)
-    if detected:
-        return detected
+
+    # shell= is the new explicit pin. When set it is treated as an exact
+    # profile override — no cost-aware movement, no dispatcher hop.
+    shell_pin = str(cfg.get("shell", "")).strip() or None
+    # core= filters the candidate set to profiles whose model matches.
+    core_pin = str(cfg.get("core", "")).strip() or None
+    # Legacy runner= stays for backward compatibility.
+    runner_cfg = str(cfg.get("runner", "auto")).strip()
+
+    # Exact-pin path: shell= or a non-"auto" runner= wins outright.
+    explicit_pin = shell_pin or (runner_cfg if runner_cfg != "auto" else None)
+    if explicit_pin:
+        if _runner_available(explicit_pin, profiles):
+            return explicit_pin
+        raise RuntimeError(
+            f"Runner '{explicit_pin}' not found on PATH. "
+            "Check shell= (or runner=) in .brr/config."
+        )
+
+    # Cost-aware selection: build the available-profile set, optionally
+    # filtered by core=, and let select_runner pick the cheapest.
+    all_profiles = [
+        runner_select.runner_from_profile(name, profiles[name])
+        for name in profiles
+        if _runner_available(name, profiles)
+    ]
+    if core_pin:
+        # Filter to profiles whose declared model matches core_pin (exact
+        # or prefix, case-insensitive), then fall back to all if none match
+        # so an unrecognised core= doesn't silently kill all options.
+        core_lower = core_pin.lower()
+        filtered = [
+            p for p in all_profiles
+            if p.model and (
+                p.model.lower() == core_lower
+                or p.model.lower().startswith(core_lower)
+            )
+        ]
+        candidates = filtered or all_profiles
+    else:
+        candidates = all_profiles
+
+    chosen = runner_select.select_runner(candidates)
+    if chosen:
+        return chosen.profile
+
     raise RuntimeError(
-        "No AI runner found.  Install claude, codex, or gemini, "
-        "or set runner= in .brr/config."
+        "No AI runner found. Install claude, codex, or gemini, "
+        "or set shell= (or core=) in .brr/config."
     )
 
 
