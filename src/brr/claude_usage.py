@@ -56,7 +56,7 @@ _USED_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%\s*used", re.IGNORECASE)
 
 
 def supported(runner_name: str | None) -> bool:
-    """True when *runner_name*'s vessel is Claude Code."""
+    """True when *runner_name*'s Shell is Claude Code."""
     if not runner_name:
         return False
     slug = str(runner_name).strip().lower()

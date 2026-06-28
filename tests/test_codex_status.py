@@ -1,5 +1,5 @@
 """Codex session-rollout quota collector — the head-less subscription-quota
-source for the Codex vessel (§8). Verified live 2026-06-28: ``token_count``
+source for the Codex Shell (§8). Verified live 2026-06-28: ``token_count``
 events in a rollout JSONL carry ``rate_limits`` (5h + weekly)."""
 
 import json
