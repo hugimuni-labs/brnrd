@@ -179,8 +179,11 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
         tmp_path, token="t1", pending=0,
         resources={
             "quota": {"status": "known", "summary": "weekly 42% - resets 3d"},
-            "cost": {"status": "unimplemented",
-                     "note": "per-run token/$ accounting not metered yet"},
+            "spend": {"status": "unimplemented",
+                      "note": "no spend collector for this medium yet"},
+            "context_window": {"status": "unimplemented",
+                               "note": "no context-window collector for this "
+                                       "medium yet"},
             "coexisting_runs": {"status": "unimplemented",
                                 "note": "single-flight per dominion"},
             "remote_scm": {"status": "absent", "pr_state": "none",
@@ -193,7 +196,7 @@ def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
     assert "resources:" in ctx
     assert "quota=weekly 42% - resets 3d" in ctx
     # The gaps read as named states with their reason, not a flat "unavailable".
-    assert "cost=unimplemented (per-run token/$ accounting not metered yet)" in ctx
+    assert "spend=unimplemented (no spend collector for this medium yet)" in ctx
     assert "coexisting-runs=unimplemented" in ctx
     assert "remote-scm=absent (no PR recorded for this branch yet)" in ctx
     assert "unavailable" not in ctx
@@ -204,7 +207,8 @@ def test_seed_surfaces_open_pr_posture(tmp_path):
         tmp_path, token="t1", pending=0,
         resources={
             "quota": {"status": "absent", "note": "no snapshot for this medium"},
-            "cost": {"status": "unimplemented"},
+            "spend": {"status": "unimplemented"},
+            "context_window": {"status": "unimplemented"},
             "coexisting_runs": {"status": "unimplemented"},
             "remote_scm": {"status": "known", "pr_state": "open",
                            "pr_number": "207", "branch": "brr/x"},
@@ -223,7 +227,8 @@ def test_post_tool_never_renders_resources(tmp_path):
         tmp_path, token="t1", pending=1,
         events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
         resources={"quota": {"status": "absent"},
-                   "cost": {"status": "unimplemented"},
+                   "spend": {"status": "unimplemented"},
+                   "context_window": {"status": "unimplemented"},
                    "coexisting_runs": {"status": "unimplemented"},
                    "remote_scm": {"status": "absent"}},
     )
