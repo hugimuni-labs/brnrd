@@ -1251,12 +1251,39 @@ def test_resources_facet_quota_known_when_summary_present():
     facet = daemon._resources_facet("weekly 42% - resets 3d")
     assert facet["quota"]["status"] == "known"
     assert facet["quota"]["summary"] == "weekly 42% - resets 3d"
-    # The not-yet-built collectors advertise themselves as unimplemented and
-    # whether they are required, so a future wake sees the slot and its weight.
-    assert facet["cost"]["status"] == "unimplemented"
-    assert facet["cost"]["required"] is True
+    # The level facets with no collector wired for this medium advertise
+    # themselves as unimplemented and whether they are required, so a future
+    # wake sees the slot and its weight.
+    assert facet["spend"]["status"] == "unimplemented"
+    assert facet["spend"]["required"] is True
+    assert facet["context_window"]["status"] == "unimplemented"
+    assert facet["context_window"]["required"] is True
     assert facet["coexisting_runs"]["status"] == "unimplemented"
     assert facet["coexisting_runs"]["required"] is False
+
+
+def test_resources_facet_level_collector_flips_empty_to_absent():
+    # With a level collector wired (the Claude statusLine), an empty spend /
+    # context-window slot is affirmative-'absent', not unbuilt 'unimplemented'.
+    facet = daemon._resources_facet(None, levels_collector=True)
+    assert facet["spend"]["status"] == "absent"
+    assert facet["context_window"]["status"] == "absent"
+    # A populated level snapshot reads 'known' and carries its summary.
+    facet = daemon._resources_facet(
+        None,
+        levels_collector=True,
+        levels={
+            "spend": {"summary": "$0.42 this session"},
+            "context_window": {"summary": "62% context left"},
+            "quota": {"summary": "5h 58% left"},
+        },
+    )
+    assert facet["spend"]["status"] == "known"
+    assert facet["spend"]["summary"] == "$0.42 this session"
+    assert facet["context_window"]["status"] == "known"
+    # statusLine quota wins over the local snapshot path.
+    assert facet["quota"]["status"] == "known"
+    assert facet["quota"]["summary"] == "5h 58% left"
 
 
 def test_resources_facet_quota_absent_without_summary():

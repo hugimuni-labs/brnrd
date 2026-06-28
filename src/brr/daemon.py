@@ -50,6 +50,7 @@ from . import conversations
 from . import dev_reload as reload_mod
 from . import dominion
 from . import envs
+from . import facets
 from . import forge_state
 from . import forges
 from . import gitops
@@ -1584,64 +1585,27 @@ def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
 def _resources_facet(
     quota_summary: str | None,
     *,
+    levels: dict[str, object] | None = None,
+    levels_collector: bool = False,
     branch: str | None = None,
     pr_number: str | None = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
-    One facet for the live cost/quota/parallelism picture. The honesty here
-    is three-state, because "missing" means two different things the resident
-    should not conflate (the distinction the maintainer drew, evt-go5z):
-
-    - ``known`` — the daemon proved a value cheaply this heartbeat.
-    - ``absent`` — the collector exists and ran, but there is genuinely
-      nothing yet: no PR opened for this branch, no quota snapshot the
-      medium would expose. This is the *affirmative-empty* signal — the same
-      logic the closeout capsule uses for "0 pending events". An absent slot
-      is data, not a gap; surfacing it is the point.
-    - ``unimplemented`` — the collector is not built yet. ``required`` flags
-      whether the missing capability is one the boundary is *expected* to
-      grow (cost metering) versus a someday-nicety (coexisting runs while
-      brr stays single-flight). An honest placeholder beats a silent omission
-      so a future wake sees the slot and what would fill it.
-
-    PR posture (``remote_scm``) is derived network-free from run metadata:
-    a recorded ``github_pr_number`` means a PR is in play; its absence is the
-    *not-yet-created* receipt — most valuable exactly when the work has a
-    branch but no PR, because that is when it is at risk of being invisible
-    (``kb/design-resident-boundary.md`` §5).
+    Thin wrapper over :func:`facets.build`, the single definition of the facet
+    schema (``kb/design-resident-boundary.md`` §1 — "by schema, not by
+    convention"). The schema, the three-state honesty, and the per-vessel level
+    asymmetry all live in ``facets``; this keeps the daemon's construction call
+    in one place so the JSON snapshot, the woven hook line, and ``brr portal
+    state`` can never drift on which facets they carry.
     """
-    quota_known = bool(quota_summary and str(quota_summary).strip())
-    pr = str(pr_number or "").strip()
-    pr_recorded = bool(pr)
-    return {
-        "quota": {
-            "status": "known" if quota_known else "absent",
-            "required": True,
-            "summary": quota_summary if quota_known else None,
-            "note": None if quota_known
-            else "no quota snapshot available for this medium",
-        },
-        "cost": {
-            "status": "unimplemented",
-            "required": True,
-            "note": "per-run token/$ accounting not metered yet",
-        },
-        "coexisting_runs": {
-            "status": "unimplemented",
-            "required": False,
-            "note": "single-flight per dominion; no concurrent-run view yet",
-        },
-        "remote_scm": {
-            "status": "known" if pr_recorded else "absent",
-            "required": True,
-            "branch": branch,
-            "pr_number": pr if pr_recorded else None,
-            "pr_state": "open" if pr_recorded else "none",
-            "note": None if pr_recorded
-            else "no PR recorded for this branch yet",
-        },
-    }
+    return facets.build(
+        quota_summary=quota_summary,
+        levels=levels,
+        levels_collector=levels_collector,
+        branch=branch,
+        pr_number=pr_number,
+    )
 
 
 def _scm_facet(
