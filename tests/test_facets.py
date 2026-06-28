@@ -87,3 +87,60 @@ def test_describe_facets_schema_only_and_with_live_status():
     quota = next(r for r in live if r["key"] == "quota")
     assert quota["status"] == "known"
     assert quota["value"] == "42%"
+
+
+# ── runner governance block (step 3, design-runner-cores.md) ─────────────────
+
+
+def test_build_runner_block_absent_without_runner_name():
+    res = facets.build(quota_summary="42%")
+    runner = res["runner"]
+    assert runner["status"] == "absent"
+    assert runner["summary"] is None
+
+
+def test_build_runner_block_known_with_runner_name():
+    res = facets.build(
+        quota_summary="42%",
+        runner_name="claude",
+        runner_meta={
+            "model": "claude-sonnet-4-6",
+            "class": "balanced",
+            "provider": "anthropic",
+            "hooks": "claude",
+            "cost_rank": 30,
+        },
+    )
+    runner = res["runner"]
+    assert runner["status"] == "known"
+    assert runner["name"] == "claude"
+    assert runner["model"] == "claude-sonnet-4-6"
+    assert runner["class"] == "balanced"
+    assert runner["provider"] == "anthropic"
+    assert runner["hooks"] == "claude"
+    assert runner["cost_rank"] == 30
+    assert runner["summary"] == "claude"
+
+
+def test_build_runner_block_known_with_name_only():
+    """runner_meta is optional — name alone is enough for a known block."""
+    res = facets.build(runner_name="codex")
+    runner = res["runner"]
+    assert runner["status"] == "known"
+    assert runner["name"] == "codex"
+    assert runner["model"] is None
+    assert runner["class"] is None
+
+
+def test_render_line_does_not_include_runner_block():
+    """render_line iterates FACETS (the level/state walls); runner is governance,
+    not a wall, so it should NOT appear in the hook injection line."""
+    res = facets.build(
+        quota_summary="42%",
+        runner_name="claude",
+        runner_meta={"class": "balanced"},
+    )
+    line = facets.render_line(res)
+    # The hook line should carry the schema facets, not the runner block
+    assert "runner=" not in line
+    assert "quota=" in line

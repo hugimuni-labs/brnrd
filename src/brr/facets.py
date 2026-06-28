@@ -135,6 +135,40 @@ def _level_record(
     }
 
 
+def _runner_block(
+    runner_name: str | None,
+    runner_meta: "dict[str, object] | None",
+) -> dict[str, object]:
+    """Build the ``resources.runner`` governance block.
+
+    Records which Shell/Core is actually executing this run so the
+    resident (and future tooling) can see the selection without parsing
+    the ``run.runner`` prose string. ``runner_name`` is the profile key;
+    ``runner_meta`` is the raw profile dict (optional keys: model,
+    class, provider, hooks, quota_source, cost_rank, owner).
+
+    The block is always ``status: known`` when a runner_name is present
+    — brr resolves the runner before the run starts, so it is always
+    determined. ``status: absent`` when nothing is resolved yet (pre-run
+    or test contexts).
+    """
+    if not runner_name:
+        return {"status": ABSENT, "summary": None, "note": "no runner resolved yet"}
+    meta = runner_meta or {}
+    return {
+        "status": KNOWN,
+        "name": runner_name,
+        "model": str(meta.get("model") or "").strip() or None,
+        "class": str(meta.get("class") or "").strip() or None,
+        "provider": str(meta.get("provider") or "").strip() or None,
+        "hooks": str(meta.get("hooks") or "").strip() or None,
+        "owner": str(meta.get("owner") or "user").strip() or "user",
+        "quota_source": str(meta.get("quota_source") or "").strip() or None,
+        "cost_rank": meta.get("cost_rank"),
+        "summary": runner_name,
+    }
+
+
 def build(
     *,
     quota_summary: str | None = None,
@@ -142,6 +176,8 @@ def build(
     levels_collector: bool | Iterable[str] = False,
     branch: str | None = None,
     pr_number: str | None = None,
+    runner_name: str | None = None,
+    runner_meta: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -161,6 +197,10 @@ def build(
       (per-Shell asymmetry: Codex collects ``quota`` + ``context_window`` but
       has no dollar-spend gauge, so ``spend`` stays ``unimplemented``).
     - ``branch`` / ``pr_number`` — run metadata for the ``remote_scm`` posture.
+    - ``runner_name`` / ``runner_meta`` — which Shell/Core is executing; the
+      profile dict carries model, class, provider, etc. Renders as
+      ``resources.runner`` for governance visibility (step 3,
+      ``design-runner-cores.md``).
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -212,6 +252,7 @@ def build(
     }
 
     return {
+        "runner": _runner_block(runner_name, runner_meta),
         "quota": quota_facet,
         "spend": spend_facet,
         "context_window": context_facet,
