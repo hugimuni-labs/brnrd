@@ -8738,3 +8738,53 @@ evt-zyu6 on 2026-06-28) and make the kb say Runner/Shell/Core with one voice.
 `design-runner-back-channel.md` and `subject-managed-mode.md` had no stale
 vocab and needed no changes. 4C (surface unresolvable forks) and 4D (method)
 remain for a future wake if/when the broader sweep continues.
+remain for a future wake if/when the broader sweep continues.
+
+## [2026-06-29] feat | Task 2 — informed respawn model: latency fix, shell=/core= knobs, dynamic Core registry
+
+Executed Task 2 slices from `plan-repo-gardening.md` on `brr/initial-context-reweave`.
+
+**New slice — flush latency fix (`daemon.py`):**
+- `_collect_levels()` gains a `refresh: bool = True` parameter. When `False`,
+  only the on-disk cache is read (`claude_usage.load_snapshot`); the blocking
+  ~18s PTY `/usage` scrape is skipped entirely.
+- `_write_live_portal_state()` gains `refresh_levels: bool = True`, threaded to
+  `_collect_levels`.
+- `_emit_flush()` now passes `refresh_levels=False` — the event-driven
+  tool-boundary flush path is guaranteed never to stall. The heartbeat
+  (every 30s) keeps `refresh=True` and owns cache refresh on its cadence.
+- The latency fix resolves the `_emit_flush` design intent: "lighter / prompt,
+  doesn't spam the card." Previously a cache-miss on the flush path could block
+  the daemon for up to 18s.
+
+**2A partial — `shell=`/`core=` config knobs (`runner.py`):**
+- `resolve_runner()` now reads `shell=` (explicit profile pin) and `core=`
+  (model filter) from `.brr/config`, in addition to legacy `runner=`.
+- Resolution order: `shell=` > legacy `runner=<non-auto>` > cost-aware
+  auto-selection (via `select_runner`) filtered by `core=` when set.
+- Cost-aware auto: builds the available-profile set from all detected profiles,
+  optionally filtered by `core=` (exact/prefix model match), and lets
+  `select_runner` pick the cheapest. Fallback: all profiles if `core=` filter
+  yields nothing (unrecognised Core pin doesn't kill all options).
+- Legacy `runner=` stays for backward compatibility; `runner=auto` still
+  triggers cost-aware selection.
+- Error messages updated to mention `shell=`/`core=` instead of `runner=`.
+- 3 new tests cover: shell= pin, core= filter, auto-cheapest.
+
+**2B — dynamic Core registry (`runner_cores.py`, new module):**
+- Bundled registry of known Cores (models) per Shell with metadata: model ID,
+  provider, cost class, cost rank, freshness date.
+- `available_cores()` returns `RunnerProfile` records for all Cores whose Shell
+  binary is on PATH. Sorted cheapest-first. Accepts `extra=` to merge/override
+  with project-level entries from `runners.md`.
+- `cores_for_shell(shell_name)` returns all bundled Cores for a Shell regardless
+  of PATH — for CLI display slices.
+- Current entries: claude-haiku (economy), claude-fable (economy),
+  claude-sonnet (balanced), claude-opus (strong), codex-mini (economy),
+  codex-full (balanced), gemini-flash (economy). All dated 2026-06-29.
+- `runners.md` reference to `runner_media.py` corrected to `runner_select.py`;
+  link to `design-runner-cores.md` fixed from stale `design-runner-media.md`.
+- 10 new tests in `test_runner_cores.py`.
+
+**`design-runner-cores.md`:** status updated; implementation sequence steps
+renumbered with steps 4 (selector+knobs) and 5 (Core registry) marked shipped.

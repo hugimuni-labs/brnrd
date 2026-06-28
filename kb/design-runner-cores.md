@@ -1,6 +1,6 @@
 # Design: runner Shell/Core selection, cost policy, and brnrd relay fallback
 
-Status: active on 2026-06-27 · foundation shipped 2026-06-28
+Status: active on 2026-06-27 · foundation shipped 2026-06-28 · 2A/2B slices shipped 2026-06-29
 
 > **2026-06-28 — shape adopted + foundation shipped (evt-y11i).** Two maintainer
 > steers fixed the user-facing shape: (1) *model selection is a requirement, not
@@ -318,20 +318,32 @@ Approve / Queue until local reset / Configure own runner
    source, and known freshness.
 3. **Portal upgrade:** replace the flat `resources.quota` string with structured
    `runner` resource while preserving the current compact hook line.
-4. **Deterministic selector:** choose economy/balanced/strong by policy and user
-   override; keep one-run execution otherwise unchanged.
-5. **Failure classifier:** distinguish quota, auth, provider outage, quality
+4. **Deterministic selector + user-facing knobs** *(shipped 2026-06-29)*:
+   `resolve_runner()` now reads `shell=`/`core=` from `.brr/config` and uses
+   `select_runner()` for cost-aware auto-detection. Legacy `runner=` still
+   works. New tests cover all three paths. The flush-path latency fix also
+   shipped here: `_collect_levels(refresh=False)` on the `_emit_flush` path
+   prevents the ~18s PTY `/usage` scrape from blocking tool-boundary flushes;
+   the heartbeat path keeps `refresh=True` and owns the cache refresh.
+5. **Dynamic Core registry** *(shipped 2026-06-29, `runner_cores.py`)*:
+   `available_cores()` returns `RunnerProfile` records for all Cores whose Shell
+   binary is on PATH, from a bundled registry. Project `runners.md` entries
+   extend/override the registry via the `extra=` parameter. No hardcoded model
+   names in dispatch — updating the registry is the only brr change when a
+   new model ships. `cores_for_shell()` lets a future CLI/display step list
+   Cores per Shell without requiring the binary to be on PATH.
+6. **Failure classifier:** distinguish quota, auth, provider outage, quality
    escalation, and no-response validation. Only quota/auth/provider errors enter
    fallback policy automatically.
-6. **Respawn portal:** let a resident request a stronger Shell/Core with reason and
+7. **Respawn portal:** let a resident request a stronger Shell/Core with reason and
    carry-forward context.
-7. **brnrd relay consent:** spending-plan prompt, wallet balance read, cap
+8. **brnrd relay consent:** spending-plan prompt, wallet balance read, cap
    enforcement, audit rows. Codex/OpenAI first.
-8. **Provider collectors:** async collectors for OpenAI, Anthropic, Gemini, each
+9. **Provider collectors:** async collectors for OpenAI, Anthropic, Gemini, each
    provenance-tagged; never block prompt assembly on network.
-9. **Historical spend:** aggregate completed runs by runner and task shape for
-   historical pre-analysis. Keep the existing guardrail: no projected dollar
-   promise for local runs; paid relay gets a cap/quote envelope for consent.
+10. **Historical spend:** aggregate completed runs by runner and task shape for
+    historical pre-analysis. Keep the existing guardrail: no projected dollar
+    promise for local runs; paid relay gets a cap/quote envelope for consent.
 
 ## Standing portal candidates
 
