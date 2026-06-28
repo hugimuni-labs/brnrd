@@ -94,6 +94,100 @@ def test_resolve_runner_accepts_binary_alias(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path) == "claude-bare-api-only"
 
 
+def test_resolve_runner_shell_pin(tmp_path, monkeypatch):
+    """shell= in config pins the named profile, skipping cost-aware selection."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "shell=claude-bare-api-only-sonnet\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-bare-api-only-sonnet": {
+                "binary": "claude",
+                "cmd": "claude --model claude-sonnet-4-6 --print",
+                "model": "claude-sonnet-4-6",
+                "class": "balanced",
+            },
+            "codex": {"cmd": "codex exec", "class": "economy", "cost_rank": 1},
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in ("claude", "codex") else None,
+    )
+    # shell= wins over cost-aware selection (which would prefer economy codex).
+    assert resolve_runner(tmp_path) == "claude-bare-api-only-sonnet"
+
+
+def test_resolve_runner_core_pin_filters_by_model(tmp_path, monkeypatch):
+    """core= filters candidates to profiles with a matching model."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "core=claude-sonnet-4-6\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-sonnet": {
+                "binary": "claude",
+                "cmd": "claude --model claude-sonnet-4-6 --print",
+                "model": "claude-sonnet-4-6",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+            "claude-haiku": {
+                "binary": "claude",
+                "cmd": "claude --model claude-haiku-4-5 --print",
+                "model": "claude-haiku-4-5",
+                "class": "economy",
+                "cost_rank": 10,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    # core=claude-sonnet-4-6 filters to the sonnet profile.
+    assert resolve_runner(tmp_path) == "claude-sonnet"
+
+
+def test_resolve_runner_auto_picks_cheapest(tmp_path, monkeypatch):
+    """Without shell= or core=, auto picks the cheapest available profile."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-strong": {
+                "binary": "claude",
+                "cmd": "claude --model opus --print",
+                "class": "strong",
+                "cost_rank": 50,
+            },
+            "claude-economy": {
+                "binary": "claude",
+                "cmd": "claude --model haiku --print",
+                "class": "economy",
+                "cost_rank": 5,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    # Auto should pick the economy (cheapest) profile.
+    assert resolve_runner(tmp_path) == "claude-economy"
+
+
 def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
     (tmp_path / ".brr").mkdir()
     (tmp_path / ".brr" / "config").write_text("runner=local-agent\n")
