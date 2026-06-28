@@ -814,6 +814,10 @@ class DockerEnv(WorktreeEnv):
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
 
+        stdout = runner._process_runner_stdout(
+            runner_name, stdout, invocation.env
+        )
+
         if invocation.response_path and returncode == 0 and stdout and stdout.strip():
             runner._write_response_file(invocation.response_path, stdout)
 

@@ -53,6 +53,7 @@ from . import envs
 from . import facets
 from . import forge_state
 from . import forges
+from . import claude_status
 from . import gitops
 from . import hooks as hooks_mod
 from . import presence
@@ -62,7 +63,6 @@ from . import protocol
 from . import run_context
 from . import runner
 from . import runner_quota
-from . import statusline
 from . import schedule as schedule_mod
 from . import sync
 from . import updates
@@ -1596,12 +1596,10 @@ def _collect_levels(
       subscription quota) and ``model_context_window`` on every ``token_count``
       event, read live by :mod:`codex_status`. No dollar-spend gauge, so
       ``spend`` is deliberately not collected.
-    - **claude** — the ``statusLine`` collector (:mod:`statusline`). Note:
-      ``statusLine`` is a TUI footer that does **not** fire under
-      ``claude --print`` (fire-verified 2026-06-28), so this path yields nothing
-      head-less today; the slots read ``absent`` until a head-less source
-      (``--output-format json`` result, carrying ``total_cost_usd`` +
-      ``contextWindow``) is wired. See ``kb/design-resident-boundary.md`` §8.
+    - **claude** — the final ``--output-format json`` result, normalized by
+      :mod:`claude_status` after the runner exits. It carries spend + context
+      accounting but no subscription quota/reset windows, so this is a terminal
+      accounting source, not mid-thought quota guidance.
 
     Returns ``(levels, wired_slots)`` for :func:`facets.build`. ``wired_slots``
     is the set of level slots whose collector exists (so an empty slot reads
@@ -1609,9 +1607,9 @@ def _collect_levels(
     """
     if codex_status.supported(runner_name):
         return codex_status.load_levels(), frozenset(codex_status.COLLECTED_SLOTS)
-    if statusline.supported(runner_name):
-        return statusline.load_snapshot(outbox_dir), frozenset(
-            {"quota", "spend", "context_window"}
+    if claude_status.supported(runner_name):
+        return claude_status.load_snapshot(outbox_dir), frozenset(
+            claude_status.COLLECTED_SLOTS
         )
     return None, False
 
@@ -1785,9 +1783,9 @@ def _write_live_portal_state(
                 quota_summary,
                 # Per-vessel level source (see _collect_levels): Codex reads its
                 # subscription quota + context window live from the session
-                # rollout file; Claude's statusLine path is head-less-broken
-                # today. The wired-slot set decides whether an empty slot reads
-                # 'absent' (collector ran, nothing yet) vs 'unimplemented'.
+                # rollout file; Claude gets terminal spend/context accounting
+                # from result JSON. The wired-slot set decides whether an empty
+                # slot reads 'absent' vs 'unimplemented'.
                 levels=run_levels,
                 levels_collector=run_level_slots,
                 branch=task.meta.get("branch_name"),

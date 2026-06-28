@@ -442,6 +442,25 @@ def _write_response_file(response_path: str, stdout: str) -> None:
     target.write_text(stdout, encoding="utf-8")
 
 
+def _process_runner_stdout(
+    runner_name: str,
+    stdout: str,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Normalize runner-specific stdout before response capture.
+
+    Most runners already print the final reply as plain text. Claude's daemon
+    profile opts into ``--output-format json`` so brr can collect spend/context
+    accounting; for that vessel, unwrap ``result`` back to the user-facing reply
+    and stash the level snapshot for the daemon's final portal refresh.
+    """
+    from . import claude_status
+
+    if claude_status.supported(runner_name):
+        return claude_status.capture_stdout(stdout, env)
+    return stdout
+
+
 def _copy_artifact_to_trace(
     trace_dir: Path,
     artifact: RunnerArtifactSpec,
@@ -568,6 +587,8 @@ def invoke_runner(
     finally:
         with _proc_lock:
             _active_proc = None
+
+    stdout = _process_runner_stdout(runner_name, stdout, invocation.env)
 
     if invocation.response_path and returncode == 0 and stdout and stdout.strip():
         _write_response_file(invocation.response_path, stdout)

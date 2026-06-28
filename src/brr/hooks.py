@@ -472,20 +472,15 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
         return {"hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}]}
 
     # PostToolBatch (not PostToolUse): one injection per tool batch, after every
-    # result lands — see ``_POST_TOOL_EVENT``. ``statusLine`` is the level
-    # collector (spend / quota / context-window): the same settings file that
-    # carries the hooks registers ``brr statusline`` as the footer command, so
-    # Claude hands its session JSON to brr on every footer refresh
-    # (kb/design-resident-boundary.md §8).
+    # result lands — see ``_POST_TOOL_EVENT``. Claude ``statusLine`` is a TUI
+    # footer and does not fire under the daemon's ``claude --print`` mode, so
+    # brr does not register it here; terminal spend/context accounting comes
+    # from the result JSON instead.
     return {
         "hooks": {
             native_event_name("claude", PHASE_POST_TOOL): [_entry(PHASE_POST_TOOL)],
             "Stop": [_entry(PHASE_STOP)],
             "SessionStart": [_entry(PHASE_SESSION_START)],
-        },
-        "statusLine": {
-            "type": "command",
-            "command": f"{brr_bin} statusline",
         },
     }
 
@@ -565,7 +560,7 @@ def install_hook_config(
     generated = _claude_hook_settings(brr_bin)
     # brr's generated keys are *defaults*; user keys in the local overlay layer
     # on top and win — except the ``hooks`` block, which brr owns and force-
-    # merges. So a user can override ``statusLine`` (their own footer) while
+    # merges. So a user's own footer or local settings are preserved while
     # brr's lifecycle hooks always install.
     merged = {**generated, **existing}
     merged["hooks"] = {**existing.get("hooks", {}), **generated["hooks"]}
