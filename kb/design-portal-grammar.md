@@ -376,7 +376,7 @@ stream markers make them structurally hard to misuse.
    child-run requests, and resume conditions as mailbox records instead
    of relying only on conversation history.
 9. **Concept prose sweep.** After the primitives land, reconcile
-   `plan-resident-cockpit.md`, `plan-cost-aware-cockpit.md`,
+   `plan-resident-portals.md`, `plan-cost-aware-runner.md`,
    `design-managed-delivery.md`, `subject-managed-mode.md`, and the index
    so the graph consistently says portals / projection instead of
    dashboard / cockpit.
@@ -408,10 +408,10 @@ portal the resident can summon when the turn needs it.
   shipped control-file manual.
 - [`design-run-event-model.md`](design-run-event-model.md) — run/event
   substrate, including the open claim/deferral/response-key questions.
-- [`plan-resident-cockpit.md`](plan-resident-cockpit.md) — parent plan
-  whose "cockpit" language is now a historical label awaiting the
-  concept sweep.
-- [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md) — cost and
+- [`plan-resident-portals.md`](plan-resident-portals.md) — parent plan
+  (renamed from `plan-resident-cockpit.md`; "cockpit" language is
+  now a historical label awaiting the full concept sweep in §9).
+- [`plan-cost-aware-runner.md`](plan-cost-aware-runner.md) — cost and
   operator-control braid.
 - [`design-managed-delivery.md`](design-managed-delivery.md) and
   [`subject-managed-mode.md`](subject-managed-mode.md) — gate transport

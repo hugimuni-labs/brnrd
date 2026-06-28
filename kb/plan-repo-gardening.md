@@ -18,8 +18,8 @@ build a cost-and-capability-aware respawn model. This hub holds four tasks.
 
 Companions: [`design-portal-grammar.md`](design-portal-grammar.md),
 [`design-resident-boundary.md`](design-resident-boundary.md),
-[`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md) (to be renamed,
-Part 3), [`design-runner-back-channel.md`](design-runner-back-channel.md).
+[`plan-cost-aware-runner.md`](plan-cost-aware-runner.md) (renamed from
+`plan-cost-aware-cockpit.md`; Part 3), [`design-runner-back-channel.md`](design-runner-back-channel.md).
 
 ## Resolved by the maintainer (2026-06-28, evt-zyu6)
 
@@ -246,13 +246,13 @@ retired *cockpit* was the polling/queryable surface. Pushing inbound state from
 "a file you `cat`" (viewport-as-cockpit) toward "woven into the wake"
 (viewport-as-injection) is the standing direction — see Part 2F.
 
-### Recommendation 3.3 — Finish the cockpit retirement
-"cockpit" was disowned in `design-portal-grammar.md` §3 but never swept (138 kb
-hits, 1 code hit, 2 plan filenames). Rename the files and sweep the prose:
-- `plan-cost-aware-cockpit.md` → `plan-cost-aware-runner.md` (or fold into
-  `design-runner-cores.md`);
-- `plan-resident-cockpit.md` → `plan-resident-portals.md`;
-- replace the in-code link in `prompts.py` (D2) and sweep kb prose.
+### Recommendation 3.3 — Finish the cockpit retirement ✓ done (Task 3.3 commit)
+"cockpit" was disowned in `design-portal-grammar.md` §3 but never swept.
+Files renamed and links swept across index, design-resident-boundary, design-portal-grammar,
+design-runner-media, design-runner-management, decision-bundled-docs, and the plans
+themselves. In-code link in `prompts.py` (D2) was fixed in Task 1 (commit `1ae9202`).
+Remaining: body-prose sweep of "cockpit" within the plan files (historical context —
+low priority) and full vocabulary sweep of vessel/medium/cockpit across kb (Task 4A).
 
 ### The unifying register (keep)
 The **ornamented magic scroll** the resident turns to the world through, Ummon

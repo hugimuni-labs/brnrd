@@ -222,19 +222,19 @@ dive-in map) and are stable until something contradicts them.
   keying, and run-granularity cost attribution (coupled to #130). Slice of
   [`design-co-maintainer.md`](design-co-maintainer.md) §6/§9/§11.
 
-- [The resident's cockpit — runner control & a live dwelling](plan-resident-cockpit.md) —
+- [The resident's portals — runner control & a dwelling that feels live](plan-resident-portals.md) —
   *proposed (2026-06-16)*. Extends [`design-co-maintainer.md`](design-co-maintainer.md)
   §11 with the dimensions a tight wake surfaced after dying on
-  runner-medium exhaustion: **runner-medium selection & quota-aware
+  runner exhaustion: **runner selection & quota-aware
   fallback** (a distinct axis from compute-host
   [`plan-failover-compute.md`](plan-failover-compute.md)), a
   **plan→approve→execute** duo loop, **run decomposition / delayed
   execution** atop [`design-run-event-model.md`](design-run-event-model.md),
-  and the **cockpit reframe** — cut the forge-state firehose, weave the
+  and the **portals reframe** — cut the forge-state firehose, weave the
   dominion/`.card`/outbox into one legible control surface.
-- [Cost-aware execution & an operator-legible control loop](plan-cost-aware-cockpit.md) —
+- [Cost-aware execution & an operator-legible control loop](plan-cost-aware-runner.md) —
   *active (2026-06-17; first slices shipping)*. The **cost/notification
-  braid** of the cockpit plan: three coupled loops — the resident
+  braid** of the portals plan: three coupled loops — the resident
   *seeing* its own medium/quota/spend (Loop A), runs surviving
   exhaustion via fallback + quota-aware deferral (Loop B), and the user
   holding operational control through a live cost `.card`, a

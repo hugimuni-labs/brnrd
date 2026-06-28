@@ -1,8 +1,7 @@
 # Plan: reweave the initial wake context (Task 1 of the gardening run)
 
-**Status: planning — written 2026-06-28 (evt-spwd) on Claude for a Sonnet
-execution run.** This is the file-by-file spec for reweaving the *initial
-context a resident receives at the start of every wake*. It is deliberately
+**Status: executed — 2026-06-28 (commit `1ae9202` on `brr/initial-context-reweave`).** D1 (vocabulary triple-naming) and D2 (cockpit alive in the surface) were the primary targets; all six files were rewritten. D2 fully resolved: `plan-cost-aware-cockpit.md` and `plan-resident-cockpit.md` renamed to `plan-cost-aware-runner.md` / `plan-resident-portals.md` in the follow-on Task 3.3 commit. D3/D4 partially resolved (test constraints limited full Delivery compression). This is the file-by-file spec that guided the *initial
+context a resident receives at the start of every wake* reweave. It is deliberately
 written as **target shape + rationale**, not as diffs, so the execution run
 can compose each new file fresh and then swap it in, rather than nudging the
 accreted text line by line.

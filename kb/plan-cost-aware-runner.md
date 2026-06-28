@@ -4,7 +4,7 @@ Status: active on 2026-06-17. First slices shipped on
 `brr/cost-aware-cockpit`; opt-in review defaults and conversational
 prompt framing shipped on `brr/cost-aware-conversation`. This page is the
 **cost/notification braid**
-of [`plan-resident-cockpit.md`](plan-resident-cockpit.md) — it does not
+of [`plan-resident-portals.md`](plan-resident-portals.md) — it does not
 replace that page's G1–G5; it threads them through one lens the
 maintainer articulated on 2026-06-17: *keep the user extremely aware of
 plan, execution flow, and costs, and give them operational control,
@@ -152,7 +152,7 @@ compute medium or its quota/spend**. Slices:
   `runner_name` is already resolved at prompt-build time
   (`daemon.py` → `resolve_runner`, emitted in `run_started`); it just
   isn't threaded into `build_daemon_prompt`. Smallest possible step,
-  enables everything below. *(= plan-resident-cockpit G1.1.)*
+  enables everything below. *(= plan-resident-portals G1.1.)*
 - **A2 — surface remaining quota / reset window when the provider
   exposes it.** Codex publishes weekly + 5h buckets; Claude/Anthropic
   expose rate headers. A best-effort probe (vantage-rule clean: it's a
@@ -168,7 +168,7 @@ compute medium or its quota/spend**. Slices:
 
 ### Loop B — Quota-aware survival (runs stop dying on exhaustion)
 
-This is plan-resident-cockpit **G1.2/G1.3**, restated as the
+This is plan-resident-portals **G1.2/G1.3**, restated as the
 load-bearing reliability slice:
 
 - **B1 — fallback chain.** `runner_media: [codex, claude, …]` in config;
@@ -192,7 +192,7 @@ human holding operational control over plan, flow, and cost. Three
 seams, all already present, under-used:
 
 - **C1 — the `.card` as a standing cost+plan dashboard.** Compose it as
-  a matter of course (plan-resident-cockpit G4 dwelling habit), and
+  a matter of course (plan-resident-portals G4 dwelling habit), and
   include the **cost frame** when the bundle exposes one: which medium,
   quota posture, whether the work is being chunked for cost/resilience,
   and historical spend facts when A3 provides them. Never present a
@@ -313,7 +313,7 @@ capability, fallback eligibility, and billing posture.
 
 ## Read next
 
-- [`plan-resident-cockpit.md`](plan-resident-cockpit.md) — the parent
+- [`plan-resident-portals.md`](plan-resident-portals.md) — the parent
   cockpit plan; G1 (medium failover), G2 (plan→approve), G4 (dwelling)
   are the loops this page costs-and-notifications.
 - [`design-run-event-model.md`](design-run-event-model.md) — #128's

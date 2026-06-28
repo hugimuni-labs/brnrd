@@ -19,7 +19,7 @@ Status: active on 2026-06-27 · foundation shipped 2026-06-28
 > of this page.
 
 This page is the implementation-design companion to
-[`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md) and the pricing
+[`plan-cost-aware-runner.md`](plan-cost-aware-runner.md) and the pricing
 decision in [`decision-llm-relay.md`](decision-llm-relay.md). It answers the
 2026-06-27 maintainer ask: simple requests should use a cheaper model, costly
 respawns should use a stronger model, and brnrd-owned relay credits should be a

@@ -1,13 +1,13 @@
 # Design: runner management — capacity-aware dispatch and proactive headroom
 
-**Status: superseded on 2026-06-16 by the cockpit framing —
-[`plan-resident-cockpit.md`](plan-resident-cockpit.md) §G1
-(runner-medium selection & quota-aware fallback).** The maintainer called
+**Status: superseded on 2026-06-16 by the portals framing —
+[`plan-resident-portals.md`](plan-resident-portals.md) §G1
+(runner selection & quota-aware fallback).** The maintainer called
 this page "a much poorer framing": it treats runner choice as a
 standalone *capacity-management subsystem* (registry → tracker →
 dispatcher) bolted beside the daemon, when the live wound is narrower and
-the right home is the **cockpit** — the wake's own control surface, where
-the medium and its quota are one panel the resident reads and the daemon
+the right home is the **resident's portals** — the wake's own control surface, where
+the runner and its quota are one surface the resident reads and the daemon
 falls back / defers along. The reframe is in §G1 there.
 
 This page is kept as a **reference mine**, not a live plan: the

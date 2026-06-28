@@ -1,10 +1,10 @@
-# Plan: the resident's cockpit — runner control & a dwelling that feels live
+# Plan: the resident's portals — runner control & a dwelling that feels live
 
 Status: active on 2026-06-17 (G4 firehose cut + G5 shipped; G1.1 medium
 surfacing, opt-in diffense defaults, and repo-level conversational
 dwelling framing shipped via the cost braid; G1.2–G3 and the dominion-side
 G4 dwelling habits still proposed). The cost/notification braid is split out into
-[`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md).
+[`plan-cost-aware-runner.md`](plan-cost-aware-runner.md).
 
 > This page began on 2026-06-16 from a tight, token-budgeted wake that
 > landed *after* its predecessor died on runner-medium
@@ -49,7 +49,7 @@ no design home yet. That gap is itself the finding.
    quota snapshot can now ride the same line as
    `Runner: <medium> (<quota posture>)`; provider-specific collectors
    are the remaining pickup. The cost lens this enables is detailed in
-   [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md).
+   [`plan-cost-aware-runner.md`](plan-cost-aware-runner.md).
 2. **A fallback chain.** Config a `runner_media: [codex, claude, …]`
    order; on an *operational* failure (the §6 `failed` signal with
    `runner_error`/quota class), the daemon retries the same event on the

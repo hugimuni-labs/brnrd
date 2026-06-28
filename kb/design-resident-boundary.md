@@ -4,7 +4,7 @@ Status: active synthesis on 2026-06-27. Reconciles a maintainer design message
 (Telegram, evt-9dp2/slhg) against the three pages shipped the same day —
 [`design-runner-back-channel.md`](design-runner-back-channel.md) (the boundary
 mechanism), [`design-runner-media.md`](design-runner-media.md) (cost/medium
-layer), and [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md) (the
+layer), and [`plan-cost-aware-runner.md`](plan-cost-aware-runner.md) (the
 cost/notification braid). It carries the conversation's settled answers and the
 two open forks that still need a maintainer nod.
 
@@ -381,7 +381,7 @@ posture, and **whether it was already used successfully this thread**. The
 matrix = those rows sorted/heat-mapped by cost_rank and grouped by medium type;
 the quota rankings sit beside it as the subscription view.
 
-Crucial guardrail from [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md):
+Crucial guardrail from [`plan-cost-aware-runner.md`](plan-cost-aware-runner.md):
 this is **historical pre-analysis, never a forward dollar estimate**. The matrix
 shows price *rank* and what comparable past weaves consumed; it does not quote a
 projected total for this run. The "crisp visualization → simpler decision"
@@ -535,7 +535,7 @@ not to retry blindly.
   mechanism (native hooks; the injection rail).
 - [`design-runner-media.md`](design-runner-media.md) — the medium/cost layer and
   the structured `runner_media` facet behind the matrix.
-- [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md) — cost
+- [`plan-cost-aware-runner.md`](plan-cost-aware-runner.md) — cost
   self-awareness, the historical-pre-analysis guardrail, operator legibility.
 - [`decision-llm-relay.md`](decision-llm-relay.md) — BYO-free / paid-relay
   pricing spine.
