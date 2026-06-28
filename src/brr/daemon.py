@@ -88,13 +88,16 @@ _BURST_MAX_WAIT_DEFAULT = 12.0
 # failure wake each. Defer those siblings briefly; a fresh event can still
 # wake the resident and show them in the live inbox.
 _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
-# Cadence for the run-time heartbeat packet. 30s is short enough that
-# the chat card visibly bumps elapsed time during the long "running"
-# phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
-_HEARTBEAT_INTERVAL = 30.0
+# Cadence for the run-time heartbeat packet. 10s keeps the chat card
+# visibly alive and is well below Telegram's edit rate ceiling
+# (~30/sec/chat). The Claude usage PTY scrape (which can block ~18s)
+# is off the flush critical path since the latency fix; it only fires
+# once per 300s (its TTL) on the heartbeat path — unaffected by
+# shortening this interval.
+_HEARTBEAT_INTERVAL = 10.0
 # Sub-heartbeat poll cadence for the runner hooks back-channel flush signal
 # (``.flush``, dropped by ``brr hook post-tool``). The heartbeat itself
-# stays at 30s; this only governs how fast the daemon notices the signal
+# stays at 10s; this only governs how fast the daemon notices the signal
 # and drains the outbox in response, so a mid-thought reply lands promptly
 # instead of waiting out the tick. See kb/design-runner-back-channel.md.
 _FLUSH_POLL_INTERVAL = 1.0
@@ -538,6 +541,13 @@ def _run_worker(
     brr_dir = gitops.shared_brr_dir(repo_root)
     runs_dir = brr_dir / "runs"
     runner_name = runner.resolve_runner(repo_root)
+    # Look up the profile dict so portal-state can expose the selected
+    # Shell/Core's metadata (model, class, provider, hooks) in the
+    # resources.runner governance block. The profile cache is already
+    # warm from resolve_runner, so this is a dict lookup, not I/O.
+    runner_meta: dict[str, object] | None = runner._load_profiles(repo_root).get(
+        runner_name
+    )
     failure_defer_seconds = float(
         cfg.get(
             "dispatch.failure_defer_seconds",
@@ -830,6 +840,7 @@ def _run_worker(
         task,
         phase="preparing",
         runner_name=runner_name,
+        runner_meta=runner_meta,
         budget_seconds=budget_seconds,
         hard_cap_seconds=hard_cap_seconds,
         keepalive_path=keepalive_path,
@@ -964,6 +975,7 @@ def _run_worker(
             phase="running",
             attempt=attempt,
             runner_name=runner_name,
+            runner_meta=runner_meta,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
@@ -992,6 +1004,7 @@ def _run_worker(
                 phase="running",
                 attempt=attempt,
                 runner_name=runner_name,
+                runner_meta=runner_meta,
                 budget_seconds=budget_seconds,
                 hard_cap_seconds=hard_cap_seconds,
                 keepalive_path=keepalive_path,
@@ -1036,6 +1049,7 @@ def _run_worker(
                 phase="running",
                 attempt=attempt,
                 runner_name=runner_name,
+                runner_meta=runner_meta,
                 budget_seconds=budget_seconds,
                 hard_cap_seconds=hard_cap_seconds,
                 keepalive_path=keepalive_path,
@@ -1088,6 +1102,7 @@ def _run_worker(
             phase="finalizing",
             attempt=attempt,
             runner_name=runner_name,
+            runner_meta=runner_meta,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
@@ -1663,6 +1678,8 @@ def _resources_facet(
     levels_collector: "bool | frozenset[str]" = False,
     branch: str | None = None,
     pr_number: str | None = None,
+    runner_name: str | None = None,
+    runner_meta: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -1679,6 +1696,8 @@ def _resources_facet(
         levels_collector=levels_collector,
         branch=branch,
         pr_number=pr_number,
+        runner_name=runner_name,
+        runner_meta=runner_meta,
     )
 
 
@@ -1741,6 +1760,7 @@ def _write_live_portal_state(
     phase: str,
     attempt: int | None = None,
     runner_name: str | None = None,
+    runner_meta: "dict[str, object] | None" = None,
     budget_seconds: float | None = None,
     hard_cap_seconds: float | None = None,
     keepalive_path: Path | None = None,
@@ -1840,6 +1860,8 @@ def _write_live_portal_state(
                 levels_collector=run_level_slots,
                 branch=task.meta.get("branch_name"),
                 pr_number=task.meta.get("github_pr_number"),
+                runner_name=runner_name,
+                runner_meta=runner_meta,
             ),
         }
         payload["change_token"] = _change_token(payload)
