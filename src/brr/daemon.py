@@ -57,6 +57,7 @@ from . import gitops
 from . import hooks as hooks_mod
 from . import presence
 from . import prompts
+from . import codex_status
 from . import protocol
 from . import run_context
 from . import runner
@@ -1583,11 +1584,43 @@ def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
     return {"status": status, "until": _iso_utc(until)}
 
 
+def _collect_levels(
+    runner_name: str | None, outbox_dir: Path | None
+) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
+    """Pick the level snapshot + wired-slot set for *runner_name*'s vessel.
+
+    Each medium exposes its quota/context (and, for Claude, spend) through a
+    different head-less seam, so the level *source* is per-vessel:
+
+    - **codex** — the session rollout file carries ``rate_limits`` (5h + weekly
+      subscription quota) and ``model_context_window`` on every ``token_count``
+      event, read live by :mod:`codex_status`. No dollar-spend gauge, so
+      ``spend`` is deliberately not collected.
+    - **claude** — the ``statusLine`` collector (:mod:`statusline`). Note:
+      ``statusLine`` is a TUI footer that does **not** fire under
+      ``claude --print`` (fire-verified 2026-06-28), so this path yields nothing
+      head-less today; the slots read ``absent`` until a head-less source
+      (``--output-format json`` result, carrying ``total_cost_usd`` +
+      ``contextWindow``) is wired. See ``kb/design-resident-boundary.md`` §8.
+
+    Returns ``(levels, wired_slots)`` for :func:`facets.build`. ``wired_slots``
+    is the set of level slots whose collector exists (so an empty slot reads
+    ``absent`` not ``unimplemented``); media with no collector return ``False``.
+    """
+    if codex_status.supported(runner_name):
+        return codex_status.load_levels(), frozenset(codex_status.COLLECTED_SLOTS)
+    if statusline.supported(runner_name):
+        return statusline.load_snapshot(outbox_dir), frozenset(
+            {"quota", "spend", "context_window"}
+        )
+    return None, False
+
+
 def _resources_facet(
     quota_summary: str | None,
     *,
     levels: dict[str, object] | None = None,
-    levels_collector: bool = False,
+    levels_collector: "bool | frozenset[str]" = False,
     branch: str | None = None,
     pr_number: str | None = None,
 ) -> dict[str, object]:
@@ -1697,6 +1730,7 @@ def _write_live_portal_state(
             int(time.monotonic() - start_monotonic)
             if start_monotonic is not None else None
         )
+        run_levels, run_level_slots = _collect_levels(runner_name, outbox_dir)
         payload: dict[str, object] = {
             "version": 1,
             "generated_at": time.strftime(
@@ -1749,13 +1783,13 @@ def _write_live_portal_state(
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
             "resources": _resources_facet(
                 quota_summary,
-                # The statusLine collector (Claude vessel) drops a normalized
-                # level snapshot beside the portal; fold it in when present so
-                # spend / quota / context_window carry live values. The medium
-                # supporting statusLine is what makes an empty slot read
-                # 'absent' (collector wired) vs 'unimplemented'.
-                levels=statusline.load_snapshot(outbox_dir),
-                levels_collector=statusline.supported(runner_name),
+                # Per-vessel level source (see _collect_levels): Codex reads its
+                # subscription quota + context window live from the session
+                # rollout file; Claude's statusLine path is head-less-broken
+                # today. The wired-slot set decides whether an empty slot reads
+                # 'absent' (collector ran, nothing yet) vs 'unimplemented'.
+                levels=run_levels,
+                levels_collector=run_level_slots,
                 branch=task.meta.get("branch_name"),
                 pr_number=task.meta.get("github_pr_number"),
             ),

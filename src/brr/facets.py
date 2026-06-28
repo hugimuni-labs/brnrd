@@ -42,6 +42,7 @@ design, surfaced honestly, not a bug.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 # Three-state status values for a facet record.
@@ -137,7 +138,7 @@ def build(
     *,
     quota_summary: str | None = None,
     levels: dict[str, object] | None = None,
-    levels_collector: bool = False,
+    levels_collector: bool | Iterable[str] = False,
     branch: str | None = None,
     pr_number: str | None = None,
 ) -> dict[str, object]:
@@ -148,15 +149,23 @@ def build(
 
     - ``quota_summary`` — a quota one-liner from the local quota snapshot
       (``runner_quota``), the always-available quota path.
-    - ``levels`` — a parsed level snapshot from the medium's statusLine
-      collector, carrying ``quota`` / ``spend`` / ``context_window`` summaries.
-      Its quota wins over ``quota_summary`` when present.
-    - ``levels_collector`` — True when a statusLine-style level collector is
-      wired for this medium (Claude), so an empty spend / context-window slot is
-      ``absent`` rather than ``unimplemented``.
+    - ``levels`` — a parsed level snapshot from the medium's level collector
+      (Claude ``statusLine``, Codex session rollout), carrying ``quota`` /
+      ``spend`` / ``context_window`` summaries. Its quota wins over
+      ``quota_summary`` when present.
+    - ``levels_collector`` — which level slots this medium has a *wired*
+      collector for, so an empty slot reads ``absent`` (collector ran, nothing
+      yet) rather than ``unimplemented`` (no collector). ``True`` means all
+      level slots; ``False`` means none; an iterable names the specific slots
+      (per-vessel asymmetry: Codex collects ``quota`` + ``context_window`` but
+      has no dollar-spend gauge, so ``spend`` stays ``unimplemented``).
     - ``branch`` / ``pr_number`` — run metadata for the ``remote_scm`` posture.
     """
     levels = levels or {}
+    if isinstance(levels_collector, bool):
+        wired_slots = {"spend", "context_window"} if levels_collector else set()
+    else:
+        wired_slots = {str(s) for s in levels_collector}
 
     def _level_summary(key: str) -> str | None:
         slot = levels.get(key)
@@ -174,11 +183,11 @@ def build(
     )
     spend_facet = _level_record(
         FACETS_BY_KEY["spend"], _level_summary("spend"),
-        has_collector=levels_collector,
+        has_collector="spend" in wired_slots,
     )
     context_facet = _level_record(
         FACETS_BY_KEY["context_window"], _level_summary("context_window"),
-        has_collector=levels_collector,
+        has_collector="context_window" in wired_slots,
     )
 
     spec_co = FACETS_BY_KEY["coexisting_runs"]
