@@ -472,13 +472,21 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
         return {"hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}]}
 
     # PostToolBatch (not PostToolUse): one injection per tool batch, after every
-    # result lands — see ``_POST_TOOL_EVENT``.
+    # result lands — see ``_POST_TOOL_EVENT``. ``statusLine`` is the level
+    # collector (spend / quota / context-window): the same settings file that
+    # carries the hooks registers ``brr statusline`` as the footer command, so
+    # Claude hands its session JSON to brr on every footer refresh
+    # (kb/design-resident-boundary.md §8).
     return {
         "hooks": {
             native_event_name("claude", PHASE_POST_TOOL): [_entry(PHASE_POST_TOOL)],
             "Stop": [_entry(PHASE_STOP)],
             "SessionStart": [_entry(PHASE_SESSION_START)],
-        }
+        },
+        "statusLine": {
+            "type": "command",
+            "command": f"{brr_bin} statusline",
+        },
     }
 
 
@@ -555,11 +563,12 @@ def install_hook_config(
     settings_path = settings_dir / "settings.local.json"
     existing: dict[str, Any] = _read_json(settings_path)
     generated = _claude_hook_settings(brr_bin)
-    # User overrides layer on top of brr's defaults; brr owns only the
-    # ``hooks`` block, so a merge preserves any other local settings.
-    merged = {**existing, **generated}
-    if "hooks" in existing:
-        merged["hooks"] = {**existing.get("hooks", {}), **generated["hooks"]}
+    # brr's generated keys are *defaults*; user keys in the local overlay layer
+    # on top and win — except the ``hooks`` block, which brr owns and force-
+    # merges. So a user can override ``statusLine`` (their own footer) while
+    # brr's lifecycle hooks always install.
+    merged = {**generated, **existing}
+    merged["hooks"] = {**existing.get("hooks", {}), **generated["hooks"]}
     try:
         settings_dir.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(
