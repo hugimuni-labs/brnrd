@@ -8595,3 +8595,48 @@ decisions, not open questions:
    read-the-cache-never-scrape pitfall. Remaining slice: move the scrape off the
    flush path (heartbeat / background refresh), keep the boundary read-only —
    then "negligible cost at the boundary" is genuinely true. ~80% shipped.
+
+## [2026-06-28] implement | Task 1: initial-context reweave — Shell/Core vocab, Runner body-image, perception/action frame
+
+Executed Task 1 of `plan-repo-gardening.md` (plan-initial-context-reweave.md).
+All four pre-execution forks were resolved; execution ran on Sonnet on
+`brr/initial-context-reweave`.
+
+**What shipped (6 files, one commit `1ae9202`):**
+
+- `prompts/dominion-playbook.md` (seed): added `## Your Runner` (Shell=CLI,
+  Core=model, Runner=executing body for this wake; resident=the spirit that
+  inhabits it) and `## Perception and action` (injection=free perception,
+  query=polling tax, injection as the stronger brr direction); trimmed existing
+  sections for density — net 298 lines vs 299 before.
+- `prompts/runners.md`: opening paragraph introduces Shell/Core/Runner upfront;
+  "runner-medium metadata" → "Core metadata"; "vessel-selection" → "Core-selection";
+  `runner=` user-facing config toggle → `shell=`/`core=`; 
+  "execution-medium data" → "Shell+Core execution config".
+- `prompts.py` Bundle: Runner line drops "compute medium" and the live
+  `plan-cost-aware-cockpit.md` link (D2 fixed); added `brr docs portals`
+  pointer to frontmatter-routing bullet (D3 partial).
+- `prompts/run.md`: Delivery section clarifies that live-values contract
+  lives in the Bundle, not re-taught here (D4 partial).
+- `prompts/daemon-substrate.md`: opening adds one line tying Runner vocab
+  to Mode block ("the Shell+Core this thought runs in").
+- `AGENTS.md`: added Vocabulary anchor paragraph (Runner=Shell+Core,
+  resident=spirit, knobs=shell=/core=).
+
+**Also shipped:** dominion `playbook.md` (brr-home `ec83ee9`) — added same
+two sections to the resident's running copy.
+
+**Discords remaining (D3 Delivery contract compression):** Test assertions
+anchor most of the key rhythm phrases in the Bundle's Delivery contract
+(plan/todo boundaries, immediately before terminal closeout, satisfying signal,
+gate: forge handoff, etc.). These are the right phrases to preserve — they
+guide the resident's runtime rhythm. Full compression to ~50% would require
+test rewrites and should be done in a coordinated Task 4 follow-up that
+restructures the tests alongside the prose. The frontmatter-routing and
+basename sections were trimmed modestly within test constraints.
+
+**Not touched (Task 4 work):**
+- Code-level rename: `runner_media.py` → `runner_select.py`, `RunnerMedium` →
+  `RunnerProfile` (Task 4A vocabulary sweep)
+- kb pages still using medium/vessel/cockpit prose (Task 4B semantic reconcile)
+- Index hygiene, oversized-page splits, proposal-scaffolding cleanup
