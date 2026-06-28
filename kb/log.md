@@ -8339,3 +8339,62 @@ updated) and `design-runner-media.md` (Claude CLI row + quota-signal grades). No
 code this wake. Next concrete build: register the statusLine collector and
 smoke-verify the JSON schema before relying on it (pitfall: fire it before you
 rule on it). Branch `brr/boundary-and-medium-synthesis`, commit 141bfad.
+
+---
+
+## [2026-06-28] implement | Boundary facets defined by schema + operator-inspectable; Claude statusLine collector wired; Codex cost-data researched
+
+Built the boundary work the maintainer green-lit (evt-1uwp), folding in two
+sign-off follow-ups (evt-t92w "work cautiously until a wall", evt-9yvh "find
+Codex's analog to the Claude cost stats"). Three committed chunks plus research.
+
+**1. Facets defined once, by schema (commit b38f5b4).** New `facets.py` holds
+the wall-derived set as a single ordered schema — `quota` / `spend` /
+`context_window` (levels) + `coexisting_runs` / `remote_scm` (state), each a
+three-state record. The three renderers (`daemon._resources_facet` JSON,
+`hooks._format_resources` woven line, `cli._format_portal_state`) now all
+project from it via `facets.facet_value` / `render_line`, so they can never
+drift on *which* facets they carry — "by schema, not by convention"
+(`design-resident-boundary.md` §1). Landed §8's `cost`→`spend` rename, the new
+`context_window` level facet, and a per-vessel `levels_collector` switch (empty
+slot reads `absent` where a collector is wired, `unimplemented` where not).
+
+**2. Operator inspectability (b38f5b4).** New `brr portal facets` lists the
+implemented facets + a `fills` blurb on demand — schema-only outside a wake,
+with each facet's live status folded in inside one. Fixed `_portal_state_path`
+to honour `BRR_PORTAL_STATE` (the env the resident is handed) so `brr portal
+state`/`facets` resolve the live portal without `--path` — the point of "see
+them on demand"; also turned a pre-existing red test green.
+
+**3. Claude statusLine collector (commit 4e97258).** `statusline.py` +
+`brr statusline`, registered in the same `.claude/settings.local.json` as the
+hooks (statusLine merges as an overridable default — user footer wins). Each
+footer fire normalizes Claude's session JSON into a level snapshot
+(`.statusline.json`) the daemon folds into the facets. Parse is **defensive**:
+the session-JSON field schema is the maintainer's reported finding, not yet
+fire-verified against a live Claude run — unrecognized shapes degrade to an
+empty snapshot, never crash. Smoke-tested the parse/write/footer path as a real
+process; the live-Claude schema check remains open (pitfall: fire it first).
+
+**4. Codex cost-data research (evt-9yvh).** Codex *does* expose usage, in a
+different shape: **no external statusLine command** (declarative `[tui]
+status_line` elements, internal TUI), so the Claude collector doesn't port.
+Token usage rides `token_count` events — live via `codex exec --json`, post-hoc
+via `$CODEX_HOME/sessions/*.jsonl` (what `ccusage` reads). Spend is *derived*
+(tokens × a price table), not handed over like Claude's `cost.total_cost_usd`;
+context headroom is computable; subscription quota stays edge-only (TUI/`/status`
+only; programmatic exposure is OpenAI issues #15281/#19555/#17827, not shipped).
+brr drives `codex exec` without `--json` today, so a Codex collector is a real
+output-parsing build, not a tweak. Reconciled `design-resident-boundary.md` §8
+(table + new §8c) and `design-runner-media.md` (Codex row + grades).
+
+**Respawn deferred, cautiously.** Maintainer green-lit respawn "as the last step
+to work around the possible quota breach," then said the breach is unlikely
+(quota <50%) and signed off, asking for cautious autonomous progress.
+Auto-respawn lives in the daemon worker loop and a bad one is a runaway
+quota-burner — the wide-blast case that wants a supervised wake. So the shape is
+recorded in §5 (spawn one run from the committed branch on a wall-class exit,
+depth-capped ≤2, ambiguous failures escalate not loop) and the active build is
+held for a supervised wake. Tests: facets/statusline/cli/hooks/daemon green; the
+24 remaining failures are pre-existing in unrelated modules (cloud_gate,
+ergonomics, brnrd). Branch `brr/boundary-and-medium-synthesis`.

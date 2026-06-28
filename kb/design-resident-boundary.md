@@ -297,8 +297,8 @@ auth required for Claude Code subscription runs.
 
 | Vessel | Spend tally | Subscription quota level | Context window | How it arrives |
 | --- | --- | --- | --- | --- |
-| Claude Code (subscription) | `cost.total_cost_usd` | `rate_limits.*` (used % + resets_at) | `context_window.remaining_percentage` | **statusLine JSON** (a hook-shaped collector) |
-| Codex (subscription) | not a clean local gauge | error text + near-limit suggestion (edge-only) | — | failure classifier / suggestion text |
+| Claude Code (subscription) | `cost.total_cost_usd` (handed over) | `rate_limits.*` (used % + resets_at) | `context_window.remaining_percentage` | **statusLine JSON** (a hook-shaped collector) |
+| Codex (subscription) | **derived**, not handed over (tokens × price table) | edge-only / TUI-only (not exposed to headless `exec`) | computable from token counts | **`token_count` events** — live via `codex exec --json`, post-hoc via `$CODEX_HOME/sessions/*.jsonl`; **no external statusLine command** |
 | Any API-key auth | response usage | `anthropic-ratelimit-*` headers | — | per-call headers |
 | brnrd-owned key | authoritative | authoritative | — | brnrd reads it (the live rail brnrd sells, §2) |
 
@@ -306,8 +306,53 @@ So for Claude Code — brr's own default vessel — **both walls and the context
 window are level-readable today**, cheaply, off one collector. The honest
 caveats remain: `cost.total_cost_usd` is *estimated* and `rate_limits` is
 *consumed%* (so headroom = `100 − used`); historical org/admin usage APIs stay
-async → pre-analysis, never the live card; and Codex subscription quota is still
-edge-only until its own collector or brnrd ownership.
+async → pre-analysis, never the live card.
+
+**(c) The Codex vessel exposes usage too — but in a different shape, derived not
+handed over (researched 2026-06-28, evt-9yvh).** The maintainer asked to find
+Codex's analog to the Claude statusLine finding ("I am sure they have
+something"). They do — and the shape matters for the build:
+
+- **No external statusLine command.** Codex's status line is *declarative* —
+  `[tui] status_line = ["context-usage", "used-tokens", "five-hour-limit",
+  "weekly-limit", …]` in `~/.codex/config.toml`, rendered inside Codex's own
+  TUI. It "does not currently use the same external statusline command model as
+  Claude Code," so there is **no command seam for brr to register** the way
+  `brr statusline` plugs into Claude. The statusLine-collector pattern does not
+  port.
+- **Token usage *is* emitted, via `token_count` events.** Codex writes
+  `event_msg` entries with `payload.type == "token_count"` carrying cumulative
+  input / cached-input / output / reasoning token counts (since codex commit
+  0269096, 2025-09-06). Two rails to read them: **live** off the
+  `codex exec --json` / `--experimental-json` NDJSON stream (brr drives codex
+  headless via `codex exec`, but does *not* pass `--json` today, so this is a
+  real change to how brr parses codex output, not a tweak); **post-hoc** off the
+  session rollout logs in `$CODEX_HOME/sessions/` + `archived_sessions/` (this
+  is what `ccusage` reads).
+- **Spend is derived, not handed over.** Unlike Claude's `cost.total_cost_usd`,
+  Codex gives token *counts* — you price them yourself (tokens × a per-model
+  rate table, the way ccusage applies the LiteLLM dataset). So the Codex spend
+  facet is a *computed* number with its own price-table dependency, a heavier
+  collector than Claude's read-the-number one. Context-window headroom is
+  likewise computable from `used-tokens` vs the model's context size.
+- **Subscription quota stays edge-only.** The 5-hour / weekly limits surface in
+  Codex's interactive TUI and via `/status` (interactive only — not available
+  to a headless `codex exec` run). Programmatic exposure is *requested but not
+  shipped*: open OpenAI issues #15281 ("expose full usage/limits data in CLI"),
+  #19555 ("show remaining credits/usage in statusline"), #17827 ("customizable
+  status line"). So §8's "Codex quota = edge-only" holds — the only headless
+  signal is near-limit error/suggestion text at the wall, until OpenAI exposes
+  it or brnrd owns the key.
+
+**Consequence for the build.** A Codex level collector is a *second shape*, not a
+port of the Claude one: parse `token_count` events (verify the `--json` event
+schema first — pitfall: fire it before you rule on it) and apply a price table
+for spend, compute context headroom from token counts, and accept quota as
+edge-only. It also partly *reopens* the stream question for Codex specifically:
+hooks can carry Claude's usage because Claude has a usage hook; Codex has none,
+so its live-usage substrate is the `--json` `token_count` stream (or the session
+log tail) — the retired loom's mechanism, scoped to the one vessel that needs
+it. Lower priority than the Claude collector that is now wired.
 
 **Design consequence for the build.** Build order is now **statusLine collector →
 populate the quota/cost/context facets → distance-card** — all on the hooks rail,
@@ -439,20 +484,54 @@ the free mechanism, always an offered convenience over it."
   PR-not-created posture, `long_running`, and no-outbound-at-closeout — across
   the JSON portal, the woven hook line, and `brr portal state`. (§1)
 
+**Shipped (evt-1uwp, 2026-06-28):**
+- **Single projection helper** (`facets.py`): the wall-derived facet set is
+  defined *once* as a schema (quota / spend / context_window levels +
+  coexisting_runs / remote_scm state, each a three-state record); all three
+  renderers project from it — "by schema, not by convention." (§1)
+- **`cost`→`spend` rename + new `context_window` level facet**, plus a per-vessel
+  `levels_collector` switch (empty slot reads `absent` on a medium with a
+  collector, `unimplemented` without one). (§1, §8)
+- **`brr portal facets`** — operator-inspectable catalogue of the implemented
+  facets (schema-only outside a wake; live status folded in inside one). Fixed
+  `_portal_state_path` to honour `BRR_PORTAL_STATE` so on-demand inspection
+  resolves the live portal without `--path`.
+- **Claude statusLine collector** (`statusline.py` + `brr statusline`): registered
+  in the same `.claude/settings.local.json` as the hooks; each footer fire
+  normalizes the session JSON into a level snapshot the daemon folds into the
+  facets. Parse is defensive — the JSON field schema is still **unverified
+  against a live Claude run** (pitfall: fire it before you rule on it).
+
 **Open forks / next builds:**
 - **The rename run** (§3) — `runner` → `medium`/`resident`, its own dedicated run.
-- **Claude statusLine collector** (§8) — register a `statusLine` command in the
-  same `.claude/settings.local.json` brr writes hooks into; capture the session
-  JSON into the portal-state quota/cost/context collector. First concrete build
-  to make the `known` values move; smoke-verify the JSON schema before relying on
-  it (pitfall: fire it before you rule on it).
-- **Add the `context_window` facet** and promote subscription `quota` to a level
-  facet for the Claude vessel, per the wall-derived selection principle. (§1, §8)
-- **Populate the remaining `known` values:** Codex/API-key/brnrd collectors so
-  each facet carries a real number, not just an honest `absent`. The matrix (§4)
-  and the near-empty-quota mid-run injection both depend on it.
-- **Single projection helper** so the three renderers can never drift in *which*
-  facets they carry — define the wall-derived facet set there, once. (§1)
+- **Smoke-verify the Claude statusLine schema** against a live run and tighten
+  `statusline.parse_session` (drop the defensive fallbacks once the real field
+  nesting of `rate_limits` / `cost` / `context_window` is confirmed).
+- **Codex level collector** (§8c, researched evt-9yvh) — a *second shape*: parse
+  `token_count` events (live via `codex exec --json`, or the
+  `$CODEX_HOME/sessions/*.jsonl` tail) and apply a per-model price table for
+  spend; compute context headroom from token counts; quota stays edge-only.
+  Heavier than the Claude collector (derived, not handed over); lower priority.
+- **The distance-card** (§7) — reframe the budget line as min-distance-across-walls
+  now that spend / quota / context_window can carry live levels.
+- **Respawn-on-wall** (§5, deferred evt-1uwp) — see the cautious-deferral note
+  below; design is sketched, active implementation waits for a supervised wake.
+
+**Respawn-on-wall — designed, deliberately not shipped tonight (evt-1uwp).** The
+maintainer green-lit building respawn "as the last step to work around the
+possible quota breach," then clarified the breach is unlikely (quota <50%) and
+signed off for the night, asking for *cautious* autonomous progress. Auto-respawn
+lives in the daemon worker loop and, done wrong, is exactly a runaway
+quota-burning loop — the wide-blast/irreversible case that wants a supervised
+wake, not an unattended one. So the shape is recorded here and the active build
+held: **on a wall-class exit** (quota/auth/provider-outage — the failure classes
+already named in `design-runner-media.md` step 5), the daemon spawns one fresh
+run seeded from the **committed run branch** (the interim work receipt always
+survives, §5), carrying a respawn-depth counter in run meta and a hard cap
+(e.g. ≤2) so a persistently-walling task escalates to the user instead of
+looping. *Ambiguous* failures never auto-respawn — they surface with the receipt
+attached. The guard is the point: the respawn exists to survive a breach cheaply,
+not to retry blindly.
 
 ## See also
 
