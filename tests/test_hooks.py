@@ -220,9 +220,9 @@ def test_seed_surfaces_open_pr_posture(tmp_path):
     assert "quota=absent (no snapshot for this medium)" in ctx
 
 
-def test_post_tool_never_renders_resources(tmp_path):
-    # Like scm:, the work-status line is a seed/stop boundary signal — mid-run
-    # it must stay quiet even when the token moves.
+def test_post_tool_renders_resources_when_injection_fires(tmp_path):
+    # Quota is a live wall, so when a post-tool boundary injects a portal-state
+    # update it carries the work-status line too.
     _portal(
         tmp_path, token="t1", pending=1,
         events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
@@ -233,7 +233,24 @@ def test_post_tool_never_renders_resources(tmp_path):
                    "remote_scm": {"status": "absent"}},
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    assert "resources:" not in out["hookSpecificOutput"]["additionalContext"]
+    assert "resources:" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_post_tool_can_inject_resource_only_update(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        resources={
+            "quota": {"status": "known", "summary": "week 55% left"},
+            "spend": {"status": "unimplemented"},
+            "context_window": {"status": "unimplemented"},
+            "coexisting_runs": {"status": "unimplemented"},
+            "remote_scm": {"status": "absent"},
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "resources:" in ctx
+    assert "quota=week 55% left" in ctx
 
 
 def test_stop_flags_no_outbound_messages(tmp_path):
