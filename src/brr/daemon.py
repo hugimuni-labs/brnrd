@@ -61,6 +61,7 @@ from . import protocol
 from . import run_context
 from . import runner
 from . import runner_quota
+from . import statusline
 from . import schedule as schedule_mod
 from . import sync
 from . import updates
@@ -1748,6 +1749,13 @@ def _write_live_portal_state(
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
             "resources": _resources_facet(
                 quota_summary,
+                # The statusLine collector (Claude vessel) drops a normalized
+                # level snapshot beside the portal; fold it in when present so
+                # spend / quota / context_window carry live values. The medium
+                # supporting statusLine is what makes an empty slot read
+                # 'absent' (collector wired) vs 'unimplemented'.
+                levels=statusline.load_snapshot(outbox_dir),
+                levels_collector=statusline.supported(runner_name),
                 branch=task.meta.get("branch_name"),
                 pr_number=task.meta.get("github_pr_number"),
             ),
