@@ -157,7 +157,7 @@ these command strings.
   profile must be named explicitly via `shell=`/`core=` in `.brr/config`
   (not auto-detected).
 
-Optional **Core metadata** (read by `runner_media.py`, the cost-aware
+Optional **Core metadata** (read by `runner_select.py`, the cost-aware
 Core-selection layer) also rides these keys. None is required; a profile
 with none is an uncosted Runner the selector uses as-is:
 
@@ -175,7 +175,7 @@ The selection *policy* is brr's, not a table the user hand-tunes: the user
 sets `shell=`/`core=` (or leaves unset for auto) and optional
 `runner_policy=` (`cost-aware` | `fixed`) in `.brr/config`, and the
 resident picks the cheapest adequate available Runner from there. See
-`kb/design-runner-media.md`.
+`kb/design-runner-cores.md`.
 
 Alias profiles with `binary` are for variants of the same CLI, for example
 `claude-bare-api-only` uses `--bare` and requires `ANTHROPIC_API_KEY`
