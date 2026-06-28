@@ -383,6 +383,26 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     assert cmds["PostToolBatch"] == "brr hook post-tool"
     assert cmds["Stop"] == "brr hook stop"
     assert cmds["SessionStart"] == "brr hook session-start"
+    # The level collector rides the same settings file: Claude's statusLine
+    # invokes ``brr statusline`` so the footer JSON reaches brr (§8).
+    assert settings["statusLine"] == {
+        "type": "command", "command": "brr statusline"
+    }
+
+
+def test_install_hook_config_user_statusline_wins(tmp_path):
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.local.json").write_text(
+        json.dumps({"statusLine": {"type": "command", "command": "my-bar"}}),
+        encoding="utf-8",
+    )
+    path = hooks.install_hook_config("claude", tmp_path)
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    # statusLine is a brr *default*; a user override in the local overlay wins,
+    # while brr's hooks still install.
+    assert settings["statusLine"]["command"] == "my-bar"
+    assert "PostToolBatch" in settings["hooks"]
 
 
 def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):
