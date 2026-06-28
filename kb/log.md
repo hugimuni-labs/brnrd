@@ -8697,3 +8697,44 @@ on `brr/initial-context-reweave` (commit `700ba26`).
   "Alternatives considered" sections serve as genuine reference, not dead
   scaffolding. Defer to a gardening wake.
 - Index hygiene (4 missing pages) — already in index from a prior wake.
+
+## [2026-06-29] refactor | Task 4B — Shell/Core vocab sweep across kb design pages
+
+Executed Task 4B of `plan-repo-gardening.md` on `brr/initial-context-reweave`
+(commit `ace4888`).
+
+**Scope:** semantic pass to retire `medium` and `vessel` (the two naming
+candidates that were tested and then superseded by the Shell/Core decision of
+evt-zyu6 on 2026-06-28) and make the kb say Runner/Shell/Core with one voice.
+
+**Files touched:**
+
+- `design-runner-cores.md` — full prose sweep: all "runner medium" / "local
+  medium" / "stronger medium" → Shell/Core; code refs updated
+  (`runner_media.py`→`runner_select.py`, `select_medium`→`select_runner`,
+  `implicit_medium`→`implicit_runner`, `proposed_medium`→`proposed_runner`);
+  TOML sketch `[[runner.media]]`→`[[runner.profiles]]`; portal JSON key
+  `runner_media`→`runner`; section title updated.
+
+- `design-resident-boundary.md` — title updated; §3 (vocabulary history)
+  rewritten to record the three-step lineage (medium → vessel candidate →
+  Shell/Core settled); §4 title "per medium" → "per Shell/Core"; §8 title
+  updated; table header "Vessel"→"Shell"; per-vessel/medium swept; settled-vs-
+  open entry updated to mark vocabulary as resolved (not an open fork).
+
+- `design-runner-management.md` — status header re-pointed at
+  `design-runner-cores.md` (the §G1 "no design home yet" gap now exists);
+  "cockpit plan" → "portals plan".
+
+- `design-portal-grammar.md` — "runner medium and quota posture" → "Shell/Core
+  and quota posture" (×2); "the medium failed" → "the Shell/Core failed";
+  PROGRESS table row updated (step 9 concept sweep aligned).
+
+- `kb/index.md` — boundary page title entry updated; gardening plan status
+  updated to reflect Tasks 3+4A+4B executed.
+
+- `plan-repo-gardening.md` — §4B marked executed with per-bullet completion.
+
+`design-runner-back-channel.md` and `subject-managed-mode.md` had no stale
+vocab and needed no changes. 4C (surface unresolvable forks) and 4D (method)
+remain for a future wake if/when the broader sweep continues.
