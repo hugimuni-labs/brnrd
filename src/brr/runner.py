@@ -451,7 +451,7 @@ def _process_runner_stdout(
 
     Most runners already print the final reply as plain text. Claude's daemon
     profile opts into ``--output-format json`` so brr can collect spend/context
-    accounting; for that vessel, unwrap ``result`` back to the user-facing reply
+    accounting; for that Shell, unwrap ``result`` back to the user-facing reply
     and stash the level snapshot for the daemon's final portal refresh.
     """
     from . import claude_status

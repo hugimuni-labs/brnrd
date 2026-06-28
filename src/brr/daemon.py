@@ -1607,10 +1607,10 @@ def _merge_level_snapshots(
 def _collect_levels(
     runner_name: str | None, outbox_dir: Path | None, work_dir: Path | None = None
 ) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
-    """Pick the level snapshot + wired-slot set for *runner_name*'s vessel.
+    """Pick the level snapshot + wired-slot set for *runner_name*'s Shell.
 
-    Each medium exposes its quota/context (and, for Claude, spend) through a
-    different head-less seam, so the level *source* is per-vessel:
+    Each Shell exposes its quota/context (and, for Claude, spend) through a
+    different head-less seam, so the level *source* is per-Shell:
 
     - **codex** — the session rollout file carries ``rate_limits`` (5h + weekly
       subscription quota) and ``model_context_window`` on every ``token_count``
@@ -1624,7 +1624,7 @@ def _collect_levels(
 
     Returns ``(levels, wired_slots)`` for :func:`facets.build`. ``wired_slots``
     is the set of level slots whose collector exists (so an empty slot reads
-    ``absent`` not ``unimplemented``); media with no collector return ``False``.
+    ``absent`` not ``unimplemented``); Shells with no collector return ``False``.
     """
     if codex_status.supported(runner_name):
         return codex_status.load_levels(), frozenset(codex_status.COLLECTED_SLOTS)
@@ -1651,7 +1651,7 @@ def _resources_facet(
 
     Thin wrapper over :func:`facets.build`, the single definition of the facet
     schema (``kb/design-resident-boundary.md`` §1 — "by schema, not by
-    convention"). The schema, the three-state honesty, and the per-vessel level
+    convention"). The schema, the three-state honesty, and the per-Shell level
     asymmetry all live in ``facets``; this keeps the daemon's construction call
     in one place so the JSON snapshot, the woven hook line, and ``brr portal
     state`` can never drift on which facets they carry.
@@ -1808,7 +1808,7 @@ def _write_live_portal_state(
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
             "resources": _resources_facet(
                 quota_summary,
-                # Per-vessel level source (see _collect_levels): Codex reads its
+                # Per-Shell level source (see _collect_levels): Codex reads its
                 # subscription quota + context window live from the session
                 # rollout file; Claude gets terminal spend/context accounting
                 # from result JSON. The wired-slot set decides whether an empty

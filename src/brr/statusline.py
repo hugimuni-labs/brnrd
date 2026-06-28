@@ -40,7 +40,7 @@ _STATUSLINE_FLAVOURS = {"claude"}
 
 
 def supported(runner_name: str | None) -> bool:
-    """True when *runner_name*'s vessel can use the interactive helper."""
+    """True when *runner_name*'s Shell can use the interactive helper."""
     if not runner_name:
         return False
     slug = str(runner_name).strip().lower()
