@@ -153,6 +153,123 @@ is the **medium**, `run`/`weave` is the wake's work, and `runner` dissolves into
 "the resident". `substrate` stays available as a clinical synonym for technical
 prose.
 
+**Reopened 2026-06-28 (evt-tw6t): the maintainer has second thoughts on
+`medium`.** He's reaching for "an artificial body, replaceable/switchable —
+maybe `chassis`?" and asked for the cyberpunk/cultural analogy. The sharpening
+this wake: `medium` and `chassis` answer *two different metaphors*, and the
+choice is really between them, not between words.
+
+- **The summoning metaphor** — *medium / conduit / channel*. The resident
+  (spirit) is *invoked through* it. Momentary, séance-flavoured. This is what
+  `medium` carries.
+- **The incarnation metaphor** — *vessel / chassis / frame / body / shell*. The
+  resident *rides / is housed in* it for the whole run. Persistent, swappable.
+  This is what the maintainer's words ("artificial body, ride, replaceable")
+  actually describe.
+
+The **incarnation** reading is truer to what the executor *is for brr*: you
+don't speak through it once, you *act through it* (tools, edits, weave) for the
+duration of a wake, and the cost/failover model — swap to cheaper/stronger, fail
+over to another — is literally *changing bodies*, not switching séance channels.
+The cleanest single word that keeps the spirit register **and** the swap
+connotation is **`vessel`** (a spirit occupies a vessel; it can be moved to
+another). `chassis`/`frame` carry the swap but go cold-mechanical, off the
+ornamented-scroll register. The exact cultural touchstone is *Ghost in the
+Shell* — the Ghost rides a replaceable **shell** — and the tragedy is the
+perfect word, `shell`, is taken by Unix; `vessel` is `shell` without that
+collision. Still a genuine fork (aesthetic/values), so it stays the
+maintainer's call: `medium` (summon, lower-friction, already glossed in code) vs
+`vessel` (incarnate, truer to ride/swap). No rename run until the noun settles.
+
+## 7. The boundary state card — level vs edge, and distance-from-envelope
+
+**Question (maintainer, evt-tw6t):** the inject rail shouldn't only report
+*warnings*. Quota *as you go* helps the resident plan ahead; knowing a coexisting
+run not only *appeared* but *still exists* is presence, not an edge-event. The
+cockpit was the wrong abstraction (drift + his/my attention-model difference),
+but **world-state woven into the stream at breakpoints** is the right model for
+temporal awareness. Injections must **not** duplicate the snapshot — a **crisp
+state card ornamenting the stream**, especially highlighting **distance from the
+envelope boundary.** Agreed?
+
+**Answer: agreed — with one sharpening that keeps it from collapsing back into
+the firehose.** The card carries two kinds of signal that must not be conflated:
+
+- **Level (standing).** The current *position relative to every wall*: distance
+  from the budget wall, quota headroom, live sibling count. This is always-true
+  state, and it's what "as you go" and "still exists" are asking for — presence,
+  not just transitions. The card *always* reflects the current level.
+- **Edge (gated re-weave).** *When is it worth spending tokens + attention to
+  re-lay the card into the scroll.* This is the `change_token` salience gate from
+  the perception model. It governs the **cost of re-injection**, not whether the
+  level is tracked.
+
+So the reconciliation of "as you go" with "don't duplicate the snapshot": the
+card is a **standing level capsule** whose *re-injection* is edge-gated. It
+shows the current distance-from-walls; it gets re-woven at a breakpoint only when
+something moved enough to earn the turn. That's how you get temporal awareness
+without re-paying for an unchanged card every tool tick — the exact dilution trap
+that killed `portal wrap`.
+
+**Distance-from-envelope is the spine, and it's multi-dimensional.** The envelope
+has several walls — wall-clock budget, quota, spend cap — and the card's headline
+should be the *minimum distance across the active walls*: whichever wall you'll
+hit first. That's the single decision-useful number ("you have ~18m of runtime
+and ~2 strong respawns before *some* wall"). The current woven line already has
+the budget half (`budget: Xs of Ys used` + `running long`, seed/stop-gated in
+`hooks._format_resources`); the card is that line *reframed as distance-to-wall*
+and extended to the other dimensions as their collectors land.
+
+**The brr-specific catch on "still exists":** a coexisting run that *persists*
+requires **sibling-liveness tracking** (heartbeat freshness of other runs), which
+doesn't exist yet — brr is single-flight *per dominion*, so `coexisting_runs`
+renders `unimplemented`. "Appeared" is an event; "still exists" is a level that
+needs a liveness collector. It's the right target, but it's a build, not a
+reframe of existing data. Until then the honest card says `coexisting-runs=
+unimplemented`, which is already the three-state honesty doing its job.
+
+## 8. What the medium actually exposes for live cost/quota (pre-build finding)
+
+**Question (maintainer):** before building the collectors, clarify exactly what
+we can get from the medium re: live cost and quota. This is load-bearing for the
+card (§7), because a card promising a smooth quota gauge it can't fill is a lie
+the resident learns to distrust.
+
+The honest answer splits into two signals of **very different data quality**, and
+that asymmetry *is* the open-source/brnrd boundary (§2) showing up again:
+
+- **Live consumption (this run, as it goes) — meterable, but only as a tally brr
+  computes, and only via the streaming driver.** When brr holds the
+  `stream-json` loom (the streaming medium in `plan-streaming-runner-injection.md`,
+  **not yet built**), each message carries usage — input/output/cache token
+  counts, and for Claude a `costUSD` (with caveats). That's the real "as you go"
+  cost signal: a *running consumption tally brr accumulates*, not a balance the
+  CLI hands over. This is the realistic source of "distance from the spend wall."
+  Crucial nuance: it measures **consumption, not remaining** — brr counts what's
+  spent, it doesn't read a headroom number.
+- **Quota / credit *level* (subscription headroom) — mostly NOT exposed.** This
+  is the hard part to be honest about. Claude Code and Codex **subscription**
+  quotas surface chiefly as **error text and near-limit suggestions**, not as a
+  readable gauge (confirmed in the CLI probe table in `design-runner-media.md`).
+  So for subscription media the quota wall is **edge-triggered** (you learn you're
+  near it when the CLI warns/errors), not a smooth level. A clean readable
+  *remaining* number exists only for: **API-key auth** (rate-limit headers),
+  **brnrd-owned keys** (brnrd reads them authoritatively), and **managed cloud**
+  (provider quota API). Historical org/admin usage APIs (OpenAI, Anthropic) are
+  async + admin-cred → they feed pre-analysis, never the live card.
+
+**Design consequence for the build.** The card's two walls have asymmetric data:
+the **spend wall is live-meterable** (token tally via streaming) and can show a
+real running number; the **subscription-quota wall is edge-only** and can show
+`ok / warned / hit` but not a smooth gauge — unless brnrd owns the key, which is
+exactly the live authoritative rail brnrd sells (§2). So: **build the consumption
+tally first** (it has real data and directly feeds distance-from-spend-wall);
+treat subscription quota as edge-triggered until brnrd/API-key auth makes it
+level-readable. And keep the §4 guardrail: the card shows *consumption-so-far +
+historical rank*, **never a forward dollar promise**. Build order is therefore
+streaming medium → consumption tally → distance-card, because the *live* half of
+the card depends on brr holding the stream.
+
 **The rename is now a sanctioned follow-up run, deliberately not folded into the
 boundary work.** `runner` is embedded across config keys (`runner`,
 `runner_cmd`), prompts (`runners.md`), kb page names (`design-runner-*`), and
@@ -252,8 +369,14 @@ the free mechanism, always an offered convenience over it."
   is the snapshot/fallback rail, not a redundant copy. (§1)
 - Self-deployed static envelope + best-effort local signals is the open
   mechanism; brnrd adds the live authoritative rail + remote control. (§2)
-- **Vocabulary:** `medium` is the noun for the executor; `runner` dissolves into
-  "the resident". A dedicated rename run follows. (§3, evt-go5z)
+- **Vocabulary:** `medium` was picked (evt-go5z) but **reopened** evt-tw6t —
+  the live fork is `medium` (summon) vs `vessel` (incarnate); rename run holds
+  until it settles. (§3)
+- **The boundary card is a standing level capsule with edge-gated re-injection;**
+  distance-from-envelope (min across walls) is its spine. (§7, evt-tw6t)
+- **Cost-data asymmetry:** live consumption is meterable via the streaming
+  medium; subscription quota is edge-only unless brnrd/API-key auth. (§8,
+  evt-tw6t)
 - Failover = cheap-recovery + visible receipt + honest escalation, not a perfect
   classifier; PR posture (incl. not-yet-created) joins the boundary. (§5)
 - Business posture reconciles with open-source via transparent
