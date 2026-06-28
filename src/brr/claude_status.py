@@ -1,11 +1,11 @@
 """Claude Code result-JSON level collector for the Claude vessel.
 
 Claude Code's interactive ``/usage`` panel shows subscription windows, but that
-TUI surface is not exposed to brr's daemon runner. Under the head-less
-``claude --print`` mode brr uses, ``statusLine`` also does not fire. The seam
-that *does* exist head-less is ``--output-format json``: the final result object
-carries the reply text plus session accounting such as ``total_cost_usd`` and
-``modelUsage[model].contextWindow``.
+is a TUI scrape handled separately by :mod:`brr.claude_usage`. Under the
+head-less ``claude --print`` mode brr uses, ``statusLine`` also does not fire.
+The result seam that *does* exist head-less is ``--output-format json``: the
+final result object carries the reply text plus session accounting such as
+``total_cost_usd`` and ``modelUsage[model].contextWindow``.
 
 This module normalizes that result JSON into the same level snapshot shape the
 portal facets already consume. It deliberately collects only the slots proved by
@@ -15,8 +15,9 @@ the head-less result JSON:
 - ``context_window`` — estimated headroom from per-model token counts and
   ``contextWindow``.
 
-Subscription quota / reset windows remain unavailable for Claude head-less until
-Claude exposes a non-TUI source for them.
+Subscription quota / reset windows remain unavailable from Claude result JSON;
+the daemon merges this snapshot with the cached interactive ``/usage`` snapshot
+when both exist.
 """
 
 from __future__ import annotations

@@ -25,7 +25,7 @@ A slot earns facet status iff it is one of:
 Each facet is a uniform three-state record, because "missing" means two
 different things the resident must not conflate:
 
-- ``known`` — a value proven cheaply this heartbeat.
+- ``known`` — a value proven by the configured collector this heartbeat.
 - ``absent`` — the collector ran and there is genuinely nothing yet: no PR for
   this branch, no quota snapshot this medium exposes. The *affirmative-empty*
   signal — the same logic the closeout capsule uses for "0 pending events".
@@ -36,9 +36,9 @@ different things the resident must not conflate:
 
 The level collectors are **per-vessel** (§8): Codex exposes live quota/context
 through session-rollout ``token_count`` events, while Claude exposes terminal
-spend/context through its result JSON. A medium with no collector for a slot
-reads ``unimplemented``. That asymmetry is the design, surfaced honestly, not a
-bug.
+spend/context through result JSON and cached subscription quota through the
+interactive ``/usage`` PTY collector. A medium with no collector for a slot reads
+``unimplemented``. That asymmetry is the design, surfaced honestly, not a bug.
 """
 
 from __future__ import annotations

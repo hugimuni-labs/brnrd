@@ -229,18 +229,24 @@ def format_delta(
                 f"{modified} modified file(s) on {branch} — commit and let "
                 "the branch publish before ending."
             )
-    # Work-status posture (cost / quota / parallelism). A boundary signal like
-    # scm: rendered at seed / stop only, where the affirmative picture is worth
-    # a line. Known fields carry their value; not-yet-built ones read
-    # "unavailable" so the resident sees the slot honestly rather than a gap.
-    if (seed or stop) and resources:
+    # Work-status posture (cost / quota / parallelism). Known fields carry
+    # their value; not-yet-built ones read as named states with reasons so the
+    # resident sees the slot honestly rather than a gap. It renders on seed /
+    # stop, and on post-tool updates whenever portal-state changed enough to be
+    # injected at all — live quota is a wall, not a footer-only nicety.
+    rendered_resources = None
+    if resources:
         rendered = _format_resources(resources)
         if rendered:
+            rendered_resources = rendered
             lines.append(rendered)
     # Mid-run, a bare header with no pending work and no movement isn't worth
     # a turn. Seed and stop always render: their empty state ("0 pending") is
     # the affirmative signal, not noise.
-    if not seed and not stop and pending == 0 and pending_files == 0 and not acked:
+    if (
+        not seed and not stop and pending == 0 and pending_files == 0
+        and not acked and not rendered_resources
+    ):
         return None
     return "\n".join(lines)
 
