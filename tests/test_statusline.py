@@ -1,4 +1,4 @@
-"""Claude statusLine level collector — the spend/quota/context source (§8)."""
+"""Interactive Claude statusLine helper tests."""
 
 import json
 
