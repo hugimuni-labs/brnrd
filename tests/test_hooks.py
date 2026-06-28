@@ -383,14 +383,12 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     assert cmds["PostToolBatch"] == "brr hook post-tool"
     assert cmds["Stop"] == "brr hook stop"
     assert cmds["SessionStart"] == "brr hook session-start"
-    # The level collector rides the same settings file: Claude's statusLine
-    # invokes ``brr statusline`` so the footer JSON reaches brr (§8).
-    assert settings["statusLine"] == {
-        "type": "command", "command": "brr statusline"
-    }
+    # statusLine is a TUI footer and does not fire under daemon --print runs,
+    # so brr must not register a dead collector by default.
+    assert "statusLine" not in settings
 
 
-def test_install_hook_config_user_statusline_wins(tmp_path):
+def test_install_hook_config_preserves_user_statusline(tmp_path):
     settings_dir = tmp_path / ".claude"
     settings_dir.mkdir()
     (settings_dir / "settings.local.json").write_text(
@@ -399,8 +397,7 @@ def test_install_hook_config_user_statusline_wins(tmp_path):
     )
     path = hooks.install_hook_config("claude", tmp_path)
     settings = json.loads(path.read_text(encoding="utf-8"))
-    # statusLine is a brr *default*; a user override in the local overlay wins,
-    # while brr's hooks still install.
+    # A user's own footer setting is preserved while brr's hooks still install.
     assert settings["statusLine"]["command"] == "my-bar"
     assert "PostToolBatch" in settings["hooks"]
 

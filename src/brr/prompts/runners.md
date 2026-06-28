@@ -1,19 +1,19 @@
 ---
 claude:
-  cmd: 'claude --print --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
   hooks: claude
 claude-bare-api-only:
   binary: claude
-  cmd: 'claude --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
 claude-bare-api-only-sonnet:
   binary: claude
-  cmd: 'claude --model "claude-sonnet-4-6" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --model "claude-sonnet-4-6" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
 claude-bare-api-only-opus:
   binary: claude
-  cmd: 'claude --model "claude-opus-4-8" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --model "claude-opus-4-8" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
 claude-bare-api-only-fable:
   binary: claude
-  cmd: 'claude --model "claude-fable-5" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --model "claude-fable-5" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
 codex:
   cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
   hooks: codex
@@ -107,9 +107,11 @@ as `claude-bare-api-only`.
 
 The profile captures the headless invocation: non-interactive mode plus
 tool/approval bypass, since the daemon needs the runner to act without
-prompts. Repository orientation, AGENTS.md, dominion context, and the Run
-Context Bundle belong in the assembled prompt, not in these command
-strings.
+prompts. Claude profiles also request ``--output-format json``; brr unwraps
+the JSON ``result`` back into the response file and uses the accounting fields
+for terminal spend/context facets. Repository orientation, AGENTS.md, dominion
+context, and the Run Context Bundle belong in the assembled prompt, not in
+these command strings.
 
 - `cmd` — base command. brr appends the prompt as the final argument.
 - `binary` — optional PATH binary for alias profiles. When set, the
