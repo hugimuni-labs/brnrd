@@ -1,4 +1,4 @@
-"""Claude Code result-JSON level collector for the Claude vessel.
+"""Claude Code result-JSON level collector for the Claude Shell.
 
 Claude Code's interactive ``/usage`` panel shows subscription windows, but that
 is a TUI scrape handled separately by :mod:`brr.claude_usage`. Under the
@@ -37,7 +37,7 @@ COLLECTED_SLOTS: frozenset[str] = frozenset({"spend", "context_window"})
 
 
 def supported(runner_name: str | None) -> bool:
-    """True when *runner_name*'s vessel is Claude Code."""
+    """True when *runner_name*'s Shell is Claude Code."""
     if not runner_name:
         return False
     slug = str(runner_name).strip().lower()
