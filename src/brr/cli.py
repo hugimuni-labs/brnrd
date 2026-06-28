@@ -198,6 +198,19 @@ def main(argv: list[str] | None = None) -> None:
              "off how a request is phrased)")
     p.set_defaults(func=cmd_agent_inject)
 
+    runners_p = sub.add_parser(
+        "runners", help="inspect configured Shell/Core runner profiles")
+    runners_sub = runners_p.add_subparsers(dest="runners_command", required=True)
+
+    p = runners_sub.add_parser(
+        "list",
+        help="list declared runner profiles and the bundled Core registry")
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.add_argument("--all", action="store_true",
+                   help="include bundled Cores whose Shell is not on PATH")
+    p.set_defaults(func=cmd_runners_list)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -359,6 +372,161 @@ def _format_portal_state(payload: dict) -> str:
     if isinstance(pending_files, list) and pending_files:
         lines.append("pending outbox files: " + ", ".join(map(str, pending_files)))
     return "\n".join(lines)
+
+
+def cmd_runners_list(args):
+    """List declared runner profiles and the bundled Core registry.
+
+    Two sections:
+
+    - **Declared profiles** — what *runners.md* declares (bundled or
+      project-owned). These are the profiles the selector and daemon
+      actually invoke. Shows PATH availability, class, hooks, and
+      cost_rank.
+    - **Bundled Core registry** — the ``runner_cores`` module's registry of
+      known Shell/Core pairs with model IDs, provider, class, and freshness.
+      Filtered to PATH-available Shells by default; ``--all`` shows all.
+      The registry extends the selector when a user pins ``core=`` in
+      ``.brr/config`` without declaring an explicit profile entry.
+
+    A ★ marks the currently resolved runner (the one the daemon would
+    pick for the next run).
+    """
+    import json as _json
+    import shutil
+    import sys
+
+    from . import runner as runner_mod
+    from . import runner_cores, runner_select
+
+    repo_root = _maybe_repo_root()
+
+    # Current runner — best-effort; may fail outside a repo or without a Shell
+    current_runner: str | None = None
+    current_runner_err: str | None = None
+    try:
+        if repo_root:
+            current_runner = runner_mod.resolve_runner(repo_root)
+    except Exception as exc:  # noqa: BLE001
+        current_runner_err = str(exc)
+
+    # Declared profiles (from runners.md, bundled or project)
+    declared_profiles: dict[str, dict] = {}
+    try:
+        declared_profiles = runner_mod._load_profiles(repo_root) or {}
+    except Exception:
+        declared_profiles = {}
+
+    # Build declared-profile rows
+    declared_rows = []
+    for name, meta in declared_profiles.items():
+        meta = meta or {}
+        binary = str(meta.get("binary") or name).strip()
+        on_path = shutil.which(binary) is not None
+        is_alias = bool(meta.get("binary"))  # alias profiles have an explicit binary
+        declared_rows.append({
+            "name": name,
+            "shell": binary,
+            "model": str(meta.get("model") or "").strip() or None,
+            "class": str(meta.get("class") or "").strip() or None,
+            "provider": str(meta.get("provider") or "").strip() or None,
+            "hooks": str(meta.get("hooks") or "").strip() or None,
+            "cost_rank": meta.get("cost_rank"),
+            "quota_source": str(meta.get("quota_source") or "").strip() or None,
+            "owner": str(meta.get("owner") or "user").strip() or "user",
+            "on_path": on_path,
+            "is_alias": is_alias,
+            "is_current": name == current_runner,
+        })
+
+    # Bundled Core registry rows
+    show_all = getattr(args, "all", False)
+    all_bundled = runner_cores.all_cores()
+    bundled_rows = []
+    for name, entry in all_bundled.items():
+        shell = str(entry.get("shell") or "").strip()
+        on_path = shutil.which(shell) is not None
+        if not show_all and not on_path:
+            continue
+        bundled_rows.append({
+            "name": name,
+            "shell": shell,
+            "model": str(entry.get("model") or "").strip() or None,
+            "class": str(entry.get("class") or "").strip() or None,
+            "provider": str(entry.get("provider") or "").strip() or None,
+            "cost_rank": entry.get("cost_rank"),
+            "freshness_date": str(entry.get("freshness_date") or "").strip() or None,
+            "on_path": on_path,
+        })
+
+    if getattr(args, "json", False):
+        print(_json.dumps({
+            "current_runner": current_runner,
+            "current_runner_error": current_runner_err,
+            "declared": declared_rows,
+            "bundled_cores": bundled_rows,
+        }, indent=2, sort_keys=True))
+        return 0
+
+    # ── Text output ──────────────────────────────────────────────────
+    if current_runner_err and not current_runner:
+        print(f"[brr runners] note: could not resolve current runner — "
+              f"{current_runner_err}", file=sys.stderr)
+
+    def _mark(row: dict) -> str:
+        return "★" if row.get("is_current") else " "
+
+    def _avail(row: dict) -> str:
+        return "✓" if row.get("on_path") else "✗"
+
+    # Declared profiles
+    print(f"declared profiles — {len(declared_rows)} profile(s), "
+          f"{sum(1 for r in declared_rows if r['on_path'])} on PATH  "
+          "(★ = selected by resolver, ✓ = Shell on PATH):")
+    if not declared_rows:
+        print("  (none)")
+    else:
+        for row in declared_rows:
+            parts = [
+                f"{_mark(row)} {_avail(row)} {row['name']:<28}",
+                f"{row['shell']:<8}",
+                f"{row['class'] or '—':<10}",
+                f"rank={row['cost_rank'] if row['cost_rank'] is not None else '—'}",
+            ]
+            extras = []
+            if row["model"]:
+                extras.append(f"model={row['model']}")
+            if row["hooks"]:
+                extras.append(f"hooks={row['hooks']}")
+            if row["is_alias"]:
+                extras.append("alias")
+            if not row["on_path"]:
+                extras.append("not found")
+            if extras:
+                parts.append(f"  [{', '.join(extras)}]")
+            print("  " + "  ".join(parts))
+
+    # Bundled Core registry
+    print()
+    all_label = " (all, including unavailable)" if show_all else ""
+    print(f"bundled Core registry{all_label} — {len(bundled_rows)} "
+          f"core(s) shown  (add --all to include unavailable Shells):")
+    if not bundled_rows:
+        print("  (none on PATH — install claude, codex, or gemini)")
+    else:
+        for row in bundled_rows:
+            avail = "✓" if row.get("on_path") else "✗ (not on PATH)"
+            parts = [
+                f"  {avail}  {row['name']:<20}",
+                f"{row['shell']:<8}",
+                f"{row['model'] or '—':<30}",
+                f"{row['class'] or '—':<10}",
+                f"rank={row['cost_rank'] if row['cost_rank'] is not None else '—'}",
+                f"fresh={row['freshness_date'] or '—'}",
+            ]
+            print("  ".join(parts))
+
+    return 0
 
 
 def cmd_portal_state(args):
