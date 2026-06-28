@@ -54,6 +54,7 @@ from . import facets
 from . import forge_state
 from . import forges
 from . import claude_status
+from . import claude_usage
 from . import gitops
 from . import hooks as hooks_mod
 from . import presence
@@ -1584,8 +1585,27 @@ def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
     return {"status": status, "until": _iso_utc(until)}
 
 
+def _merge_level_snapshots(
+    *snapshots: dict[str, object] | None,
+) -> dict[str, object] | None:
+    merged: dict[str, object] = {}
+    sources: list[str] = []
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        source = snapshot.get("source")
+        if isinstance(source, str) and source.strip():
+            sources.append(source.strip())
+        for key in ("quota", "spend", "context_window", "plan_type"):
+            if key in snapshot:
+                merged[key] = snapshot[key]
+    if sources:
+        merged["source"] = " + ".join(dict.fromkeys(sources))
+    return merged or None
+
+
 def _collect_levels(
-    runner_name: str | None, outbox_dir: Path | None
+    runner_name: str | None, outbox_dir: Path | None, work_dir: Path | None = None
 ) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
     """Pick the level snapshot + wired-slot set for *runner_name*'s vessel.
 
@@ -1596,10 +1616,11 @@ def _collect_levels(
       subscription quota) and ``model_context_window`` on every ``token_count``
       event, read live by :mod:`codex_status`. No dollar-spend gauge, so
       ``spend`` is deliberately not collected.
-    - **claude** — the final ``--output-format json`` result, normalized by
-      :mod:`claude_status` after the runner exits. It carries spend + context
-      accounting but no subscription quota/reset windows, so this is a terminal
-      accounting source, not mid-thought quota guidance.
+    - **claude** — a cached, daemon-side PTY scrape of interactive ``/usage``
+      carries subscription quota windows, and the final ``--output-format json``
+      result normalized by :mod:`claude_status` carries spend + context
+      accounting. The TUI scrape is intentionally throttled; hooks read the
+      portal-state snapshot, they do not run the scrape themselves.
 
     Returns ``(levels, wired_slots)`` for :func:`facets.build`. ``wired_slots``
     is the set of level slots whose collector exists (so an empty slot reads
@@ -1608,8 +1629,12 @@ def _collect_levels(
     if codex_status.supported(runner_name):
         return codex_status.load_levels(), frozenset(codex_status.COLLECTED_SLOTS)
     if claude_status.supported(runner_name):
-        return claude_status.load_snapshot(outbox_dir), frozenset(
-            claude_status.COLLECTED_SLOTS
+        usage_levels = claude_usage.load_or_refresh_snapshot(
+            outbox_dir, cwd=work_dir
+        )
+        result_levels = claude_status.load_snapshot(outbox_dir)
+        return _merge_level_snapshots(usage_levels, result_levels), frozenset(
+            claude_usage.COLLECTED_SLOTS | claude_status.COLLECTED_SLOTS
         )
     return None, False
 
@@ -1728,7 +1753,9 @@ def _write_live_portal_state(
             int(time.monotonic() - start_monotonic)
             if start_monotonic is not None else None
         )
-        run_levels, run_level_slots = _collect_levels(runner_name, outbox_dir)
+        run_levels, run_level_slots = _collect_levels(
+            runner_name, outbox_dir, work_dir
+        )
         payload: dict[str, object] = {
             "version": 1,
             "generated_at": time.strftime(

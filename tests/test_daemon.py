@@ -1312,3 +1312,31 @@ def test_resources_facet_remote_scm_known_when_pr_recorded():
     assert facet["remote_scm"]["pr_state"] == "open"
     assert facet["remote_scm"]["pr_number"] == "207"
     assert facet["remote_scm"]["note"] is None
+
+
+def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        daemon.claude_usage,
+        "load_or_refresh_snapshot",
+        lambda outbox, cwd=None: {
+            "source": "claude /usage PTY",
+            "quota": {"summary": "session 100% left; week 55% left"},
+        },
+    )
+    monkeypatch.setattr(
+        daemon.claude_status,
+        "load_snapshot",
+        lambda outbox: {
+            "source": "claude result JSON",
+            "spend": {"summary": "$0.0100 this session"},
+            "context_window": {"summary": "95% context left (est)"},
+        },
+    )
+
+    levels, slots = daemon._collect_levels("claude", tmp_path, tmp_path)
+
+    assert slots == {"quota", "spend", "context_window"}
+    assert levels["quota"]["summary"] == "session 100% left; week 55% left"
+    assert levels["spend"]["summary"] == "$0.0100 this session"
+    assert levels["context_window"]["summary"] == "95% context left (est)"
+    assert levels["source"] == "claude /usage PTY + claude result JSON"
