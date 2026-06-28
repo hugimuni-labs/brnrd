@@ -1263,7 +1263,7 @@ def test_resources_facet_quota_known_when_summary_present():
 
 
 def test_resources_facet_level_collector_flips_empty_to_absent():
-    # With a level collector wired (the Claude statusLine), an empty spend /
+    # With a level collector wired (for example Claude result JSON), an empty spend /
     # context-window slot is affirmative-'absent', not unbuilt 'unimplemented'.
     facet = daemon._resources_facet(None, levels_collector=True)
     assert facet["spend"]["status"] == "absent"
@@ -1281,7 +1281,7 @@ def test_resources_facet_level_collector_flips_empty_to_absent():
     assert facet["spend"]["status"] == "known"
     assert facet["spend"]["summary"] == "$0.42 this session"
     assert facet["context_window"]["status"] == "known"
-    # statusLine quota wins over the local snapshot path.
+    # A level-source quota wins over the local snapshot path.
     assert facet["quota"]["status"] == "known"
     assert facet["quota"]["summary"] == "5h 58% left"
 
