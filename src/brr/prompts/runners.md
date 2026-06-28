@@ -56,6 +56,12 @@ gemini:
 ---
 Bundled runner profiles for brr.
 
+Each profile names a **Shell** (the CLI invocation on PATH: `claude`,
+`codex`, `gemini`) and, optionally, a **Core** (the model and its
+cost/quota metadata). A profile with both Shell and Core pinned is one
+selectable Runner. The **resident** inhabits whichever Runner this wake
+was given; `prompts/runners.md` (this file) catalogs what's available.
+
 The runner contract is deliberately abstract: a runner is a process that
 can intelligently operate files in its working directory. brr passes the
 assembled prompt as the final command argument, captures stdout as the
@@ -130,7 +136,7 @@ manage runner profiles for a project, create `.brr/runners.md` with the
 same frontmatter shape; brr reads that before the bundled defaults. The
 legacy `.brr/prompts/runners.md` override is still accepted, but new
 configuration should use `.brr/runners.md` because runner profiles are
-execution-medium data, not prompt templates. For a one-off command,
+Shell+Core execution config, not prompt templates. For a one-off command,
 `runner_cmd` in `.brr/config` remains the smallest override.
 
 Each frontmatter key is a runner name. During detection brr checks
@@ -148,26 +154,28 @@ these command strings.
 
 - `cmd` — base command. brr appends the prompt as the final argument.
 - `binary` — optional PATH binary for alias profiles. When set, the
-  profile is opt-in via `runner=` in `.brr/config` (not auto-detected).
+  profile must be named explicitly via `shell=`/`core=` in `.brr/config`
+  (not auto-detected).
 
-Optional **runner-medium** metadata (read by `runner_media.py`, the
-cost-aware vessel-selection layer) also rides these keys. None is required;
-a profile with none is an uncosted medium the selector uses as-is:
+Optional **Core metadata** (read by `runner_media.py`, the cost-aware
+Core-selection layer) also rides these keys. None is required; a profile
+with none is an uncosted Runner the selector uses as-is:
 
-- `provider` / `model` / `owner` — who runs the vessel (`owner: user` for a
-  local subscription/API key, `owner: brnrd` for a paid relay medium).
+- `provider` / `model` / `owner` — who runs the Core (`owner: user` for a
+  local subscription/API key, `owner: brnrd` for a paid relay Core).
 - `class` — cost class: `economy` < `balanced` < `strong`, or `relay` for a
   paid brnrd-owned fallback (never auto-selected; needs spend-plan consent).
 - `cost_rank` — a coarse, **tunable relative ordering hint** (cheapest first),
   *not* a dollar figure and not a promise of price. The selector sorts by it
   within a class; projects retune it freely in their own `.brr/runners.md`.
-- `quota_source` — which collector reads this medium's quota (`codex-local`
+- `quota_source` — which collector reads this Core's quota (`codex-local`
   reads the session rollout; `claude-local` is terminal spend/context only).
 
 The selection *policy* is brr's, not a table the user hand-tunes: the user
-sets `runner=` (or `auto`) and optional `runner_policy=` (`cost-aware` |
-`fixed`) in `.brr/config`, and the resident picks the cheapest adequate
-available medium from there. See `kb/design-runner-media.md`.
+sets `shell=`/`core=` (or leaves unset for auto) and optional
+`runner_policy=` (`cost-aware` | `fixed`) in `.brr/config`, and the
+resident picks the cheapest adequate available Runner from there. See
+`kb/design-runner-media.md`.
 
 Alias profiles with `binary` are for variants of the same CLI, for example
 `claude-bare-api-only` uses `--bare` and requires `ANTHROPIC_API_KEY`
@@ -184,8 +192,8 @@ Users can override `cmd` per-repo by setting `runner_cmd` in
 `.brr/config`. The same stdout capture rules apply, and `{prompt}` is
 substituted before exec.
 
-Quota and price signals are metadata about a runner medium, not part of
-the command string. Today brr reads them from `runner.quota.*`,
-`BRR_RUNNER_QUOTA_*`, or `.brr/runner-quota.json`; a fuller runner-medium
+Quota and price signals are metadata about a Core, not part of the
+command string. Today brr reads them from `runner.quota.*`,
+`BRR_RUNNER_QUOTA_*`, or `.brr/runner-quota.json`; a fuller Runner/Core
 registry can grow from this contract without making built-in commands
 pretend to know provider billing.

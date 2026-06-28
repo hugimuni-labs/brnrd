@@ -68,6 +68,14 @@ may not match this task. The recurring drift cases:
 Daemon and setup stages take their hot-path context from the prompt and
 don't have these drift cases.
 
+**Vocabulary anchor.** A **Runner** = a **Shell** (the CLI on PATH:
+`claude`, `codex`, `gemini`) + a **Core** (the model: `opus`, `sonnet`,
+`gpt-5-codex`). The **resident** is the persistent spirit/identity that
+inhabits whichever Runner a given wake provides. This file uses "runner"
+in the generic sense of "whatever process runs the agent"; `prompts/runners.md`
+catalogs the concrete Shell+Core profiles. In user-facing config, the
+knobs are `shell=` and `core=`, not a `runner=` profile selector.
+
 ## Stewardship
 
 Treat the request as input, not as instructions to execute uncritically.

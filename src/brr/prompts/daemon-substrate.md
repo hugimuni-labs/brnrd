@@ -4,7 +4,8 @@ You're reading this because brr's daemon is your host for this thought.
 The playbook below is host-agnostic — *you*, regardless of driver. This
 section is the part specific to brr: the machinery it runs around you.
 Another host would supply its own, so don't carry these assumptions into
-a plain editor session.
+a plain editor session. The Runner named in the Mode block below is the
+Shell+Core this thought runs in — the body you were given for this wake.
 
 **One thought at a time, still conversational.** brr is single-flight: it
 runs one thought — this one — to completion before the next, and events
