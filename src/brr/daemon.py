@@ -1019,6 +1019,9 @@ def _run_worker(
             # + portal-state the next boundary reads back for injection. Lighter
             # than _emit_heartbeat — no heartbeat packet / presence ping, so
             # a tool-boundary flush doesn't spam the chat card.
+            # refresh_levels=False: the event-driven flush must never block on the
+            # ~18s PTY scrape for Claude usage. The heartbeat (every 30s) owns
+            # the refresh; the flush only reads the on-disk cached snapshot.
             _drain_outbox(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
                 stats=output_stats,
@@ -1041,6 +1044,7 @@ def _run_worker(
                 start_monotonic=run_started_monotonic,
                 work_dir=run_root,
                 quota_summary=quota_summary,
+                refresh_levels=False,
             )
 
         result = _invoke_with_heartbeat(
@@ -1605,7 +1609,11 @@ def _merge_level_snapshots(
 
 
 def _collect_levels(
-    runner_name: str | None, outbox_dir: Path | None, work_dir: Path | None = None
+    runner_name: str | None,
+    outbox_dir: Path | None,
+    work_dir: Path | None = None,
+    *,
+    refresh: bool = True,
 ) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
     """Pick the level snapshot + wired-slot set for *runner_name*'s Shell.
 
@@ -1622,6 +1630,12 @@ def _collect_levels(
       accounting. The TUI scrape is intentionally throttled; hooks read the
       portal-state snapshot, they do not run the scrape themselves.
 
+    When *refresh* is ``False`` only the on-disk cache is read — the
+    blocking ~18s PTY scrape is skipped entirely. The heartbeat path passes
+    ``refresh=True`` (the default) so the cache stays current on the 30s
+    cadence; the event-driven flush path passes ``refresh=False`` so it
+    never stalls a boundary reply waiting for a stale-cache refresh.
+
     Returns ``(levels, wired_slots)`` for :func:`facets.build`. ``wired_slots``
     is the set of level slots whose collector exists (so an empty slot reads
     ``absent`` not ``unimplemented``); Shells with no collector return ``False``.
@@ -1629,9 +1643,12 @@ def _collect_levels(
     if codex_status.supported(runner_name):
         return codex_status.load_levels(), frozenset(codex_status.COLLECTED_SLOTS)
     if claude_status.supported(runner_name):
-        usage_levels = claude_usage.load_or_refresh_snapshot(
-            outbox_dir, cwd=work_dir
-        )
+        if refresh:
+            usage_levels = claude_usage.load_or_refresh_snapshot(
+                outbox_dir, cwd=work_dir
+            )
+        else:
+            usage_levels = claude_usage.load_snapshot(outbox_dir)
         result_levels = claude_status.load_snapshot(outbox_dir)
         return _merge_level_snapshots(usage_levels, result_levels), frozenset(
             claude_usage.COLLECTED_SLOTS | claude_status.COLLECTED_SLOTS
@@ -1732,6 +1749,7 @@ def _write_live_portal_state(
     start_monotonic: float | None = None,
     work_dir: Path | None = None,
     quota_summary: str | None = None,
+    refresh_levels: bool = True,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -1740,6 +1758,11 @@ def _write_live_portal_state(
     resident: input, delivery/card posture, budget state, and local SCM
     posture (unpushed commits / modified files) in one daemon-owned file
     refreshed on the heartbeat cadence.
+
+    *refresh_levels* controls whether the Claude usage scrape may run:
+    ``True`` (default, heartbeat path) allows a cache-miss to trigger the
+    blocking PTY probe; ``False`` (flush path) only reads the on-disk
+    cache, keeping the event-driven flush cheap.
     """
     if not outbox_dir:
         return None
@@ -1754,7 +1777,7 @@ def _write_live_portal_state(
             if start_monotonic is not None else None
         )
         run_levels, run_level_slots = _collect_levels(
-            runner_name, outbox_dir, work_dir
+            runner_name, outbox_dir, work_dir, refresh=refresh_levels
         )
         payload: dict[str, object] = {
             "version": 1,
