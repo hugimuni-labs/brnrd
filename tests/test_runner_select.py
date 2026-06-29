@@ -128,6 +128,123 @@ def test_select_override_for_relay_is_honoured():
     assert rs.select_runner(runners, override="relay").name == "relay"
 
 
+def test_automatic_fallback_picks_same_or_cheaper_different_domain():
+    runners = [
+        _profile(
+            "codex-full",
+            provider="openai",
+            quota_source="codex-local",
+            **{"class": "balanced", "cost_rank": 35},
+        ),
+        _profile(
+            "codex-mini",
+            provider="openai",
+            quota_source="codex-local",
+            **{"class": "economy", "cost_rank": 20},
+        ),
+        _profile(
+            "claude-haiku",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "economy", "cost_rank": 10},
+        ),
+        _profile(
+            "claude-opus",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "strong", "cost_rank": 50},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="codex-full",
+        failure_kind="quota_exhausted",
+        tried=("codex-full",),
+    )
+
+    assert chosen is not None
+    assert chosen.name == "claude-haiku"
+
+
+def test_automatic_fallback_does_not_escalate_cost_or_pick_relay():
+    runners = [
+        _profile(
+            "codex-mini",
+            provider="openai",
+            quota_source="codex-local",
+            **{"class": "economy", "cost_rank": 20},
+        ),
+        _profile(
+            "claude-opus",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "strong", "cost_rank": 50},
+        ),
+        _profile(
+            "brnrd-codex",
+            provider="openai",
+            owner="brnrd",
+            **{"class": "relay", "cost_rank": 1},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="codex-mini",
+        failure_kind="quota_exhausted",
+        tried=("codex-mini",),
+    )
+
+    assert chosen is None
+
+
+def test_automatic_provider_fallback_requires_different_provider():
+    runners = [
+        _profile(
+            "claude-api",
+            provider="anthropic",
+            **{"class": "balanced", "cost_rank": 30},
+        ),
+        _profile(
+            "claude-subscription",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "economy", "cost_rank": 10},
+        ),
+        _profile(
+            "codex-mini",
+            provider="openai",
+            quota_source="codex-local",
+            **{"class": "economy", "cost_rank": 20},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="claude-api",
+        failure_kind="provider_error",
+        tried=("claude-api",),
+    )
+
+    assert chosen is not None
+    assert chosen.name == "codex-mini"
+
+
+def test_automatic_fallback_ignores_non_operational_failures():
+    runners = [
+        _profile("codex", provider="openai", **{"class": "balanced"}),
+        _profile("claude", provider="anthropic", **{"class": "balanced"}),
+    ]
+
+    assert rs.automatic_fallback_runner(
+        runners,
+        current="codex",
+        failure_kind="runner_error",
+        tried=("codex",),
+    ) is None
+
+
 def test_fixed_policy_picks_cheapest_local_without_class_logic():
     runners = [
         _profile("strong", **{"class": "strong", "cost_rank": 50}),
