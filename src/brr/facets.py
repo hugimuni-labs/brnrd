@@ -139,6 +139,7 @@ def _runner_block(
     runner_name: str | None,
     runner_meta: "dict[str, object] | None",
     quality_escalation: "dict[str, object] | None" = None,
+    relay_consent: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the ``resources.runner`` governance block.
 
@@ -152,6 +153,10 @@ def _runner_block(
     — brr resolves the runner before the run starts, so it is always
     determined. ``status: absent`` when nothing is resolved yet (pre-run
     or test contexts).
+
+    ``relay_consent`` is optional and carries spending plan details when
+    relay fallback is being offered: reason, model, provider, estimated costs,
+    per-run cap, relay balance, and consent state (pending/approved/denied/capped).
     """
     if not runner_name:
         return {"status": ABSENT, "summary": None, "note": "no runner resolved yet"}
@@ -175,6 +180,8 @@ def _runner_block(
     }
     if quality_escalation:
         block["quality_escalation"] = quality_escalation
+    if relay_consent:
+        block["relay_consent"] = relay_consent
     return block
 
 
@@ -188,6 +195,7 @@ def build(
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
+    relay_consent: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -213,6 +221,9 @@ def build(
       ``design-runner-cores.md``).
     - ``quality_escalation`` — deterministic stronger local Runner metadata for
       a resident-authored ``respawn: true`` / ``quality: escalate`` handoff.
+    - ``relay_consent`` — spending plan details for brnrd relay fallback when
+      local quota is exhausted: reason, model, provider, costs, cap, balance,
+      and consent state (pending/approved/denied/capped).
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -264,7 +275,7 @@ def build(
     }
 
     return {
-        "runner": _runner_block(runner_name, runner_meta, quality_escalation),
+        "runner": _runner_block(runner_name, runner_meta, quality_escalation, relay_consent),
         "quota": quota_facet,
         "spend": spend_facet,
         "context_window": context_facet,
