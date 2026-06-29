@@ -911,6 +911,14 @@ dive-in map) and are stable until something contradicts them.
   agent-owned `gate: forge`, and the 2026-06-21 correction made that route
   generic for explicit PR handoffs instead of diffense-only; push/reply
   ownership remains open.
+- [Execution-model coherence + context-shape review, 2026-06-29](review-execution-model-coherence-2026-06-29.md)
+  — *handoff*. Reviewed the `brr/initial-context-reweave` runner/Core/respawn
+  diff (10k lines) vs main: engine is sound and plan-consistent, but shipped
+  without a control surface — envelope invisible, two parallel Core catalogs,
+  relay-consent loop open, card overwrites its attempt history, no plan↔diff
+  traceability. Frames the reshape (envelope facet, catalog collapse, per-run
+  record, plain-language config, cross-run ledger) and the daemon-per-account
+  fork for a next implementing wake. Companion to `plan-repo-gardening.md`.
 
 ## Research
 
