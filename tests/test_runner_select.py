@@ -37,6 +37,9 @@ def test_runner_from_profile_parses_metadata():
             "class": "balanced",
             "cost_rank": "25",
             "quota_source": "codex-local",
+            "capability_score": "0.72",
+            "capability_source": "benchmark-cache",
+            "capability_freshness": "2026-06-29",
         },
     )
     assert r.provider == "openai"
@@ -44,6 +47,9 @@ def test_runner_from_profile_parses_metadata():
     assert r.cost_rank == 25  # coerced from string
     assert r.quota_source == "codex-local"
     assert r.hooks == "codex"
+    assert r.capability_score == 0.72
+    assert r.capability_source == "benchmark-cache"
+    assert r.capability_freshness == "2026-06-29"
 
 
 def test_relay_profile_detected_by_owner_or_class():

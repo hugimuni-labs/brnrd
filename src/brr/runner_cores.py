@@ -16,6 +16,12 @@ to :func:`runner_select.select_runner`. The daemon resolver uses
 ``generated_profile_entries()`` to turn the same registry rows into concrete
 profiles with model flags inserted into the Shell command.
 
+Capability metadata is layered on top from the packaged
+``runner-capabilities.json`` cache. Hand-set ``class`` on a Core entry wins;
+when it is absent, the capability cache may derive economy/balanced/strong from
+benchmark scores. Empty benchmark scores stay empty rather than inventing a
+capability claim.
+
 **TTL / staleness:** the registry is static within a brr release. Operators
 who need to add a model before the next brr release add an entry to their
 project ``runners.md`` — those profile records override and extend this
@@ -29,7 +35,7 @@ import shlex
 import shutil
 from typing import Any
 
-from . import runner_select
+from . import runner_capabilities, runner_select
 
 # ---------------------------------------------------------------------------
 # Bundled Core registry
@@ -150,14 +156,18 @@ def available_cores(
         shell = str(entry.get("shell") or name).strip()
         if not shell or shutil.which(shell) is None:
             continue
+        cap_meta = runner_capabilities.metadata_for_model(entry.get("model"))
         profile = runner_select.RunnerProfile(
             name=name,
             profile=shell,  # invoke the base Shell; Core is in cmd/model
             model=_str(entry.get("model")),
             provider=_str(entry.get("provider")),
             owner="user",
-            cost_class=_str(entry.get("class")),
+            cost_class=_class_for_entry(entry),
             cost_rank=_int(entry.get("cost_rank")),
+            capability_score=_float(cap_meta.get("capability_score")),
+            capability_source=_str(cap_meta.get("capability_source")),
+            capability_freshness=_str(cap_meta.get("capability_freshness")),
         )
         if profile.is_relay:
             continue
@@ -175,6 +185,7 @@ def cores_for_shell(shell_name: str) -> list[runner_select.RunnerProfile]:
         declared_shell = str(entry.get("shell") or "").strip().lower()
         if declared_shell != shell_lower:
             continue
+        cap_meta = runner_capabilities.metadata_for_model(entry.get("model"))
         out.append(
             runner_select.RunnerProfile(
                 name=name,
@@ -182,8 +193,11 @@ def cores_for_shell(shell_name: str) -> list[runner_select.RunnerProfile]:
                 model=_str(entry.get("model")),
                 provider=_str(entry.get("provider")),
                 owner="user",
-                cost_class=_str(entry.get("class")),
+                cost_class=_class_for_entry(entry),
                 cost_rank=_int(entry.get("cost_rank")),
+                capability_score=_float(cap_meta.get("capability_score")),
+                capability_source=_str(cap_meta.get("capability_source")),
+                capability_freshness=_str(cap_meta.get("capability_freshness")),
             )
         )
     out.sort(key=lambda p: (p.rank, p.name))
@@ -226,11 +240,12 @@ def generated_profile_entries(
             "model": model,
             "provider": _str(entry.get("provider")) or _str(base.get("provider")),
             "owner": _str(entry.get("owner")) or _str(base.get("owner")) or "user",
-            "class": _str(entry.get("class")),
+            "class": _class_for_entry(entry),
             "cost_rank": _int(entry.get("cost_rank")),
             "freshness_date": _str(entry.get("freshness_date")),
             "generated_core": True,
         }
+        generated.update(runner_capabilities.metadata_for_model(model))
         hooks = _str(entry.get("hooks")) or _str(base.get("hooks"))
         if hooks:
             generated["hooks"] = hooks
@@ -260,6 +275,21 @@ def _int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _class_for_entry(entry: dict[str, Any]) -> str | None:
+    return _str(entry.get("class")) or runner_capabilities.derived_cost_class(
+        _str(entry.get("model"))
+    )
 
 
 def _base_profile_for_shell(
