@@ -58,6 +58,15 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _as_str(value: Any) -> str | None:
     if value is None:
         return None
@@ -88,6 +97,9 @@ class RunnerProfile:
     billing: str | None = None
     consent: str | None = None
     cmd: str | None = None
+    capability_score: float | None = None
+    capability_source: str | None = None
+    capability_freshness: str | None = None
 
     @property
     def is_relay(self) -> bool:
@@ -134,6 +146,9 @@ def runner_from_profile(name: str, profile: dict[str, Any] | None) -> RunnerProf
         billing=_as_str(profile.get("billing")),
         consent=_as_str(profile.get("consent")),
         cmd=_as_str(profile.get("cmd")),
+        capability_score=_as_float(profile.get("capability_score")),
+        capability_source=_as_str(profile.get("capability_source")),
+        capability_freshness=_as_str(profile.get("capability_freshness")),
     )
 
 

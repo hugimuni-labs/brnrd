@@ -135,3 +135,68 @@ def test_generated_profile_entries_preserve_declared_override():
         }
     )
     assert "claude-haiku" not in profiles
+
+
+def test_generated_profile_entries_derive_class_when_missing(monkeypatch):
+    monkeypatch.setattr(
+        runner_cores,
+        "_BUNDLED_CORES",
+        {
+            "claude-preview": {
+                "shell": "claude",
+                "model": "claude-preview-x",
+                "cost_rank": 42,
+                "freshness_date": "2099-01-01",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        runner_cores.runner_capabilities,
+        "derived_cost_class",
+        lambda model: "strong" if model == "claude-preview-x" else None,
+    )
+    monkeypatch.setattr(
+        runner_cores.runner_capabilities,
+        "metadata_for_model",
+        lambda model: {
+            "capability_score": 0.91,
+            "capability_source": "test-cache",
+            "capability_freshness": "2099-01-01",
+        },
+    )
+
+    profiles = runner_cores.generated_profile_entries(
+        {"claude": {"cmd": "claude --print"}}
+    )
+
+    preview = profiles["claude-preview"]
+    assert preview["class"] == "strong"
+    assert preview["capability_score"] == 0.91
+    assert preview["capability_source"] == "test-cache"
+
+
+def test_generated_profile_entries_keep_hand_set_class(monkeypatch):
+    monkeypatch.setattr(
+        runner_cores,
+        "_BUNDLED_CORES",
+        {
+            "claude-preview": {
+                "shell": "claude",
+                "model": "claude-preview-x",
+                "class": "economy",
+                "cost_rank": 42,
+                "freshness_date": "2099-01-01",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        runner_cores.runner_capabilities,
+        "derived_cost_class",
+        lambda model: "strong",
+    )
+
+    profiles = runner_cores.generated_profile_entries(
+        {"claude": {"cmd": "claude --print"}}
+    )
+
+    assert profiles["claude-preview"]["class"] == "economy"
