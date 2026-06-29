@@ -959,6 +959,7 @@ def _run_worker(
     runner_meta, quota_summary, runner_env, extra_runner_args = _runner_runtime(
         runner_name
     )
+    runner_catalog = runner.available_runner_catalog(repo_root, selected=runner_name)
     _record_task_runner(task, runner_name, runner_meta)
     task.save(runs_dir)
     _write_live_portal_state(
@@ -969,6 +970,7 @@ def _run_worker(
         phase="preparing",
         runner_name=runner_name,
         runner_meta=runner_meta,
+        runner_catalog=runner_catalog,
         quality_escalation=quality_escalation,
         budget_seconds=budget_seconds,
         hard_cap_seconds=hard_cap_seconds,
@@ -1030,6 +1032,7 @@ def _run_worker(
             budget_seconds=budget_seconds,
             runner_medium=runner_name,
             runner_quota=quota_summary,
+            runner_catalog=runner_catalog,
             diffense=prompt_diffense,
         )
         if attempt == 1:
@@ -1053,6 +1056,7 @@ def _run_worker(
             attempt=attempt,
             runner_name=runner_name,
             runner_meta=runner_meta,
+            runner_catalog=runner_catalog,
             quality_escalation=quality_escalation,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
@@ -1084,6 +1088,7 @@ def _run_worker(
                 attempt=attempt,
                 runner_name=runner_name,
                 runner_meta=runner_meta,
+                runner_catalog=runner_catalog,
                 quality_escalation=quality_escalation,
                 budget_seconds=budget_seconds,
                 hard_cap_seconds=hard_cap_seconds,
@@ -1131,6 +1136,7 @@ def _run_worker(
                 attempt=attempt,
                 runner_name=runner_name,
                 runner_meta=runner_meta,
+                runner_catalog=runner_catalog,
                 quality_escalation=quality_escalation,
                 budget_seconds=budget_seconds,
                 hard_cap_seconds=hard_cap_seconds,
@@ -1186,6 +1192,7 @@ def _run_worker(
             attempt=attempt,
             runner_name=runner_name,
             runner_meta=runner_meta,
+            runner_catalog=runner_catalog,
             quality_escalation=quality_escalation,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
@@ -1334,6 +1341,9 @@ def _run_worker(
             runner_name = fallback_runner_name
             runner_meta, quota_summary, runner_env, extra_runner_args = (
                 _runner_runtime(runner_name)
+            )
+            runner_catalog = runner.available_runner_catalog(
+                repo_root, selected=runner_name,
             )
             quality_escalation = _quality_escalation_meta(repo_root, runner_name)
             _record_task_runner(task, runner_name, runner_meta)
@@ -1846,6 +1856,7 @@ def _resources_facet(
     pr_number: str | None = None,
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
+    runner_catalog: "list[dict[str, object]] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
@@ -1866,6 +1877,7 @@ def _resources_facet(
         pr_number=pr_number,
         runner_name=runner_name,
         runner_meta=runner_meta,
+        runner_catalog=runner_catalog,
         quality_escalation=quality_escalation,
         relay_consent=relay_consent,
     )
@@ -1931,6 +1943,7 @@ def _write_live_portal_state(
     attempt: int | None = None,
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
+    runner_catalog: "list[dict[str, object]] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
     budget_seconds: float | None = None,
@@ -2034,6 +2047,7 @@ def _write_live_portal_state(
                 pr_number=task.meta.get("github_pr_number"),
                 runner_name=runner_name,
                 runner_meta=runner_meta,
+                runner_catalog=runner_catalog,
                 quality_escalation=quality_escalation,
                 relay_consent=relay_consent,
             ),

@@ -246,6 +246,41 @@ def test_resolve_runner_auto_prefers_generated_core_profile(tmp_path, monkeypatc
     assert resolve_runner(tmp_path) == "claude-haiku"
 
 
+def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkeypatch):
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "codex": {
+                "cmd": "codex exec",
+                "hooks": "codex",
+                "class": "balanced",
+                "cost_rank": 25,
+                "quota_source": "codex-local",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/codex" if name == "codex" else None,
+    )
+
+    catalog = runner_mod.available_runner_catalog(
+        tmp_path, selected="codex-mini",
+    )
+    mini = next(item for item in catalog if item["name"] == "codex-mini")
+
+    assert mini["selected"] is True
+    assert mini["shell"] == "codex"
+    assert mini["model"] == "gpt-5.4-mini"
+    assert mini["class"] == "economy"
+    assert mini["quota_source"] == "codex-local"
+    assert mini["availability"] == "available"
+    assert "cmd" not in mini
+
+
 def test_resolve_runner_core_pin_matches_generated_short_alias(tmp_path, monkeypatch):
     """core=haiku can select the generated claude-haiku profile."""
     (tmp_path / ".brr").mkdir()

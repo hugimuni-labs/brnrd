@@ -140,6 +140,7 @@ def _runner_block(
     runner_meta: "dict[str, object] | None",
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
+    runner_catalog: "list[dict[str, object]] | None" = None,
 ) -> dict[str, object]:
     """Build the ``resources.runner`` governance block.
 
@@ -158,10 +159,16 @@ def _runner_block(
     relay fallback is being offered: reason, model, provider, estimated costs,
     per-run cap, relay balance, and consent state (pending/approved/denied/capped).
     """
+    catalog = list(runner_catalog or [])
     if not runner_name:
-        return {"status": ABSENT, "summary": None, "note": "no runner resolved yet"}
+        block: dict[str, object] = {
+            "status": ABSENT, "summary": None, "note": "no runner resolved yet",
+        }
+        if catalog:
+            block["catalog"] = catalog
+        return block
     meta = runner_meta or {}
-    block = {
+    block: dict[str, object] = {
         "status": KNOWN,
         "name": runner_name,
         "model": str(meta.get("model") or "").strip() or None,
@@ -182,6 +189,8 @@ def _runner_block(
         block["quality_escalation"] = quality_escalation
     if relay_consent:
         block["relay_consent"] = relay_consent
+    if catalog:
+        block["catalog"] = catalog
     return block
 
 
@@ -194,6 +203,7 @@ def build(
     pr_number: str | None = None,
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
+    runner_catalog: "list[dict[str, object]] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
@@ -219,6 +229,9 @@ def build(
       profile dict carries model, class, provider, etc. Renders as
       ``resources.runner`` for governance visibility (step 3,
       ``design-runner-cores.md``).
+    - ``runner_catalog`` — selectable local Runner/Core catalog, built from the
+      same profile view as selection and marked with ``selected`` on the active
+      profile.
     - ``quality_escalation`` — deterministic stronger local Runner metadata for
       a resident-authored ``respawn: true`` / ``quality: escalate`` handoff.
     - ``relay_consent`` — spending plan details for brnrd relay fallback when
@@ -275,7 +288,13 @@ def build(
     }
 
     return {
-        "runner": _runner_block(runner_name, runner_meta, quality_escalation, relay_consent),
+        "runner": _runner_block(
+            runner_name,
+            runner_meta,
+            quality_escalation,
+            relay_consent,
+            runner_catalog,
+        ),
         "quota": quota_facet,
         "spend": spend_facet,
         "context_window": context_facet,
