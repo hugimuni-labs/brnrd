@@ -8943,3 +8943,51 @@ The outbox respawn parser accepts `respawn: true` with `quality: escalate` /
 event for the same conversation with `respawn_quality=strong`. `portal-state.json`
 exposes the candidate as `resources.runner.quality_escalation`, and the portal
 manual / runner prompt docs now describe the low-cognitive-load handoff.
+
+## [2026-06-29] implement | brnrd relay spend-plan and consent gate (slices 1–3)
+
+Continued `plan-repo-gardening.md` Task 2 on `brr/initial-context-reweave`.
+
+When a run exhausts local LLM quota, brnrd relay offers a paid fallback with a
+spending plan for user approval before spend. Implemented slices 1–3 of
+`plan-relay-spend-consent.md`:
+
+**Slice 1: Spending plan data model** (`spending_plan.py`, 200+ lines):
+- `SpendingPlan` dataclass: reason, model, provider, token estimates, costs,
+  balance, cap, consent state
+- `calculate_spending_plan()`: estimate provider cost + 12% relay service fee
+  from token counts and per-token rates
+- `format_spending_plan_message()`: human-friendly approval prompt
+- Helpers: `is_within_cap()`, `has_sufficient_balance()` for cap/balance checks
+- Full serialization to dict for JSON portal emission
+
+**Slice 2: Relay runner selection** (updates to `runner_select.py`):
+- `relay_runners()`: list all brnrd-owned relay runners, sorted by cost
+- `best_relay_runner()`: pick the best relay candidate, optionally matching a
+  provider
+- Extended `RespawnRequest`: add `relay_consent` field (pending/approved/denied/capped)
+
+**Slice 3: Daemon fallback → relay check** (updates to `daemon.py`):
+- After local automatic fallback exhausts, check for available relay runners
+- If relay exists and failure is quota/auth/provider, emit `attempt_failed` with
+  `needs_relay_consent=true` + spending plan details
+- Payload includes relay candidate summary and plan (cost, cap, balance) for
+  resident to read
+- Hard failure deferred; resident responds via respawn request with
+  `relay_consent=approved` or denies
+
+**Tests** (8 passing test cases):
+- Spending plan creation, cost calculation, fee calculation (12%)
+- Cap and balance checks (both with/without sufficient info)
+- Handling of unknown rates (None gracefully)
+- Serialization and message formatting
+
+**Open slices (deferred to next wake)**:
+4. Portal exposure: inject relay_consent block into `portal-state.json`
+5. Resident respawn consumer: when `needs_relay_consent=true`, resident
+   approves and retries
+6. Wallet balance read: hook brnrd account for relay balance
+7. Audit and billing: ledger line items, cap enforcement
+
+**Companions**: `decision-llm-relay.md` (pricing), `design-runner-cores.md`
+(fallback chain), `plan-relay-spend-consent.md` (this plan).
