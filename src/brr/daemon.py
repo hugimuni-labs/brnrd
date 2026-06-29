@@ -545,8 +545,8 @@ def _run_worker(
     # Shell/Core's metadata (model, class, provider, hooks) in the
     # resources.runner governance block. The profile cache is already
     # warm from resolve_runner, so this is a dict lookup, not I/O.
-    runner_meta: dict[str, object] | None = runner._load_profiles(repo_root).get(
-        runner_name
+    runner_meta: dict[str, object] | None = runner.profile_metadata(
+        runner_name, repo_root
     )
     failure_defer_seconds = float(
         cfg.get(

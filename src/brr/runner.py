@@ -318,6 +318,32 @@ def _load_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
     return _profiles_cache
 
 
+def _selection_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Declared profiles plus generated bundled Core profiles.
+
+    ``_load_profiles()`` is the active ``runners.md`` source. This view keeps
+    those entries authoritative, then adds invokable profiles derived from the
+    bundled Core registry for any Shell declared in that source. The resolver and
+    command builder use this view so ``core=haiku`` can select ``claude-haiku``
+    even when ``runners.md`` only declares the base ``claude`` Shell.
+    """
+    declared = dict(_load_profiles(repo_root))
+    from . import runner_cores
+
+    generated = runner_cores.generated_profile_entries(declared)
+    merged = dict(generated)
+    merged.update(declared)
+    return merged
+
+
+def profile_metadata(
+    name: str, repo_root: Path | None = None
+) -> dict[str, Any] | None:
+    """Return metadata for a declared or generated runner profile."""
+    profile = _selection_profiles(repo_root).get(name)
+    return dict(profile) if profile is not None else None
+
+
 def _profile_binary(name: str, profiles: dict[str, dict[str, Any]]) -> str:
     profile = profiles.get(name) or {}
     return str(profile.get("binary") or name)
@@ -337,7 +363,7 @@ def profile_hooks_flavour(
     config present), so a caller wires hooks only after confirming the
     flavour here *and* passing that precheck.
     """
-    profile = _load_profiles(repo_root).get(name) or {}
+    profile = _selection_profiles(repo_root).get(name) or {}
     flavour = profile.get("hooks")
     if not flavour:
         return None
@@ -387,7 +413,7 @@ def resolve_runner(repo_root: Path) -> str:
     from . import runner_select
 
     cfg = conf.load_config(repo_root)
-    profiles = _load_profiles(repo_root)
+    profiles = _selection_profiles(repo_root)
 
     # shell= is the new explicit pin. When set it is treated as an exact
     # profile override — no cost-aware movement, no dispatcher hop.
@@ -408,29 +434,57 @@ def resolve_runner(repo_root: Path) -> str:
         )
 
     # Cost-aware selection: build the available-profile set, optionally
-    # filtered by core=, and let select_runner pick the cheapest.
-    all_profiles = [
-        runner_select.runner_from_profile(name, profiles[name])
-        for name in profiles
-        if _runner_available(name, profiles)
-    ]
+    # filtered by core=, and let select_runner pick the cheapest. Model-less
+    # base Shell profiles are kept for explicit shell= pins, but they should
+    # not beat generated Core profiles in auto mode when the registry knows
+    # concrete Cores for that Shell.
+    generated_shells = {
+        str(profile.get("shell") or profile.get("binary") or "").strip()
+        for profile in profiles.values()
+        if isinstance(profile, dict) and profile.get("generated_core")
+    }
+    all_profiles = []
+    for name, profile in profiles.items():
+        if not _runner_available(name, profiles):
+            continue
+        shell = str(profile.get("binary") or profile.get("shell") or name).strip()
+        if (
+            not core_pin
+            and shell in generated_shells
+            and not str(profile.get("model") or "").strip()
+        ):
+            continue
+        all_profiles.append(runner_select.runner_from_profile(name, profile))
     if core_pin:
         # Filter to profiles whose declared model matches core_pin (exact
-        # or prefix, case-insensitive), then fall back to all if none match
-        # so an unrecognised core= doesn't silently kill all options.
+        # or prefix, case-insensitive), plus short profile aliases like
+        # ``core=haiku`` → ``claude-haiku``. Fall back to all if none match so
+        # an unrecognised core= doesn't silently kill all options.
         core_lower = core_pin.lower()
+
+        def _core_matches(profile: runner_select.RunnerProfile) -> bool:
+            model = (profile.model or "").lower()
+            name = profile.name.lower()
+            return (
+                bool(model)
+                and (model == core_lower or model.startswith(core_lower))
+            ) or name == core_lower or name.endswith(f"-{core_lower}")
+
         filtered = [
             p for p in all_profiles
-            if p.model and (
-                p.model.lower() == core_lower
-                or p.model.lower().startswith(core_lower)
-            )
+            if _core_matches(p)
         ]
         candidates = filtered or all_profiles
     else:
         candidates = all_profiles
 
-    chosen = runner_select.select_runner(candidates)
+    policy = str(
+        cfg.get("runner_policy", runner_select.POLICY_COST_AWARE)
+    ).strip() or runner_select.POLICY_COST_AWARE
+    if policy not in {runner_select.POLICY_COST_AWARE, runner_select.POLICY_FIXED}:
+        policy = runner_select.POLICY_COST_AWARE
+
+    chosen = runner_select.select_runner(candidates, policy=policy)
     if chosen:
         return chosen.profile
 
@@ -470,7 +524,7 @@ def _build_cmd(
             return _replace_placeholders(custom)
         return _replace_placeholders(shlex.split(str(custom)))
 
-    profile = _load_profiles(repo_root).get(runner_name)
+    profile = _selection_profiles(repo_root).get(runner_name)
     if profile:
         cmd = shlex.split(str(profile.get("cmd", runner_name)))
         cmd.extend(extra)

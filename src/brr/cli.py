@@ -287,7 +287,7 @@ def cmd_docs(args):
     if text is None:
         print(f"[brr docs] unknown topic: {args.topic}", file=sys.stderr)
         print(docs.format_listing(repo_root), file=sys.stderr)
-        return 2
+        return 1
     print(text)
     return 0
 
@@ -457,6 +457,7 @@ def cmd_runners_list(args):
             "cost_rank": entry.get("cost_rank"),
             "freshness_date": str(entry.get("freshness_date") or "").strip() or None,
             "on_path": on_path,
+            "is_current": name == current_runner,
         })
 
     if getattr(args, "json", False):
@@ -517,7 +518,7 @@ def cmd_runners_list(args):
         for row in bundled_rows:
             avail = "✓" if row.get("on_path") else "✗ (not on PATH)"
             parts = [
-                f"  {avail}  {row['name']:<20}",
+                f"  {_mark(row)} {avail}  {row['name']:<20}",
                 f"{row['shell']:<8}",
                 f"{row['model'] or '—':<30}",
                 f"{row['class'] or '—':<10}",
