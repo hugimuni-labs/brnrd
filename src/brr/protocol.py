@@ -63,7 +63,7 @@ def frontmatter_body(text: str) -> str:
 # Routing selectors that may lead an outbox message's frontmatter. Used
 # only to gate the lenient (missing-opening-fence) parse below — see
 # ``parse_outbox_message``.
-_OUTBOX_ROUTING_KEYS = ("event", "gate")
+_OUTBOX_ROUTING_KEYS = ("event", "gate", "respawn")
 
 
 def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
@@ -77,7 +77,8 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
       fence*, terminated by a ``---`` line: e.g. ``event: <id>\\n---\\nbody``.
 
     The lenient shape exists because the resident reaches for it
-    naturally — the delivery contract names ``event:`` / ``gate:`` as
+    naturally — the delivery contract names ``event:`` / ``gate:`` /
+    ``respawn:`` as
     "frontmatter" without showing the fences, and writing the selector
     line then a ``---`` separator reads as obviously correct. Under the
     strict parser that silently failed: the routing was dropped, the
@@ -88,7 +89,7 @@ def parse_outbox_message(text: str) -> tuple[dict[str, Any], str]:
 
     To avoid mistaking a plain message for routing, the lenient path
     engages **only** when the first non-empty line is a recognised
-    routing selector (``event:`` / ``gate:``) *and* a closing ``---``
+    routing selector (``event:`` / ``gate:`` / ``respawn:``) *and* a closing ``---``
     line follows in the contiguous leading key-block. A normal message
     that merely contains ``---`` dividers (a PLAN, say) is never touched.
     Misparses degrade safely: the drain drops an unknown ``event:`` target
