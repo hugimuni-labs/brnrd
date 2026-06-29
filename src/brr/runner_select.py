@@ -325,11 +325,80 @@ def automatic_fallback_runner(
     return sorted(candidates, key=_by_cost)[0]
 
 
+def quality_escalation_runner(
+    runners: list[RunnerProfile],
+    *,
+    current: str,
+    target_class: str | None = STRONG,
+    tried: list[str] | tuple[str, ...] = (),
+) -> RunnerProfile | None:
+    """Pick a stronger local Runner for a resident-authored quality escalation.
+
+    This is deliberately separate from automatic fallback. Operational fallback
+    recovers from quota/auth/provider failures without spending more; quality
+    escalation is an explicit resident-authored handoff after reading the repo
+    and deciding the task wants a stronger Core. It therefore may move up the
+    local cost ladder, but still excludes relay profiles until the spend-consent
+    slice exists.
+
+    The default target is ``strong`` because the design reserves strong local
+    Cores for explicit asks, repeated quality failure, or resident-authored
+    escalation. If no target-class candidate exists, fall back to the cheapest
+    strictly stronger local candidate.
+    """
+    current_profile = _find_runner(runners, current)
+    if current_profile is None:
+        return None
+
+    tried_names = {str(name) for name in tried if str(name).strip()}
+    tried_names.add(current_profile.name)
+    tried_names.add(current_profile.profile)
+
+    local = [
+        runner for runner in runners
+        if (
+            not runner.is_relay
+            and runner.name not in tried_names
+            and runner.profile not in tried_names
+        )
+    ]
+    if not local:
+        return None
+
+    current_rank = _LOCAL_CLASS_ORDER.get(current_profile.cost_class or "", -1)
+    target_rank = _LOCAL_CLASS_ORDER.get(
+        str(target_class or "").strip().lower(), None
+    )
+    if target_rank is not None:
+        target_candidates = [
+            runner for runner in local
+            if (
+                runner.cost_class in _LOCAL_CLASS_ORDER
+                and runner.class_rank >= target_rank
+                and runner.class_rank > current_rank
+            )
+        ]
+        if target_candidates:
+            return sorted(target_candidates, key=_quality_key)[0]
+
+    stronger = [
+        runner for runner in local
+        if runner.cost_class in _LOCAL_CLASS_ORDER and runner.class_rank > current_rank
+    ]
+    if not stronger:
+        return None
+    return sorted(stronger, key=_quality_key)[0]
+
+
 def _find_runner(runners: list[RunnerProfile], name: str) -> RunnerProfile | None:
     for runner in runners:
         if runner.name == name or runner.profile == name:
             return runner
     return None
+
+
+def _quality_key(runner: RunnerProfile) -> tuple[int, int, str]:
+    return (runner.class_rank, runner.rank, runner.name)
 
 
 def _failure_domain(runner: RunnerProfile) -> str | None:
