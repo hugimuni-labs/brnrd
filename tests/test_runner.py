@@ -188,6 +188,80 @@ def test_resolve_runner_auto_picks_cheapest(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path) == "claude-economy"
 
 
+def test_resolve_runner_auto_prefers_generated_core_profile(tmp_path, monkeypatch):
+    """Auto mode should use the bundled Core registry, not the model-less shell."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    # The generated claude-haiku profile is cheaper than the model-less base
+    # Shell and should be the auto choice.
+    assert resolve_runner(tmp_path) == "claude-haiku"
+
+
+def test_resolve_runner_core_pin_matches_generated_short_alias(tmp_path, monkeypatch):
+    """core=haiku can select the generated claude-haiku profile."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("core=haiku\n", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    assert resolve_runner(tmp_path) == "claude-haiku"
+
+
+def test_build_cmd_for_generated_claude_core_inserts_model(tmp_path, monkeypatch):
+    """Generated Core profiles are invokable, not just selector labels."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print --output-format json",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+        },
+    )
+
+    cmd = _build_cmd("claude-haiku", "fix it", {}, tmp_path)
+
+    assert cmd[:3] == ["claude", "--model", "claude-haiku-4-5-20251001"]
+    assert cmd[-1] == "fix it"
+
+
 def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
     (tmp_path / ".brr").mkdir()
     (tmp_path / ".brr" / "config").write_text("runner=local-agent\n")
