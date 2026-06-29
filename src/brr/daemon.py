@@ -63,6 +63,7 @@ from . import codex_status
 from . import protocol
 from . import run_context
 from . import runner
+from . import runner_failures
 from . import runner_quota
 from . import schedule as schedule_mod
 from . import sync
@@ -1139,10 +1140,17 @@ def _run_worker(
             result.raise_for_error()
         except RuntimeError as e:
             print(f"[brr] worker {eid}: runner error: {e}")
+            detail = result.error_detail() or str(e)
+            timed_out = result.returncode == 124
             last_failure = {
                 "exit_code": result.returncode,
-                "error": result.error_detail() or str(e),
-                "timed_out": result.returncode == 124,
+                "error": detail,
+                "timed_out": timed_out,
+                "failure_kind": runner_failures.classify_failure(
+                    timed_out=timed_out,
+                    exit_code=result.returncode,
+                    detail=detail,
+                ),
             }
         else:
             if not result.validation_ok and not result.retry_reason():
@@ -1152,6 +1160,10 @@ def _run_worker(
                         "exit_code": result.returncode,
                         "error": detail,
                         "timed_out": False,
+                        "failure_kind": runner_failures.classify_failure(
+                            exit_code=result.returncode,
+                            detail=detail,
+                        ),
                     }
 
         # Detect a fresh commit on the worktree branch before finalize runs
@@ -1219,6 +1231,7 @@ def _run_worker(
         }
         if last_failure and not retry_reason:
             attempt_payload["exit_code"] = last_failure["exit_code"]
+            attempt_payload["failure_kind"] = last_failure.get("failure_kind")
             if last_failure.get("timed_out"):
                 attempt_payload["timed_out"] = True
         emit("attempt_failed", **attempt_payload)
@@ -1278,24 +1291,12 @@ def _run_worker(
         task = env_backend.finalize(env_ctx, task, runs_dir)
     _remove_outbox(outbox_dir)
     _emit_preserved_containers(emit, task)
-    # Classify the failure for the card: §6 says the user owns the runner
-    # (critical infra brr doesn't control) so an operational failure
-    # — runner timeout, non-zero exit, env/setup error — renders distinctly
-    # from a "I ran out of attempts" silent partial. ``failure_kind`` reads:
-    #   timed_out → "timed_out"  (runner.communicate hit the hard cap)
-    #   exit_code → "runner_error" (subprocess returned non-zero)
-    #   ok but no signal → "no_output" (runner ran clean but emitted
-    #     nothing on any thread, didn't commit, can't declare noop —
-    #     should be rare once #126's full noop affordance lands)
-    #   no_output is the clean-exit-but-no-signal case: ``last_failure`` is
-    #   None (the runner never recorded a failure), yet the run produced no
-    #   reply on any thread and no commit. Any recorded ``last_failure``
-    #   that isn't a timeout is a non-zero / artifact-missing runner error.
-    failure_kind = "no_output"
-    if last_failure:
-        failure_kind = (
-            "timed_out" if last_failure.get("timed_out") else "runner_error"
-        )
+    # Classify the failure for the card. The no-output case is the clean-exit-
+    # but-no-signal path: the runner never recorded a hard failure, yet the run
+    # produced no reply on any thread and no commit.
+    failure_kind = str(
+        (last_failure or {}).get("failure_kind") or runner_failures.NO_OUTPUT
+    )
     failed_payload: dict[str, object] = {
         "run_id": task.id,
         "event_id": eid,
@@ -2546,14 +2547,19 @@ def _failure_reason(
     if last_failure:
         detail = str(last_failure.get("error") or "").strip()
         exit_code = last_failure.get("exit_code")
-        if last_failure.get("timed_out"):
-            if detail:
-                return f"runner timed out after {attempts} attempt(s): {detail}"
-            return f"runner timed out after {attempts} attempt(s)"
+        kind = str(
+            last_failure.get("failure_kind")
+            or runner_failures.classify_failure(
+                timed_out=bool(last_failure.get("timed_out")),
+                exit_code=exit_code,
+                detail=detail,
+            )
+        )
+        prefix = runner_failures.reason_prefix(kind)
         if detail:
-            return f"runner failed after {attempts} attempt(s): {detail}"
+            return f"{prefix} after {attempts} attempt(s): {detail}"
         if exit_code is not None:
-            return f"runner failed after {attempts} attempt(s) with exit code {exit_code}"
+            return f"{prefix} after {attempts} attempt(s) with exit code {exit_code}"
     return f"runner produced no reply after {attempts} attempt(s)"
 
 
