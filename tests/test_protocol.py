@@ -67,6 +67,14 @@ class TestParseOutboxMessage:
         }
         assert body == "PR body\n"
 
+    def test_lenient_respawn_selector(self):
+        meta, body = protocol.parse_outbox_message(
+            "respawn: true\nshell: codex-mini\ndefer_until: +30m\n---\ncarry this forward\n")
+        assert meta == {
+            "respawn": True, "shell": "codex-mini", "defer_until": "+30m",
+        }
+        assert body == "carry this forward\n"
+
     def test_plain_message_with_dividers_is_not_frontmatter(self):
         # A PLAN-style message leads with prose and uses --- as a section
         # divider — it must never be mistaken for routing frontmatter.

@@ -126,6 +126,37 @@ class CardAck(BaseModel):
     message_id: int | None = None
 
 
+class ActivityRecordIn(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    kind: str = Field(default="run", min_length=1, max_length=32)
+    source: str = Field(default="", max_length=32)
+    conversation_key: str = Field(default="", max_length=255)
+    summary: str = ""
+    runner: dict[str, Any] = Field(default_factory=dict)
+    status: str = Field(default="", max_length=32)
+    phase: str = Field(default="", max_length=64)
+    branch: str = Field(default="", max_length=255)
+    pr_number: str | int | None = None
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+    scheduled_for: datetime | None = None
+    defer_until: datetime | None = None
+    links: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActivityReport(BaseModel):
+    records: list[ActivityRecordIn] = Field(default_factory=list)
+
+
+class ActivityRecordOut(ActivityRecordIn):
+    repo_id: str
+    reported_at: datetime
+
+
+class ActivityList(BaseModel):
+    activity: list[ActivityRecordOut]
+
+
 class PackRelayPost(BaseModel):
     pack: dict[str, Any]
     ttl_s: int | None = None

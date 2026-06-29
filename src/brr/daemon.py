@@ -540,7 +540,15 @@ def _run_worker(
     eid = event["id"]
     brr_dir = gitops.shared_brr_dir(repo_root)
     runs_dir = brr_dir / "runs"
-    runner_name = runner.resolve_runner(repo_root)
+    runner_overrides = {
+        key: event.get(key)
+        for key in ("shell", "core", "runner", "runner_policy")
+        if event.get(key) not in (None, "")
+    }
+    runner_name = (
+        runner.resolve_runner(repo_root, runner_overrides)
+        if runner_overrides else runner.resolve_runner(repo_root)
+    )
     # Look up the profile dict so portal-state can expose the selected
     # Shell/Core's metadata (model, class, provider, hooks) in the
     # resources.runner governance block. The profile cache is already
@@ -613,6 +621,14 @@ def _run_worker(
     task.conversation_key = conv_key
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
+    task.meta["runner_name"] = runner_name
+    if runner_meta:
+        if runner_meta.get("shell"):
+            task.meta["runner_shell"] = runner_meta["shell"]
+        if runner_meta.get("model"):
+            task.meta["runner_core"] = runner_meta["model"]
+        if runner_meta.get("class"):
+            task.meta["runner_class"] = runner_meta["class"]
     task.save(runs_dir)
 
     if conv_key:
@@ -1185,6 +1201,7 @@ def _run_worker(
                 replies_current=output_stats.get("current", 0),
                 replies_other=output_stats.get("other", 0),
                 outbound_messages=output_stats.get("outbound", 0),
+                respawn_requests=output_stats.get("respawn", 0),
                 committed=has_new_commit,
             )
             return task
@@ -1885,6 +1902,97 @@ def _find_pending_event(inbox_dir: Path | None, event_id: str) -> dict | None:
     return None
 
 
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _respawn_defer_until(fm: dict) -> str | None:
+    raw = str(fm.get("defer_until") or fm.get("at") or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("+"):
+        seconds = schedule_mod.parse_duration(raw[1:].strip())
+        return _format_utc_after(seconds) if seconds is not None else None
+    return raw if schedule_mod.parse_iso(raw) is not None else None
+
+
+def _queue_respawn_request(
+    emit: _WorkerEmit,
+    task: Run,
+    inbox_dir: Path | None,
+    event_id: str,
+    fm: dict,
+    body: str,
+) -> bool:
+    if inbox_dir is None:
+        print("[brr] outbox: respawn request had no inbox; dropping")
+        return False
+    proposed = str(
+        fm.get("proposed_runner")
+        or fm.get("runner")
+        or fm.get("shell")
+        or ""
+    ).strip()
+    core = str(fm.get("core") or "").strip()
+    if not proposed and not core:
+        print("[brr] outbox: respawn request had no runner/core; dropping")
+        return False
+    current = _find_pending_event(inbox_dir, event_id) or {}
+    source = str(fm.get("source") or current.get("source") or task.source or "respawn")
+    carry = str(fm.get("carry_forward") or "").strip()
+    new_body = body.strip() or carry or task.body
+    if not new_body.strip():
+        print("[brr] outbox: respawn request had no body; dropping")
+        return False
+    reserved = {
+        "_path", "id", "body", "status", "created", "source",
+        "origin_message_key", "respawn", "event", "gate",
+        "runner", "proposed_runner", "shell", "core", "at", "defer_until",
+        "carry_forward",
+    }
+    meta = {
+        k: v for k, v in current.items()
+        if k not in reserved and not str(k).startswith("_")
+    }
+    if proposed:
+        meta["shell"] = proposed
+    if core:
+        meta["core"] = core
+    defer_until = _respawn_defer_until(fm)
+    if defer_until:
+        meta["defer_until"] = defer_until
+    reason = str(fm.get("reason") or "").strip()
+    meta["respawned_from_event"] = event_id
+    meta["respawned_by_run"] = task.id
+    if reason:
+        meta["respawn_reason"] = reason
+    new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
+    print(f"[brr] outbox: queued respawn request ({new_path.stem})")
+    if emit.conversation_key:
+        conversations.append_artifact(
+            emit.brr_dir, emit.conversation_key,
+            kind="respawn_request",
+            path=str(new_path),
+            run_id=task.id,
+            event_id=event_id,
+            label=f"respawn:{new_path.stem}",
+            body=reason or new_body,
+        )
+    emit(
+        "respawn_requested",
+        run_id=task.id,
+        event_id=event_id,
+        respawn_event_id=new_path.stem,
+        proposed_runner=proposed or None,
+        core=core or None,
+        defer_until=defer_until,
+        reason=reason or None,
+    )
+    return True
+
+
 def _drain_outbox(
     emit: _WorkerEmit,
     task: Run,
@@ -1959,6 +2067,13 @@ def _drain_outbox(
         # ``protocol.parse_outbox_message``.
         fm, body = protocol.parse_outbox_message(text)
         body = body.strip()
+        if _truthy(fm.get("respawn")):
+            if _queue_respawn_request(emit, task, inbox_dir, event_id, fm, body):
+                promoted += 1
+                if stats is not None:
+                    stats["respawn"] = stats.get("respawn", 0) + 1
+            fpath.unlink(missing_ok=True)
+            continue
         gate = str(fm.get("gate") or "").strip()
         if gate:
             # Gate-addressed: an agent-initiated message to a destination
@@ -2395,15 +2510,15 @@ def _result_satisfied_delivery(
 
     Aligns with the §6 co-maintainer model: a run succeeds when it produced
     an output event (a current-thread reply, a folded-in reply, or an
-    out-of-bound gate send), or a new commit on the worktree branch, or the
-    event is internal (schedule fire / dedup retire) and no thread reply is
-    required. Stdout remains the common ``current_reply`` path, but it is no
-    longer the *only* success signal — a run that committed work or
-    answered a sibling thread is a successful run too.
+    out-of-bound gate send), queued a respawn, made a new commit on the worktree
+    branch, or the event is internal (schedule fire / dedup retire) and no
+    thread reply is required. Stdout remains the common ``current_reply`` path,
+    but it is no longer the *only* success signal — a run that committed work,
+    answered a sibling thread, or parked a respawn is a successful run too.
 
-    *signal* is one of ``current_reply | other_reply | outbound | commit |
-    internal | ""`` (empty when not satisfied). The string surfaces on the
-    ``done`` packet so renderers can name what the success was.
+    *signal* is one of ``current_reply | other_reply | outbound | respawn |
+    commit | internal | ""`` (empty when not satisfied). The string surfaces on
+    the ``done`` packet so renderers can name what the success was.
     """
     if not result.ok or result.missing_artifacts:
         return False, ""
@@ -2415,6 +2530,8 @@ def _result_satisfied_delivery(
         return True, "other_reply"
     if output_stats.get("outbound", 0) > 0:
         return True, "outbound"
+    if output_stats.get("respawn", 0) > 0:
+        return True, "respawn"
     if has_new_commit:
         return True, "commit"
     if not _event_requires_thread_delivery(event):

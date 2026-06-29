@@ -38,13 +38,17 @@ def _account(client, email="a@b.com"):
     return brnrd_account_headers(client.app, login=login, email=email)
 
 
-def _project(client, headers, name="demo"):
-    r = client.post("/v1/accounts/projects", json={"name": name}, headers=headers)
+def _repo(client, headers, name="demo"):
+    r = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": f"Gurio/{name}"},
+        headers=headers,
+    )
     assert r.status_code == 201, r.text
-    return r.json()["project_id"]
+    return r.json()["repo_id"]
 
 
-def _connect(client, headers, project_id):
+def _connect(client, headers, repo_id):
     """Run the device-flow handshake, returning daemon auth headers."""
     pair = client.post("/v1/accounts/pair").json()
     code, secret = pair["pair_code"], pair["poll_secret"]
@@ -55,7 +59,7 @@ def _connect(client, headers, project_id):
 
     approve = client.post(
         f"/v1/accounts/pair/{code}/approve",
-        json={"project_id": project_id},
+        json={"repo_id": repo_id},
         headers=headers,
     )
     assert approve.status_code == 200, approve.text
@@ -64,7 +68,7 @@ def _connect(client, headers, project_id):
         f"/v1/accounts/pair/{code}", params={"poll_secret": secret}
     ).json()
     assert paired["status"] == "paired"
-    assert paired["project_id"] == project_id
+    assert paired["repo_id"] == repo_id
     token = paired["daemon_token"]
     assert token
     return {"Authorization": f"Bearer {token}"}
@@ -78,8 +82,8 @@ def test_healthz(env):
 def test_full_round_trip(env):
     app, client, forwarder = env
     acc = _account(client)
-    pid = _project(client, acc)
-    dmn = _connect(client, acc, pid)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
 
     assert client.post(
         "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=dmn
@@ -87,7 +91,7 @@ def test_full_round_trip(env):
 
     enq = client.post(
         "/v1/_dev/enqueue",
-        json={"project_id": pid, "body": "do the thing", "reply_to": {"chat": 7}},
+        json={"repo_id": rid, "body": "do the thing", "reply_to": {"chat": 7}},
         headers=acc,
     )
     assert enq.status_code == 201, enq.text
@@ -122,10 +126,10 @@ def test_full_round_trip(env):
 def test_response_records_metadata_only(env):
     app, client, forwarder = env
     acc = _account(client)
-    pid = _project(client, acc)
-    dmn = _connect(client, acc, pid)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
     event_id = client.post(
-        "/v1/_dev/enqueue", json={"project_id": pid, "body": "task"}, headers=acc
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "task"}, headers=acc
     ).json()["event_id"]
     client.post(
         "/v1/daemons/responses",
@@ -154,8 +158,8 @@ def test_response_records_metadata_only(env):
 def test_long_poll_times_out_empty(env):
     _, client, _ = env
     acc = _account(client)
-    pid = _project(client, acc)
-    dmn = _connect(client, acc, pid)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
 
     started = time.monotonic()
     result = client.get(
@@ -171,13 +175,15 @@ def test_long_poll_times_out_empty(env):
 def test_long_poll_wakes_on_enqueue(env):
     _, client, _ = env
     acc = _account(client)
-    pid = _project(client, acc)
-    dmn = _connect(client, acc, pid)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
 
     def _enqueue_soon():
         time.sleep(0.05)
         client.post(
-            "/v1/_dev/enqueue", json={"project_id": pid, "body": "late"}, headers=acc
+            "/v1/_dev/enqueue",
+            json={"repo_id": rid, "body": "late"},
+            headers=acc,
         )
 
     t = threading.Thread(target=_enqueue_soon)
@@ -194,10 +200,10 @@ def test_long_poll_wakes_on_enqueue(env):
 def test_cursor_is_idempotent_on_repoll(env):
     _, client, _ = env
     acc = _account(client)
-    pid = _project(client, acc)
-    dmn = _connect(client, acc, pid)
-    client.post("/v1/_dev/enqueue", json={"project_id": pid, "body": "one"}, headers=acc)
-    client.post("/v1/_dev/enqueue", json={"project_id": pid, "body": "two"}, headers=acc)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+    client.post("/v1/_dev/enqueue", json={"repo_id": rid, "body": "one"}, headers=acc)
+    client.post("/v1/_dev/enqueue", json={"repo_id": rid, "body": "two"}, headers=acc)
 
     first = client.get(
         "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
@@ -218,12 +224,12 @@ def test_cursor_is_idempotent_on_repoll(env):
 def test_project_isolation(env):
     _, client, _ = env
     acc = _account(client)
-    pid_a = _project(client, acc, name="a")
-    pid_b = _project(client, acc, name="b")
-    dmn_a = _connect(client, acc, pid_a)
-    dmn_b = _connect(client, acc, pid_b)
+    rid_a = _repo(client, acc, name="a")
+    rid_b = _repo(client, acc, name="b")
+    dmn_a = _connect(client, acc, rid_a)
+    dmn_b = _connect(client, acc, rid_b)
 
-    client.post("/v1/_dev/enqueue", json={"project_id": pid_a, "body": "for-a"}, headers=acc)
+    client.post("/v1/_dev/enqueue", json={"repo_id": rid_a, "body": "for-a"}, headers=acc)
 
     a_sees = client.get(
         "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn_a
@@ -238,8 +244,8 @@ def test_project_isolation(env):
 def test_auth_scoping(env):
     _, client, _ = env
     acc = _account(client)
-    pid = _project(client, acc)
-    dmn = _connect(client, acc, pid)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
 
     # No credentials.
     assert client.get("/v1/daemons/inbox", params={"wait": 0}).status_code == 401
@@ -249,7 +255,7 @@ def test_auth_scoping(env):
     ).status_code == 403
     # Daemon token on an account endpoint.
     assert client.post(
-        "/v1/accounts/projects", json={"name": "z"}, headers=dmn
+        "/v1/accounts/repos", json={"repo_full_name": "Gurio/z"}, headers=dmn
     ).status_code == 403
     # Garbage token.
     bad = {"Authorization": "Bearer nope"}
@@ -269,10 +275,10 @@ def test_dev_enqueue_rejects_foreign_project(env):
     _, client, _ = env
     acc_a = _account(client, email="a@b.com")
     acc_b = _account(client, email="c@d.com")
-    pid_b = _project(client, acc_b, name="b-proj")
+    rid_b = _repo(client, acc_b, name="b-proj")
     # Account A cannot enqueue into account B's project.
     resp = client.post(
-        "/v1/_dev/enqueue", json={"project_id": pid_b, "body": "x"}, headers=acc_a
+        "/v1/_dev/enqueue", json={"repo_id": rid_b, "body": "x"}, headers=acc_a
     )
     assert resp.status_code == 404
 
@@ -302,10 +308,10 @@ def test_delivery_failure_keeps_event_queued_then_recovers():
     )
     client = TestClient(app)
     acc = _account(client)
-    pid = _project(client, acc)
-    dmn = _connect(client, acc, pid)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
     event_id = client.post(
-        "/v1/_dev/enqueue", json={"project_id": pid, "body": "task"}, headers=acc
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "task"}, headers=acc
     ).json()["event_id"]
 
     body = {"event_id": event_id, "body_markdown": "answer", "status": "done"}
@@ -335,30 +341,26 @@ def test_delivery_failure_keeps_event_queued_then_recovers():
     assert len(flaky.sent) == 1
 
 
-def test_project_create_is_idempotent(env):
+def test_repo_create_is_idempotent(env):
     _, client, _ = env
     acc = _account(client)
     first = client.post(
-        "/v1/accounts/projects", json={"name": "same"}, headers=acc
+        "/v1/accounts/repos", json={"repo_full_name": "Gurio/same"}, headers=acc
     ).json()
     second = client.post(
-        "/v1/accounts/projects", json={"name": "same"}, headers=acc
+        "/v1/accounts/repos", json={"repo_full_name": "Gurio/same"}, headers=acc
     ).json()
-    assert first["project_id"] == second["project_id"]
-    listing = client.get("/v1/accounts/projects", headers=acc).json()
-    names = [p["name"] for p in listing["projects"]]
-    # Exactly one "same" (idempotent), alongside the auto-created "default".
-    assert names.count("same") == 1
-    assert "default" in names
-    assert len(listing["projects"]) == 2
+    assert first["repo_id"] == second["repo_id"]
+    listing = client.get("/v1/accounts/repos", headers=acc).json()
+    names = [r["repo_full_name"] for r in listing["repos"]]
+    assert names == ["Gurio/same"]
 
 
-def test_github_account_seeds_default_project(env):
+def test_github_account_starts_with_no_repos(env):
     _, client, _ = env
     acc = _account(client, email="seed@b.com")
-    listing = client.get("/v1/accounts/projects", headers=acc).json()
-    assert len(listing["projects"]) == 1
-    assert listing["projects"][0]["name"] == "default"
+    listing = client.get("/v1/accounts/repos", headers=acc).json()
+    assert listing["repos"] == []
 
 
 def test_password_account_endpoints_are_not_exposed(env):
