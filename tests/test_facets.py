@@ -155,6 +155,36 @@ def test_build_runner_block_known_with_name_only():
     assert runner["class"] is None
 
 
+def test_build_runner_block_exposes_catalog():
+    res = facets.build(
+        runner_name="codex-mini",
+        runner_meta={"class": "economy"},
+        runner_catalog=[
+            {
+                "name": "codex-mini",
+                "shell": "codex",
+                "model": "gpt-5.4-mini",
+                "class": "economy",
+                "selected": True,
+                "availability": "available",
+            },
+            {
+                "name": "claude-opus",
+                "shell": "claude",
+                "model": "claude-opus-4-8",
+                "class": "strong",
+                "selected": False,
+                "availability": "available",
+            },
+        ],
+    )
+
+    catalog = res["runner"]["catalog"]
+    assert catalog[0]["name"] == "codex-mini"
+    assert catalog[0]["selected"] is True
+    assert catalog[1]["name"] == "claude-opus"
+
+
 def test_build_runner_block_can_expose_relay_consent():
     """relay_consent carries spending plan details when relay fallback is offered."""
     res = facets.build(

@@ -429,6 +429,7 @@ def build_daemon_prompt(
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
+    runner_catalog: list[dict[str, Any]] | None = None,
     diffense: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated runs.
@@ -454,6 +455,7 @@ def build_daemon_prompt(
         budget_seconds=budget_seconds,
         runner_medium=runner_medium,
         runner_quota=runner_quota,
+        runner_catalog=runner_catalog,
         repo_root=repo_root,
         run_id=run_id,
         source=source,
@@ -492,6 +494,36 @@ def build_daemon_prompt(
 RECENT_CONVERSATION_MAX = 8
 
 
+def _render_runner_catalog(
+    catalog: list[dict[str, Any]] | None,
+) -> list[str]:
+    """Compact prompt rendering for the selectable Runner/Core mandate."""
+    lines: list[str] = []
+    for item in catalog or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        selected = bool(item.get("selected"))
+        prefix = "selected " if selected else ""
+        bits = [
+            f"shell={item.get('shell') or 'unknown'}",
+            f"core={item.get('model') or 'default'}",
+        ]
+        if item.get("class"):
+            bits.append(f"class={item['class']}")
+        if item.get("cost_rank") is not None:
+            bits.append(f"cost_rank={item['cost_rank']}")
+        if item.get("quota_source"):
+            bits.append(f"quota={item['quota_source']}")
+        if item.get("auth_variant"):
+            bits.append(f"auth={item['auth_variant']}")
+        bits.append(f"availability={item.get('availability') or 'available'}")
+        lines.append(f"- {prefix}{name}: " + ", ".join(str(bit) for bit in bits))
+    return lines
+
+
 def _build_run_context_bundle(
     *,
     event_id: str,
@@ -500,6 +532,7 @@ def _build_run_context_bundle(
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
+    runner_catalog: list[dict[str, Any]] | None = None,
     repo_root: Path,
     run_id: str | None,
     source: str | None,
@@ -548,6 +581,15 @@ def _build_run_context_bundle(
             "a manual reroute, so chunk work and commit early when the budget "
             "is tight."
         )
+    mandate_lines = _render_runner_catalog(runner_catalog)
+    if mandate_lines:
+        sections.append("")
+        sections.append("### Runner Mandate")
+        sections.append(
+            "Selectable local Shell+Core profiles from the same catalog brr "
+            "uses for cost-aware selection and respawn decisions:"
+        )
+        sections.extend(mandate_lines)
     sections.append(
         "- Delivery: situational outputs captured by brr "
         "(see Delivery contract below)"
