@@ -350,9 +350,11 @@ Approve / Queue until local reset / Configure own runner
    packaged as a source/freshness-tagged cache keyed by model id, loaded without
    network I/O. When a Core entry has no hand-set `class`, the selector can
    derive economy/balanced/strong from cached SWE-bench / Terminal-Bench style
-   scores; hand-set class stays authoritative. Current bundled rows are
-   provenance placeholders with null scores, deliberately avoiding fabricated
-   benchmark claims. Populating and refreshing trusted scores remains open.
+   scores; hand-set class stays authoritative. Trusted score population shipped
+   the same day: exact Vals SWE-bench Verified rows populate matching Cores, and
+   verified Terminal-Bench 2.0 rows populate only when the agent matches the
+   Shell. Non-exact, unverified, or missing rows stay `null` with provenance;
+   refresh policy remains open.
 7. **Failure classifier** *(classification shipped 2026-06-29)*: the daemon
    distinguishes timeout, quota exhaustion, auth error, provider failure,
    generic runner error, and clean no-output validation. The classification

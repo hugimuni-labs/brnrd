@@ -8897,3 +8897,17 @@ No decision changed. The Fly env config spelling was reconciled to
 `fly_machines`, matching the package path and sibling kb pages.
 `plan-repo-gardening.md` and `kb/index.md` now record this slice; the remaining
 proposal-scaffolding cleanup item is `design-diffense.md`.
+
+## [2026-06-29] implement | Trusted runner benchmark scores populated
+
+Continued `plan-repo-gardening.md` Task 2C on `brr/initial-context-reweave`.
+
+`runner-capabilities.json` now carries real trusted benchmark scores for the
+bundled Core registry where the sources had an exact enough match: Vals
+SWE-bench Verified rows for Fable, Sonnet, Opus, and GPT-5.4 Mini; verified
+Terminal-Bench 2.0 rows for Codex CLI / GPT-5-Codex and Claude Code / Haiku.
+Rows without an exact trusted match, such as Gemini 2.0 Flash's current
+registry entry, stay `null` with provenance instead of receiving guessed scores.
+
+The capability-score tests were updated for the populated cache. The design and
+gardening pages now mark population shipped while leaving refresh policy open.

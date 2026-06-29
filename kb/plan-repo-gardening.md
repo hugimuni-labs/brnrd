@@ -153,9 +153,12 @@ benchmark. Plan:
   `RunnerProfile` and the `resources.runner` portal block. Hand-set `class`
   remains authoritative; capability-derived class is only the fallback when the
   Core entry has no explicit class.
-- Current bundled cache rows intentionally contain provenance placeholders and
-  `null` benchmark scores rather than fabricated numbers. Actual SWE-bench /
-  Terminal-Bench population and refresh policy remain open.
+- **Trusted score population shipped 2026-06-29:** bundled rows now carry exact
+  Vals SWE-bench Verified scores where the benchmark row matches the Core, plus
+  verified Terminal-Bench 2.0 rows only when the agent matches the Shell
+  (`Codex CLI` for `gpt-5-codex`, `Claude Code` for Haiku). Non-exact,
+  unverified, or missing rows stay `null` with provenance explaining the gap.
+  Refresh policy remains open.
 - **Pushback/caution:** benchmarks go stale and game-able; treat them as a
   *hint to the class assignment*, never a hard selector. The deterministic,
   conservative selector stays the floor (no revived LLM triage). Recommend
