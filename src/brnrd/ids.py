@@ -31,6 +31,10 @@ def event_id() -> str:
     return _rid("ev")
 
 
+def activity_id() -> str:
+    return _rid("act")
+
+
 def pair_request_id() -> str:
     return _rid("pair")
 

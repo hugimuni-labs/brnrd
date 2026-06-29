@@ -428,6 +428,67 @@ def test_run_worker_accepts_current_outbox_reply_without_stdout(
     ] == ["handled through outbox"]
 
 
+def test_drain_outbox_queues_respawn_request(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+        chat_id="42",
+        origin_message_key="telegram:42::99",
+    )
+    event_id = path.stem
+    (outbox / "respawn.md").write_text(
+        "---\n"
+        "respawn: true\n"
+        "shell: codex-mini\n"
+        "reason: needs a stronger core\n"
+        "defer_until: +30m\n"
+        "---\n"
+        "carry this exact task forward\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-dispatch",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"respawn": 1}
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("respawned_from_event") == event_id
+    ][0]
+    assert spawned["source"] == "telegram"
+    assert spawned["conversation_key"] == "telegram:42:"
+    assert spawned["chat_id"] == 42
+    assert spawned["shell"] == "codex-mini"
+    assert spawned["respawn_reason"] == "needs a stronger core"
+    assert spawned["body"] == "carry this exact task forward"
+    assert "origin_message_key" not in spawned
+    assert protocol.event_is_deferred(spawned)
+
+
 def test_run_worker_writes_terminal_failure_response_on_runner_error(
     tmp_path, monkeypatch,
 ):
@@ -1107,6 +1168,16 @@ def test_result_satisfied_delivery_recognises_outbound_gate_send():
     ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
     assert ok is True
     assert signal == "outbound"
+
+
+def test_result_satisfied_delivery_recognises_respawn_signal():
+    """A parked respawn is an explicit success signal: the current run handed the
+    work to a new Shell/Core instead of silently producing no output."""
+    event = {"source": "telegram"}
+    stats = {"current": 0, "other": 0, "outbound": 0, "respawn": 1}
+    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
+    assert ok is True
+    assert signal == "respawn"
 
 
 def test_result_satisfied_delivery_recognises_commit_signal():
