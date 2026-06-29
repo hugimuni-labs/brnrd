@@ -65,7 +65,9 @@ from . import run_context
 from . import runner
 from . import runner_failures
 from . import runner_quota
+from . import runner_select
 from . import schedule as schedule_mod
+from . import spending_plan
 from . import sync
 from . import updates
 from . import worktree
@@ -1359,6 +1361,38 @@ def _run_worker(
             )
             last_failure = None
             continue
+        # Check for relay fallback before hard failure.
+        # If no local fallback is available but relay runners exist and the
+        # failure is a candidate for relay (quota exhausted, auth error),
+        # emit a spending plan request instead of hard failure.
+        relay_candidate = None
+        relay_plan = None
+        if (
+            failure_kind
+            and failure_kind in runner_select.AUTO_FALLBACK_FAILURES
+            and not fallback_runner_name
+        ):
+            try:
+                runners = runner_select.available_runners(repo_root)
+                relay_candidate = runner_select.best_relay_runner(runners)
+                if relay_candidate:
+                    # Emit spending plan request. The resident can respond with
+                    # relay_consent=approved via a respawn request, or deny it.
+                    relay_plan = spending_plan.SpendingPlan(
+                        reason=f"local_quota_exhausted",
+                        model=relay_candidate.model or relay_candidate.name,
+                        provider=relay_candidate.provider or "unknown",
+                        estimated_input_tokens=0,
+                        estimated_output_tokens=0,
+                        consent_state="pending",
+                    )
+                    attempt_payload["needs_relay_consent"] = True
+                    attempt_payload["relay_candidate"] = relay_candidate.summary()
+                    attempt_payload["relay_plan"] = relay_plan.to_dict()
+            except Exception:
+                # Relay check failed; don't block hard failure
+                relay_candidate = None
+                relay_plan = None
         # Hard failure (timeout / non-zero exit) — no retry, give up now
         # rather than burning another expensive attempt. The give-up
         # branch below carries the captured error up to the gate.
