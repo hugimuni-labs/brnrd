@@ -60,17 +60,17 @@ def _account(client):
     )
 
 
-def _project(client, headers, name="demo"):
+def _repo(client, headers, repo="owner/repo"):
     return client.post(
-        "/v1/accounts/projects", json={"name": name}, headers=headers
-    ).json()["project_id"]
+        "/v1/accounts/repos", json={"repo_full_name": repo}, headers=headers
+    ).json()["repo_id"]
 
 
-def _daemon_headers(client, acc, pid):
+def _daemon_headers(client, acc, repo_id):
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"project_id": pid},
+        json={"repo_id": repo_id},
         headers=acc,
     )
     token = client.get(
@@ -78,18 +78,6 @@ def _daemon_headers(client, acc, pid):
         params={"poll_secret": pair["poll_secret"]},
     ).json()["daemon_token"]
     return {"Authorization": f"Bearer {token}"}
-
-
-def _bind_repo(client, acc, pid, *, repo="owner/repo", installation_id="42"):
-    return client.post(
-        "/v1/accounts/bindings/repo",
-        json={
-            "installation_id": installation_id,
-            "repo_full_name": repo,
-            "project_id": pid,
-        },
-        headers=acc,
-    )
 
 
 def _payload(*, repo="owner/repo", body="@brr-bot do the thing",
@@ -133,25 +121,27 @@ def _github_post(client, payload, *, event="issue_comment", secret=_SECRET):
     )
 
 
-def test_repo_binding_create_list_and_rebind(env):
+def test_repo_create_list_is_idempotent(env):
     _, client, _ = env
     acc = _account(client)
-    pid_a = _project(client, acc, name="alpha")
-    pid_b = _project(client, acc, name="beta")
 
-    first = _bind_repo(client, acc, pid_a)
+    first = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "owner/repo"},
+        headers=acc,
+    )
     assert first.status_code == 201, first.text
-    assert first.json()["project_id"] == pid_a
-
-    second = _bind_repo(client, acc, pid_b)
+    second = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "owner/repo"},
+        headers=acc,
+    )
     assert second.status_code == 201, second.text
-    assert second.json()["binding_id"] == first.json()["binding_id"]
-    assert second.json()["project_id"] == pid_b
+    assert second.json()["repo_id"] == first.json()["repo_id"]
 
-    listing = client.get("/v1/accounts/bindings/repo", headers=acc).json()
-    assert len(listing["bindings"]) == 1
-    assert listing["bindings"][0]["repo_full_name"] == "owner/repo"
-    assert listing["bindings"][0]["project_id"] == pid_b
+    listing = client.get("/v1/accounts/repos", headers=acc).json()
+    assert len(listing["repos"]) == 1
+    assert listing["repos"][0]["repo_full_name"] == "owner/repo"
 
 
 def test_github_webhook_rejects_bad_signature(env):
@@ -177,18 +167,17 @@ def test_unbound_repo_gets_setup_comment_without_enqueue(env):
 def test_bound_pr_comment_enqueues_and_response_posts_back(env):
     app, client, posts = env
     acc = _account(client)
-    pid = _project(client, acc)
-    assert _bind_repo(client, acc, pid).status_code == 201
+    rid = _repo(client, acc)
 
     r = _github_post(client, _payload(is_pr=True))
     assert r.status_code == 200
 
     with app.state.SessionLocal() as db:
         event = db.execute(select(Event).where(Event.source == "github")).scalar_one()
-        assert event.project_id == pid
+        assert event.repo_id == rid
         assert "@brr-bot do the thing" in (event.body or "")
 
-    dmn = _daemon_headers(client, acc, pid)
+    dmn = _daemon_headers(client, acc, rid)
     drained = client.get(
         "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
     ).json()
@@ -231,8 +220,7 @@ def test_bound_pr_comment_enqueues_and_response_posts_back(env):
 def test_github_webhook_ignores_unaddressed_comments(env):
     app, client, posts = env
     acc = _account(client)
-    pid = _project(client, acc)
-    assert _bind_repo(client, acc, pid).status_code == 201
+    _repo(client, acc)
 
     r = _github_post(client, _payload(body="plain repo chatter"))
     assert r.status_code == 200

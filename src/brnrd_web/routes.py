@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -17,6 +18,7 @@ from brnrd import ids, oauth
 from brnrd.auth import get_db
 from brnrd.models import (
     Account,
+    ActivityRecord,
     ChannelRoute,
     Daemon,
     Event,
@@ -115,6 +117,13 @@ def _age_label(value: datetime | None) -> str:
     return f"{days}d ago"
 
 
+def _time_label(value: datetime | None) -> str:
+    value = _dt(value)
+    if value is None:
+        return ""
+    return value.strftime("%Y-%m-%d %H:%M UTC")
+
+
 def _repos(db: Session, account_id: str) -> list[Repo]:
     return list(db.execute(select(Repo).where(Repo.account_id == account_id)).scalars())
 
@@ -176,6 +185,66 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
             }
         )
     return sorted(views, key=lambda v: (v["daemon_status"] == "online", v["sort_time"], v["repo"].repo_full_name.casefold()), reverse=True)
+
+
+def _activity_views(
+    db: Session,
+    repos: list[Repo],
+    *,
+    repo_id: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+) -> list[dict]:
+    repo_by_id = {repo.id: repo for repo in repos}
+    repo_ids = set(repo_by_id)
+    if repo_id:
+        repo_ids = {repo_id} if repo_id in repo_ids else set()
+    if not repo_ids:
+        return []
+    stmt = select(ActivityRecord).where(ActivityRecord.repo_id.in_(repo_ids))
+    if kind:
+        stmt = stmt.where(ActivityRecord.kind == kind)
+    if status:
+        stmt = stmt.where(ActivityRecord.status == status)
+    rows = db.execute(
+        stmt.order_by(
+            ActivityRecord.updated_at.desc().nullslast(),
+            ActivityRecord.reported_at.desc(),
+        )
+    ).scalars()
+    out: list[dict] = []
+    for row in rows:
+        try:
+            runner = json.loads(row.runner_json or "{}")
+        except ValueError:
+            runner = {}
+        try:
+            links = json.loads(row.links_json or "{}")
+        except ValueError:
+            links = {}
+        repo = repo_by_id.get(row.repo_id)
+        runner_summary = ""
+        if isinstance(runner, dict):
+            runner_summary = " / ".join(
+                str(runner.get(key) or "").strip()
+                for key in ("shell", "core")
+                if str(runner.get(key) or "").strip()
+            )
+            if not runner_summary:
+                runner_summary = str(runner.get("summary") or runner.get("name") or "").strip()
+        when = row.scheduled_for or row.defer_until or row.updated_at or row.started_at or row.reported_at
+        out.append(
+            {
+                "record": row,
+                "repo": repo,
+                "repo_name": repo.repo_full_name if repo else row.repo_id,
+                "runner_summary": runner_summary,
+                "when_label": _time_label(when),
+                "updated_label": _age_label(row.updated_at or row.reported_at),
+                "links": links if isinstance(links, dict) else {},
+            }
+        )
+    return out
 
 
 def _github_sync_configured(request: Request) -> bool:
@@ -294,6 +363,43 @@ def dashboard(request: Request, installation_id: str | None = None, notice: str 
         return RedirectResponse(url="/login?next=/", status_code=303)
     notice = notice or _github_auto_sync_if_needed(request, db, account.id)
     return _render(request, "dashboard.html", _dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
+
+
+@router.get("/activity", response_class=HTMLResponse)
+def activity_page(request: Request, repo_id: str | None = None, kind: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/activity", status_code=303)
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url="/login?next=/activity", status_code=303)
+    repos = _repos(db, account.id)
+    views = _activity_views(
+        db,
+        repos,
+        repo_id=repo_id or None,
+        kind=kind or None,
+        status=status or None,
+    )
+    kinds = sorted({view["record"].kind for view in views} | {"run", "scheduled", "respawn"})
+    statuses = sorted({view["record"].status for view in views if view["record"].status} | {"running", "pending", "scheduled"})
+    return _render(
+        request,
+        "activity.html",
+        {
+            "body_class": "dashboard-page",
+            "title": "brnrd activity",
+            "logged_in": True,
+            "account": account,
+            "repos": repos,
+            "activity_views": views,
+            "selected_repo_id": repo_id or "",
+            "selected_kind": kind or "",
+            "selected_status": status or "",
+            "kinds": kinds,
+            "statuses": statuses,
+        },
+    )
 
 
 @router.post("/repos", response_class=HTMLResponse)
