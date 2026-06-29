@@ -180,6 +180,13 @@ sets `shell=`/`core=` (or leaves unset for auto) and optional
 resident picks the cheapest adequate available Runner from there. See
 `kb/design-runner-cores.md`.
 
+Automatic fallback is narrower than first selection. When a runner exits with a
+classified quota/auth/provider failure, brr may retry the same run in the same
+prepared worktree on another local Runner. That fallback excludes paid relay
+profiles, stays in the same or a cheaper class, and avoids the same failure
+domain where metadata makes that visible. Relay remains behind spend-plan
+consent.
+
 Auto mode also reads brr's bundled Core registry. For each Shell declared in
 the active `runners.md`, brr materializes registry rows such as `claude-haiku`
 or `codex-mini` as invokable profiles by inserting the Core's model flag into

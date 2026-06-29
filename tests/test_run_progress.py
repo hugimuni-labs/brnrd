@@ -119,6 +119,32 @@ def test_project_run_failed_with_retry(tmp_path):
     assert view.attempt == 2
 
 
+def test_retrying_packet_can_record_runner_fallback(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:fallback:"
+    conversations.append_run(
+        brr_dir, key,
+        run_id="run-fallback", event_id="evt-fallback",
+        env="worktree", status="running",
+    )
+    _emit(brr_dir, key, "run_created", run_id="run-fallback", event_id="evt-fallback",
+          env="worktree")
+    _emit(brr_dir, key, "run_started", run_id="run-fallback", runner="codex")
+    _emit(brr_dir, key, "attempt_started", run_id="run-fallback", attempt=1)
+    _emit(brr_dir, key, "attempt_failed", run_id="run-fallback", attempt=1,
+          reason="session limit", failure_kind="quota_exhausted",
+          will_retry=False, will_fallback=True, fallback_runner="claude")
+    _emit(brr_dir, key, "retrying", run_id="run-fallback", attempt=2,
+          reason="fallback after quota_exhausted", from_runner="codex",
+          runner="claude")
+
+    view = run_progress.project_run(brr_dir, key, "run-fallback")
+
+    assert view is not None
+    assert view.runner_name == "claude"
+    assert view.detail == "fallback codex -> claude (attempt 2)"
+
+
 def test_project_run_conflict(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:4:"
