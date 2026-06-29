@@ -1847,6 +1847,7 @@ def _resources_facet(
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
+    relay_consent: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -1866,6 +1867,7 @@ def _resources_facet(
         runner_name=runner_name,
         runner_meta=runner_meta,
         quality_escalation=quality_escalation,
+        relay_consent=relay_consent,
     )
 
 
@@ -1930,6 +1932,7 @@ def _write_live_portal_state(
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
+    relay_consent: "dict[str, object] | None" = None,
     budget_seconds: float | None = None,
     hard_cap_seconds: float | None = None,
     keepalive_path: Path | None = None,
@@ -2032,6 +2035,7 @@ def _write_live_portal_state(
                 runner_name=runner_name,
                 runner_meta=runner_meta,
                 quality_escalation=quality_escalation,
+                relay_consent=relay_consent,
             ),
         }
         payload["change_token"] = _change_token(payload)
