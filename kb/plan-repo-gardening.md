@@ -228,7 +228,9 @@ different provider). The run packets record the decision:
 `attempt_failed` carries `will_fallback` + `fallback_runner`, and the following
 `retrying` packet carries `from_runner` + `runner`, so cards can show the switch
 instead of a generic retry. Paid relay consent, wallet/cap enforcement,
-quota-reset deferral remains a separate slice.
+quota-reset deferral remains a separate slice — see
+[`plan-relay-spend-consent.md`](plan-relay-spend-consent.md) for the spend-plan
+data model, consent gate, and the deferred wallet/billing slices (5–7).
 
 ### 2I — Resident-authored quality escalation — **shipped 2026-06-29**
 
