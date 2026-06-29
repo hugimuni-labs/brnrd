@@ -49,7 +49,7 @@ identity plus the laptop it runs on. It owns what is genuinely account-scoped:
 
 - the **channels** — typically one Telegram channel per account (the common case
   the maintainer named: single TG channel per forge account per laptop);
-- the **runner envelope** — the Shells+Cores this account may select/escalate
+- the **runner mandate** — the Shells+Cores this account may select/escalate
   into (one catalog, not per-repo);
 - the **set of managed repos** and a **default repo**;
 - **inter-run plans** (part 4) and the **view surface / control plane** bindings
@@ -127,7 +127,7 @@ the account model. Final placement is the maintainer's call on execution.
 The dashboard the engine shipped without. Five surfaces, all reading **one**
 source of state:
 
-- **Runner envelope** — the catalog of selectable Shells+Cores (name, class,
+- **Runner mandate** — the catalog of selectable Shells+Cores (name, class,
   cost_rank, quota/availability, `selected`), not just the one selected runner.
 - **Per-run record** — runner/core, repo, boundary, elapsed, commits, plan
   position, attempt history; persisted (gist-per-run), card links to it.
@@ -135,13 +135,76 @@ source of state:
   cheaper" story instead of letting `attempt_failed` reasons vanish.
 - **Activity** — running + scheduled runs, **with repo shown** (the 2E view
   already uses `repo_id`).
-- **Plain-language config + daemon-owned confirmation** — show the envelope, let
+- **Plain-language config + daemon-owned confirmation** — show the mandate, let
   the user request changes in prose, the resident proposes a config change, and a
   *daemon-owned* step applies it (the resident cannot silently rewrite its own
   selection policy).
 
 **brnrd is the hosted projection of this surface; the local daemon serves the
 same state standalone.** That is the next invariant.
+
+## Account-scoped store — the daemon's own home (recommendation, evt-puhl)
+
+The account daemon has **no repo of its own**, yet several things are genuinely
+account-scoped and need a durable, web-visible, OSS-local home: cross-repo
+inter-run plans (part 4), the **run-state objects** (part 5's per-run record /
+the maintainer's "larger run state object rendered beautifully in the browser"),
+account config + repo registry + default repo, and the account-scoped **dispatch
+queue** (the message-event inbox the cheap dispatcher reads). The maintainer
+named the gap directly: *"brnrd daemon doesn't have a repo… where to keep the
+plan then?"*
+
+**Recommendation: a dedicated, daemon-created account repo** (private; working
+name `brnrd-home`) — **not** a fork of the brnrd source, **not** a gist.
+
+- *Why not fork-the-source* (the maintainer's "each install forks brr on behalf
+  of the user"): it solves the right problem — give the daemon a repo — by the
+  wrong means. Forking the tool's source **entangles user account-state with the
+  tool's code**, pollutes the project's fork network, and makes update/merge
+  semantics ugly (every account fork drifts from upstream). Take the idea's
+  insight (the daemon should own a git repo), drop the entanglement.
+- *Why not a gist*: off-repo, separate auth, no structure — already this page's
+  weakest option for plans; the same verdict holds for the whole account store.
+- *Why a fresh account repo*: it is exactly the **dominion pattern lifted from
+  repo-scope to account-scope**. `brr-home` is already an orphaned branch holding
+  the resident's durable per-repo memory; `brnrd-home` is its account-scoped
+  sibling as a *standalone repo* (because account state can't hang off any one
+  managed repo's branch). It holds the **OSS self-deploy invariant**: when
+  self-deployed it is just a local git repo; brnrd cloud mirrors/projects it.
+
+**What lives in the account repo:** cross-repo inter-run plans (resolves the
+cross-repo sub-fork of open question #1); the **run-state registry** (see the
+CS2 reconciliation below); account config / repo registry / default repo; the
+account-scoped dispatch inbox.
+
+**What stays repo-local:** per-run **worktree execution artifacts** stay in the
+*target repo's* `.brr/` — they are repo-scoped execution, not account state.
+Repo-scoped (single-repo) inter-run plans can still ride that repo's own
+orphaned branch; only **cross-repo** plans require the account repo.
+
+**Event/run files under the account daemon** (the maintainer's "where should
+they be now?"): split by scope — repo-scoped run files → target repo `.brr/`;
+account-scoped queues (dispatch inbox, cross-repo state) → account repo. The
+"reroute-to-another-repo as an event written into that repo's inbox" idea is
+**unnecessary within one account daemon**: respawn-in-another-repo is *in-process*
+(`RespawnRequest.repo`, part 3) because one daemon owns all the repos. A written
+inbox-event handoff only earns its keep crossing a **daemon/account boundary**
+(a different machine or account) — that is the case for an event file into
+another inbox, not intra-account repo hops.
+
+**Run-state object — reconciling CS2.** `plan-control-surface.md` CS2 says
+"gist-per-run, delete on cleanup, no durable store." The maintainer now wants a
+*larger, durable, beautifully-rendered* run-state object as part of the status
+card. The account repo reconciles this: "gist-per-run" was a placeholder for *"a
+per-run state doc somewhere web-visible"*; the account repo is the durable,
+git-historied, **brnrd-projectable** home that satisfies the richer ask without a
+new bespoke store. CS2 is updated to point here.
+
+Still open for the maintainer (execution): the account repo's
+name/visibility (private `brnrd-home` vs a namespace under the user's account),
+and whether the daemon **auto-creates** it on first `brr up`/install (recommended)
+vs the user designating an existing repo. Ties to the
+[`decision-brnrd-rename.md`](decision-brnrd-rename.md) naming work.
 
 ## OSS self-deploy invariant
 
@@ -229,7 +292,7 @@ the load-bearing notes:
    first move is to make a single daemon handle a `repo` field on events/runs
    while still bound to one repo_root as default. That threads `repo` through
    `RespawnRequest`, presence, schedule, and portal-state *without* changing the
-   process model yet. Ship the envelope/per-run-record/attempt-ledger view
+   process model yet. Ship the mandate/per-run-record/attempt-ledger view
    surface (review steps 1+3) on top of that — those are pure projection and
    don't need the account model.
 2. **Then lift the daemon to account scope.** Introduce account config (forge
@@ -253,9 +316,10 @@ the load-bearing notes:
 
 - **Inter-run plan physical location.** Refined (evt-ohsp): **orphaned branch**
   surfaced by the daemon, recommended over a working-tree tracked file (which
-  pollutes the user's checkout) — reusing the dominion's `brr-home` pattern. Open
-  on execution: dedicated `brr-plans` sibling vs a namespace; and where cross-repo
-  plans live (account-level orphaned branch vs a designated home repo).
+  pollutes the user's checkout) — reusing the dominion's `brr-home` pattern. The
+  **cross-repo half is now resolved** (evt-puhl): cross-repo plans live in the
+  **account repo** (`brnrd-home`) — see "Account-scoped store" above. Open only on
+  execution: the per-repo sibling's name (`brr-plans` vs a namespace).
 - **Multi-account on one laptop.** Rare; defer. The account model should not
   *forbid* it, but v1 need not support it.
 - **Repo discovery.** Explicit registry (user adds repos) vs scanning a

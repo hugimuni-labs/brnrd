@@ -23,7 +23,7 @@ them. So the diff is **consistent with the plan**.
 The incoherence the maintainer feels is real but it is **not in the engine — it
 is in the absence of a control surface over the engine.** Five concrete gaps:
 
-1. **The envelope is invisible.** `facets._runner_block` exposes the *selected*
+1. **The mandate is invisible.** `facets._runner_block` exposes the *selected*
    runner, the *one* quality-escalation target, and (when set) the relay
    spending plan. It never exposes the *set of available* Shells+Cores. The
    catalog lives only in `runner_cores._BUNDLED_CORES` + `runners.md` frontmatter
@@ -84,8 +84,8 @@ poll*. Seams noticed this wake:
   open/deferred slices). This *is* the maintainer's "inject more / preflight
   runner with full work context" intuition, made concrete.
 
-- **The runner envelope belongs in the bundle too.** The resident is told its
-  *own* Runner (Mode block) but not the *envelope* it can respawn/escalate into.
+- **The runner mandate belongs in the bundle too.** The resident is told its
+  *own* Runner (Mode block) but not the *mandate* it can respawn/escalate into.
   Same gap as finding #1, from the resident's side.
 
 - **Pre-release bias confirms cuts:** the bare-api triplet (finding #2) and any
@@ -95,7 +95,7 @@ poll*. Seams noticed this wake:
 
 Sequenced cheap→deep; each is reversible and the first three are clear edits.
 
-1. **Runner envelope facet.** Add `resources.runner.catalog` to
+1. **Runner mandate facet.** Add `resources.runner.catalog` to
    `portal-state.json`: the available Shells+Cores (name, class, cost_rank,
    quota/availability, `selected: true` on the active one). One source feeds both
    the user-facing card link and the resident's respawn decisions. Derives from
@@ -111,7 +111,7 @@ Sequenced cheap→deep; each is reversible and the first three are clear edits.
    commits, plan position, and the attempt history. Delete on cleanup — no
    durable store needed.
 4. **Plain-language config + daemon-owned confirmation.** Replace `shell=`/
-   `core=`/`runner_policy=` knobs with: show the envelope, let the user request
+   `core=`/`runner_policy=` knobs with: show the mandate, let the user request
    changes in prose, the resident proposes a config change, and a *daemon-owned*
    confirmation step applies it (the resident cannot silently rewrite its own
    selection policy). Preferences like "escalate to most capable" become stored

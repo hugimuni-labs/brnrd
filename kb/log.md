@@ -9052,3 +9052,45 @@ gardening relay slice; the review page is now linked from index + decision + pla
 
 Commits: 12339bd (decision + plans), 3c7757d (orphan re-home), + this turn's
 routing correction. Branch: brr/initial-context-reweave.
+
+## [2026-06-29] decision | brr → brnrd rename + account-scoped store + envelope→mandate
+
+Maintainer (evt-puhl) opened another replanning round on the new account-centered
+shape, with seven threads. Resolved/etched this wake:
+
+- **Rename brr → brnrd.** Wrote `decision-brnrd-rename.md`: direction accepted
+  (PyPI `brr` taken / `brnrd` free; `brnrd-dev`/`brnrd-bot` identities; `brnrd.dev`;
+  the daemon is now account-based, so "repo-based brr" is no longer the center).
+  Open sub-fork left to the maintainer: whether `brr` survives as a short
+  local/runner-facing CLI verb (my recommendation — it absorbs the costly runtime
+  names `.brr/` and `brr-home` so the brand rename avoids a flag-day on every
+  install's dominion) or is fully retired. Amends `decision-cli-shape.md` (brnrd
+  now primary, not sibling). No code renamed — scoped as dedicated migration wakes
+  (89 kb pages, package, `src/brr/`, runtime-state names).
+- **Account-scoped store.** Added an "Account-scoped store" section to
+  `decision-account-centered-daemon.md` unifying four of the maintainer's
+  questions (account-wide plans, event/run-file home, the run-state object, the
+  "daemon has no repo" problem): recommend a **dedicated daemon-created account
+  repo `brnrd-home`** — not a fork of the source (his "each install forks brr"
+  idea: right problem, wrong means — entangles user state with tool source), not a
+  gist. It's the dominion pattern lifted from repo-scope to account-scope.
+  Reconciled CS2's "gist-per-run" → durable run-state object in the account repo
+  (the maintainer's "larger object rendered beautifully"). Clarified event-file
+  placement (repo-scoped → target repo `.brr/`; account-scoped queues → account
+  repo) and that respawn-in-another-repo is in-process, so an inbox-event handoff
+  is only for crossing daemon/account boundaries.
+- **envelope → mandate.** "runner envelope" was a 5-occurrence, kb-only term (the
+  account/control-surface concept), distinct from code's generic "cost/operating
+  envelope" — so a clean, contained rename, NOT a sed across code. Renamed in the
+  3 new pages + index; "mandate" (a grant of authority to select a Runner)
+  disambiguates from facets' "operating envelope" and the cost "cap envelope".
+
+Consistency check of the three named pages (review / decision / control-surface):
+they cohere tightly — review parks two forks, decision resolves them, plan
+sequences the work, all cross-linked. No new forks introduced beyond the ones
+surfaced above as the maintainer's calls.
+
+Folded in evt-izfm (quota note): confirmed I see injected inbox events — kept the
+wake light per the 40% quota caution.
+
+Branch: brr/initial-context-reweave.

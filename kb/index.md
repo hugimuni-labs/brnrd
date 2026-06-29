@@ -39,9 +39,17 @@ dive-in map) and are stable until something contradicts them.
   dispatcher stays repo-based but can respawn-in-another-repo; inter-run
   plans live in-repo, known and visible; a local-first view surface with an
   optional brnrd projection (OSS self-deploy invariant). Resolves the two
-  forks parked by the execution-model review.
+  forks parked by the execution-model review. Adds the **account-scoped
+  store** recommendation (a daemon-created `brnrd-home` repo for cross-repo
+  plans, run-state objects, and account config — not a source fork, not a gist).
+- [brnrd rename decision](decision-brnrd-rename.md) — *direction accepted
+  2026-06-29, execution staged*. Rename the product **brr → brnrd** (PyPI
+  `brnrd` free, `brnrd-dev`/`brnrd-bot` identities, `brnrd.dev`; the daemon is
+  now account-based, not "the repo-based brr"). Open sub-fork: whether `brr`
+  survives as a short local/runner-facing CLI verb (recommended) or is fully
+  retired. Amends the CLI-shape decision (brnrd now primary, not sibling).
 - [Control surface plan](plan-control-surface.md) — *active*. The
-  "dashboard" the engine shipped without: runner-envelope facet, per-run
+  "dashboard" the engine shipped without: runner-mandate facet, per-run
   record + attempt ledger, repo dimension on cards/activity, account daemon +
   cross-repo dispatch, inter-run plan injection, plain-language config, and a
   cross-run decision ledger (CS1–CS7, projection surfaces first).

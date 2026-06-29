@@ -18,7 +18,7 @@ the first three are pure projection (no architecture change) and land first.
 
 ## Slices
 
-### CS1 — Runner envelope facet (highest leverage, pure projection)
+### CS1 — Runner mandate facet (highest leverage, pure projection)
 Add `resources.runner.catalog` to `portal-state.json`: the available Shells+Cores
 (name, class, cost_rank, quota/availability, `selected: true` on the active one).
 The data already exists in `runner_cores.available_cores()` — it is simply not
@@ -27,15 +27,15 @@ respawn decisions. This is the review's finding #1 (the single highest-leverage
 fix) and answers "we don't know what we allow to select and what was selected"
 for the *selectable* half (the *selected* half is already in the portal).
 
-Also inject the envelope into the **wake bundle** (the resident is told its own
-Runner but not the envelope it can escalate into — review §2, the resident-side
+Also inject the mandate into the **wake bundle** (the resident is told its own
+Runner but not the mandate it can escalate into — review §2, the resident-side
 of the same gap).
 
 **Collapse the two Core catalogs first** (review finding #2 / reshape step 2):
 retire the static `claude-bare-api-only-*` triplet in `runners.md` whose Cores
 duplicate the `_BUNDLED_CORES` registry rows (same cost_ranks, differ only by
 auth). Model `--bare`/`ANTHROPIC_API_KEY` as an **auth-variant flag on a registry
-Core**, not a separate triplet of profiles. The envelope should project one
+Core**, not a separate triplet of profiles. The mandate should project one
 source, so this collapse precedes the facet. **Maintainer approval to delete the
 bare-API path is granted** (evt-ogga — "no run relies on bare-API … you have my
 approval"). Scope note: behaviour-touching, ~31 references across 8 test files use
@@ -46,9 +46,14 @@ fixtures; don't blind-delete. Worth its own focused wake.
 - Render the **attempt ledger** on the card (don't let `attempt_failed` reasons
   vanish — `run_progress` already models `phase_history`/`attempt`/`fallback X->Y`;
   this is rendering/persistence, not new data).
-- Persist a **per-run status doc** (gist-per-run) carrying runner/core, **repo**,
-  boundary, elapsed, commits, plan position, attempt history. The card links to
-  it. Delete on cleanup — no durable store needed.
+- Persist a **per-run status doc** (the run-state object) carrying runner/core,
+  **repo**, boundary, elapsed, commits, plan position, attempt history. The card
+  links to it. **Home reconciled (evt-puhl):** the maintainer wants a larger,
+  durable, beautifully-rendered run-state object — so this lives in the
+  **account repo** (`brnrd-home`), the durable brnrd-projectable store, not an
+  ephemeral gist. See `decision-account-centered-daemon.md` → "Account-scoped
+  store". ("gist-per-run" was a placeholder for "a per-run state doc somewhere
+  web-visible.")
 
 ### CS3 — Repo dimension on runs/cards/activity
 Thread a `repo` field through `RespawnRequest`, presence, schedule, and
@@ -77,7 +82,7 @@ the physical location with the maintainer before building (tracked file vs
 orphaned branch vs gist; cross-repo store).
 
 ### CS6 — Plain-language config + daemon-owned confirmation
-Replace `shell=`/`core=`/`runner_policy=` knobs with: show the envelope (CS1), let
+Replace `shell=`/`core=`/`runner_policy=` knobs with: show the mandate (CS1), let
 the user request changes in prose, the resident proposes a config change, a
 *daemon-owned* confirmation step applies it (the resident cannot silently rewrite
 its own selection policy). Standing preferences ("escalate to most capable")
