@@ -392,6 +392,37 @@ def detect_all_runners(repo_root: Path | None = None) -> list[str]:
     return [name for name in profiles if _runner_available(name, profiles)]
 
 
+def available_selection_runners(repo_root: Path | None = None) -> list["RunnerProfile"]:
+    """Available declared/generated Runner profiles for selection policy."""
+    from . import runner_select
+
+    profiles = _selection_profiles(repo_root)
+    out: list[runner_select.RunnerProfile] = []
+    for name, profile in profiles.items():
+        if _runner_available(name, profiles):
+            out.append(runner_select.runner_from_profile(name, profile))
+    return out
+
+
+def fallback_runner(
+    repo_root: Path,
+    current: str,
+    failure_kind: str | None,
+    *,
+    tried: list[str] | tuple[str, ...] = (),
+) -> str | None:
+    """Return a conservative local fallback Runner profile, if one exists."""
+    from . import runner_select
+
+    candidate = runner_select.automatic_fallback_runner(
+        available_selection_runners(repo_root),
+        current=current,
+        failure_kind=failure_kind,
+        tried=tried,
+    )
+    return candidate.name if candidate is not None else None
+
+
 def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> str:
     """Determine which runner to use for this repo.
 

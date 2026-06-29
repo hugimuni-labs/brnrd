@@ -16,11 +16,10 @@ already ships (extra frontmatter keys, fully backward-compatible); the only
 user-facing knobs are *which Shell* (``shell=``) and *which Core* (``core=``).
 Everything else the resident reads and decides.
 
-This module is the **data model + a deterministic, conservative selector**. It
-does *not* change dispatch yet: the daemon still resolves and invokes one
-runner via :func:`runner.resolve_runner`. Wiring the selector into dispatch and
-the respawn portal (``design-runner-cores.md`` implementation sequence steps
-4-7) is a later slice; this is the foundation those rest on.
+This module is the **data model + deterministic policy** for first selection and
+for the narrow automatic fallback path. The daemon still invokes one Runner at a
+time, but after a classified quota/auth/provider failure it may ask this module
+for a conservative same-or-cheaper local fallback before surfacing the failure.
 """
 
 from __future__ import annotations
@@ -28,6 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from . import runner_failures
 
 # Cost classes, cheapest → strongest. ``relay`` is a brnrd-owned paid fallback,
 # never auto-selected (it needs spend-plan consent), so it sorts outside the
@@ -47,6 +48,14 @@ POLICY_FIXED = "fixed"
 # cost_rank for profiles that declare none. Unknown cost must never *win* a
 # cheapest-first race, so it sorts last rather than as 0.
 _UNKNOWN_COST_RANK = 1_000_000
+
+AUTO_FALLBACK_FAILURES = frozenset(
+    {
+        runner_failures.QUOTA_EXHAUSTED,
+        runner_failures.AUTH_ERROR,
+        runner_failures.PROVIDER_ERROR,
+    }
+)
 
 
 def _as_int(value: Any) -> int | None:
@@ -191,6 +200,10 @@ def _local(runners: list[RunnerProfile]) -> list[RunnerProfile]:
     return [r for r in runners if not r.is_relay]
 
 
+def _by_cost(runner: RunnerProfile) -> tuple[int, str]:
+    return (runner.rank, runner.name)
+
+
 def select_runner(
     runners: list[RunnerProfile],
     *,
@@ -232,7 +245,7 @@ def select_runner(
         return None
 
     def cheapest(candidates: list[RunnerProfile]) -> RunnerProfile:
-        return sorted(candidates, key=lambda r: (r.rank, r.name))[0]
+        return sorted(candidates, key=_by_cost)[0]
 
     if policy == POLICY_FIXED:
         return cheapest(local)
@@ -241,6 +254,90 @@ def select_runner(
     target_rank = _LOCAL_CLASS_ORDER.get(target, len(_LOCAL_CLASS_ORDER))
     at_or_below = [r for r in local if r.class_rank <= target_rank]
     return cheapest(at_or_below or local)
+
+
+def automatic_fallback_runner(
+    runners: list[RunnerProfile],
+    *,
+    current: str,
+    failure_kind: str | None,
+    tried: list[str] | tuple[str, ...] = (),
+) -> RunnerProfile | None:
+    """Pick the next local Runner after an operational failure.
+
+    Automatic fallback is deliberately narrower than first selection:
+
+    - only unambiguous operational failures enter it (quota/auth/provider);
+    - paid relay profiles are excluded until the spend-plan consent slice lands;
+    - the next Runner must be in the same or a cheaper class than the failed one,
+      so recovery does not silently escalate cost;
+    - provider outages require a different provider, while quota/auth failures
+      require a different failure domain (quota source first, provider second).
+
+    Returns ``None`` when no conservative local fallback exists.
+    """
+    if failure_kind not in AUTO_FALLBACK_FAILURES:
+        return None
+
+    current_profile = _find_runner(runners, current)
+    if current_profile is None:
+        return None
+
+    tried_names = {str(name) for name in tried if str(name).strip()}
+    tried_names.add(current_profile.name)
+    tried_names.add(current_profile.profile)
+
+    candidates = [
+        runner for runner in runners
+        if (
+            not runner.is_relay
+            and runner.name not in tried_names
+            and runner.profile not in tried_names
+        )
+    ]
+    if not candidates:
+        return None
+
+    if current_profile.cost_class in _LOCAL_CLASS_ORDER:
+        candidates = [
+            runner for runner in candidates
+            if runner.class_rank <= current_profile.class_rank
+        ]
+    if not candidates:
+        return None
+
+    if failure_kind == runner_failures.PROVIDER_ERROR and current_profile.provider:
+        current_provider = current_profile.provider.strip().lower()
+        candidates = [
+            runner for runner in candidates
+            if (runner.provider or "").strip().lower() != current_provider
+        ]
+    else:
+        current_domain = _failure_domain(current_profile)
+        if current_domain:
+            candidates = [
+                runner for runner in candidates
+                if _failure_domain(runner) != current_domain
+            ]
+
+    if not candidates:
+        return None
+    return sorted(candidates, key=_by_cost)[0]
+
+
+def _find_runner(runners: list[RunnerProfile], name: str) -> RunnerProfile | None:
+    for runner in runners:
+        if runner.name == name or runner.profile == name:
+            return runner
+    return None
+
+
+def _failure_domain(runner: RunnerProfile) -> str | None:
+    for value in (runner.quota_source, runner.provider, runner.profile, runner.name):
+        text = (value or "").strip().lower()
+        if text:
+            return text
+    return None
 
 
 @dataclass(frozen=True)
