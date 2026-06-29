@@ -404,6 +404,75 @@ def available_selection_runners(repo_root: Path | None = None) -> list["RunnerPr
     return out
 
 
+def available_runner_catalog(
+    repo_root: Path | None = None,
+    *,
+    selected: str | None = None,
+) -> list[dict[str, Any]]:
+    """Structured catalog of selectable local Runner profiles.
+
+    This is the control-surface projection over the selector's profile view:
+    declared profiles plus Core-registry-generated profiles, filtered to
+    binaries currently on PATH. It intentionally omits command strings while
+    preserving the fields the resident/user need to reason about a respawn:
+    Shell, Core, class, cost rank, quota source, auth variant, availability,
+    and which profile is active.
+    """
+    profiles = _selection_profiles(repo_root)
+    selected_name = str(selected or "").strip()
+    out: list[dict[str, Any]] = []
+    for name, profile in profiles.items():
+        if not _runner_available(name, profiles):
+            continue
+        record = _catalog_record(name, profile, selected_name)
+        if record:
+            out.append(record)
+    return sorted(
+        out,
+        key=lambda item: (
+            item.get("cost_rank") is None,
+            item.get("cost_rank") if item.get("cost_rank") is not None else 0,
+            str(item.get("name") or ""),
+        ),
+    )
+
+
+def _catalog_record(
+    name: str,
+    profile: dict[str, Any] | None,
+    selected: str,
+) -> dict[str, Any] | None:
+    from . import runner_select
+
+    if not isinstance(profile, dict):
+        return None
+    runner_profile = runner_select.runner_from_profile(name, profile)
+    shell = str(
+        profile.get("shell") or profile.get("binary") or runner_profile.profile
+    ).strip() or None
+    record: dict[str, Any] = {
+        "name": name,
+        "shell": shell,
+        "model": runner_profile.model,
+        "provider": runner_profile.provider,
+        "owner": runner_profile.owner,
+        "class": runner_profile.cost_class,
+        "cost_rank": runner_profile.cost_rank,
+        "quota_source": runner_profile.quota_source,
+        "hooks": runner_profile.hooks,
+        "auth_variant": str(profile.get("auth_variant") or "").strip() or None,
+        "auth_env": str(profile.get("auth_env") or "").strip() or None,
+        "capability_score": runner_profile.capability_score,
+        "capability_source": runner_profile.capability_source,
+        "capability_freshness": runner_profile.capability_freshness,
+        "generated_core": bool(profile.get("generated_core")),
+        "available": True,
+        "availability": "available",
+        "selected": name == selected or runner_profile.profile == selected,
+    }
+    return {key: value for key, value in record.items() if value is not None}
+
+
 def fallback_runner(
     repo_root: Path,
     current: str,
