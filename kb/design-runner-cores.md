@@ -329,19 +329,22 @@ Approve / Queue until local reset / Configure own runner
    shipped here: `_collect_levels(refresh=False)` on the `_emit_flush` path
    prevents the ~18s PTY `/usage` scrape from blocking tool-boundary flushes;
    the heartbeat path keeps `refresh=True` and owns the cache refresh.
-5. **Dynamic Core registry** *(shipped 2026-06-29, corrected in dispatch the
-   same day, `runner_cores.py` + `runner.py`)*:
+5. **Dynamic Core registry + help probe** *(registry shipped 2026-06-29,
+   corrected in dispatch the same day; help-probe fallback shipped later that
+   day, `runner_cores.py` + `runner.py`)*:
    `available_cores()` returns `RunnerProfile` records for all Cores whose Shell
-   binary is on PATH, from a bundled registry. Project `runners.md` entries
+   binary is on PATH, from a bundled registry plus any model-ish tokens exposed
+   by a short local Shell help probe. Project `runners.md` entries
    extend/override the registry via the `extra=` parameter. The resolver reads
-   generated invokable profiles derived from this registry (`claude-haiku`,
-   `codex-mini`, etc.) and auto mode prefers concrete Cores over model-less base
-   Shell profiles. `shell=` still exact-pins the named Shell/profile; `core=`
-   can match a full model id or short generated profile alias such as `haiku`.
-   No hardcoded model names live in dispatch — updating the registry is the
-   only brr change when a new bundled model ships. `cores_for_shell()` lets a
-   future CLI/display step list Cores per Shell without requiring the binary to
-   be on PATH. A true live per-Shell model probe remains open.
+   generated invokable profiles derived from this view (`claude-haiku`,
+   `codex-mini`, probed profiles such as `codex-gpt-new-*`, etc.) and auto mode
+   prefers concrete Cores over model-less base Shell profiles. `shell=` still
+   exact-pins the named Shell/profile; `core=` can match a full model id or
+   short generated profile alias such as `haiku`. Dispatch no longer hardcodes
+   model names. `cores_for_shell()` lets a future CLI/display step list bundled
+   Cores per Shell without requiring the binary to be on PATH. A stable
+   per-Shell `list models` command/API remains open; help output is only a
+   best-effort discovery seam.
 6. **Capability cache substrate** *(shipped 2026-06-29,
    `runner-capabilities.json` + `runner_capabilities.py`)*: benchmark hints are
    packaged as a source/freshness-tagged cache keyed by model id, loaded without
@@ -350,9 +353,13 @@ Approve / Queue until local reset / Configure own runner
    scores; hand-set class stays authoritative. Current bundled rows are
    provenance placeholders with null scores, deliberately avoiding fabricated
    benchmark claims. Populating and refreshing trusted scores remains open.
-7. **Failure classifier:** distinguish quota, auth, provider outage, quality
-   escalation, and no-response validation. Only quota/auth/provider errors enter
-   fallback policy automatically.
+7. **Failure classifier** *(classification shipped 2026-06-29)*: the daemon
+   distinguishes timeout, quota exhaustion, auth error, provider failure,
+   generic runner error, and clean no-output validation. The classification
+   rides `attempt_failed` and terminal `failed` packets so cards render
+   quota/auth/provider failures distinctly. Still open: quality escalation and
+   automatic fallback policy. Only quota/auth/provider errors should enter
+   fallback policy automatically once the fallback loop exists.
 8. **Respawn portal** *(consumer shipped 2026-06-29)*: a resident can drop an
    outbox message with `respawn: true`, `shell=` / `core=`, reason,
    carry-forward body, and optional `at` / `defer_until`. The daemon queues a

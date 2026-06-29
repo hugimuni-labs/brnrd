@@ -8860,3 +8860,20 @@ claiming they are paired with no active repo.
 
 Full `pytest -q` passes again: 1123 tests, with only the existing
 Starlette/httpx deprecation warning.
+
+## [2026-06-29] implement | Live Core help probe and runner failure classification
+
+Continued the non-KB-gardening remainder of `plan-repo-gardening.md` Task 2 on
+`brr/initial-context-reweave`.
+
+`runner_cores.py` now performs a bounded local help probe for declared Shells
+and materializes newly exposed model tokens as generated Core profiles, while
+keeping the bundled registry and project `runners.md` overrides authoritative.
+This closes the best-effort CLI-output/help half of the per-Shell model probe;
+a stable first-class model-list command/API remains open.
+
+Runner failures now classify into timeout, quota exhaustion, auth error,
+provider failure, generic runner error, or clean no-output. The classification
+rides both `attempt_failed` and terminal `failed` packets, and the progress card
+labels quota/auth/provider failures distinctly. The previous "session limit"
+shape now surfaces as `quota_exhausted` rather than generic `runner_error`.

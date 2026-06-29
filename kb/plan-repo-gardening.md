@@ -1,6 +1,6 @@
 # Plan: repo gardening — initial context, respawn model, imagery, kb/code sweep
 
-**Status: executing — Tasks 1, 3.3, 4A, 4B done 2026-06-28/29; Task 2 partial (new slice + 2A + corrected 2B + 2C substrate + 2D respawn consumer + 2E Activity implementation + 2F runner portal metadata) done 2026-06-29.** The maintainer
+**Status: executing — Tasks 1, 3.3, 4A, 4B done 2026-06-28/29; Task 2 partial (new slice + 2A + corrected 2B + live help probe + 2C substrate + 2D respawn consumer + 2E Activity implementation + 2F runner portal metadata + failure classification) done 2026-06-29.** The maintainer
 asked this run to *evaluate and plan only*; a later run on a cheaper-but-capable
 model (Sonnet) executes the plan. We are at an architecture crossroads where
 **vessel / medium / runner / core** are mixed across configs, kb, prompts, and
@@ -134,8 +134,12 @@ without a brr update. Plan:
 - Generated Core profiles carry real commands: the model flag is inserted into
   the base Shell command, hooks/quota metadata are inherited from the Shell, and
   the daemon uses the same metadata for the `resources.runner` portal block.
-- Still not done: a true per-Shell model *probe* from CLI output/help. Today the
-  registry is bundled data plus project overrides, not a live discovered list.
+- **Best-effort live probe shipped 2026-06-29:** `runner_cores.py` now runs a
+  short local help probe for declared Shells and materializes any model-ish
+  tokens it exposes as generated Core profiles. The bundled registry and
+  project overrides remain the fallback and authority. Still not done: a stable
+  per-Shell model-list command/API; when a CLI's help does not expose model
+  choices, brr cannot discover new Cores without registry/project data.
 
 ### 2C — Capability-aware selection (swe-bench / terminal-bench), cached — **substrate shipped 2026-06-29**
 The maintainer wants cost **and capability** awareness, ideally from a
@@ -195,6 +199,15 @@ Part 3. **Current state:** `portal-state.json` already carries
 the selected Core's model/class/provider/hooks/cost metadata instead of only the
 base Shell name. The compact hook line still renders the wall/state facets, not
 the governance block.
+
+### 2G — Failure classifier — **shipped 2026-06-29**
+The daemon now classifies runner failures into timeout, quota exhaustion,
+auth error, provider error, generic runner error, or clean no-output. The
+classification rides both `attempt_failed` and terminal `failed` packets, and
+the card labels quota/auth/provider failures distinctly instead of collapsing
+them into `runner_error`. The prior "session limit" failure mode is now
+`quota_exhausted`. This is classification only; automatic fallback policy and
+paid relay consent remain separate slices.
 
 ## Part 3 — Imagery & vocabulary (Task 3) — decision + pushback
 
