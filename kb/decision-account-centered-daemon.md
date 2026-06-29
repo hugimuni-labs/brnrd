@@ -99,15 +99,28 @@ daemon: a repo-scoped home cannot carry a plan that spans repos; only the
 account daemon sees all the repos at once. So the two forks are one shape — this
 is why they resolve together.
 
-Recommended physical location (flagged for the maintainer, see Open questions): a
-**tracked file in the repo** (e.g. a per-resident `kb/plan-active.md` or a
-dominion-mirrored tracked doc) over an **orphaned branch** or a **gist**. The
-maintainer's own test is "known and visible"; a tracked file is web-rendered,
-git-historied, diffable, and injectable for free. An orphaned branch is invisible
-in the repo tree unless you know the ref; a gist lives off-repo behind separate
-auth. Cross-repo plans, which can't live in a single repo, are the one case that
-points at an account-level store (or a designated "home" repo) — decide on
-execution.
+Recommended physical location (refined with the maintainer, evt-ohsp): an
+**orphaned branch**, surfaced by the daemon — *not* a working-tree tracked file.
+This reverses an earlier draft that recommended a working-tree file. The maintainer
+raised a valid objection: a tracked file in the main tree **pollutes the user's
+repo** (it shows up in their checkout, PRs, and `git log`), and users may not want
+brr's bookkeeping there. An orphaned branch threads the needle:
+
+- it is **in the repo** (pushable, fetchable, web-visible at its branch URL,
+  git-historied) — so it still passes the "known and visible" test;
+- it is **not in the working tree** — zero pollution of the user's checkout;
+- the earlier "invisible unless you know the ref" objection is answered by the
+  **daemon surfacing it** (card link + auto-injection between wakes) — the user
+  never needs the ref; brr brings the plan to them.
+
+Crucially this **reuses brr's existing dominion pattern** (`brr-home` is already
+an orphaned branch holding the resident's durable memory) rather than inventing a
+new mechanism — a dedicated user-facing sibling (e.g. `brr-plans`), or a
+designated namespace, kept distinct from the private dominion. A gist stays the
+weakest option (off-repo, separate auth). Cross-repo plans, which can't live in a
+single repo's branch, point at an **account-level** store (the account daemon's
+own orphaned branch, or a designated home repo) — the case that genuinely needs
+the account model. Final placement is the maintainer's call on execution.
 
 ### 5. User view surface + control plane
 
@@ -238,10 +251,11 @@ the load-bearing notes:
 
 ## Open questions (genuine — surface, don't force)
 
-- **Inter-run plan physical location.** Tracked repo file (recommended) vs
-  orphaned branch vs gist; and where cross-repo plans live (account-level store
-  vs a designated home repo). Maintainer leaned "in the repo, known and visible."
-  Decide on execution.
+- **Inter-run plan physical location.** Refined (evt-ohsp): **orphaned branch**
+  surfaced by the daemon, recommended over a working-tree tracked file (which
+  pollutes the user's checkout) — reusing the dominion's `brr-home` pattern. Open
+  on execution: dedicated `brr-plans` sibling vs a namespace; and where cross-repo
+  plans live (account-level orphaned branch vs a designated home repo).
 - **Multi-account on one laptop.** Rare; defer. The account model should not
   *forbid* it, but v1 need not support it.
 - **Repo discovery.** Explicit registry (user adds repos) vs scanning a
