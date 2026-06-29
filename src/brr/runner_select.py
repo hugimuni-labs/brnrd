@@ -409,6 +409,55 @@ def _failure_domain(runner: RunnerProfile) -> str | None:
     return None
 
 
+def relay_runners(runners: list[RunnerProfile]) -> list[RunnerProfile]:
+    """All available paid relay runners, sorted by cost.
+
+    Relay runners are brnrd-owned or explicitly marked as class='relay'.
+    They are never auto-selected; they require spend-plan consent from the user.
+    This function returns the candidates for when local runners are exhausted.
+
+    Returns an empty list if no relay runners are available.
+    """
+    relay = [r for r in runners if r.is_relay]
+    return sorted(relay, key=_by_cost)
+
+
+def best_relay_runner(
+    runners: list[RunnerProfile],
+    *,
+    preferred_provider: str | None = None,
+) -> RunnerProfile | None:
+    """Pick the best relay runner for fallback, optionally matching a provider.
+
+    When local runners are exhausted, offer a relay runner. If preferred_provider
+    is set (e.g., 'openai' for Codex relay), prefer that provider. Otherwise,
+    pick the cheapest available relay runner.
+
+    This function does NOT gate on spend-plan consent — that is the caller's
+    responsibility. It only returns the candidate to propose to the user.
+
+    Args:
+        runners: All available runner profiles.
+        preferred_provider: If set, prefer relay runners from this provider.
+
+    Returns:
+        The best relay runner candidate, or None if no relay runners are available.
+    """
+    relay = relay_runners(runners)
+    if not relay:
+        return None
+
+    if preferred_provider:
+        provider_matches = [
+            r for r in relay
+            if (r.provider or "").strip().lower() == preferred_provider.strip().lower()
+        ]
+        if provider_matches:
+            return sorted(provider_matches, key=_by_cost)[0]
+
+    return relay[0]
+
+
 @dataclass(frozen=True)
 class RespawnRequest:
     """A resident-authored ask to re-run on a stronger/different Shell or Core.
@@ -421,6 +470,9 @@ class RespawnRequest:
     a parallel time queue. The daemon's respawn loop (a later slice, gated on
     the run/event model #128) consumes it; this records the contract so the
     selector and the loop agree.
+
+    For relay respawn requests (when spending on brnrd relay), the ``relay_consent``
+    field carries approval status: 'pending', 'approved', 'denied', or 'capped'.
     """
 
     reason: str
@@ -429,3 +481,5 @@ class RespawnRequest:
     consent: str | None = None
     at: str | None = None
     defer_until: str | None = None
+    relay_consent: str = "pending"
+    """Relay spend consent: 'pending', 'approved', 'denied', or 'capped'."""
