@@ -9021,3 +9021,34 @@ Deferred slices 5-7 for next wake:
 - ac8ad30 feat: expose relay consent in portal-state.json (slice 4)
 
 **Branches**: brr/initial-context-reweave (4 commits ahead of origin)
+
+## [2026-06-29] decision | account-centered daemon + control-surface reshape
+
+Maintainer (evt-ogga) resolved the two architecture forks the execution-model
+review parked, and asked to etch the new shape: account-centered daemon, OSS
+self-deploy friendly, cheap answer-or-respawn handler, user view surface + control
+plane — "the engine without the dashboard" was the diagnosis; they ship together.
+
+Wrote `decision-account-centered-daemon.md` (core shape + implementation/migration
+notes for the next model): one daemon per account (forge identity + laptop),
+repo-scoped runs underneath; cheap dispatcher stays repo-based (default repo) but
+can respawn-in-another-repo; inter-run plans live in-repo, known and visible
+(web-rendered tracked file recommended over orphaned branch/gist); local-first view
+surface with optional brnrd projection (the OSS self-deploy invariant). Turned the
+review's reshape direction into `plan-control-surface.md` (CS1–CS7, projection
+surfaces first; includes the maintainer-approved bare-API catalog collapse — noted
+as behaviour-touching, ~31 refs across 8 test files, its own wake). Folded both into
+`plan-repo-gardening.md` Part 5; marked the review's forks resolved; indexed.
+
+Mid-thread correction (evt-w02y): the maintainer caught a conflation in my first
+framing — I'd merged "which repo" and "which Runner" into one bypass rule. Resolved:
+two independent axes. Repo routing is the dispatcher's *output* (or inherent to
+forge events, which are repo-addressed at the gate and never touch the dispatcher),
+never a precondition you "skip." The only real bypass is the 2A Shell/Core pin on
+the Runner axis. Corrected the decision page + both plans.
+
+kb cleanup: re-homed `plan-relay-spend-consent` (was a peer orphan) into the
+gardening relay slice; the review page is now linked from index + decision + plan.
+
+Commits: 12339bd (decision + plans), 3c7757d (orphan re-home), + this turn's
+routing correction. Branch: brr/initial-context-reweave.

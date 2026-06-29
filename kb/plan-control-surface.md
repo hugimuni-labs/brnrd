@@ -62,9 +62,10 @@ activity view already uses `repo_id`; extend cards and per-run records to match.
 Lift the daemon from per-repo to per-account (decision page, migration step 2):
 account config (forge identity + repo registry + default repo); `brr up` reads
 it; the event loop selects `repo_root` per run. Add `RespawnRequest.repo` and the
-**respawn-in-another-repo** dispatch (step 3). Bypass the cheap dispatcher per the
-decision's routing table (reuse the 2A pin-skip path; add forge-event-carries-repo
-and repo-pin cases). Keep single-flight across repos for v1. **OSS invariant:
+**respawn-in-another-repo** dispatch (step 3). Route on two axes per the decision's
+table: *which repo* (forge events repo-addressed at the gate → no dispatcher;
+message events → dispatcher output) and *which Runner* (reuse the 2A Shell/Core
+pin-skip path). Keep single-flight across repos for v1. **OSS invariant:
 local-only first, brnrd projection additive.**
 
 ### CS5 — Inter-run plan home + injection

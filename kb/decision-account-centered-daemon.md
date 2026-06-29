@@ -144,26 +144,50 @@ the load-bearing constraint that keeps the reshape from collapsing into a
 managed-only feature. Every part above must have a local-only realization first;
 the brnrd projection is additive.
 
-## When to bypass the dispatcher (the maintainer's open question)
+## Two routing axes — don't conflate them (corrected, evt-w02y)
 
-The maintainer asked "how to decide when to bypass [the cross-repo dispatcher]."
-Generalize the existing 2A pin-skip rule to a **repo axis**. Skip the cheap
-dispatcher when routing is already unambiguous:
+An earlier draft folded "which repo" and "which Runner" into one "skip the
+dispatcher when routing is unambiguous" rule. The maintainer caught the conflict:
+*if the dispatcher runs in a repo, you don't "skip" it to reach the right repo —
+running it is how you reach the right repo.* Repo routing is the dispatcher's
+**output**, never a precondition you bypass. The clean model has **two
+independent axes**:
 
-| Event | Routing known? | Dispatcher |
+### Axis A — which repo (determined by the event source, not a bypass)
+
+- **Forge events** (issue/PR comment) are **repo-addressed at the gate** — they
+  arrive carrying repo identity, so they **never touch the cheap dispatcher**;
+  they start directly in that repo's worktree. This is not "skipping" a
+  dispatcher — there is no dispatcher in this path.
+- **Channel/message events** (Telegram) have **no inherent repo**. They enter
+  through the cheap dispatcher, which runs **in the default repo** and either
+  keeps the work there or emits a **respawn-in-another-repo**. For message events,
+  repo routing is the dispatcher's *output*, never a precondition.
+
+So the cheap dispatcher is specifically a **message-event construct** for the
+no-inherent-repo case. Forge events route by construction; message events route
+through the dispatcher.
+
+### Axis B — which Runner / Shell+Core (this is the only real "bypass" — the 2A rule)
+
+- **Shell/Core pinned** (`shell=`/`core=`) → skip the cheap *intent-parsing* wake;
+  go straight to the named Runner. No cheap model is needed to parse "run on
+  Opus." For a message event with Shell/Core pinned, the work runs directly in the
+  default (or channel-configured) repo, with respawn-in-another-repo still
+  available from inside the real run.
+- **Nothing pinned** → the entry wake selects conservatively / parses intent (the
+  dispatcher for message events; the first run for forge events).
+
+| Event source | Repo (axis A) | Runner (axis B) |
 | --- | --- | --- |
-| Shell/Core pinned (`shell=`/`core=`) | yes (2A rule) | **skip** — run directly |
-| Forge event (issue/PR comment) | yes — event carries repo identity | **skip** — run in that repo |
-| User pins a repo | yes | **skip** — run in that repo |
-| Bare message event, no repo, no pin | no | **cheap dispatch** on default repo → answer or respawn (possibly into another repo) |
+| Forge (issue/PR) | the event's repo (no dispatcher) | pinned → direct; else conservative default |
+| Message, Shell/Core pinned | default / channel repo (dispatcher's intent job not needed) | the pin |
+| Message, nothing pinned | **cheap dispatcher** in default repo → keep or respawn-into-another-repo | dispatcher parses intent |
 
 **Where the cross-repo dispatcher runs:** the account daemon is its *home* (it
-owns cross-repo dispatch). The cheap wake *itself* runs as a normal repo-scoped
-run on the **default repo** — that buys it a real working directory and repo
-context cheaply; its respawn output is what the account daemon consumes to cross
-repos. So "where to run it" and "when to bypass it" are the same rule seen twice:
-unambiguous routing skips the wake; an ambiguous message gets one cheap
-default-repo wake whose only job may be to redirect.
+owns cross-repo dispatch). The cheap wake itself runs as a normal repo-scoped run
+on the **default repo** — that buys it a real working directory and repo context
+cheaply; its respawn output is what the account daemon consumes to cross repos.
 
 ## Consequences / migration
 

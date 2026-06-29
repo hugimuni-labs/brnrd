@@ -354,8 +354,11 @@ architecture forks the review parked are now **resolved by the maintainer
    right shape.* One daemon per account (forge identity + laptop); repo-scoped
    runs underneath. The cheap dispatcher stays repo-based (default-repo selector)
    but can return a **respawn-in-another-repo** request the account daemon
-   dispatches. Status cards show the repo. Bypass generalizes the 2A pin-skip rule
-   to a repo axis. **OSS self-deploy invariant holds:** account is an organizing
+   dispatches. Status cards show the repo. Routing splits into two axes: *which
+   repo* (forge events are repo-addressed at the gate and never touch the
+   dispatcher; message events route via the dispatcher's output) and *which
+   Runner* (the 2A Shell/Core pin-skip). Repo routing is the dispatcher's output,
+   not a bypass. **OSS self-deploy invariant holds:** account is an organizing
    concept, not a cloud dependency.
 2. **Where inter-run plans live** — *resolved: in the repo, known and visible* —
    web-visible, referenced in status cards, auto-injected/preloaded by the daemon
