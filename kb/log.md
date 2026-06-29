@@ -8833,3 +8833,30 @@ Focused tests passed:
 Full `pytest -q` still stops during collection on unrelated brnrd model/test
 drift (`Project`, `RepoBinding`, and `ChatBinding` imports expected by brnrd
 tests but absent from `brnrd.models`).
+
+## [2026-06-29] implement | Respawn consumer and brnrd Activity read surface
+
+Continued `plan-repo-gardening.md` Task 2 on `brr/initial-context-reweave`.
+
+The parked respawn contract now has a daemon consumer. Outbox messages can use
+`respawn: true` with `shell=` / `core=`, a reason, a carry-forward body, and
+optional `at` / `defer_until`; the daemon queues a new event with those runner
+overrides and records `respawn` as the current run's success signal instead of
+falling into no-output failure. Event-specific runner overrides are passed to
+`runner.resolve_runner()` without changing repo config.
+
+The brnrd Activity read slice shipped. Daemons can replace their current
+snapshot through `PUT /v1/daemons/activity`; accounts read
+`GET /v1/accounts/activity`; `brnrd_web` serves a read-only `/activity` view;
+and the cloud gate publishes running runs, resident schedule entries, and parked
+respawn events from local `.brr` state. The Activity contract uses `repo_id`,
+reconciling the dashboard handoff with the accepted repo-first decision.
+
+The stale brnrd tests were migrated from retired `Project` / `RepoBinding` /
+`ChatBinding` names to `Repo` / `ChannelRoute`, removing the collection blocker
+called out by the previous run. A real Telegram copy bug surfaced during the
+migration and was fixed: unpaired chats now say they are not paired, instead of
+claiming they are paired with no active repo.
+
+Full `pytest -q` passes again: 1123 tests, with only the existing
+Starlette/httpx deprecation warning.

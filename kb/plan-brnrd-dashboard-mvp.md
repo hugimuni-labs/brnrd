@@ -347,9 +347,9 @@ Steps:
 9. **View 9: `GET /activity` → activity view** (NEW). Renders
    running runs from the daemon presence/run registry, scheduled
    wakes from the resident schedule, and parked respawn requests
-   from the respawn/defer queue. The backend contract should
+   from the respawn/defer queue. The backend contract now
    expose a uniform activity record:
-   `id`, `kind`, `project_id`, `source`, `conversation_key`,
+   `id`, `kind`, `repo_id`, `source`, `conversation_key`,
    `summary`, `runner` (Shell/Core metadata), `status`,
    `phase`, `branch`, `pr_number`, `started_at`,
    `updated_at`, `scheduled_for`, `defer_until`, and
@@ -529,3 +529,11 @@ Steps:
   surface; the daemon / brnrd protocol slices still own the
   uniform activity-record endpoint and any later cancel /
   reschedule / approve actions.
+- 2026-06-29 (Activity implementation). The read-only Activity
+  slice shipped: daemons publish snapshots with
+  `PUT /v1/daemons/activity`, account clients read
+  `GET /v1/accounts/activity`, and `GET /activity` renders the
+  dashboard view. The activity record follows the accepted
+  repo-first decision (`repo_id`, not `project_id`); later cancel,
+  reschedule, and approve-respawn mutations remain outside this MVP
+  slice.

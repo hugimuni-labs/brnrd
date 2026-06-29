@@ -20,7 +20,7 @@ from ..platforms import telegram as tg
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 
-_UNPAIRED_TEXT = "This chat is paired to your brnrd account, but no active repo is selected. Send /repos or /repo owner/name."
+_UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then send /repos or /repo owner/name."
 _UNBOUND_REPO_TEXT = "This repository is not connected to brnrd yet. Open brnrd.dev, connect the repo, then call the bot again."
 
 

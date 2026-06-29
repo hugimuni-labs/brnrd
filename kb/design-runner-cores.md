@@ -353,11 +353,12 @@ Approve / Queue until local reset / Configure own runner
 7. **Failure classifier:** distinguish quota, auth, provider outage, quality
    escalation, and no-response validation. Only quota/auth/provider errors enter
    fallback policy automatically.
-8. **Respawn portal:** let a resident request a stronger Shell/Core with reason and
-   carry-forward context. *(Contract slice shipped 2026-06-29: `RespawnRequest`
-   now also carries optional `at` / `defer_until` fields so scheduled respawn
-   composes with the existing schedule/defer machinery; daemon consumption
-   remains open.)*
+8. **Respawn portal** *(consumer shipped 2026-06-29)*: a resident can drop an
+   outbox message with `respawn: true`, `shell=` / `core=`, reason,
+   carry-forward body, and optional `at` / `defer_until`. The daemon queues a
+   new event with those runner overrides and treats `respawn` as the current
+   run's success signal, so a cheap dispatcher can park the handoff without
+   producing a misleading no-output failure.
 9. **brnrd relay consent:** spending-plan prompt, wallet balance read, cap
    enforcement, audit rows. Codex/OpenAI first.
 10. **Provider collectors:** async collectors for OpenAI, Anthropic, Gemini, each

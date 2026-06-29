@@ -1,6 +1,6 @@
 # Plan: repo gardening — initial context, respawn model, imagery, kb/code sweep
 
-**Status: executing — Tasks 1, 3.3, 4A, 4B done 2026-06-28/29; Task 2 partial (new slice + 2A + corrected 2B + 2C substrate + 2D contract + 2E dashboard-plan handoff + 2F runner portal metadata) done 2026-06-29.** The maintainer
+**Status: executing — Tasks 1, 3.3, 4A, 4B done 2026-06-28/29; Task 2 partial (new slice + 2A + corrected 2B + 2C substrate + 2D respawn consumer + 2E Activity implementation + 2F runner portal metadata) done 2026-06-29.** The maintainer
 asked this run to *evaluate and plan only*; a later run on a cheaper-but-capable
 model (Sonnet) executes the plan. We are at an architecture crossroads where
 **vessel / medium / runner / core** are mixed across configs, kb, prompts, and
@@ -158,15 +158,18 @@ benchmark. Plan:
   shipping 2B (model discovery) before 2C (scoring) — discovery is the
   load-bearing half; scoring is polish.
 
-### 2D — Scheduling-aware respawn — **contract shipped 2026-06-29**
+### 2D — Scheduling-aware respawn — **contract + daemon consumer shipped 2026-06-29**
 "Run in half an hour on Codex" = a scheduled respawn. This already has a home:
 the dominion `schedule.md` (`at:`/`every:`) and #128's `defer_until`. Plan: the
 `RespawnRequest` gains an optional `at:`/`defer_until` so a respawn can be both
 Runner-routed and time-deferred. No new mechanism — compose the two existing
 ones. **Shipped:** `RespawnRequest` now carries optional `at` and `defer_until`
-fields. The daemon-side respawn consumer is still a later slice.
+fields, the outbox parser recognises `respawn: true`, and the daemon queues a
+new event carrying the requested `shell=` / `core=` plus optional
+`defer_until`. The current run records `respawn` as a success signal instead of
+falling into no-output failure.
 
-### 2E — Show running + scheduled runs on the brnrd overview — **dashboard plan handoff done 2026-06-29**
+### 2E — Show running + scheduled runs on the brnrd overview — **read-only implementation shipped 2026-06-29**
 `plan-brnrd-dashboard-mvp.md` has **no run-listing view today** (grep: none).
 The presence registry (`presence.py`) and schedule (`schedule.py`) hold the
 data locally. Plan: add an **"Activity" view** to the dashboard inventory
@@ -174,12 +177,13 @@ data locally. Plan: add an **"Activity" view** to the dashboard inventory
 entries + parked `RespawnRequest`s). This is a dashboard slice to add to
 `plan-brnrd-dashboard-mvp.md`'s view inventory, consuming the brnrd protocol —
 flag it there so the dashboard plan owns the UI and this plan owns the data
-contract (what a run/scheduled-wake record must expose). **Done at the planning
-layer:** `plan-brnrd-dashboard-mvp.md` now has Activity as View 9, puts it in
-Slice 3, and records the uniform activity-record fields the backend should
-expose. Remaining work is implementation: brnrd protocol endpoint, dashboard
-route/template/tests, and later mutation actions (cancel / reschedule / approve
-respawn).
+contract (what a run/scheduled-wake record must expose). **Shipped:** brnrd now
+has `PUT /v1/daemons/activity` for daemon snapshots,
+`GET /v1/accounts/activity` for account reads, `/activity` in `brnrd_web`, and
+cloud gate snapshot publishing from run manifests, resident schedule entries,
+and parked respawn events. Activity uses the accepted repo-first `repo_id`
+vocabulary. Later mutation actions (cancel / reschedule / approve respawn)
+remain future protocol slices.
 
 ### 2F — Portal/structured-state upgrade (already sequenced) — **runner metadata wired**
 `design-runner-cores.md` step 3 ("replace flat `resources.quota` string with
