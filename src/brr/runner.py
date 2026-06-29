@@ -423,6 +423,25 @@ def fallback_runner(
     return candidate.name if candidate is not None else None
 
 
+def quality_escalation_runner(
+    repo_root: Path,
+    current: str,
+    *,
+    target_class: str | None = None,
+    tried: list[str] | tuple[str, ...] = (),
+) -> str | None:
+    """Return a stronger local Runner for an explicit quality escalation."""
+    from . import runner_select
+
+    candidate = runner_select.quality_escalation_runner(
+        available_selection_runners(repo_root),
+        current=current,
+        target_class=target_class or runner_select.STRONG,
+        tried=tried,
+    )
+    return candidate.name if candidate is not None else None
+
+
 def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> str:
     """Determine which runner to use for this repo.
 

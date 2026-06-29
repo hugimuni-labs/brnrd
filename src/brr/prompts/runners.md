@@ -187,6 +187,15 @@ profiles, stays in the same or a cheaper class, and avoids the same failure
 domain where metadata makes that visible. Relay remains behind spend-plan
 consent.
 
+Quality escalation is a different path. It is resident-authored, not automatic
+triage: after reading the repo, a cheap Runner can drop an outbox message with
+`respawn: true` and either an explicit `shell:` / `core:` or
+`quality: escalate`. The latter asks brr's deterministic selector for the
+stronger local Core advertised in `portal-state.json`
+(`resources.runner.quality_escalation`) and queues a fresh event for the same
+conversation. Relay profiles remain excluded here too; paid handoff waits for
+the spend-consent flow.
+
 Auto mode also reads brr's bundled Core registry. For each Shell declared in
 the active `runners.md`, brr materializes registry rows such as `claude-haiku`
 or `codex-mini` as invokable profiles by inserting the Core's model flag into

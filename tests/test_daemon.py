@@ -489,6 +489,73 @@ def test_drain_outbox_queues_respawn_request(tmp_path):
     assert protocol.event_is_deferred(spawned)
 
 
+def test_drain_outbox_quality_respawn_resolves_local_escalation(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+        chat_id="42",
+    )
+    event_id = path.stem
+    monkeypatch.setattr(
+        daemon.runner,
+        "quality_escalation_runner",
+        lambda _repo, current, *, target_class=None, tried=(): (
+            "claude-opus"
+            if current == "codex-mini" and target_class == "strong"
+            else None
+        ),
+    )
+    (outbox / "respawn.md").write_text(
+        "---\n"
+        "respawn: true\n"
+        "quality: escalate\n"
+        "reason: needs a stronger core\n"
+        "---\n"
+        "carry this exact task forward\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-dispatch",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"runner_name": "codex-mini"},
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        repo_root=tmp_path,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"respawn": 1}
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("respawned_from_event") == event_id
+    ][0]
+    assert spawned["shell"] == "claude-opus"
+    assert spawned["respawn_quality"] == "strong"
+    assert spawned["respawn_reason"] == "needs a stronger core"
+
+
 def test_run_worker_writes_terminal_failure_response_on_runner_error(
     tmp_path, monkeypatch,
 ):

@@ -138,6 +138,7 @@ def _level_record(
 def _runner_block(
     runner_name: str | None,
     runner_meta: "dict[str, object] | None",
+    quality_escalation: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the ``resources.runner`` governance block.
 
@@ -155,7 +156,7 @@ def _runner_block(
     if not runner_name:
         return {"status": ABSENT, "summary": None, "note": "no runner resolved yet"}
     meta = runner_meta or {}
-    return {
+    block = {
         "status": KNOWN,
         "name": runner_name,
         "model": str(meta.get("model") or "").strip() or None,
@@ -172,6 +173,9 @@ def _runner_block(
         ).strip() or None,
         "summary": runner_name,
     }
+    if quality_escalation:
+        block["quality_escalation"] = quality_escalation
+    return block
 
 
 def build(
@@ -183,6 +187,7 @@ def build(
     pr_number: str | None = None,
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
+    quality_escalation: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -206,6 +211,8 @@ def build(
       profile dict carries model, class, provider, etc. Renders as
       ``resources.runner`` for governance visibility (step 3,
       ``design-runner-cores.md``).
+    - ``quality_escalation`` — deterministic stronger local Runner metadata for
+      a resident-authored ``respawn: true`` / ``quality: escalate`` handoff.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -257,7 +264,7 @@ def build(
     }
 
     return {
-        "runner": _runner_block(runner_name, runner_meta),
+        "runner": _runner_block(runner_name, runner_meta, quality_escalation),
         "quota": quota_facet,
         "spend": spend_facet,
         "context_window": context_facet,
