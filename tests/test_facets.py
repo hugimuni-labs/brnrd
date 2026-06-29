@@ -109,6 +109,9 @@ def test_build_runner_block_known_with_runner_name():
             "provider": "anthropic",
             "hooks": "claude",
             "cost_rank": 30,
+            "capability_score": 0.73,
+            "capability_source": "benchmark-cache",
+            "capability_freshness": "2026-06-29",
         },
     )
     runner = res["runner"]
@@ -119,6 +122,9 @@ def test_build_runner_block_known_with_runner_name():
     assert runner["provider"] == "anthropic"
     assert runner["hooks"] == "claude"
     assert runner["cost_rank"] == 30
+    assert runner["capability_score"] == 0.73
+    assert runner["capability_source"] == "benchmark-cache"
+    assert runner["capability_freshness"] == "2026-06-29"
     assert runner["summary"] == "claude"
 
 
