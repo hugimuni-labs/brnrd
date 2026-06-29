@@ -101,3 +101,37 @@ def test_available_cores_are_runner_profiles(monkeypatch):
     for p in profiles:
         assert isinstance(p, RunnerProfile)
         assert p.model is not None
+
+
+def test_generated_profile_entries_derive_invokable_profiles_from_base_shell():
+    profiles = runner_cores.generated_profile_entries(
+        {
+            "claude": {
+                "cmd": "claude --print --output-format json",
+                "hooks": "claude",
+                "quota_source": "claude-local",
+            }
+        }
+    )
+
+    haiku = profiles["claude-haiku"]
+    assert haiku["binary"] == "claude"
+    assert haiku["hooks"] == "claude"
+    assert haiku["quota_source"] == "claude-local"
+    assert haiku["model"] == "claude-haiku-4-5-20251001"
+    assert "--model claude-haiku-4-5-20251001" in haiku["cmd"]
+
+
+def test_generated_profile_entries_do_not_reintroduce_undeclared_shells():
+    profiles = runner_cores.generated_profile_entries({"local-agent": {"cmd": "agent"}})
+    assert profiles == {}
+
+
+def test_generated_profile_entries_preserve_declared_override():
+    profiles = runner_cores.generated_profile_entries(
+        {
+            "claude": {"cmd": "claude --print"},
+            "claude-haiku": {"cmd": "custom"},
+        }
+    )
+    assert "claude-haiku" not in profiles

@@ -235,11 +235,16 @@ class RespawnRequest:
     The data shape of the parked respawn portal (``design-runner-cores.md``):
     an economy run that finds the task harder than it looked, or hits a
     classified quota/auth/provider failure, emits this rather than grinding. The
-    daemon's respawn loop (a later slice, gated on the run/event model #128)
-    consumes it; this records the contract so the selector and the loop agree.
+    optional ``at`` / ``defer_until`` fields compose respawn with the existing
+    schedule/defer machinery ("run in half an hour on Codex") instead of adding
+    a parallel time queue. The daemon's respawn loop (a later slice, gated on
+    the run/event model #128) consumes it; this records the contract so the
+    selector and the loop agree.
     """
 
     reason: str
     proposed_runner: str
     carry_forward: str | None = None
     consent: str | None = None
+    at: str | None = None
+    defer_until: str | None = None
