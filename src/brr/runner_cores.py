@@ -6,13 +6,15 @@ the "live source" the selector reads; static ``runners.md`` profile metadata
 becomes *defaults/overrides* on top of it
 (``kb/plan-repo-gardening.md`` §2B).
 
-**Design:** neither ``claude`` nor ``codex`` expose a model-list CLI
-subcommand today. The probe is therefore: if the Shell binary is on PATH, all
-Cores declared for that Shell in the bundled registry are available. The
-registry ships as a typed Python dict (no separate data file needed at this
-scale; split if it grows past ~100 entries). Each Core entry carries the same
-metadata shape as a ``RunnerProfile`` so :func:`available_cores` can hand the
-result directly to :func:`runner_select.select_runner`.
+**Design:** neither ``claude`` nor ``codex`` expose a model-list CLI subcommand
+today. The probe is therefore: if the Shell binary is on PATH, all Cores
+declared for that Shell in the bundled registry are available. The registry
+ships as a typed Python dict (no separate data file needed at this scale; split
+if it grows past ~100 entries). Each Core entry carries the same metadata shape
+as a ``RunnerProfile`` so :func:`available_cores` can hand the result directly
+to :func:`runner_select.select_runner`. The daemon resolver uses
+``generated_profile_entries()`` to turn the same registry rows into concrete
+profiles with model flags inserted into the Shell command.
 
 **TTL / staleness:** the registry is static within a brr release. Operators
 who need to add a model before the next brr release add an entry to their
@@ -23,6 +25,7 @@ verified so a future tooling pass can flag stale entries.
 
 from __future__ import annotations
 
+import shlex
 import shutil
 from typing import Any
 
@@ -187,6 +190,57 @@ def cores_for_shell(shell_name: str) -> list[runner_select.RunnerProfile]:
     return out
 
 
+def generated_profile_entries(
+    declared_profiles: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Invokable profile entries generated from the bundled Core registry.
+
+    ``available_cores()`` exposes registry entries as selector records. The
+    daemon also needs a concrete profile name it can pass to ``_build_cmd``.
+    This helper derives those profiles from the Shell's declared base profile:
+    copy hook/quota metadata from the base Shell, insert the Core's model flag
+    into the base command, and keep project-declared profiles authoritative.
+
+    A registry Core is generated only when its Shell has a declared base profile
+    in the active ``runners.md`` source. That keeps a project-owned
+    ``.brr/runners.md`` from unexpectedly reintroducing bundled Shells it chose
+    not to declare.
+    """
+    declared = declared_profiles or {}
+    out: dict[str, dict[str, Any]] = {}
+    for name, entry in _BUNDLED_CORES.items():
+        if name in declared:
+            continue
+        shell = _str(entry.get("shell"))
+        model = _str(entry.get("model"))
+        if not shell or not model:
+            continue
+        base = _base_profile_for_shell(declared, shell)
+        if base is None:
+            continue
+        cmd = _cmd_with_model(shell, _str(base.get("cmd")) or shell, model)
+        generated: dict[str, Any] = {
+            "binary": _str(base.get("binary")) or shell,
+            "cmd": cmd,
+            "shell": shell,
+            "model": model,
+            "provider": _str(entry.get("provider")) or _str(base.get("provider")),
+            "owner": _str(entry.get("owner")) or _str(base.get("owner")) or "user",
+            "class": _str(entry.get("class")),
+            "cost_rank": _int(entry.get("cost_rank")),
+            "freshness_date": _str(entry.get("freshness_date")),
+            "generated_core": True,
+        }
+        hooks = _str(entry.get("hooks")) or _str(base.get("hooks"))
+        if hooks:
+            generated["hooks"] = hooks
+        quota_source = _str(entry.get("quota_source")) or _str(base.get("quota_source"))
+        if quota_source:
+            generated["quota_source"] = quota_source
+        out[name] = generated
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -206,3 +260,34 @@ def _int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _base_profile_for_shell(
+    declared_profiles: dict[str, dict[str, Any]],
+    shell: str,
+) -> dict[str, Any] | None:
+    base = declared_profiles.get(shell)
+    if isinstance(base, dict):
+        return base
+    return None
+
+
+def _cmd_with_model(shell: str, base_cmd: str, model: str) -> str:
+    parts = shlex.split(base_cmd) if base_cmd else [shell]
+    if not parts:
+        parts = [shell]
+
+    for flag in ("--model", "-m"):
+        if flag not in parts:
+            continue
+        idx = parts.index(flag)
+        if idx + 1 < len(parts):
+            parts[idx + 1] = model
+        else:
+            parts.append(model)
+        return shlex.join(parts)
+
+    insert_at = 1
+    if shell == "codex" and len(parts) > 1 and parts[1] == "exec":
+        insert_at = 2
+    return shlex.join([*parts[:insert_at], "--model", model, *parts[insert_at:]])

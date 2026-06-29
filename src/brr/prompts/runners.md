@@ -177,6 +177,16 @@ sets `shell=`/`core=` (or leaves unset for auto) and optional
 resident picks the cheapest adequate available Runner from there. See
 `kb/design-runner-cores.md`.
 
+Auto mode also reads brr's bundled Core registry. For each Shell declared in
+the active `runners.md`, brr materializes registry rows such as `claude-haiku`
+or `codex-mini` as invokable profiles by inserting the Core's model flag into
+the base Shell command and inheriting hook/quota metadata from that Shell.
+Those generated profiles let `core=haiku` and cost-aware auto-selection choose a
+concrete Core without requiring a static profile entry for every model. A
+project-owned `.brr/runners.md` remains authoritative: registry profiles are
+generated only for Shells that file declares, and any declared profile with the
+same name wins.
+
 Alias profiles with `binary` are for variants of the same CLI, for example
 `claude-bare-api-only` uses `--bare` and requires `ANTHROPIC_API_KEY`
 (OAuth / `~/.claude` subscription auth is not used).
