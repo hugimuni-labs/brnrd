@@ -520,6 +520,25 @@ def _branches_to_refresh(repo_root: Path, event: dict) -> list[str]:
 # ── Worker ───────────────────────────────────────────────────────────
 
 
+def _record_task_runner(
+    task: Run,
+    runner_name: str,
+    runner_meta: dict[str, object] | None,
+) -> None:
+    """Persist the currently selected Runner/Core on the run manifest."""
+    task.meta["runner_name"] = runner_name
+    for key in ("runner_shell", "runner_core", "runner_class"):
+        task.meta.pop(key, None)
+    if not runner_meta:
+        return
+    if runner_meta.get("shell"):
+        task.meta["runner_shell"] = runner_meta["shell"]
+    if runner_meta.get("model"):
+        task.meta["runner_core"] = runner_meta["model"]
+    if runner_meta.get("class"):
+        task.meta["runner_class"] = runner_meta["class"]
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -622,14 +641,7 @@ def _run_worker(
     task.conversation_key = conv_key
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
-    task.meta["runner_name"] = runner_name
-    if runner_meta:
-        if runner_meta.get("shell"):
-            task.meta["runner_shell"] = runner_meta["shell"]
-        if runner_meta.get("model"):
-            task.meta["runner_core"] = runner_meta["model"]
-        if runner_meta.get("class"):
-            task.meta["runner_class"] = runner_meta["class"]
+    _record_task_runner(task, runner_name, runner_meta)
     task.save(runs_dir)
 
     if conv_key:
@@ -832,7 +844,6 @@ def _run_worker(
     last_failure: dict[str, object] | None = None
     output_stats = {"current": 0, "other": 0, "outbound": 0}
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
-    quota_summary = runner_quota.describe_runner_quota(runner_name, cfg, brr_dir)
     # Liveness budget: the heartbeat enforces this soft, agent-extensible
     # deadline; the runner's communicate() backstops at the hard cap. The
     # agent extends it by writing the keepalive control dotfile in its
@@ -850,6 +861,74 @@ def _run_worker(
     flush_path = outbox_dir / hooks_mod.FLUSH_SIGNAL_NAME
     card_state: dict[str, str] = {}
     run_started_monotonic = time.monotonic()
+
+    def _runner_runtime(
+        name: str,
+    ) -> tuple[dict[str, object] | None, str | None, dict[str, str], list[str]]:
+        meta = runner.profile_metadata(name, repo_root)
+        quota = runner_quota.describe_runner_quota(name, cfg, brr_dir)
+        # Native hook config is opt-in through a profile's explicit ``hooks:``
+        # field — brr never infers hooks from the runner name. A profile with no
+        # ``hooks:`` field uses the heartbeat-polled fallback (outbound flush, no
+        # inbound injection).
+        declared_hooks_flavour = runner.profile_hooks_flavour(name, repo_root)
+        hooks_flavour = declared_hooks_flavour or name
+        env = {
+            "BRR_RUN_ID": task.id,
+            "BRR_EVENT_ID": eid,
+            "BRR_RUNNER": hooks_flavour,
+            "BRR_RESPONSE_PATH": str(env_ctx.response_path_env),
+            "BRR_CONTEXT_PATH": str(context_path),
+            "BRR_PORTAL_STATE": str(
+                (env_ctx.outbox_env or outbox_dir) / _LIVE_PORTAL_STATE_NAME
+            ),
+        }
+        if env_ctx.outbox_env:
+            env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
+            env["BRR_INBOX_PATH"] = str(env_ctx.outbox_env / _LIVE_INBOX_NAME)
+
+        # Tier 2 native hooks: install per-run hook config only for profiles that
+        # explicitly declare a hook flavour. Two mechanisms by flavour — a
+        # settings file written into the worktree (claude), or config-override
+        # argv injected into the runner command (codex).
+        extra_args: list[str] = []
+        if declared_hooks_flavour == "codex":
+            if hooks_mod.codex_hook_capability():
+                extra_args = hooks_mod.codex_hook_args()
+                emit(
+                    "hooks_installed",
+                    run_id=task.id,
+                    event_id=eid,
+                    flavour=declared_hooks_flavour,
+                    path="<argv -c hooks.*>",
+                )
+                print(f"[brr] worker {eid}: installed codex hook config via argv")
+        elif (
+            declared_hooks_flavour
+            and hooks_mod.hook_capability(declared_hooks_flavour, run_root)
+        ):
+            hook_config_path = hooks_mod.install_hook_config(
+                declared_hooks_flavour, run_root
+            )
+            if hook_config_path is not None:
+                emit(
+                    "hooks_installed",
+                    run_id=task.id,
+                    event_id=eid,
+                    flavour=declared_hooks_flavour,
+                    path=str(hook_config_path),
+                )
+                print(
+                    f"[brr] worker {eid}: installed "
+                    f"{declared_hooks_flavour} hook config at {hook_config_path}"
+                )
+        return meta, quota, env, extra_args
+
+    runner_meta, quota_summary, runner_env, extra_runner_args = _runner_runtime(
+        runner_name
+    )
+    _record_task_runner(task, runner_name, runner_meta)
+    task.save(runs_dir)
     _write_live_portal_state(
         outbox_dir,
         inbox_dir,
@@ -867,118 +946,66 @@ def _run_worker(
         work_dir=run_root,
         quota_summary=quota_summary,
     )
-    # Native hook config is opt-in through a profile's explicit ``hooks:``
-    # field — brr never infers hooks from the runner name. A profile with no
-    # ``hooks:`` field uses the heartbeat-polled fallback (outbound flush, no
-    # inbound injection).
-    declared_hooks_flavour = runner.profile_hooks_flavour(runner_name, repo_root)
-    hooks_flavour = declared_hooks_flavour or runner_name
-    runner_env = {
-        "BRR_RUN_ID": task.id,
-        "BRR_EVENT_ID": eid,
-        "BRR_RUNNER": hooks_flavour,
-        "BRR_RESPONSE_PATH": str(env_ctx.response_path_env),
-        "BRR_CONTEXT_PATH": str(context_path),
-        "BRR_PORTAL_STATE": str(
-            (env_ctx.outbox_env or outbox_dir) / _LIVE_PORTAL_STATE_NAME
-        ),
-    }
-    if env_ctx.outbox_env:
-        runner_env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
-        runner_env["BRR_INBOX_PATH"] = str(env_ctx.outbox_env / _LIVE_INBOX_NAME)
 
-    # Tier 2 native hooks: install per-run hook config only for profiles that
-    # explicitly declare a hook flavour. Two mechanisms by flavour — a settings
-    # file written into the worktree (claude), or config-override argv injected
-    # into the runner command (codex). Runners with no ``hooks:`` field degrade
-    # to the heartbeat-polled portal model.
-    extra_runner_args: list[str] = []
-    if declared_hooks_flavour == "codex":
-        if hooks_mod.codex_hook_capability():
-            extra_runner_args = hooks_mod.codex_hook_args()
-            emit(
-                "hooks_installed",
-                run_id=task.id,
-                event_id=eid,
-                flavour=declared_hooks_flavour,
-                path="<argv -c hooks.*>",
+    attempt = 0
+    clean_retries_used = 0
+    attempted_runners: list[str] = []
+    prompt_mode = "normal"
+    fallback_notice: str | None = None
+    while True:
+        attempt += 1
+        if runner_name not in attempted_runners:
+            attempted_runners.append(runner_name)
+        if prompt_mode == "stdout_retry":
+            prompt_instruction = (
+                "Previous attempt printed no final reply on stdout. "
+                "Print your full response as the final stdout message.\n\n"
+                f"Original run instruction: {task.body}"
             )
-            print(f"[brr] worker {eid}: installed codex hook config via argv")
-    elif (
-        declared_hooks_flavour
-        and hooks_mod.hook_capability(declared_hooks_flavour, run_root)
-    ):
-        hook_config_path = hooks_mod.install_hook_config(
-            declared_hooks_flavour, run_root
+        elif prompt_mode == "fallback" and fallback_notice:
+            prompt_instruction = (
+                f"{fallback_notice}\n\n"
+                "Continue from the current worktree state and finish the "
+                "original run instruction. Do not restart work that is already "
+                "present in the files unless it is wrong.\n\n"
+                f"Original run instruction: {task.body}"
+            )
+        else:
+            prompt_instruction = task.body
+
+        prompt = prompts.build_daemon_prompt(
+            prompt_instruction,
+            eid,
+            str(env_ctx.response_path_env),
+            run_root,
+            outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
+            run_id=task.id,
+            source=task.source or event.get("source"),
+            environment=task.env,
+            branch_name=branch_name,
+            seed_ref=branch_plan.seed_ref,
+            branch_source=branch_plan.source,
+            branch_setup_notice=branch_setup_notice,
+            host_context_branch=branch_plan.host_context_branch,
+            runtime_dir=str(env_ctx.runtime_dir),
+            context_path=str(context_path),
+            recent_conversation=recent_conversation,
+            communication_snapshot=communication_snapshot,
+            pending_events=pending_events_snapshot,
+            present=present_snapshot,
+            event_body=event_body_for_prompt,
+            budget_seconds=budget_seconds,
+            runner_medium=runner_name,
+            runner_quota=quota_summary,
+            diffense=prompt_diffense,
         )
-        if hook_config_path is not None:
-            emit(
-                "hooks_installed",
-                run_id=task.id,
-                event_id=eid,
-                flavour=declared_hooks_flavour,
-                path=str(hook_config_path),
-            )
-            print(
-                f"[brr] worker {eid}: installed "
-                f"{declared_hooks_flavour} hook config at {hook_config_path}"
-            )
-    for attempt in range(1, max_retries + 2):
         if attempt == 1:
-            prompt = prompts.build_daemon_prompt(
-                task.body, eid, str(env_ctx.response_path_env), run_root,
-                outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
-                run_id=task.id,
-                source=task.source or event.get("source"),
-                environment=task.env,
-                branch_name=branch_name,
-                seed_ref=branch_plan.seed_ref,
-                branch_source=branch_plan.source,
-                branch_setup_notice=branch_setup_notice,
-                host_context_branch=branch_plan.host_context_branch,
-                runtime_dir=str(env_ctx.runtime_dir),
-                context_path=str(context_path),
-                recent_conversation=recent_conversation,
-                communication_snapshot=communication_snapshot,
-                pending_events=pending_events_snapshot,
-                present=present_snapshot,
-                event_body=event_body_for_prompt,
-                budget_seconds=budget_seconds,
-                runner_medium=runner_name,
-                runner_quota=quota_summary,
-                diffense=prompt_diffense,
-            )
             # Persist the assembled prompt so "what did this wake see?" has
             # an honest answer even on successful runs (traces are cleaned up
             # on success; the run directory persists).
             run_context.write_prompt_file(brr_dir, task, prompt)
-        else:
-            prompt = prompts.build_daemon_prompt(
-                f"Previous attempt printed no final reply on stdout. "
-                f"Print your full response as the final stdout message.\n\n"
-                f"Original run instruction: {task.body}",
-                eid, str(env_ctx.response_path_env), run_root,
-                outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
-                run_id=task.id,
-                source=task.source or event.get("source"),
-                environment=task.env,
-                branch_name=branch_name,
-                seed_ref=branch_plan.seed_ref,
-                branch_source=branch_plan.source,
-                branch_setup_notice=branch_setup_notice,
-                host_context_branch=branch_plan.host_context_branch,
-                runtime_dir=str(env_ctx.runtime_dir),
-                context_path=str(context_path),
-                recent_conversation=recent_conversation,
-                communication_snapshot=communication_snapshot,
-                pending_events=pending_events_snapshot,
-                present=present_snapshot,
-                event_body=event_body_for_prompt,
-                budget_seconds=budget_seconds,
-                runner_medium=runner_name,
-                runner_quota=quota_summary,
-                diffense=prompt_diffense,
-            )
+        prompt_mode = "normal"
+        fallback_notice = None
 
         print(f"[brr] worker {eid}: attempt {attempt}")
         emit("attempt_started", run_id=task.id, event_id=eid, attempt=attempt)
@@ -1219,7 +1246,19 @@ def _run_worker(
             return task
 
         retry_reason = result.retry_reason()
-        will_retry = bool(retry_reason and attempt <= max_retries)
+        will_retry = bool(retry_reason and clean_retries_used < max_retries)
+        fallback_runner_name: str | None = None
+        failure_kind = (
+            str(last_failure.get("failure_kind") or "")
+            if last_failure and not retry_reason else ""
+        )
+        if failure_kind:
+            fallback_runner_name = runner.fallback_runner(
+                repo_root,
+                runner_name,
+                failure_kind,
+                tried=attempted_runners,
+            )
         attempt_payload: dict[str, object] = {
             "run_id": task.id,
             "event_id": eid,
@@ -1229,6 +1268,9 @@ def _run_worker(
             ) or "unknown",
             "will_retry": will_retry,
         }
+        if fallback_runner_name:
+            attempt_payload["will_fallback"] = True
+            attempt_payload["fallback_runner"] = fallback_runner_name
         if last_failure and not retry_reason:
             attempt_payload["exit_code"] = last_failure["exit_code"]
             attempt_payload["failure_kind"] = last_failure.get("failure_kind")
@@ -1236,6 +1278,8 @@ def _run_worker(
                 attempt_payload["timed_out"] = True
         emit("attempt_failed", **attempt_payload)
         if will_retry:
+            clean_retries_used += 1
+            prompt_mode = "stdout_retry"
             print(f"[brr] worker {eid}: {retry_reason}, retrying...")
             emit(
                 "retrying",
@@ -1244,6 +1288,37 @@ def _run_worker(
                 attempt=attempt + 1,
                 reason=retry_reason,
             )
+            continue
+        if fallback_runner_name:
+            previous_runner = runner_name
+            runner_name = fallback_runner_name
+            runner_meta, quota_summary, runner_env, extra_runner_args = (
+                _runner_runtime(runner_name)
+            )
+            _record_task_runner(task, runner_name, runner_meta)
+            task.save(runs_dir)
+            reason = f"fallback after {failure_kind}"
+            fallback_notice = (
+                f"Previous runner {previous_runner} failed operationally "
+                f"({failure_kind}). brr automatically fell back to "
+                f"{runner_name}."
+            )
+            prompt_mode = "fallback"
+            print(
+                f"[brr] worker {eid}: {previous_runner} failed "
+                f"({failure_kind}); falling back to {runner_name}"
+            )
+            emit(
+                "retrying",
+                run_id=task.id,
+                event_id=eid,
+                attempt=attempt + 1,
+                reason=reason,
+                runner=runner_name,
+                from_runner=previous_runner,
+                failure_kind=failure_kind,
+            )
+            last_failure = None
             continue
         # Hard failure (timeout / non-zero exit) — no retry, give up now
         # rather than burning another expensive attempt. The give-up
