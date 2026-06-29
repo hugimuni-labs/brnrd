@@ -35,6 +35,13 @@ def test_missing_scores_do_not_invent_class():
 
 
 def test_metadata_for_model_omits_empty_score_but_keeps_provenance():
-    meta = caps.metadata_for_model("gpt-5-codex")
+    meta = caps.metadata_for_model("gemini-2.0-flash")
     assert "capability_score" not in meta
+    assert meta["capability_freshness"] == "2026-06-29"
+
+
+def test_metadata_for_model_reads_populated_score():
+    meta = caps.metadata_for_model("gpt-5-codex")
+    assert meta["capability_score"] == 0.443
+    assert "Terminal-Bench 2.0 verified row" in meta["capability_source"]
     assert meta["capability_freshness"] == "2026-06-29"
