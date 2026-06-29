@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "freshness_date": "2026-06-29",
+  "source": "operator-maintained benchmark cache; empty scores mean not yet verified",
+  "models": {
+    "claude-haiku-4-5-20251001": {
+      "source": "bundled registry placeholder; benchmark scores not yet verified",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": null
+    },
+    "claude-fable-5": {
+      "source": "bundled registry placeholder; benchmark scores not yet verified",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": null
+    },
+    "claude-sonnet-4-6": {
+      "source": "bundled registry placeholder; benchmark scores not yet verified",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": null
+    },
+    "claude-opus-4-8": {
+      "source": "bundled registry placeholder; benchmark scores not yet verified",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": null
+    },
+    "gpt-5.4-mini": {
+      "source": "bundled registry placeholder; benchmark scores not yet verified",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": null
+    },
+    "gpt-5-codex": {
+      "source": "bundled registry placeholder; benchmark scores not yet verified",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": null
+    },
+    "gemini-2.0-flash": {
+      "source": "bundled registry placeholder; benchmark scores not yet verified",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": null
+    }
+  }
+}

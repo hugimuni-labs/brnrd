@@ -170,6 +170,9 @@ with none is an uncosted Runner the selector uses as-is:
   within a class; projects retune it freely in their own `.brr/runners.md`.
 - `quota_source` — which collector reads this Core's quota (`codex-local`
   reads the session rollout; `claude-local` is terminal spend/context only).
+- `capability_score` / `capability_source` / `capability_freshness` — optional
+  benchmark-cache hints. These may derive `class` when no hand-set class exists,
+  but never override an explicit `class` and never act as a hard selector.
 
 The selection *policy* is brr's, not a table the user hand-tunes: the user
 sets `shell=`/`core=` (or leaves unset for auto) and optional
