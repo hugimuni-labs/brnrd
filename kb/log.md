@@ -8877,3 +8877,23 @@ provider failure, generic runner error, or clean no-output. The classification
 rides both `attempt_failed` and terminal `failed` packets, and the progress card
 labels quota/auth/provider failures distinctly. The previous "session limit"
 shape now surfaces as `quota_exhausted` rather than generic `runner_error`.
+
+## [2026-06-29] fix | Accepted kb pages compressed to current state
+
+Continued `plan-repo-gardening.md` Task 4 on `brr/initial-context-reweave`.
+
+The first proposal-scaffolding cleanup slice rewrote
+`decision-licensing-and-defense.md`, `decision-monorepo-structure.md`, and
+`plan-env-fly-machines.md` from proposal-shaped pages into accepted current-state
+syntheses. The licensing page now states the three defended moves (MIT daemon +
+AGPL backend/dashboard, supporter pricing, deferred trademark) plus rejected
+alternatives and open follow-ups; the monorepo page now states the
+single-package-with-extras layout, license boundary, first-party env graduation
+rule, deploy-branch shape, rejected alternatives, and follow-ups; the Fly
+Machines page now states the not-yet-started env contract, implementation
+spine, config surface, deferred choices, and out-of-scope boundaries.
+
+No decision changed. The Fly env config spelling was reconciled to
+`fly_machines`, matching the package path and sibling kb pages.
+`plan-repo-gardening.md` and `kb/index.md` now record this slice; the remaining
+proposal-scaffolding cleanup item is `design-diffense.md`.

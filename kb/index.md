@@ -257,7 +257,10 @@ dive-in map) and are stable until something contradicts them.
   `brr/initial-context-reweave`; Task 2 has shipped the latency fix,
   `shell=`/`core=` knobs, generated Core-profile selection, the capability-cache
   substrate, scheduled-respawn contract fields, the Activity dashboard-plan
-  handoff, and runner metadata in `portal-state.json`.
+  handoff, and runner metadata in `portal-state.json`. The first
+  proposal-scaffolding cleanup slice compressed the accepted
+  licensing/defense, monorepo-structure, and Fly Machines env pages into
+  current-state synthesis.
 - [Initial wake-context reweave (gardening Task 1)](plan-initial-context-reweave.md) —
   *planning 2026-06-28*. File-by-file target-shape spec for the prompts + Run
   Context Bundle the resident reads on every wake; written as new-shape +
@@ -592,7 +595,7 @@ dive-in map) and are stable until something contradicts them.
   BUSL/ELv2/SSPL (community-goodwill cost > defense gain at
   current scale), gating any feature behind hosted-only
   (breaks the always-free-self-host promise), racing to the
-  bottom on price, and   pre-buying defensive domains
+  bottom on price, and pre-buying defensive domains
   (trademark + UDRP covers the actual attack pattern at
   lower ongoing cost). **Anti-pattern surface expanded
   2026-05-26 with "don't lock subscribers into brnrd's

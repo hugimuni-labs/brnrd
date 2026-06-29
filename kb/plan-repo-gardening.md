@@ -1,6 +1,6 @@
 # Plan: repo gardening — initial context, respawn model, imagery, kb/code sweep
 
-**Status: executing — Tasks 1, 3.3, 4A, 4B done 2026-06-28/29; Task 2 partial (new slice + 2A + corrected 2B + live help probe + 2C substrate + 2D respawn consumer + 2E Activity implementation + 2F runner portal metadata + failure classification) done 2026-06-29.** The maintainer
+**Status: executing — Tasks 1, 3.3, 4A, 4B done 2026-06-28/29; Task 2 partial (new slice + 2A + corrected 2B + live help probe + 2C substrate + 2D respawn consumer + 2E Activity implementation + 2F runner portal metadata + failure classification) done 2026-06-29; Task 4 proposal-scaffolding cleanup done for `decision-licensing-and-defense`, `decision-monorepo-structure`, and `plan-env-fly-machines` on 2026-06-29.** The maintainer
 asked this run to *evaluate and plan only*; a later run on a cheaper-but-capable
 model (Sonnet) executes the plan. We are at an architecture crossroads where
 **vessel / medium / runner / core** are mixed across configs, kb, prompts, and
@@ -322,10 +322,10 @@ From this wake's kb-health preflight + greps, the known backlog:
   `design-resident-boundary`, `plan-failover-compute` — split into hub +
   daughters or compress accreted history to a lineage breadcrumb. The index
   being oversized is itself a signal it should become a hub-of-hubs.
-- **Proposal-scaffolding cleanup:** `decision-licensing-and-defense`,
-  `decision-monorepo-structure`, `design-diffense`, `plan-env-fly-machines`
-  are accepted but still carry Goals/Alternatives proposal shape — compress to
-  current-state synthesis + a short Rejected-alternatives appendix.
+- **Proposal-scaffolding cleanup:** ✓ `decision-licensing-and-defense`,
+  `decision-monorepo-structure`, and `plan-env-fly-machines` compressed to
+  current-state synthesis on 2026-06-29. Remaining: `design-diffense`, the large
+  accepted design page that still carries proposal-shaped sections.
 - **Hub coverage:** `index §Research` and `index §Reviews` lack `subject-*`
   hubs — consider writing them.
 
