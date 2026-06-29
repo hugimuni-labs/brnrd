@@ -1452,6 +1452,26 @@ def test_resources_facet_remote_scm_known_when_pr_recorded():
     assert facet["remote_scm"]["note"] is None
 
 
+def test_resources_facet_threads_runner_catalog():
+    facet = daemon._resources_facet(
+        None,
+        runner_name="codex-mini",
+        runner_catalog=[
+            {
+                "name": "codex-mini",
+                "shell": "codex",
+                "model": "gpt-5.4-mini",
+                "selected": True,
+                "availability": "available",
+            }
+        ],
+    )
+
+    catalog = facet["runner"]["catalog"]
+    assert catalog[0]["name"] == "codex-mini"
+    assert catalog[0]["selected"] is True
+
+
 def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path):
     monkeypatch.setattr(
         daemon.claude_usage,
