@@ -204,6 +204,44 @@ def test_hard_failure_does_not_retry_and_bubbles_error_to_failed_packet(
     assert attempt_failed.get("exit_code") == 124
 
 
+def test_quota_failure_is_classified_for_attempt_and_terminal_packets(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-quota", body="big task",
+                        telegram_chat_id=41)
+    _patch_runner(monkeypatch)
+
+    def _quota_hit(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="",
+            stderr="You've hit your session limit · resets 5am (Europe/Berlin)",
+            returncode=1, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=_quota_hit),
+    )
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 3,
+    )
+
+    assert task.status == "error"
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    attempt_failed = next(r for r in records if r.get("type") == "attempt_failed")
+    assert attempt_failed.get("failure_kind") == "quota_exhausted"
+    failed = next(r for r in records if r.get("type") == "failed")
+    assert failed.get("failure_kind") == "quota_exhausted"
+    assert "session limit" in failed.get("error", "")
+    response = (tmp_path / ".brr" / "responses" / "evt-quota.md").read_text(
+        encoding="utf-8"
+    )
+    assert "runner quota was exhausted" in response
+
+
 def test_failure_after_retries_emits_finalizing_then_failed(tmp_path, monkeypatch):
     """The failed packet must be the last word.
 

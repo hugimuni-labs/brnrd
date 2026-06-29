@@ -894,6 +894,24 @@ def test_render_runner_error_renames_the_failed_terminal_line(tmp_path):
     assert any(line.startswith("runner failed · ") for line in lines)
 
 
+def test_render_quota_failure_renames_the_failed_terminal_line(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:22q:"
+    _emit(brr_dir, key, "run_created", run_id="run-Q")
+    _emit(brr_dir, key, "attempt_started", run_id="run-Q", attempt=1)
+    _emit(brr_dir, key, "failed", run_id="run-Q", event_id="evt-Q",
+          stage="run", attempts=1, exit_code=1,
+          failure_kind="quota_exhausted",
+          error="You've hit your session limit")
+
+    view = run_progress.project_run(brr_dir, key, "run-Q")
+    assert view is not None
+    assert view.failure_kind == "quota_exhausted"
+    text = run_progress.render_text(view, compact=True)
+    lines = text.rstrip().splitlines()
+    assert any(line.startswith("quota exhausted · ") for line in lines)
+
+
 def test_render_no_output_failure_renames_the_failed_terminal_line(tmp_path):
     """A clean exit with no signal renders as ``no reply · …`` — distinct
     from an operational failure so the user can tell apart 'the runner

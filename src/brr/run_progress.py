@@ -752,6 +752,9 @@ def _phase_label(entry: PhaseEntry, multi_attempt: bool,
     if entry.name == "failed" and view is not None and view.failure_kind:
         return {
             "timed_out": "timed out",
+            "quota_exhausted": "quota exhausted",
+            "auth_error": "auth failed",
+            "provider_error": "provider failed",
             "runner_error": "runner failed",
             "no_output": "no reply",
         }.get(view.failure_kind, entry.name)
