@@ -242,6 +242,45 @@ class TestPromptBuilding:
             in prompt
         )
 
+    def test_daemon_prompt_surfaces_runner_mandate_catalog(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            runner_medium="codex-mini",
+            runner_catalog=[
+                {
+                    "name": "codex-mini",
+                    "shell": "codex",
+                    "model": "gpt-5.4-mini",
+                    "class": "economy",
+                    "cost_rank": 20,
+                    "quota_source": "codex-local",
+                    "selected": True,
+                    "availability": "available",
+                },
+                {
+                    "name": "claude-bare-api-only-sonnet",
+                    "shell": "claude",
+                    "model": "claude-sonnet-4-6",
+                    "class": "balanced",
+                    "cost_rank": 30,
+                    "auth_variant": "anthropic-api-key",
+                    "selected": False,
+                    "availability": "available",
+                },
+            ],
+        )
+
+        assert "### Runner Mandate" in prompt
+        assert (
+            "- selected codex-mini: shell=codex, core=gpt-5.4-mini, "
+            "class=economy, cost_rank=20, quota=codex-local, "
+            "availability=available"
+        ) in prompt
+        assert "claude-bare-api-only-sonnet" in prompt
+        assert "auth=anthropic-api-key" in prompt
+        assert "cmd=" not in prompt
+
     def test_daemon_prompt_includes_outbox_contract_when_given(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
