@@ -326,7 +326,19 @@ def _project(
             attempt = record.get("attempt")
             if isinstance(attempt, int):
                 view.attempt = attempt
-            view.detail = f"retry attempt {view.attempt}"
+            runner_name = record.get("runner")
+            if isinstance(runner_name, str) and runner_name.strip():
+                view.runner_name = runner_name
+                from_runner = record.get("from_runner")
+                if isinstance(from_runner, str) and from_runner.strip():
+                    view.detail = (
+                        f"fallback {from_runner} -> {runner_name} "
+                        f"(attempt {view.attempt})"
+                    )
+                else:
+                    view.detail = f"retry on {runner_name} (attempt {view.attempt})"
+            else:
+                view.detail = f"retry attempt {view.attempt}"
         elif ptype == "artifact_created":
             label = record.get("label") or record.get("kind") or "artifact"
             view.detail = f"artifact: {label}"

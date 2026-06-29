@@ -22,6 +22,10 @@ from _helpers import (
 
 def _patch_runner(monkeypatch):
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _: "codex")
+    monkeypatch.setattr(
+        daemon.runner, "fallback_runner",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
     monkeypatch.setattr(
         daemon.prompts, "build_daemon_prompt",
@@ -240,6 +244,59 @@ def test_quota_failure_is_classified_for_attempt_and_terminal_packets(
         encoding="utf-8"
     )
     assert "runner quota was exhausted" in response
+
+
+def test_operational_failure_falls_back_to_next_runner(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-fallback", body="big task",
+                        telegram_chat_id=42)
+    _patch_runner(monkeypatch)
+    monkeypatch.setattr(
+        daemon.runner, "fallback_runner",
+        lambda _repo, _current, kind, *, tried=(): (
+            "claude" if kind == "quota_exhausted" else None
+        ),
+    )
+
+    attempts: list[str] = []
+
+    def _quota_then_success(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        attempts.append(runner_name)
+        if runner_name == "codex":
+            return RunnerResult(
+                invocation=invocation, runner_name=runner_name, command=["mock"],
+                stdout="",
+                stderr="You've hit your session limit",
+                returncode=1, trace_dir=None, artifacts=[],
+            )
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=_quota_then_success),
+    )
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    assert attempts == ["codex", "claude"]
+    assert task.meta["runner_name"] == "claude"
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    attempt_failed = next(r for r in records if r.get("type") == "attempt_failed")
+    assert attempt_failed.get("failure_kind") == "quota_exhausted"
+    assert attempt_failed.get("will_fallback") is True
+    assert attempt_failed.get("fallback_runner") == "claude"
+    retrying = next(r for r in records if r.get("type") == "retrying")
+    assert retrying.get("from_runner") == "codex"
+    assert retrying.get("runner") == "claude"
+    assert retrying.get("reason") == "fallback after quota_exhausted"
 
 
 def test_failure_after_retries_emits_finalizing_then_failed(tmp_path, monkeypatch):
