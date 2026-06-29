@@ -165,6 +165,11 @@ def _runner_block(
         "owner": str(meta.get("owner") or "user").strip() or "user",
         "quota_source": str(meta.get("quota_source") or "").strip() or None,
         "cost_rank": meta.get("cost_rank"),
+        "capability_score": meta.get("capability_score"),
+        "capability_source": str(meta.get("capability_source") or "").strip() or None,
+        "capability_freshness": str(
+            meta.get("capability_freshness") or ""
+        ).strip() or None,
         "summary": runner_name,
     }
 
