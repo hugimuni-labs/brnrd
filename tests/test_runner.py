@@ -378,6 +378,22 @@ class TestCommandBuilding:
             "fix it",
         ]
 
+    def test_build_cmd_generated_claude_bare_api_core_headless(self):
+        cmd = _build_cmd("claude-bare-api-only-sonnet", "fix it", {})
+        assert cmd == [
+            "claude",
+            "--model",
+            "claude-sonnet-4-6",
+            "--print",
+            "--output-format",
+            "json",
+            "--dangerously-skip-permissions",
+            "--bare",
+            "--system-prompt",
+            _RUNNER_BASE,
+            "fix it",
+        ]
+
     def test_build_cmd_gemini_headless_uses_yolo(self):
         cmd = _build_cmd("gemini", "fix it", {})
         assert cmd == [

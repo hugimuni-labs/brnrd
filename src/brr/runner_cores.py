@@ -264,6 +264,10 @@ def generated_profile_entries(
     This helper derives those profiles from the Shell's declared base profile:
     copy hook/quota metadata from the base Shell, insert the Core's model flag
     into the base command, and keep project-declared profiles authoritative.
+    If a declared base profile carries an ``auth_variant`` flag (for example
+    Claude's ``--bare`` / ``ANTHROPIC_API_KEY`` path), generate the same Core
+    names under that base profile too. The Core metadata still comes from this
+    registry; the profile supplies only the authentication/command variant.
 
     A registry Core is generated only when its Shell has a declared base profile
     in the active ``runners.md`` source. That keeps a project-owned
@@ -274,38 +278,48 @@ def generated_profile_entries(
     registry = dict(_BUNDLED_CORES)
     registry.update(_probed_core_entries(_declared_shells(declared), registry))
     out: dict[str, dict[str, Any]] = {}
-    for name, entry in registry.items():
-        if name in declared:
-            continue
+    for core_name, entry in registry.items():
         shell = _str(entry.get("shell"))
         model = _str(entry.get("model"))
         if not shell or not model:
             continue
-        base = _base_profile_for_shell(declared, shell)
-        if base is None:
+        bases = _base_profiles_for_shell(declared, shell)
+        if not bases:
             continue
-        cmd = _cmd_with_model(shell, _str(base.get("cmd")) or shell, model)
-        generated: dict[str, Any] = {
-            "binary": _str(base.get("binary")) or shell,
-            "cmd": cmd,
-            "shell": shell,
-            "model": model,
-            "provider": _str(entry.get("provider")) or _str(base.get("provider")),
-            "owner": _str(entry.get("owner")) or _str(base.get("owner")) or "user",
-            "class": _class_for_entry(entry),
-            "cost_rank": _int(entry.get("cost_rank")),
-            "freshness_date": _str(entry.get("freshness_date")),
-            "freshness_source": _str(entry.get("freshness_source")),
-            "generated_core": True,
-        }
-        generated.update(runner_capabilities.metadata_for_model(model))
-        hooks = _str(entry.get("hooks")) or _str(base.get("hooks"))
-        if hooks:
-            generated["hooks"] = hooks
-        quota_source = _str(entry.get("quota_source")) or _str(base.get("quota_source"))
-        if quota_source:
-            generated["quota_source"] = quota_source
-        out[name] = generated
+        for base_name, base in bases:
+            name = _generated_profile_name(core_name, shell, base_name)
+            if name in declared or name in out:
+                continue
+            cmd = _cmd_with_model(shell, _str(base.get("cmd")) or shell, model)
+            generated: dict[str, Any] = {
+                "binary": _str(base.get("binary")) or shell,
+                "cmd": cmd,
+                "shell": shell,
+                "model": model,
+                "provider": _str(entry.get("provider")) or _str(base.get("provider")),
+                "owner": _str(entry.get("owner")) or _str(base.get("owner")) or "user",
+                "class": _class_for_entry(entry),
+                "cost_rank": _int(entry.get("cost_rank")),
+                "freshness_date": _str(entry.get("freshness_date")),
+                "freshness_source": _str(entry.get("freshness_source")),
+                "generated_core": True,
+            }
+            generated.update(runner_capabilities.metadata_for_model(model))
+            hooks = _str(entry.get("hooks")) or _str(base.get("hooks"))
+            if hooks:
+                generated["hooks"] = hooks
+            quota_source = _str(entry.get("quota_source")) or _str(
+                base.get("quota_source")
+            )
+            if quota_source:
+                generated["quota_source"] = quota_source
+            auth_variant = _str(base.get("auth_variant"))
+            if auth_variant:
+                generated["auth_variant"] = auth_variant
+            auth_env = _str(base.get("auth_env"))
+            if auth_env:
+                generated["auth_env"] = auth_env
+            out[name] = generated
     return out
 
 
@@ -451,14 +465,45 @@ def _class_for_entry(entry: dict[str, Any]) -> str | None:
     )
 
 
-def _base_profile_for_shell(
+def _base_profiles_for_shell(
     declared_profiles: dict[str, dict[str, Any]],
     shell: str,
-) -> dict[str, Any] | None:
-    base = declared_profiles.get(shell)
-    if isinstance(base, dict):
-        return base
-    return None
+) -> list[tuple[str, dict[str, Any]]]:
+    """Declared base profiles that can host generated Cores for *shell*."""
+    out: list[tuple[str, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for name, profile in declared_profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        declared_shell = (
+            _str(profile.get("shell")) or _str(profile.get("binary")) or name
+        )
+        if declared_shell != shell:
+            continue
+        model = _str(profile.get("model"))
+        has_auth_variant = bool(_str(profile.get("auth_variant")))
+        # Model-pinned profiles are generated outputs or user overrides, not
+        # base commands for every Core. Auth variants are the intentional alias
+        # base exception (`claude-bare-api-only`).
+        if model and not has_auth_variant:
+            continue
+        # A same-shell profile with no auth variant is the canonical base
+        # profile; arbitrary aliases are exact pins, not extra catalogs.
+        if name != shell and not has_auth_variant:
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append((name, profile))
+    return out
+
+
+def _generated_profile_name(core_name: str, shell: str, base_name: str) -> str:
+    if base_name == shell:
+        return core_name
+    prefix = f"{shell}-"
+    suffix = core_name[len(prefix):] if core_name.startswith(prefix) else core_name
+    return f"{base_name}-{suffix}"
 
 
 def _cmd_with_model(shell: str, base_cmd: str, model: str) -> str:
