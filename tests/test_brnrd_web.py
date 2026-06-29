@@ -15,7 +15,7 @@ from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Account, Project  # noqa: E402
+from brnrd.models import Account, Repo  # noqa: E402
 from brnrd.oauth import GitHubIdentity, OAuthError  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -43,14 +43,16 @@ def client():
     return TestClient(app, base_url="https://testserver")
 
 
-def _account_and_project(client):
+def _account_and_repo(client):
     headers = brnrd_account_headers(
         client.app, github_id=_GITHUB_ID, login=_LOGIN, email=_EMAIL
     )
-    project_id = client.post(
-        "/v1/accounts/projects", json={"name": "laptop"}, headers=headers
-    ).json()["project_id"]
-    return project_id
+    repo_id = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/laptop"},
+        headers=headers,
+    ).json()["repo_id"]
+    return repo_id
 
 
 def _oauth_start(client, *, next="/"):
@@ -118,7 +120,7 @@ def test_github_login_redirect_uses_state_and_pkce(client):
     assert query["code_challenge"][0]
 
 
-def test_github_callback_sets_session_cookie_and_seeds_default_project(
+def test_github_callback_sets_session_cookie_without_seed_repo(
     client, monkeypatch
 ):
     _, callback, seen = _login_web(client, monkeypatch, next="/connect/BR-123")
@@ -135,10 +137,10 @@ def test_github_callback_sets_session_cookie_and_seeds_default_project(
         ).scalar_one()
         assert account.github_login == _LOGIN
         assert account.email == _EMAIL
-        projects = db.execute(
-            select(Project).where(Project.account_id == account.id)
+        repos = db.execute(
+            select(Repo).where(Repo.account_id == account.id)
         ).scalars().all()
-        assert [p.name for p in projects] == ["default"]
+        assert repos == []
 
 
 def test_github_login_is_not_the_identity_key(client):
@@ -182,15 +184,15 @@ def test_github_callback_surfaces_provider_failure(client, monkeypatch):
 
 
 def test_connect_page_requires_login(client):
-    _account_and_project(client)
+    _account_and_repo(client)
     pair = client.post("/v1/accounts/pair").json()
     r = client.get(f"/connect/{pair['pair_code']}", follow_redirects=False)
     assert r.status_code == 303
     assert "/login" in r.headers["location"]
 
 
-def test_connect_page_lists_projects(client, monkeypatch):
-    _account_and_project(client)
+def test_connect_page_lists_repos(client, monkeypatch):
+    _account_and_repo(client)
     _login_web(client, monkeypatch)
     pair = client.post("/v1/accounts/pair").json()
     r = client.get(f"/connect/{pair['pair_code']}")
@@ -200,13 +202,13 @@ def test_connect_page_lists_projects(client, monkeypatch):
 
 
 def test_approve_makes_poll_return_token(client, monkeypatch):
-    project_id = _account_and_project(client)
+    repo_id = _account_and_repo(client)
     _login_web(client, monkeypatch)
     pair = client.post("/v1/accounts/pair").json()
 
     approve = client.post(
         f"/connect/{pair['pair_code']}",
-        data={"project_id": project_id},
+        data={"repo_id": repo_id},
         follow_redirects=False,
     )
     assert approve.status_code == 200
@@ -219,4 +221,4 @@ def test_approve_makes_poll_return_token(client, monkeypatch):
     ).json()
     assert polled["status"] == "paired"
     assert polled["daemon_token"]
-    assert polled["project_id"] == project_id
+    assert polled["repo_id"] == repo_id

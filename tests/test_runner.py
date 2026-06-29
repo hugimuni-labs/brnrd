@@ -122,6 +122,37 @@ def test_resolve_runner_shell_pin(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path) == "claude-bare-api-only-sonnet"
 
 
+def test_resolve_runner_event_override_pins_shell(tmp_path, monkeypatch):
+    """A respawned event can carry shell= without rewriting .brr/config."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "codex-mini": {
+                "binary": "codex",
+                "cmd": "codex exec --model gpt-5-mini",
+                "model": "gpt-5-mini",
+                "class": "economy",
+            },
+            "claude-opus": {
+                "binary": "claude",
+                "cmd": "claude --model opus --print",
+                "model": "opus",
+                "class": "strong",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in ("claude", "codex") else None,
+    )
+
+    assert resolve_runner(tmp_path, {"shell": "claude-opus"}) == "claude-opus"
+
+
 def test_resolve_runner_core_pin_filters_by_model(tmp_path, monkeypatch):
     """core= filters candidates to profiles with a matching model."""
     (tmp_path / ".brr").mkdir()

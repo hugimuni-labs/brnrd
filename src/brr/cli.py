@@ -901,7 +901,7 @@ def cmd_ergonomics_clear(args):
     if args.before:
         before_ts = datetime.fromisoformat(args.before).replace(tzinfo=timezone.utc).timestamp()
     removed = ergonomics.clear_records(_brr_dir(), before_ts=before_ts)
-    print(f"[brr ergonomics] removed {removed} record(s)")
+    print(f"[brr ergonomics] cleared {removed} record(s)")
     return 0
 
 
