@@ -392,7 +392,7 @@ def detect_all_runners(repo_root: Path | None = None) -> list[str]:
     return [name for name in profiles if _runner_available(name, profiles)]
 
 
-def resolve_runner(repo_root: Path) -> str:
+def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> str:
     """Determine which runner to use for this repo.
 
     Resolution order (highest precedence first):
@@ -413,6 +413,11 @@ def resolve_runner(repo_root: Path) -> str:
     from . import runner_select
 
     cfg = conf.load_config(repo_root)
+    if overrides:
+        for key in ("shell", "core", "runner", "runner_policy"):
+            value = overrides.get(key)
+            if value not in (None, ""):
+                cfg[key] = value
     profiles = _selection_profiles(repo_root)
 
     # shell= is the new explicit pin. When set it is treated as an exact

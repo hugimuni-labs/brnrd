@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -9,8 +10,9 @@ from typing import Any, Callable
 import requests
 
 from .. import gitops, protocol, run_progress
+from .. import dominion, schedule as schedule_mod
 from ..gates.github.parse import parse_origin_url
-from ..run import Run, run_manifest_path
+from ..run import Run, list_runs, run_manifest_path
 from . import delivery, runtime
 
 _POLL_WAIT_S = 25
@@ -187,6 +189,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         state["since"] = cursor
         _save_state(brr_dir, state)
     _deliver_responses(brr_dir, inbox_dir, responses_dir, state)
+    _publish_activity(brr_dir, inbox_dir, state)
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:
@@ -199,6 +202,169 @@ def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, stat
             body = delivery.resolve_overflow(body, limit=limit, gist_fn=delivery.post_gist)
         _request(state["brnrd_url"], "POST", "/v1/daemons/responses", token=state["token"], json={"event_id": cloud_event_id, "body_markdown": body, "status": "done"})
     runtime.deliver_responses(inbox_dir, responses_dir, "cloud", deliver)
+
+
+def _iso_from_epoch(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return datetime.fromtimestamp(value, timezone.utc).isoformat()
+
+
+def _iso_from_event(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _summary(text: str, *, limit: int = 140) -> str:
+    one_line = " ".join((text or "").split())
+    if len(one_line) <= limit:
+        return one_line
+    return one_line[: limit - 1].rstrip() + "…"
+
+
+def _runner_payload(meta: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    name = str(meta.get("runner_name") or meta.get("shell") or "").strip()
+    shell = str(meta.get("runner_shell") or meta.get("shell") or "").strip()
+    core = str(meta.get("runner_core") or meta.get("core") or "").strip()
+    klass = str(meta.get("runner_class") or "").strip()
+    if name:
+        out["name"] = name
+    if shell:
+        out["shell"] = shell
+    elif name:
+        out["shell"] = name
+    if core:
+        out["core"] = core
+    if klass:
+        out["class"] = klass
+    return out
+
+
+def _run_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    runs_dir = brr_dir / "runs"
+    for task in list_runs(runs_dir):
+        if task.status not in {"pending", "running"}:
+            continue
+        manifest = run_manifest_path(runs_dir, task.id)
+        try:
+            stat = manifest.stat()
+        except OSError:
+            stat = None
+        updated = _iso_from_epoch(stat.st_mtime if stat else None)
+        started = _iso_from_epoch(stat.st_ctime if stat else None)
+        records.append(
+            {
+                "id": f"run:{task.id}",
+                "kind": "run",
+                "source": task.source,
+                "conversation_key": task.conversation_key,
+                "summary": _summary(task.body) or task.event_id,
+                "runner": _runner_payload(task.meta),
+                "status": task.status,
+                "phase": str(task.meta.get("publish_status") or ""),
+                "branch": str(task.meta.get("branch_name") or task.meta.get("publish_branch") or ""),
+                "pr_number": task.meta.get("pr_number"),
+                "started_at": started,
+                "updated_at": updated,
+                "links": {},
+            }
+        )
+    return records
+
+
+def _schedule_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
+    try:
+        dom = dominion.dominion_path(brr_dir.parent)
+        entries = schedule_mod.parse_schedule(dom)
+    except Exception:
+        return []
+    state = schedule_mod.load_state(brr_dir)
+    records: list[dict[str, Any]] = []
+    for entry in entries:
+        scheduled_for: float | None = None
+        status = "scheduled"
+        if entry.kind == "at":
+            rec = state.get(entry.id) or {}
+            if rec.get("fired"):
+                continue
+            scheduled_for = entry.at
+        elif entry.kind == "every":
+            rec = state.get(entry.id) or {}
+            last = rec.get("last_fired")
+            try:
+                last_fired = float(last)
+            except (TypeError, ValueError):
+                last_fired = None
+            if last_fired is not None and entry.interval:
+                scheduled_for = last_fired + entry.interval
+            status = "recurring"
+        records.append(
+            {
+                "id": f"schedule:{entry.id}",
+                "kind": "scheduled",
+                "source": "schedule",
+                "conversation_key": entry.conversation_key or f"schedule:{entry.id}",
+                "summary": _summary(entry.body) or f"self-scheduled thought: {entry.id}",
+                "runner": {},
+                "status": status,
+                "phase": entry.kind,
+                "scheduled_for": _iso_from_epoch(scheduled_for),
+                "links": {},
+            }
+        )
+    return records
+
+
+def _respawn_activity_records(inbox_dir: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for event in protocol.list_pending(inbox_dir):
+        parent = str(event.get("respawned_from_event") or "").strip()
+        if not parent:
+            continue
+        deferred = protocol.event_is_deferred(event)
+        records.append(
+            {
+                "id": f"respawn:{event.get('id')}",
+                "kind": "respawn",
+                "source": str(event.get("source") or ""),
+                "conversation_key": str(event.get("conversation_key") or ""),
+                "summary": _summary(str(event.get("body") or "")) or parent,
+                "runner": _runner_payload(event),
+                "status": "scheduled" if deferred else str(event.get("status") or "pending"),
+                "phase": str(event.get("respawn_reason") or ""),
+                "branch": str(event.get("branch") or event.get("branch_target") or ""),
+                "pr_number": event.get("pr_number") or event.get("github_pr_number"),
+                "defer_until": _iso_from_event(event.get("defer_until")),
+                "links": {},
+            }
+        )
+    return records
+
+
+def _activity_snapshot(brr_dir: Path, inbox_dir: Path) -> list[dict[str, Any]]:
+    return [
+        *_run_activity_records(brr_dir),
+        *_schedule_activity_records(brr_dir),
+        *_respawn_activity_records(inbox_dir),
+    ]
+
+
+def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    try:
+        _request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/activity",
+            token=state["token"],
+            json={"records": _activity_snapshot(brr_dir, inbox_dir)},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] activity publish failed: {e}")
 
 
 class _CloudCardTransport:
