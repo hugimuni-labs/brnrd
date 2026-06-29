@@ -1,7 +1,8 @@
 # Decision: rename the product to brnrd (brr → brnrd)
 
 Status: **direction accepted** by the maintainer (evt-puhl, 2026-06-29);
-**execution staged and partly open** (see sub-fork + migration below).
+**sub-fork resolved to (b)** (evt-qhk6, 2026-06-29 — `brr` survives as the local
+verb); execution staged across dedicated migration wakes (see migration below).
 
 Amends [`decision-cli-shape.md`](decision-cli-shape.md) (which had `brr` and
 `brnrd` as sibling binaries from one package, with `brr` primary). Rests on
@@ -34,10 +35,17 @@ that name can only be brnrd.
 **brnrd becomes the product / brand / package / service name.** `brr` is retired
 as the *product* name.
 
-## Open sub-fork (the maintainer's call) — what, if anything, `brr` remains
+## Sub-fork RESOLVED — `brr` survives as the local verb (option (b))
 
-The maintainer flagged it: *"no reason to keep brr (apart from maybe a
-runner-facing interface / cli?)."* Two coherent shapes:
+The maintainer settled it (evt-qhk6, 2026-06-29): *"keep-brr-as-local-verb — I
+agree, let's keep brr command (or brnrd brr, but brr is unlikely to collide with
+the PyPI package, so it is a way)."* **Option (b) is chosen.** `brnrd` is the
+brand/package/service/identity; `brr` persists as the short local CLI verb and the
+resident/runner-facing surface, and it absorbs the costly runtime-state names
+(`.brr/`, `brr-home`) so the brand rename lands without a flag-day on every
+install's dominion. The PyPI-collision worry is noted as low (the local `brr` verb
+ships from the `brnrd` wheel via `[project.scripts]`; it is not a separate PyPI
+package). The two shapes that were on the table:
 
 - **(a) One name everywhere.** Retire `brr` fully: CLI `brnrd`, package `brnrd`,
   dominion `brnrd-home`, runtime dir `.brnrd/`. Cleanest brand; costliest
@@ -49,14 +57,22 @@ runner-facing interface / cli?)."* Two coherent shapes:
   runner-facing interface. One brand, one optional 4-char local alias — not a
   second product.
 
-**Recommendation: (b).** Keep the brand single (brnrd) while letting `brr`
-persist *only* as the local CLI ergonomic, because the costliest, most
-state-entangled names are exactly the local/runtime ones — the dominion branch
-`brr-home` and the runtime dir `.brr/` are load-bearing for **every existing
-install's memory and in-flight runs**. Renaming brand/package/identity is worth
-it; renaming those runtime-state names needs a migration shim or a deliberate
-keep, and folding them into "the local `brr` surface" lets the brand rename land
-without a flag-day on everyone's dominion. The maintainer decides (a) vs (b).
+- **(b) is the chosen shape** (recorded above). The reasoning that carried it:
+  the costliest, most state-entangled names are exactly the local/runtime ones —
+  the dominion branch `brr-home` and the runtime dir `.brr/` are load-bearing for
+  **every existing install's memory and in-flight runs**. Renaming
+  brand/package/identity is worth it; renaming those runtime-state names needs a
+  migration shim or a deliberate keep, and folding them into "the local `brr`
+  surface" lets the brand rename land without a flag-day on everyone's dominion.
+
+Note the cross-link to the account-dominion consolidation
+([`decision-account-centered-daemon.md`](decision-account-centered-daemon.md) →
+"Account-scoped store"): the maintainer also confirmed the resident's dominion
+moves from a per-repo `brr-home` orphaned branch to a **per-account dominion
+repo**. That account dominion repo keeping the `brr-home` name is consistent with
+(b) — runtime-state naming stays under the local `brr` surface — though the
+account-repo name is itself a minor open detail there (`brr-home` vs `brnrd-home`,
+no migration cost since the account repo is new).
 
 ## Migration scope (honest — this is multiple dedicated wakes, not one sed)
 
@@ -69,14 +85,15 @@ Roughly, in increasing cost / risk:
    (b), `brr` stays as an alias verb.
 3. **Identity + infra**: claim PyPI `brnrd`, GitHub `brnrd-dev` / `brnrd-bot` +
    the GitHub App, `brnrd.dev`.
-4. **Runtime-state names** (highest risk, gated on the sub-fork): `brr-home`
-   dominion branch and `.brr/` runtime dir. Renaming these is **state-touching**
-   for every install — needs a migration/compat shim or a deliberate keep (the
-   (b) recommendation keeps them under the local `brr` surface).
+4. **Runtime-state names** — **kept** under (b): `brr-home` dominion branch and
+   `.brr/` runtime dir stay as-is (no rename), avoiding the state-touching
+   migration for every install. This is the payoff of (b): step 4 drops out
+   entirely instead of needing a migration/compat shim.
 
-Sequence: **lock the name + the (a)/(b) sub-fork first**, then land in staged,
-reversible chunks (1 → 2/3 → 4-if-(a)). Don't blind-sed; runtime-state and
-import renames need migration care.
+Sequence: name + sub-fork are now **locked** (brnrd brand; `brr` local verb), so
+land in staged, reversible chunks: 1 (brand/docs) → 2/3 (package/CLI + identity,
+with `brr` retained as alias verb). Step 4 is a no-op under (b). Don't blind-sed;
+import renames in step 2 still need migration care.
 
 ## Consequences
 
@@ -87,4 +104,5 @@ import renames need migration care.
 - The account repo proposed in `decision-account-centered-daemon.md` is named
   `brnrd-home` precisely because the account/service layer is brnrd-branded.
 - No code is renamed in this wake — this page etches the direction and scope so a
-  dedicated migration wake (after the maintainer settles (a)/(b)) executes it.
+  dedicated migration wake executes it. The (a)/(b) sub-fork is now settled (b),
+  so a migration wake is unblocked to start at step 1 whenever scheduled.
