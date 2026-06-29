@@ -139,6 +139,32 @@ def test_generated_profile_entries_derive_invokable_profiles_from_base_shell():
     assert "--model claude-haiku-4-5-20251001" in haiku["cmd"]
 
 
+def test_generated_profile_entries_materialize_auth_variant_from_core_registry():
+    profiles = runner_cores.generated_profile_entries(
+        {
+            "claude": {"cmd": "claude --print", "hooks": "claude"},
+            "claude-bare-api-only": {
+                "binary": "claude",
+                "shell": "claude",
+                "cmd": "claude --print --bare",
+                "auth_variant": "anthropic-api-key",
+                "auth_env": "ANTHROPIC_API_KEY",
+            },
+        }
+    )
+
+    sonnet = profiles["claude-bare-api-only-sonnet"]
+    assert sonnet["binary"] == "claude"
+    assert sonnet["shell"] == "claude"
+    assert sonnet["model"] == "claude-sonnet-4-6"
+    assert sonnet["class"] == "balanced"
+    assert sonnet["cost_rank"] == 30
+    assert sonnet["auth_variant"] == "anthropic-api-key"
+    assert sonnet["auth_env"] == "ANTHROPIC_API_KEY"
+    assert "--bare" in sonnet["cmd"]
+    assert "--model claude-sonnet-4-6" in sonnet["cmd"]
+
+
 def test_generated_profile_entries_do_not_reintroduce_undeclared_shells():
     profiles = runner_cores.generated_profile_entries({"local-agent": {"cmd": "agent"}})
     assert profiles == {}
