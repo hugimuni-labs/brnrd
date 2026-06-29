@@ -80,6 +80,23 @@ def test_available_cores_extra_adds_new_entry(monkeypatch):
     assert any(p.name == "claude-preview" for p in profiles)
 
 
+def test_available_cores_adds_cli_probed_models(monkeypatch):
+    monkeypatch.setattr(runner_cores.shutil, "which",
+                        lambda name: f"/usr/bin/{name}" if name == "codex" else None)
+    monkeypatch.setattr(
+        runner_cores,
+        "probe_shell_models",
+        lambda shell: ("gpt-new-9",) if shell == "codex" else (),
+    )
+
+    profiles = runner_cores.available_cores()
+
+    probed = next((p for p in profiles if p.model == "gpt-new-9"), None)
+    assert probed is not None
+    assert probed.name == "codex-gpt-new-9"
+    assert probed.provider == "openai"
+
+
 def test_cores_for_shell_returns_correct_subset():
     claude_cores = runner_cores.cores_for_shell("claude")
     assert all(p.profile == "claude" for p in claude_cores)
@@ -135,6 +152,36 @@ def test_generated_profile_entries_preserve_declared_override():
         }
     )
     assert "claude-haiku" not in profiles
+
+
+def test_generated_profile_entries_materialize_cli_probed_model(monkeypatch):
+    monkeypatch.setattr(
+        runner_cores,
+        "probe_shell_models",
+        lambda shell: ("claude-preview-9",) if shell == "claude" else (),
+    )
+
+    profiles = runner_cores.generated_profile_entries(
+        {"claude": {"cmd": "claude --print", "hooks": "claude"}}
+    )
+
+    generated = profiles["claude-claude-preview-9"]
+    assert generated["model"] == "claude-preview-9"
+    assert generated["hooks"] == "claude"
+    assert "--model claude-preview-9" in generated["cmd"]
+    assert generated["freshness_source"] == "cli-help"
+
+
+def test_probe_shell_models_parses_model_help(monkeypatch):
+    class _Proc:
+        stdout = "  --model <MODEL>  choices: gpt-5-codex, gpt-5.4-mini\n"
+        stderr = ""
+
+    monkeypatch.setattr(runner_cores.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(runner_cores.subprocess, "run", lambda *a, **k: _Proc())
+    runner_cores.probe_shell_models.cache_clear()
+
+    assert runner_cores.probe_shell_models("codex") == ("gpt-5-codex", "gpt-5.4-mini")
 
 
 def test_generated_profile_entries_derive_class_when_missing(monkeypatch):
