@@ -128,6 +128,23 @@ def test_build_runner_block_known_with_runner_name():
     assert runner["summary"] == "claude"
 
 
+def test_build_runner_block_can_expose_quality_escalation_target():
+    res = facets.build(
+        runner_name="codex-mini",
+        runner_meta={"class": "economy"},
+        quality_escalation={
+            "status": "known",
+            "name": "claude-opus",
+            "model": "claude-opus-4-8",
+            "class": "strong",
+        },
+    )
+
+    runner = res["runner"]
+    assert runner["quality_escalation"]["name"] == "claude-opus"
+    assert runner["quality_escalation"]["class"] == "strong"
+
+
 def test_build_runner_block_known_with_name_only():
     """runner_meta is optional — name alone is enough for a known block."""
     res = facets.build(runner_name="codex")

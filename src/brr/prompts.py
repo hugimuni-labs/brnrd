@@ -651,8 +651,10 @@ def _build_run_context_bundle(
             "branch should become or refresh a PR, write `head`, `base`, and "
             "`title` frontmatter and put the PR body in the message. Diffense "
             "can supply that title/body when a checked review pack exists, but "
-            "it does not own PR creation. See `brr docs portals` for the "
-            "full field list and choreography."
+            "it does not own PR creation. `respawn: true` parks a handoff to "
+            "another run; name `shell:` / `core:` explicitly or use "
+            "`quality: escalate` to let brr pick the stronger local Core. See "
+            "`brr docs portals` for the full field list and choreography."
         )
         sections.append(
             f"- A live inbox view at `{outbox_path}/inbox.json` is refreshed "
