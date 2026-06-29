@@ -155,6 +155,34 @@ def test_build_runner_block_known_with_name_only():
     assert runner["class"] is None
 
 
+def test_build_runner_block_can_expose_relay_consent():
+    """relay_consent carries spending plan details when relay fallback is offered."""
+    res = facets.build(
+        runner_name="codex-mini",
+        runner_meta={"class": "economy", "provider": "openai"},
+        relay_consent={
+            "status": "pending",
+            "reason": "local_quota_exhausted",
+            "model": "gpt-5-codex-mini",
+            "provider": "openai",
+            "provider_cost_usd": "0.10",
+            "relay_service_fee_usd": "0.01",
+            "total_estimated_cost_usd": "0.11",
+            "per_run_cap_usd": "1.00",
+            "relay_balance_usd": "5.00",
+            "consent_state": "pending",
+        },
+    )
+
+    runner = res["runner"]
+    assert "relay_consent" in runner
+    relay = runner["relay_consent"]
+    assert relay["status"] == "pending"
+    assert relay["reason"] == "local_quota_exhausted"
+    assert relay["model"] == "gpt-5-codex-mini"
+    assert relay["consent_state"] == "pending"
+
+
 def test_render_line_does_not_include_runner_block():
     """render_line iterates FACETS (the level/state walls); runner is governance,
     not a wall, so it should NOT appear in the hook injection line."""
