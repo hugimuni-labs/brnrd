@@ -9,35 +9,14 @@ claude:
   quota_source: claude-local
 claude-bare-api-only:
   binary: claude
+  shell: claude
   cmd: 'claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
   provider: anthropic
   owner: user
   class: balanced
   cost_rank: 30
-claude-bare-api-only-sonnet:
-  binary: claude
-  cmd: 'claude --model "claude-sonnet-4-6" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
-  provider: anthropic
-  owner: user
-  model: claude-sonnet-4-6
-  class: balanced
-  cost_rank: 30
-claude-bare-api-only-opus:
-  binary: claude
-  cmd: 'claude --model "claude-opus-4-8" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
-  provider: anthropic
-  owner: user
-  model: claude-opus-4-8
-  class: strong
-  cost_rank: 50
-claude-bare-api-only-fable:
-  binary: claude
-  cmd: 'claude --model "claude-fable-5" --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
-  provider: anthropic
-  owner: user
-  model: claude-fable-5
-  class: economy
-  cost_rank: 15
+  auth_variant: anthropic-api-key
+  auth_env: ANTHROPIC_API_KEY
 codex:
   cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
   hooks: codex
@@ -116,7 +95,7 @@ fields. The *config-install mechanism* is runner-specific:
 
 brr only installs hook config for a profile that explicitly declares `hooks:`.
 It never infers hooks from the runner name; a profile with no `hooks:` field
-(the `--bare` aliases, a `runner_cmd` override) uses the heartbeat-polled
+(the `--bare` auth variant, a `runner_cmd` override) uses the heartbeat-polled
 fallback (outbox drain + `portal-state.json` refresh on the daemon timer),
 which carries *outbound* mid-thought flush but not *inbound* injection.
 
@@ -206,9 +185,13 @@ project-owned `.brr/runners.md` remains authoritative: registry profiles are
 generated only for Shells that file declares, and any declared profile with the
 same name wins.
 
-Alias profiles with `binary` are for variants of the same CLI, for example
-`claude-bare-api-only` uses `--bare` and requires `ANTHROPIC_API_KEY`
-(OAuth / `~/.claude` subscription auth is not used).
+Alias profiles with `binary` and `auth_variant` are for authentication variants
+of the same CLI. For example `claude-bare-api-only` uses `--bare` and requires
+`ANTHROPIC_API_KEY` (OAuth / `~/.claude` subscription auth is not used). The
+Core registry materializes model-pinned profiles for that auth variant too
+(`claude-bare-api-only-sonnet`, `claude-bare-api-only-opus`, etc.), but their
+model / class / cost metadata stays in `runner_cores.py`, not in a second static
+profile catalog.
 
 When the resident chooses a plain current-thread stdout reply, brr reads it
 from stdout and writes it to the event's response file automatically;
