@@ -8928,3 +8928,18 @@ Progress packets now expose the switch: `attempt_failed` carries
 `from_runner` / `runner` so cards can render the fallback instead of a generic
 retry. Paid relay consent, quota-reset deferral, and proactive quality
 escalation remain open.
+
+## [2026-06-29] implement | Resident-authored quality escalation selector
+
+Continued `plan-repo-gardening.md` Task 2 on `brr/initial-context-reweave`.
+
+Quality escalation now rides the respawn portal instead of daemon-side task
+heuristics. `runner_select.py` can choose a stronger local Runner for an
+explicit escalation, preferring a strong local Core when available, falling back
+to the cheapest strictly stronger local Core, and excluding paid relay.
+
+The outbox respawn parser accepts `respawn: true` with `quality: escalate` /
+`quality: strong`, resolves that through the selector, and queues a respawned
+event for the same conversation with `respawn_quality=strong`. `portal-state.json`
+exposes the candidate as `resources.runner.quality_escalation`, and the portal
+manual / runner prompt docs now describe the low-cognitive-load handoff.

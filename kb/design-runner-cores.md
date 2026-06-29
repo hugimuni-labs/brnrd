@@ -1,6 +1,6 @@
 # Design: runner Shell/Core selection, cost policy, and brnrd relay fallback
 
-Status: active on 2026-06-27 · foundation shipped 2026-06-28 · selector/Core-registry/capability-cache/portal metadata/local-fallback slices shipped 2026-06-29
+Status: active on 2026-06-27 · foundation shipped 2026-06-28 · selector/Core-registry/capability-cache/portal metadata/local-fallback/quality-escalation slices shipped 2026-06-29
 
 > **2026-06-28 — shape adopted + foundation shipped (evt-y11i).** Two maintainer
 > steers fixed the user-facing shape: (1) *model selection is a requirement, not
@@ -368,14 +368,18 @@ Approve / Queue until local reset / Configure own runner
    same quota/auth domains where possible, and requires a different provider for
    provider failures. `attempt_failed` records `will_fallback` +
    `fallback_runner`; the following `retrying` packet records `from_runner` +
-   `runner` so cards can show the switch. Still open: quality escalation,
-   quota-reset deferral, and paid relay consent.
+   `runner` so cards can show the switch. Still open: quota-reset deferral and
+   paid relay consent.
 8. **Respawn portal** *(consumer shipped 2026-06-29)*: a resident can drop an
    outbox message with `respawn: true`, `shell=` / `core=`, reason,
    carry-forward body, and optional `at` / `defer_until`. The daemon queues a
    new event with those runner overrides and treats `respawn` as the current
    run's success signal, so a cheap dispatcher can park the handoff without
-   producing a misleading no-output failure.
+   producing a misleading no-output failure. **Quality escalation shipped
+   2026-06-29:** `quality: escalate` / `quality: strong` resolves through the
+   deterministic local selector to the cheapest strong Runner, falling back to
+   the cheapest strictly stronger local Runner when no strong profile exists;
+   relay remains excluded until spend consent lands.
 9. **brnrd relay consent:** spending-plan prompt, wallet balance read, cap
    enforcement, audit rows. Codex/OpenAI first.
 10. **Provider collectors:** async collectors for OpenAI, Anthropic, Gemini, each
@@ -395,7 +399,8 @@ in prose:
 - local quota posture with source/freshness/confidence;
 - brnrd relay/intelligence balance, per-run cap, and auto-approve policy;
 - cost telemetry for this run so far, when available;
-- whether an escalation/respawn has already been requested;
+- the local quality-escalation candidate and whether an escalation/respawn has
+  already been requested;
 - whether paid relay consent is pending, approved, denied, or capped.
 
 As this grows, `portal-state.json` likely deserves a small owner module rather
@@ -424,10 +429,13 @@ proceed unless redirected.
    unambiguous operational loop inside the current run: classified
    quota/auth/provider failures can retry on a conservative local fallback
    Runner without user intervention. The resident-authored `RespawnRequest`
-   remains the right surface for quality escalation, explicit Shell/Core choice,
-   scheduled handoff, or anything that would spend paid relay credits. The open
-   promotion is not "retry on local fallback" anymore; it is quota-reset
-   deferral plus spend-plan-gated relay.
+   remains the right surface for explicit Shell/Core choice, scheduled handoff,
+   or anything that would spend paid relay credits. Quality escalation now rides
+   that surface too: `resources.runner.quality_escalation` exposes the
+   deterministic stronger-local candidate, and `respawn: true` +
+   `quality: escalate` queues it without the resident hand-writing a profile
+   name. The open promotion is not "retry on local fallback" anymore; it is
+   quota-reset deferral plus spend-plan-gated relay.
 
 3. **What the deterministic v1 selector keys on.** The selector must stay
    conservative (no revived LLM triage). Today it keys on: explicit override →
