@@ -143,6 +143,42 @@ def test_retrying_packet_can_record_runner_fallback(tmp_path):
     assert view is not None
     assert view.runner_name == "claude"
     assert view.detail == "fallback codex -> claude (attempt 2)"
+    assert view.attempt_history[0].reason == "session limit"
+    assert view.attempt_history[0].failure_kind == "quota_exhausted"
+    assert view.attempt_history[0].fallback_runner == "claude"
+
+
+def test_render_text_compact_surfaces_attempt_failure_ledger(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:attempt-ledger:"
+    conversations.append_run(
+        brr_dir, key,
+        run_id="run-ledger", event_id="evt-ledger",
+        env="host", status="running",
+        branch_name="brr/run-ledger",
+    )
+    _emit(brr_dir, key, "run_created", run_id="run-ledger", env="host")
+    _emit(brr_dir, key, "run_started", run_id="run-ledger",
+          runner="codex", branch="brr/run-ledger")
+    _emit(brr_dir, key, "attempt_started", run_id="run-ledger", attempt=1)
+    _emit(brr_dir, key, "attempt_failed", run_id="run-ledger", attempt=1,
+          reason="You've hit your session limit",
+          failure_kind="quota_exhausted", will_retry=False,
+          will_fallback=True, fallback_runner="claude")
+    _emit(brr_dir, key, "retrying", run_id="run-ledger", attempt=2,
+          reason="fallback after quota_exhausted", from_runner="codex",
+          runner="claude")
+    _emit(brr_dir, key, "attempt_started", run_id="run-ledger", attempt=2)
+
+    view = run_progress.project_run(brr_dir, key, "run-ledger")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+
+    assert "attempts:" in text
+    assert (
+        "- attempt 1 (codex): quota exhausted - "
+        "You've hit your session limit -> claude"
+    ) in text
 
 
 def test_project_run_conflict(tmp_path):
