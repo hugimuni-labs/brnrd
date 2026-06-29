@@ -551,6 +551,11 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
         phase="running",
         attempt=1,
         runner_name="codex",
+        quality_escalation={
+            "status": "known",
+            "name": "claude-opus",
+            "class": "strong",
+        },
         budget_seconds=3600,
         hard_cap_seconds=7200,
         keepalive_path=outbox / ".keepalive",
@@ -577,6 +582,9 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     assert payload["outbound"]["outbound_messages"] == 3
     assert payload["outbound"]["pending_outbox_files"] == ["draft.md"]
     assert payload["card"] == {"active": True, "text": "working"}
+    assert payload["resources"]["runner"]["quality_escalation"]["name"] == (
+        "claude-opus"
+    )
     assert payload["budget"]["keepalive"]["status"] == "active"
     assert payload["budget"]["elapsed_seconds"] >= 0
     assert payload["change_token"]
@@ -591,6 +599,11 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
         phase="running",
         attempt=1,
         runner_name="codex",
+        quality_escalation={
+            "status": "known",
+            "name": "claude-opus",
+            "class": "strong",
+        },
         budget_seconds=3600,
         hard_cap_seconds=7200,
         keepalive_path=outbox / ".keepalive",

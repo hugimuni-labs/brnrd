@@ -539,6 +539,35 @@ def _record_task_runner(
         task.meta["runner_class"] = runner_meta["class"]
 
 
+def _quality_escalation_meta(
+    repo_root: Path,
+    runner_name: str | None,
+) -> dict[str, object] | None:
+    """Metadata for the stronger local Runner a quality respawn would target."""
+    if not runner_name:
+        return None
+    proposed = runner.quality_escalation_runner(repo_root, runner_name)
+    if not proposed:
+        return None
+    meta = runner.profile_metadata(proposed, repo_root) or {}
+    return {
+        "status": "known",
+        "name": proposed,
+        "model": str(meta.get("model") or "").strip() or None,
+        "class": str(meta.get("class") or "").strip() or None,
+        "provider": str(meta.get("provider") or "").strip() or None,
+        "owner": str(meta.get("owner") or "user").strip() or "user",
+        "cost_rank": meta.get("cost_rank"),
+        "capability_score": meta.get("capability_score"),
+        "capability_source": str(
+            meta.get("capability_source") or ""
+        ).strip() or None,
+        "capability_freshness": str(
+            meta.get("capability_freshness") or ""
+        ).strip() or None,
+    }
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -576,6 +605,7 @@ def _run_worker(
     runner_meta: dict[str, object] | None = runner.profile_metadata(
         runner_name, repo_root
     )
+    quality_escalation = _quality_escalation_meta(repo_root, runner_name)
     failure_defer_seconds = float(
         cfg.get(
             "dispatch.failure_defer_seconds",
@@ -937,6 +967,7 @@ def _run_worker(
         phase="preparing",
         runner_name=runner_name,
         runner_meta=runner_meta,
+        quality_escalation=quality_escalation,
         budget_seconds=budget_seconds,
         hard_cap_seconds=hard_cap_seconds,
         keepalive_path=keepalive_path,
@@ -1020,6 +1051,7 @@ def _run_worker(
             attempt=attempt,
             runner_name=runner_name,
             runner_meta=runner_meta,
+            quality_escalation=quality_escalation,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
@@ -1036,6 +1068,7 @@ def _run_worker(
             # promptly as the heartbeat that observed the agent is alive.
             _drain_outbox(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+                repo_root=repo_root,
                 stats=output_stats,
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -1049,6 +1082,7 @@ def _run_worker(
                 attempt=attempt,
                 runner_name=runner_name,
                 runner_meta=runner_meta,
+                quality_escalation=quality_escalation,
                 budget_seconds=budget_seconds,
                 hard_cap_seconds=hard_cap_seconds,
                 keepalive_path=keepalive_path,
@@ -1081,6 +1115,7 @@ def _run_worker(
             # the refresh; the flush only reads the on-disk cached snapshot.
             _drain_outbox(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+                repo_root=repo_root,
                 stats=output_stats,
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -1094,6 +1129,7 @@ def _run_worker(
                 attempt=attempt,
                 runner_name=runner_name,
                 runner_meta=runner_meta,
+                quality_escalation=quality_escalation,
                 budget_seconds=budget_seconds,
                 hard_cap_seconds=hard_cap_seconds,
                 keepalive_path=keepalive_path,
@@ -1134,6 +1170,7 @@ def _run_worker(
         # written between the last heartbeat and exit, before finalize.
         _drain_outbox(
             emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+            repo_root=repo_root,
             stats=output_stats,
         )
         _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -1147,6 +1184,7 @@ def _run_worker(
             attempt=attempt,
             runner_name=runner_name,
             runner_meta=runner_meta,
+            quality_escalation=quality_escalation,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
@@ -1295,6 +1333,7 @@ def _run_worker(
             runner_meta, quota_summary, runner_env, extra_runner_args = (
                 _runner_runtime(runner_name)
             )
+            quality_escalation = _quality_escalation_meta(repo_root, runner_name)
             _record_task_runner(task, runner_name, runner_meta)
             task.save(runs_dir)
             reason = f"fallback after {failure_kind}"
@@ -1773,6 +1812,7 @@ def _resources_facet(
     pr_number: str | None = None,
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
+    quality_escalation: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -1791,6 +1831,7 @@ def _resources_facet(
         pr_number=pr_number,
         runner_name=runner_name,
         runner_meta=runner_meta,
+        quality_escalation=quality_escalation,
     )
 
 
@@ -1854,6 +1895,7 @@ def _write_live_portal_state(
     attempt: int | None = None,
     runner_name: str | None = None,
     runner_meta: "dict[str, object] | None" = None,
+    quality_escalation: "dict[str, object] | None" = None,
     budget_seconds: float | None = None,
     hard_cap_seconds: float | None = None,
     keepalive_path: Path | None = None,
@@ -1955,6 +1997,7 @@ def _write_live_portal_state(
                 pr_number=task.meta.get("github_pr_number"),
                 runner_name=runner_name,
                 runner_meta=runner_meta,
+                quality_escalation=quality_escalation,
             ),
         }
         payload["change_token"] = _change_token(payload)
@@ -1994,9 +2037,30 @@ def _respawn_defer_until(fm: dict) -> str | None:
     return raw if schedule_mod.parse_iso(raw) is not None else None
 
 
+def _respawn_quality_target(fm: dict) -> str | None:
+    """Return the requested local quality target class for a respawn frontmatter."""
+    raw = str(
+        fm.get("quality")
+        or fm.get("quality_escalation")
+        or fm.get("escalation")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    value = raw.lower()
+    if value in {"0", "false", "no", "n", "off", "none"}:
+        return None
+    if value in {"balanced", "strong"}:
+        return value
+    if value in {"1", "true", "yes", "y", "on", "escalate", "stronger", "higher"}:
+        return "strong"
+    return None
+
+
 def _queue_respawn_request(
     emit: _WorkerEmit,
     task: Run,
+    repo_root: Path | None,
     inbox_dir: Path | None,
     event_id: str,
     fm: dict,
@@ -2012,8 +2076,17 @@ def _queue_respawn_request(
         or ""
     ).strip()
     core = str(fm.get("core") or "").strip()
+    quality_target = _respawn_quality_target(fm)
+    if not proposed and not core and quality_target and repo_root is not None:
+        current_runner = str(task.meta.get("runner_name") or "").strip()
+        proposed = runner.quality_escalation_runner(
+            repo_root, current_runner, target_class=quality_target
+        ) or ""
     if not proposed and not core:
-        print("[brr] outbox: respawn request had no runner/core; dropping")
+        print(
+            "[brr] outbox: respawn request had no runner/core/"
+            "quality target; dropping"
+        )
         return False
     current = _find_pending_event(inbox_dir, event_id) or {}
     source = str(fm.get("source") or current.get("source") or task.source or "respawn")
@@ -2026,7 +2099,7 @@ def _queue_respawn_request(
         "_path", "id", "body", "status", "created", "source",
         "origin_message_key", "respawn", "event", "gate",
         "runner", "proposed_runner", "shell", "core", "at", "defer_until",
-        "carry_forward",
+        "carry_forward", "quality", "quality_escalation", "escalation",
     }
     meta = {
         k: v for k, v in current.items()
@@ -2044,6 +2117,8 @@ def _queue_respawn_request(
     meta["respawned_by_run"] = task.id
     if reason:
         meta["respawn_reason"] = reason
+    if quality_target:
+        meta["respawn_quality"] = quality_target
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
     print(f"[brr] outbox: queued respawn request ({new_path.stem})")
     if emit.conversation_key:
@@ -2063,6 +2138,7 @@ def _queue_respawn_request(
         respawn_event_id=new_path.stem,
         proposed_runner=proposed or None,
         core=core or None,
+        quality=quality_target,
         defer_until=defer_until,
         reason=reason or None,
     )
@@ -2077,6 +2153,7 @@ def _drain_outbox(
     outbox_dir: Path | None,
     inbox_dir: Path | None = None,
     *,
+    repo_root: Path | None = None,
     stats: dict[str, int] | None = None,
 ) -> int:
     """Promote interim/interleaved responses the resident dropped in its outbox.
@@ -2144,7 +2221,9 @@ def _drain_outbox(
         fm, body = protocol.parse_outbox_message(text)
         body = body.strip()
         if _truthy(fm.get("respawn")):
-            if _queue_respawn_request(emit, task, inbox_dir, event_id, fm, body):
+            if _queue_respawn_request(
+                emit, task, repo_root, inbox_dir, event_id, fm, body
+            ):
                 promoted += 1
                 if stats is not None:
                     stats["respawn"] = stats.get("respawn", 0) + 1

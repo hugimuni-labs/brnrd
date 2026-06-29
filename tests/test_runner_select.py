@@ -245,6 +245,43 @@ def test_automatic_fallback_ignores_non_operational_failures():
     ) is None
 
 
+def test_quality_escalation_prefers_strong_local_when_available():
+    runners = [
+        _profile("codex-mini", **{"class": "economy", "cost_rank": 20}),
+        _profile("claude-sonnet", **{"class": "balanced", "cost_rank": 30}),
+        _profile("claude-opus", **{"class": "strong", "cost_rank": 50}),
+        _profile("relay-opus", owner="brnrd", **{"class": "relay", "cost_rank": 1}),
+    ]
+
+    chosen = rs.quality_escalation_runner(runners, current="codex-mini")
+
+    assert chosen is not None
+    assert chosen.name == "claude-opus"
+
+
+def test_quality_escalation_falls_back_to_cheapest_stronger_local():
+    runners = [
+        _profile("codex-mini", **{"class": "economy", "cost_rank": 20}),
+        _profile("claude-sonnet", **{"class": "balanced", "cost_rank": 30}),
+    ]
+
+    chosen = rs.quality_escalation_runner(runners, current="codex-mini")
+
+    assert chosen is not None
+    assert chosen.name == "claude-sonnet"
+
+
+def test_quality_escalation_returns_none_from_strong_runner():
+    runners = [
+        _profile("claude-opus", **{"class": "strong", "cost_rank": 50}),
+        _profile("relay-opus", owner="brnrd", **{"class": "relay", "cost_rank": 1}),
+    ]
+
+    assert rs.quality_escalation_runner(
+        runners, current="claude-opus",
+    ) is None
+
+
 def test_fixed_policy_picks_cheapest_local_without_class_logic():
     runners = [
         _profile("strong", **{"class": "strong", "cost_rank": 50}),
