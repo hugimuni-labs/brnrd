@@ -131,6 +131,7 @@ class RunProgressView:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     container_ids: list[str] = field(default_factory=list)
     response_path: str | None = None
+    run_state_path: str | None = None
     error: str | None = None
     event_id: str | None = None
     phase_history: list[PhaseEntry] = field(default_factory=list)
@@ -389,6 +390,9 @@ def _project(
             view.repo_label = record.get("repo_label") or view.repo_label
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
+            run_state_path = record.get("run_state_path")
+            if isinstance(run_state_path, str) and run_state_path:
+                view.run_state_path = run_state_path
             _open_phase(view, "preparing", ts)
         elif ptype == "env_prepared":
             view.repo_label = record.get("repo_label") or view.repo_label
@@ -871,6 +875,8 @@ def _render_verbose(view: RunProgressView) -> str:
         rows.append(("containers", ", ".join(view.container_ids)))
     if view.response_path and view.is_terminal:
         rows.append(("response", view.response_path))
+    if view.run_state_path:
+        rows.append(("run_state", view.run_state_path))
 
     lines.append("")
     for key, value in rows:

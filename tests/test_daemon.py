@@ -1500,6 +1500,95 @@ def test_repo_label_uses_config_before_directory_name(tmp_path):
     assert daemon._repo_label(tmp_path, {}, {"repo.label": "local/demo"}) == "local/demo"
 
 
+def test_account_dispatch_inbox_routes_message_event_to_registered_repo(tmp_path):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "account.dominion_path": str(tmp_path / "account-home"),
+        "account.repo.Gurio/b": str(repo_b),
+    }
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    protocol.create_event(
+        ctx.dispatch_inbox,
+        "telegram",
+        "route this to repo b",
+        repo="Gurio/b",
+    )
+
+    targets = daemon._dispatchable_targets(ctx, repo_a, cfg)
+
+    assert len(targets) == 1
+    assert targets[0].repo_root == repo_b
+    assert targets[0].repo_label == "Gurio/b"
+    assert targets[0].inbox_dir == ctx.dispatch_inbox
+    assert targets[0].responses_dir == ctx.responses_dir
+
+
+def test_account_dispatch_keeps_forge_events_on_repo_local_route(tmp_path):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "account.dominion_path": str(tmp_path / "account-home"),
+        "account.repo.Gurio/b": str(repo_b),
+    }
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    repo_b_inbox = repo_b / ".brr" / "inbox"
+    protocol.create_event(repo_b_inbox, "github", "fix this issue")
+
+    targets = daemon._dispatchable_targets(ctx, repo_a, cfg)
+
+    assert len(targets) == 1
+    assert targets[0].repo_root == repo_b
+    assert targets[0].repo_label == "Gurio/b"
+    assert targets[0].inbox_dir == repo_b_inbox
+    assert targets[0].responses_dir == repo_b / ".brr" / "responses"
+    assert targets[0].event["repo_label"] == "Gurio/b"
+
+
+def test_account_run_state_doc_persists_run_snapshot(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {
+            "repo.label": "Gurio/brr",
+            "account.dominion_path": str(tmp_path / "account-home"),
+        },
+    )
+    task = Run(
+        id="run-state",
+        event_id="evt-state",
+        body="please make the state visible",
+        source="telegram",
+        status="running",
+        meta={"runner_name": "codex"},
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx,
+        task,
+        repo_label="Gurio/brr",
+        stage="created",
+    )
+
+    assert path == ctx.run_state_dir / "Gurio__brr" / "run-state.md"
+    text = path.read_text(encoding="utf-8")
+    assert "run_id: run-state" in text
+    assert "repo_label: Gurio/brr" in text
+    assert "- runner: codex" in text
+
+
 def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path):
     monkeypatch.setattr(
         daemon.claude_usage,
