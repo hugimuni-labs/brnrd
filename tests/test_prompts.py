@@ -242,6 +242,15 @@ class TestPromptBuilding:
             in prompt
         )
 
+    def test_daemon_prompt_surfaces_repo_label(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            repo_label="Gurio/brr",
+        )
+
+        assert "- Repo: Gurio/brr" in prompt
+
     def test_daemon_prompt_surfaces_runner_mandate_catalog(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
