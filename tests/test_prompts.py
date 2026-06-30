@@ -4,6 +4,7 @@ from brr import dominion
 from brr.prompts import (
     _build_context_block,
     _build_decision_ledger_block,
+    _build_identity_core_block,
     _build_inter_run_plan_block,
     _build_runner_policy_block,
     _read_recent_log,
@@ -106,6 +107,36 @@ class TestContextInjection:
 
 
 class TestPromptBuilding:
+    def test_run_prompt_includes_identity_core_before_dominion_and_task(
+        self, tmp_path,
+    ):
+        dom = dominion.dominion_path(tmp_path)
+        dom.mkdir(parents=True)
+        (dom / "self-inject").write_text("full playbook.md\n", encoding="utf-8")
+        (dom / "playbook.md").write_text("# Living Playbook\n", encoding="utf-8")
+
+        prompt = build_run_prompt("do something", tmp_path)
+
+        assert "Resident Identity Core" in prompt
+        assert "product-owned identity contract" in prompt
+        assert "Appearance settings" in prompt
+        assert "Your dominion (working memory)" in prompt
+        assert prompt.index("Resident Identity Core") < prompt.index(
+            "Your dominion (working memory)"
+        )
+        assert prompt.index("Resident Identity Core") < prompt.index("Task:")
+
+    def test_identity_core_ignores_runtime_prompt_override(self, tmp_path):
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "identity-core.md").write_text(
+            "# Custom Core\n\nRuntime override.", encoding="utf-8"
+        )
+
+        block = _build_identity_core_block(tmp_path)
+        assert "Resident Identity Core" in block
+        assert "Runtime override" not in block
+
     def test_run_prompt_includes_context(self, tmp_path):
         kb = tmp_path / "kb"
         kb.mkdir()
