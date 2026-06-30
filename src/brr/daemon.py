@@ -44,6 +44,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import account
 from . import branching
 from . import config as conf
 from . import conversations
@@ -118,6 +119,17 @@ _CARD_CONTROL_NAME = ".card"
 # resident from flooding a thread. Excess bytes are truncated.
 _CARD_CONTROL_MAX_BYTES = 4096
 _INTERNAL_EVENT_SOURCES = {"schedule"}
+
+
+@dataclass(frozen=True)
+class _DispatchTarget:
+    """One pending event plus the repo/runtime surface it should use."""
+
+    event: dict
+    repo_root: Path
+    inbox_dir: Path
+    responses_dir: Path
+    repo_label: str
 
 
 # ── Per-branch locks ────────────────────────────────────────────────
@@ -578,7 +590,7 @@ def _repo_label(
     """Best-effort human label for the repo this run belongs to."""
     event = event or {}
     cfg = cfg or {}
-    for key in ("github_repo", "repo_full_name", "repo"):
+    for key in ("github_repo", "repo_full_name", "repo", "repo_label"):
         value = str(event.get(key) or "").strip()
         if value:
             return value
@@ -604,12 +616,176 @@ def _repo_label(
     return repo_root.name
 
 
+def _event_files_present(inbox_dir: Path) -> bool:
+    """Cheap guard before asking the protocol layer to parse an inbox."""
+    try:
+        return any(entry.name.endswith(".md") for entry in os.scandir(inbox_dir))
+    except OSError:
+        return False
+
+
+def _repo_inbox(repo_root: Path) -> Path:
+    return gitops.shared_brr_dir(repo_root) / "inbox"
+
+
+def _repo_responses(repo_root: Path) -> Path:
+    return gitops.shared_brr_dir(repo_root) / "responses"
+
+
+def _repo_for_event(
+    account_context: account.AccountContext,
+    event: dict,
+    *,
+    fallback_repo_root: Path,
+    fallback_label: str,
+) -> tuple[Path, str]:
+    """Resolve the repo dimension for one event.
+
+    Message events in the account dispatch inbox carry an explicit ``repo`` /
+    ``repo_label`` target.  Forge events can stay direct: if the event file
+    lives in a registered repo's local inbox, that repo is the target even when
+    the event body does not repeat its repo label.
+    """
+    explicit_label = account.event_repo_label(event)
+    if explicit_label:
+        repo = account_context.repo_for_label(explicit_label)
+        if repo is not None:
+            return repo.root, repo.label
+        return fallback_repo_root, explicit_label
+
+    path = event.get("_path")
+    if isinstance(path, Path):
+        for repo in account_context.repos.values():
+            try:
+                if path.parent.resolve() == _repo_inbox(repo.root).resolve():
+                    return repo.root, repo.label
+            except OSError:
+                continue
+    return fallback_repo_root, fallback_label
+
+
+def _dispatchable_targets(
+    account_context: account.AccountContext,
+    default_repo_root: Path,
+    cfg: dict,
+) -> list[_DispatchTarget]:
+    """Return pending events across the account daemon's known inboxes.
+
+    The existing single-repo path remains the hot path: the default repo inbox
+    is always scanned. Additional repo inboxes and the account dispatch inbox
+    are scanned only when they actually contain event files, avoiding extra work
+    and preserving tests that monkeypatch the protocol scanner.
+    """
+    default_label = account_context.default_repo.label
+    sources: list[tuple[Path, Path, Path, str, bool]] = []
+    seen: set[Path] = set()
+
+    def add_source(
+        inbox_dir: Path,
+        responses_dir: Path,
+        repo_root: Path,
+        repo_label: str,
+        *,
+        always: bool = False,
+    ) -> None:
+        try:
+            key = inbox_dir.resolve()
+        except OSError:
+            key = inbox_dir
+        if key in seen:
+            return
+        seen.add(key)
+        if always or _event_files_present(inbox_dir):
+            sources.append((inbox_dir, responses_dir, repo_root, repo_label, always))
+
+    add_source(
+        _repo_inbox(default_repo_root),
+        _repo_responses(default_repo_root),
+        default_repo_root,
+        default_label,
+        always=True,
+    )
+    if account_context.enabled:
+        add_source(
+            account_context.dispatch_inbox,
+            account_context.responses_dir,
+            account_context.default_repo.root,
+            account_context.default_repo.label,
+        )
+        for repo in account_context.repos.values():
+            add_source(
+                _repo_inbox(repo.root),
+                _repo_responses(repo.root),
+                repo.root,
+                repo.label,
+            )
+
+    targets: list[_DispatchTarget] = []
+    for inbox_dir, responses_dir, source_repo, source_label, _always in sources:
+        for event in protocol.list_dispatchable(inbox_dir):
+            repo_root, repo_label = _repo_for_event(
+                account_context,
+                event,
+                fallback_repo_root=source_repo,
+                fallback_label=source_label,
+            )
+            if not account.event_repo_label(event):
+                event.setdefault("repo_label", repo_label)
+            targets.append(
+                _DispatchTarget(
+                    event=event,
+                    repo_root=repo_root,
+                    inbox_dir=inbox_dir,
+                    responses_dir=responses_dir,
+                    repo_label=repo_label,
+                )
+            )
+    return sorted(targets, key=lambda target: _event_mtime(target.event))
+
+
+def _start_account_gates(
+    account_context: account.AccountContext,
+    default_repo_root: Path,
+) -> list[threading.Thread]:
+    """Start configured gates for the account store and registered repos."""
+
+    threads: list[threading.Thread] = []
+    seen: set[Path] = set()
+
+    def start_for(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
+        try:
+            key = brr_dir.resolve()
+        except OSError:
+            key = brr_dir
+        if key in seen:
+            return
+        seen.add(key)
+        threads.extend(_start_gates(brr_dir, inbox_dir, responses_dir))
+
+    if account_context.enabled:
+        start_for(
+            account_context.dominion_repo,
+            account_context.dispatch_inbox,
+            account_context.responses_dir,
+        )
+        for repo in account_context.repos.values():
+            brr_dir = gitops.shared_brr_dir(repo.root)
+            start_for(brr_dir, brr_dir / "inbox", brr_dir / "responses")
+    else:
+        brr_dir = gitops.shared_brr_dir(default_repo_root)
+        start_for(brr_dir, brr_dir / "inbox", brr_dir / "responses")
+    return threads
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
+    *,
+    account_context: account.AccountContext | None = None,
+    inbox_dir: Path | None = None,
 ) -> Run:
     """Run the runner for a single event, with retries.
 
@@ -669,6 +845,11 @@ def _run_worker(
         if correspondent_key:
             task.meta["correspondent_key"] = correspondent_key
         task.meta["repo_label"] = repo_label
+        run_state_path = _persist_run_state_doc(
+            account_context, task, repo_label=repo_label, stage="deduplicated",
+        )
+        if run_state_path is not None:
+            task.meta["run_state_path"] = str(run_state_path)
         task.meta["deduplicated_origin_message_key"] = origin_message_key
         prior_event_id = str(duplicate_event.get("event_id") or "").strip()
         prior_conversation = str(duplicate_event.get("conversation_key") or "").strip()
@@ -680,6 +861,7 @@ def _run_worker(
         emit(
             "run_created", run_id=task.id, event_id=eid,
             env=task.env, repo_label=repo_label,
+            run_state_path=task.meta.get("run_state_path"),
         )
         if conv_key:
             conversations.append_run(
@@ -714,6 +896,11 @@ def _run_worker(
         task.meta["correspondent_key"] = correspondent_key
     task.meta["repo_label"] = repo_label
     _record_task_runner(task, runner_name, runner_meta)
+    run_state_path = _persist_run_state_doc(
+        account_context, task, repo_label=repo_label, stage="created",
+    )
+    if run_state_path is not None:
+        task.meta["run_state_path"] = str(run_state_path)
     task.save(runs_dir)
 
     if conv_key:
@@ -732,6 +919,7 @@ def _run_worker(
     emit(
         "run_created", run_id=task.id, event_id=eid,
         env=task.env, repo_label=repo_label,
+        run_state_path=task.meta.get("run_state_path"),
     )
 
     # Record this thought in the presence registry so overlapping thoughts
@@ -756,7 +944,7 @@ def _run_worker(
     # Created up front so the agent can write to it the moment it wakes.
     outbox_dir = brr_dir / "outbox" / eid
     outbox_dir.mkdir(parents=True, exist_ok=True)
-    inbox_dir = brr_dir / "inbox"
+    inbox_dir = inbox_dir or (brr_dir / "inbox")
 
     print(f"[brr] run {task.id} (event {eid}): env={task.env}")
 
@@ -2749,6 +2937,77 @@ def _record_response_artifact(
     )
 
 
+def _persist_run_state_doc(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    repo_label: str,
+    stage: str,
+) -> Path | None:
+    """Write the durable account-level run-state document for *task*.
+
+    This is the CS2/CS4 bridge: the live card remains a compact projection,
+    while the account dominion repo gets a durable, git-mirrorable status
+    object.  The document is intentionally simple markdown for the first slice;
+    a richer renderer can project the same fields later.
+    """
+    if account_context is None or not account_context.enabled:
+        return None
+    root = account_context.run_state_dir / account.slug_repo_label(repo_label)
+    path = root / f"{task.id}.md"
+    root.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "---",
+        f"run_id: {task.id}",
+        f"event_id: {task.event_id}",
+        f"status: {task.status}",
+        f"stage: {stage}",
+        f"repo_label: {repo_label}",
+        f"source: {task.source}",
+    ]
+    if task.conversation_key:
+        lines.append(f"conversation_key: {task.conversation_key}")
+    for key in (
+        "runner_name",
+        "runner_shell",
+        "runner_core",
+        "runner_class",
+        "branch_name",
+        "target_branch",
+        "publish_branch",
+        "publish_status",
+        "success_signal",
+    ):
+        value = task.meta.get(key)
+        if value not in (None, ""):
+            lines.append(f"{key}: {value}")
+    lines.extend([
+        "---",
+        f"# Run {task.id}",
+        "",
+        f"- status: {task.status}",
+        f"- stage: {stage}",
+        f"- repo: {repo_label}",
+        f"- source: {task.source or 'unknown'}",
+        f"- event: {task.event_id or 'unknown'}",
+    ])
+    runner_name = task.meta.get("runner_name")
+    if runner_name:
+        lines.append(f"- runner: {runner_name}")
+    branch = task.meta.get("branch_name") or task.meta.get("publish_branch")
+    if branch:
+        lines.append(f"- branch: {branch}")
+    if task.body:
+        summary = " ".join(task.body.split())
+        if len(summary) > 240:
+            summary = summary[:239].rstrip() + "..."
+        lines.extend(["", "## Request", "", summary])
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
 def _event_requires_thread_delivery(event: dict) -> bool:
     """True when the originating event has a user-facing thread to close."""
     return str(event.get("source") or "") not in _INTERNAL_EVENT_SOURCES
@@ -2926,6 +3185,9 @@ def _run_worker_and_finalize(
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
+    *,
+    account_context: account.AccountContext | None = None,
+    inbox_dir: Path | None = None,
 ) -> Run:
     """Run one event end-to-end and return the resulting Run.
 
@@ -2941,13 +3203,28 @@ def _run_worker_and_finalize(
     """
     task = None
     try:
-        task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
+        task = _run_worker(
+            event,
+            repo_root,
+            responses_dir,
+            cfg,
+            max_retries,
+            account_context=account_context,
+            inbox_dir=inbox_dir,
+        )
         if event.get("status") != "done":
             _set_event_status_if_present(event, task.status)
         if task.status == "error":
             print(f"[brr] run {task.id}: failed")
 
         publish(repo_root, task)
+        repo_label = str(task.meta.get("repo_label") or _repo_label(repo_root, event, cfg))
+        _persist_run_state_doc(
+            account_context,
+            task,
+            repo_label=repo_label,
+            stage="finished",
+        )
         _retire_internal_event(event, responses_dir)
         return task
     finally:
@@ -3053,6 +3330,7 @@ def start(
     signal.signal(signal.SIGINT, _handle_signal)
 
     cfg = conf.load_config(repo_root)
+    account_context = account.resolve_context(repo_root, cfg)
     max_retries = int(cfg.get("response_retries", 1))
     burst_window = float(
         cfg.get("dispatch.burst_window_seconds", _BURST_WINDOW_DEFAULT))
@@ -3080,7 +3358,10 @@ def start(
         except Exception as exc:  # noqa: BLE001
             print(f"[brr] dominion bootstrap skipped: {exc}")
 
-    gate_threads = _start_gates(brr_dir, inbox_dir, responses_dir)
+    if account_context.enabled and account_context.dominion_repo.exists():
+        print(f"[brr] account dominion ready: {account_context.dominion_repo}")
+
+    gate_threads = _start_account_gates(account_context, repo_root)
     if not gate_threads:
         print("[brr] warning: no gates configured — inbox will only receive events from `brr run` or scripts")
 
@@ -3147,20 +3428,28 @@ def start(
             # slot can drain.
             burst_hold = 0.0
             if current is None and not reload_requested:
-                pending = protocol.list_dispatchable(inbox_dir)
+                pending = _dispatchable_targets(account_context, repo_root, cfg)
                 if pending:
                     burst_hold = _burst_settle_delay(
-                        pending, burst_window, burst_max_wait, time.time())
+                        [target.event for target in pending],
+                        burst_window,
+                        burst_max_wait,
+                        time.time(),
+                    )
                     if burst_hold <= 0:
                         # Dispatch the oldest as lead; the wake reads the
                         # whole settled burst and folds the rest in (the
                         # multi-response ``event:`` path), so a burst becomes
                         # one thought, not one spawn per fragment.
-                        event = pending[0]
+                        target = pending[0]
+                        event = target.event
                         eid = event["id"]
                         extra = len(pending) - 1
                         suffix = f" (+{extra} pending)" if extra else ""
-                        print(f"[brr] processing: {eid}{suffix}")
+                        repo_suffix = (
+                            f" [{target.repo_label}]" if target.repo_label else ""
+                        )
+                        print(f"[brr] processing: {eid}{repo_suffix}{suffix}")
                         protocol.update_event_meta(
                             event,
                             defer_until=None,
@@ -3170,7 +3459,13 @@ def start(
                         protocol.set_status(event, "processing")
                         current = pool.submit(
                             _run_worker_and_finalize,
-                            event, repo_root, responses_dir, cfg, max_retries,
+                            event,
+                            target.repo_root,
+                            target.responses_dir,
+                            cfg,
+                            max_retries,
+                            account_context=account_context,
+                            inbox_dir=target.inbox_dir,
                         )
 
             # Event-driven idle wait: block until a fresh in-process event
