@@ -570,6 +570,40 @@ def _quality_escalation_meta(
     }
 
 
+def _repo_label(
+    repo_root: Path,
+    event: dict | None = None,
+    cfg: dict | None = None,
+) -> str:
+    """Best-effort human label for the repo this run belongs to."""
+    event = event or {}
+    cfg = cfg or {}
+    for key in ("github_repo", "repo_full_name", "repo"):
+        value = str(event.get(key) or "").strip()
+        if value:
+            return value
+    for key in ("repo.label", "repo_label"):
+        value = str(cfg.get(key) or "").strip()
+        if value:
+            return value
+    try:
+        remote = gitops.default_remote(repo_root)
+        if remote:
+            url = gitops.remote_url(repo_root, remote)
+            if url:
+                from .gates.github.parse import parse_origin_url
+
+                parsed = parse_origin_url(url)
+                if parsed:
+                    return parsed
+    except Exception:
+        pass
+    value = str(event.get("repo_id") or "").strip()
+    if value:
+        return value
+    return repo_root.name
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
@@ -591,6 +625,7 @@ def _run_worker(
     eid = event["id"]
     brr_dir = gitops.shared_brr_dir(repo_root)
     runs_dir = brr_dir / "runs"
+    repo_label = _repo_label(repo_root, event, cfg)
     runner_overrides = {
         key: event.get(key)
         for key in ("shell", "core", "runner", "runner_policy")
@@ -633,6 +668,7 @@ def _run_worker(
         task.status = "done"
         if correspondent_key:
             task.meta["correspondent_key"] = correspondent_key
+        task.meta["repo_label"] = repo_label
         task.meta["deduplicated_origin_message_key"] = origin_message_key
         prior_event_id = str(duplicate_event.get("event_id") or "").strip()
         prior_conversation = str(duplicate_event.get("conversation_key") or "").strip()
@@ -641,12 +677,15 @@ def _run_worker(
         if prior_conversation:
             task.meta["deduplicated_by_conversation_key"] = prior_conversation
         task.save(runs_dir)
-        emit("run_created", run_id=task.id, event_id=eid, env=task.env)
+        emit(
+            "run_created", run_id=task.id, event_id=eid,
+            env=task.env, repo_label=repo_label,
+        )
         if conv_key:
             conversations.append_run(
                 brr_dir, conv_key,
                 run_id=task.id, event_id=eid,
-                env=task.env, status=task.status,
+                env=task.env, status=task.status, repo_label=repo_label,
             )
         body = _deduplicated_event_body()
         resp_path = protocol.response_path(responses_dir, eid)
@@ -673,6 +712,7 @@ def _run_worker(
     task.conversation_key = conv_key
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
+    task.meta["repo_label"] = repo_label
     _record_task_runner(task, runner_name, runner_meta)
     task.save(runs_dir)
 
@@ -689,7 +729,10 @@ def _run_worker(
                 error=sync_result.error,
             )
 
-    emit("run_created", run_id=task.id, event_id=eid, env=task.env)
+    emit(
+        "run_created", run_id=task.id, event_id=eid,
+        env=task.env, repo_label=repo_label,
+    )
 
     # Record this thought in the presence registry so overlapping thoughts
     # (ad-hoc sessions, a second daemon) can see who's on which stream and
@@ -700,6 +743,7 @@ def _run_worker(
     try:
         presence_id = presence.register(
             brr_dir, kind="daemon", stream=conv_key, run_id=task.id,
+            repo_label=repo_label,
         )["id"]
         task.meta["presence_id"] = presence_id
     except OSError:
@@ -781,6 +825,7 @@ def _run_worker(
         run_id=task.id,
         env=task.env,
         branch_name=branch_name,
+        repo_label=repo_label,
         seed_ref=branch_plan.seed_ref,
         target_branch=branch_plan.target_branch,
         branch_source=branch_plan.source,
@@ -796,6 +841,7 @@ def _run_worker(
             target_branch=branch_plan.target_branch,
             branch_source=branch_plan.source,
             host_context_branch=branch_plan.host_context_branch,
+            repo_label=repo_label,
         )
 
     history_groups = (
@@ -1018,6 +1064,7 @@ def _run_worker(
             source=task.source or event.get("source"),
             environment=task.env,
             branch_name=branch_name,
+            repo_label=repo_label,
             seed_ref=branch_plan.seed_ref,
             branch_source=branch_plan.source,
             branch_setup_notice=branch_setup_notice,
@@ -1996,6 +2043,7 @@ def _write_live_portal_state(
                 "attempt": attempt,
                 "env": task.env,
                 "runner": runner_name,
+                "repo": task.meta.get("repo_label"),
                 "branch": task.meta.get("branch_name"),
             },
             "attention": {
@@ -2157,6 +2205,14 @@ def _queue_respawn_request(
         k: v for k, v in current.items()
         if k not in reserved and not str(k).startswith("_")
     }
+    explicit_repo = str(
+        fm.get("repo") or fm.get("repo_label") or fm.get("repo_id") or ""
+    ).strip()
+    if explicit_repo:
+        meta["repo"] = explicit_repo
+        meta["repo_label"] = explicit_repo
+    elif task.meta.get("repo_label"):
+        meta["repo_label"] = task.meta["repo_label"]
     if proposed:
         meta["shell"] = proposed
     if core:
@@ -2542,6 +2598,7 @@ def _fire_due_schedules(
             protocol.create_event(
                 inbox_dir, "schedule", body,
                 schedule_id=entry.id, conversation_key=conv,
+                repo_label=_repo_label(repo_root, {}, cfg),
             )
             print(f"[brr] schedule: fired {entry.id}")
         if new_state != state:
