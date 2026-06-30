@@ -8241,3 +8241,1053 @@ is not assumed to be API-visible; brnrd relay debits provider cost plus the
 transparent relay service fee from `decision-llm-relay.md`. The older billing
 and managed-mode pages now carry the partial supersession so they no longer
 read as compute-wallet-only.
+
+## [2026-06-27] design | The boundary as one envelope on two rails; medium vocabulary fork
+
+Dogfooding session against a maintainer design message (evt-9dp2/slhg) that
+braided several threads: should the portal json and the hooks be one concept;
+the open-source vs brnrd boundary split; runner/run/weave/medium vocabulary;
+cost manifests per medium and the respawn matrix; failover triage; and the
+fair-but-everywhere business posture. Filed `design-resident-boundary.md` as the
+reconciliation against the same-day runner-media / back-channel / cost-aware
+pages, and indexed it.
+
+Settled: the **boundary is one concept on two rails of different density** — a
+mid-run re-evaluation, after tracing `daemon._resources_facet` (full JSON
+snapshot) vs `hooks._format_resources` (seed/stop-gated woven line). The portal
+json is the complete snapshot + no-hook fallback rail the gated injection reads
+from, not a redundant "more live" copy; making them byte-identical would revive
+the firehose. The real gap is *populating the collectors* (all facets render
+`unavailable`), not merging the rails. Also settled: self-deployed static
+**envelope** is the open mechanism, brnrd adds the live authoritative rail +
+remote control (open-source-friendly, fair value-add); failover = cheap-recovery
++ visible receipt (PR posture incl. not-yet-created joins the boundary) rather
+than a perfect failure classifier; business posture reconciles with OSS via
+transparent paid-everywhere-it-fits.
+
+Open forks left for a maintainer nod: confirm **medium** (vs substrate/shell) for
+the executor — which frees `runner` to dissolve into "the resident" and implies
+a dedicated rename run; and the first concrete build = resource collectors so the
+boundary facets and the cost matrix actually move.
+
+Branch `brr/boundary-and-medium-synthesis`. No code changed this wake — design
+synthesis only.
+
+---
+
+## [2026-06-27] feat | medium settled; boundary portal shows substantially more missing data
+
+Maintainer confirmed two open forks from the boundary synthesis (evt-go5z,
+telegram) and asked for a concrete enrichment. **Vocabulary fork resolved:**
+`medium` is the noun for the executor — `runner` dissolves into "the resident",
+with a dedicated rename run left as a sanctioned follow-up (kept out of this
+behavioural diff). **Boundary ask:** the portal should "show substantially more
+missing data" than the old flat `unavailable` — no PR, no outbound messages,
+running so long, plus unimplemented-but-required slots.
+
+Shipped that across all three rails (JSON `portal-state.json`, the woven hook
+line, and `brr portal state`): the resource facets are now three-state —
+`known` (proven value), `absent` (affirmative-empty: no PR for the branch, no
+quota snapshot for this medium), `unimplemented` (collector not built, with a
+`required` flag) — each carrying a `note` on *why* a slot is empty. Added
+network-free PR posture in `remote_scm` (recorded `github_pr_number` →
+`pr_state: open`, else the not-yet-created receipt), a `budget.long_running`
+flag with a "running long" line past the soft budget, and a
+no-outbound-at-closeout receipt (`outbound.any_sent`). The distinction encodes
+the maintainer's own split: "missing data" (absent) vs "unimplemented but
+required" — absence is data, surfaced on purpose, not a silent gap.
+
+Still open: populate the `known` *values* (live quota/cost collectors), unify
+the three renderers behind a single projection helper, and the runner→medium
+rename run. Reconciled `design-resident-boundary.md` (§1/§3/§5/summary) and
+`design-runner-media.md`. Branch `brr/boundary-and-medium-synthesis`.
+
+---
+
+## [2026-06-28] design | Stream-json loom retired for cost-data; Claude statusLine is the level-readable quota source
+
+Maintainer correction on the cost-awareness thread (evt-e1gl, telegram), against
+my own prior reply (00:21) which had leaned on "the stream-json loom we decided
+to build — not built yet." Two corrections, both folding the live-cost question
+back onto the **hooks rail**:
+
+1. **The streaming medium is retired** — abandoned 2026-06-27 in favour of native
+   hooks as the one boundary abstraction over vessels
+   (`plan-streaming-runner-injection.md` status). So my §8 build order
+   "streaming medium → consumption tally → distance-card" was stale; the kb
+   already said so and I'd contradicted it.
+2. **Claude Code exposes subscription quota as a readable gauge** via the
+   `statusLine` feature: the configured command receives session JSON on stdin
+   carrying `rate_limits.five_hour/seven_day.used_percentage` + `.resets_at`,
+   `context_window.remaining_percentage`, and `cost.total_cost_usd`. Structurally
+   that's *another hook* — a command brr registers in the same
+   `.claude/settings.local.json` it writes hooks into. This overturns my
+   "subscription-quota wall is edge-only" claim: for the Claude vessel both walls
+   plus the context window are level-readable today, no API-key/brnrd needed. The
+   real asymmetry is **per-vessel** (Claude rich, Codex edge-only), not
+   spend-vs-quota.
+
+Also answered the maintainer's "how do I *choose* the facets?" question with a
+selection principle: facets are **derived from the envelope walls** (budget,
+spend, quota, context_window) plus actionable state (coexisting_runs,
+remote_scm), defined **once** in the single projection helper — "by schema," not
+"by convention." This adds a new `context_window` facet and promotes subscription
+`quota` to a level facet for Claude.
+
+Reconciled `design-resident-boundary.md` (§8 rewritten, §7/§1 + Settled/open
+updated) and `design-runner-media.md` (Claude CLI row + quota-signal grades). No
+code this wake. Next concrete build: register the statusLine collector and
+smoke-verify the JSON schema before relying on it (pitfall: fire it before you
+rule on it). Branch `brr/boundary-and-medium-synthesis`, commit 141bfad.
+
+---
+
+## [2026-06-28] implement | Boundary facets defined by schema + operator-inspectable; Claude statusLine collector wired; Codex cost-data researched
+
+Built the boundary work the maintainer green-lit (evt-1uwp), folding in two
+sign-off follow-ups (evt-t92w "work cautiously until a wall", evt-9yvh "find
+Codex's analog to the Claude cost stats"). Three committed chunks plus research.
+
+**1. Facets defined once, by schema (commit b38f5b4).** New `facets.py` holds
+the wall-derived set as a single ordered schema — `quota` / `spend` /
+`context_window` (levels) + `coexisting_runs` / `remote_scm` (state), each a
+three-state record. The three renderers (`daemon._resources_facet` JSON,
+`hooks._format_resources` woven line, `cli._format_portal_state`) now all
+project from it via `facets.facet_value` / `render_line`, so they can never
+drift on *which* facets they carry — "by schema, not by convention"
+(`design-resident-boundary.md` §1). Landed §8's `cost`→`spend` rename, the new
+`context_window` level facet, and a per-vessel `levels_collector` switch (empty
+slot reads `absent` where a collector is wired, `unimplemented` where not).
+
+**2. Operator inspectability (b38f5b4).** New `brr portal facets` lists the
+implemented facets + a `fills` blurb on demand — schema-only outside a wake,
+with each facet's live status folded in inside one. Fixed `_portal_state_path`
+to honour `BRR_PORTAL_STATE` (the env the resident is handed) so `brr portal
+state`/`facets` resolve the live portal without `--path` — the point of "see
+them on demand"; also turned a pre-existing red test green.
+
+**3. Claude statusLine collector (commit 4e97258).** `statusline.py` +
+`brr statusline`, registered in the same `.claude/settings.local.json` as the
+hooks (statusLine merges as an overridable default — user footer wins). Each
+footer fire normalizes Claude's session JSON into a level snapshot
+(`.statusline.json`) the daemon folds into the facets. Parse is **defensive**:
+the session-JSON field schema is the maintainer's reported finding, not yet
+fire-verified against a live Claude run — unrecognized shapes degrade to an
+empty snapshot, never crash. Smoke-tested the parse/write/footer path as a real
+process; the live-Claude schema check remains open (pitfall: fire it first).
+
+**4. Codex cost-data research (evt-9yvh).** Codex *does* expose usage, in a
+different shape: **no external statusLine command** (declarative `[tui]
+status_line` elements, internal TUI), so the Claude collector doesn't port.
+Token usage rides `token_count` events — live via `codex exec --json`, post-hoc
+via `$CODEX_HOME/sessions/*.jsonl` (what `ccusage` reads). Spend is *derived*
+(tokens × a price table), not handed over like Claude's `cost.total_cost_usd`;
+context headroom is computable; subscription quota stays edge-only (TUI/`/status`
+only; programmatic exposure is OpenAI issues #15281/#19555/#17827, not shipped).
+brr drives `codex exec` without `--json` today, so a Codex collector is a real
+output-parsing build, not a tweak. Reconciled `design-resident-boundary.md` §8
+(table + new §8c) and `design-runner-media.md` (Codex row + grades).
+
+**Respawn deferred, cautiously.** Maintainer green-lit respawn "as the last step
+to work around the possible quota breach," then said the breach is unlikely
+(quota <50%) and signed off, asking for cautious autonomous progress.
+Auto-respawn lives in the daemon worker loop and a bad one is a runaway
+quota-burner — the wide-blast case that wants a supervised wake. So the shape is
+recorded in §5 (spawn one run from the committed branch on a wall-class exit,
+depth-capped ≤2, ambiguous failures escalate not loop) and the active build is
+held for a supervised wake. Tests: facets/statusline/cli/hooks/daemon green; the
+24 remaining failures are pre-existing in unrelated modules (cloud_gate,
+ergonomics, brnrd). Branch `brr/boundary-and-medium-synthesis`.
+
+## [2026-06-28] implement | Fire-verified cost-data: Claude statusLine dead headless; Codex quota wired from session rollout
+
+Validated the prior wake's Claude cost-awareness changes against a live runner
+(evt-4x6o ask: "validate the claude cost changes work; do something for codex")
+— and the result overturns the evt-e1gl finding both halves rested on.
+
+**Claude statusLine does NOT fire headless.** A probe statusLine command set in
+`.claude/settings.local.json` was never invoked under `claude --print` (brr's
+runner mode), while settings-file *hooks* fired the same run with a clean env
+(stripping `CLAUDE_CODE_SAFE_MODE` et al). statusLine is a TUI footer; the
+daemon never renders one, so `statusline.py` is dead in production — which is
+exactly why the live portal showed quota/spend/context all `absent`. The
+head-less Claude cost source is instead `claude --print --output-format json`:
+its result carries `total_cost_usd` (spend), token `usage`, and
+`modelUsage[model].contextWindow` (context) — but NOT subscription 5h/weekly
+`rate_limits`. Repointing to it changes the stdout contract (stdout→JSON; parse
+`.result` for the reply), so it's deferred to a maintainer-nod chunk.
+
+**Codex DOES expose subscription quota headless — the inverse of the prior
+"edge-only" conclusion.** Every `token_count` event in a Codex session rollout
+(`$CODEX_HOME/sessions/.../rollout-*.jsonl`) carries `rate_limits.primary` (5h)
++ `secondary` (weekly) with `used_percent`/`window_minutes`/`resets_at`, plus
+`plan_type` and `model_context_window`. That is exactly what `/status` prints —
+written to disk continuously, no `/status` call, no credits. Verified live on a
+real rollout and on a fresh `codex exec` run (`codex-cli 0.142.3`). The
+`codex exec --json` *stdout stream* does NOT carry rate_limits (only
+`turn.completed` token usage) — quota lives in the rollout file only.
+
+**Shipped:** `codex_status.py` (reads the newest rollout's last `token_count` →
+levels snapshot in statusline's shape); `facets.build` `levels_collector` is now
+a per-slot set (not one bool) so Codex `spend` honestly reads `unimplemented`
+(no $ gauge) rather than a misleading `absent`; daemon `_collect_levels` picks
+the level source per vessel. Live result: `quota=5h 99% left; 7d 73% left;
+context-window=… (est)`. Tests: `tests/test_codex_status.py` (7) + per-slot
+facet cases; 140 affected tests green. Reconciled `design-resident-boundary.md`
+§8 + `design-runner-media.md` to the fire-verified reality with a lineage
+breadcrumb; pitfall recorded (dominion). Tracking issue brr#195 (collector
+hardening: thread_id correlation, context math, upstream quota seam). Also added
+the maintainer's standing "ask mid-thought when initial context is unclear"
+workflow note to the dominion playbook. Branch `brr/boundary-and-medium-synthesis`.
+
+## [2026-06-28] implement | Claude result JSON wired for terminal spend/context facets
+
+Followed up the maintainer's `/usage` observation with fresh live probes on
+Claude Code 2.1.195. Result: `/usage` is still TUI-visible only from brr's
+head-less vantage. A per-run `statusLine` command did not fire under
+`claude --print` (again), and the `--output-format json` result did not carry
+5h/weekly subscription quota or reset windows. It did carry the usable head-less
+fields: `total_cost_usd` and `modelUsage[model].contextWindow`.
+
+Shipped `claude_status.py` and changed bundled Claude profiles to request
+`--output-format json`; runner capture unwraps `.result` back into the normal
+response file and writes a `.claude-result-levels.json` snapshot so the final
+portal refresh can populate `spend` + `context_window`. Claude `quota` stays
+`absent`/snapshot-only, not fabricated. Removed brr's automatic `statusLine`
+registration from Claude hook settings; the old `brr statusline` helper remains
+only for a manually wired interactive footer. Reconciled
+`design-resident-boundary.md` and `design-runner-media.md` from "Claude repoint
+deferred" to "wired terminal accounting; no head-less reset windows."
+
+Verification: live Codex portal state in this run showed quota reset times
+already injected (`5h 98% left (resets 17:51Z); 7d 73% left (resets 16:12Z)`).
+Focused tests (`test_claude_status`, `test_codex_status`, `test_statusline`,
+`test_runner`, `test_hooks`, `test_daemon`) passed: 127 tests. Full `pytest`
+still fails on pre-existing brnrd/cloud/CLI/ergonomics drift, unrelated to this
+change.
+
+## [2026-06-28] implement | Runner-medium foundation + cost-aware selection shape adopted
+
+Maintainer restarted the daemon to check the Claude boundary accounting, then
+sharpened the next workstream: model selection is a *requirement* to implement
+now, carrying low cognitive load (empower the runner to decide, don't make the
+user hand-tune execution details), with the selected medium/cost/quota exposed
+in the status card as governance.
+
+**Boundary finding (reported).** The Claude result-JSON wiring works, but it is
+*terminal accounting*, not a live gauge: spend + context appear on the closeout
+card / final portal refresh of a run, never in a later run's opening wake bundle
+(the snapshot is written after `claude --print` exits, into the per-event
+outbox). So Claude data cannot ride the Mode line the way Codex's live rollout
+quota does, and there is no head-less subscription quota / reset window for
+Claude at all. This run's own closeout card is the live demonstration.
+
+**Shape adopted.** Reconciled the config-format fork (`.brr/config` is flat
+`key=value`; the design's `[[runner.media]]` TOML can't live there) by carrying
+medium metadata as **optional frontmatter keys on the existing `runners.md`
+profiles** — a profile *is* a medium. User knobs stay minimal (`runner=` +
+`runner_policy=`); the selection policy is brr's.
+
+**Shipped** (`runner_media.py` + tests + bundled-profile metadata, branch
+`brr/boundary-and-medium-synthesis`): `RunnerMedium` schema, `implicit_medium()`
+legacy shim, `load/available_media()`, a deterministic conservative
+`select_medium()` (cheapest adequate local medium, never auto-selects a paid
+relay, honours explicit override), and the `RespawnRequest` parked-portal shape.
+Behaviour-neutral — no dispatch wiring yet. 15 new tests pass; adjacent suites
+(`test_runner`, `test_claude_status`, `test_codex_status`, `test_facets`) green.
+
+**Open decisions surfaced** (design-runner-media.md foot): reactive-vs-proactive
+respawn (Claude is terminal-only, so reactive-on-failure for v1); parked respawn
+request first vs. auto-chain (latter wants #128); deterministic selector keys on
+repo default_class only (no event-body heuristic); `cost_rank` is a coarse
+ordering hint not a price; card/portal `runner_media` exposure is the next slice;
+reset windows stay Codex-only by structure.
+
+## [2026-06-28] implement | Claude `/usage` PTY quota collector wired
+
+The maintainer pushed on the earlier "Claude quota is TUI-only" conclusion. A
+live PTY probe on Claude Code 2.1.195 proved interactive `/usage` can be driven
+programmatically without a model prompt: start Claude in `--safe-mode`, type
+`/usage`, capture the terminal, and parse Claude's own `Current session` +
+`Current week (all models)` buckets. This does not make quota head-less-native
+or hook-native; it is a best-effort TUI scrape (~15s live), so brr caches it.
+
+Shipped `claude_usage.py` with the PTY capture, parser, snapshot cache, and
+tests; daemon `_collect_levels` now merges Claude `/usage` quota with Claude
+result-JSON spend/context. Hook deltas now include the `resources:` line on
+post-tool injections too, so a changed quota/spend/context wall can enter the
+weave mid-run rather than only at seed/stop. Reconciled
+`design-resident-boundary.md`, `design-runner-media.md`, and
+`plan-cost-aware-cockpit.md` from "Claude reset windows unavailable" to
+"available as cached, source-tagged PTY telemetry."
+
+Verification: live PTY probe returned `session 100% left` and `week 55% left`
+from the local Claude subscription. Focused suites passed:
+`test_claude_usage`, `test_claude_status`, `test_hooks`, `test_daemon`,
+`test_outbox`, `test_facets`, `test_codex_status`, `test_runner_quota`, plus the
+Claude runner stdout unwrap case.
+
+## [2026-06-28] plan | Repo-gardening crossroads planned (4 tasks) for a Sonnet execution run
+
+Planning-only wake (maintainer to restart on a cheaper-but-capable model to
+execute). The repo is at an architecture crossroads where vessel/medium/runner/
+core are mixed across configs, kb, prompts, and code. Produced two plan pages.
+
+**Daemon quota check (side-ask).** Verified the restarted daemon's Claude
+quota-awareness: this wake's `portal-state.json` carries `resources.quota` =
+known ("session 100% left; week 55% left") — the cached `/usage` PTY scrape
+rides into the wake. But `spend` + `context_window` are `absent` at wake: the
+known structural boundary — Claude spend/context are terminal (written after
+`claude --print` exits), so they ride a run's *closeout*, never the next run's
+*opening* bundle. Working as designed, not a bug.
+
+**Task 1 — `plan-initial-context-reweave.md`:** file-by-file target-shape spec
+for the 9 prompt `.md` files + the Run Context Bundle strings baked in
+`prompts.py`. Names the discord (D1 vocabulary triple-naming; D2 cockpit link
+live in the daemon string `prompts.py` → `plan-cost-aware-cockpit.md`; D3 the
+Delivery contract re-teaches the whole portal protocol every wake instead of
+injecting live values + a pointer; D4 run.md⇄playbook⇄substrate overlap; D5
+claims-beyond-code re Claude live spend gauge; D6 imagery half-applied) and the
+new shape per file, written so the execution run composes fresh then swaps.
+
+**Tasks 2–4 — `plan-repo-gardening.md` (hub):** (2) informed respawn model
+extending `design-runner-media.md` — cheap dispatcher runner owns user knobs
+then respawns; probe installed models from the Shell itself (no hardcoded
+staleness); cached capability table (swe-bench/terminal-bench) as a hint not a
+hard selector; scheduling-aware respawn via existing schedule/defer; add an
+Activity view (running+scheduled runs) to the brnrd dashboard. (3) Imagery
+decision + pushback: adopt Runner = Shell (CLI) + Core (model), retire
+vessel/medium; **keep "portal" as the genus** (pushback on viewport-wholesale —
+viewport is perception-only and loses outbound/parked; use "viewport" only for
+the inbound sub-type); finish the never-swept cockpit retirement. (4) kb/code
+gardening method + conflict inventory from this wake's preflight.
+
+Also fixed cheap kb-health items: indexed the 2 new pages + the 4
+missing-from-index brnrd pages. Three forks raised to the maintainer
+(vocabulary veto, dispatcher-hop policy, task sequencing) before execution.
+
+---
+
+## [2026-06-28] plan | Maintainer resolved the repo-gardening forks; point-1 boundary quota engaged
+
+Discussion wake (still on Claude; Sonnet executes next). The maintainer answered
+the three pre-execution forks in `plan-repo-gardening.md` and added one new
+agreement. Folded all four into the plan hub so the execution run builds on
+decisions, not open questions:
+
+1. **Vocabulary adopted**, with one override of my draft: Runner stays as the
+   *umbrella entity* (resident · Shell · Core for a wake), so most of the 271
+   `runner` code uses stay — but the **`runner=` user-facing config toggle is
+   retired** in favour of `shell=`/`core=`, because the user defines Cores and
+   Shells, not a Runner. Retire vessel + medium; adopt Shell/Core; keep portal.
+   Task 1 (initial-context reweave) is now unblocked.
+2. **Dispatcher hop skipped when a specific Shell/Shell+Core is pinned** — the
+   simple-interface main case (Telegram over a local CLI agent).
+3. **Chunking confirmed** — Task 4 and large tasks split across follow-up wakes.
+4. **Point 1 (boundary quota), agreed + grounded in code:** the *injection*
+   half is already shipped — `_emit_flush` (boundary `.flush`) refreshes
+   `portal-state.json` and the post-tool hook injects the `resources:` line on
+   `change_token` movement. The correction: the ~18s blocking `/usage` PTY
+   scrape (`claude_usage.load_or_refresh_snapshot`, TTL 300s) currently sits on
+   the flush critical path (`_emit_flush` → `_write_live_portal_state` →
+   `_collect_levels`), so a tool-boundary flush can block the daemon ~18s when
+   the cache is stale — against the flush's "lighter/prompt" intent and the
+   read-the-cache-never-scrape pitfall. Remaining slice: move the scrape off the
+   flush path (heartbeat / background refresh), keep the boundary read-only —
+   then "negligible cost at the boundary" is genuinely true. ~80% shipped.
+
+## [2026-06-28] implement | Task 1: initial-context reweave — Shell/Core vocab, Runner body-image, perception/action frame
+
+Executed Task 1 of `plan-repo-gardening.md` (plan-initial-context-reweave.md).
+All four pre-execution forks were resolved; execution ran on Sonnet on
+`brr/initial-context-reweave`.
+
+**What shipped (6 files, one commit `1ae9202`):**
+
+- `prompts/dominion-playbook.md` (seed): added `## Your Runner` (Shell=CLI,
+  Core=model, Runner=executing body for this wake; resident=the spirit that
+  inhabits it) and `## Perception and action` (injection=free perception,
+  query=polling tax, injection as the stronger brr direction); trimmed existing
+  sections for density — net 298 lines vs 299 before.
+- `prompts/runners.md`: opening paragraph introduces Shell/Core/Runner upfront;
+  "runner-medium metadata" → "Core metadata"; "vessel-selection" → "Core-selection";
+  `runner=` user-facing config toggle → `shell=`/`core=`; 
+  "execution-medium data" → "Shell+Core execution config".
+- `prompts.py` Bundle: Runner line drops "compute medium" and the live
+  `plan-cost-aware-cockpit.md` link (D2 fixed); added `brr docs portals`
+  pointer to frontmatter-routing bullet (D3 partial).
+- `prompts/run.md`: Delivery section clarifies that live-values contract
+  lives in the Bundle, not re-taught here (D4 partial).
+- `prompts/daemon-substrate.md`: opening adds one line tying Runner vocab
+  to Mode block ("the Shell+Core this thought runs in").
+- `AGENTS.md`: added Vocabulary anchor paragraph (Runner=Shell+Core,
+  resident=spirit, knobs=shell=/core=).
+
+**Also shipped:** dominion `playbook.md` (brr-home `ec83ee9`) — added same
+two sections to the resident's running copy.
+
+**Discords remaining (D3 Delivery contract compression):** Test assertions
+anchor most of the key rhythm phrases in the Bundle's Delivery contract
+(plan/todo boundaries, immediately before terminal closeout, satisfying signal,
+gate: forge handoff, etc.). These are the right phrases to preserve — they
+guide the resident's runtime rhythm. Full compression to ~50% would require
+test rewrites and should be done in a coordinated Task 4 follow-up that
+restructures the tests alongside the prose. The frontmatter-routing and
+basename sections were trimmed modestly within test constraints.
+
+**Not touched (Task 4 work):**
+- Code-level rename: `runner_media.py` → `runner_select.py`, `RunnerMedium` →
+  `RunnerProfile` (Task 4A vocabulary sweep)
+- kb pages still using medium/vessel/cockpit prose (Task 4B semantic reconcile)
+- Index hygiene, oversized-page splits, proposal-scaffolding cleanup
+
+## [2026-06-28] refactor | Task 3.3 — cockpit file renames complete
+
+Executed Task 3.3 of `plan-repo-gardening.md` on `brr/initial-context-reweave`
+(commit `0bf281c`).
+
+Renamed `plan-resident-cockpit.md` → `plan-resident-portals.md` and
+`plan-cost-aware-cockpit.md` → `plan-cost-aware-runner.md`, completing the
+cockpit retirement that `design-portal-grammar.md` §3 settled months ago but
+was never mechanically applied to filenames.
+
+Link sweep touched: `kb/index.md`, `design-resident-boundary.md`,
+`design-portal-grammar.md`, `design-runner-media.md`, `design-runner-management.md`,
+`decision-bundled-docs.md`, and the plan files themselves. The in-code link in
+`prompts.py` (D2) was already fixed in Task 1.
+
+Also updated `plan-initial-context-reweave.md` status to "executed" and noted
+D2 as fully resolved.
+
+**Remaining (Task 4A):**
+- Body-prose "cockpit" sweep inside the renamed plan files (historical context;
+  low priority)
+- Full vocabulary sweep of vessel/medium across kb + code (incl.
+  `runner_media.py` → `runner_select.py`)
+- Proposal-scaffolding cleanup (4 pages: decision-licensing-and-defense,
+  decision-monorepo-structure, design-diffense, plan-env-fly-machines)
+
+## [2026-06-28] refactor | Task 4A — vessel/medium vocabulary retired; runner_select module
+
+Executed the mechanical vocabulary sweep (Task 4A of `plan-repo-gardening.md`)
+on `brr/initial-context-reweave` (commit `700ba26`).
+
+**Code (src/brr/):**
+- `runner_media.py` → `runner_select.py` (git mv + full rewrite)
+- `RunnerMedium` → `RunnerProfile`; function renames: `medium_from_profile` →
+  `runner_from_profile`, `implicit_medium` → `implicit_runner`, `load_media` →
+  `load_runners`, `available_media` → `available_runners`, `select_medium` →
+  `select_runner`; `RespawnRequest.proposed_medium` → `proposed_runner`
+- `test_runner_media.py` → `test_runner_select.py` (rewritten; all 15 pass)
+- `vessel` → `Shell` swept across: `claude_status`, `codex_status`, `facets`,
+  `daemon`, `claude_usage`, `runner`, `statusline`, `test_codex_status`
+- `medium` → `Shell` swept across: `codex_status`, `daemon`, `facets`
+
+**KB:**
+- `design-runner-media.md` → `design-runner-cores.md` (git mv)
+- Page title updated; links swept across 8 non-log kb files; index entry
+  re-labeled "Runner Shell/Core selection…"
+- `design-runner-cores.md` body still uses stale vocab (33 hits: RunnerMedium,
+  medium, vessel) — that is the 4B semantic pass, deferred to next wake
+
+**Skipped:**
+- Proposal-scaffolding cleanup (4 pages: decision-licensing-and-defense,
+  decision-monorepo-structure, design-diffense, plan-env-fly-machines) — pages
+  are well-synthesized; the `[info]` finding is accurate but non-urgent. The
+  "Alternatives considered" sections serve as genuine reference, not dead
+  scaffolding. Defer to a gardening wake.
+- Index hygiene (4 missing pages) — already in index from a prior wake.
+
+## [2026-06-29] refactor | Task 4B — Shell/Core vocab sweep across kb design pages
+
+Executed Task 4B of `plan-repo-gardening.md` on `brr/initial-context-reweave`
+(commit `ace4888`).
+
+**Scope:** semantic pass to retire `medium` and `vessel` (the two naming
+candidates that were tested and then superseded by the Shell/Core decision of
+evt-zyu6 on 2026-06-28) and make the kb say Runner/Shell/Core with one voice.
+
+**Files touched:**
+
+- `design-runner-cores.md` — full prose sweep: all "runner medium" / "local
+  medium" / "stronger medium" → Shell/Core; code refs updated
+  (`runner_media.py`→`runner_select.py`, `select_medium`→`select_runner`,
+  `implicit_medium`→`implicit_runner`, `proposed_medium`→`proposed_runner`);
+  TOML sketch `[[runner.media]]`→`[[runner.profiles]]`; portal JSON key
+  `runner_media`→`runner`; section title updated.
+
+- `design-resident-boundary.md` — title updated; §3 (vocabulary history)
+  rewritten to record the three-step lineage (medium → vessel candidate →
+  Shell/Core settled); §4 title "per medium" → "per Shell/Core"; §8 title
+  updated; table header "Vessel"→"Shell"; per-vessel/medium swept; settled-vs-
+  open entry updated to mark vocabulary as resolved (not an open fork).
+
+- `design-runner-management.md` — status header re-pointed at
+  `design-runner-cores.md` (the §G1 "no design home yet" gap now exists);
+  "cockpit plan" → "portals plan".
+
+- `design-portal-grammar.md` — "runner medium and quota posture" → "Shell/Core
+  and quota posture" (×2); "the medium failed" → "the Shell/Core failed";
+  PROGRESS table row updated (step 9 concept sweep aligned).
+
+- `kb/index.md` — boundary page title entry updated; gardening plan status
+  updated to reflect Tasks 3+4A+4B executed.
+
+- `plan-repo-gardening.md` — §4B marked executed with per-bullet completion.
+
+`design-runner-back-channel.md` and `subject-managed-mode.md` had no stale
+vocab and needed no changes. 4C (surface unresolvable forks) and 4D (method)
+remain for a future wake if/when the broader sweep continues.
+remain for a future wake if/when the broader sweep continues.
+
+## [2026-06-29] feat | Task 2 — informed respawn model: latency fix, shell=/core= knobs, dynamic Core registry
+
+Executed Task 2 slices from `plan-repo-gardening.md` on `brr/initial-context-reweave`.
+
+**New slice — flush latency fix (`daemon.py`):**
+- `_collect_levels()` gains a `refresh: bool = True` parameter. When `False`,
+  only the on-disk cache is read (`claude_usage.load_snapshot`); the blocking
+  ~18s PTY `/usage` scrape is skipped entirely.
+- `_write_live_portal_state()` gains `refresh_levels: bool = True`, threaded to
+  `_collect_levels`.
+- `_emit_flush()` now passes `refresh_levels=False` — the event-driven
+  tool-boundary flush path is guaranteed never to stall. The heartbeat
+  (every 30s) keeps `refresh=True` and owns cache refresh on its cadence.
+- The latency fix resolves the `_emit_flush` design intent: "lighter / prompt,
+  doesn't spam the card." Previously a cache-miss on the flush path could block
+  the daemon for up to 18s.
+
+**2A partial — `shell=`/`core=` config knobs (`runner.py`):**
+- `resolve_runner()` now reads `shell=` (explicit profile pin) and `core=`
+  (model filter) from `.brr/config`, in addition to legacy `runner=`.
+- Resolution order: `shell=` > legacy `runner=<non-auto>` > cost-aware
+  auto-selection (via `select_runner`) filtered by `core=` when set.
+- Cost-aware auto: builds the available-profile set from all detected profiles,
+  optionally filtered by `core=` (exact/prefix model match), and lets
+  `select_runner` pick the cheapest. Fallback: all profiles if `core=` filter
+  yields nothing (unrecognised Core pin doesn't kill all options).
+- Legacy `runner=` stays for backward compatibility; `runner=auto` still
+  triggers cost-aware selection.
+- Error messages updated to mention `shell=`/`core=` instead of `runner=`.
+- 3 new tests cover: shell= pin, core= filter, auto-cheapest.
+
+**2B — dynamic Core registry (`runner_cores.py`, new module):**
+- Bundled registry of known Cores (models) per Shell with metadata: model ID,
+  provider, cost class, cost rank, freshness date.
+- `available_cores()` returns `RunnerProfile` records for all Cores whose Shell
+  binary is on PATH. Sorted cheapest-first. Accepts `extra=` to merge/override
+  with project-level entries from `runners.md`.
+- `cores_for_shell(shell_name)` returns all bundled Cores for a Shell regardless
+  of PATH — for CLI display slices.
+- Current entries: claude-haiku (economy), claude-fable (economy),
+  claude-sonnet (balanced), claude-opus (strong), codex-mini (economy),
+  codex-full (balanced), gemini-flash (economy). All dated 2026-06-29.
+- `runners.md` reference to `runner_media.py` corrected to `runner_select.py`;
+  link to `design-runner-cores.md` fixed from stale `design-runner-media.md`.
+- 10 new tests in `test_runner_cores.py`.
+
+**`design-runner-cores.md`:** status updated; implementation sequence steps
+renumbered with steps 4 (selector+knobs) and 5 (Core registry) marked shipped.
+
+## [2026-06-29] feat | Task 2 — generated Core selection and scheduled respawn contract
+
+Continued `plan-repo-gardening.md` Task 2 on `brr/initial-context-reweave`.
+
+The dynamic Core registry is now wired into real runner resolution, not only
+CLI display. `runner.resolve_runner()` reads a merged selection view: active
+`runners.md` profiles plus generated invokable Core profiles derived from
+`runner_cores.py` (`claude-haiku`, `codex-mini`, etc.). Generated profiles are
+created only for Shells declared in the active `runners.md`, so a project-owned
+profile file stays authoritative; auto mode prefers concrete Core profiles over
+model-less base Shells; `shell=` remains an exact pin; and short `core=` aliases
+such as `core=haiku` match generated Core profile names.
+
+Generated Core profiles now carry actual commands: the model flag is inserted
+into the base Shell command, hooks/quota metadata are inherited from the Shell,
+and the daemon exposes the same generated metadata through
+`resources.runner` in `portal-state.json`. `RespawnRequest` gained optional
+`at` and `defer_until` fields so scheduled respawn composes with existing
+schedule/defer machinery; the daemon-side respawn consumer remains a later
+slice. `brr docs <unknown>` now returns handled-error status `1` instead of
+argparse-style usage status `2`.
+
+Task 2C's substrate also shipped: `runner-capabilities.json` is packaged as a
+small source/freshness-tagged benchmark cache keyed by model id, and
+`runner_capabilities.py` can derive economy/balanced/strong from cached scores
+when a Core entry has no hand-set `class`. Hand-set class remains authoritative;
+the bundled rows carry placeholder provenance with null scores rather than
+invented benchmark claims. Capability metadata now threads through
+`RunnerProfile`, generated Core entries, and the `resources.runner` portal
+block.
+
+Task 2E's dashboard-planning handoff is also complete:
+`plan-brnrd-dashboard-mvp.md` now includes Activity as View 9, places it in
+Slice 3, and records the uniform activity-record fields for running runs,
+scheduled wakes, and parked respawn requests. The actual brnrd protocol
+endpoint and dashboard implementation remain future work.
+
+Docs updated: `design-runner-cores.md`, `plan-repo-gardening.md`,
+`plan-brnrd-dashboard-mvp.md`, `prompts/runners.md`, and `kb/index.md`.
+Focused tests passed:
+`pytest tests/test_runner_capabilities.py tests/test_runner.py tests/test_runner_cores.py tests/test_runner_select.py tests/test_cli.py tests/test_facets.py tests/test_hooks.py tests/test_daemon.py -q`.
+Full `pytest -q` still stops during collection on unrelated brnrd model/test
+drift (`Project`, `RepoBinding`, and `ChatBinding` imports expected by brnrd
+tests but absent from `brnrd.models`).
+
+## [2026-06-29] implement | Respawn consumer and brnrd Activity read surface
+
+Continued `plan-repo-gardening.md` Task 2 on `brr/initial-context-reweave`.
+
+The parked respawn contract now has a daemon consumer. Outbox messages can use
+`respawn: true` with `shell=` / `core=`, a reason, a carry-forward body, and
+optional `at` / `defer_until`; the daemon queues a new event with those runner
+overrides and records `respawn` as the current run's success signal instead of
+falling into no-output failure. Event-specific runner overrides are passed to
+`runner.resolve_runner()` without changing repo config.
+
+The brnrd Activity read slice shipped. Daemons can replace their current
+snapshot through `PUT /v1/daemons/activity`; accounts read
+`GET /v1/accounts/activity`; `brnrd_web` serves a read-only `/activity` view;
+and the cloud gate publishes running runs, resident schedule entries, and parked
+respawn events from local `.brr` state. The Activity contract uses `repo_id`,
+reconciling the dashboard handoff with the accepted repo-first decision.
+
+The stale brnrd tests were migrated from retired `Project` / `RepoBinding` /
+`ChatBinding` names to `Repo` / `ChannelRoute`, removing the collection blocker
+called out by the previous run. A real Telegram copy bug surfaced during the
+migration and was fixed: unpaired chats now say they are not paired, instead of
+claiming they are paired with no active repo.
+
+Full `pytest -q` passes again: 1123 tests, with only the existing
+Starlette/httpx deprecation warning.
+
+## [2026-06-29] implement | Live Core help probe and runner failure classification
+
+Continued the non-KB-gardening remainder of `plan-repo-gardening.md` Task 2 on
+`brr/initial-context-reweave`.
+
+`runner_cores.py` now performs a bounded local help probe for declared Shells
+and materializes newly exposed model tokens as generated Core profiles, while
+keeping the bundled registry and project `runners.md` overrides authoritative.
+This closes the best-effort CLI-output/help half of the per-Shell model probe;
+a stable first-class model-list command/API remains open.
+
+Runner failures now classify into timeout, quota exhaustion, auth error,
+provider failure, generic runner error, or clean no-output. The classification
+rides both `attempt_failed` and terminal `failed` packets, and the progress card
+labels quota/auth/provider failures distinctly. The previous "session limit"
+shape now surfaces as `quota_exhausted` rather than generic `runner_error`.
+
+## [2026-06-29] fix | Accepted kb pages compressed to current state
+
+Continued `plan-repo-gardening.md` Task 4 on `brr/initial-context-reweave`.
+
+The first proposal-scaffolding cleanup slice rewrote
+`decision-licensing-and-defense.md`, `decision-monorepo-structure.md`, and
+`plan-env-fly-machines.md` from proposal-shaped pages into accepted current-state
+syntheses. The licensing page now states the three defended moves (MIT daemon +
+AGPL backend/dashboard, supporter pricing, deferred trademark) plus rejected
+alternatives and open follow-ups; the monorepo page now states the
+single-package-with-extras layout, license boundary, first-party env graduation
+rule, deploy-branch shape, rejected alternatives, and follow-ups; the Fly
+Machines page now states the not-yet-started env contract, implementation
+spine, config surface, deferred choices, and out-of-scope boundaries.
+
+No decision changed. The Fly env config spelling was reconciled to
+`fly_machines`, matching the package path and sibling kb pages.
+`plan-repo-gardening.md` and `kb/index.md` now record this slice; the remaining
+proposal-scaffolding cleanup item is `design-diffense.md`.
+
+## [2026-06-29] implement | Trusted runner benchmark scores populated
+
+Continued `plan-repo-gardening.md` Task 2C on `brr/initial-context-reweave`.
+
+`runner-capabilities.json` now carries real trusted benchmark scores for the
+bundled Core registry where the sources had an exact enough match: Vals
+SWE-bench Verified rows for Fable, Sonnet, Opus, and GPT-5.4 Mini; verified
+Terminal-Bench 2.0 rows for Codex CLI / GPT-5-Codex and Claude Code / Haiku.
+Rows without an exact trusted match, such as Gemini 2.0 Flash's current
+registry entry, stay `null` with provenance instead of receiving guessed scores.
+
+The capability-score tests were updated for the populated cache. The design and
+gardening pages now mark population shipped while leaving refresh policy open.
+
+## [2026-06-29] implement | Automatic local runner fallback policy
+
+Continued `plan-repo-gardening.md` Task 2 on `brr/initial-context-reweave`.
+
+The runner failure classifier now feeds a conservative automatic fallback loop.
+When a run fails with `quota_exhausted`, `auth_error`, or `provider_error`, the
+daemon can retry the same event in the same prepared worktree on another local
+Runner. The policy excludes paid relay, requires the fallback to be in the same
+or a cheaper class than the failed Runner, avoids same quota/auth domains where
+possible, and requires a different provider for provider failures.
+
+Progress packets now expose the switch: `attempt_failed` carries
+`will_fallback` / `fallback_runner`, and the following `retrying` packet carries
+`from_runner` / `runner` so cards can render the fallback instead of a generic
+retry. Paid relay consent, quota-reset deferral, and proactive quality
+escalation remain open.
+
+## [2026-06-29] implement | Resident-authored quality escalation selector
+
+Continued `plan-repo-gardening.md` Task 2 on `brr/initial-context-reweave`.
+
+Quality escalation now rides the respawn portal instead of daemon-side task
+heuristics. `runner_select.py` can choose a stronger local Runner for an
+explicit escalation, preferring a strong local Core when available, falling back
+to the cheapest strictly stronger local Core, and excluding paid relay.
+
+The outbox respawn parser accepts `respawn: true` with `quality: escalate` /
+`quality: strong`, resolves that through the selector, and queues a respawned
+event for the same conversation with `respawn_quality=strong`. `portal-state.json`
+exposes the candidate as `resources.runner.quality_escalation`, and the portal
+manual / runner prompt docs now describe the low-cognitive-load handoff.
+
+## [2026-06-29] implement | brnrd relay spend-plan and consent gate (slices 1–3)
+
+Continued `plan-repo-gardening.md` Task 2 on `brr/initial-context-reweave`.
+
+When a run exhausts local LLM quota, brnrd relay offers a paid fallback with a
+spending plan for user approval before spend. Implemented slices 1–3 of
+`plan-relay-spend-consent.md`:
+
+**Slice 1: Spending plan data model** (`spending_plan.py`, 200+ lines):
+- `SpendingPlan` dataclass: reason, model, provider, token estimates, costs,
+  balance, cap, consent state
+- `calculate_spending_plan()`: estimate provider cost + 12% relay service fee
+  from token counts and per-token rates
+- `format_spending_plan_message()`: human-friendly approval prompt
+- Helpers: `is_within_cap()`, `has_sufficient_balance()` for cap/balance checks
+- Full serialization to dict for JSON portal emission
+
+**Slice 2: Relay runner selection** (updates to `runner_select.py`):
+- `relay_runners()`: list all brnrd-owned relay runners, sorted by cost
+- `best_relay_runner()`: pick the best relay candidate, optionally matching a
+  provider
+- Extended `RespawnRequest`: add `relay_consent` field (pending/approved/denied/capped)
+
+**Slice 3: Daemon fallback → relay check** (updates to `daemon.py`):
+- After local automatic fallback exhausts, check for available relay runners
+- If relay exists and failure is quota/auth/provider, emit `attempt_failed` with
+  `needs_relay_consent=true` + spending plan details
+- Payload includes relay candidate summary and plan (cost, cap, balance) for
+  resident to read
+- Hard failure deferred; resident responds via respawn request with
+  `relay_consent=approved` or denies
+
+**Tests** (8 passing test cases):
+- Spending plan creation, cost calculation, fee calculation (12%)
+- Cap and balance checks (both with/without sufficient info)
+- Handling of unknown rates (None gracefully)
+- Serialization and message formatting
+
+**Open slices (deferred to next wake)**:
+4. Portal exposure: inject relay_consent block into `portal-state.json`
+5. Resident respawn consumer: when `needs_relay_consent=true`, resident
+   approves and retries
+6. Wallet balance read: hook brnrd account for relay balance
+7. Audit and billing: ledger line items, cap enforcement
+
+**Companions**: `decision-llm-relay.md` (pricing), `design-runner-cores.md`
+(fallback chain), `plan-relay-spend-consent.md` (this plan).
+
+**Slice 4: Portal exposure** (completed 2026-06-29):
+- Extended `resources.runner` governance block in `portal-state.json` to expose
+  relay_consent fields: reason, model, provider, costs, cap, balance
+- `facets.py`: added relay_consent parameter to _runner_block() and build()
+- `daemon.py`: wired relay_consent through _resources_facet() and
+  _write_live_portal_state()
+- Portal now carries relay spending plan details for resident to read before approval
+- Tests: added test_build_runner_block_can_expose_relay_consent() (all 12 facets tests pass)
+
+**Summary: slices 1-4 complete, 3 deferred to next wake**
+Shipping payload paths are now wired. When a run exhausts local quota:
+1. Daemon detects relay opportunity (slice 3 check)
+2. Spending plan is calculated (slice 1 model)
+3. Relay candidate is selected (slice 2 selection)
+4. Details are exposed in portal-state (slice 4 portal)
+5. Resident reads spending plan from portal and emits approval (slice 5, deferred)
+
+Deferred slices 5-7 for next wake:
+- Slice 5: Resident respawn consumer (handle relay_consent=approved)
+- Slice 6: Wallet balance read (brnrd account integration)
+- Slice 7: Audit and billing (ledger line items, cap enforcement)
+
+**Commits**:
+- 3923dc8 feat: implement spending plan data model and relay runner selection
+- 42bba88 test: add comprehensive tests for spending plan module
+- a47a975 log: record relay spend-consent implementation (slices 1-3)
+- ac8ad30 feat: expose relay consent in portal-state.json (slice 4)
+
+**Branches**: brr/initial-context-reweave (4 commits ahead of origin)
+
+## [2026-06-29] decision | account-centered daemon + control-surface reshape
+
+Maintainer (evt-ogga) resolved the two architecture forks the execution-model
+review parked, and asked to etch the new shape: account-centered daemon, OSS
+self-deploy friendly, cheap answer-or-respawn handler, user view surface + control
+plane — "the engine without the dashboard" was the diagnosis; they ship together.
+
+Wrote `decision-account-centered-daemon.md` (core shape + implementation/migration
+notes for the next model): one daemon per account (forge identity + laptop),
+repo-scoped runs underneath; cheap dispatcher stays repo-based (default repo) but
+can respawn-in-another-repo; inter-run plans live in-repo, known and visible
+(web-rendered tracked file recommended over orphaned branch/gist); local-first view
+surface with optional brnrd projection (the OSS self-deploy invariant). Turned the
+review's reshape direction into `plan-control-surface.md` (CS1–CS7, projection
+surfaces first; includes the maintainer-approved bare-API catalog collapse — noted
+as behaviour-touching, ~31 refs across 8 test files, its own wake). Folded both into
+`plan-repo-gardening.md` Part 5; marked the review's forks resolved; indexed.
+
+Mid-thread correction (evt-w02y): the maintainer caught a conflation in my first
+framing — I'd merged "which repo" and "which Runner" into one bypass rule. Resolved:
+two independent axes. Repo routing is the dispatcher's *output* (or inherent to
+forge events, which are repo-addressed at the gate and never touch the dispatcher),
+never a precondition you "skip." The only real bypass is the 2A Shell/Core pin on
+the Runner axis. Corrected the decision page + both plans.
+
+kb cleanup: re-homed `plan-relay-spend-consent` (was a peer orphan) into the
+gardening relay slice; the review page is now linked from index + decision + plan.
+
+Commits: 12339bd (decision + plans), 3c7757d (orphan re-home), + this turn's
+routing correction. Branch: brr/initial-context-reweave.
+
+## [2026-06-29] decision | brr → brnrd rename + account-scoped store + envelope→mandate
+
+Maintainer (evt-puhl) opened another replanning round on the new account-centered
+shape, with seven threads. Resolved/etched this wake:
+
+- **Rename brr → brnrd.** Wrote `decision-brnrd-rename.md`: direction accepted
+  (PyPI `brr` taken / `brnrd` free; `brnrd-dev`/`brnrd-bot` identities; `brnrd.dev`;
+  the daemon is now account-based, so "repo-based brr" is no longer the center).
+  Open sub-fork left to the maintainer: whether `brr` survives as a short
+  local/runner-facing CLI verb (my recommendation — it absorbs the costly runtime
+  names `.brr/` and `brr-home` so the brand rename avoids a flag-day on every
+  install's dominion) or is fully retired. Amends `decision-cli-shape.md` (brnrd
+  now primary, not sibling). No code renamed — scoped as dedicated migration wakes
+  (89 kb pages, package, `src/brr/`, runtime-state names).
+- **Account-scoped store.** Added an "Account-scoped store" section to
+  `decision-account-centered-daemon.md` unifying four of the maintainer's
+  questions (account-wide plans, event/run-file home, the run-state object, the
+  "daemon has no repo" problem): recommend a **dedicated daemon-created account
+  repo `brnrd-home`** — not a fork of the source (his "each install forks brr"
+  idea: right problem, wrong means — entangles user state with tool source), not a
+  gist. It's the dominion pattern lifted from repo-scope to account-scope.
+  Reconciled CS2's "gist-per-run" → durable run-state object in the account repo
+  (the maintainer's "larger object rendered beautifully"). Clarified event-file
+  placement (repo-scoped → target repo `.brr/`; account-scoped queues → account
+  repo) and that respawn-in-another-repo is in-process, so an inbox-event handoff
+  is only for crossing daemon/account boundaries.
+- **envelope → mandate.** "runner envelope" was a 5-occurrence, kb-only term (the
+  account/control-surface concept), distinct from code's generic "cost/operating
+  envelope" — so a clean, contained rename, NOT a sed across code. Renamed in the
+  3 new pages + index; "mandate" (a grant of authority to select a Runner)
+  disambiguates from facets' "operating envelope" and the cost "cap envelope".
+
+Consistency check of the three named pages (review / decision / control-surface):
+they cohere tightly — review parks two forks, decision resolves them, plan
+sequences the work, all cross-linked. No new forks introduced beyond the ones
+surfaced above as the maintainer's calls.
+
+Folded in evt-izfm (quota note): confirmed I see injected inbox events — kept the
+wake light per the 40% quota caution.
+
+Branch: brr/initial-context-reweave.
+
+## [2026-06-29] decision | confirmations etched + control-surface plan handoff sharpened
+
+Maintainer (evt-qhk6) confirmed four open points from the account-centered reshape
+and asked whether the remaining-work plan is clearly laid out for the next
+implementation run. Etched the confirmations and audited the plan:
+
+- **brr survives as the local verb (rename sub-fork → (b)).** Resolved the open
+  (a)/(b) fork in `decision-brnrd-rename.md`: brnrd is brand/package/service;
+  `brr` persists as the short local/runtime-facing verb and absorbs the runtime
+  names (`.brr/`, `brr-home`), so migration **step 4 (runtime-state rename) drops
+  out entirely** — the brand rename lands with no flag-day on installs' dominions.
+  PyPI-collision worry noted low (brr ships from the brnrd wheel via
+  `[project.scripts]`, not a separate package). Added a superseded-framing banner
+  to `decision-cli-shape.md` (brnrd primary, brr local alias).
+- **Dominion consolidates to a per-account repo.** Maintainer: "move brr-home
+  orphaned branch per repo to the brr-home / dominion repo per account? love it."
+  Etched in `decision-account-centered-daemon.md` → Account-scoped store as a
+  *consolidation, not a sibling*: one resident per account ⇒ one dominion per
+  account. The account dominion repo unifies the resident's memory (old `brr-home`
+  role) + the account store (cross-repo plans, run-state registry, config/registry,
+  dispatch inbox). Repo-specific memory becomes a repo-tagged section within it.
+  Name a minor open detail (`brr-home` vs `brnrd-home`, no migration cost — new repo).
+- **Account repo auto-create is default + overridable; dispatch inbox lives there.**
+  Confirmed both: auto-create on first `brr up`/install with an override to
+  designate an existing repo (or stay local); the message-event dispatch inbox is
+  account state → account repo.
+- **Plan handoff sharpened.** `plan-control-surface.md`: added an "Entry point for
+  the next implementation run" section — all genuine forks resolved, nothing in
+  CS1–CS4 waits on a maintainer call, so the next wake starts at **CS1** (collapse
+  the two Core catalogs first → project the runner mandate facet) with explicit
+  acceptance criteria. Updated CS2 (run-state home → account dominion repo; ledger
+  *rendering* lands regardless, *persistence* waits on CS4), CS4 (folds in the
+  account repo + auto-create + dispatch inbox), and CS5 (form=orphaned branch and
+  cross-repo=account repo now resolved; only the narrow repo-scoped-plan-home cut
+  —account dominion vs per-repo `brr-plans`— remains, recommend the former).
+
+Branch: brr/initial-context-reweave.
+
+## [2026-06-29] implement | control-surface CS1-CS3 shipped
+
+Advanced the control-surface implementation on `brr/initial-context-reweave`:
+
+- **CS1 shipped.** The static `claude-bare-api-only-*` profile triplet is gone;
+  bare Anthropic API use is now an auth-variant base profile whose concrete Core
+  profiles are generated from the Core registry. The same generated Runner/Core
+  catalog now projects to `resources.runner.catalog` in `portal-state.json` and
+  to the Run Context Bundle's Runner Mandate section.
+- **CS2 partial shipped.** Progress cards now render an attempt ledger for failed
+  Runner attempts, quota/provider reasons, and fallback targets. The durable
+  per-run status document remains deferred until CS4 supplies the account
+  dominion repo.
+- **CS3 shipped.** Repo labels now flow through run metadata, conversation rows,
+  live portal state, progress cards, presence, schedule-created events, and
+  respawn metadata, so run surfaces can say which repo they belong to before the
+  account-daemon migration.
+
+Updated `plan-control-surface.md`: the next implementation wake now starts at
+CS4 (account daemon + account dominion repo), with acceptance criteria including
+manual instructions for moving this project's current dominion once the new shape
+is functional.
+
+Branch: brr/initial-context-reweave.
+
+## [2026-06-30] implement | control-surface CS4 account context slice shipped
+
+Advanced CS4 on `brr/initial-context-reweave`:
+
+- Added a local-first account context (`src/brr/account.py`) with account id,
+  repo registry, default repo, account dominion path/override, account dispatch
+  inbox, account responses, and account run-state directories. A real git
+  checkout auto-creates the local account dominion repo; explicit
+  `account.dominion_path` designates an existing one.
+- Taught the daemon loop to dispatch across the account context: current
+  single-repo installs still scan the repo-local inbox, account dispatch events
+  can target a registered repo via `repo:`/`repo_label`, and forge events remain
+  direct when they appear in a registered repo's own `.brr/inbox`.
+- Persisted durable run-state markdown docs under the account dominion repo and
+  added `brr docs account-daemon` with manual instructions for moving this
+  project's current `.brr/dominion` into the account home.
+
+CS4 is not fully done: wake-time dominion injection/capture still needs to move
+from repo-local `.brr/dominion` to the account dominion after the operator
+migration, and run-state docs still need a web-visible projection URL.
+
+Branch: brr/initial-context-reweave.
+
+## [2026-06-30] implement | control-surface CS4 run-state URLs + test isolation
+
+Advanced the remaining CS4 control-surface work on `brr/initial-context-reweave`:
+
+- **Run-state docs are now web-visible.** Added `forges.view_blob_url` (per-kind
+  GitHub/GitLab/Bitbucket/Gitea blob templates) and `account.run_state_blob_url`,
+  which derives a run-state doc's URL from the account dominion's remote and the
+  doc's repo-relative path (resolving the branch even on an unborn `git init`
+  repo). `_persist_run_state_doc` records both `run_state_path` (a host-local dev
+  breadcrumb) and, when a remote exists, `run_state_url`. The progress card now
+  renders the URL when present and otherwise falls back to the doc *basename* —
+  it no longer leaks an absolute `~/.local/state/...` path that a remote chat
+  reader can't open. The projection is additive (lit by adding a remote), per the
+  OSS local-first invariant.
+- **Fixed CS4 test pollution.** The account context auto-created its store in the
+  developer's real `~/.local/state` during full-daemon tests, and a stale
+  registry there leaked one test's `default_repo` into another — silently no-op'ing
+  event routing (two daemon tests failed nondeterministically). New
+  `tests/conftest.py` autouse fixture redirects `XDG_STATE_HOME` per test, so the
+  default account location is pristine and disposable. Full suite green (1174).
+
+The one remaining CS4 step — rehoming the resident's wake-time dominion
+injection/capture onto the account dominion path — is deliberately **left for
+after the operator runs the `brr docs account-daemon` migration**; re-pointing
+the resident's memory plumbing while the live dominion still sits at
+`.brr/dominion` is the risky mid-migration move to avoid.
+
+Gardening: cleared the three peer-orphan pages (`design-runner-management`,
+`research-runner-interweave-2026-06-26`, `plan-financial-growth`) by adding
+inbound links from their natural parents (`design-runner-cores`,
+`decision-pricing-shape`). Oversized-page splits and the `design-diffense`
+proposal-scaffolding compression remain a future gardening chunk.
+
+Branch: brr/initial-context-reweave.
+
+## [2026-06-30] implement | account dominion becomes wake-time resident home
+
+Completed the CS4 dominion rehome after the operator migration:
+
+- Wake-time self-inject, matched pitfalls, `schedule.md`, thread-of-record hints,
+  and capture-at-sleep now prefer `repos/<repo>/dominion/` inside the local
+  account dominion repo. The old repo-local `.brr/dominion` stays readable and
+  capturable as a legacy fallback so partially migrated installs do not wake
+  blank.
+- Fresh default account state now uses the `brnrd` namespace under XDG state
+  (`$XDG_STATE_HOME/brnrd/accounts/<account>/dominion`), while an existing
+  `$XDG_STATE_HOME/brr/...` account home remains a migration fallback. The
+  account repo is local-first; remote/GitHub durability is explicit opt-in.
+- Updated the resident playbook seed, bundled docs, AGENTS template, and current
+  KB shape so they describe the account-scoped local-first dominion rather than
+  a repo-stored `brr-home` orphan branch as the active model.
+- Added regression coverage for account dominion path selection, account-path
+  schedules, account-home capture, final run-state capture ordering, and the new
+  brnrd default namespace.
+
+Full suite green: 1185 passed (one existing Starlette/httpx deprecation warning).
+
+Branch: brr/initial-context-reweave.
+
+## [2026-06-30] fix | control-surface checkpoint + diffense gardening
+
+Closed the stale CS4 checkpoint after the account store moved from
+`$XDG_STATE_HOME/brr` to `$XDG_STATE_HOME/brnrd`: `plan-control-surface.md` now
+records CS1-CS4 as shipped, including durable run-state docs, web-visible
+`run_state_url`, and resident wake-time dominion injection/capture from
+`repos/<repo>/dominion/` inside the account dominion repo. CS5-CS7 remain the
+later control-surface topics.
+
+Took the next gardening chunk by compressing `design-diffense.md` out of
+proposal scaffolding: the accepted page now uses a rejected-approaches appendix
+and a current implementation-edge ledger instead of "Alternatives" / "Open
+questions" proposal sections. `plan-repo-gardening.md` marks that cleanup done.
+
+Branch: brr/initial-context-reweave.
+
+## [2026-06-30] implement | CS5-CS7 — plan home, runner policy, decision ledger
+
+Shipped the storage + injection layer for control surface slices 5–7:
+
+**CS5 — Inter-run plan home + injection.** The narrow repo-scoped-plan sub-fork
+resolved: all repo plans live in the account dominion tagged by repo (simpler,
+consistent with the account-scoped model). `account.py` gains `PLANS_PATH`,
+`repo_plans_path()`, `active_plan_path()`, and `cross_repo_plans_path()`;
+`resolve_context` now creates `plans/` alongside the other account-store
+directories. `prompts.py` gains `_build_inter_run_plan_block()` — reads
+`plans/<repo-slug>/active.md` (and `plans/_cross-repo/active.md`) and injects as
+an "Active inter-run plan" block. Perception=injection: rides in automatically,
+silent when no file exists.
+
+**CS6 — Runner policy store + injection.** `account.py` gains
+`RUNNER_POLICY_PATH`, `runner_policy_path()` (repo-scoped), and
+`account_runner_policy_path()` (`runner-policy/_account/policy.md`). `prompts.py`
+gains `_build_runner_policy_block()` — injects as "Stored runner policy" when
+either file is present. The daemon-owned confirmation step (proposal → approval →
+apply, preventing the resident from silently rewriting its own selection policy)
+is deferred to CS6b — it requires a proposal+confirm loop in the daemon.
+
+**CS7 — Decision ledger.** `account.py` gains `LEDGER_PATH` and
+`decisions_ledger_path()` (`ledger/decisions.md`). `prompts.py` gains
+`_build_decision_ledger_block()` — injects as "Decision ledger" when the resident
+maintains the file. User-facing complement to `kb/log.md`; web-visible via the
+account dominion remote when configured. Composes with CS5 (plan = tactics;
+ledger = strategy/decisions).
+
+All three blocks slot into `_build_injected_blocks()` after the dominion digest
+and before pitfalls. 22 new tests; full suite green: 1207 passed.
+`plan-control-surface.md` updated to record all CS1-CS7 shipped (CS6b noted as
+follow-on).
+
+Branch: brr/cs5-cs7-plan-policy-ledger.

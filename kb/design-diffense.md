@@ -3,9 +3,11 @@
 Status: accepted on 2026-05-29 — the card / zoom / navigation model is
 validated by a working renderer spike
 ([`src/brr/diffense/`](../src/brr/diffense), rendered against the
-[PR #64 pack](diffense-prototype-pr64.md)). Remaining work (pack schema
-lock, transport, runner wiring) is implementation-plan detail, not
-design-blocking. (Drafted 2026-05-28; reshaped 2026-05-29, passes 6–9.)
+[PR #64 pack](diffense-prototype-pr64.md)). Pack schema checking, PR-body
+projection, runner emission, forge handoff, and gist-backed rich links have
+since shipped as implementation slices. Remaining work is product hardening:
+decision-first generated packs, pack versioning, reviewer state, and the richer
+hosted renderer. (Drafted 2026-05-28; reshaped 2026-05-29, passes 6–9.)
 
 Dogfood correction (2026-06-17): the accepted model remains the target,
 but recent generated packs do not realize it well enough for default
@@ -28,8 +30,8 @@ prototype (the [PR #64 pack](diffense-prototype-pr64.md)) and a working
 renderer spike ([`src/brr/diffense/`](../src/brr/diffense)) have since
 validated the shape and closed two formerly-open dimensions —
 inter-card navigation and code-rendering-at-a-locator (see "Rendering the
-zoom"). What remains open (pack schema lock, transport, aesthetic
-locking) is marked as such and deferred to an implementation plan.
+zoom"). The remaining implementation edges are tracked near the bottom of this
+page.
 
 Companion to:
 
@@ -105,9 +107,11 @@ to a solo dogfooder and to a small team sharing a brr-managed repo —
 team size does not change the shape of the surface, only how many people
 open it.
 
-## Alternatives briefly considered
+## Rejected approaches
 
-The research dimension of this design: shapes weighed and set aside.
+The research dimension of this design: shapes weighed and set aside. They stay
+as a compact appendix because the rejected shapes still protect the current
+model from recurring drift.
 
 - **Plain PR body only, no inspect mode.** A structured PR body is a
   genuinely useful *lossy fallback* (see "PR body as a lossy
@@ -1383,64 +1387,42 @@ created issues and PRs, so a future post-PR producer can wake on PR
 creation without opting into every comment. Both emit the same pack into
 the same renderers, which is the whole point of the producer/pack split.
 
-## Open questions
+## Remaining implementation edges
 
-- **Pack JSON schema — locked as the `--check` contract (2026-06-01).**
-  The discriminated union over item kinds + walkthroughs + uncertainty
-  subkinds is now encoded in
-  [`src/brr/diffense/pack.py`](../src/brr/diffense/pack.py) and enforced
-  by `brr review --check` (v0.1). The
-  [PR #64 prototype](diffense-prototype-pr64.md) findings are folded in:
-  `code-module-split` / `code-move` are core kinds, the kind set is an
-  open core (custom kinds warn, never fail), card-namespaced edge targets
-  must resolve while free references don't, and uncertainty cards carry
-  `honest_nuance`. Deliberately *not* yet enforced, pending real
-  emission: mechanical-stat derivation (the prototype authored stats by
-  hand) and `provenance.conversation_msg`, the one field only a
-  brr-*produced* pack (Producer B) exercises. A `schema_version` bump
-  policy lands with that emission.
-- **Graph / inter-card navigation + code rendering at a locator —
-  resolved by the spike.** Lateral edges and zoom-drills share one
-  breadcrumb heading-bar stack; a code leaf is jump-to-forge at v0
-  (`path:line` inline, inline-diff deferred). See "Rendering the zoom."
-- **Pack transport — resolved.** The pack stays the producer's; brnrd is
-  a transient relay, never a store (see "Where packs live"). The PR-body
-  embed threshold is a concrete budget (`_BODY_BUDGET` in `prbody.py`):
-  under it the full pack rides in the body marker, over it the embed
-  degrades to a "render locally" pointer. The transient brnrd relay
-  (`/v1/daemons/pack` + `/r/{token}`, shipped) carries the rich hosted
-  view for oversized packs and remote reviewers. Still open: a richer
-  hosted renderer (the brnrd dashboard) beyond the reused static render,
-  and gating private-repo render links behind the reviewer's session.
-- **Pack versioning across iterations.** A PR accrues successive packs as
-  the feedback loop iterates; how to store them and render a "what
-  changed since I last reviewed" pack-diff.
-- **Card-level reviewer state.** Local-only in `.brr/`, or roundtripped
-  to forge review state? Likely local-first, forge-roundtrip optional.
-- **Aesthetic locking.** The terminal-via-CSS look is validated by the
-  spike (dense on desktop, reflows on a phone without literal
-  box-drawing). The exact palette/typography lock is still open; the
-  direction holds.
-- **Animated data-flow trace (the live demo axis).** Promoted from a
-  deferred "GIF" to a native direction (see "Animated data flow is a
-  native direction"): v0 renders the trace static + zoomable, but the pack
-  keeps it steppable so animation is a renderer-only upgrade. Open: the
-  animation substrate (CSS/JS step-player vs recorded GIF) and when it
-  lands.
-- **Locked-abilities axis.** Deferred future direction.
-- **LLM token budget for pack generation.** Bounded by the
-  always-vs-conditional split, the gloss-not-leaf rule (leaves are
-  mechanical), and the six clamps; revisit on real runs.
-- **Live agent on cards.** Cost/value addressed when that slice opens;
-  same clamps.
-- **Naming.** `diffense` adopted as the working name; `pensieve` /
-  `holocron` set aside as cosplay-leaning next to the `brr` / `brnrd`
-  house style. `diffuse` was tempting on typing ergonomics (a frequent
-  fingers-typo) but rejected on meaning: "diffuse" = *scatter / dilute*,
-  the opposite of a tool that *concentrates* scattered context into
-  focus — and the typed verb is `brr review`, so codename ergonomics
-  don't load-bear anyway. The `brr review` verb stays regardless.
-  Locking deferred until the spike confirms the brand fits the surface.
+The accepted design has shipped enough substrate that this section should read
+as an implementation ledger, not a proposal checklist.
+
+- **Pack contract:** `brr review --check` locks v0.1 in
+  [`pack.py`](../src/brr/diffense/pack.py): item kinds + walkthroughs +
+  uncertainty subkinds, graph resolution, locator checks, open-core custom
+  kinds, and `honest_nuance`. Still pending real Producer-B pressure:
+  mechanical-stat derivation, `provenance.conversation_msg`, and the first
+  explicit `schema_version` bump policy.
+- **Navigation and code leaves:** the renderer spike resolved lateral edges,
+  zoom drills, and breadcrumb heading-bar stacks. Code leaves are jump-to-forge
+  at v0 (`path:line` inline); inline diff rendering remains a renderer upgrade,
+  not a design fork.
+- **Transport:** the pack stays producer-owned. Small packs embed in the PR
+  body marker; large packs degrade to a local-render pointer plus the rich-link
+  path. The transient brnrd relay shipped, and gist-backed rich review links are
+  the durable user-owned path. Remaining transport polish belongs to the brnrd
+  dashboard: a richer hosted renderer and private-repo review links gated behind
+  the reviewer's session.
+- **Iteration state:** a PR can accrue successive packs as the feedback loop
+  iterates. Still to design: storage and a "what changed since I last reviewed"
+  pack-diff view.
+- **Reviewer state:** start local-first (`.brr/`), with optional forge
+  roundtrip later for teams that want review-state continuity across machines.
+- **Aesthetic lock:** the terminal-via-CSS direction is validated: dense on
+  desktop, phone-safe, no literal box-drawing dependency. Palette and typography
+  can lock when the decision-first board reshape produces real daily traffic.
+- **Future axes:** animated data-flow traces, locked-abilities, and live
+  card-level Q&A stay follow-ups. They use the same pack and clamps; none should
+  expand v0 generation cost before generated packs become trustworthy.
+- **Naming:** `diffense` remains the working name. `pensieve` / `holocron` were
+  set aside as cosplay-leaning next to the `brr` / `brnrd` house style, and
+  `diffuse` was rejected because its meaning points the wrong way. The user verb
+  is `brr review`, so codename typing ergonomics do not load-bear.
 
 ## Read next
 

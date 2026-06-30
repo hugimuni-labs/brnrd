@@ -9,8 +9,8 @@ time a slice lands).
 
 Implementation plan for the brnrd dashboard — the user-facing
 web layer on top of the brnrd backend that gives users a view
-of their accounts, projects, daemons, bindings, AI credentials,
-failover policy, audit log, and cost ledger.
+of their accounts, projects, daemons, bindings, live activity,
+AI credentials, failover policy, audit log, and cost ledger.
 
 Companion to [`subject-managed-mode.md`](subject-managed-mode.md)
 (the surfaces the dashboard renders),
@@ -28,7 +28,7 @@ implemented. The prototype web shell in `src/brnrd_web/` currently
 covers GitHub login plus the device-flow approve page on the intended
 server-rendered substrate: Jinja templates plus packaged static CSS
 mounted from the brnrd FastAPI app. The projects, tasks, credentials,
-failover, audit, allowance, and billing views still depend on the
+activity, failover, audit, allowance, and billing views still depend on the
 remaining managed-gates / failover / billing backend slices.
 
 Ship order within this plan: bootstrap (slice 1) → core views
@@ -54,7 +54,7 @@ see your projects exist," already useful for self-hosters.
 
 ## Done definition
 
-Eight views, each one renderable end-to-end against real backend
+Nine views, each one renderable end-to-end against real backend
 endpoints:
 
 1. **Accounts / projects view** — list projects, create new
@@ -101,6 +101,17 @@ endpoints:
    anchor surface for the nudge UX (see "Allowance gauges +
    honest-nudge UX" section below). Linked from the top nav
    directly, not buried under a settings page.
+9. **Activity view (NEW)** — running and scheduled work across
+   a project: active runs from the daemon presence / run
+   registry, queued or parked respawns, and future scheduled
+   wakes. Each row shows kind (`running`, `queued`,
+   `scheduled`, `respawn`), source thread, summary, Shell/Core,
+   phase / status, branch / PR when known, started / updated
+   timestamp, and next fire time or `defer_until` when
+   applicable. This is the UI owner for `plan-repo-gardening`
+   Task 2E; the runner/schedule data contract still lives with
+   the daemon / brnrd protocol slices, not in dashboard-local
+   polling code.
 
 Plus:
 
@@ -286,7 +297,7 @@ Steps:
 **Estimate.** ~900-1200 LOC templates + ~600 LOC routes + ~400
 LOC tests.
 
-### Slice 3 — Audit log + cost chart + event detail + conversation view + allowance view
+### Slice 3 — Audit log + cost chart + event detail + conversation view + allowance view + activity view
 
 The observability surfaces. After this slice, a user can see
 what happened, what it cost, and where they stand against
@@ -333,10 +344,24 @@ Steps:
    above; the table also lives in
    [`decision-pricing-shape.md`](decision-pricing-shape.md)
    so backend + dashboard can stay in sync.
+9. **View 9: `GET /activity` → activity view** (NEW). Renders
+   running runs from the daemon presence/run registry, scheduled
+   wakes from the resident schedule, and parked respawn requests
+   from the respawn/defer queue. The backend contract now
+   expose a uniform activity record:
+   `id`, `kind`, `repo_id`, `source`, `conversation_key`,
+   `summary`, `runner` (Shell/Core metadata), `status`,
+   `phase`, `branch`, `pr_number`, `started_at`,
+   `updated_at`, `scheduled_for`, `defer_until`, and
+   `links`. Dashboard behaviour is read-only in MVP: filter by
+   kind/status, link to event/run detail when available, and
+   show empty states for "nothing running" and "nothing
+   scheduled." Mutation actions (cancel / reschedule / approve
+   respawn) belong to later protocol slices.
 
-**Estimate.** ~1200-1600 LOC templates + ~900 LOC routes +
+**Estimate.** ~1300-1750 LOC templates + ~1000 LOC routes +
 inline SVG chart helper (~200 LOC) + gauge + banner partials
-(~300 LOC) + ~700 LOC tests.
+(~300 LOC) + ~800 LOC tests.
 
 ### Slice 4 — Polish
 
@@ -370,7 +395,7 @@ Steps:
 | FastAPI app composition (mounts web routes on the existing API app) | `src/brnrd/app.py` (or wherever it lives) |
 | Session middleware | `src/brnrd/middleware/session.py` |
 | Auth views (`/login`, `/auth/github/start`, `/auth/github/callback`, `/logout`) | `src/brnrd_web/routes.py` now; split under `src/brnrd_web/routes/*.py` when the MVP grows |
-| Project / binding / credential / failover / audit views | `src/brnrd_web/routes/*.py` |
+| Project / binding / credential / activity / failover / audit views | `src/brnrd_web/routes/*.py` |
 | Tests | `tests/brnrd_web/` |
 | Build | None — Python-only, no JS bundler at MVP |
 | Deploy | Bundled with brnrd backend; served from same Upsun app per `design-brnrd-protocol.md` → "Upsun deployment notes" |
@@ -435,7 +460,9 @@ Steps:
 5. [`plan-managed-gates-launch.md`](plan-managed-gates-launch.md)
    and [`plan-failover-compute.md`](plan-failover-compute.md)
    for the backend endpoints the dashboard reads.
-6. [`decision-connectors-layering.md`](decision-connectors-layering.md)
+6. [`plan-repo-gardening.md`](plan-repo-gardening.md) Task 2E for the
+   Activity view handoff from runner/schedule work.
+7. [`decision-connectors-layering.md`](decision-connectors-layering.md)
    for why no connectors view ships at MVP.
 
 ## Lineage
@@ -493,3 +520,20 @@ Steps:
   stay aligned. Driven by the user's "I think there's a
   lot of data duplication ... maybe we still could prune
   and groom it" MR-review feedback.
+- 2026-06-29 (runner/schedule activity handoff). **Activity
+  view added as the 9th first-class view**: running runs from
+  daemon presence/run state, scheduled wakes from resident
+  schedule, and parked respawn requests from the respawn/defer
+  queue. This resolves `plan-repo-gardening.md` Task 2E at the
+  dashboard-planning layer: the dashboard owns the read-only UI
+  surface; the daemon / brnrd protocol slices still own the
+  uniform activity-record endpoint and any later cancel /
+  reschedule / approve actions.
+- 2026-06-29 (Activity implementation). The read-only Activity
+  slice shipped: daemons publish snapshots with
+  `PUT /v1/daemons/activity`, account clients read
+  `GET /v1/accounts/activity`, and `GET /activity` renders the
+  dashboard view. The activity record follows the accepted
+  repo-first decision (`repo_id`, not `project_id`); later cancel,
+  reschedule, and approve-respawn mutations remain outside this MVP
+  slice.

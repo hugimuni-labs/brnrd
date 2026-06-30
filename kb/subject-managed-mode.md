@@ -494,7 +494,7 @@ sustainable, transparent, no surprises.
 LLM relay cost is tracked separately from managed compute: provider,
 model, token counts where available, provider cost, relay service fee,
 total, and per-run cap outcome. The dispatch/cost-policy design lives in
-[`design-runner-media.md`](design-runner-media.md); the pricing decision lives
+[`design-runner-cores.md`](design-runner-cores.md); the pricing decision lives
 in [`decision-llm-relay.md`](decision-llm-relay.md).
 
 ## BYO compute (subscriber sub-option of Surface B)

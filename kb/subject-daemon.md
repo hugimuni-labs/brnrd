@@ -232,8 +232,10 @@ For each pending event, the daemon:
    [`design-co-maintainer.md`](design-co-maintainer.md) §8);
 9. captures the resident's dominion edits via a serialized commit
    (`dominion.commit`; runs on success *and* failure — a failed thought
-   may still have recorded pain), best-effort pushing the `brr-home`
-   branch so the memory travels;
+   may still have recorded pain). The current path is the repo-tagged
+   resident directory inside the account dominion repo; `.brr/dominion`
+   is a legacy fallback. If the account dominion repo has a remote, brr
+   best-effort pushes it so the memory travels;
 10. retries only when the addressed thread has no output yet; if the
     runner/env path ultimately fails or stays silent, writes an explicit
     terminal failure note for addressed events while keeping the run record
@@ -266,20 +268,18 @@ in the originating chat thread. (Deterministic kb-health now rides the
 
 ### Society-of-Mind concurrency (dominion + presence)
 
-The daemon is single-flight, but the repo is *already* multi-thought:
-ad-hoc sessions (Cursor, Codex, a hand-run agent) work alongside the
-daemon and can touch the one shared dominion (`.brr/dominion/`,
-`brr-home`) at the same moment. brr tolerates that rather than caging it
-(the model is laid out in
+The daemon is single-flight, but the account home is *already* multi-thought:
+ad-hoc sessions (Cursor, Codex, a hand-run agent) work alongside the daemon and
+can touch the one shared account dominion repo at the same moment. brr tolerates
+that rather than caging it (the model is laid out in
 [`design-agent-dominion.md`](design-agent-dominion.md) §4):
 
 - **Serialized capture, free edits.** `dominion.commit` captures the
   resident's working-memory edits at sleep. Only the index-touching commit
-  serializes — across processes, via an advisory `fcntl.flock` on
-  `.brr/dominion.commit.lock` — so two thoughts never corrupt the shared
-  git index, while their *file edits* run without coordination. A clean
-  dominion is a silent no-op; the step is best-effort and never fails a
-  run.
+  serializes — across processes, via an advisory `fcntl.flock` beside the
+  committed dominion repo — so two thoughts never corrupt the shared git index,
+  while their *file edits* run without coordination. A clean dominion is a
+  silent no-op; the step is best-effort and never fails a run.
 - **Presence registry.** `presence.py` keeps a lock-free, prune-on-read
   registry under `.brr/presence/` (one JSON file per participant). The
   daemon registers a thought at step 4, heartbeats it on the runner

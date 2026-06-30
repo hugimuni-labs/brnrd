@@ -113,7 +113,7 @@ deployment-templates work here proceed independently.
    container deploy + the required env vars.
 5. **Upsun template.** `.upsun/config.yaml` with the
    writable-mount declarations for `~/.config/brr/` (project
-   registry), `~/.local/state/brr/account/` (brnrd binding),
+   registry), `~/.local/state/brnrd/` (account dominion + brnrd binding),
    each per-project `.brr/` directory, and `/data/repos/` —
    the daemon clones repos into `/data/repos/` instead of the
    read-only `/app`, and the registry points at those paths.

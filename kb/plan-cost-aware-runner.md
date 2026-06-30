@@ -4,7 +4,7 @@ Status: active on 2026-06-17. First slices shipped on
 `brr/cost-aware-cockpit`; opt-in review defaults and conversational
 prompt framing shipped on `brr/cost-aware-conversation`. This page is the
 **cost/notification braid**
-of [`plan-resident-cockpit.md`](plan-resident-cockpit.md) — it does not
+of [`plan-resident-portals.md`](plan-resident-portals.md) — it does not
 replace that page's G1–G5; it threads them through one lens the
 maintainer articulated on 2026-06-17: *keep the user extremely aware of
 plan, execution flow, and costs, and give them operational control,
@@ -152,7 +152,7 @@ compute medium or its quota/spend**. Slices:
   `runner_name` is already resolved at prompt-build time
   (`daemon.py` → `resolve_runner`, emitted in `run_started`); it just
   isn't threaded into `build_daemon_prompt`. Smallest possible step,
-  enables everything below. *(= plan-resident-cockpit G1.1.)*
+  enables everything below. *(= plan-resident-portals G1.1.)*
 - **A2 — surface remaining quota / reset window when the provider
   exposes it.** Codex publishes weekly + 5h buckets; Claude/Anthropic
   expose rate headers. A best-effort probe (vantage-rule clean: it's a
@@ -168,7 +168,7 @@ compute medium or its quota/spend**. Slices:
 
 ### Loop B — Quota-aware survival (runs stop dying on exhaustion)
 
-This is plan-resident-cockpit **G1.2/G1.3**, restated as the
+This is plan-resident-portals **G1.2/G1.3**, restated as the
 load-bearing reliability slice:
 
 - **B1 — fallback chain.** `runner_media: [codex, claude, …]` in config;
@@ -192,7 +192,7 @@ human holding operational control over plan, flow, and cost. Three
 seams, all already present, under-used:
 
 - **C1 — the `.card` as a standing cost+plan dashboard.** Compose it as
-  a matter of course (plan-resident-cockpit G4 dwelling habit), and
+  a matter of course (plan-resident-portals G4 dwelling habit), and
   include the **cost frame** when the bundle exposes one: which medium,
   quota posture, whether the work is being chunked for cost/resilience,
   and historical spend facts when A3 provides them. Never present a
@@ -265,38 +265,44 @@ least I can get away with."
   execution mechanic, not a one-shot reply contract: substantial work
   should keep the live card honest and use mid-thought replies when they
   help.
-- **A2 prompt/snapshot ingress** — the daemon now has a conservative
-  runner-quota snapshot contract (`.brr/runner-quota.json`,
-  `runner.quota.*`, or `BRR_RUNNER_QUOTA_*`) and threads a proven summary
-  into the Mode block as `Runner: <medium> (<quota posture>)`. This ships
-  the run-visible surface without pretending provider-specific collectors
-  exist yet: when no quota signal is present, the line stays compact.
+- **A2 prompt/snapshot ingress + first provider collectors** — the daemon has a
+  conservative runner-quota snapshot contract (`.brr/runner-quota.json`,
+  `runner.quota.*`, or `BRR_RUNNER_QUOTA_*`) for Mode-line summaries, and the
+  live portal facets now read provider-specific local signals where proved:
+  Codex rollout quota/context, Claude result JSON spend/context, and cached
+  Claude `/usage` PTY quota. When no quota signal is present, the line stays
+  compact / the facet reads `absent`.
 - **Run-facing bundle language** — the generated prompt, recovery context,
   and bundled operator docs now frame the live unit as a daemon run/wake
   (`Run Context Bundle`, `Run ID`). The follow-up #128 rename slice now
   removes the legacy `task-...` id string and `.brr/tasks/` storage in
   favour of `run-*` ids and `.brr/runs/<run-id>/run.md` manifests.
+- **B1 local fallback** — classified quota/auth/provider failures now retry the
+  same run in the same worktree on a conservative local fallback Runner when one
+  exists. The policy excludes paid relay, stays at the same or a cheaper class,
+  and records the switch in `attempt_failed` / `retrying` packets for the card.
 
 ## Sequence after this run (pickup list)
 
 2026-06-27 refinement: runner selection needs an explicit **runner-medium**
 layer, not only provider collectors. The current design home is
-[`design-runner-media.md`](design-runner-media.md): profiles remain the CLI
+[`design-runner-cores.md`](design-runner-cores.md): profiles remain the CLI
 invocation, while media record model, owner, cost class, quota source, hook
 capability, fallback eligibility, and billing posture.
 
 1. **Runner-medium schema and resolver** — turn legacy `runner=` into an
    implicit medium, then let projects/accounts declare cheap, strong, and
    brnrd-relay media without burying that policy in command strings.
-2. **A2 provider collectors** — populate the shipped quota snapshot from
-   real Codex / Claude / Gemini signals (headers, errors, usage APIs, or
-   a host wrapper) without adding slow network work to prompt assembly.
+2. **A2 provider-collector hardening** — correlate Codex rollout files to the
+   active session, keep Claude `/usage` scrape freshness visible, and add Gemini
+   / API-key collectors when a local signal is proved, without adding slow
+   network work to prompt assembly.
 3. **C1 — `.card` cost frame habit in resident memory** (repo prompt
    framing shipped; the dominion playbook still needs the same trim).
 4. **C3 — operator notification + `brr docs operator` doc** (the
    user-facing acknowledge contract; the maintainer's explicit ask).
-5. **B1/B2 — fallback chain + quota deferral** (highest reliability
-   leverage; wants runner media plus #128's run/event substrate).
+5. **B2 — quota deferral and reset-window routing** (the local fallback chain
+   exists; still defer instead of retrying when a hard reset window is known).
 6. **C2 — plan→approve with a historical cost pre-analysis** (the
    duo-loop primitive; wants #128 threading).
 7. **A3 — per-run historical spend analysis** (feeds C1/C2; coarse first).
@@ -311,14 +317,14 @@ capability, fallback eligibility, and billing posture.
 
 ## Read next
 
-- [`plan-resident-cockpit.md`](plan-resident-cockpit.md) — the parent
+- [`plan-resident-portals.md`](plan-resident-portals.md) — the parent
   cockpit plan; G1 (medium failover), G2 (plan→approve), G4 (dwelling)
   are the loops this page costs-and-notifications.
 - [`design-run-event-model.md`](design-run-event-model.md) — #128's
   `defer_until` + per-run claim, the substrate B1/B2/C2 lean on.
 - [`design-co-maintainer.md`](design-co-maintainer.md) — §11 continuity
   spine, §4.2 firehose-vs-synthesis (the diffense de-firehose applies it).
-- [`design-runner-media.md`](design-runner-media.md) — runner profile vs
+- [`design-runner-cores.md`](design-runner-cores.md) — runner profile vs
   runner medium, deterministic cheap/strong dispatch policy, and brnrd LLM
   relay as a spend-gated fallback medium.
 - [`plan-failover-compute.md`](plan-failover-compute.md) — *compute-host*

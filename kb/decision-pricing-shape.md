@@ -27,9 +27,11 @@ surfaces being priced;
 [`design-billing.md`](design-billing.md) implements the subscription,
 wallet, Stripe, and ledger mechanics;
 [`design-brnrd-protocol.md`](design-brnrd-protocol.md) carries the
-protocol hooks; and
+protocol hooks;
 [`decision-licensing-and-defense.md`](decision-licensing-and-defense.md)
-records the license / pricing defense strategy.
+records the license / pricing defense strategy; and
+[`plan-financial-growth.md`](plan-financial-growth.md) sets this pricing
+shape inside the wider no-investor, duo-run growth plan.
 
 Billing is Stripe-integrated from day one. Subscription checkout uses
 Stripe recurring subscriptions and the Customer Portal; wallet top-ups use

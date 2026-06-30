@@ -60,11 +60,15 @@ as a future shape, not built.
 **Specs are owned (dominion); firing-state is operational (runtime).** The split
 mirrors the memory-layer model:
 
-- **`.brr/dominion/schedule.md`** — the declarative specs, in the agent's owned,
-  durable, committed memory. The resident adds / edits / removes entries freely
+- **`schedule.md` in the resident dominion** — the declarative specs, in the
+  agent's owned, durable, committed memory. The current path is
+  `repos/<repo>/dominion/schedule.md` inside the account dominion repo, with
+  legacy `.brr/dominion/schedule.md` still readable during migration. The
+  resident adds / edits / removes entries freely
   ([`schedule.py`](../src/brr/schedule.py) parses it: a `## ` heading is the
   entry id, then `at:` / `every:`, an optional `conversation_key:`, and optional
-  body lines). Travels with the dominion to a second machine / failover.
+  body lines). Travels with the dominion to a second machine / failover when a
+  remote is configured.
 - **`.brr/schedule/state.json`** — last-fired timestamps, keyed by entry id.
   Daemon-owned, gitignored, *ephemeral but machine-persistent* (survives daemon
   restarts; lost only on machine-loss). The daemon mutates this, never the
@@ -103,18 +107,19 @@ after a reinstall.
 
 Surfaced reviewing slice 5: `dominion.commit` captured locally then *best-effort
 pushed*, and **silently gave up on a diverged remote** — two machines (or a
-daemon + a failover host) writing `brr-home` would quietly diverge and never
-reconcile. The fix follows the slice-5 principle directly: **merging two
+daemon + a failover host) writing the resident memory remote would quietly
+diverge and never reconcile. The fix follows the slice-5 principle directly:
+**merging two
 divergent memories is synthesis — judgement — exactly what a daemon/scanner
 can't do** (the same reason there's no deterministic dissonance detector). So:
 
 - **Daemon = durability floor.** Keep the serialized local commit at sleep
   (memory is never lost) and a best-effort *push*. That's all the reflex owes.
 - **Agent = remote reconciliation.** Fetch / merge / resolve-conflicts / push of
-  `brr-home` is the resident's job — git-layer dissonance resolution, done in
-  the dominion worktree (whose absolute path the wake prompt already gives it),
-  and **gated on presence** (reconcile when you're the one awake, so two live
-  thoughts don't fight over the merge).
+  the account dominion repo is the resident's job — git-layer dissonance
+  resolution, done in the dominion repo whose absolute path the wake prompt
+  names, and **gated on presence** (reconcile when you're the one awake, so two
+  live thoughts don't fight over the merge).
 - **Stop giving up silently.** On a failed push the daemon records a
   `needs_sync` marker (runtime); the wake prompt surfaces "your dominion's
   remote diverged — reconcile it"; a successful push clears the marker. The

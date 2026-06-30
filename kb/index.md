@@ -33,6 +33,32 @@ dive-in map) and are stable until something contradicts them.
   synthesis of the foreground `brr up` process, gate/file-protocol
   boundary, serial worker lifecycle, local process control, and where
   developer reload fits without becoming broad product UX.
+- [Account-centered daemon decision](decision-account-centered-daemon.md) —
+  *accepted 2026-06-29*. One daemon per **account** (forge identity +
+  laptop), **repo-scoped runs** underneath it; the cheap answer-or-respawn
+  dispatcher stays repo-based but can respawn-in-another-repo; inter-run
+  plans live in-repo, known and visible; a local-first view surface with an
+  optional brnrd projection (OSS self-deploy invariant). Resolves the two
+  forks parked by the execution-model review. Adds the **account-scoped
+  store** recommendation: a local-first account dominion repo (working remote
+  name `brnrd-home`) for cross-repo plans, run-state objects, account config,
+  and resident memory — not a source fork, not a gist, and not a forge repo
+  created without opt-in.
+- [brnrd rename decision](decision-brnrd-rename.md) — *direction accepted
+  2026-06-29, execution staged*. Rename the product **brr → brnrd** (PyPI
+  `brnrd` free, `brnrd-dev`/`brnrd-bot` identities, `brnrd.dev`; the daemon is
+  now account-based, not "the repo-based brr"). Open sub-fork: whether `brr`
+  survives as a short local/runner-facing CLI verb (recommended) or is fully
+  retired. Amends the CLI-shape decision (brnrd now primary, not sibling).
+- [Control surface plan](plan-control-surface.md) — *active*. The
+  "dashboard" the engine shipped without: runner-mandate facet, per-run
+  record + attempt ledger, repo dimension on cards/activity, account daemon +
+  cross-repo dispatch, inter-run plan injection, plain-language config, and a
+  cross-run decision ledger (CS1–CS7, projection surfaces first).
+- [Execution-model coherence review](review-execution-model-coherence-2026-06-29.md) —
+  *2026-06-29*. Found the Core-selection/fallback/escalation/relay engine
+  sound but missing a control surface ("engine without the dashboard");
+  framed the reshape now carried by the two pages above.
 - [Git layer rework design](design-git-layer-rework.md) — *shipped
   on 2026-05-15*. Reframes the deleted tasks-folder gate around what
   it was conflating: daemon-side freshness (pre-task fetch+ff with
@@ -86,9 +112,9 @@ dive-in map) and are stable until something contradicts them.
   spawn-per-event into a **resident agent**: the agent *is* its durable memory,
   a *thought* is a runner woken by an event or self-scheduled cron, execution is
   **single-flight** (reflex/deliberation split, replacing the threaded pool),
-  and durable memory splits into a **forge-backed orphan-branch dominion**
-  (owned, auto-injected digest) plus the curated kb, joined by a promotion
-  bridge. Folds the **playbook** as the convergence point (multi-response,
+  and durable memory splits into an **account-scoped local-first dominion**
+  (owned, auto-injected digest; optional remote) plus the curated kb, joined by
+  a promotion bridge. Folds the **playbook** as the convergence point (multi-response,
   ownership, pain-evaluation input, wake-as-action-and-growth). Reshapes
   [`design-concurrent-execution.md`](design-concurrent-execution.md).
   **Substrate shipped across slices 1–6** (2026-06: dominion worktree +
@@ -112,10 +138,10 @@ dive-in map) and are stable until something contradicts them.
   `every:` interval) and the reflex loop fires due entries as ordinary
   inbox events. Cron is just one shape of "the resident emits an event to
   its own future"; ambient initiative emerges as a recurring self-thought.
-  Companion decision — **the agent owns `brr-home` sync + conflict
-  resolution** (daemon keeps a local durability floor + best-effort push;
-  a rejected push sets a `needs_sync` marker the wake prompt surfaces;
-  fetch/merge/resolve/push is the agent's judgement). Realises
+  Companion decision — **the agent owns account-dominion sync + conflict
+  resolution** (daemon keeps a local durability floor + best-effort push when a
+  remote is configured; a rejected push sets a `needs_sync` marker the wake
+  prompt surfaces; fetch/merge/resolve/push is the agent's judgement). Realises
   [`design-agent-dominion.md`](design-agent-dominion.md) §4 self-scheduling
   and refines §5 persistence.
 - [Context introspection — "look at it" mode](design-context-introspection.md) —
@@ -222,33 +248,71 @@ dive-in map) and are stable until something contradicts them.
   keying, and run-granularity cost attribution (coupled to #130). Slice of
   [`design-co-maintainer.md`](design-co-maintainer.md) §6/§9/§11.
 
-- [The resident's cockpit — runner control & a live dwelling](plan-resident-cockpit.md) —
+- [The resident's portals — runner control & a dwelling that feels live](plan-resident-portals.md) —
   *proposed (2026-06-16)*. Extends [`design-co-maintainer.md`](design-co-maintainer.md)
   §11 with the dimensions a tight wake surfaced after dying on
-  runner-medium exhaustion: **runner-medium selection & quota-aware
+  runner exhaustion: **runner selection & quota-aware
   fallback** (a distinct axis from compute-host
   [`plan-failover-compute.md`](plan-failover-compute.md)), a
   **plan→approve→execute** duo loop, **run decomposition / delayed
   execution** atop [`design-run-event-model.md`](design-run-event-model.md),
-  and the **cockpit reframe** — cut the forge-state firehose, weave the
+  and the **portals reframe** — cut the forge-state firehose, weave the
   dominion/`.card`/outbox into one legible control surface.
-- [Cost-aware execution & an operator-legible control loop](plan-cost-aware-cockpit.md) —
+- [Cost-aware execution & an operator-legible control loop](plan-cost-aware-runner.md) —
   *active (2026-06-17; first slices shipping)*. The **cost/notification
-  braid** of the cockpit plan: three coupled loops — the resident
-  *seeing* its own medium/quota/spend (Loop A), runs surviving
+  braid** of the portals plan: three coupled loops — the resident
+  *seeing* its own Shell/Core, quota, and spend posture (Loop A), runs surviving
   exhaustion via fallback + quota-aware deferral (Loop B), and the user
   holding operational control through a live cost `.card`, a
   plan→approve handshake, and a documented inbox/acknowledge contract
   (Loop C) — plus a budget-aware self-chunking discipline. Ships A1
-  (medium in the wake bundle), the first A2 quota snapshot ingress, and
-  the diffense de-firehose first.
-- [Runner media, cost policy, and brnrd relay fallback](design-runner-media.md) —
-  *active on 2026-06-27*. Splits static runner profiles from **runner media**
-  (profile + model + owner + auth/quota source + hook capability + billing
-  posture), so simple tasks can default to cheaper local media, expensive
-  respawns can move to stronger media, and brnrd-owned LLM relay can sit behind
+  (medium in the wake bundle), the first A2 quota snapshot ingress, the
+  first B1 local fallback loop, and the diffense de-firehose first.
+- [brnrd relay spend-plan and consent gate](plan-relay-spend-consent.md) —
+  *implementation in progress (2026-06-29)*. When local LLM quota is exhausted,
+  offer brnrd-owned relay with a spending plan for user approval. Includes
+  `SpendingPlan` data model (provider cost + relay fee calculation), relay
+  runner selection, and the consent gate that pauses a run before relay spend.
+  Slices 1–2 (spending plan model + relay runner selection) shipped 2026-06-29.
+  Deferred to next wake: daemon integration, portal exposure, and resident
+  respawn consumer.
+- [Runner Shell/Core selection, cost policy, and brnrd relay fallback](design-runner-cores.md) —
+  *active on 2026-06-27*. Splits static runner profiles from **RunnerProfiles**
+  (profile + model/Core + owner + auth/quota source + hook capability + billing
+  posture), so simple tasks can default to cheaper local Shells, expensive
+  respawns can move to stronger Cores, and brnrd-owned LLM relay can sit behind
   a spend-plan consent checkpoint with wallet/audit line items instead of an
   opaque command-string convention.
+- [Repo gardening — initial context, respawn model, imagery, kb/code sweep](plan-repo-gardening.md) —
+  *executing 2026-06-28–29*. The four-task hub for the gardening crossroads: reweave
+  the initial wake context, build the cost-and-capability-aware respawn model,
+  settle the imagery/vocabulary (Runner = Shell + Core; keep portal; retire
+  vessel/medium/cockpit), and sweep kb + code. Tasks 3 + 4A + 4B executed on
+  `brr/initial-context-reweave`; Task 2 has shipped the latency fix,
+  `shell=`/`core=` knobs, generated Core-profile selection, the capability-cache
+  substrate, scheduled-respawn contract fields, the Activity dashboard-plan
+  handoff, runner metadata in `portal-state.json`, failure classification, and
+  automatic local fallback on quota/auth/provider failures. The first
+  proposal-scaffolding cleanup slice compressed the accepted
+  licensing/defense, monorepo-structure, and Fly Machines env pages into
+  current-state synthesis.
+- [Initial wake-context reweave (gardening Task 1)](plan-initial-context-reweave.md) —
+  *planning 2026-06-28*. File-by-file target-shape spec for the prompts + Run
+  Context Bundle the resident reads on every wake; written as new-shape +
+  rationale so the execution run composes fresh files rather than nudging
+  accreted text.
+- [The boundary — one envelope, two rails, and the runner vocabulary](design-resident-boundary.md) —
+  *active synthesis 2026-06-27*. Reconciles a maintainer design message against
+  the same-day runner-media / back-channel / cost-aware pages. Settles that the
+  **boundary is one concept on two rails of different density** —
+  `portal-state.json` is the complete snapshot/fallback rail, the hook capsule is
+  the salience-gated injection rail, *not* a redundant copy; the open-source
+  static **envelope** is the open mechanism while brnrd adds the live
+  authoritative rail + remote control; failover is cheap-recovery + a visible
+  receipt (PR posture, incl. *not-yet-created*, joins the boundary) rather than a
+  perfect failure classifier. Carries two open forks: the **medium** vocabulary
+  (runner→resident / executor→medium) and populating the resource collectors so
+  the boundary facets (and the respawn cost matrix) actually move.
 - [Portal grammar & the reconcile/projection layer](design-portal-grammar.md) —
   *active; #159 design contract revised 2026-06-21 after live dogfood*.
   Names the **reconcile/projection layer** above gates (append-log vs
@@ -372,6 +436,14 @@ dive-in map) and are stable until something contradicts them.
   spawn-compute joined the protocol; renamed to
   `design-brnrd-protocol.md` on 2026-05-25 with the
   brnrd-naming-keep decision.
+- [brnrd repo-first model decision](decision-brnrd-repo-first-model.md) —
+  brnrd's account/project model is repo-first.
+- [brnrd channel routing design](design-brnrd-channel-routing.md) —
+  how brnrd routes messages across channels/gates.
+- [brnrd GitHub bot user design](design-brnrd-github-bot-user.md) —
+  the brnrd GitHub bot identity and its interactions.
+- [brnrd GitHub installation sync design](design-brnrd-github-installation-sync.md) —
+  syncing GitHub App installation state into brnrd.
 - [brnrd GitHub OAuth identity decision](decision-brnrd-github-oauth-identity.md) —
   *accepted on 2026-06-03*. brnrd accounts are GitHub identities via
   the managed GitHub App / OAuth web flow; email+password signup and
@@ -558,7 +630,7 @@ dive-in map) and are stable until something contradicts them.
   BUSL/ELv2/SSPL (community-goodwill cost > defense gain at
   current scale), gating any feature behind hosted-only
   (breaks the always-free-self-host promise), racing to the
-  bottom on price, and   pre-buying defensive domains
+  bottom on price, and pre-buying defensive domains
   (trademark + UDRP covers the actual attack pattern at
   lower ongoing cost). **Anti-pattern surface expanded
   2026-05-26 with "don't lock subscribers into brnrd's
@@ -716,7 +788,7 @@ dive-in map) and are stable until something contradicts them.
   three-step working-branch rule (`event.branch_target` →
   `daemon.last_spawned_branch[project_id]` → repo default),
   and the machine-scoped account-binding layout at
-  `~/.local/state/brr/account/` (binding / subscription /
+  `~/.local/state/brnrd/account/` (binding / subscription /
   cached settings). Three-scope config model: `project` (`brr.toml` at repo root,
   committed — teammates + brnrd-side spawns see it), `local`
   (`.brr/config`, gitignored, this machine only), `account`
@@ -865,6 +937,14 @@ dive-in map) and are stable until something contradicts them.
   agent-owned `gate: forge`, and the 2026-06-21 correction made that route
   generic for explicit PR handoffs instead of diffense-only; push/reply
   ownership remains open.
+- [Execution-model coherence + context-shape review, 2026-06-29](review-execution-model-coherence-2026-06-29.md)
+  — *handoff*. Reviewed the `brr/initial-context-reweave` runner/Core/respawn
+  diff (10k lines) vs main: engine is sound and plan-consistent, but shipped
+  without a control surface — envelope invisible, two parallel Core catalogs,
+  relay-consent loop open, card overwrites its attempt history, no plan↔diff
+  traceability. Frames the reshape (envelope facet, catalog collapse, per-run
+  record, plain-language config, cross-run ledger) and the daemon-per-account
+  fork for a next implementing wake. Companion to `plan-repo-gardening.md`.
 
 ## Research
 

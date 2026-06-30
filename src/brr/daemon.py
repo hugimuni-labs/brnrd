@@ -44,23 +44,31 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import account
 from . import branching
 from . import config as conf
 from . import conversations
 from . import dev_reload as reload_mod
 from . import dominion
 from . import envs
+from . import facets
 from . import forge_state
 from . import forges
+from . import claude_status
+from . import claude_usage
 from . import gitops
 from . import hooks as hooks_mod
 from . import presence
 from . import prompts
+from . import codex_status
 from . import protocol
 from . import run_context
 from . import runner
+from . import runner_failures
 from . import runner_quota
+from . import runner_select
 from . import schedule as schedule_mod
+from . import spending_plan
 from . import sync
 from . import updates
 from . import worktree
@@ -84,13 +92,16 @@ _BURST_MAX_WAIT_DEFAULT = 12.0
 # failure wake each. Defer those siblings briefly; a fresh event can still
 # wake the resident and show them in the live inbox.
 _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
-# Cadence for the run-time heartbeat packet. 30s is short enough that
-# the chat card visibly bumps elapsed time during the long "running"
-# phase, and far below Telegram's edit rate ceiling (~30/sec/chat).
-_HEARTBEAT_INTERVAL = 30.0
+# Cadence for the run-time heartbeat packet. 10s keeps the chat card
+# visibly alive and is well below Telegram's edit rate ceiling
+# (~30/sec/chat). The Claude usage PTY scrape (which can block ~18s)
+# is off the flush critical path since the latency fix; it only fires
+# once per 300s (its TTL) on the heartbeat path — unaffected by
+# shortening this interval.
+_HEARTBEAT_INTERVAL = 10.0
 # Sub-heartbeat poll cadence for the runner hooks back-channel flush signal
 # (``.flush``, dropped by ``brr hook post-tool``). The heartbeat itself
-# stays at 30s; this only governs how fast the daemon notices the signal
+# stays at 10s; this only governs how fast the daemon notices the signal
 # and drains the outbox in response, so a mid-thought reply lands promptly
 # instead of waiting out the tick. See kb/design-runner-back-channel.md.
 _FLUSH_POLL_INTERVAL = 1.0
@@ -108,6 +119,17 @@ _CARD_CONTROL_NAME = ".card"
 # resident from flooding a thread. Excess bytes are truncated.
 _CARD_CONTROL_MAX_BYTES = 4096
 _INTERNAL_EVENT_SOURCES = {"schedule"}
+
+
+@dataclass(frozen=True)
+class _DispatchTarget:
+    """One pending event plus the repo/runtime surface it should use."""
+
+    event: dict
+    repo_root: Path
+    inbox_dir: Path
+    responses_dir: Path
+    repo_label: str
 
 
 # ── Per-branch locks ────────────────────────────────────────────────
@@ -512,12 +534,258 @@ def _branches_to_refresh(repo_root: Path, event: dict) -> list[str]:
 # ── Worker ───────────────────────────────────────────────────────────
 
 
+def _record_task_runner(
+    task: Run,
+    runner_name: str,
+    runner_meta: dict[str, object] | None,
+) -> None:
+    """Persist the currently selected Runner/Core on the run manifest."""
+    task.meta["runner_name"] = runner_name
+    for key in ("runner_shell", "runner_core", "runner_class"):
+        task.meta.pop(key, None)
+    if not runner_meta:
+        return
+    if runner_meta.get("shell"):
+        task.meta["runner_shell"] = runner_meta["shell"]
+    if runner_meta.get("model"):
+        task.meta["runner_core"] = runner_meta["model"]
+    if runner_meta.get("class"):
+        task.meta["runner_class"] = runner_meta["class"]
+
+
+def _quality_escalation_meta(
+    repo_root: Path,
+    runner_name: str | None,
+) -> dict[str, object] | None:
+    """Metadata for the stronger local Runner a quality respawn would target."""
+    if not runner_name:
+        return None
+    proposed = runner.quality_escalation_runner(repo_root, runner_name)
+    if not proposed:
+        return None
+    meta = runner.profile_metadata(proposed, repo_root) or {}
+    return {
+        "status": "known",
+        "name": proposed,
+        "model": str(meta.get("model") or "").strip() or None,
+        "class": str(meta.get("class") or "").strip() or None,
+        "provider": str(meta.get("provider") or "").strip() or None,
+        "owner": str(meta.get("owner") or "user").strip() or "user",
+        "cost_rank": meta.get("cost_rank"),
+        "capability_score": meta.get("capability_score"),
+        "capability_source": str(
+            meta.get("capability_source") or ""
+        ).strip() or None,
+        "capability_freshness": str(
+            meta.get("capability_freshness") or ""
+        ).strip() or None,
+    }
+
+
+def _repo_label(
+    repo_root: Path,
+    event: dict | None = None,
+    cfg: dict | None = None,
+) -> str:
+    """Best-effort human label for the repo this run belongs to."""
+    event = event or {}
+    cfg = cfg or {}
+    for key in ("github_repo", "repo_full_name", "repo", "repo_label"):
+        value = str(event.get(key) or "").strip()
+        if value:
+            return value
+    for key in ("repo.label", "repo_label"):
+        value = str(cfg.get(key) or "").strip()
+        if value:
+            return value
+    try:
+        remote = gitops.default_remote(repo_root)
+        if remote:
+            url = gitops.remote_url(repo_root, remote)
+            if url:
+                from .gates.github.parse import parse_origin_url
+
+                parsed = parse_origin_url(url)
+                if parsed:
+                    return parsed
+    except Exception:
+        pass
+    value = str(event.get("repo_id") or "").strip()
+    if value:
+        return value
+    return repo_root.name
+
+
+def _event_files_present(inbox_dir: Path) -> bool:
+    """Cheap guard before asking the protocol layer to parse an inbox."""
+    try:
+        return any(entry.name.endswith(".md") for entry in os.scandir(inbox_dir))
+    except OSError:
+        return False
+
+
+def _repo_inbox(repo_root: Path) -> Path:
+    return gitops.shared_brr_dir(repo_root) / "inbox"
+
+
+def _repo_responses(repo_root: Path) -> Path:
+    return gitops.shared_brr_dir(repo_root) / "responses"
+
+
+def _repo_for_event(
+    account_context: account.AccountContext,
+    event: dict,
+    *,
+    fallback_repo_root: Path,
+    fallback_label: str,
+) -> tuple[Path, str]:
+    """Resolve the repo dimension for one event.
+
+    Message events in the account dispatch inbox carry an explicit ``repo`` /
+    ``repo_label`` target.  Forge events can stay direct: if the event file
+    lives in a registered repo's local inbox, that repo is the target even when
+    the event body does not repeat its repo label.
+    """
+    explicit_label = account.event_repo_label(event)
+    if explicit_label:
+        repo = account_context.repo_for_label(explicit_label)
+        if repo is not None:
+            return repo.root, repo.label
+        return fallback_repo_root, explicit_label
+
+    path = event.get("_path")
+    if isinstance(path, Path):
+        for repo in account_context.repos.values():
+            try:
+                if path.parent.resolve() == _repo_inbox(repo.root).resolve():
+                    return repo.root, repo.label
+            except OSError:
+                continue
+    return fallback_repo_root, fallback_label
+
+
+def _dispatchable_targets(
+    account_context: account.AccountContext,
+    default_repo_root: Path,
+    cfg: dict,
+) -> list[_DispatchTarget]:
+    """Return pending events across the account daemon's known inboxes.
+
+    The existing single-repo path remains the hot path: the default repo inbox
+    is always scanned. Additional repo inboxes and the account dispatch inbox
+    are scanned only when they actually contain event files, avoiding extra work
+    and preserving tests that monkeypatch the protocol scanner.
+    """
+    default_label = account_context.default_repo.label
+    sources: list[tuple[Path, Path, Path, str, bool]] = []
+    seen: set[Path] = set()
+
+    def add_source(
+        inbox_dir: Path,
+        responses_dir: Path,
+        repo_root: Path,
+        repo_label: str,
+        *,
+        always: bool = False,
+    ) -> None:
+        try:
+            key = inbox_dir.resolve()
+        except OSError:
+            key = inbox_dir
+        if key in seen:
+            return
+        seen.add(key)
+        if always or _event_files_present(inbox_dir):
+            sources.append((inbox_dir, responses_dir, repo_root, repo_label, always))
+
+    add_source(
+        _repo_inbox(default_repo_root),
+        _repo_responses(default_repo_root),
+        default_repo_root,
+        default_label,
+        always=True,
+    )
+    if account_context.enabled:
+        add_source(
+            account_context.dispatch_inbox,
+            account_context.responses_dir,
+            account_context.default_repo.root,
+            account_context.default_repo.label,
+        )
+        for repo in account_context.repos.values():
+            add_source(
+                _repo_inbox(repo.root),
+                _repo_responses(repo.root),
+                repo.root,
+                repo.label,
+            )
+
+    targets: list[_DispatchTarget] = []
+    for inbox_dir, responses_dir, source_repo, source_label, _always in sources:
+        for event in protocol.list_dispatchable(inbox_dir):
+            repo_root, repo_label = _repo_for_event(
+                account_context,
+                event,
+                fallback_repo_root=source_repo,
+                fallback_label=source_label,
+            )
+            if not account.event_repo_label(event):
+                event.setdefault("repo_label", repo_label)
+            targets.append(
+                _DispatchTarget(
+                    event=event,
+                    repo_root=repo_root,
+                    inbox_dir=inbox_dir,
+                    responses_dir=responses_dir,
+                    repo_label=repo_label,
+                )
+            )
+    return sorted(targets, key=lambda target: _event_mtime(target.event))
+
+
+def _start_account_gates(
+    account_context: account.AccountContext,
+    default_repo_root: Path,
+) -> list[threading.Thread]:
+    """Start configured gates for the account store and registered repos."""
+
+    threads: list[threading.Thread] = []
+    seen: set[Path] = set()
+
+    def start_for(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
+        try:
+            key = brr_dir.resolve()
+        except OSError:
+            key = brr_dir
+        if key in seen:
+            return
+        seen.add(key)
+        threads.extend(_start_gates(brr_dir, inbox_dir, responses_dir))
+
+    if account_context.enabled:
+        start_for(
+            account_context.dominion_repo,
+            account_context.dispatch_inbox,
+            account_context.responses_dir,
+        )
+        for repo in account_context.repos.values():
+            brr_dir = gitops.shared_brr_dir(repo.root)
+            start_for(brr_dir, brr_dir / "inbox", brr_dir / "responses")
+    else:
+        brr_dir = gitops.shared_brr_dir(default_repo_root)
+        start_for(brr_dir, brr_dir / "inbox", brr_dir / "responses")
+    return threads
+
+
 def _run_worker(
     event: dict,
     repo_root: Path,
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
+    *,
+    account_context: account.AccountContext | None = None,
+    inbox_dir: Path | None = None,
 ) -> Run:
     """Run the runner for a single event, with retries.
 
@@ -533,7 +801,24 @@ def _run_worker(
     eid = event["id"]
     brr_dir = gitops.shared_brr_dir(repo_root)
     runs_dir = brr_dir / "runs"
-    runner_name = runner.resolve_runner(repo_root)
+    repo_label = _repo_label(repo_root, event, cfg)
+    runner_overrides = {
+        key: event.get(key)
+        for key in ("shell", "core", "runner", "runner_policy")
+        if event.get(key) not in (None, "")
+    }
+    runner_name = (
+        runner.resolve_runner(repo_root, runner_overrides)
+        if runner_overrides else runner.resolve_runner(repo_root)
+    )
+    # Look up the profile dict so portal-state can expose the selected
+    # Shell/Core's metadata (model, class, provider, hooks) in the
+    # resources.runner governance block. The profile cache is already
+    # warm from resolve_runner, so this is a dict lookup, not I/O.
+    runner_meta: dict[str, object] | None = runner.profile_metadata(
+        runner_name, repo_root
+    )
+    quality_escalation = _quality_escalation_meta(repo_root, runner_name)
     failure_defer_seconds = float(
         cfg.get(
             "dispatch.failure_defer_seconds",
@@ -559,6 +844,11 @@ def _run_worker(
         task.status = "done"
         if correspondent_key:
             task.meta["correspondent_key"] = correspondent_key
+        task.meta["repo_label"] = repo_label
+        _persist_run_state_doc(
+            account_context, task, repo_label=repo_label,
+            stage="deduplicated", cfg=cfg,
+        )
         task.meta["deduplicated_origin_message_key"] = origin_message_key
         prior_event_id = str(duplicate_event.get("event_id") or "").strip()
         prior_conversation = str(duplicate_event.get("conversation_key") or "").strip()
@@ -567,12 +857,17 @@ def _run_worker(
         if prior_conversation:
             task.meta["deduplicated_by_conversation_key"] = prior_conversation
         task.save(runs_dir)
-        emit("run_created", run_id=task.id, event_id=eid, env=task.env)
+        emit(
+            "run_created", run_id=task.id, event_id=eid,
+            env=task.env, repo_label=repo_label,
+            run_state_path=task.meta.get("run_state_path"),
+            run_state_url=task.meta.get("run_state_url"),
+        )
         if conv_key:
             conversations.append_run(
                 brr_dir, conv_key,
                 run_id=task.id, event_id=eid,
-                env=task.env, status=task.status,
+                env=task.env, status=task.status, repo_label=repo_label,
             )
         body = _deduplicated_event_body()
         resp_path = protocol.response_path(responses_dir, eid)
@@ -599,6 +894,11 @@ def _run_worker(
     task.conversation_key = conv_key
     if correspondent_key:
         task.meta["correspondent_key"] = correspondent_key
+    task.meta["repo_label"] = repo_label
+    _record_task_runner(task, runner_name, runner_meta)
+    _persist_run_state_doc(
+        account_context, task, repo_label=repo_label, stage="created", cfg=cfg,
+    )
     task.save(runs_dir)
 
     if conv_key:
@@ -614,7 +914,12 @@ def _run_worker(
                 error=sync_result.error,
             )
 
-    emit("run_created", run_id=task.id, event_id=eid, env=task.env)
+    emit(
+        "run_created", run_id=task.id, event_id=eid,
+        env=task.env, repo_label=repo_label,
+        run_state_path=task.meta.get("run_state_path"),
+        run_state_url=task.meta.get("run_state_url"),
+    )
 
     # Record this thought in the presence registry so overlapping thoughts
     # (ad-hoc sessions, a second daemon) can see who's on which stream and
@@ -625,6 +930,7 @@ def _run_worker(
     try:
         presence_id = presence.register(
             brr_dir, kind="daemon", stream=conv_key, run_id=task.id,
+            repo_label=repo_label,
         )["id"]
         task.meta["presence_id"] = presence_id
     except OSError:
@@ -637,7 +943,7 @@ def _run_worker(
     # Created up front so the agent can write to it the moment it wakes.
     outbox_dir = brr_dir / "outbox" / eid
     outbox_dir.mkdir(parents=True, exist_ok=True)
-    inbox_dir = brr_dir / "inbox"
+    inbox_dir = inbox_dir or (brr_dir / "inbox")
 
     print(f"[brr] run {task.id} (event {eid}): env={task.env}")
 
@@ -706,6 +1012,7 @@ def _run_worker(
         run_id=task.id,
         env=task.env,
         branch_name=branch_name,
+        repo_label=repo_label,
         seed_ref=branch_plan.seed_ref,
         target_branch=branch_plan.target_branch,
         branch_source=branch_plan.source,
@@ -721,6 +1028,7 @@ def _run_worker(
             target_branch=branch_plan.target_branch,
             branch_source=branch_plan.source,
             host_context_branch=branch_plan.host_context_branch,
+            repo_label=repo_label,
         )
 
     history_groups = (
@@ -801,7 +1109,6 @@ def _run_worker(
     last_failure: dict[str, object] | None = None
     output_stats = {"current": 0, "other": 0, "outbound": 0}
     prompt_diffense = prompts.diffense_emit_enabled(cfg)
-    quota_summary = runner_quota.describe_runner_quota(runner_name, cfg, brr_dir)
     # Liveness budget: the heartbeat enforces this soft, agent-extensible
     # deadline; the runner's communicate() backstops at the hard cap. The
     # agent extends it by writing the keepalive control dotfile in its
@@ -819,6 +1126,75 @@ def _run_worker(
     flush_path = outbox_dir / hooks_mod.FLUSH_SIGNAL_NAME
     card_state: dict[str, str] = {}
     run_started_monotonic = time.monotonic()
+
+    def _runner_runtime(
+        name: str,
+    ) -> tuple[dict[str, object] | None, str | None, dict[str, str], list[str]]:
+        meta = runner.profile_metadata(name, repo_root)
+        quota = runner_quota.describe_runner_quota(name, cfg, brr_dir)
+        # Native hook config is opt-in through a profile's explicit ``hooks:``
+        # field — brr never infers hooks from the runner name. A profile with no
+        # ``hooks:`` field uses the heartbeat-polled fallback (outbound flush, no
+        # inbound injection).
+        declared_hooks_flavour = runner.profile_hooks_flavour(name, repo_root)
+        hooks_flavour = declared_hooks_flavour or name
+        env = {
+            "BRR_RUN_ID": task.id,
+            "BRR_EVENT_ID": eid,
+            "BRR_RUNNER": hooks_flavour,
+            "BRR_RESPONSE_PATH": str(env_ctx.response_path_env),
+            "BRR_CONTEXT_PATH": str(context_path),
+            "BRR_PORTAL_STATE": str(
+                (env_ctx.outbox_env or outbox_dir) / _LIVE_PORTAL_STATE_NAME
+            ),
+        }
+        if env_ctx.outbox_env:
+            env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
+            env["BRR_INBOX_PATH"] = str(env_ctx.outbox_env / _LIVE_INBOX_NAME)
+
+        # Tier 2 native hooks: install per-run hook config only for profiles that
+        # explicitly declare a hook flavour. Two mechanisms by flavour — a
+        # settings file written into the worktree (claude), or config-override
+        # argv injected into the runner command (codex).
+        extra_args: list[str] = []
+        if declared_hooks_flavour == "codex":
+            if hooks_mod.codex_hook_capability():
+                extra_args = hooks_mod.codex_hook_args()
+                emit(
+                    "hooks_installed",
+                    run_id=task.id,
+                    event_id=eid,
+                    flavour=declared_hooks_flavour,
+                    path="<argv -c hooks.*>",
+                )
+                print(f"[brr] worker {eid}: installed codex hook config via argv")
+        elif (
+            declared_hooks_flavour
+            and hooks_mod.hook_capability(declared_hooks_flavour, run_root)
+        ):
+            hook_config_path = hooks_mod.install_hook_config(
+                declared_hooks_flavour, run_root
+            )
+            if hook_config_path is not None:
+                emit(
+                    "hooks_installed",
+                    run_id=task.id,
+                    event_id=eid,
+                    flavour=declared_hooks_flavour,
+                    path=str(hook_config_path),
+                )
+                print(
+                    f"[brr] worker {eid}: installed "
+                    f"{declared_hooks_flavour} hook config at {hook_config_path}"
+                )
+        return meta, quota, env, extra_args
+
+    runner_meta, quota_summary, runner_env, extra_runner_args = _runner_runtime(
+        runner_name
+    )
+    runner_catalog = runner.available_runner_catalog(repo_root, selected=runner_name)
+    _record_task_runner(task, runner_name, runner_meta)
+    task.save(runs_dir)
     _write_live_portal_state(
         outbox_dir,
         inbox_dir,
@@ -826,6 +1202,9 @@ def _run_worker(
         task,
         phase="preparing",
         runner_name=runner_name,
+        runner_meta=runner_meta,
+        runner_catalog=runner_catalog,
+        quality_escalation=quality_escalation,
         budget_seconds=budget_seconds,
         hard_cap_seconds=hard_cap_seconds,
         keepalive_path=keepalive_path,
@@ -835,118 +1214,68 @@ def _run_worker(
         work_dir=run_root,
         quota_summary=quota_summary,
     )
-    # Native hook config is opt-in through a profile's explicit ``hooks:``
-    # field — brr never infers hooks from the runner name. A profile with no
-    # ``hooks:`` field uses the heartbeat-polled fallback (outbound flush, no
-    # inbound injection).
-    declared_hooks_flavour = runner.profile_hooks_flavour(runner_name, repo_root)
-    hooks_flavour = declared_hooks_flavour or runner_name
-    runner_env = {
-        "BRR_RUN_ID": task.id,
-        "BRR_EVENT_ID": eid,
-        "BRR_RUNNER": hooks_flavour,
-        "BRR_RESPONSE_PATH": str(env_ctx.response_path_env),
-        "BRR_CONTEXT_PATH": str(context_path),
-        "BRR_PORTAL_STATE": str(
-            (env_ctx.outbox_env or outbox_dir) / _LIVE_PORTAL_STATE_NAME
-        ),
-    }
-    if env_ctx.outbox_env:
-        runner_env["BRR_OUTBOX_DIR"] = str(env_ctx.outbox_env)
-        runner_env["BRR_INBOX_PATH"] = str(env_ctx.outbox_env / _LIVE_INBOX_NAME)
 
-    # Tier 2 native hooks: install per-run hook config only for profiles that
-    # explicitly declare a hook flavour. Two mechanisms by flavour — a settings
-    # file written into the worktree (claude), or config-override argv injected
-    # into the runner command (codex). Runners with no ``hooks:`` field degrade
-    # to the heartbeat-polled portal model.
-    extra_runner_args: list[str] = []
-    if declared_hooks_flavour == "codex":
-        if hooks_mod.codex_hook_capability():
-            extra_runner_args = hooks_mod.codex_hook_args()
-            emit(
-                "hooks_installed",
-                run_id=task.id,
-                event_id=eid,
-                flavour=declared_hooks_flavour,
-                path="<argv -c hooks.*>",
+    attempt = 0
+    clean_retries_used = 0
+    attempted_runners: list[str] = []
+    prompt_mode = "normal"
+    fallback_notice: str | None = None
+    while True:
+        attempt += 1
+        if runner_name not in attempted_runners:
+            attempted_runners.append(runner_name)
+        if prompt_mode == "stdout_retry":
+            prompt_instruction = (
+                "Previous attempt printed no final reply on stdout. "
+                "Print your full response as the final stdout message.\n\n"
+                f"Original run instruction: {task.body}"
             )
-            print(f"[brr] worker {eid}: installed codex hook config via argv")
-    elif (
-        declared_hooks_flavour
-        and hooks_mod.hook_capability(declared_hooks_flavour, run_root)
-    ):
-        hook_config_path = hooks_mod.install_hook_config(
-            declared_hooks_flavour, run_root
+        elif prompt_mode == "fallback" and fallback_notice:
+            prompt_instruction = (
+                f"{fallback_notice}\n\n"
+                "Continue from the current worktree state and finish the "
+                "original run instruction. Do not restart work that is already "
+                "present in the files unless it is wrong.\n\n"
+                f"Original run instruction: {task.body}"
+            )
+        else:
+            prompt_instruction = task.body
+
+        prompt = prompts.build_daemon_prompt(
+            prompt_instruction,
+            eid,
+            str(env_ctx.response_path_env),
+            run_root,
+            outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
+            run_id=task.id,
+            source=task.source or event.get("source"),
+            environment=task.env,
+            branch_name=branch_name,
+            repo_label=repo_label,
+            seed_ref=branch_plan.seed_ref,
+            branch_source=branch_plan.source,
+            branch_setup_notice=branch_setup_notice,
+            host_context_branch=branch_plan.host_context_branch,
+            runtime_dir=str(env_ctx.runtime_dir),
+            context_path=str(context_path),
+            recent_conversation=recent_conversation,
+            communication_snapshot=communication_snapshot,
+            pending_events=pending_events_snapshot,
+            present=present_snapshot,
+            event_body=event_body_for_prompt,
+            budget_seconds=budget_seconds,
+            runner_medium=runner_name,
+            runner_quota=quota_summary,
+            runner_catalog=runner_catalog,
+            diffense=prompt_diffense,
         )
-        if hook_config_path is not None:
-            emit(
-                "hooks_installed",
-                run_id=task.id,
-                event_id=eid,
-                flavour=declared_hooks_flavour,
-                path=str(hook_config_path),
-            )
-            print(
-                f"[brr] worker {eid}: installed "
-                f"{declared_hooks_flavour} hook config at {hook_config_path}"
-            )
-    for attempt in range(1, max_retries + 2):
         if attempt == 1:
-            prompt = prompts.build_daemon_prompt(
-                task.body, eid, str(env_ctx.response_path_env), run_root,
-                outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
-                run_id=task.id,
-                source=task.source or event.get("source"),
-                environment=task.env,
-                branch_name=branch_name,
-                seed_ref=branch_plan.seed_ref,
-                branch_source=branch_plan.source,
-                branch_setup_notice=branch_setup_notice,
-                host_context_branch=branch_plan.host_context_branch,
-                runtime_dir=str(env_ctx.runtime_dir),
-                context_path=str(context_path),
-                recent_conversation=recent_conversation,
-                communication_snapshot=communication_snapshot,
-                pending_events=pending_events_snapshot,
-                present=present_snapshot,
-                event_body=event_body_for_prompt,
-                budget_seconds=budget_seconds,
-                runner_medium=runner_name,
-                runner_quota=quota_summary,
-                diffense=prompt_diffense,
-            )
             # Persist the assembled prompt so "what did this wake see?" has
             # an honest answer even on successful runs (traces are cleaned up
             # on success; the run directory persists).
             run_context.write_prompt_file(brr_dir, task, prompt)
-        else:
-            prompt = prompts.build_daemon_prompt(
-                f"Previous attempt printed no final reply on stdout. "
-                f"Print your full response as the final stdout message.\n\n"
-                f"Original run instruction: {task.body}",
-                eid, str(env_ctx.response_path_env), run_root,
-                outbox_path=str(env_ctx.outbox_env) if env_ctx.outbox_env else None,
-                run_id=task.id,
-                source=task.source or event.get("source"),
-                environment=task.env,
-                branch_name=branch_name,
-                seed_ref=branch_plan.seed_ref,
-                branch_source=branch_plan.source,
-                branch_setup_notice=branch_setup_notice,
-                host_context_branch=branch_plan.host_context_branch,
-                runtime_dir=str(env_ctx.runtime_dir),
-                context_path=str(context_path),
-                recent_conversation=recent_conversation,
-                communication_snapshot=communication_snapshot,
-                pending_events=pending_events_snapshot,
-                present=present_snapshot,
-                event_body=event_body_for_prompt,
-                budget_seconds=budget_seconds,
-                runner_medium=runner_name,
-                runner_quota=quota_summary,
-                diffense=prompt_diffense,
-            )
+        prompt_mode = "normal"
+        fallback_notice = None
 
         print(f"[brr] worker {eid}: attempt {attempt}")
         emit("attempt_started", run_id=task.id, event_id=eid, attempt=attempt)
@@ -960,6 +1289,9 @@ def _run_worker(
             phase="running",
             attempt=attempt,
             runner_name=runner_name,
+            runner_meta=runner_meta,
+            runner_catalog=runner_catalog,
+            quality_escalation=quality_escalation,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
@@ -976,6 +1308,7 @@ def _run_worker(
             # promptly as the heartbeat that observed the agent is alive.
             _drain_outbox(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+                repo_root=repo_root,
                 stats=output_stats,
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -988,6 +1321,9 @@ def _run_worker(
                 phase="running",
                 attempt=attempt,
                 runner_name=runner_name,
+                runner_meta=runner_meta,
+                runner_catalog=runner_catalog,
+                quality_escalation=quality_escalation,
                 budget_seconds=budget_seconds,
                 hard_cap_seconds=hard_cap_seconds,
                 keepalive_path=keepalive_path,
@@ -1015,8 +1351,12 @@ def _run_worker(
             # + portal-state the next boundary reads back for injection. Lighter
             # than _emit_heartbeat — no heartbeat packet / presence ping, so
             # a tool-boundary flush doesn't spam the chat card.
+            # refresh_levels=False: the event-driven flush must never block on the
+            # ~18s PTY scrape for Claude usage. The heartbeat (every 30s) owns
+            # the refresh; the flush only reads the on-disk cached snapshot.
             _drain_outbox(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+                repo_root=repo_root,
                 stats=output_stats,
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -1029,6 +1369,9 @@ def _run_worker(
                 phase="running",
                 attempt=attempt,
                 runner_name=runner_name,
+                runner_meta=runner_meta,
+                runner_catalog=runner_catalog,
+                quality_escalation=quality_escalation,
                 budget_seconds=budget_seconds,
                 hard_cap_seconds=hard_cap_seconds,
                 keepalive_path=keepalive_path,
@@ -1037,6 +1380,7 @@ def _run_worker(
                 start_monotonic=run_started_monotonic,
                 work_dir=run_root,
                 quota_summary=quota_summary,
+                refresh_levels=False,
             )
 
         result = _invoke_with_heartbeat(
@@ -1068,6 +1412,7 @@ def _run_worker(
         # written between the last heartbeat and exit, before finalize.
         _drain_outbox(
             emit, task, responses_dir, eid, outbox_dir, inbox_dir,
+            repo_root=repo_root,
             stats=output_stats,
         )
         _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -1080,6 +1425,9 @@ def _run_worker(
             phase="finalizing",
             attempt=attempt,
             runner_name=runner_name,
+            runner_meta=runner_meta,
+            runner_catalog=runner_catalog,
+            quality_escalation=quality_escalation,
             budget_seconds=budget_seconds,
             hard_cap_seconds=hard_cap_seconds,
             keepalive_path=keepalive_path,
@@ -1093,17 +1441,29 @@ def _run_worker(
         # call site covers success, retry, and hard failure: a clean
         # dominion no-ops, and on retry the next pass just re-captures any
         # new writes (idempotent — see _capture_dominion).
-        _capture_dominion(repo_root, cfg, task)
+        _capture_dominion(
+            repo_root,
+            cfg,
+            task,
+            account_context=account_context,
+        )
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
         try:
             result.raise_for_error()
         except RuntimeError as e:
             print(f"[brr] worker {eid}: runner error: {e}")
+            detail = result.error_detail() or str(e)
+            timed_out = result.returncode == 124
             last_failure = {
                 "exit_code": result.returncode,
-                "error": result.error_detail() or str(e),
-                "timed_out": result.returncode == 124,
+                "error": detail,
+                "timed_out": timed_out,
+                "failure_kind": runner_failures.classify_failure(
+                    timed_out=timed_out,
+                    exit_code=result.returncode,
+                    detail=detail,
+                ),
             }
         else:
             if not result.validation_ok and not result.retry_reason():
@@ -1113,6 +1473,10 @@ def _run_worker(
                         "exit_code": result.returncode,
                         "error": detail,
                         "timed_out": False,
+                        "failure_kind": runner_failures.classify_failure(
+                            exit_code=result.returncode,
+                            detail=detail,
+                        ),
                     }
 
         # Detect a fresh commit on the worktree branch before finalize runs
@@ -1162,12 +1526,25 @@ def _run_worker(
                 replies_current=output_stats.get("current", 0),
                 replies_other=output_stats.get("other", 0),
                 outbound_messages=output_stats.get("outbound", 0),
+                respawn_requests=output_stats.get("respawn", 0),
                 committed=has_new_commit,
             )
             return task
 
         retry_reason = result.retry_reason()
-        will_retry = bool(retry_reason and attempt <= max_retries)
+        will_retry = bool(retry_reason and clean_retries_used < max_retries)
+        fallback_runner_name: str | None = None
+        failure_kind = (
+            str(last_failure.get("failure_kind") or "")
+            if last_failure and not retry_reason else ""
+        )
+        if failure_kind:
+            fallback_runner_name = runner.fallback_runner(
+                repo_root,
+                runner_name,
+                failure_kind,
+                tried=attempted_runners,
+            )
         attempt_payload: dict[str, object] = {
             "run_id": task.id,
             "event_id": eid,
@@ -1177,12 +1554,18 @@ def _run_worker(
             ) or "unknown",
             "will_retry": will_retry,
         }
+        if fallback_runner_name:
+            attempt_payload["will_fallback"] = True
+            attempt_payload["fallback_runner"] = fallback_runner_name
         if last_failure and not retry_reason:
             attempt_payload["exit_code"] = last_failure["exit_code"]
+            attempt_payload["failure_kind"] = last_failure.get("failure_kind")
             if last_failure.get("timed_out"):
                 attempt_payload["timed_out"] = True
         emit("attempt_failed", **attempt_payload)
         if will_retry:
+            clean_retries_used += 1
+            prompt_mode = "stdout_retry"
             print(f"[brr] worker {eid}: {retry_reason}, retrying...")
             emit(
                 "retrying",
@@ -1192,6 +1575,73 @@ def _run_worker(
                 reason=retry_reason,
             )
             continue
+        if fallback_runner_name:
+            previous_runner = runner_name
+            runner_name = fallback_runner_name
+            runner_meta, quota_summary, runner_env, extra_runner_args = (
+                _runner_runtime(runner_name)
+            )
+            runner_catalog = runner.available_runner_catalog(
+                repo_root, selected=runner_name,
+            )
+            quality_escalation = _quality_escalation_meta(repo_root, runner_name)
+            _record_task_runner(task, runner_name, runner_meta)
+            task.save(runs_dir)
+            reason = f"fallback after {failure_kind}"
+            fallback_notice = (
+                f"Previous runner {previous_runner} failed operationally "
+                f"({failure_kind}). brr automatically fell back to "
+                f"{runner_name}."
+            )
+            prompt_mode = "fallback"
+            print(
+                f"[brr] worker {eid}: {previous_runner} failed "
+                f"({failure_kind}); falling back to {runner_name}"
+            )
+            emit(
+                "retrying",
+                run_id=task.id,
+                event_id=eid,
+                attempt=attempt + 1,
+                reason=reason,
+                runner=runner_name,
+                from_runner=previous_runner,
+                failure_kind=failure_kind,
+            )
+            last_failure = None
+            continue
+        # Check for relay fallback before hard failure.
+        # If no local fallback is available but relay runners exist and the
+        # failure is a candidate for relay (quota exhausted, auth error),
+        # emit a spending plan request instead of hard failure.
+        relay_candidate = None
+        relay_plan = None
+        if (
+            failure_kind
+            and failure_kind in runner_select.AUTO_FALLBACK_FAILURES
+            and not fallback_runner_name
+        ):
+            try:
+                runners = runner_select.available_runners(repo_root)
+                relay_candidate = runner_select.best_relay_runner(runners)
+                if relay_candidate:
+                    # Emit spending plan request. The resident can respond with
+                    # relay_consent=approved via a respawn request, or deny it.
+                    relay_plan = spending_plan.SpendingPlan(
+                        reason=f"local_quota_exhausted",
+                        model=relay_candidate.model or relay_candidate.name,
+                        provider=relay_candidate.provider or "unknown",
+                        estimated_input_tokens=0,
+                        estimated_output_tokens=0,
+                        consent_state="pending",
+                    )
+                    attempt_payload["needs_relay_consent"] = True
+                    attempt_payload["relay_candidate"] = relay_candidate.summary()
+                    attempt_payload["relay_plan"] = relay_plan.to_dict()
+            except Exception:
+                # Relay check failed; don't block hard failure
+                relay_candidate = None
+                relay_plan = None
         # Hard failure (timeout / non-zero exit) — no retry, give up now
         # rather than burning another expensive attempt. The give-up
         # branch below carries the captured error up to the gate.
@@ -1238,24 +1688,12 @@ def _run_worker(
         task = env_backend.finalize(env_ctx, task, runs_dir)
     _remove_outbox(outbox_dir)
     _emit_preserved_containers(emit, task)
-    # Classify the failure for the card: §6 says the user owns the runner
-    # (critical infra brr doesn't control) so an operational failure
-    # — runner timeout, non-zero exit, env/setup error — renders distinctly
-    # from a "I ran out of attempts" silent partial. ``failure_kind`` reads:
-    #   timed_out → "timed_out"  (runner.communicate hit the hard cap)
-    #   exit_code → "runner_error" (subprocess returned non-zero)
-    #   ok but no signal → "no_output" (runner ran clean but emitted
-    #     nothing on any thread, didn't commit, can't declare noop —
-    #     should be rare once #126's full noop affordance lands)
-    #   no_output is the clean-exit-but-no-signal case: ``last_failure`` is
-    #   None (the runner never recorded a failure), yet the run produced no
-    #   reply on any thread and no commit. Any recorded ``last_failure``
-    #   that isn't a timeout is a non-zero / artifact-missing runner error.
-    failure_kind = "no_output"
-    if last_failure:
-        failure_kind = (
-            "timed_out" if last_failure.get("timed_out") else "runner_error"
-        )
+    # Classify the failure for the card. The no-output case is the clean-exit-
+    # but-no-signal path: the runner never recorded a hard failure, yet the run
+    # produced no reply on any thread and no commit.
+    failure_kind = str(
+        (last_failure or {}).get("failure_kind") or runner_failures.NO_OUTPUT
+    )
     failed_payload: dict[str, object] = {
         "run_id": task.id,
         "event_id": eid,
@@ -1581,35 +2019,107 @@ def _keepalive_state(keepalive_path: Path | None) -> dict[str, object]:
     return {"status": status, "until": _iso_utc(until)}
 
 
-def _resources_facet(quota_summary: str | None) -> dict[str, object]:
+def _merge_level_snapshots(
+    *snapshots: dict[str, object] | None,
+) -> dict[str, object] | None:
+    merged: dict[str, object] = {}
+    sources: list[str] = []
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        source = snapshot.get("source")
+        if isinstance(source, str) and source.strip():
+            sources.append(source.strip())
+        for key in ("quota", "spend", "context_window", "plan_type"):
+            if key in snapshot:
+                merged[key] = snapshot[key]
+    if sources:
+        merged["source"] = " + ".join(dict.fromkeys(sources))
+    return merged or None
+
+
+def _collect_levels(
+    runner_name: str | None,
+    outbox_dir: Path | None,
+    work_dir: Path | None = None,
+    *,
+    refresh: bool = True,
+) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
+    """Pick the level snapshot + wired-slot set for *runner_name*'s Shell.
+
+    Each Shell exposes its quota/context (and, for Claude, spend) through a
+    different head-less seam, so the level *source* is per-Shell:
+
+    - **codex** — the session rollout file carries ``rate_limits`` (5h + weekly
+      subscription quota) and ``model_context_window`` on every ``token_count``
+      event, read live by :mod:`codex_status`. No dollar-spend gauge, so
+      ``spend`` is deliberately not collected.
+    - **claude** — a cached, daemon-side PTY scrape of interactive ``/usage``
+      carries subscription quota windows, and the final ``--output-format json``
+      result normalized by :mod:`claude_status` carries spend + context
+      accounting. The TUI scrape is intentionally throttled; hooks read the
+      portal-state snapshot, they do not run the scrape themselves.
+
+    When *refresh* is ``False`` only the on-disk cache is read — the
+    blocking ~18s PTY scrape is skipped entirely. The heartbeat path passes
+    ``refresh=True`` (the default) so the cache stays current on the 30s
+    cadence; the event-driven flush path passes ``refresh=False`` so it
+    never stalls a boundary reply waiting for a stale-cache refresh.
+
+    Returns ``(levels, wired_slots)`` for :func:`facets.build`. ``wired_slots``
+    is the set of level slots whose collector exists (so an empty slot reads
+    ``absent`` not ``unimplemented``); Shells with no collector return ``False``.
+    """
+    if codex_status.supported(runner_name):
+        return codex_status.load_levels(), frozenset(codex_status.COLLECTED_SLOTS)
+    if claude_status.supported(runner_name):
+        if refresh:
+            usage_levels = claude_usage.load_or_refresh_snapshot(
+                outbox_dir, cwd=work_dir
+            )
+        else:
+            usage_levels = claude_usage.load_snapshot(outbox_dir)
+        result_levels = claude_status.load_snapshot(outbox_dir)
+        return _merge_level_snapshots(usage_levels, result_levels), frozenset(
+            claude_usage.COLLECTED_SLOTS | claude_status.COLLECTED_SLOTS
+        )
+    return None, False
+
+
+def _resources_facet(
+    quota_summary: str | None,
+    *,
+    levels: dict[str, object] | None = None,
+    levels_collector: "bool | frozenset[str]" = False,
+    branch: str | None = None,
+    pr_number: str | None = None,
+    runner_name: str | None = None,
+    runner_meta: "dict[str, object] | None" = None,
+    runner_catalog: "list[dict[str, object]] | None" = None,
+    quality_escalation: "dict[str, object] | None" = None,
+    relay_consent: "dict[str, object] | None" = None,
+) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
-    One facet for the live cost/quota/parallelism picture. Each sub-field
-    is either ``known`` (the daemon can prove it cheaply today) or
-    ``unavailable`` (the capability isn't built yet) — an honest placeholder
-    is more useful to the resident than a silently-missing field, so a future
-    wake knows the slot exists and what would fill it.
-
-    - ``quota`` — known when the daemon proved a runner-quota snapshot
-      (``runner_quota.describe_runner_quota``); else unavailable.
-    - ``cost`` — per-run token/$ accounting: not metered yet.
-    - ``coexisting_runs`` — other concurrent runs (incl. cheaper-model
-      shadow runs with their own ranking/pricing): brr is single-flight
-      today, so not implemented.
-    - ``remote_scm`` — unpushed-branch / open-PR posture across the repo:
-      the per-run worktree's local posture already rides the ``scm`` facet;
-      the cross-repo remote view is not wired into the heartbeat yet.
+    Thin wrapper over :func:`facets.build`, the single definition of the facet
+    schema (``kb/design-resident-boundary.md`` §1 — "by schema, not by
+    convention"). The schema, the three-state honesty, and the per-Shell level
+    asymmetry all live in ``facets``; this keeps the daemon's construction call
+    in one place so the JSON snapshot, the woven hook line, and ``brr portal
+    state`` can never drift on which facets they carry.
     """
-    quota_known = bool(quota_summary and str(quota_summary).strip())
-    return {
-        "quota": {
-            "status": "known" if quota_known else "unavailable",
-            "summary": quota_summary if quota_known else None,
-        },
-        "cost": {"status": "unavailable"},
-        "coexisting_runs": {"status": "unavailable"},
-        "remote_scm": {"status": "unavailable"},
-    }
+    return facets.build(
+        quota_summary=quota_summary,
+        levels=levels,
+        levels_collector=levels_collector,
+        branch=branch,
+        pr_number=pr_number,
+        runner_name=runner_name,
+        runner_meta=runner_meta,
+        runner_catalog=runner_catalog,
+        quality_escalation=quality_escalation,
+        relay_consent=relay_consent,
+    )
 
 
 def _scm_facet(
@@ -1671,6 +2181,10 @@ def _write_live_portal_state(
     phase: str,
     attempt: int | None = None,
     runner_name: str | None = None,
+    runner_meta: "dict[str, object] | None" = None,
+    runner_catalog: "list[dict[str, object]] | None" = None,
+    quality_escalation: "dict[str, object] | None" = None,
+    relay_consent: "dict[str, object] | None" = None,
     budget_seconds: float | None = None,
     hard_cap_seconds: float | None = None,
     keepalive_path: Path | None = None,
@@ -1679,6 +2193,7 @@ def _write_live_portal_state(
     start_monotonic: float | None = None,
     work_dir: Path | None = None,
     quota_summary: str | None = None,
+    refresh_levels: bool = True,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -1687,6 +2202,11 @@ def _write_live_portal_state(
     resident: input, delivery/card posture, budget state, and local SCM
     posture (unpushed commits / modified files) in one daemon-owned file
     refreshed on the heartbeat cadence.
+
+    *refresh_levels* controls whether the Claude usage scrape may run:
+    ``True`` (default, heartbeat path) allows a cache-miss to trigger the
+    blocking PTY probe; ``False`` (flush path) only reads the on-disk
+    cache, keeping the event-driven flush cheap.
     """
     if not outbox_dir:
         return None
@@ -1700,6 +2220,9 @@ def _write_live_portal_state(
             int(time.monotonic() - start_monotonic)
             if start_monotonic is not None else None
         )
+        run_levels, run_level_slots = _collect_levels(
+            runner_name, outbox_dir, work_dir, refresh=refresh_levels
+        )
         payload: dict[str, object] = {
             "version": 1,
             "generated_at": time.strftime(
@@ -1712,6 +2235,7 @@ def _write_live_portal_state(
                 "attempt": attempt,
                 "env": task.env,
                 "runner": runner_name,
+                "repo": task.meta.get("repo_label"),
                 "branch": task.meta.get("branch_name"),
             },
             "attention": {
@@ -1727,6 +2251,11 @@ def _write_live_portal_state(
                 "replies_current": int(stats.get("current", 0)),
                 "replies_other": int(stats.get("other", 0)),
                 "outbound_messages": int(stats.get("outbound", 0)),
+                "any_sent": bool(
+                    stats.get("current")
+                    or stats.get("other")
+                    or stats.get("outbound")
+                ),
                 "pending_outbox_files": pending_files,
             },
             "card": {
@@ -1737,10 +2266,31 @@ def _write_live_portal_state(
                 "elapsed_seconds": elapsed,
                 "budget_seconds": budget_seconds,
                 "hard_cap_seconds": hard_cap_seconds,
+                "long_running": bool(
+                    elapsed is not None
+                    and budget_seconds is not None
+                    and elapsed > budget_seconds
+                ),
                 "keepalive": _keepalive_state(keepalive_path),
             },
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
-            "resources": _resources_facet(quota_summary),
+            "resources": _resources_facet(
+                quota_summary,
+                # Per-Shell level source (see _collect_levels): Codex reads its
+                # subscription quota + context window live from the session
+                # rollout file; Claude gets terminal spend/context accounting
+                # from result JSON. The wired-slot set decides whether an empty
+                # slot reads 'absent' vs 'unimplemented'.
+                levels=run_levels,
+                levels_collector=run_level_slots,
+                branch=task.meta.get("branch_name"),
+                pr_number=task.meta.get("github_pr_number"),
+                runner_name=runner_name,
+                runner_meta=runner_meta,
+                runner_catalog=runner_catalog,
+                quality_escalation=quality_escalation,
+                relay_consent=relay_consent,
+            ),
         }
         payload["change_token"] = _change_token(payload)
         path = outbox_dir / _LIVE_PORTAL_STATE_NAME
@@ -1763,6 +2313,138 @@ def _find_pending_event(inbox_dir: Path | None, event_id: str) -> dict | None:
     return None
 
 
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _respawn_defer_until(fm: dict) -> str | None:
+    raw = str(fm.get("defer_until") or fm.get("at") or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("+"):
+        seconds = schedule_mod.parse_duration(raw[1:].strip())
+        return _format_utc_after(seconds) if seconds is not None else None
+    return raw if schedule_mod.parse_iso(raw) is not None else None
+
+
+def _respawn_quality_target(fm: dict) -> str | None:
+    """Return the requested local quality target class for a respawn frontmatter."""
+    raw = str(
+        fm.get("quality")
+        or fm.get("quality_escalation")
+        or fm.get("escalation")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    value = raw.lower()
+    if value in {"0", "false", "no", "n", "off", "none"}:
+        return None
+    if value in {"balanced", "strong"}:
+        return value
+    if value in {"1", "true", "yes", "y", "on", "escalate", "stronger", "higher"}:
+        return "strong"
+    return None
+
+
+def _queue_respawn_request(
+    emit: _WorkerEmit,
+    task: Run,
+    repo_root: Path | None,
+    inbox_dir: Path | None,
+    event_id: str,
+    fm: dict,
+    body: str,
+) -> bool:
+    if inbox_dir is None:
+        print("[brr] outbox: respawn request had no inbox; dropping")
+        return False
+    proposed = str(
+        fm.get("proposed_runner")
+        or fm.get("runner")
+        or fm.get("shell")
+        or ""
+    ).strip()
+    core = str(fm.get("core") or "").strip()
+    quality_target = _respawn_quality_target(fm)
+    if not proposed and not core and quality_target and repo_root is not None:
+        current_runner = str(task.meta.get("runner_name") or "").strip()
+        proposed = runner.quality_escalation_runner(
+            repo_root, current_runner, target_class=quality_target
+        ) or ""
+    if not proposed and not core:
+        print(
+            "[brr] outbox: respawn request had no runner/core/"
+            "quality target; dropping"
+        )
+        return False
+    current = _find_pending_event(inbox_dir, event_id) or {}
+    source = str(fm.get("source") or current.get("source") or task.source or "respawn")
+    carry = str(fm.get("carry_forward") or "").strip()
+    new_body = body.strip() or carry or task.body
+    if not new_body.strip():
+        print("[brr] outbox: respawn request had no body; dropping")
+        return False
+    reserved = {
+        "_path", "id", "body", "status", "created", "source",
+        "origin_message_key", "respawn", "event", "gate",
+        "runner", "proposed_runner", "shell", "core", "at", "defer_until",
+        "carry_forward", "quality", "quality_escalation", "escalation",
+    }
+    meta = {
+        k: v for k, v in current.items()
+        if k not in reserved and not str(k).startswith("_")
+    }
+    explicit_repo = str(
+        fm.get("repo") or fm.get("repo_label") or fm.get("repo_id") or ""
+    ).strip()
+    if explicit_repo:
+        meta["repo"] = explicit_repo
+        meta["repo_label"] = explicit_repo
+    elif task.meta.get("repo_label"):
+        meta["repo_label"] = task.meta["repo_label"]
+    if proposed:
+        meta["shell"] = proposed
+    if core:
+        meta["core"] = core
+    defer_until = _respawn_defer_until(fm)
+    if defer_until:
+        meta["defer_until"] = defer_until
+    reason = str(fm.get("reason") or "").strip()
+    meta["respawned_from_event"] = event_id
+    meta["respawned_by_run"] = task.id
+    if reason:
+        meta["respawn_reason"] = reason
+    if quality_target:
+        meta["respawn_quality"] = quality_target
+    new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
+    print(f"[brr] outbox: queued respawn request ({new_path.stem})")
+    if emit.conversation_key:
+        conversations.append_artifact(
+            emit.brr_dir, emit.conversation_key,
+            kind="respawn_request",
+            path=str(new_path),
+            run_id=task.id,
+            event_id=event_id,
+            label=f"respawn:{new_path.stem}",
+            body=reason or new_body,
+        )
+    emit(
+        "respawn_requested",
+        run_id=task.id,
+        event_id=event_id,
+        respawn_event_id=new_path.stem,
+        proposed_runner=proposed or None,
+        core=core or None,
+        quality=quality_target,
+        defer_until=defer_until,
+        reason=reason or None,
+    )
+    return True
+
+
 def _drain_outbox(
     emit: _WorkerEmit,
     task: Run,
@@ -1771,6 +2453,7 @@ def _drain_outbox(
     outbox_dir: Path | None,
     inbox_dir: Path | None = None,
     *,
+    repo_root: Path | None = None,
     stats: dict[str, int] | None = None,
 ) -> int:
     """Promote interim/interleaved responses the resident dropped in its outbox.
@@ -1837,6 +2520,15 @@ def _drain_outbox(
         # ``protocol.parse_outbox_message``.
         fm, body = protocol.parse_outbox_message(text)
         body = body.strip()
+        if _truthy(fm.get("respawn")):
+            if _queue_respawn_request(
+                emit, task, repo_root, inbox_dir, event_id, fm, body
+            ):
+                promoted += 1
+                if stats is not None:
+                    stats["respawn"] = stats.get("respawn", 0) + 1
+            fpath.unlink(missing_ok=True)
+            continue
         gate = str(fm.get("gate") or "").strip()
         if gate:
             # Gate-addressed: an agent-initiated message to a destination
@@ -2056,28 +2748,36 @@ def _fire_due_schedules(
     brr_dir: Path,
     inbox_dir: Path,
     cfg: dict,
+    *,
+    account_context: account.AccountContext | None = None,
 ) -> None:
     """Emit inbox events for any self-scheduled thoughts that are now due.
 
-    The reflex half of self-invocation: the resident owns its
-    ``.brr/dominion/schedule.md`` specs; this reads them against the
-    daemon-owned firing-state and the clock, and fires due entries as
-    ordinary ``schedule``-source events (picked up by the normal
-    spawn-one-when-idle path). Specs live in the dominion; firing-state
-    lives in the runtime dir — the daemon never writes the agent's
-    ``schedule.md``. Best-effort: any failure is swallowed so scheduling
-    never wedges the loop. See ``kb/design-self-scheduled-thoughts.md``.
+    The reflex half of self-invocation: the resident owns ``schedule.md`` in
+    its account-scoped dominion (legacy repo-local fallback supported); this
+    reads it against daemon-owned firing-state and the clock, and fires due
+    entries as ordinary ``schedule``-source events. Specs live in the
+    dominion; firing-state lives in the runtime dir — the daemon never writes
+    the agent's ``schedule.md``. Best-effort: any failure is swallowed so
+    scheduling never wedges the loop. See ``kb/design-self-scheduled-
+    thoughts.md``.
     """
     if not _schedule_enabled(cfg):
         return
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return
-    dom = dominion.dominion_path(repo_root)
-    if not dom.is_dir():
-        return
     try:
-        entries = schedule_mod.parse_schedule(dom)
-        if not entries:
+        candidates = dominion.resident_dominion_candidates(repo_root, cfg)
+        dom = None
+        entries = []
+        for candidate in candidates:
+            if not candidate.path.is_dir():
+                continue
+            entries = schedule_mod.parse_schedule(candidate.path)
+            if entries:
+                dom = candidate.path
+                break
+        if dom is None or not entries:
             return
         state = schedule_mod.load_state(brr_dir)
         grace = float(
@@ -2098,6 +2798,11 @@ def _fire_due_schedules(
             protocol.create_event(
                 inbox_dir, "schedule", body,
                 schedule_id=entry.id, conversation_key=conv,
+                repo_label=(
+                    account_context.default_repo.label
+                    if account_context is not None and account_context.enabled
+                    else _repo_label(repo_root, {}, cfg)
+                ),
             )
             print(f"[brr] schedule: fired {entry.id}")
         if new_state != state:
@@ -2129,36 +2834,65 @@ def _capture_dominion(
     repo_root: Path,
     cfg: dict,
     task: Run,
+    *,
+    account_context: account.AccountContext | None = None,
 ) -> None:
     """Commit whatever the resident wrote into its dominion this thought.
 
-    The persistence step of the agent-as-memory model: the resident edits
-    ``.brr/dominion/`` freely during a thought; brr captures those edits
+    The persistence step of the agent-as-memory model: the resident edits its
+    account-scoped dominion freely during a thought; brr captures those edits
     at sleep so they survive to the next wake without the agent running a
-    commit dance. Serialized + best-effort (see
-    :func:`dominion.commit`) — a clean dominion is a silent no-op, and any
-    failure is swallowed so capturing memory never breaks the run. Runs on
-    both the success and failure exits (a failed thought may still have
-    recorded the pain that caused it).
+    commit dance. The legacy repo-local dominion is still captured when present
+    so partially migrated installs do not lose notes.
     """
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return
-    branch = str(
-        cfg.get("dominion.branch", cfg.get("dominion_branch", dominion.DEFAULT_BRANCH))
-    )
-    remote = gitops.default_remote(repo_root)
     push = bool(
         cfg.get("dominion.push_on_capture", cfg.get("dominion_push_on_capture", True))
     )
-    committed = dominion.commit(
-        dominion.dominion_path(repo_root),
-        f"brr-home: capture working memory after run {task.id}",
-        remote=remote,
-        branch=branch,
-        push=push and bool(remote),
-    )
-    if committed:
-        print(f"[brr] dominion: captured working memory after {task.id}")
+    candidates = dominion.resident_dominion_candidates(repo_root, cfg)
+    if account_context is not None and account_context.enabled:
+        candidates.insert(
+            0,
+            dominion.ResidentDominion(
+                path=account.repo_dominion_path(
+                    account_context,
+                    str(task.meta.get("repo_label") or account_context.default_repo.label),
+                ),
+                capture_root=account_context.dominion_repo,
+                label="account",
+            ),
+        )
+    seen_roots: set[Path] = set()
+    for candidate in candidates:
+        root = candidate.capture_root
+        if not root.is_dir():
+            continue
+        try:
+            key = root.resolve()
+        except OSError:
+            key = root
+        if key in seen_roots:
+            continue
+        seen_roots.add(key)
+        remote = gitops.default_remote(root)
+        branch = gitops.current_branch(root)
+        if branch == "HEAD":
+            branch = None
+        message = (
+            f"brnrd-home: capture account memory after run {task.id}"
+            if not candidate.legacy
+            else f"brr-home: capture working memory after run {task.id}"
+        )
+        committed = dominion.commit(
+            root,
+            message,
+            remote=remote,
+            branch=branch,
+            push=push and bool(remote),
+        )
+        if committed:
+            print(f"[brr] dominion: captured working memory after {task.id}")
 
 
 def _capture_worktree(
@@ -2248,6 +2982,88 @@ def _record_response_artifact(
     )
 
 
+def _persist_run_state_doc(
+    account_context: account.AccountContext | None,
+    task: Run,
+    *,
+    repo_label: str,
+    stage: str,
+    cfg: dict | None = None,
+) -> Path | None:
+    """Write the durable account-level run-state document for *task*.
+
+    This is the CS2/CS4 bridge: the live card remains a compact projection,
+    while the account dominion repo gets a durable, git-mirrorable status
+    object.  The document is intentionally simple markdown for the first slice;
+    a richer renderer can project the same fields later.
+
+    Records both ``run_state_path`` (the local store path, a dev breadcrumb)
+    and, when the account dominion tracks a forge-hosted remote,
+    ``run_state_url`` (the web-visible link) into ``task.meta`` so run surfaces
+    can link the durable object rather than leak a host-local path to a remote
+    reader.
+    """
+    if account_context is None or not account_context.enabled:
+        return None
+    root = account_context.run_state_dir / account.slug_repo_label(repo_label)
+    path = root / f"{task.id}.md"
+    root.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "---",
+        f"run_id: {task.id}",
+        f"event_id: {task.event_id}",
+        f"status: {task.status}",
+        f"stage: {stage}",
+        f"repo_label: {repo_label}",
+        f"source: {task.source}",
+    ]
+    if task.conversation_key:
+        lines.append(f"conversation_key: {task.conversation_key}")
+    for key in (
+        "runner_name",
+        "runner_shell",
+        "runner_core",
+        "runner_class",
+        "branch_name",
+        "target_branch",
+        "publish_branch",
+        "publish_status",
+        "success_signal",
+    ):
+        value = task.meta.get(key)
+        if value not in (None, ""):
+            lines.append(f"{key}: {value}")
+    lines.extend([
+        "---",
+        f"# Run {task.id}",
+        "",
+        f"- status: {task.status}",
+        f"- stage: {stage}",
+        f"- repo: {repo_label}",
+        f"- source: {task.source or 'unknown'}",
+        f"- event: {task.event_id or 'unknown'}",
+    ])
+    runner_name = task.meta.get("runner_name")
+    if runner_name:
+        lines.append(f"- runner: {runner_name}")
+    branch = task.meta.get("branch_name") or task.meta.get("publish_branch")
+    if branch:
+        lines.append(f"- branch: {branch}")
+    if task.body:
+        summary = " ".join(task.body.split())
+        if len(summary) > 240:
+            summary = summary[:239].rstrip() + "..."
+        lines.extend(["", "## Request", "", summary])
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    task.meta["run_state_path"] = str(path)
+    url = account.run_state_blob_url(account_context, path, cfg=cfg)
+    if url:
+        task.meta["run_state_url"] = url
+    return path
+
+
 def _event_requires_thread_delivery(event: dict) -> bool:
     """True when the originating event has a user-facing thread to close."""
     return str(event.get("source") or "") not in _INTERNAL_EVENT_SOURCES
@@ -2273,15 +3089,15 @@ def _result_satisfied_delivery(
 
     Aligns with the §6 co-maintainer model: a run succeeds when it produced
     an output event (a current-thread reply, a folded-in reply, or an
-    out-of-bound gate send), or a new commit on the worktree branch, or the
-    event is internal (schedule fire / dedup retire) and no thread reply is
-    required. Stdout remains the common ``current_reply`` path, but it is no
-    longer the *only* success signal — a run that committed work or
-    answered a sibling thread is a successful run too.
+    out-of-bound gate send), queued a respawn, made a new commit on the worktree
+    branch, or the event is internal (schedule fire / dedup retire) and no
+    thread reply is required. Stdout remains the common ``current_reply`` path,
+    but it is no longer the *only* success signal — a run that committed work,
+    answered a sibling thread, or parked a respawn is a successful run too.
 
-    *signal* is one of ``current_reply | other_reply | outbound | commit |
-    internal | ""`` (empty when not satisfied). The string surfaces on the
-    ``done`` packet so renderers can name what the success was.
+    *signal* is one of ``current_reply | other_reply | outbound | respawn |
+    commit | internal | ""`` (empty when not satisfied). The string surfaces on
+    the ``done`` packet so renderers can name what the success was.
     """
     if not result.ok or result.missing_artifacts:
         return False, ""
@@ -2293,6 +3109,8 @@ def _result_satisfied_delivery(
         return True, "other_reply"
     if output_stats.get("outbound", 0) > 0:
         return True, "outbound"
+    if output_stats.get("respawn", 0) > 0:
+        return True, "respawn"
     if has_new_commit:
         return True, "commit"
     if not _event_requires_thread_delivery(event):
@@ -2307,14 +3125,19 @@ def _failure_reason(
     if last_failure:
         detail = str(last_failure.get("error") or "").strip()
         exit_code = last_failure.get("exit_code")
-        if last_failure.get("timed_out"):
-            if detail:
-                return f"runner timed out after {attempts} attempt(s): {detail}"
-            return f"runner timed out after {attempts} attempt(s)"
+        kind = str(
+            last_failure.get("failure_kind")
+            or runner_failures.classify_failure(
+                timed_out=bool(last_failure.get("timed_out")),
+                exit_code=exit_code,
+                detail=detail,
+            )
+        )
+        prefix = runner_failures.reason_prefix(kind)
         if detail:
-            return f"runner failed after {attempts} attempt(s): {detail}"
+            return f"{prefix} after {attempts} attempt(s): {detail}"
         if exit_code is not None:
-            return f"runner failed after {attempts} attempt(s) with exit code {exit_code}"
+            return f"{prefix} after {attempts} attempt(s) with exit code {exit_code}"
     return f"runner produced no reply after {attempts} attempt(s)"
 
 
@@ -2418,6 +3241,9 @@ def _run_worker_and_finalize(
     responses_dir: Path,
     cfg: dict,
     max_retries: int,
+    *,
+    account_context: account.AccountContext | None = None,
+    inbox_dir: Path | None = None,
 ) -> Run:
     """Run one event end-to-end and return the resulting Run.
 
@@ -2433,13 +3259,35 @@ def _run_worker_and_finalize(
     """
     task = None
     try:
-        task = _run_worker(event, repo_root, responses_dir, cfg, max_retries)
+        task = _run_worker(
+            event,
+            repo_root,
+            responses_dir,
+            cfg,
+            max_retries,
+            account_context=account_context,
+            inbox_dir=inbox_dir,
+        )
         if event.get("status") != "done":
             _set_event_status_if_present(event, task.status)
         if task.status == "error":
             print(f"[brr] run {task.id}: failed")
 
         publish(repo_root, task)
+        repo_label = str(task.meta.get("repo_label") or _repo_label(repo_root, event, cfg))
+        _persist_run_state_doc(
+            account_context,
+            task,
+            repo_label=repo_label,
+            stage="finished",
+            cfg=cfg,
+        )
+        _capture_dominion(
+            repo_root,
+            cfg,
+            task,
+            account_context=account_context,
+        )
         _retire_internal_event(event, responses_dir)
         return task
     finally:
@@ -2545,6 +3393,7 @@ def start(
     signal.signal(signal.SIGINT, _handle_signal)
 
     cfg = conf.load_config(repo_root)
+    account_context = account.resolve_context(repo_root, cfg)
     max_retries = int(cfg.get("response_retries", 1))
     burst_window = float(
         cfg.get("dispatch.burst_window_seconds", _BURST_WINDOW_DEFAULT))
@@ -2559,7 +3408,10 @@ def start(
         if dev_reload_mode else None
     )
 
-    if bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+    if (
+        bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True)))
+        and (not account_context.enabled or bool(cfg.get("dominion.legacy_repo_local", False)))
+    ):
         try:
             dpath = dominion.ensure_dominion(
                 repo_root,
@@ -2572,7 +3424,18 @@ def start(
         except Exception as exc:  # noqa: BLE001
             print(f"[brr] dominion bootstrap skipped: {exc}")
 
-    gate_threads = _start_gates(brr_dir, inbox_dir, responses_dir)
+    if account_context.enabled and account_context.dominion_repo.exists():
+        try:
+            repo_dominion = account.repo_dominion_path(
+                account_context,
+                account.repo_label(repo_root, cfg),
+            )
+            dominion.seed_account_dominion(repo_dominion)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[brr] account dominion seed skipped: {exc}")
+        print(f"[brr] account dominion ready: {account_context.dominion_repo}")
+
+    gate_threads = _start_account_gates(account_context, repo_root)
     if not gate_threads:
         print("[brr] warning: no gates configured — inbox will only receive events from `brr run` or scripts")
 
@@ -2630,7 +3493,13 @@ def start(
             # land in the inbox as ordinary events and queue behind a
             # running thought like any other (kb/design-self-scheduled-
             # thoughts.md). Runs every tick, busy or idle.
-            _fire_due_schedules(repo_root, brr_dir, inbox_dir, cfg)
+            _fire_due_schedules(
+                repo_root,
+                brr_dir,
+                inbox_dir,
+                cfg,
+                account_context=account_context,
+            )
 
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
@@ -2639,20 +3508,28 @@ def start(
             # slot can drain.
             burst_hold = 0.0
             if current is None and not reload_requested:
-                pending = protocol.list_dispatchable(inbox_dir)
+                pending = _dispatchable_targets(account_context, repo_root, cfg)
                 if pending:
                     burst_hold = _burst_settle_delay(
-                        pending, burst_window, burst_max_wait, time.time())
+                        [target.event for target in pending],
+                        burst_window,
+                        burst_max_wait,
+                        time.time(),
+                    )
                     if burst_hold <= 0:
                         # Dispatch the oldest as lead; the wake reads the
                         # whole settled burst and folds the rest in (the
                         # multi-response ``event:`` path), so a burst becomes
                         # one thought, not one spawn per fragment.
-                        event = pending[0]
+                        target = pending[0]
+                        event = target.event
                         eid = event["id"]
                         extra = len(pending) - 1
                         suffix = f" (+{extra} pending)" if extra else ""
-                        print(f"[brr] processing: {eid}{suffix}")
+                        repo_suffix = (
+                            f" [{target.repo_label}]" if target.repo_label else ""
+                        )
+                        print(f"[brr] processing: {eid}{repo_suffix}{suffix}")
                         protocol.update_event_meta(
                             event,
                             defer_until=None,
@@ -2662,7 +3539,13 @@ def start(
                         protocol.set_status(event, "processing")
                         current = pool.submit(
                             _run_worker_and_finalize,
-                            event, repo_root, responses_dir, cfg, max_retries,
+                            event,
+                            target.repo_root,
+                            target.responses_dir,
+                            cfg,
+                            max_retries,
+                            account_context=account_context,
+                            inbox_dir=target.inbox_dir,
                         )
 
             # Event-driven idle wait: block until a fresh in-process event

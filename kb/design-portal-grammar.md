@@ -122,7 +122,7 @@ each frame must mean before any new syntax is built.
 | Frame | Portal form | Human surface | Required affordance | Current implementation |
 | --- | --- | --- | --- | --- |
 | PLAN | parked + outbound append-log | chat / issue comment | approve or edit; what resumes | ordinary outbox message using the five-part PLAN shape |
-| PROGRESS | outbound desired-state | live `.card` | current phase; why chunking; medium/quota if known | `.card` control file |
+| PROGRESS | outbound desired-state | live `.card` | current phase; why chunking; Shell/Core and quota posture if known | `.card` control file |
 | INBOUND-CHECK | inbound | not always user-visible | what was checked; fold/defer/leave decision when it matters | `portal-state.json` live capsule plus focused `inbox.json` reads at boundaries and pre-closeout |
 | INTERRUPTION-REPLY | outbound append-log to event | target event's thread | one complete reply; no duplicate answer | outbox file with `event:` route |
 | HANDOFF | outbound append-log or desired-state | PR, issue, branch note, chat | what changed; where review continues | branch publish, issue/comment reply, final reply; explicit PR open/refresh via `gate: forge` |
@@ -253,7 +253,7 @@ outcome:
   shipped in #128.
 
 This keeps "I chose not to handle it," "I crashed before handling it,"
-and "the medium failed" distinguishable without spawning one noisy wake
+and "the Shell/Core failed" distinguishable without spawning one noisy wake
 per leftover event.
 
 ### Run mailbox records
@@ -293,7 +293,7 @@ If brr later allows more than one run at once, the rules are:
 
 The output frame should make pacing visible without inventing promises.
 
-- Show the runner medium and quota posture when the bundle exposes them.
+- Show the Shell/Core and quota posture when the bundle exposes them.
 - Use historical cost facts only; never present a projected dollar figure
   as a quote.
 - Explain chunking when it affects the user's wait or approval path.
@@ -376,7 +376,7 @@ stream markers make them structurally hard to misuse.
    child-run requests, and resume conditions as mailbox records instead
    of relying only on conversation history.
 9. **Concept prose sweep.** After the primitives land, reconcile
-   `plan-resident-cockpit.md`, `plan-cost-aware-cockpit.md`,
+   `plan-resident-portals.md`, `plan-cost-aware-runner.md`,
    `design-managed-delivery.md`, `subject-managed-mode.md`, and the index
    so the graph consistently says portals / projection instead of
    dashboard / cockpit.
@@ -392,7 +392,7 @@ This wake also confirms which context belongs on a live, summonable
 surface rather than in always-injected prose:
 
 - live daemon-state / queued-event / unacknowledged-delivery state;
-- runner medium and quota posture;
+- Shell/Core and quota posture;
 - branch dirt, unpushed commits, and prior-run artifact state;
 - forge issue/PR state when relevant;
 - kb-health findings as a pullable diagnostic, with only urgent drift
@@ -408,10 +408,10 @@ portal the resident can summon when the turn needs it.
   shipped control-file manual.
 - [`design-run-event-model.md`](design-run-event-model.md) — run/event
   substrate, including the open claim/deferral/response-key questions.
-- [`plan-resident-cockpit.md`](plan-resident-cockpit.md) — parent plan
-  whose "cockpit" language is now a historical label awaiting the
-  concept sweep.
-- [`plan-cost-aware-cockpit.md`](plan-cost-aware-cockpit.md) — cost and
+- [`plan-resident-portals.md`](plan-resident-portals.md) — parent plan
+  (renamed from `plan-resident-cockpit.md`; "cockpit" language is
+  now a historical label awaiting the full concept sweep in §9).
+- [`plan-cost-aware-runner.md`](plan-cost-aware-runner.md) — cost and
   operator-control braid.
 - [`design-managed-delivery.md`](design-managed-delivery.md) and
   [`subject-managed-mode.md`](subject-managed-mode.md) — gate transport

@@ -148,7 +148,7 @@ the placeholder file only; the planned operations on it are:
 
 The brnrd account binding (auth token, subscription status,
 brnrd URL, cached account-scope config) lives at
-**`~/.local/state/brr/account/`** — not per project. When the
+**`~/.local/state/brnrd/account/`** — not per project. When the
 user runs `brnrd connect` (or `brr brnrd connect`) from a
 second project's directory, the connect verb sees the existing
 machine binding and skips the account-pair step, going
@@ -325,7 +325,7 @@ brr daemon uninstall
      user-services need it, prompt "Disable linger?" [y/N].
      Defaults to N (user may use it for other services).
   6. Leave `~/.config/brr/projects.toml` + the account
-     binding at `~/.local/state/brr/account/` in place —
+     binding at `~/.local/state/brnrd/account/` in place —
      uninstalling the supervisor doesn't reset which projects
      are brr-init'd or which brnrd account is paired. User
      can re-install later with no further setup. To wipe

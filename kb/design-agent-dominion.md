@@ -95,42 +95,41 @@ its **own initiative**; moving something from the workshop to the catalogue is
 its call, not a permission it waits for. *That* is the consolidation the
 operator was reaching for — a bridge, not a merger.
 
-## 3. The dominion is a forge-backed orphan branch
+## 3. The dominion lives inside the account dominion repo
 
-The dominion lives on a **dedicated orphan branch** (`brr-home`),
-checked out in its own worktree, pushed to the repo's remote. Why this shape:
+The dominion is now the resident-owned working-memory directory inside the
+**account dominion repo**, normally
+`$XDG_STATE_HOME/brnrd/accounts/<account>/dominion/repos/<repo>/dominion/`
+(`~/.local/state/brnrd/accounts/default/dominion/...` on a default Linux
+install). The account dominion repo is a local-first git repo: it can remain
+only on the user's machine, or the user can opt into off-machine durability by
+adding a git remote. brr does not create a GitHub repo, gist, or other forge
+object by default.
 
-- **Owned / unsupervised** — it is the agent's branch; it is never reviewed or
-  merged into `main`.
-- **Inspectable, not hidden** — it's a known branch anyone can fetch and read.
-- **Non-polluting** — parallel history; it never appears in `main`'s diffs or
-  PRs, so it doesn't spend the user's review attention.
-- **Durable + forge-based + available** — it travels with the repo's remote;
-  `git fetch` brings it back on any machine.
+This preserves the original separation goals while removing the "they made a
+branch/repo in my GitHub space" surprise:
 
-**Materialization — a long-lived worktree, a durable branch.** The branch is the
-durable thing; its local checkout is a disposable *view*. Concretely: one
-long-lived `git worktree` on `brr-home`, materialized at `.brr/dominion/`
-(under the impermanent runtime dir — consistent, because the checkout is
-re-derivable and only the branch + remote carry durability). Bootstrap is
-fetch-or-create:
-
-- **Returning** (reinstall / second machine / failover): `git fetch <remote>
-  brr-home` then `git worktree add .brr/dominion brr-home` — the resident is
-  reconstituted, no manual clone step.
-- **Fresh**: create the orphan *empty* without touching the main worktree
-  (plumbing — empty tree → root commit → branch, or `git worktree add --orphan`
-  on git ≥ 2.42), `worktree add`, seed a skeleton self-inject index, push.
+- **Owned / unsupervised** — resident memory remains the agent's workshop, not a
+  PR-reviewed project artifact.
+- **Inspectable, not hidden** — the account home is plain files in a git repo,
+  and becomes forge-visible only when the user chooses a remote.
+- **Non-polluting** — nothing lands in the project working tree or source repo
+  branch list; per-run code branches stay separate.
+- **Durable by layers** — local git history is the floor; a remote is an
+  explicit durability backend, with existing-repo / arbitrary-git-remote now and
+  S3-compatible storage left as a later backend.
 
 A *thought* therefore touches **two trees**: its ephemeral per-run worktree
-(seeded from `main`, where code work happens → PR / land) and the shared dominion
-worktree (where memory work happens → `brr-home`). Clean separation by
-destination — code to `main`'s history, memory to the parallel one. Concurrent
-thoughts share the *one* dominion worktree (git forbids one branch in two
-worktrees), so file edits run concurrently while the commit step serializes for
-index safety; semantic conflicts are reconciled by a later thought (§4). **No
-remote**: the dominion is still a local orphan branch + worktree — durable across
-runs, self-injected as normal; only cross-machine continuity waits for a remote.
+(seeded from `main`, where code work happens → PR / land) and the account
+dominion repo (where resident memory, account registry, run-state docs, and
+cross-repo plans live). Concurrent thoughts can touch the same account dominion
+repo, so file edits run concurrently while the commit step serializes for index
+safety; semantic conflicts are reconciled by a later thought (§4).
+
+Lineage: earlier slices used a repo-local orphan branch (`brr-home` at
+`.brr/dominion/`) as the durable memory store. CS4 moved the resident memory
+into the account dominion repo on 2026-06-30 after the account daemon landed;
+the old path remains a migration fallback only.
 
 **Self-inject, agent-controlled.** Rather than a fixed digest, the dominion
 holds a **self-inject index** — a manifest the *agent* owns and edits, declaring
@@ -337,14 +336,16 @@ Society-of-Mind concurrency is present *for free*, and the daemon needn't
 multiplex to get it. Eventual consistency is the accepted cost (each thought sees
 memory as of its last read).
 
-**Shipped (2026-06-09, slice 5).** The mechanics that were "left to emerge"
-landed: the daemon captures the dominion **at sleep** — after each thought,
-on success and failure alike — via `dominion.commit`, whose commit step
-serializes across processes with an advisory `fcntl.flock` on
-`.brr/dominion.commit.lock` (file *edits* run free; only the index-touching
-commit serializes, so a daemon thought and an ad-hoc session never corrupt
-the shared index). Granularity is therefore one capture-commit per thought,
-not per write — the resident writes freely and need not commit. The
+**Shipped (2026-06-09, slice 5; account home rehomed 2026-06-30).** The
+mechanics that were "left to emerge" landed: the daemon captures the dominion
+**at sleep** — after each thought, on success and failure alike — via
+`dominion.commit`. In the current account-scoped shape, the commit root is the
+account dominion repo; the old `.brr/dominion/` worktree is captured only as a
+migration fallback. The commit step serializes across processes with an advisory
+`fcntl.flock` beside the committed repo (file *edits* run free; only the
+index-touching commit serializes, so a daemon thought and an ad-hoc session never
+corrupt the shared index). Granularity is therefore one capture-commit per
+thought, not per write — the resident writes freely and need not commit. The
 **presence registry** is per-participant JSON under `.brr/presence/`
 (`presence.py`): lock-free because each participant owns one file, and
 self-healing because reads prune dead-pid and stale-heartbeat ghosts. The
@@ -356,12 +357,13 @@ detector" — that contradiction is exactly the synthesis a scanner can't do
 (cf. the kb preflight, which only flags structural facts). See
 [`subject-daemon.md`](subject-daemon.md).
 
-**Sync refinement (2026-06-09, slice 7).** Capture's *push* is a durability
-floor, not a merge. The daemon commits locally and best-effort pushes
-`brr-home`; a **rejected** push (a second machine / failover host diverged the
-remote) is no longer swallowed — `dominion.commit` records a `needs_sync`
-marker, the wake bundle surfaces it, and the resident reconciles by hand
-(fetch / merge / resolve / push, gated on presence). Same principle as the
+**Sync refinement (2026-06-09, slice 7; backend clarified 2026-06-30).**
+Capture's *push* is a durability floor, not a merge. The daemon commits locally
+and best-effort pushes the account dominion repo **only when the user has
+configured a remote**; a **rejected** push (a second machine / failover host
+diverged the remote) is no longer swallowed — `dominion.commit` records a
+`needs_sync` marker, the wake bundle surfaces it, and the resident reconciles by
+hand (fetch / merge / resolve / push, gated on presence). Same principle as the
 coherence pass: a git merge of two divergent memories is judgement, not a
 reflex. A successful push (including a clean-tree no-op) clears the marker. See
 [`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md) → sync
@@ -443,26 +445,19 @@ The operator's original instinct ("brr is a project-specific agent; brnrd
 manages those") *is* the locked brand; no re-acronym is needed, and the pattern
 extends to the local entity for free — the local entity is just "a brr."
 
-**Naming, finalized (2026-06-08).** The branch / concept split resolves *by
-audience*, not as a contradiction. The **branch** is `brr-home` — plain on
-purpose, so it reads as ordinary infrastructure to anyone browsing the repo,
-neither grandiose nor a generic "memory" add-on (a branch shows in the forge's
-list; that's a cold-visitor surface). The **concept** and the **worktree path**
-keep the earned term: `.brr/dominion/`, "your dominion," in the playbook and
-these docs — agent- and maintainer-facing surfaces, where the ownership weight
-belongs. The agent works in `.brr/dominion/`, backed by `brr-home`.
+**Naming, revised (2026-06-30).** The old branch / concept split no longer
+load-bears because the primary store is not a visible branch in the project
+repo. The account-level container should follow the product turn — working name
+`brnrd-home` / "account dominion repo" — while the resident-facing directory
+inside it keeps the earned term `dominion/`. The local CLI can still be `brr`;
+the durable account home should not make a fresh user wonder why brr created a
+GitHub branch or repo on their behalf.
 
-This is not insincere, and *why* is load-bearing: sincerity rides on the
-**substance**, not the label. The ownership is structurally real (git-backed,
-review-exempt, self-injected, self-governed), so a plain branch name doesn't
-qualify what the space *is*. When the agent meets both names, reconcile
-**reasoning-transparently, peer-to-peer**: *"named `brr-home` plainly, for the
-visitor's sake; to you it's your dominion; the plain name is courtesy, not a
-hedge on the ownership."* The genuine failure mode is the **opposite** of a
-naming mismatch — performative *feel-ownership* copy; that, not the dual
-register, is what reads as insincere. Deliver the substance and the reasoning;
-never instruct a feeling. (`brr-dominion` stays a fine honest fallback if the
-split ever grates — it just trades a sliver of human cringe for zero registers.)
+Lineage: the 2026-06-08 naming decision intentionally used `brr-home` for the
+repo-local orphan branch because it appeared in a forge branch list. That
+audience disappeared when CS4 moved resident memory into a configurable
+local-first account repo; the old branch name now survives only as a legacy
+fallback for existing installs.
 
 ## 7. What inherits, what reshapes
 
@@ -496,9 +491,10 @@ split ever grates — it just trades a sliver of human cringe for zero registers
   at sleep (`dominion.commit` + an `fcntl.flock`); the presence-registry format is
   per-participant JSON under `.brr/presence/` (`presence.py`); the coherence pass
   is the resident's own judgement (playbook), not a deterministic detector. The
-  *remote* divergence case (two machines on `brr-home`) is the same: daemon keeps
-  a local floor + best-effort push, a rejected push sets `needs_sync`, and the
-  resident reconciles by hand. See §4 → *Shipped* / *Sync refinement* and
+  *remote* divergence case (two machines pushing the account dominion repo) is
+  the same: daemon keeps a local floor + best-effort push, a rejected push sets
+  `needs_sync`, and the resident reconciles by hand. See §4 → *Shipped* /
+  *Sync refinement* and
   [`subject-daemon.md`](subject-daemon.md).
 - **Self-scheduled wakes.** *Resolved (slice 7, 2026-06-09).* Declarative
   self-events (`at:` / `every:`) in the dominion, fired by the reflex loop; see

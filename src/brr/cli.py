@@ -160,12 +160,28 @@ def main(argv: list[str] | None = None) -> None:
                    help="read this portal-state.json path instead of auto-detecting")
     p.set_defaults(func=cmd_portal_state)
 
+    p = portal_sub.add_parser(
+        "facets",
+        help="list the boundary facet catalogue — what the implemented facets "
+             "are, and (inside a wake) which are populated right now")
+    p.add_argument("--json", action="store_true",
+                   help="emit the facet catalogue as JSON")
+    p.add_argument("--path", default=None,
+                   help="read this portal-state.json path for live status")
+    p.set_defaults(func=cmd_portal_facets)
+
     p = sub.add_parser(
         "hook",
         help="runner hooks back channel endpoint (Tier 2; called by the "
              "runner's native lifecycle hooks, not by hand)")
     p.add_argument("phase", help="abstract phase: post-tool | stop | session-start")
     p.set_defaults(func=cmd_hook)
+
+    p = sub.add_parser(
+        "statusline",
+        help="Claude statusLine helper for interactive sessions; reads session "
+             "JSON on stdin when wired into Claude's TUI footer")
+    p.set_defaults(func=cmd_statusline)
 
     agent_p = sub.add_parser(
         "agent", help="resident-agent helpers (wake-context, dominion)")
@@ -181,6 +197,19 @@ def main(argv: list[str] | None = None) -> None:
         help="task text to match pitfalls against (a pitfall's triggers key "
              "off how a request is phrased)")
     p.set_defaults(func=cmd_agent_inject)
+
+    runners_p = sub.add_parser(
+        "runners", help="inspect configured Shell/Core runner profiles")
+    runners_sub = runners_p.add_subparsers(dest="runners_command", required=True)
+
+    p = runners_sub.add_parser(
+        "list",
+        help="list declared runner profiles and the bundled Core registry")
+    p.add_argument("--json", action="store_true",
+                   help="emit machine-readable JSON instead of text")
+    p.add_argument("--all", action="store_true",
+                   help="include bundled Cores whose Shell is not on PATH")
+    p.set_defaults(func=cmd_runners_list)
 
     args = parser.parse_args(argv)
     return args.func(args)
@@ -258,7 +287,7 @@ def cmd_docs(args):
     if text is None:
         print(f"[brr docs] unknown topic: {args.topic}", file=sys.stderr)
         print(docs.format_listing(repo_root), file=sys.stderr)
-        return 2
+        return 1
     print(text)
     return 0
 
@@ -304,24 +333,27 @@ def _format_portal_state(payload: dict) -> str:
         "delivery: "
         f"current={outbound.get('replies_current', 0)} "
         f"other={outbound.get('replies_other', 0)} "
-        f"outbound={outbound.get('outbound_messages', 0)}",
+        f"outbound={outbound.get('outbound_messages', 0)}"
+        + ("" if outbound.get("any_sent") else "  ⚠ nothing sent yet"),
         "budget: "
         f"elapsed={_fmt_duration(budget.get('elapsed_seconds'))} "
         f"limit={_fmt_duration(budget.get('budget_seconds'))} "
-        f"keepalive={(budget.get('keepalive') or {}).get('status', '-')}",
+        f"keepalive={(budget.get('keepalive') or {}).get('status', '-')}"
+        + ("  ⚠ running long" if budget.get("long_running") else ""),
     ]
     if resources:
-        def _facet(key: str) -> str:
-            f = resources.get(key) if isinstance(resources.get(key), dict) else {}
-            if f.get("status") == "known":
-                return str(f.get("summary") or "known").strip() or "known"
-            return "unavailable"
+        # Three-state honesty: a 'known' facet shows its value; an 'absent' or
+        # 'unimplemented' one names the state and its reason so the gaps read as
+        # data, not as a flat "unavailable". Projects from the shared facet
+        # schema so this view can never drift from the woven line / JSON.
+        from . import facets
+
         lines.append(
             "resources: "
-            f"quota={_facet('quota')} "
-            f"cost={_facet('cost')} "
-            f"coexisting-runs={_facet('coexisting_runs')} "
-            f"remote-scm={_facet('remote_scm')}"
+            + " | ".join(
+                f"{spec.label}={facets.facet_value(resources.get(spec.key))}"
+                for spec in facets.FACETS
+            )
         )
     card_text = str(card.get("text") or "").strip()
     if card_text:
@@ -340,6 +372,162 @@ def _format_portal_state(payload: dict) -> str:
     if isinstance(pending_files, list) and pending_files:
         lines.append("pending outbox files: " + ", ".join(map(str, pending_files)))
     return "\n".join(lines)
+
+
+def cmd_runners_list(args):
+    """List declared runner profiles and the bundled Core registry.
+
+    Two sections:
+
+    - **Declared profiles** — what *runners.md* declares (bundled or
+      project-owned). These are the profiles the selector and daemon
+      actually invoke. Shows PATH availability, class, hooks, and
+      cost_rank.
+    - **Bundled Core registry** — the ``runner_cores`` module's registry of
+      known Shell/Core pairs with model IDs, provider, class, and freshness.
+      Filtered to PATH-available Shells by default; ``--all`` shows all.
+      The registry extends the selector when a user pins ``core=`` in
+      ``.brr/config`` without declaring an explicit profile entry.
+
+    A ★ marks the currently resolved runner (the one the daemon would
+    pick for the next run).
+    """
+    import json as _json
+    import shutil
+    import sys
+
+    from . import runner as runner_mod
+    from . import runner_cores, runner_select
+
+    repo_root = _maybe_repo_root()
+
+    # Current runner — best-effort; may fail outside a repo or without a Shell
+    current_runner: str | None = None
+    current_runner_err: str | None = None
+    try:
+        if repo_root:
+            current_runner = runner_mod.resolve_runner(repo_root)
+    except Exception as exc:  # noqa: BLE001
+        current_runner_err = str(exc)
+
+    # Declared profiles (from runners.md, bundled or project)
+    declared_profiles: dict[str, dict] = {}
+    try:
+        declared_profiles = runner_mod._load_profiles(repo_root) or {}
+    except Exception:
+        declared_profiles = {}
+
+    # Build declared-profile rows
+    declared_rows = []
+    for name, meta in declared_profiles.items():
+        meta = meta or {}
+        binary = str(meta.get("binary") or name).strip()
+        on_path = shutil.which(binary) is not None
+        is_alias = bool(meta.get("binary"))  # alias profiles have an explicit binary
+        declared_rows.append({
+            "name": name,
+            "shell": binary,
+            "model": str(meta.get("model") or "").strip() or None,
+            "class": str(meta.get("class") or "").strip() or None,
+            "provider": str(meta.get("provider") or "").strip() or None,
+            "hooks": str(meta.get("hooks") or "").strip() or None,
+            "cost_rank": meta.get("cost_rank"),
+            "quota_source": str(meta.get("quota_source") or "").strip() or None,
+            "owner": str(meta.get("owner") or "user").strip() or "user",
+            "on_path": on_path,
+            "is_alias": is_alias,
+            "is_current": name == current_runner,
+        })
+
+    # Bundled Core registry rows
+    show_all = getattr(args, "all", False)
+    all_bundled = runner_cores.all_cores()
+    bundled_rows = []
+    for name, entry in all_bundled.items():
+        shell = str(entry.get("shell") or "").strip()
+        on_path = shutil.which(shell) is not None
+        if not show_all and not on_path:
+            continue
+        bundled_rows.append({
+            "name": name,
+            "shell": shell,
+            "model": str(entry.get("model") or "").strip() or None,
+            "class": str(entry.get("class") or "").strip() or None,
+            "provider": str(entry.get("provider") or "").strip() or None,
+            "cost_rank": entry.get("cost_rank"),
+            "freshness_date": str(entry.get("freshness_date") or "").strip() or None,
+            "on_path": on_path,
+            "is_current": name == current_runner,
+        })
+
+    if getattr(args, "json", False):
+        print(_json.dumps({
+            "current_runner": current_runner,
+            "current_runner_error": current_runner_err,
+            "declared": declared_rows,
+            "bundled_cores": bundled_rows,
+        }, indent=2, sort_keys=True))
+        return 0
+
+    # ── Text output ──────────────────────────────────────────────────
+    if current_runner_err and not current_runner:
+        print(f"[brr runners] note: could not resolve current runner — "
+              f"{current_runner_err}", file=sys.stderr)
+
+    def _mark(row: dict) -> str:
+        return "★" if row.get("is_current") else " "
+
+    def _avail(row: dict) -> str:
+        return "✓" if row.get("on_path") else "✗"
+
+    # Declared profiles
+    print(f"declared profiles — {len(declared_rows)} profile(s), "
+          f"{sum(1 for r in declared_rows if r['on_path'])} on PATH  "
+          "(★ = selected by resolver, ✓ = Shell on PATH):")
+    if not declared_rows:
+        print("  (none)")
+    else:
+        for row in declared_rows:
+            parts = [
+                f"{_mark(row)} {_avail(row)} {row['name']:<28}",
+                f"{row['shell']:<8}",
+                f"{row['class'] or '—':<10}",
+                f"rank={row['cost_rank'] if row['cost_rank'] is not None else '—'}",
+            ]
+            extras = []
+            if row["model"]:
+                extras.append(f"model={row['model']}")
+            if row["hooks"]:
+                extras.append(f"hooks={row['hooks']}")
+            if row["is_alias"]:
+                extras.append("alias")
+            if not row["on_path"]:
+                extras.append("not found")
+            if extras:
+                parts.append(f"  [{', '.join(extras)}]")
+            print("  " + "  ".join(parts))
+
+    # Bundled Core registry
+    print()
+    all_label = " (all, including unavailable)" if show_all else ""
+    print(f"bundled Core registry{all_label} — {len(bundled_rows)} "
+          f"core(s) shown  (add --all to include unavailable Shells):")
+    if not bundled_rows:
+        print("  (none on PATH — install claude, codex, or gemini)")
+    else:
+        for row in bundled_rows:
+            avail = "✓" if row.get("on_path") else "✗ (not on PATH)"
+            parts = [
+                f"  {_mark(row)} {avail}  {row['name']:<20}",
+                f"{row['shell']:<8}",
+                f"{row['model'] or '—':<30}",
+                f"{row['class'] or '—':<10}",
+                f"rank={row['cost_rank'] if row['cost_rank'] is not None else '—'}",
+                f"fresh={row['freshness_date'] or '—'}",
+            ]
+            print("  ".join(parts))
+
+    return 0
 
 
 def cmd_portal_state(args):
@@ -368,6 +556,52 @@ def cmd_portal_state(args):
     return 0
 
 
+def cmd_portal_facets(args):
+    """List the boundary facet catalogue for an operator.
+
+    The schema is always printable (it is defined in code, not in a run), so
+    this works outside a wake and answers "what are the implemented facets?".
+    Inside a wake — or with ``--path`` — it also folds in the live status of
+    each facet from ``portal-state.json``, answering "which are populated now?".
+    """
+    import json
+    import sys
+
+    from . import facets
+
+    resources = None
+    path = _portal_state_path(args.path)
+    if path is not None:
+        payload, _token, _error = _read_portal_state(path)
+        if isinstance(payload, dict):
+            res = payload.get("resources")
+            resources = res if isinstance(res, dict) else None
+
+    rows = facets.describe_facets(resources)
+    if args.json:
+        print(json.dumps(rows, indent=2, sort_keys=True))
+        return 0
+
+    live = resources is not None
+    header = "[brr portal facets] boundary facet catalogue"
+    print(header + (" (with live status)" if live else " (schema only)"))
+    for row in rows:
+        flag = "required" if row["required"] else "optional"
+        head = f"  {row['label']} [{row['kind']}, {flag}]"
+        if live:
+            status = row.get("status") or "unimplemented"
+            value = row.get("value") or status
+            head += f" — {status}: {value}"
+        print(head)
+        print(f"      {row['fills']}")
+    if not live:
+        print(
+            "\n  no live run detected — run inside a daemon wake or pass "
+            "--path to also see which facets are populated right now."
+        )
+    return 0
+
+
 def cmd_hook(args):
     import sys
 
@@ -378,6 +612,12 @@ def cmd_hook(args):
         print("{}", end="")
         return 0
     return hooks.main(phase)
+
+
+def cmd_statusline(args):
+    from . import statusline
+
+    return statusline.main()
 
 
 def cmd_review(args):
@@ -661,13 +901,22 @@ def cmd_ergonomics_clear(args):
     if args.before:
         before_ts = datetime.fromisoformat(args.before).replace(tzinfo=timezone.utc).timestamp()
     removed = ergonomics.clear_records(_brr_dir(), before_ts=before_ts)
-    print(f"[brr ergonomics] removed {removed} record(s)")
+    print(f"[brr ergonomics] cleared {removed} record(s)")
     return 0
 
 
 def _portal_state_path(explicit: str | None) -> Path | None:
     if explicit:
         return Path(explicit)
+    # Inside a wake the daemon hands the resident the live portal path as
+    # ``BRR_PORTAL_STATE`` (the delivery contract). Honour it first so
+    # ``brr portal state`` / ``brr portal facets`` resolve on demand without a
+    # ``--path``, which is the whole point of "see them on demand".
+    import os
+
+    env_path = os.environ.get("BRR_PORTAL_STATE")
+    if env_path:
+        return Path(env_path)
     brr_dir = _maybe_brr_dir()
     if brr_dir is None:
         return None

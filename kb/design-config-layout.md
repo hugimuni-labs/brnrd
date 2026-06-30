@@ -7,7 +7,7 @@ wins?"; clarified that brnrd has no "active branch" concept
 at all, and the daemon's "last-spawned branch per project"
 is the natural default base when an event doesn't name a
 branch; **account binding promoted to machine scope** at
-`~/.local/state/brr/account/` so `brnrd connect` from a
+`~/.local/state/brnrd/account/` so `brnrd connect` from a
 second project skips the account-pair step on already-paired
 machines). Fluid past the schema specifics — implementation
 will surface keys we haven't enumerated; the three-scope
@@ -328,7 +328,7 @@ the settings table), but the daemon caches the most recent
 read at **machine scope** on the laptop / cloud host:
 
 ```
-~/.local/state/brr/account/
+~/.local/state/brnrd/account/
   ├── binding.toml      # brnrd URL, account_id, auth token
   ├── subscription.toml # tier, period_end, project_cap state
   └── settings.toml     # cached account-scope settings
@@ -374,7 +374,7 @@ The daemon fetches account settings at startup and on a periodic
 refresh (every 5 min while connected); brnrd-side spawns fetch at
 bootstrap. Push-style invalidation (brnrd notifies daemons of
 settings changes via the inbox long-poll) is a v-next refinement.
-The local mirror at `~/.local/state/brr/account/settings.toml`
+The local mirror at `~/.local/state/brnrd/account/settings.toml`
 is the read source so the daemon doesn't have to hit brnrd on
 every per-task lookup; staleness is bounded by the 5-min
 refresh.
@@ -581,7 +581,7 @@ degrades to "empty" when brnrd isn't connected).
      same `brr.toml`.
   3. **New "Account scope — machine-scoped binding +
      cached settings" section** codifies the file layout
-     at `~/.local/state/brr/account/` (binding.toml,
+     at `~/.local/state/brnrd/account/` (binding.toml,
      subscription.toml, settings.toml). Binding is
      machine-scoped — the load-bearing UX win of the
      locking-pass-IV daemon shape: `brnrd connect` from a
