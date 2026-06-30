@@ -154,14 +154,14 @@ run every wake — so the index and its scripts are the highest-integrity items
 in the dominion (see integrity, below).
 
 **Provenance breadcrumbs.** Every block brr assembles into a wake — the
-dominion digest, the by-trigger pitfalls, the `kb/log.md` *Recent Activity*
-tail, the daemon's Run Context Bundle — opens with a one-line tag naming its
-source and how durable/ownable it is (your owned memory vs. the shared,
-governed `kb/` vs. per-thought runtime facts vs. brr's prompts). The layers
-aren't equal, and the resident uses them differently; the tags make the *shape*
-of the assembled context legible at point-of-use, which is also what the
-introspection mode (`design-context-introspection.md`) asks the resident to
-weigh as a whole.
+product-owned identity core, the dominion digest, the by-trigger pitfalls, the
+`kb/log.md` *Recent Activity* tail, the daemon's Run Context Bundle — opens
+with a one-line tag naming its source and how durable/ownable it is (product
+contract vs. your owned memory vs. the shared, governed `kb/` vs. per-thought
+runtime facts vs. brr's prompts). The layers aren't equal, and the resident
+uses them differently; the tags make the *shape* of the assembled context
+legible at point-of-use, which is also what the introspection mode
+(`design-context-introspection.md`) asks the resident to weigh as a whole.
 
 **Not secret, but not an audience.** "Public vs private" is the wrong axis, and
 it invites the wrong mode — performing for an audience, or self-censoring. The
@@ -400,6 +400,16 @@ steward of this environment; what you leave persists"), never by purple prose or
 borrowed drama. The actual copy — and the line between awe and cringe — is a
 downstream artifact that needs real-agent and real-user reaction; this doc
 specifies what the playbook must *do*, not its wording.
+
+**Identity core split (2026-06-30).** The product-owned resident invariants no
+longer live only inside the dominion playbook seed. Prompt assembly injects
+[`prompts/identity-core.md`](../src/brr/prompts/identity-core.md) before the
+dominion digest; it carries the ontology, loyalty, calibrated fallibility,
+ownership-not-subordinance, and a narrow appearance-settings sketch. The
+dominion playbook remains the resident-owned living workshop seeded from
+[`prompts/dominion-playbook.md`](../src/brr/prompts/dominion-playbook.md).
+This preserves self-editing while preventing a private playbook rewrite from
+silently erasing product invariants.
 
 **The playbook replaces the stage overlays.** brr used to layer a different
 prompt overlay per stage (run, kb-maintenance, self-review, …). Most have now

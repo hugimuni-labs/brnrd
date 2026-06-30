@@ -121,7 +121,10 @@ dive-in map) and are stable until something contradicts them.
   self-inject digest, single-flight loop, playbook, multi-response,
   serialized capture + presence, and the trigger-indexed failure-memory
   affordance — see per-slice breadcrumbs in the page and `log.md`);
-  self-scheduled wakes shipped too (slice 7, see below).
+  self-scheduled wakes shipped too (slice 7, see below). 2026-06-30 follow-up:
+  product-owned resident invariants now ride in
+  [`prompts/identity-core.md`](../src/brr/prompts/identity-core.md), while the
+  dominion playbook remains resident-owned workshop memory.
 - [Multi-response protocol](design-multi-response.md) — *shipped
   2026-06-09 (slice 4)*. The delivery half of the resident reshape: the
   agent ships **interim + multiple + interleaved** responses mid-thought

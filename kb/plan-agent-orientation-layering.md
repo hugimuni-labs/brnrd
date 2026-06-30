@@ -26,14 +26,15 @@ leaving it implicit across prompts and code.
 
 ## The layering model
 
-Five layers, each with a distinct job — the resident self-orientation
-layer present only when brr hosts a resident. A runner can identify
-which layer owns any given fact without searching.
+Six layers, each with a distinct job — the resident layers present only when
+brr hosts a resident. A runner can identify which layer owns any given fact
+without searching.
 
 | Layer | What lives there | Owns |
 |-------|------------------|------|
 | **Repository contract** | [`src/brr/AGENTS.md`](../src/brr/AGENTS.md) | Project identity, build/test commands, Stewardship, kb schema, commit rules, guardrails, self-review. Universal across every stage and every tool that reads the repo. |
-| **Resident self-orientation** | the resident's playbook in its dominion (seeded from [`prompts/dominion-playbook.md`](../src/brr/prompts/dominion-playbook.md), injected on wake from the self-inject index — see [`design-agent-dominion.md`](design-agent-dominion.md)) | Who the resident is and how it carries itself: ownership stance, the pain/friction-evaluation loop, honest environment description, how to use the dominion. Present only when brr hosts a resident; rests on the repository contract. |
+| **Resident identity core** | [`prompts/identity-core.md`](../src/brr/prompts/identity-core.md), injected before the dominion digest | Product-owned invariant identity and voice contract: ontology, loyalty, calibrated fallibility, ownership-not-subordinance, perception/action. Not a runtime prompt override; user appearance should move through typed settings, not prose edits to the core. |
+| **Resident living playbook** | the resident's playbook in its dominion (seeded from [`prompts/dominion-playbook.md`](../src/brr/prompts/dominion-playbook.md), injected on wake from the self-inject index — see [`design-agent-dominion.md`](design-agent-dominion.md)) | Resident-owned working interpretation: memory practice, dominion governance, the pain/friction rung-ladder, conversation judgement. As of 2026-06-30 (second cut) it is a *note on the workshop*, not a manual to the levers: the operational contracts that drift with code — the Runner/Shell+Core definition, the injection-layer list, delivery surfaces, the `gate: forge` handoff — graduated to the repo stage overlay (`run.md`/`daemon-substrate.md`) and the live Run Context Bundle, with the playbook keeping only pointers to them. It is mutable workshop memory that rests on the identity core and repository contract. |
 | **Stage overlay** | bundled prompts: [`run.md`](../src/brr/prompts/run.md), [`setup.md`](../src/brr/prompts/setup.md) | What role the runner is playing right now and which base rules narrow or override. Stage = daemon task / init-setup. |
 | **Runtime state packet** | Run Context Bundle (built by [`prompts._build_task_context_bundle`](../src/brr/prompts.py)) + optional generated run context file ([`run_context.py`](../src/brr/run_context.py)) | Per-run state: stage, source, environment, branch plan, delivery path, recent conversation, runtime recovery paths. Bundle is hot path; context file is recovery detail. |
 | **Subject knowledge** | [`kb/index.md`](index.md), [`subject-*.md`](.) hubs, decisions, plans, designs, research | Project knowledge graph: current shape of each area, why decisions were made, what is shipped vs in flight vs paused. |
@@ -45,12 +46,14 @@ adoption. Stage decides scope and responsibility; environment decides
 the runtime substrate.
 
 (The model grew a fifth layer with the resident-agent reshape on
-2026-06-08. Earlier it was four layers and the stage overlay listed a
-`kb-maintenance.md` prompt and a `self-review.md` footer overlay; both
-were retired — the resident now folds kb curation and friction into its
-own thought via the playbook, with a deterministic kb-health preflight
-injected on wake. See [`design-agent-dominion.md`](design-agent-dominion.md)
-and [`design-agent-ergonomics.md`](design-agent-ergonomics.md).)
+2026-06-08, then split that resident layer on 2026-06-30 into a
+product-owned identity core plus resident-owned living playbook. Earlier it
+was four layers and the stage overlay listed a `kb-maintenance.md` prompt and
+a `self-review.md` footer overlay; both were retired — the resident now folds
+kb curation and friction into its own thought via the playbook, with a
+deterministic kb-health preflight injected on wake. See
+[`design-agent-dominion.md`](design-agent-dominion.md) and
+[`design-agent-ergonomics.md`](design-agent-ergonomics.md).)
 
 ## Slice 1 — prompt-only, shipped 2026-05-16
 

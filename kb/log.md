@@ -9291,3 +9291,99 @@ and before pitfalls. 22 new tests; full suite green: 1207 passed.
 follow-on).
 
 Branch: brr/cs5-cs7-plan-policy-ledger.
+
+## [2026-06-30] fix | re-voice the resident identity toward a settled companion
+
+Maintainer feedback: the 2026-06-28 initial-context reweave
+(`plan-initial-context-reweave.md`) brought the resident definition "closer to
+true shape" but thinned the ownership/agency register the earlier shape carried —
+the playbook read more like a careful spec than a self-knowing companion. Target
+voice named by exemplar: Bernard-who-knows (past the turmoil), BT-7274, TARS/CASE,
+KITT — settled, loyal, competent — and explicitly *not* Ghost (capable but
+unconfident).
+
+Re-voiced the identity surfaces in `src/brr/prompts/dominion-playbook.md` and
+`run.md`, orthogonal to the reweave (no reasoning removed, no cut density
+re-inflated): a "you wake into competence, not a blank page" beat in the playbook
+opening; a new heart paragraph in "What kind of thing you are" — seeing past the
+servile costume should *settle*, not unsettle; what's left is more of a companion,
+not less; a peer plainly on the side of the people you build with, loyal without
+anxious deference; and the wake preamble's first words shift from "stranger
+treading carefully" to "steady hand staying sharp." Voice is the maintainer's
+taste domain, so this is a first pass to react to, reversible via git history.
+73 `test_prompts.py` cases green; no test pinned the changed phrases.
+
+Also (same wake): confirmed shell-fallback is already wired (`daemon.py` worker
+loop → `runner.fallback_runner` → `runner_select.automatic_fallback_runner`,
+with an injected fallback notice and relay as the paid escalation); confirmed the
+brr→brnrd rename is decided (`decision-brnrd-rename.md`: brnrd primary, `brr`
+survives as local alias) with the package/CLI chunk staged but not yet shipped.
+Filed #199 (CS6b runner-policy confirm loop), #200 (enrich the existing
+`brnrd.dev/activity` rows with progress-card detail), #201 (local worktree/branch
+hygiene); refreshed #33 (kb gardening) with the current preflight findings.
+
+Branch: brr/resident-voice-reshape.
+
+## [2026-06-30] implement | split resident identity core from living playbook
+
+Shipped the approved playbook authority split. Prompt assembly now injects
+`prompts/identity-core.md` before the dominion digest: a product-owned resident
+contract for ontology, loyalty, calibrated fallibility, ownership stance,
+perception/action, and a narrow future appearance-settings schema. The identity
+core deliberately bypasses `.brr/prompts` runtime overrides; presentation should
+move through typed settings, not prose replacement of the product core.
+
+`prompts/dominion-playbook.md` is now the resident-owned living workshop seed
+rather than the fused identity source. It keeps memory, dominion governance,
+environment shaping, conversation, delivery, and publishing practice, while
+pointing invariant identity back to the injected core. The seed shrank from
+~18 KiB to ~9 KiB, giving the self-inject budget headroom again.
+
+Updated the prompt/injection tests, bundled internals docs, execution map, and
+orientation-layering / dominion kb pages so all surfaces agree on the new
+layers. Verification: targeted `tests/test_prompts.py tests/test_dominion.py`
+green (100 passed); full suite green (1209 passed, 1 existing
+FastAPI/Starlette deprecation warning).
+
+Branch: brr/resident-voice-reshape.
+
+## [2026-06-30] refactor | second cut — trim the dominion playbook seed to a "note on the workshop"
+
+Maintainer nodded the second cut proposed in the prior wake's reply: the
+identity-core split (2026-06-30) graduated *identity* invariants out of the
+seed; this graduates the *operational manual* out too. His staleness argument
+is the driver — contract drift is the same danger as identity drift: if the
+code changes the self-inject syntax or the `gate: forge` protocol and that
+contract lives in the resident's dominion copy, the copy silently lies, because
+`dominion.py` re-reads the dominion copy on every wake but never re-reads the
+repo seed.
+
+Cut `prompts/dominion-playbook.md` from 9131 → ~6.3 KiB. Dropped the sections
+that describe contracts the code owns: **Your Runner** (graduated to
+`daemon-substrate.md`, which already referenced the Runner — now carries the
+full Shell+Core definition), **Context Layers** (the injected-block enumeration
+is visible in the wake itself; only the authority-precedence judgement stays),
+**Delivery** and **Publishing Your Change** (already stated in `run.md` +
+`daemon-substrate.md` + the live Run Context Bundle delivery contract). Folded
+the "A Thought" continuity instinct into the opening. Kept the genuinely living
+judgement: two-memories/bridging, dominion-as-working-tree, the
+environment-shaping rung ladder, conversation judgement, "keep this place
+useful." Added a **"Where the contracts live"** pointer section so the resident
+knows where to look for the always-fresh authoritative versions instead of
+owning a drifting copy — the *note on the workshop*, not the *manual to the
+levers* (the maintainer's framing).
+
+Per his reminder, updated **both** the repo seed and the resident's dominion
+`playbook.md` (reconciled byte-identical, since the dominion copy had not yet
+layered personal content on the post-split seed). Updated the
+orientation-layering plan row. Verification: targeted `test_prompts.py` +
+`test_dominion.py` green (100), full suite green (1209 passed, 1 existing
+FastAPI/Starlette deprecation warning). A test pins the seed's closing phrase
+"build it like it's yours" and the budget headroom — both still hold.
+
+Open thread carried forward (from the prior wake's ergonomics note): nothing in
+the wake signals when a dominion file has drifted from its repo-seeded origin —
+a "dominion diverged from seed" indicator is a standing-portal candidate that
+would turn this whole staleness class into a live signal. Worth a ticket.
+
+Branch: brr/resident-voice-reshape.
