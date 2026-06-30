@@ -1,7 +1,6 @@
 # Plan: control surface — the dashboard the engine shipped without
 
-Status: active (opened 2026-06-29; CS1-CS4 shipped by 2026-06-30, CS5-CS7
-remain). Successor home for the reshape direction in
+Status: active (opened 2026-06-29; CS1-CS7 shipped by 2026-06-30). Successor home for the reshape direction in
 [`review-execution-model-coherence-2026-06-29.md`](review-execution-model-coherence-2026-06-29.md)
 §3. Architecture: [`decision-account-centered-daemon.md`](decision-account-centered-daemon.md).
 The *engine* half lives in [`plan-repo-gardening.md`](plan-repo-gardening.md)
@@ -110,55 +109,94 @@ is accepted as a legacy fallback until the operator moves it or sets
 `account.dominion_path`.
 
 ### CS5 — Inter-run plan home + injection
-A web-visible plan store; the daemon preloads/auto-injects it into the wake the
-way Recent Activity is injected (perception=injection, not a polling tax), and
-surfaces it in the card + web view. **Two halves now resolved:** the *form* is an
-**orphaned branch** (not a working-tree tracked file — it would pollute the user's
-checkout), and the **cross-repo** store is the **account dominion repo**
-(decision page, evt-puhl). **One narrow sub-fork remains:** whether *repo-scoped*
-inter-run plans also live in the account dominion (tagged by repo — the simplest
-shape, recommended now that the dominion is account-scoped) or ride a separate
-per-repo `brr-plans` branch. Confirm that one cut with the maintainer before
-building CS5.
+**Shipped 2026-06-30.** The sub-fork resolved: repo-scoped plans live in the
+account dominion tagged by repo (simplest shape, consistent with the account-scoped
+dominion). The narrow sub-fork of a separate per-repo `brr-plans` branch was
+retired in favour of this single home. Implementation:
+
+- `account.py`: `PLANS_PATH`, `repo_plans_path()`, `active_plan_path()`,
+  `cross_repo_plans_path()` — the plan home helpers. `resolve_context` now creates
+  `plans/` alongside the other account-store directories.
+- `prompts.py`: `_build_inter_run_plan_block()` reads `plans/<repo-slug>/active.md`
+  and `plans/_cross-repo/active.md` from the account dominion; returned as an
+  injected block ("Active inter-run plan") between the dominion digest and pitfalls.
+- Injection is **perception=injection**: the plan rides in automatically; the
+  resident never polls for it. Silent when no plan file exists — never a
+  constant tax.
+- The resident writes/updates the plan file; retiring it is as simple as
+  emptying or deleting `active.md`.
 
 ### CS6 — Plain-language config + daemon-owned confirmation
-Replace `shell=`/`core=`/`runner_policy=` knobs with: show the mandate (CS1), let
-the user request changes in prose, the resident proposes a config change, a
-*daemon-owned* confirmation step applies it (the resident cannot silently rewrite
-its own selection policy). Standing preferences ("escalate to most capable")
-become stored policy, not per-run flags. Review reshape step 4.
+**Shipped 2026-06-30 (storage + injection half).** The stored runner policy
+infrastructure is in place:
+
+- `account.py`: `RUNNER_POLICY_PATH`, `runner_policy_path()` (repo-scoped),
+  `account_runner_policy_path()` (account-wide, `runner-policy/_account/policy.md`).
+- `prompts.py`: `_build_runner_policy_block()` reads both and injects a "Stored
+  runner policy" block when either file is present.
+- The resident writes standing preferences to these files; the daemon injects them
+  into each wake so the resident sees them when selecting a runner or proposing a
+  respawn.
+
+**Not yet shipped:** the *daemon-owned confirmation step* that applies proposed
+policy changes without the resident being able to silently rewrite its own
+selection policy. That requires daemon-side machinery (a proposal handoff +
+operator confirmation loop) and belongs to a later slice. For now, the operator
+writes policy directly to the file; the resident proposes prose changes that the
+operator transcribes.
 
 ### CS7 — Cross-run decision/plan ledger
-A user-facing through-line of recent decisions/definitions/plan-position so
-coherent work stops feeling scrambled. `kb/log.md` is the resident's through-line;
-this is its **user-facing projection**. Review reshape step 5; composes with CS5.
+**Shipped 2026-06-30 (storage + injection half).** The ledger home is
+established:
+
+- `account.py`: `LEDGER_PATH`, `decisions_ledger_path()` pointing at
+  `ledger/decisions.md` in the account dominion.
+- `prompts.py`: `_build_decision_ledger_block()` reads and injects the ledger when
+  present as a "Decision ledger" block — the user-facing through-line alongside
+  `kb/log.md`.
+- The resident creates and maintains `ledger/decisions.md` with key decisions and
+  current plan-position in plain language. Web-visible via the account dominion
+  remote when one is configured — the local-first durability model.
+
+**Composes with CS5:** the active plan (CS5) is the tactical "what we're doing
+now"; the decision ledger (CS7) is the strategic "what we've decided and why".
 
 ## Sequencing
 
 CS1, CS2, and CS3 shipped first because they were pure projection / additive and
 made the existing engine legible without touching the process model. CS4 then
 moved the architecture to the account daemon + account dominion repo, unlocking
-CS2's durable run-state docs and the cross-repo home CS5 will build on. CS5 is
-the next implementation topic; CS6/CS7 are the richer UX and come last. Chunk
-across wakes per the gardening plan's established cadence.
+CS2's durable run-state docs and the cross-repo home CS5 built on. CS5-CS7 landed
+together in a single wake: the storage + injection infrastructure for plans, runner
+policy, and the decision ledger is small and symmetric — three new block builders
+wired into `_build_injected_blocks()`, three sets of path helpers in `account.py`.
+
+Remaining work is CS6b (the daemon-owned confirmation step for policy changes),
+which requires an explicit proposal+confirm protocol in the daemon. That is a
+follow-on slice when daemon UX capacity is available.
 
 ## Current checkpoint
 
-The pure-projection runway is complete: CS1 shipped, CS2's attempt-ledger and
-durable run-state-doc halves shipped, and CS3's repo label dimension shipped.
-CS4 is complete for the local-first account surface: account registry, account
-dispatch inbox, multi-repo event selection, direct repo-local forge routing,
-account run-state docs, web-visible run-state URL projection, manual dominion
-move instructions, and resident wake-time dominion rehome all landed. The
-operator moved the account store from `$XDG_STATE_HOME/brr` to
-`$XDG_STATE_HOME/brnrd` on 2026-06-30, and the live wake picked up the new
-account dominion path.
+All seven control surface slices are now shipped at their storage + injection
+layer. What landed across CS1-CS7:
 
-No remaining CS4 fork waits on a maintainer decision: account daemon, `brr` as
-the local verb, account dominion repo, auto-create-with-override, account
-dispatch inbox, and account-dominion resident memory are accepted and wired.
-Only CS5's narrow repo-scoped-plan-home cut and CS6/CS7's UX details remain
-later decisions.
+- **CS1**: runner mandate catalog projected into every wake.
+- **CS2**: per-run state docs persisted and linked from the card.
+- **CS3**: repo label dimension across runs, cards, and activity records.
+- **CS4**: account daemon + account dominion repo; multi-repo dispatch; wake-time
+  resident memory rehomed into the account dominion.
+- **CS5**: inter-run plan home (`plans/<repo-slug>/active.md`) injected each
+  wake; cross-repo plans at `plans/_cross-repo/active.md`.
+- **CS6**: runner policy store (`runner-policy/`) injected each wake; the
+  daemon-owned confirmation step (applying proposed changes without the resident
+  silently rewriting selection policy) is deferred to a later slice.
+- **CS7**: decision ledger (`ledger/decisions.md`) injected when the resident
+  maintains it — the user-facing projection alongside `kb/log.md`.
+
+The one remaining gap is CS6's daemon-owned confirmation step (the handoff where
+a proposed policy change waits for operator approval before being applied). That
+requires an explicit proposal+confirm loop in the daemon and belongs to a CS6b
+slice when the daemon UX is ready for it.
 
 CS4 shipped through four concrete cuts:
 

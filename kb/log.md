@@ -9255,3 +9255,39 @@ and a current implementation-edge ledger instead of "Alternatives" / "Open
 questions" proposal sections. `plan-repo-gardening.md` marks that cleanup done.
 
 Branch: brr/initial-context-reweave.
+
+## [2026-06-30] implement | CS5-CS7 — plan home, runner policy, decision ledger
+
+Shipped the storage + injection layer for control surface slices 5–7:
+
+**CS5 — Inter-run plan home + injection.** The narrow repo-scoped-plan sub-fork
+resolved: all repo plans live in the account dominion tagged by repo (simpler,
+consistent with the account-scoped model). `account.py` gains `PLANS_PATH`,
+`repo_plans_path()`, `active_plan_path()`, and `cross_repo_plans_path()`;
+`resolve_context` now creates `plans/` alongside the other account-store
+directories. `prompts.py` gains `_build_inter_run_plan_block()` — reads
+`plans/<repo-slug>/active.md` (and `plans/_cross-repo/active.md`) and injects as
+an "Active inter-run plan" block. Perception=injection: rides in automatically,
+silent when no file exists.
+
+**CS6 — Runner policy store + injection.** `account.py` gains
+`RUNNER_POLICY_PATH`, `runner_policy_path()` (repo-scoped), and
+`account_runner_policy_path()` (`runner-policy/_account/policy.md`). `prompts.py`
+gains `_build_runner_policy_block()` — injects as "Stored runner policy" when
+either file is present. The daemon-owned confirmation step (proposal → approval →
+apply, preventing the resident from silently rewriting its own selection policy)
+is deferred to CS6b — it requires a proposal+confirm loop in the daemon.
+
+**CS7 — Decision ledger.** `account.py` gains `LEDGER_PATH` and
+`decisions_ledger_path()` (`ledger/decisions.md`). `prompts.py` gains
+`_build_decision_ledger_block()` — injects as "Decision ledger" when the resident
+maintains the file. User-facing complement to `kb/log.md`; web-visible via the
+account dominion remote when configured. Composes with CS5 (plan = tactics;
+ledger = strategy/decisions).
+
+All three blocks slot into `_build_injected_blocks()` after the dominion digest
+and before pitfalls. 22 new tests; full suite green: 1207 passed.
+`plan-control-surface.md` updated to record all CS1-CS7 shipped (CS6b noted as
+follow-on).
+
+Branch: brr/cs5-cs7-plan-policy-ledger.
