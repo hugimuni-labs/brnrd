@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block body %}
+{% set stats = dashboard_stats|default({}) %}
+{% set active_rows = active_activity_views|default([]) %}
+{% set scheduled_rows = scheduled_activity_views|default([]) %}
+{% set recent_rows = recent_activity_views|default([]) %}
+{% set quota_rows = runner_quotas|default([]) %}
+{% set shell_rows = runner_stats|default([]) %}
+{% set event_rows = outbound_event_views|default([]) %}
 <div class="ops-shell">
   <aside class="ops-sidebar" aria-label="brnrd navigation">
     <a class="brand-stack" href="/">
@@ -17,8 +24,8 @@
     {% if logged_in %}
       <div class="daemon-card">
         <span class="eyebrow">Local daemons</span>
-        <strong>{{ dashboard_stats.daemons_online }} online</strong>
-        <small>{{ dashboard_stats.daemons_waiting }} waiting · {{ dashboard_stats.daemons_stale }} stale</small>
+        <strong>{{ stats.daemons_online|default(0) }} online</strong>
+        <small>{{ stats.daemons_waiting|default(0) }} waiting · {{ stats.daemons_stale|default(0) }} stale</small>
       </div>
       <div class="sidebar-user">
         <span class="avatar-letter">{{ account.github_login[:1]|upper }}</span>
@@ -51,9 +58,9 @@
       <section class="status-grid" aria-label="Operational status">
         <article class="status-card status-ok"><span>Signed in</span><strong>@{{ account.github_login }}</strong></article>
         <article class="status-card"><span>GitHub App</span><strong>{{ github_app_slug }}</strong></article>
-        <article class="status-card"><span>Enabled repos</span><strong>{{ connected_count }} <small>of {{ dashboard_stats.synced_repos }} synced</small></strong></article>
-        <article class="status-card"><span>Current work</span><strong>{{ dashboard_stats.active_runs }} active <small>{{ dashboard_stats.pending_runs }} pending</small></strong></article>
-        <article class="status-card {% if dashboard_stats.outbound_failures %}status-warn{% endif %}"><span>Outbound events</span><strong>{{ dashboard_stats.outbound_events }} <small>{{ dashboard_stats.outbound_failures }} failed</small></strong></article>
+        <article class="status-card"><span>Enabled repos</span><strong>{{ connected_count }} <small>of {{ stats.synced_repos|default(installed_repos|length) }} synced</small></strong></article>
+        <article class="status-card"><span>Current work</span><strong>{{ stats.active_runs|default(0) }} active <small>{{ stats.pending_runs|default(0) }} pending</small></strong></article>
+        <article class="status-card {% if stats.outbound_failures|default(0) %}status-warn{% endif %}"><span>Outbound events</span><strong>{{ stats.outbound_events|default(0) }} <small>{{ stats.outbound_failures|default(0) }} failed</small></strong></article>
       </section>
 
       <section class="ops-grid">
@@ -116,9 +123,9 @@
             <div><p class="eyebrow">Current work</p><h2>Active runs</h2></div>
             <a class="button button-secondary button-compact" href="/activity">Open activity</a>
           </div>
-          {% if active_activity_views %}
+          {% if active_rows %}
             <div class="activity-list compact-list">
-              {% for row in active_activity_views %}
+              {% for row in active_rows %}
                 {% set item = row.record %}
                 <section class="activity-row status-{{ row.status_class }}">
                   <div class="activity-main">
@@ -147,32 +154,36 @@
               {% endfor %}
             </div>
           {% else %}
-            <div class="empty-state"><strong>No active runs.</strong><p>Running, pending, failed, and parked work will appear here as daemons report it.</p></div>
+            <div class="empty-state"><strong>No active runs surfaced here yet.</strong><p>Running, pending, failed, and parked work will appear here once the dashboard aggregation layer passes activity records into this view.</p></div>
           {% endif %}
         </article>
 
         <article id="quota" class="panel deck-panel span-4">
           <div class="section-heading compact-heading"><div><p class="eyebrow">Budget</p><h2>Runner quotas</h2></div></div>
-          <div class="quota-stack">
-            {% for quota in runner_quotas %}
-              <section class="quota-card quota-{{ quota.status }}">
-                <div class="quota-head"><strong>{{ quota.shell }}</strong><span>{{ quota.status }}</span></div>
-                {% for window in quota.windows %}
-                  <div class="quota-window">
-                    <div><span>{{ window.label }}</span><small>{% if window.used is none %}unknown{% else %}{{ window.used }} / {{ window.limit }}{% endif %}</small></div>
-                    <div class="quota-bar"><span style="width: {{ window.percent or 0 }}%"></span></div>
-                  </div>
-                {% endfor %}
-              </section>
-            {% endfor %}
-          </div>
+          {% if quota_rows %}
+            <div class="quota-stack">
+              {% for quota in quota_rows %}
+                <section class="quota-card quota-{{ quota.status }}">
+                  <div class="quota-head"><strong>{{ quota.shell }}</strong><span>{{ quota.status }}</span></div>
+                  {% for window in quota.windows %}
+                    <div class="quota-window">
+                      <div><span>{{ window.label }}</span><small>{% if window.used is none %}unknown{% else %}{{ window.used }} / {{ window.limit }}{% endif %}</small></div>
+                      <div class="quota-bar"><span style="width: {{ window.percent or 0 }}%"></span></div>
+                    </div>
+                  {% endfor %}
+                </section>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty-state tight"><strong>Quota provider pending.</strong><p>This panel is ready for 5h and weekly quota windows per shell.</p></div>
+          {% endif %}
         </article>
 
         <article class="panel deck-panel span-4">
           <div class="section-heading compact-heading"><div><p class="eyebrow">Runners</p><h2>Shell load</h2></div></div>
-          {% if runner_stats %}
+          {% if shell_rows %}
             <div class="stat-table">
-              {% for row in runner_stats %}
+              {% for row in shell_rows %}
                 <div><strong>{{ row.shell }}</strong><span>{{ row.running }} active · {{ row.pending }} pending · {{ row.scheduled }} scheduled · {{ row.completed }} done · {{ row.failed }} failed</span></div>
               {% endfor %}
             </div>
@@ -183,9 +194,9 @@
 
         <article id="schedule" class="panel deck-panel span-4">
           <div class="section-heading compact-heading"><div><p class="eyebrow">Wake plan</p><h2>Scheduled work</h2></div></div>
-          {% if scheduled_activity_views %}
+          {% if scheduled_rows %}
             <div class="mini-list">
-              {% for row in scheduled_activity_views %}
+              {% for row in scheduled_rows %}
                 <div class="mini-row"><span class="status-dot"></span><div><strong>{{ row.repo_name }}</strong><small>{{ row.summary_compact }}</small></div><time>{{ row.when_label }}</time></div>
               {% endfor %}
             </div>
@@ -196,9 +207,9 @@
 
         <article id="events" class="panel deck-panel span-6">
           <div class="section-heading compact-heading"><div><p class="eyebrow">Outbound</p><h2>Events</h2></div></div>
-          {% if outbound_event_views %}
+          {% if event_rows %}
             <div class="event-list">
-              {% for row in outbound_event_views %}
+              {% for row in event_rows %}
                 <div class="event-row"><time>{{ row.time_label }}</time><span class="pill status-pill status-{{ row.status_class }}">{{ row.status }}</span><div><strong>[{{ row.source }}]</strong> {{ row.repo_name }}{% if row.summary %}<small>{{ row.summary }}</small>{% endif %}</div></div>
               {% endfor %}
             </div>
@@ -209,9 +220,9 @@
 
         <article class="panel deck-panel span-6">
           <div class="section-heading compact-heading"><div><p class="eyebrow">System log</p><h2>Recent daemon reports</h2></div></div>
-          {% if recent_activity_views %}
+          {% if recent_rows %}
             <div class="system-log">
-              {% for row in recent_activity_views %}
+              {% for row in recent_rows %}
                 {% set item = row.record %}
                 <div><time>{{ row.short_when_label or "--:--:--" }}</time><span>[{{ row.source_label }}]</span><strong>{{ item.kind }}.{{ item.status or row.bucket }}</strong><em>{{ row.repo_name }}</em></div>
               {% endfor %}
