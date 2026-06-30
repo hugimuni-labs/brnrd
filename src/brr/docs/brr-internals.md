@@ -139,7 +139,10 @@ there is no public command to seed them:
 
 The runner checks prompt overrides first, then falls back to the
 bundled copy. Docs helpers do the same for doc overrides when used
-internally.
+internally. `prompts/identity-core.md` is the deliberate exception: it is
+the product-owned resident identity contract, so prompt assembly reads the
+bundled copy directly. User-facing presentation should move through typed
+appearance settings rather than a runtime prose override of that core.
 
 Project-specific knowledge belongs in `kb/` (the knowledge base),
 never in `.brr/`. The split is:
