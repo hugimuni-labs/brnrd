@@ -300,10 +300,12 @@ def _build_inter_run_plan_block(repo_root: Path) -> str:
 def _build_runner_policy_block(repo_root: Path) -> str:
     """Render stored runner policy preferences when present in the account dominion.
 
-    CS6: the resident (or operator) writes standing runner preferences to
+    CS6: standing runner preferences live in
     ``runner-policy/<repo-slug>/policy.md`` (or ``runner-policy/_account/policy.md``
-    for account-wide defaults). The daemon injects them so the resident can
-    reference them when selecting a runner or emitting a respawn request.
+    for account-wide defaults). Operators can edit them directly; resident-originated
+    changes flow through the daemon-owned proposal/approval path. The daemon injects
+    them so the resident can reference them when selecting a runner or emitting a
+    respawn request.
     Repo-level policy is listed first; account-wide policy follows.
     Returns ``""`` when no policy file exists.
     """
@@ -335,8 +337,10 @@ def _build_runner_policy_block(repo_root: Path) -> str:
     return (
         "## Stored runner policy\n\n"
         "Standing runner preferences from the account dominion. The daemon "
-        "applies these; to propose a change, update the policy file and the "
-        "daemon will prompt for confirmation before applying.\n\n"
+        "applies these; do not silently rewrite them. To propose a change, "
+        "emit an outbox file with `runner_policy: propose` frontmatter and the "
+        "new policy body. The daemon parks it for operator approval before "
+        "mutating `runner-policy/.../policy.md`.\n\n"
         + "\n\n".join(blocks)
     )
 
@@ -895,7 +899,10 @@ def _build_run_context_bundle(
             "can supply that title/body when a checked review pack exists, but "
             "it does not own PR creation. `respawn: true` parks a handoff to "
             "another run; name `shell:` / `core:` explicitly or use "
-            "`quality: escalate` to let brr pick the stronger local Core. See "
+            "`quality: escalate` to let brr pick the stronger local Core. "
+            "`runner_policy: propose` parks a runner-policy change for "
+            "operator approval before the daemon writes the account dominion "
+            "policy file. See "
             "`brr docs portals` for the full field list and choreography."
         )
         sections.append(
