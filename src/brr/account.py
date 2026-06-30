@@ -44,6 +44,7 @@ CROSS_REPO_SLUG = "_cross-repo"
 # CS6 — stored runner policy
 RUNNER_POLICY_PATH = "runner-policy"
 ACCOUNT_RUNNER_POLICY_SLUG = "_account"
+RUNNER_POLICY_PROPOSALS_SLUG = "_proposals"
 
 # CS7 — decision ledger
 LEDGER_PATH = "ledger"
@@ -369,10 +370,12 @@ def cross_repo_plans_path(ctx: AccountContext) -> Path:
 def runner_policy_path(ctx: AccountContext, repo_label: str) -> Path:
     """Return the stored runner policy file for one repo.
 
-    Write standing runner preferences here (e.g. "prefer haiku for quick
-    tasks, escalate to opus for design reviews"). The daemon injects the
-    policy into each wake so the resident can reference it when selecting
-    a runner or proposing a respawn.
+    Standing runner preferences live here (e.g. "prefer haiku for quick
+    tasks, escalate to opus for design reviews"). Operators can edit it
+    directly; resident-originated changes flow through the daemon-owned
+    proposal/approval path. The daemon injects the policy into each wake
+    so the resident can reference it when selecting a runner or proposing
+    a respawn.
     """
     return (
         ctx.dominion_repo
@@ -389,6 +392,17 @@ def account_runner_policy_path(ctx: AccountContext) -> Path:
     policy (see :func:`runner_policy_path`) takes precedence.
     """
     return ctx.dominion_repo / RUNNER_POLICY_PATH / ACCOUNT_RUNNER_POLICY_SLUG / "policy.md"
+
+
+def runner_policy_proposals_path(ctx: AccountContext) -> Path:
+    """Return the daemon-owned pending runner-policy proposal directory.
+
+    Residents can propose runner-policy edits, but the daemon applies them
+    only after an operator approval event. Pending proposals live here until
+    approved or rejected; the policy files themselves stay under the repo or
+    account runner-policy paths above.
+    """
+    return ctx.dominion_repo / RUNNER_POLICY_PATH / RUNNER_POLICY_PROPOSALS_SLUG
 
 
 # ── CS7 — decision ledger helper ──────────────────────────────────────
