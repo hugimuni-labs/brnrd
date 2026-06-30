@@ -2,7 +2,7 @@
 
 When the resident hits friction worth remembering but not yet worth a
 forcing function, it records a **pitfall** in its dominion
-(``.brr/dominion/pitfalls.md``): a lesson keyed by one or more *triggers*
+(``pitfalls.md`` in the resident dominion): a lesson keyed by one or more *triggers*
 (keywords or loci that tend to appear when the failure is about to
 recur). On each wake, brr matches the current task's text against those
 triggers and injects the matching pitfalls into the prompt.
