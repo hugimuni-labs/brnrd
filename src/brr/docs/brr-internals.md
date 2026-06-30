@@ -43,8 +43,8 @@ gitignored; do not commit its contents.
 | `responses/` | Agent final responses destined for gate replies; per-event `<id>.partials/` hold queued interim replies |
 | `outbox/`    | Per-event drop zone (`<id>/`) where the resident writes interim/interleaved replies mid-thought |
 | `presence/`  | Who's awake right now — one JSON file per active thought/session, pruned on read |
-| `dominion/`  | The resident's durable working memory (worktree on the `brr-home` branch); captured at sleep |
-| `schedule/`  | Firing-state (`state.json`) for self-scheduled thoughts; specs live in the dominion's `schedule.md` |
+| `dominion/`  | Legacy repo-local resident memory; current account-scoped installs use the account dominion repo and keep this only as a migration fallback |
+| `schedule/`  | Firing-state (`state.json`) for self-scheduled thoughts; specs live in resident memory's `schedule.md` |
 | `conversations/` | Per-gate-thread append-only logs of events, runs, artifacts, lifecycle updates |
 | `traces/`    | Prompt + stdout + meta per runner invocation (cleaned on success)  |
 | `reviews/`   | Reserved for explicit review artifacts; default runs do not write here |

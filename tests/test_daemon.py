@@ -1593,6 +1593,90 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     assert "run_state_url" not in task.meta
 
 
+def test_capture_dominion_commits_account_home(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {
+        "repo.label": "Gurio/brr",
+        "account.dominion_path": str(tmp_path / "account-home"),
+    }
+    ctx = daemon.account.resolve_context(repo, cfg)
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=ctx.dominion_repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=ctx.dominion_repo,
+        check=True,
+    )
+    repo_dom = daemon.account.repo_dominion_path(ctx, "Gurio/brr")
+    daemon.dominion.seed_account_dominion(repo_dom)
+    (repo_dom / "notes.md").write_text("remember this\n", encoding="utf-8")
+    task = Run(
+        id="run-capture",
+        event_id="evt-capture",
+        body="capture memory",
+        source="telegram",
+        status="done",
+        meta={"repo_label": "Gurio/brr"},
+    )
+
+    daemon._capture_dominion(repo, cfg, task, account_context=ctx)
+
+    log = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=ctx.dominion_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert log == "brnrd-home: capture account memory after run run-capture"
+
+
+def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
+    event = {"id": "evt-final", "source": "telegram", "status": "done"}
+    task = Run(
+        id="run-final",
+        event_id="evt-final",
+        body="finish state",
+        source="telegram",
+        status="done",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_run_worker(*args, **kwargs):
+        return task
+
+    def fake_persist(_ctx, persisted_task, *, repo_label, stage, cfg=None):
+        calls.append(("persist", stage))
+        persisted_task.meta["run_state_stage"] = stage
+        return tmp_path / "state.md"
+
+    def fake_capture(_repo, _cfg, captured_task, *, account_context=None):
+        calls.append(("capture", captured_task.meta.get("run_state_stage", "")))
+
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda _repo, _task: None)
+    monkeypatch.setattr(daemon, "_persist_run_state_doc", fake_persist)
+    monkeypatch.setattr(daemon, "_capture_dominion", fake_capture)
+    monkeypatch.setattr(daemon, "_retire_internal_event", lambda _event, _responses: False)
+
+    daemon._run_worker_and_finalize(
+        event,
+        tmp_path,
+        tmp_path / ".brr" / "responses",
+        {},
+        0,
+        account_context=None,
+    )
+
+    assert calls == [("persist", "finished"), ("capture", "finished")]
+
+
 def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path):
     monkeypatch.setattr(
         daemon.claude_usage,
