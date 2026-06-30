@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from brr import daemon, dominion, protocol, schedule
+from brr import account, daemon, dominion, protocol, schedule
 
 from _helpers import commit_files, init_git_repo
 
@@ -45,6 +45,34 @@ def test_fire_due_creates_event_for_past_at(tmp_path):
     # Fired once: a second tick doesn't re-emit.
     daemon._fire_due_schedules(repo, brr_dir, inbox, {})
     assert len(protocol.list_pending(inbox)) == 1
+
+
+def test_fire_due_reads_account_dominion_before_legacy(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    legacy = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(legacy, "")
+    home = tmp_path / "account-home"
+    cfg = {"account.dominion_path": str(home), "repo.label": "Gurio/brr"}
+    ctx = account.resolve_context(repo, cfg)
+    repo_dom = account.repo_dominion_path(ctx, "Gurio/brr")
+    dominion.seed_account_dominion(repo_dom)
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    _write_schedule(repo_dom, f"## Account Followup\nat: {past}\naccount task\n")
+
+    daemon._fire_due_schedules(
+        repo,
+        brr_dir,
+        inbox,
+        cfg,
+        account_context=ctx,
+    )
+
+    pending = protocol.list_pending(inbox)
+    assert len(pending) == 1
+    assert pending[0]["schedule_id"] == "account-followup"
+    assert pending[0]["repo_label"] == "Gurio/brr"
 
 
 def test_fire_due_threads_with_default_conversation_key(tmp_path):
