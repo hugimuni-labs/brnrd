@@ -181,6 +181,42 @@ def test_render_text_compact_surfaces_attempt_failure_ledger(tmp_path):
     ) in text
 
 
+def test_render_text_compact_surfaces_relay_offer(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:relay-ledger:"
+    conversations.append_run(
+        brr_dir, key,
+        run_id="run-relay", event_id="evt-relay",
+        env="host", status="running",
+        branch_name="brr/run-relay",
+    )
+    _emit(brr_dir, key, "run_created", run_id="run-relay", env="host")
+    _emit(brr_dir, key, "run_started", run_id="run-relay",
+          runner="codex", branch="brr/run-relay")
+    _emit(brr_dir, key, "attempt_started", run_id="run-relay", attempt=1)
+    _emit(
+        brr_dir,
+        key,
+        "attempt_failed",
+        run_id="run-relay",
+        attempt=1,
+        reason="You've hit your session limit",
+        failure_kind="quota_exhausted",
+        will_retry=False,
+        needs_relay_consent=True,
+        relay_candidate="brnrd-codex-relay · gpt-5-codex-relay (relay, brnrd)",
+    )
+
+    view = run_progress.project_run(brr_dir, key, "run-relay")
+    assert view is not None
+    assert "relay available: brnrd-codex-relay" in view.detail
+    text = run_progress.render_text(view, compact=True)
+    assert (
+        "relay available: brnrd-codex-relay · gpt-5-codex-relay "
+        "(relay, brnrd)"
+    ) in text
+
+
 def test_project_run_conflict(tmp_path):
     brr_dir = tmp_path / ".brr"
     key = "telegram:4:"
