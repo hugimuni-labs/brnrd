@@ -75,6 +75,12 @@ class TestParseOutboxMessage:
         }
         assert body == "carry this forward\n"
 
+    def test_lenient_runner_policy_selector(self):
+        meta, body = protocol.parse_outbox_message(
+            "runner_policy: propose\nscope: account\n---\nPrefer economy runners.\n")
+        assert meta == {"runner_policy": "propose", "scope": "account"}
+        assert body == "Prefer economy runners.\n"
+
     def test_plain_message_with_dividers_is_not_frontmatter(self):
         # A PLAN-style message leads with prose and uses --- as a section
         # divider — it must never be mistaken for routing frontmatter.
