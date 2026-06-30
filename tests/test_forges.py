@@ -156,6 +156,53 @@ def test_view_branch_url_produces_expected_links(remote, branch, expected):
     assert forges.view_branch_url(remote, branch) == expected
 
 
+@pytest.mark.parametrize(
+    "remote, branch, rel_path, expected",
+    [
+        (
+            "git@github.com:Gurio/brr.git",
+            "main",
+            "run-state/Gurio__brr/run-260630.md",
+            "https://github.com/Gurio/brr/blob/main/run-state/Gurio__brr/run-260630.md",
+        ),
+        (
+            "https://gitlab.com/group/sub/repo.git",
+            "main",
+            "run-state/local/run.md",
+            "https://gitlab.com/group/sub/repo/-/blob/main/run-state/local/run.md",
+        ),
+        (
+            "git@codeberg.org:user/repo.git",
+            "main",
+            "run-state/x/run.md",
+            "https://codeberg.org/user/repo/src/branch/main/run-state/x/run.md",
+        ),
+    ],
+)
+def test_view_blob_url_produces_expected_links(remote, branch, rel_path, expected):
+    assert forges.view_blob_url(remote, branch, rel_path) == expected
+
+
+def test_view_blob_url_strips_leading_slash():
+    """A leading slash on the relative path must not double up in the URL."""
+    assert forges.view_blob_url(
+        "git@github.com:Gurio/brr.git", "main", "/run-state/run.md",
+    ) == "https://github.com/Gurio/brr/blob/main/run-state/run.md"
+
+
+def test_view_blob_url_returns_none_for_empty_or_unsafe_path():
+    assert forges.view_blob_url("git@github.com:Gurio/brr.git", "main", "") is None
+    assert forges.view_blob_url(
+        "git@github.com:Gurio/brr.git", "main", "bad name.md",
+    ) is None
+
+
+def test_view_blob_url_returns_none_for_unknown_remote():
+    assert forges.view_blob_url(
+        "git@git.example.com:team/repo.git", "main", "run-state/run.md",
+    ) is None
+
+
 def test_view_branch_url_returns_none_for_unknown_remote():
     """No template for a bare ``git.example.com`` means no link — the
     daemon stays quiet rather than emit a guessed URL."""
