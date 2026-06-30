@@ -49,8 +49,8 @@ def _account_and_project(client):
         client.app, github_id="123", login="octocat", email="a@b.com"
     )
     pid = client.post(
-        "/v1/accounts/projects", json={"name": "demo"}, headers=headers
-    ).json()["project_id"]
+        "/v1/accounts/repos", json={"repo_full_name": "Gurio/demo"}, headers=headers
+    ).json()["repo_id"]
     return headers, pid
 
 
@@ -58,7 +58,7 @@ def _handshake(client, acc_headers, pid):
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"project_id": pid},
+        json={"repo_id": pid},
         headers=acc_headers,
     )
     paired = client.get(
@@ -75,7 +75,7 @@ def test_relay_pack_returns_render_url_that_renders(tmp_path, monkeypatch):
     token = _handshake(client, acc, pid)
     cloud._save_state(
         brr_dir,
-        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 0},
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
     )
     monkeypatch.setattr(cloud, "_request", _route_to(client))
 
@@ -112,7 +112,7 @@ def test_connect_persists_token(tmp_path, monkeypatch):
         [
             {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
             {"status": "pending"},
-            {"status": "paired", "project_id": "proj_x", "daemon_token": "bd_tok"},
+            {"status": "paired", "repo_id": "proj_x", "daemon_token": "bd_tok"},
         ]
     )
     seen = []
@@ -131,7 +131,7 @@ def test_connect_persists_token(tmp_path, monkeypatch):
         out=lambda *_: None,
     )
     assert state["token"] == "bd_tok"
-    assert state["project_id"] == "proj_x"
+    assert state["repo_id"] == "proj_x"
     assert state["daemon_name"] == "laptop"
     # Persisted to .brr/gates/cloud.json and reports configured.
     assert cloud._load_state(brr_dir)["token"] == "bd_tok"
@@ -148,18 +148,18 @@ def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
     token = _handshake(client, acc, pid)
     cloud._save_state(
         brr_dir,
-        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 0},
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
     )
     monkeypatch.setattr(cloud, "_request", _route_to(client))
 
     # Two events queued on the brnrd side.
     e1 = client.post(
         "/v1/_dev/enqueue",
-        json={"project_id": pid, "body": "first", "reply_to": {"chat": 1}},
+        json={"repo_id": pid, "body": "first", "reply_to": {"chat": 1}},
         headers=acc,
     ).json()["event_id"]
     e2 = client.post(
-        "/v1/_dev/enqueue", json={"project_id": pid, "body": "second"}, headers=acc
+        "/v1/_dev/enqueue", json={"repo_id": pid, "body": "second"}, headers=acc
     ).json()["event_id"]
 
     # Drain: events land as local .brr/inbox files carrying the cloud id.
@@ -199,14 +199,14 @@ def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
     token = _handshake(client, acc, pid)
     cloud._save_state(
         brr_dir,
-        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 0},
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
     )
     monkeypatch.setattr(cloud, "_request", _route_to(client))
 
     client.post(
         "/v1/_dev/enqueue",
         json={
-            "project_id": pid,
+            "repo_id": pid,
             "body": "@brr-bot fix this",
             "source": "github",
             "reply_to": {
@@ -253,14 +253,14 @@ def test_drain_preserves_telegram_origin_identity(tmp_path, monkeypatch):
     token = _handshake(client, acc, pid)
     cloud._save_state(
         brr_dir,
-        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 0},
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
     )
     monkeypatch.setattr(cloud, "_request", _route_to(client))
 
     client.post(
         "/v1/_dev/enqueue",
         json={
-            "project_id": pid,
+            "repo_id": pid,
             "body": "fix from telegram",
             "source": "telegram",
             "reply_to": {
@@ -301,7 +301,7 @@ def test_loop_skips_delivery_without_cloud_event_id(tmp_path, monkeypatch):
     token = _handshake(client, acc, pid)
     cloud._save_state(
         brr_dir,
-        {"brnrd_url": "http://brnrd", "token": token, "project_id": pid, "since": 99},
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 99},
     )
     monkeypatch.setattr(cloud, "_request", _route_to(client))
 
@@ -324,7 +324,7 @@ def test_render_update_relays_card_through_the_cloud_transport(tmp_path, monkeyp
     brr_dir = tmp_path / ".brr"
     cloud._save_state(
         brr_dir,
-        {"brnrd_url": "http://brnrd", "token": "tok", "project_id": "p", "since": 0},
+        {"brnrd_url": "http://brnrd", "token": "tok", "repo_id": "p", "since": 0},
     )
 
     posts: list[tuple[str, dict]] = []
@@ -390,7 +390,7 @@ def test_run_loop_exits_on_auth_error(tmp_path, monkeypatch):
         {
             "brnrd_url": "http://brnrd",
             "token": "bd_bad",
-            "project_id": "proj_x",
+            "repo_id": "proj_x",
             "since": 0,
         },
     )

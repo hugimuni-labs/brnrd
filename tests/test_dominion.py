@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from brr import dominion, gitops, prompts
+from brr import account, dominion, gitops, prompts
 
 from _helpers import commit_files, init_git_repo
 
@@ -213,6 +213,37 @@ def test_build_injected_context_matches_runner_injection(tmp_path):
     assert context in prompts.build_run_prompt("fix the parser", repo)
 
 
+def test_build_injected_context_prefers_account_dominion(tmp_path):
+    repo = _repo(tmp_path)
+    legacy = dominion.ensure_dominion(repo, push=False)
+    (legacy / "playbook.md").write_text("legacy playbook\n", encoding="utf-8")
+    home = tmp_path / "account-home"
+    from brr import config as conf
+
+    conf.write_config(
+        repo,
+        {
+            "account.dominion_path": str(home),
+            "repo.label": "Gurio/brr",
+            "diffense.emit_pack": False,
+            "introspect.enabled": False,
+        },
+    )
+    ctx = account.resolve_context(
+        repo,
+        {"account.dominion_path": str(home), "repo.label": "Gurio/brr"},
+    )
+    repo_dom = account.repo_dominion_path(ctx, "Gurio/brr")
+    dominion.seed_account_dominion(repo_dom)
+    (repo_dom / "playbook.md").write_text("account playbook\n", encoding="utf-8")
+
+    context = prompts.build_injected_context(repo, task_text="fix the parser")
+
+    assert "account playbook" in context
+    assert "legacy playbook" not in context
+    assert str(repo_dom) in context
+
+
 def test_build_injected_context_includes_mode_toggles(tmp_path):
     """build_injected_context honors the diffense + introspect config toggles.
 
@@ -265,6 +296,20 @@ def test_dominion_block_surfaces_divergence_when_marked(tmp_path):
     # guidance) and carries the recorded reason.
     assert "Reason on record" in block
     assert "push of brr-home was rejected" in block
+
+
+def test_seed_account_dominion_preserves_existing_files(tmp_path):
+    path = tmp_path / "home" / "repos" / "Gurio__brr" / "dominion"
+    path.mkdir(parents=True)
+    (path / "playbook.md").write_text("custom\n", encoding="utf-8")
+
+    dominion.seed_account_dominion(path)
+
+    assert (path / "playbook.md").read_text(encoding="utf-8") == "custom\n"
+    assert (path / "self-inject").exists()
+    assert "Default startup does not create a GitHub repo" in (
+        path / "README.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_resolve_self_inject_modes(tmp_path):

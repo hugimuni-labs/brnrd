@@ -12,7 +12,7 @@ from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import ChatBinding, Event  # noqa: E402
+from brnrd.models import ChannelRoute, Event  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
 _SECRET = "webhook-secret"
@@ -52,15 +52,17 @@ def _account(client):
     )
 
 
-def _project(client, headers, name="demo"):
+def _repo(client, headers, name="demo"):
     return client.post(
-        "/v1/accounts/projects", json={"name": name}, headers=headers
-    ).json()["project_id"]
+        "/v1/accounts/repos",
+        json={"repo_full_name": f"Gurio/{name}"},
+        headers=headers,
+    ).json()["repo_id"]
 
 
-def _tg_pair_code(client, headers, project_id):
+def _tg_pair_code(client, headers, repo_id):
     return client.post(
-        "/v1/accounts/pair/telegram", json={"project_id": project_id}, headers=headers
+        "/v1/accounts/pair/telegram", json={"repo_id": repo_id}, headers=headers
     ).json()["pair_code"]
 
 
@@ -85,11 +87,11 @@ def _message(
     return {"update_id": message_id, "message": msg}
 
 
-def _daemon_headers(client, acc, pid):
+def _daemon_headers(client, acc, repo_id):
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"project_id": pid},
+        json={"repo_id": repo_id},
         headers=acc,
     )
     token = client.get(
@@ -114,8 +116,8 @@ def test_webhook_rejects_bad_secret(env):
 def test_start_binds_chat_and_confirms(env):
     app, client, sends = env
     acc = _account(client)
-    pid = _project(client, acc, name="myproj")
-    code = _tg_pair_code(client, acc, pid)
+    rid = _repo(client, acc, name="myrepo")
+    code = _tg_pair_code(client, acc, rid)
 
     r = client.post(
         "/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR
@@ -124,13 +126,13 @@ def test_start_binds_chat_and_confirms(env):
 
     with app.state.SessionLocal() as db:
         binding = db.execute(
-            select(ChatBinding).where(ChatBinding.chat_id == "555")
+            select(ChannelRoute).where(ChannelRoute.channel_id == "555")
         ).scalar_one()
-        assert binding.project_id == pid
+        assert binding.repo_id == rid
     # The bot confirmed the pairing back to the chat.
     assert len(sends) == 1
     assert sends[0]["chat_id"] == "555"
-    assert "myproj" in sends[0]["text"]
+    assert "myrepo" in sends[0]["text"]
 
 
 def test_invalid_start_code_is_reported(env):
@@ -145,8 +147,8 @@ def test_invalid_start_code_is_reported(env):
 def test_bound_chat_message_enqueues_with_reply_to(env):
     app, client, _ = env
     acc = _account(client)
-    pid = _project(client, acc)
-    code = _tg_pair_code(client, acc, pid)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
 
     r = client.post(
@@ -160,11 +162,11 @@ def test_bound_chat_message_enqueues_with_reply_to(env):
         event = db.execute(
             select(Event).where(Event.source == "telegram")
         ).scalar_one()
-        assert event.project_id == pid
+        assert event.repo_id == rid
         assert event.body == "do the thing"
 
     # Drain it through the daemon to confirm the reply_to routes home.
-    dmn = _daemon_headers(client, acc, pid)
+    dmn = _daemon_headers(client, acc, rid)
     drained = client.get(
         "/v1/daemons/inbox", params={"since": 0, "wait": 0}, headers=dmn
     ).json()
@@ -192,12 +194,12 @@ def test_unbound_chat_gets_setup_error(env):
     assert "not paired" in sends[0]["text"]
 
 
-def test_project_command_switches_bound_chat(env):
+def test_repo_command_switches_bound_chat(env):
     app, client, sends = env
     acc = _account(client)
-    pid_a = _project(client, acc, name="alpha")
-    pid_b = _project(client, acc, name="beta")
-    code = _tg_pair_code(client, acc, pid_a)
+    rid_a = _repo(client, acc, name="alpha")
+    rid_b = _repo(client, acc, name="beta")
+    code = _tg_pair_code(client, acc, rid_a)
     client.post(
         "/v1/webhooks/telegram",
         json=_message(555, f"/start {code}"),
@@ -206,33 +208,32 @@ def test_project_command_switches_bound_chat(env):
     sends.clear()
 
     r = client.post(
-        "/v1/webhooks/telegram", json=_message(555, "/project beta"), headers=_HDR
+        "/v1/webhooks/telegram", json=_message(555, "/repo beta"), headers=_HDR
     )
     assert r.status_code == 200
     with app.state.SessionLocal() as db:
         binding = db.execute(
-            select(ChatBinding).where(ChatBinding.chat_id == "555")
+            select(ChannelRoute).where(ChannelRoute.channel_id == "555")
         ).scalar_one()
-        assert binding.project_id == pid_b
+        assert binding.repo_id == rid_b
         assert db.execute(select(Event)).scalars().all() == []
     assert len(sends) == 1
-    assert "Selected project 'beta'" in sends[0]["text"]
+    assert "Active repo set to 'Gurio/beta'" in sends[0]["text"]
 
     client.post(
         "/v1/webhooks/telegram", json=_message(555, "ship it"), headers=_HDR
     )
     with app.state.SessionLocal() as db:
         event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
-        assert event.project_id == pid_b
+        assert event.repo_id == rid_b
         assert event.body == "ship it"
 
 
-def test_connect_command_switches_bound_chat(env):
+def test_status_command_reports_active_repo(env):
     app, client, sends = env
     acc = _account(client)
-    pid_a = _project(client, acc, name="alpha")
-    pid_b = _project(client, acc, name="beta project")
-    code = _tg_pair_code(client, acc, pid_a)
+    rid = _repo(client, acc, name="alpha")
+    code = _tg_pair_code(client, acc, rid)
     client.post(
         "/v1/webhooks/telegram",
         json=_message(555, f"/start {code}"),
@@ -242,26 +243,25 @@ def test_connect_command_switches_bound_chat(env):
 
     r = client.post(
         "/v1/webhooks/telegram",
-        json=_message(555, "/connect beta project"),
+        json=_message(555, "/status"),
         headers=_HDR,
     )
     assert r.status_code == 200
 
     with app.state.SessionLocal() as db:
         binding = db.execute(
-            select(ChatBinding).where(ChatBinding.chat_id == "555")
+            select(ChannelRoute).where(ChannelRoute.channel_id == "555")
         ).scalar_one()
-        assert binding.project_id == pid_b
+        assert binding.repo_id == rid
     assert len(sends) == 1
-    assert "Selected project 'beta project'" in sends[0]["text"]
+    assert "Active repo: Gurio/alpha" in sends[0]["text"]
 
 
-def test_project_command_routes_one_task_without_switching(env):
+def test_repo_command_unknown_repo_replies_without_enqueue(env):
     app, client, sends = env
     acc = _account(client)
-    pid_a = _project(client, acc, name="alpha")
-    pid_b = _project(client, acc, name="beta")
-    code = _tg_pair_code(client, acc, pid_a)
+    rid = _repo(client, acc, name="alpha")
+    code = _tg_pair_code(client, acc, rid)
     client.post(
         "/v1/webhooks/telegram",
         json=_message(555, f"/start {code}"),
@@ -271,37 +271,7 @@ def test_project_command_routes_one_task_without_switching(env):
 
     r = client.post(
         "/v1/webhooks/telegram",
-        json=_message(555, "/project beta do the other thing", message_id=42),
-        headers=_HDR,
-    )
-    assert r.status_code == 200
-
-    with app.state.SessionLocal() as db:
-        binding = db.execute(
-            select(ChatBinding).where(ChatBinding.chat_id == "555")
-        ).scalar_one()
-        event = db.execute(select(Event).where(Event.source == "telegram")).scalar_one()
-        assert binding.project_id == pid_a
-        assert event.project_id == pid_b
-        assert event.body == "do the other thing"
-    assert sends == []
-
-
-def test_project_command_unknown_project_replies_without_enqueue(env):
-    app, client, sends = env
-    acc = _account(client)
-    pid = _project(client, acc, name="alpha")
-    code = _tg_pair_code(client, acc, pid)
-    client.post(
-        "/v1/webhooks/telegram",
-        json=_message(555, f"/start {code}"),
-        headers=_HDR,
-    )
-    sends.clear()
-
-    r = client.post(
-        "/v1/webhooks/telegram",
-        json=_message(555, "/project missing do the thing"),
+        json=_message(555, "/repo missing"),
         headers=_HDR,
     )
     assert r.status_code == 200
@@ -309,15 +279,15 @@ def test_project_command_unknown_project_replies_without_enqueue(env):
     with app.state.SessionLocal() as db:
         assert db.execute(select(Event)).scalars().all() == []
     assert len(sends) == 1
-    assert "No project matched" in sends[0]["text"]
+    assert "was not found" in sends[0]["text"]
 
 
-def test_projects_command_lists_current_project(env):
+def test_repos_command_lists_current_repo(env):
     _, client, sends = env
     acc = _account(client)
-    pid = _project(client, acc, name="alpha")
-    _project(client, acc, name="beta")
-    code = _tg_pair_code(client, acc, pid)
+    rid = _repo(client, acc, name="alpha")
+    _repo(client, acc, name="beta")
+    code = _tg_pair_code(client, acc, rid)
     client.post(
         "/v1/webhooks/telegram",
         json=_message(555, f"/start {code}"),
@@ -326,13 +296,13 @@ def test_projects_command_lists_current_project(env):
     sends.clear()
 
     r = client.post(
-        "/v1/webhooks/telegram", json=_message(555, "/projects"), headers=_HDR
+        "/v1/webhooks/telegram", json=_message(555, "/repos"), headers=_HDR
     )
     assert r.status_code == 200
 
     assert len(sends) == 1
-    assert "- alpha (current)" in sends[0]["text"]
-    assert "- beta" in sends[0]["text"]
+    assert "- Gurio/alpha (active)" in sends[0]["text"]
+    assert "- Gurio/beta" in sends[0]["text"]
 
 
 def test_split_message_prefers_newlines_and_loses_nothing():
@@ -370,8 +340,8 @@ def test_send_message_chunks_long_body(monkeypatch):
 def test_response_is_forwarded_back_to_telegram(env):
     app, client, sends = env
     acc = _account(client)
-    pid = _project(client, acc)
-    code = _tg_pair_code(client, acc, pid)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
     sends.clear()  # drop the pairing confirmation
 
@@ -385,7 +355,7 @@ def test_response_is_forwarded_back_to_telegram(env):
             select(Event).where(Event.source == "telegram")
         ).scalar_one().event_id
 
-    dmn = _daemon_headers(client, acc, pid)
+    dmn = _daemon_headers(client, acc, rid)
     resp = client.post(
         "/v1/daemons/responses",
         json={"event_id": event_id, "body_markdown": "here is your answer",
@@ -411,9 +381,9 @@ def test_telegram_pair_returns_deep_link_when_username_set():
     )
     client = TestClient(create_app(settings))
     acc = _account(client)
-    pid = _project(client, acc)
+    rid = _repo(client, acc)
     body = client.post(
-        "/v1/accounts/pair/telegram", json={"project_id": pid}, headers=acc
+        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
     ).json()
     code = body["pair_code"]
     assert code.startswith("TG-")
@@ -425,9 +395,9 @@ def test_telegram_pair_returns_deep_link_when_username_set():
 def test_telegram_pair_omits_deep_link_without_username(env):
     _, client, _ = env  # fixture Settings sets no telegram_bot_username
     acc = _account(client)
-    pid = _project(client, acc)
+    rid = _repo(client, acc)
     body = client.post(
-        "/v1/accounts/pair/telegram", json={"project_id": pid}, headers=acc
+        "/v1/accounts/pair/telegram", json={"repo_id": rid}, headers=acc
     ).json()
     assert body["deep_link"] is None
     assert f"/start {body['pair_code']}" in body["instructions"]
@@ -436,8 +406,8 @@ def test_telegram_pair_omits_deep_link_without_username(env):
 def _bound_telegram_event(app, client, *, message_id=77):
     """Bind chat 555 and enqueue one task message; return its event_id."""
     acc = _account(client)
-    pid = _project(client, acc)
-    code = _tg_pair_code(client, acc, pid)
+    rid = _repo(client, acc)
+    code = _tg_pair_code(client, acc, rid)
     client.post("/v1/webhooks/telegram", json=_message(555, f"/start {code}"), headers=_HDR)
     client.post(
         "/v1/webhooks/telegram",
@@ -448,7 +418,7 @@ def _bound_telegram_event(app, client, *, message_id=77):
         event_id = db.execute(
             select(Event).where(Event.source == "telegram")
         ).scalar_one().event_id
-    return acc, pid, event_id
+    return acc, rid, event_id
 
 
 def test_card_relay_sends_then_edits(env, monkeypatch):
@@ -468,8 +438,8 @@ def test_card_relay_sends_then_edits(env, monkeypatch):
     monkeypatch.setattr("brnrd.platforms.telegram.send_card", fake_send_card)
     monkeypatch.setattr("brnrd.platforms.telegram.edit_card", fake_edit_card)
 
-    acc, pid, event_id = _bound_telegram_event(app, client)
-    dmn = _daemon_headers(client, acc, pid)
+    acc, rid, event_id = _bound_telegram_event(app, client)
+    dmn = _daemon_headers(client, acc, rid)
 
     # First card: no message_id → send, brnrd returns the platform id.
     r1 = client.post(
@@ -508,8 +478,8 @@ def test_card_relay_is_noop_after_responded(env, monkeypatch):
         "brnrd.platforms.telegram.edit_card", lambda *a, **k: cards.append(a)
     )
 
-    acc, pid, event_id = _bound_telegram_event(app, client)
-    dmn = _daemon_headers(client, acc, pid)
+    acc, rid, event_id = _bound_telegram_event(app, client)
+    dmn = _daemon_headers(client, acc, rid)
 
     # Deliver the final answer first; the card lifecycle is then over.
     client.post(
@@ -530,8 +500,8 @@ def test_card_relay_unknown_event_is_404(env, monkeypatch):
         "brnrd.platforms.telegram.send_card", lambda *a, **k: 1
     )
     acc = _account(client)
-    pid = _project(client, acc)
-    dmn = _daemon_headers(client, acc, pid)
+    rid = _repo(client, acc)
+    dmn = _daemon_headers(client, acc, rid)
     r = client.post(
         "/v1/daemons/card", json={"event_id": "evt-nope", "text": "x"}, headers=dmn
     )

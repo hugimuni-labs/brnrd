@@ -1,7 +1,7 @@
 """Self-scheduled thoughts — the resident wakes itself on its own clock.
 
 The resident keeps a declarative **schedule** in its dominion
-(``.brr/dominion/schedule.md``); the daemon's reflex loop reads it each
+(``schedule.md`` in the resident dominion); the daemon's reflex loop reads it each
 tick and fires due entries as ordinary inbox events, which flow through
 the normal single-flight pipeline. A self-scheduled wake *is just an
 event* whose source happens to be the resident itself — consistent with

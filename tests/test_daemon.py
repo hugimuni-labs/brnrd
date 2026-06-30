@@ -428,6 +428,137 @@ def test_run_worker_accepts_current_outbox_reply_without_stdout(
     ] == ["handled through outbox"]
 
 
+def test_drain_outbox_queues_respawn_request(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+        chat_id="42",
+        origin_message_key="telegram:42::99",
+    )
+    event_id = path.stem
+    (outbox / "respawn.md").write_text(
+        "---\n"
+        "respawn: true\n"
+        "shell: codex-mini\n"
+        "repo: Gurio/other\n"
+        "reason: needs a stronger core\n"
+        "defer_until: +30m\n"
+        "---\n"
+        "carry this exact task forward\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-dispatch",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"respawn": 1}
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("respawned_from_event") == event_id
+    ][0]
+    assert spawned["source"] == "telegram"
+    assert spawned["conversation_key"] == "telegram:42:"
+    assert spawned["chat_id"] == 42
+    assert spawned["shell"] == "codex-mini"
+    assert spawned["repo"] == "Gurio/other"
+    assert spawned["repo_label"] == "Gurio/other"
+    assert spawned["respawn_reason"] == "needs a stronger core"
+    assert spawned["body"] == "carry this exact task forward"
+    assert "origin_message_key" not in spawned
+    assert protocol.event_is_deferred(spawned)
+
+
+def test_drain_outbox_quality_respawn_resolves_local_escalation(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+        chat_id="42",
+    )
+    event_id = path.stem
+    monkeypatch.setattr(
+        daemon.runner,
+        "quality_escalation_runner",
+        lambda _repo, current, *, target_class=None, tried=(): (
+            "claude-opus"
+            if current == "codex-mini" and target_class == "strong"
+            else None
+        ),
+    )
+    (outbox / "respawn.md").write_text(
+        "---\n"
+        "respawn: true\n"
+        "quality: escalate\n"
+        "reason: needs a stronger core\n"
+        "---\n"
+        "carry this exact task forward\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-dispatch",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"runner_name": "codex-mini"},
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        repo_root=tmp_path,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"respawn": 1}
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("respawned_from_event") == event_id
+    ][0]
+    assert spawned["shell"] == "claude-opus"
+    assert spawned["respawn_quality"] == "strong"
+    assert spawned["respawn_reason"] == "needs a stronger core"
+
+
 def test_run_worker_writes_terminal_failure_response_on_runner_error(
     tmp_path, monkeypatch,
 ):
@@ -1109,6 +1240,16 @@ def test_result_satisfied_delivery_recognises_outbound_gate_send():
     assert signal == "outbound"
 
 
+def test_result_satisfied_delivery_recognises_respawn_signal():
+    """A parked respawn is an explicit success signal: the current run handed the
+    work to a new Shell/Core instead of silently producing no output."""
+    event = {"source": "telegram"}
+    stats = {"current": 0, "other": 0, "outbound": 0, "respawn": 1}
+    ok, signal = daemon._result_satisfied_delivery(_result(), stats, event)
+    assert ok is True
+    assert signal == "respawn"
+
+
 def test_result_satisfied_delivery_recognises_commit_signal():
     """A run that committed new work on the worktree branch is a
     successful run, even without any reply event — §6's commit signal."""
@@ -1249,17 +1390,316 @@ def test_scm_facet_reports_dirty_unpushed_tree(tmp_path):
 
 def test_resources_facet_quota_known_when_summary_present():
     facet = daemon._resources_facet("weekly 42% - resets 3d")
-    assert facet["quota"] == {
-        "status": "known", "summary": "weekly 42% - resets 3d",
-    }
-    # The not-yet-built capabilities advertise themselves honestly.
-    assert facet["cost"] == {"status": "unavailable"}
-    assert facet["coexisting_runs"] == {"status": "unavailable"}
-    assert facet["remote_scm"] == {"status": "unavailable"}
+    assert facet["quota"]["status"] == "known"
+    assert facet["quota"]["summary"] == "weekly 42% - resets 3d"
+    # The level facets with no collector wired for this medium advertise
+    # themselves as unimplemented and whether they are required, so a future
+    # wake sees the slot and its weight.
+    assert facet["spend"]["status"] == "unimplemented"
+    assert facet["spend"]["required"] is True
+    assert facet["context_window"]["status"] == "unimplemented"
+    assert facet["context_window"]["required"] is True
+    assert facet["coexisting_runs"]["status"] == "unimplemented"
+    assert facet["coexisting_runs"]["required"] is False
 
 
-def test_resources_facet_quota_unavailable_without_summary():
+def test_resources_facet_level_collector_flips_empty_to_absent():
+    # With a level collector wired (for example Claude result JSON), an empty spend /
+    # context-window slot is affirmative-'absent', not unbuilt 'unimplemented'.
+    facet = daemon._resources_facet(None, levels_collector=True)
+    assert facet["spend"]["status"] == "absent"
+    assert facet["context_window"]["status"] == "absent"
+    # A populated level snapshot reads 'known' and carries its summary.
+    facet = daemon._resources_facet(
+        None,
+        levels_collector=True,
+        levels={
+            "spend": {"summary": "$0.42 this session"},
+            "context_window": {"summary": "62% context left"},
+            "quota": {"summary": "5h 58% left"},
+        },
+    )
+    assert facet["spend"]["status"] == "known"
+    assert facet["spend"]["summary"] == "$0.42 this session"
+    assert facet["context_window"]["status"] == "known"
+    # A level-source quota wins over the local snapshot path.
+    assert facet["quota"]["status"] == "known"
+    assert facet["quota"]["summary"] == "5h 58% left"
+
+
+def test_resources_facet_quota_absent_without_summary():
+    # Quota's collector exists but proved nothing for this medium: that is an
+    # affirmative-empty 'absent', not an unbuilt 'unimplemented'.
     facet = daemon._resources_facet(None)
-    assert facet["quota"] == {"status": "unavailable", "summary": None}
+    assert facet["quota"]["status"] == "absent"
+    assert facet["quota"]["summary"] is None
+    assert facet["quota"]["note"]
     facet_blank = daemon._resources_facet("   ")
-    assert facet_blank["quota"]["status"] == "unavailable"
+    assert facet_blank["quota"]["status"] == "absent"
+
+
+def test_resources_facet_remote_scm_pr_not_created_is_absent():
+    facet = daemon._resources_facet(None, branch="brr/feature")
+    assert facet["remote_scm"]["status"] == "absent"
+    assert facet["remote_scm"]["pr_state"] == "none"
+    assert facet["remote_scm"]["branch"] == "brr/feature"
+    assert facet["remote_scm"]["pr_number"] is None
+    assert "no PR" in facet["remote_scm"]["note"]
+
+
+def test_resources_facet_remote_scm_known_when_pr_recorded():
+    facet = daemon._resources_facet(None, branch="brr/feature", pr_number="207")
+    assert facet["remote_scm"]["status"] == "known"
+    assert facet["remote_scm"]["pr_state"] == "open"
+    assert facet["remote_scm"]["pr_number"] == "207"
+    assert facet["remote_scm"]["note"] is None
+
+
+def test_resources_facet_threads_runner_catalog():
+    facet = daemon._resources_facet(
+        None,
+        runner_name="codex-mini",
+        runner_catalog=[
+            {
+                "name": "codex-mini",
+                "shell": "codex",
+                "model": "gpt-5.4-mini",
+                "selected": True,
+                "availability": "available",
+            }
+        ],
+    )
+
+    catalog = facet["runner"]["catalog"]
+    assert catalog[0]["name"] == "codex-mini"
+    assert catalog[0]["selected"] is True
+
+
+def test_repo_label_prefers_event_repo():
+    label = daemon._repo_label(
+        Path("/tmp/local-brr"),
+        {"github_repo": "Gurio/brr"},
+        {},
+    )
+
+    assert label == "Gurio/brr"
+
+
+def test_repo_label_falls_back_to_remote(monkeypatch, tmp_path):
+    monkeypatch.setattr(daemon.gitops, "default_remote", lambda _root: "origin")
+    monkeypatch.setattr(
+        daemon.gitops,
+        "remote_url",
+        lambda _root, _remote: "git@github.com:Gurio/brr.git",
+    )
+
+    assert daemon._repo_label(tmp_path, {}, {}) == "Gurio/brr"
+
+
+def test_repo_label_uses_config_before_directory_name(tmp_path):
+    assert daemon._repo_label(tmp_path, {}, {"repo.label": "local/demo"}) == "local/demo"
+
+
+def test_account_dispatch_inbox_routes_message_event_to_registered_repo(tmp_path):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "account.dominion_path": str(tmp_path / "account-home"),
+        "account.repo.Gurio/b": str(repo_b),
+    }
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    protocol.create_event(
+        ctx.dispatch_inbox,
+        "telegram",
+        "route this to repo b",
+        repo="Gurio/b",
+    )
+
+    targets = daemon._dispatchable_targets(ctx, repo_a, cfg)
+
+    assert len(targets) == 1
+    assert targets[0].repo_root == repo_b
+    assert targets[0].repo_label == "Gurio/b"
+    assert targets[0].inbox_dir == ctx.dispatch_inbox
+    assert targets[0].responses_dir == ctx.responses_dir
+
+
+def test_account_dispatch_keeps_forge_events_on_repo_local_route(tmp_path):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
+    cfg = {
+        "repo.label": "Gurio/a",
+        "account.dominion_path": str(tmp_path / "account-home"),
+        "account.repo.Gurio/b": str(repo_b),
+    }
+    ctx = daemon.account.resolve_context(repo_a, cfg)
+    repo_b_inbox = repo_b / ".brr" / "inbox"
+    protocol.create_event(repo_b_inbox, "github", "fix this issue")
+
+    targets = daemon._dispatchable_targets(ctx, repo_a, cfg)
+
+    assert len(targets) == 1
+    assert targets[0].repo_root == repo_b
+    assert targets[0].repo_label == "Gurio/b"
+    assert targets[0].inbox_dir == repo_b_inbox
+    assert targets[0].responses_dir == repo_b / ".brr" / "responses"
+    assert targets[0].event["repo_label"] == "Gurio/b"
+
+
+def test_account_run_state_doc_persists_run_snapshot(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    ctx = daemon.account.resolve_context(
+        repo,
+        {
+            "repo.label": "Gurio/brr",
+            "account.dominion_path": str(tmp_path / "account-home"),
+        },
+    )
+    task = Run(
+        id="run-state",
+        event_id="evt-state",
+        body="please make the state visible",
+        source="telegram",
+        status="running",
+        meta={"runner_name": "codex"},
+    )
+
+    path = daemon._persist_run_state_doc(
+        ctx,
+        task,
+        repo_label="Gurio/brr",
+        stage="created",
+    )
+
+    assert path == ctx.run_state_dir / "Gurio__brr" / "run-state.md"
+    text = path.read_text(encoding="utf-8")
+    assert "run_id: run-state" in text
+    assert "repo_label: Gurio/brr" in text
+    assert "- runner: codex" in text
+    # The local store path is recorded as a dev breadcrumb; with no forge
+    # remote on the dominion there is no web URL to surface yet.
+    assert task.meta["run_state_path"] == str(path)
+    assert "run_state_url" not in task.meta
+
+
+def test_capture_dominion_commits_account_home(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    cfg = {
+        "repo.label": "Gurio/brr",
+        "account.dominion_path": str(tmp_path / "account-home"),
+    }
+    ctx = daemon.account.resolve_context(repo, cfg)
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=ctx.dominion_repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=ctx.dominion_repo,
+        check=True,
+    )
+    repo_dom = daemon.account.repo_dominion_path(ctx, "Gurio/brr")
+    daemon.dominion.seed_account_dominion(repo_dom)
+    (repo_dom / "notes.md").write_text("remember this\n", encoding="utf-8")
+    task = Run(
+        id="run-capture",
+        event_id="evt-capture",
+        body="capture memory",
+        source="telegram",
+        status="done",
+        meta={"repo_label": "Gurio/brr"},
+    )
+
+    daemon._capture_dominion(repo, cfg, task, account_context=ctx)
+
+    log = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=ctx.dominion_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert log == "brnrd-home: capture account memory after run run-capture"
+
+
+def test_finalize_captures_after_finished_run_state(monkeypatch, tmp_path):
+    event = {"id": "evt-final", "source": "telegram", "status": "done"}
+    task = Run(
+        id="run-final",
+        event_id="evt-final",
+        body="finish state",
+        source="telegram",
+        status="done",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_run_worker(*args, **kwargs):
+        return task
+
+    def fake_persist(_ctx, persisted_task, *, repo_label, stage, cfg=None):
+        calls.append(("persist", stage))
+        persisted_task.meta["run_state_stage"] = stage
+        return tmp_path / "state.md"
+
+    def fake_capture(_repo, _cfg, captured_task, *, account_context=None):
+        calls.append(("capture", captured_task.meta.get("run_state_stage", "")))
+
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda _repo, _task: None)
+    monkeypatch.setattr(daemon, "_persist_run_state_doc", fake_persist)
+    monkeypatch.setattr(daemon, "_capture_dominion", fake_capture)
+    monkeypatch.setattr(daemon, "_retire_internal_event", lambda _event, _responses: False)
+
+    daemon._run_worker_and_finalize(
+        event,
+        tmp_path,
+        tmp_path / ".brr" / "responses",
+        {},
+        0,
+        account_context=None,
+    )
+
+    assert calls == [("persist", "finished"), ("capture", "finished")]
+
+
+def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        daemon.claude_usage,
+        "load_or_refresh_snapshot",
+        lambda outbox, cwd=None: {
+            "source": "claude /usage PTY",
+            "quota": {"summary": "session 100% left; week 55% left"},
+        },
+    )
+    monkeypatch.setattr(
+        daemon.claude_status,
+        "load_snapshot",
+        lambda outbox: {
+            "source": "claude result JSON",
+            "spend": {"summary": "$0.0100 this session"},
+            "context_window": {"summary": "95% context left (est)"},
+        },
+    )
+
+    levels, slots = daemon._collect_levels("claude", tmp_path, tmp_path)
+
+    assert slots == {"quota", "spend", "context_window"}
+    assert levels["quota"]["summary"] == "session 100% left; week 55% left"
+    assert levels["spend"]["summary"] == "$0.0100 this session"
+    assert levels["context_window"]["summary"] == "95% context left (est)"
+    assert levels["source"] == "claude /usage PTY + claude result JSON"

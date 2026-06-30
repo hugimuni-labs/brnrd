@@ -13,7 +13,7 @@
       <article class="status-card status-ok"><span>Signed in</span><strong>@{{ account.github_login }}</strong></article>
       <article class="status-card"><span>GitHub App</span><strong>{{ github_app_slug }}</strong></article>
       <article class="status-card"><span>Enabled repos</span><strong>{{ connected_count }}</strong></article>
-      <article class="status-card"><span>Call sign</span><strong>@{{ github_bot_login }}</strong></article>
+      <article class="status-card"><span>Activity</span><strong><a href="/activity">Open</a></strong></article>
     </section>
 
     {% if not installations and not installed_repos %}
