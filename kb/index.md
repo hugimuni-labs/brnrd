@@ -276,9 +276,11 @@ dive-in map) and are stable until something contradicts them.
   offer brnrd-owned relay with a spending plan for user approval. Includes
   `SpendingPlan` data model (provider cost + relay fee calculation), relay
   runner selection, and the consent gate that pauses a run before relay spend.
-  Slices 1–2 (spending plan model + relay runner selection) shipped 2026-06-29.
-  Deferred to next wake: daemon integration, portal exposure, and resident
-  respawn consumer.
+  Slices 1–2 (spending plan model + relay runner selection) shipped 2026-06-29;
+  the 2026-07-01 feedback slice surfaces a relay candidate and spending plan on
+  `attempt_failed` plus the terminal failure note. Still deferred: true
+  pause-for-approval, live portal relay state, wallet balance, audit/billing, and
+  the resident/daemon approval-resume consumer.
 - [Runner Shell/Core selection, cost policy, and brnrd relay fallback](design-runner-cores.md) —
   *active on 2026-06-27*. Splits static runner profiles from **RunnerProfiles**
   (profile + model/Core + owner + auth/quota source + hook capability + billing

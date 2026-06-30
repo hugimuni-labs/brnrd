@@ -41,13 +41,16 @@ Service fee rate: 12% (midpoint of 10–15% range; exact rate locks in
 - `best_relay_runner()`: pick the best relay runner, optionally by provider
 - Extended `RespawnRequest`: add `relay_consent` field (pending/approved/denied/capped)
 
-### Daemon integration (deferred to next slice)
+### Daemon integration (feedback shipped 2026-07-01; approval deferred)
 After automatic local fallback exhausts in `daemon.py` ~line 1330:
 - Check for available relay runners
 - If relay exists and no local fallback, emit an `attempt_failed` with
-  `needs_relay_consent=true` instead of hard failure
-- The resident responds with a respawn request (`relay_consent=approved`) or
-  denies it
+  `needs_relay_consent=true`, `relay_candidate`, and `relay_plan` before the
+  terminal failure path runs. This feedback slice is shipped: the progress/card
+  ledger says "relay available", and the terminal failure reply names the relay
+  candidate while explicitly saying brr did not auto-spend relay tokens.
+- Deferred: pause in "waiting for approval" instead of hard failure; persist the
+  spending plan to task/event state for audit; consume approval or denial.
 
 ### Resident integration (deferred to next slice)
 When the resident sees `needs_relay_consent=true`:
@@ -75,18 +78,23 @@ When the resident sees `needs_relay_consent=true`:
 - `runner_select.py`: `relay_runners()`, `best_relay_runner()`
 - Extend `RespawnRequest` with `relay_consent` field
 
-### Slice 3: Daemon fallback → relay (deferred)
+### Slice 3: Daemon fallback → relay feedback — partial shipped 2026-07-01
 After local fallback exhausts at line ~1330 in `daemon.py`:
-- Check `best_relay_runner()`
-- If found, emit `attempt_failed` with `needs_relay_consent=true` and
-  `spending_plan` dict
-- Save spending plan to task/event state for potential audit
-- Stay in "paused waiting for approval" state, not "hard failure"
+- Shipped: check `best_relay_runner()` and, when found, emit
+  `attempt_failed` with `needs_relay_consent=true`, `relay_candidate`, and
+  `relay_plan` before the packet is persisted/rendered. The attempt ledger and
+  terminal failure note surface that relay is available without implying spend
+  has happened.
+- Deferred: save the spending plan to task/event state for audit and stay in
+  "paused waiting for approval" rather than "hard failure".
 
-### Slice 4: Portal expose (deferred)
+### Slice 4: Portal/card expose (partial)
 - `_write_live_portal_state()`: add `relay_consent` block with plan details
 - `resources.relay_candidates`: best relay runner metadata
-- Card render: "Local quota exhausted. Relay available. Approve to continue?"
+- Shipped: card/run-progress attempt ledger renders "relay available" from the
+  `attempt_failed` packet.
+- Deferred: live `portal-state.json` relay block and approval-oriented card copy
+  such as "Local quota exhausted. Relay available. Approve to continue?"
 
 ### Slice 5: Resident respawn consumer (deferred)
 - When resident sees `needs_relay_consent=true`, read spending plan from portal

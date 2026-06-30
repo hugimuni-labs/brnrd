@@ -9417,3 +9417,19 @@ Added regression coverage for filtered `/activity` rendering and for the cloud
 gate publishing a local snapshot of running runs, future scheduled wakes, and
 parked respawns through `PUT /v1/daemons/activity` back to
 `GET /v1/accounts/activity`. Verification: brnrd/cloud focused suite green.
+
+## [2026-07-01] fix | relay fallback feedback surfaces before hard failure
+
+Closed the relay feedback bug in the spend-consent slice: daemon fallback code
+was constructing `needs_relay_consent`, `relay_candidate`, and `relay_plan`
+after the `attempt_failed` packet had already emitted, so cards/progress never
+saw the relay offer. The relay check now runs before emission. Run-progress
+attempt ledgers render "relay available", and the terminal failure note names
+the brnrd relay candidate while saying brr did not auto-spend relay tokens.
+
+This is a feedback slice, not the full approval/resume loop: runs still hard
+fail after surfacing the candidate. Updated `plan-relay-spend-consent.md` and
+`kb/index.md` to mark feedback as shipped and keep pause-for-approval, live
+portal relay state, wallet balance, audit/billing, and approval-resume consumer
+as deferred. Verification: daemon progress, run-progress, runner selector,
+spending-plan, and facet tests green.
