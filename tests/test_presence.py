@@ -14,11 +14,18 @@ from brr import presence
 
 def test_register_then_list(tmp_path):
     brr = tmp_path / ".brr"
-    entry = presence.register(brr, kind="daemon", stream="telegram:1:", run_id="t1")
+    entry = presence.register(
+        brr,
+        kind="daemon",
+        stream="telegram:1:",
+        run_id="t1",
+        repo_label="Gurio/brr",
+    )
     assert entry["id"]
     assert entry["kind"] == "daemon"
     assert entry["stream"] == "telegram:1:"
     assert entry["run_id"] == "t1"
+    assert entry["repo_label"] == "Gurio/brr"
     assert entry["pid"] > 0
 
     active = presence.list_active(brr)
