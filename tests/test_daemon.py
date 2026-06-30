@@ -1587,6 +1587,10 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
     assert "run_id: run-state" in text
     assert "repo_label: Gurio/brr" in text
     assert "- runner: codex" in text
+    # The local store path is recorded as a dev breadcrumb; with no forge
+    # remote on the dominion there is no web URL to surface yet.
+    assert task.meta["run_state_path"] == str(path)
+    assert "run_state_url" not in task.meta
 
 
 def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path):

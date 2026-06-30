@@ -80,6 +80,17 @@ _BRANCH_TEMPLATES: dict[str, str] = {
 }
 
 
+# File blob templates. ``{path}`` is a repo-relative path (slashes kept).
+# Used to project a file committed to a forge-hosted repo — e.g. a run-state
+# document in the account dominion repo — to a clickable web URL.
+_BLOB_TEMPLATES: dict[str, str] = {
+    _KIND_GITHUB:    "https://{host}/{owner}/{repo}/blob/{branch}/{path}",
+    _KIND_GITLAB:    "https://{host}/{owner}/{repo}/-/blob/{branch}/{path}",
+    _KIND_BITBUCKET: "https://{host}/{owner}/{repo}/src/{branch}/{path}",
+    _KIND_GITEA:     "https://{host}/{owner}/{repo}/src/branch/{branch}/{path}",
+}
+
+
 # Issue / PR thread templates. The ``issues`` path is the durable common
 # denominator: GitHub redirects ``/issues/N`` to ``/pull/N`` when N is a
 # pull request, so a single template covers both without us knowing the
@@ -220,6 +231,47 @@ def view_branch_url(
         owner=match.owner,
         repo=match.repo,
         branch=branch,
+    )
+
+
+def view_blob_url(
+    remote_url: str,
+    branch: str,
+    rel_path: str,
+    *,
+    override_kind: str | None = None,
+    override_url_base: str | None = None,
+) -> str | None:
+    """Return a clickable URL for the file *rel_path* on *branch*, or ``None``.
+
+    The repo-relative *rel_path* keeps its slashes; both it and *branch* are
+    validated against the same URL-safe character set used for branch links
+    (letters, digits, ``-_./%``), so a malformed packet can't smuggle
+    whitespace or control characters into the URL. Returns ``None`` for empty
+    or unsafe inputs, unparseable remotes, or unknown forge kinds — the caller
+    surfaces the URL when present and stays quiet otherwise.
+    """
+    rel = (rel_path or "").strip().lstrip("/")
+    if not branch or not _is_url_safe_branch(branch):
+        return None
+    if not rel or not _is_url_safe_branch(rel):
+        return None
+    match = detect_forge(
+        remote_url,
+        override_kind=override_kind,
+        override_url_base=override_url_base,
+    )
+    if match is None:
+        return None
+    template = _BLOB_TEMPLATES.get(match.kind)
+    if template is None:
+        return None
+    return template.format(
+        host=match.host,
+        owner=match.owner,
+        repo=match.repo,
+        branch=branch,
+        path=rel,
     )
 
 
