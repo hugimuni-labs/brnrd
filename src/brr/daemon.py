@@ -845,11 +845,10 @@ def _run_worker(
         if correspondent_key:
             task.meta["correspondent_key"] = correspondent_key
         task.meta["repo_label"] = repo_label
-        run_state_path = _persist_run_state_doc(
-            account_context, task, repo_label=repo_label, stage="deduplicated",
+        _persist_run_state_doc(
+            account_context, task, repo_label=repo_label,
+            stage="deduplicated", cfg=cfg,
         )
-        if run_state_path is not None:
-            task.meta["run_state_path"] = str(run_state_path)
         task.meta["deduplicated_origin_message_key"] = origin_message_key
         prior_event_id = str(duplicate_event.get("event_id") or "").strip()
         prior_conversation = str(duplicate_event.get("conversation_key") or "").strip()
@@ -862,6 +861,7 @@ def _run_worker(
             "run_created", run_id=task.id, event_id=eid,
             env=task.env, repo_label=repo_label,
             run_state_path=task.meta.get("run_state_path"),
+            run_state_url=task.meta.get("run_state_url"),
         )
         if conv_key:
             conversations.append_run(
@@ -896,11 +896,9 @@ def _run_worker(
         task.meta["correspondent_key"] = correspondent_key
     task.meta["repo_label"] = repo_label
     _record_task_runner(task, runner_name, runner_meta)
-    run_state_path = _persist_run_state_doc(
-        account_context, task, repo_label=repo_label, stage="created",
+    _persist_run_state_doc(
+        account_context, task, repo_label=repo_label, stage="created", cfg=cfg,
     )
-    if run_state_path is not None:
-        task.meta["run_state_path"] = str(run_state_path)
     task.save(runs_dir)
 
     if conv_key:
@@ -920,6 +918,7 @@ def _run_worker(
         "run_created", run_id=task.id, event_id=eid,
         env=task.env, repo_label=repo_label,
         run_state_path=task.meta.get("run_state_path"),
+        run_state_url=task.meta.get("run_state_url"),
     )
 
     # Record this thought in the presence registry so overlapping thoughts
@@ -2943,6 +2942,7 @@ def _persist_run_state_doc(
     *,
     repo_label: str,
     stage: str,
+    cfg: dict | None = None,
 ) -> Path | None:
     """Write the durable account-level run-state document for *task*.
 
@@ -2950,6 +2950,12 @@ def _persist_run_state_doc(
     while the account dominion repo gets a durable, git-mirrorable status
     object.  The document is intentionally simple markdown for the first slice;
     a richer renderer can project the same fields later.
+
+    Records both ``run_state_path`` (the local store path, a dev breadcrumb)
+    and, when the account dominion tracks a forge-hosted remote,
+    ``run_state_url`` (the web-visible link) into ``task.meta`` so run surfaces
+    can link the durable object rather than leak a host-local path to a remote
+    reader.
     """
     if account_context is None or not account_context.enabled:
         return None
@@ -3005,6 +3011,10 @@ def _persist_run_state_doc(
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp.replace(path)
+    task.meta["run_state_path"] = str(path)
+    url = account.run_state_blob_url(account_context, path, cfg=cfg)
+    if url:
+        task.meta["run_state_url"] = url
     return path
 
 
@@ -3224,6 +3234,7 @@ def _run_worker_and_finalize(
             task,
             repo_label=repo_label,
             stage="finished",
+            cfg=cfg,
         )
         _retire_internal_event(event, responses_dir)
         return task
