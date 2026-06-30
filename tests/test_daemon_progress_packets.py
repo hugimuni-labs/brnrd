@@ -246,6 +246,63 @@ def test_quota_failure_is_classified_for_attempt_and_terminal_packets(
     assert "runner quota was exhausted" in response
 
 
+def test_relay_candidate_rides_attempt_failure_and_terminal_response(
+    tmp_path, monkeypatch,
+):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-relay", body="big task",
+                        telegram_chat_id=43)
+    _patch_runner(monkeypatch)
+    relay_profile = daemon.runner_select.runner_from_profile(
+        "brnrd-codex-relay",
+        {
+            "owner": "brnrd",
+            "provider": "openai",
+            "model": "gpt-5-codex-relay",
+            "class": "relay",
+            "cost_rank": 1,
+        },
+    )
+    monkeypatch.setattr(
+        daemon.runner_select,
+        "available_runners",
+        lambda _repo: [relay_profile],
+    )
+
+    def _quota_hit(_ctx, runner_name, invocation, _cfg, *, trace=False):
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="",
+            stderr="You've hit your session limit",
+            returncode=1, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        daemon.envs, "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=_quota_hit),
+    )
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "error"
+    records = _update_records(tmp_path / ".brr", task.conversation_key)
+    attempt_failed = next(r for r in records if r.get("type") == "attempt_failed")
+    assert attempt_failed.get("needs_relay_consent") is True
+    assert "brnrd-codex-relay" in attempt_failed.get("relay_candidate", "")
+    relay_plan = attempt_failed.get("relay_plan")
+    assert relay_plan["reason"] == "quota_exhausted"
+    assert relay_plan["model"] == "gpt-5-codex-relay"
+    assert relay_plan["provider"] == "openai"
+    response = (tmp_path / ".brr" / "responses" / "evt-relay.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Relay fallback" in response
+    assert "brnrd-codex-relay" in response
+    assert "did not spend relay tokens automatically" in response
+
+
 def test_operational_failure_falls_back_to_next_runner(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-fallback", body="big task",
