@@ -13,7 +13,7 @@ def test_resolve_context_creates_account_dominion_and_registry(tmp_path):
     repo_b.mkdir()
     write_repo_scaffold(repo_a)
     write_repo_scaffold(repo_b)
-    home = tmp_path / "brr-home"
+    home = tmp_path / "account-home"
 
     ctx = account.resolve_context(
         repo_a,
@@ -33,6 +33,55 @@ def test_resolve_context_creates_account_dominion_and_registry(tmp_path):
     registry = json.loads((home / "account" / "repos.json").read_text())
     assert registry["default_repo"] == "Gurio/b"
     assert {item["label"] for item in registry["repos"]} == {"Gurio/a", "Gurio/b"}
+    assert (home / ".gitignore").read_text(encoding="utf-8").splitlines() == [
+        "/dispatch/inbox/",
+        "/dispatch/responses/",
+        "*.tmp",
+    ]
+
+
+def test_default_account_home_uses_brnrd_namespace(monkeypatch, tmp_path):
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+
+    ctx = account.resolve_context(repo)
+
+    assert ctx.dominion_repo == state_home / "brnrd" / "accounts" / "default" / "dominion"
+
+
+def test_default_account_home_reads_existing_brr_namespace_as_legacy(
+    monkeypatch, tmp_path,
+):
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    legacy = state_home / "brr" / "accounts" / "default"
+    (legacy / "dominion").mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+
+    ctx = account.resolve_context(repo, create=False)
+
+    assert ctx.dominion_repo == legacy / "dominion"
+
+
+def test_repo_dominion_path_is_repo_tagged(tmp_path):
+    ctx = account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path / "home",
+        dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
+        responses_dir=tmp_path / "home" / "dispatch" / "responses",
+        run_state_dir=tmp_path / "home" / "run-state",
+        repos={},
+        default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+    assert account.repo_dominion_path(ctx, "Gurio/brr") == (
+        tmp_path / "home" / "repos" / "Gurio__brr" / "dominion"
+    )
 
 
 def test_event_repo_label_accepts_repo_label_metadata():

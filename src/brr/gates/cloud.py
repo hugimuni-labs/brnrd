@@ -276,7 +276,16 @@ def _run_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
 
 def _schedule_activity_records(brr_dir: Path) -> list[dict[str, Any]]:
     try:
-        dom = dominion.dominion_path(brr_dir.parent)
+        from .. import config as conf
+
+        cfg = conf.load_config(brr_dir.parent)
+        dom = None
+        for candidate in dominion.resident_dominion_candidates(brr_dir.parent, cfg):
+            if candidate.path.is_dir():
+                dom = candidate.path
+                break
+        if dom is None:
+            return []
         entries = schedule_mod.parse_schedule(dom)
     except Exception:
         return []

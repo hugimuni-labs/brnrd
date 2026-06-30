@@ -129,19 +129,16 @@ def _build_context_block(repo_root: Path) -> str:
 def _build_dominion_block(repo_root: Path) -> str:
     """Render the wake-time self-inject digest from the agent's dominion.
 
-    Reads from the shared dominion worktree (``.brr/dominion/``, resolved
-    via the git common dir so a per-run worktree still finds the one
-    dominion). Returns ``""`` when the dominion is disabled, not yet
-    materialized, or resolves to nothing — the caller drops the block.
+    Reads from the account-scoped resident dominion when present, falling back
+    to the legacy repo-local dominion for partially migrated installs. Returns
+    ``""`` when the dominion is disabled, not yet materialized, or resolves to
+    nothing — the caller drops the block.
     """
     from . import config as conf
     from . import dominion
 
     cfg = conf.load_config(repo_root)
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
-        return ""
-    path = dominion.dominion_path(repo_root)
-    if not path.is_dir():
         return ""
     budget = int(
         cfg.get(
@@ -152,34 +149,58 @@ def _build_dominion_block(repo_root: Path) -> str:
             ),
         )
     )
-    digest = dominion.resolve_self_inject(path, budget_bytes=budget)
-    if not digest:
+    chosen = None
+    digest = ""
+    for candidate in dominion.resident_dominion_candidates(repo_root, cfg):
+        if not candidate.path.is_dir():
+            continue
+        digest = dominion.resolve_self_inject(candidate.path, budget_bytes=budget)
+        if digest:
+            chosen = candidate
+            break
+    if chosen is None or not digest:
         return ""
+    path = chosen.path
     sync_note = ""
-    diverged = dominion.needs_sync(path.parent)
+    diverged = dominion.needs_sync(chosen.capture_root.parent)
     if diverged:
         sync_note = (
-            "\n\n**Your dominion's remote has diverged** — brr's last push of "
-            "`brr-home` was rejected, so another machine or session wrote it "
-            "too. brr commits locally so nothing is lost, but reconciling the "
-            "remote is yours (it's a merge — judgement, not a reflex): when "
-            f"you're the one awake, in `{path}` fetch, merge / resolve any "
-            "conflicts, and push. "
+            "\n\n**Your dominion remote has diverged** — brr's last push of "
+            "the account dominion repo was rejected, so another machine or "
+            "session wrote it too. brr commits locally so nothing is lost, but "
+            "reconciling the remote is yours (it's a merge — judgement, not a "
+            f"reflex): when you're the one awake, in `{chosen.capture_root}` "
+            "fetch, merge / resolve any conflicts, and push. "
             f"(Reason on record: {diverged})"
+        )
+    if chosen.legacy:
+        location = (
+            f"Your dominion is the legacy repo-local working memory at `{path}`. "
+            "This install has not moved that memory into the account dominion "
+            "repo yet."
+        )
+        remote = (
+            "When its git branch has a remote, brr best-effort pushes it after "
+            "a thought; reconciling a diverged remote stays yours."
+        )
+    else:
+        location = (
+            f"Your dominion is the resident-owned working memory at `{path}` "
+            f"inside the local account dominion repo `{chosen.capture_root}`."
+        )
+        remote = (
+            "The account dominion repo is local-first: it can stay only on this "
+            "machine, or you can opt into durability by adding a git remote. "
+            "When a remote is configured, brr best-effort pushes it after a "
+            "thought; reconciling a diverged remote stays yours."
         )
     return (
         "## Your dominion (working memory)\n\n"
-        f"Your dominion is the `brr-home` branch, checked out at `{path}` — "
-        "an absolute path, reachable from any working directory (your task "
-        "may run in a worktree or container whose cwd is elsewhere). It's "
-        "your durable memory: write notes, pain records, and your "
-        "`self-inject` index there freely, and **commit what you mean to "
-        "keep** — the diff is the receipt your next wake reads from. brr "
-        "best-effort pushes `brr-home` after a thought so your memory reaches "
-        "the remote; what it *won't* do is reconcile a **diverged** remote "
-        "(another machine or session wrote `brr-home` too) — fetch / merge / "
-        "resolve / push is yours to own, a merge is judgement not reflex, and "
-        "you'll see a note here when it's needed."
+        f"{location} It is an absolute path, reachable from any working "
+        "directory (your task may run in a worktree or container whose cwd is "
+        "elsewhere). It's your durable memory: write notes, pain records, and "
+        "your `self-inject` index there freely, and **commit what you mean to "
+        f"keep** — the diff is the receipt your next wake reads from. {remote}"
         f"{sync_note}\n\n"
         "Self-injected below per your `self-inject` index — yours to "
         "reshape:\n\n"
@@ -191,10 +212,10 @@ def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
     """Render dominion pitfalls whose triggers fire for *task_text*.
 
     The affordance surface of the env-shaping loop: failure-memory the
-    resident recorded in ``.brr/dominion/pitfalls.md``, injected only when
-    a trigger appears in the task at hand (see
-    ``kb/design-environment-shaping.md`` and ``pitfalls.py``). Returns
-    ``""`` when the dominion is disabled / absent, or nothing matches.
+    resident recorded in its account-scoped dominion (legacy repo-local
+    fallback supported), injected only when a trigger appears in the task at
+    hand (see ``kb/design-environment-shaping.md`` and ``pitfalls.py``).
+    Returns ``""`` when the dominion is disabled / absent, or nothing matches.
     """
     if not task_text:
         return ""
@@ -204,10 +225,13 @@ def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
     cfg = conf.load_config(repo_root)
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return ""
-    path = dominion.dominion_path(repo_root)
-    if not path.is_dir():
-        return ""
-    matched = pitfalls.match(pitfalls.parse_pitfalls(path), task_text)
+    matched = []
+    for candidate in dominion.resident_dominion_candidates(repo_root, cfg):
+        if not candidate.path.is_dir():
+            continue
+        matched = pitfalls.match(pitfalls.parse_pitfalls(candidate.path), task_text)
+        if matched:
+            break
     return pitfalls.format_block(matched)
 
 
@@ -1089,8 +1113,12 @@ def _format_thread_of_record(repo_root: Path) -> str:
     cfg = conf.load_config(repo_root)
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return ""
-    path = dominion.dominion_path(repo_root)
-    if not path.is_dir():
+    path = None
+    for candidate in dominion.resident_dominion_candidates(repo_root, cfg):
+        if candidate.path.is_dir():
+            path = candidate.path
+            break
+    if path is None:
         return ""
     record_path = path / "thread-of-record.md"
     state = "exists" if record_path.exists() else "not created yet"
