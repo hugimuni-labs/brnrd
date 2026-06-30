@@ -8,7 +8,7 @@ from brr import hooks
 
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
-            resources=None):
+            resources=None, budget=None, outbound=None):
     payload = {
         "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
         "attention": {
@@ -16,12 +16,12 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
             "pending_outbox_file_count": 0,
         },
         "inbound": {"events": events or []},
-        "outbound": {
+        "outbound": outbound or {
             "replies_current": 0,
             "replies_other": 0,
             "outbound_messages": 0,
         },
-        "budget": {"elapsed_seconds": 10, "budget_seconds": 3600},
+        "budget": budget or {"elapsed_seconds": 10, "budget_seconds": 3600},
         "change_token": token,
     }
     if scm is not None:
@@ -174,38 +174,120 @@ def test_scm_unknown_is_silent(tmp_path):
     assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_seed_surfaces_resources_with_known_quota_and_placeholders(tmp_path):
+def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):
     _portal(
         tmp_path, token="t1", pending=0,
         resources={
             "quota": {"status": "known", "summary": "weekly 42% - resets 3d"},
-            "cost": {"status": "unavailable"},
-            "coexisting_runs": {"status": "unavailable"},
-            "remote_scm": {"status": "unavailable"},
+            "spend": {"status": "unimplemented",
+                      "note": "no spend collector for this medium yet"},
+            "context_window": {"status": "unimplemented",
+                               "note": "no context-window collector for this "
+                                       "medium yet"},
+            "coexisting_runs": {"status": "unimplemented",
+                                "note": "single-flight per dominion"},
+            "remote_scm": {"status": "absent", "pr_state": "none",
+                           "branch": "brr/x",
+                           "note": "no PR recorded for this branch yet"},
         },
     )
     out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "resources:" in ctx
     assert "quota=weekly 42% - resets 3d" in ctx
-    assert "cost=unavailable" in ctx
-    assert "coexisting-runs=unavailable" in ctx
-    assert "remote-scm=unavailable" in ctx
+    # The gaps read as named states with their reason, not a flat "unavailable".
+    assert "spend=unimplemented (no spend collector for this medium yet)" in ctx
+    assert "coexisting-runs=unimplemented" in ctx
+    assert "remote-scm=absent (no PR recorded for this branch yet)" in ctx
+    assert "unavailable" not in ctx
 
 
-def test_post_tool_never_renders_resources(tmp_path):
-    # Like scm:, the work-status line is a seed/stop boundary signal — mid-run
-    # it must stay quiet even when the token moves.
+def test_seed_surfaces_open_pr_posture(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        resources={
+            "quota": {"status": "absent", "note": "no snapshot for this medium"},
+            "spend": {"status": "unimplemented"},
+            "context_window": {"status": "unimplemented"},
+            "coexisting_runs": {"status": "unimplemented"},
+            "remote_scm": {"status": "known", "pr_state": "open",
+                           "pr_number": "207", "branch": "brr/x"},
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "remote-scm=PR #207" in ctx
+    assert "quota=absent (no snapshot for this medium)" in ctx
+
+
+def test_post_tool_renders_resources_when_injection_fires(tmp_path):
+    # Quota is a live wall, so when a post-tool boundary injects a portal-state
+    # update it carries the work-status line too.
     _portal(
         tmp_path, token="t1", pending=1,
         events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
-        resources={"quota": {"status": "unavailable"},
-                   "cost": {"status": "unavailable"},
-                   "coexisting_runs": {"status": "unavailable"},
-                   "remote_scm": {"status": "unavailable"}},
+        resources={"quota": {"status": "absent"},
+                   "spend": {"status": "unimplemented"},
+                   "context_window": {"status": "unimplemented"},
+                   "coexisting_runs": {"status": "unimplemented"},
+                   "remote_scm": {"status": "absent"}},
     )
     out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
-    assert "resources:" not in out["hookSpecificOutput"]["additionalContext"]
+    assert "resources:" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_post_tool_can_inject_resource_only_update(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        resources={
+            "quota": {"status": "known", "summary": "week 55% left"},
+            "spend": {"status": "unimplemented"},
+            "context_window": {"status": "unimplemented"},
+            "coexisting_runs": {"status": "unimplemented"},
+            "remote_scm": {"status": "absent"},
+        },
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "resources:" in ctx
+    assert "quota=week 55% left" in ctx
+
+
+def test_stop_flags_no_outbound_messages(tmp_path):
+    # Affirmative-empty: a closeout with nothing sent surfaces the absence.
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "no outbound messages sent yet" in ctx
+
+
+def test_stop_silent_on_outbound_when_something_sent(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        outbound={"replies_current": 1, "replies_other": 0,
+                  "outbound_messages": 1},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "no outbound messages sent yet" not in ctx
+    assert "delivery so far" in ctx
+
+
+def test_long_running_surfaced_when_over_soft_budget(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        budget={"elapsed_seconds": 4000, "budget_seconds": 3600,
+                "long_running": True},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "running long" in ctx
+
+
+def test_long_running_quiet_within_budget(tmp_path):
+    _portal(tmp_path, token="t1", pending=0)
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    assert "running long" not in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_codex_block_renders_continue_false(tmp_path):
@@ -318,6 +400,23 @@ def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
     assert cmds["PostToolBatch"] == "brr hook post-tool"
     assert cmds["Stop"] == "brr hook stop"
     assert cmds["SessionStart"] == "brr hook session-start"
+    # statusLine is a TUI footer and does not fire under daemon --print runs,
+    # so brr must not register a dead collector by default.
+    assert "statusLine" not in settings
+
+
+def test_install_hook_config_preserves_user_statusline(tmp_path):
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.local.json").write_text(
+        json.dumps({"statusLine": {"type": "command", "command": "my-bar"}}),
+        encoding="utf-8",
+    )
+    path = hooks.install_hook_config("claude", tmp_path)
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    # A user's own footer setting is preserved while brr's hooks still install.
+    assert settings["statusLine"]["command"] == "my-bar"
+    assert "PostToolBatch" in settings["hooks"]
 
 
 def test_install_hook_config_merges_and_preserves_user_keys(tmp_path):

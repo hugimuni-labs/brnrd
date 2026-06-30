@@ -600,10 +600,12 @@ def test_append_run_includes_env_and_branch_name(tmp_path):
         seed_ref="main", target_branch="main",
         branch_source="event:target_branch",
         branch_name="brr/t-1",
+        repo_label="Gurio/brr",
     )
     record = conversations.read_records(tmp_path, "k")[-1]
     assert record["run_id"] == "t-1"
     assert record["env"] == "worktree"
+    assert record["repo_label"] == "Gurio/brr"
     assert record["seed_ref"] == "main"
     assert record["target_branch"] == "main"
     assert record["branch_source"] == "event:target_branch"
