@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "freshness_date": "2026-06-29",
+  "source": "operator-maintained trusted benchmark cache; SWE-bench from Vals SWE-bench Verified, Terminal-Bench from verified Terminal-Bench 2.0 rows whose agent matches the Shell",
+  "source_urls": [
+    "https://www.vals.ai/benchmarks/swebench",
+    "https://www.tbench.ai/leaderboard/terminal-bench/2.0"
+  ],
+  "models": {
+    "claude-haiku-4-5-20251001": {
+      "source": "Terminal-Bench 2.0 verified row: Claude Code / Claude Haiku 4.5; no exact non-thinking Vals SWE-bench row found",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": 27.5
+    },
+    "claude-fable-5": {
+      "source": "Vals SWE-bench Verified row: anthropic/claude-fable-5",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": 95.0,
+      "terminal_bench": null
+    },
+    "claude-sonnet-4-6": {
+      "source": "Vals SWE-bench Verified row: anthropic/claude-sonnet-4-6; matching Terminal-Bench row was unverified and omitted",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": 77.4,
+      "terminal_bench": null
+    },
+    "claude-opus-4-8": {
+      "source": "Vals SWE-bench Verified row: anthropic/claude-opus-4-8",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": 88.6,
+      "terminal_bench": null
+    },
+    "gpt-5.4-mini": {
+      "source": "Vals SWE-bench Verified row: openai/gpt-5.4-mini-2026-03-17",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": 73.0,
+      "terminal_bench": null
+    },
+    "gpt-5-codex": {
+      "source": "Terminal-Bench 2.0 verified row: Codex CLI / GPT-5-Codex; no exact Vals SWE-bench row found",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": 44.3
+    },
+    "gemini-2.0-flash": {
+      "source": "no exact trusted score found in Vals SWE-bench Verified or Terminal-Bench 2.0",
+      "freshness_date": "2026-06-29",
+      "swe_bench_verified": null,
+      "terminal_bench": null
+    }
+  }
+}

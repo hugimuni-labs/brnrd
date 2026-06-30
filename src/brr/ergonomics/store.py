@@ -126,3 +126,55 @@ def clear(brr_dir: Path, *, before: str | None = None) -> list[str]:
             continue
         removed.append(path.name)
     return removed
+
+
+def clear_records(brr_dir: Path, *, before_ts: float | None = None) -> int:
+    """Delete records from the local store and return the number removed.
+
+    Without ``before_ts`` this removes whole day files. With ``before_ts`` it
+    rewrites partially matching files so newer records survive.
+    """
+    store = ergonomics_dir(brr_dir)
+    if not store.exists():
+        return 0
+    if before_ts is None:
+        removed = 0
+        for path in sorted(store.glob("*.jsonl")):
+            try:
+                removed += sum(
+                    1 for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                )
+            except OSError:
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                continue
+        return removed
+
+    removed = 0
+    for path in sorted(store.glob("*.jsonl")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        keep: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = Record.from_dict(json.loads(stripped))
+            except (ValueError, KeyError, TypeError):
+                keep.append(line)
+                continue
+            if record.timestamp < before_ts:
+                removed += 1
+            else:
+                keep.append(line)
+        if keep:
+            path.write_text("\n".join(keep) + "\n", encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
+    return removed

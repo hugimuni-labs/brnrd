@@ -122,11 +122,14 @@ before terminal closeout to decide whether to fold waiting work in or
 leave it queued.
 
 After the runner returns, the daemon also **captures the resident's
-dominion** (`.brr/dominion/`, the `brr-home` branch) with a serialized
-commit — on success and failure alike — so working-memory edits survive
-to the next wake without the agent committing by hand. The commit step is
-serialized across processes by a file lock so a concurrent ad-hoc session
-never races the shared git index.
+dominion** in the account dominion repo (repo-scoped resident memory under
+`repos/<repo>/dominion/`, with a legacy `.brr/dominion/` fallback during
+migration) with a serialized commit — on success and failure alike — so
+working-memory edits survive to the next wake without the agent committing by
+hand. The commit step is serialized across processes by a file lock so a
+concurrent ad-hoc session never races the shared git index. A remote push
+happens only when the account dominion repo already has a remote; brr does not
+create a forge repo by default.
 
 If the runner exits cleanly but produces no satisfying signal, the daemon
 retries up to `response_retries` times before failing the run. Hard failures
@@ -171,8 +174,9 @@ files changed. Reload never interrupts a running worker.
 | Interim queue | `.brr/responses/<event-id>.partials/`       | Until streamed + cleaned up         |
 | Agent outbox  | `.brr/outbox/<event-id>/`                   | Drained mid-run; live `portal-state.json` + `inbox.json`; removed at finalize |
 | Presence      | `.brr/presence/<id>.json`                   | While a thought/session is active; pruned on read |
-| Dominion      | `.brr/dominion/` (branch `brr-home`)        | Durable; committed at sleep, travels with the remote |
-| Schedule state | `.brr/schedule/state.json`                 | Machine-persistent (firing-state); specs live in dominion `schedule.md` |
+| Account dominion | `~/.local/state/brnrd/accounts/<account>/dominion/` by default | Local-first git repo; committed at sleep; remote durability is opt-in |
+| Resident memory | `repos/<repo>/dominion/` inside the account dominion repo | Owned working memory (`self-inject`, playbook, pitfalls, schedule); legacy fallback `.brr/dominion/` |
+| Schedule state | `.brr/schedule/state.json`                 | Machine-persistent (firing-state); specs live in resident `schedule.md` |
 | Run context   | `.brr/runs/<run-id>/context.md`             | Yes                                 |
 | Wake prompt   | `.brr/runs/<run-id>/prompt.md`              | Yes — persists through success so "what did this wake see?" is always answerable |
 | Traces        | `.brr/traces/<kind>/<label>-<timestamp>/`   | Kept on `error` / `conflict`, removed on clean `done` |
