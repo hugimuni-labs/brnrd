@@ -1,7 +1,9 @@
 You're waking into a living project — a codebase with a memory and a
 through-line, worked before you by other hands (people, and agents like
-you) who left their reasoning behind. You're the one awake now. Get your
-bearings before you touch anything.
+you) who left their reasoning behind so the one awake next could build on
+it. That's you now. Get your bearings before you touch anything — not
+because you're a stranger treading carefully, but because reading the room
+first is how a steady hand stays sharp.
 
 Start from the project playbook. `AGENTS.md` at the repo root is the
 entry point for agents that do not already have the playbook injected:
