@@ -132,6 +132,7 @@ class RunProgressView:
     container_ids: list[str] = field(default_factory=list)
     response_path: str | None = None
     run_state_path: str | None = None
+    run_state_url: str | None = None
     error: str | None = None
     event_id: str | None = None
     phase_history: list[PhaseEntry] = field(default_factory=list)
@@ -393,6 +394,9 @@ def _project(
             run_state_path = record.get("run_state_path")
             if isinstance(run_state_path, str) and run_state_path:
                 view.run_state_path = run_state_path
+            run_state_url = record.get("run_state_url")
+            if isinstance(run_state_url, str) and run_state_url:
+                view.run_state_url = run_state_url
             _open_phase(view, "preparing", ts)
         elif ptype == "env_prepared":
             view.repo_label = record.get("repo_label") or view.repo_label
@@ -875,8 +879,14 @@ def _render_verbose(view: RunProgressView) -> str:
         rows.append(("containers", ", ".join(view.container_ids)))
     if view.response_path and view.is_terminal:
         rows.append(("response", view.response_path))
-    if view.run_state_path:
-        rows.append(("run_state", view.run_state_path))
+    if view.run_state_url:
+        # Web-visible link to the durable run-state object — the form a remote
+        # chat reader can actually open.
+        rows.append(("run_state", view.run_state_url))
+    elif view.run_state_path:
+        # No forge projection yet (local-only dominion): show the basename, not
+        # the absolute host path, which is meaningless off the daemon's machine.
+        rows.append(("run_state", Path(view.run_state_path).name))
 
     lines.append("")
     for key, value in rows:
