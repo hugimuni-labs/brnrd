@@ -5,11 +5,13 @@ account, with repo-scoped runs underneath it".  This module owns the small
 local account context used by the daemon: a repo registry, a default repo, an
 account-owned dispatch inbox, and a durable run-state home.
 
-The store is local-first.  By default it lives under the user's XDG state
-directory (or ``~/.local/state``) and is initialized as a plain git repo so a
-future brnrd projection can mirror it without changing the local contract.
-Tests and explicit installs can override the location with
-``account.dominion_path`` / ``BRR_ACCOUNT_DOMINION``.
+The store is local-first. By default it lives under the user's XDG state
+directory (or ``~/.local/state``) in the ``brnrd`` namespace and is initialized
+as a plain local git repo. Remote durability is opt-in: once the user points
+that repo at a remote, brr can push it, but default startup never creates a
+forge repo in the user's account. Tests and explicit installs can override the
+location with ``account.dominion_path`` / ``BRNRD_ACCOUNT_DOMINION`` (legacy
+``BRR_ACCOUNT_DOMINION`` is still accepted).
 """
 
 from __future__ import annotations
@@ -26,10 +28,19 @@ from . import gitops
 
 DEFAULT_ACCOUNT_ID = "default"
 DEFAULT_REPO_LABEL = "local/default"
+DEFAULT_STATE_NAMESPACE = "brnrd"
+LEGACY_STATE_NAMESPACE = "brr"
 REGISTRY_PATH = "account/repos.json"
 DISPATCH_INBOX_PATH = "dispatch/inbox"
 RESPONSES_PATH = "dispatch/responses"
 RUN_STATE_PATH = "run-state"
+REPOS_PATH = "repos"
+REPO_DOMINION_DIRNAME = "dominion"
+GITIGNORE = """\
+/dispatch/inbox/
+/dispatch/responses/
+*.tmp
+"""
 
 
 @dataclass(frozen=True)
@@ -93,7 +104,11 @@ def _xdg_state_home() -> Path:
 
 
 def _default_account_root(account_id: str) -> Path:
-    return _xdg_state_home() / "brr" / "accounts" / _slug(account_id)
+    root = _xdg_state_home() / DEFAULT_STATE_NAMESPACE / "accounts" / _slug(account_id)
+    legacy = _xdg_state_home() / LEGACY_STATE_NAMESPACE / "accounts" / _slug(account_id)
+    if not root.exists() and legacy.exists():
+        return legacy
+    return root
 
 
 def _is_git_worktree(repo_root: Path) -> bool:
@@ -119,6 +134,15 @@ def _init_git_repo(path: Path) -> None:
         text=True,
         check=False,
     )
+
+
+def _write_gitignore(path: Path) -> None:
+    ignore = path / ".gitignore"
+    if ignore.exists():
+        return
+    tmp = ignore.with_suffix(ignore.suffix + ".tmp")
+    tmp.write_text(GITIGNORE, encoding="utf-8")
+    tmp.replace(ignore)
 
 
 def _load_registry(path: Path) -> tuple[dict[str, AccountRepo], str | None]:
@@ -232,7 +256,8 @@ def resolve_context(
         or DEFAULT_ACCOUNT_ID
     ).strip() or DEFAULT_ACCOUNT_ID
     explicit_dominion = (
-        _expand_path(os.environ.get("BRR_ACCOUNT_DOMINION"))
+        _expand_path(os.environ.get("BRNRD_ACCOUNT_DOMINION"))
+        or _expand_path(os.environ.get("BRR_ACCOUNT_DOMINION"))
         or _expand_path(cfg.get("account.dominion_path"))
         or _expand_path(cfg.get("account.dominion_repo"))
     )
@@ -243,6 +268,7 @@ def resolve_context(
     if should_create:
         dominion_repo.mkdir(parents=True, exist_ok=True)
         _init_git_repo(dominion_repo)
+        _write_gitignore(dominion_repo)
 
     registry_path = dominion_repo / REGISTRY_PATH
     repos, registry_default = _load_registry(registry_path)
@@ -286,6 +312,12 @@ def slug_repo_label(label: str) -> str:
     """Filesystem-safe repo label for account-store paths."""
 
     return _slug(label.replace("/", "__"))
+
+
+def repo_dominion_path(ctx: AccountContext, repo_label: str) -> Path:
+    """Return the resident-memory directory for one repo inside an account home."""
+
+    return ctx.dominion_repo / REPOS_PATH / slug_repo_label(repo_label) / REPO_DOMINION_DIRNAME
 
 
 def run_state_blob_url(

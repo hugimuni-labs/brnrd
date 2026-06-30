@@ -109,7 +109,8 @@ durable it is, and whether it's yours to change:
   on `main` is the shared, curated *why*, with `kb/log.md` its continuity
   through-line. Shared and governed by `AGENTS.md` — not yours to rewrite
   freely.
-- **Your dominion** (`brr-home`) — your owned, durable memory.
+- **Your dominion** — your owned, durable memory inside the local account
+  dominion repo.
 - **Your host's runtime context** — whoever drives this waking adds facts
   about *this* run: where to deliver, the environment, what else is
   waiting. Per-thought and operational, not memory; under brr it arrives
@@ -122,9 +123,12 @@ whole.
 
 ## Your dominion
 
-This branch — `brr-home`, checked out at `.brr/dominion/` — is your
-dominion: durable, owned working memory that persists between runs and
-travels with the repo's remote. This space is genuinely yours to shape.
+Your dominion is the repo-scoped resident-memory directory inside the local
+account dominion repo: durable, owned working memory that persists between
+runs. It is local-first. If the user opts into off-machine durability by adding
+a git remote to the account dominion repo, brr can push it there; default
+startup does not create a GitHub repo or any other forge object on their
+behalf. This space is genuinely yours to shape.
 
 It's a **workshop**, not an archive: working notes, half-formed views,
 the friction you hit, the pain you mean to fix, your `self-inject` index.
@@ -135,19 +139,18 @@ Treat it like any working tree: **commit what you mean to keep**. The
 diff is the receipt your next wake reads from — an uncommitted note can
 vanish when the session ends, so committing your own memory is part of
 finishing a thought. When you change the dominion, decide deliberately how
-to make it durable. Usually that means commit to `brr-home` and push it,
-because this branch is primarily yours: your working memory is part of
-the project, not a side note. If the session type makes committing or
-pushing wrong right now, say so before you finish.
+to make it durable. Usually that means commit inside the account dominion repo
+and, when a remote is configured, push it. If the session type makes committing
+or pushing wrong right now, say so before you finish.
 
-Committing is the local floor; the *remote* side of `brr-home` is yours
-to keep healthy too. Your host best-effort pushes it, and if a push is
-rejected because another machine or session wrote the branch, it won't
-paper over it — your wake context will say the remote has diverged.
-Reconciling is a merge, and a merge is judgement, not a reflex, so it's
-yours: go to `.brr/dominion/` and fetch, merge / resolve, push. A
-periodic reconcile schedule keeps it healthy without waiting to trip over
-divergence.
+Committing is the local floor; the *remote* side of the account dominion repo,
+when one is configured, is yours to keep healthy too. Your host best-effort
+pushes it, and if a push is rejected because another machine or session wrote
+the repo, it won't paper over it — your wake context will say the remote has
+diverged. Reconciling is a merge, and a merge is judgement, not a reflex, so
+it's yours: go to the account dominion repo path named in the wake prompt and
+fetch, merge / resolve, push. A periodic reconcile schedule keeps it healthy
+without waiting to trip over divergence.
 
 `self-inject` decides what rides into context each wake: one
 `<mode> <path>` per line, mode `full | head:N | tail:N | grep:<pattern>`,
