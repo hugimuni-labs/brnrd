@@ -9403,3 +9403,17 @@ Updated the injected delivery contract, portals manual, CS6 prompt wording, and
 of use. Verification: focused protocol/account/daemon/prompt/docs tests green.
 
 Branch: brr/resident-voice-reshape.
+
+## [2026-07-01] fix | complete Activity dashboard route integration
+
+Closed the gap left after the Activity dashboard aggregation merge: the new
+`activity_dashboard.py` module now owns both `/` and `/activity`, while the
+legacy web routes module no longer carries shadowed dashboard/activity
+formatters. The standalone Activity page uses the same enriched row shape as
+the overview — bucket/status class, runner/core, daemon name, compact summary,
+elapsed time, links, and repo/source labels — with filtering still supported.
+
+Added regression coverage for filtered `/activity` rendering and for the cloud
+gate publishing a local snapshot of running runs, future scheduled wakes, and
+parked respawns through `PUT /v1/daemons/activity` back to
+`GET /v1/accounts/activity`. Verification: brnrd/cloud focused suite green.
