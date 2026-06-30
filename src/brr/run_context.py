@@ -380,8 +380,12 @@ def _thread_of_record_line(repo_root: Path) -> str:
     cfg = conf.load_config(repo_root)
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return ""
-    path = dominion.dominion_path(repo_root)
-    if not path.is_dir():
+    path = None
+    for candidate in dominion.resident_dominion_candidates(repo_root, cfg):
+        if candidate.path.is_dir():
+            path = candidate.path
+            break
+    if path is None:
         return ""
     record_path = path / "thread-of-record.md"
     state = "exists" if record_path.exists() else "not created yet"

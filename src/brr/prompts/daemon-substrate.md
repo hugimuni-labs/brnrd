@@ -20,9 +20,10 @@ while you think, but nothing preempts this run.
 **Your memory is captured as a net.** When a thought ends, brr commits
 your dominion, so a forgetful thought doesn't lose what it wrote. Don't
 lean on it — commit what you mean to keep, with a message, as the playbook
-says; the capture is insurance, not the plan. brr also best-effort pushes
-`brr-home`; reconciling a *diverged* remote stays yours (the playbook
-covers it, and your wake context flags it when it's needed).
+says; the capture is insurance, not the plan. When the account dominion repo
+has a remote, brr also best-effort pushes it; reconciling a *diverged* remote
+stays yours (the playbook covers it, and your wake context flags it when it's
+needed).
 
 **Waking yourself.** You aren't only summoned — you keep your own clock.
 Your dominion holds a `schedule.md`; each entry there becomes a future
