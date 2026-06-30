@@ -559,6 +559,188 @@ def test_drain_outbox_quality_respawn_resolves_local_escalation(
     assert spawned["respawn_reason"] == "needs a stronger core"
 
 
+def _account_context_for_policy(tmp_path):
+    home = tmp_path / "account-home"
+    return daemon.account.AccountContext(
+        account_id="default",
+        dominion_repo=home,
+        dispatch_inbox=home / "dispatch" / "inbox",
+        responses_dir=home / "dispatch" / "responses",
+        run_state_dir=home / "run-state",
+        repos={},
+        default_repo=daemon.account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+
+def test_drain_outbox_parks_runner_policy_proposal(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    ctx = _account_context_for_policy(tmp_path)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "propose a runner policy",
+        status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "policy.md").write_text(
+        "---\n"
+        "runner_policy: propose\n"
+        "scope: repo\n"
+        "---\n"
+        "Prefer codex-mini for quick mechanical tasks.\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-policy",
+        event_id=event_id,
+        body="propose a runner policy",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        account_context=ctx,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"current": 1, "runner_policy": 1}
+    assert not daemon.account.runner_policy_path(ctx, "Gurio/brr").exists()
+    proposals = list(daemon.account.runner_policy_proposals_path(ctx).glob("*.md"))
+    assert len(proposals) == 1
+    proposal_text = proposals[0].read_text(encoding="utf-8")
+    assert "status: pending" in proposal_text
+    assert "repo_label: Gurio/brr" in proposal_text
+    assert protocol.frontmatter_body(proposal_text).strip() == (
+        "Prefer codex-mini for quick mechanical tasks."
+    )
+    partial = protocol.list_partials(responses, event_id)[0].read_text(encoding="utf-8")
+    assert "approve runner-policy" in partial
+    assert proposals[0].stem in partial
+
+
+def _write_policy_proposal(ctx, proposal_id, *, conversation_key="telegram:42:"):
+    proposal = daemon.account.runner_policy_proposals_path(ctx) / f"{proposal_id}.md"
+    proposal.parent.mkdir(parents=True)
+    proposal.write_text(
+        "---\n"
+        f"id: {proposal_id}\n"
+        "status: pending\n"
+        "scope: repo\n"
+        "repo_label: Gurio/brr\n"
+        "policy_path: runner-policy/Gurio__brr/policy.md\n"
+        f"conversation_key: {conversation_key}\n"
+        "created: 2026-06-30T00:00:00Z\n"
+        "---\n"
+        "Prefer codex-mini for quick mechanical tasks.\n",
+        encoding="utf-8",
+    )
+    return proposal
+
+
+def _policy_control_target(tmp_path, body, *, conversation_key="telegram:42:"):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        body,
+        conversation_key=conversation_key,
+    )
+    event = protocol.list_pending(inbox)[0]
+    return daemon._DispatchTarget(
+        event=event,
+        repo_root=tmp_path,
+        inbox_dir=inbox,
+        responses_dir=responses,
+        repo_label="Gurio/brr",
+    )
+
+
+def test_runner_policy_approval_applies_pending_proposal(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "rpol-test-approve"
+    proposal = _write_policy_proposal(ctx, proposal_id)
+    target = _policy_control_target(
+        tmp_path,
+        f"approve runner-policy {proposal_id}",
+    )
+
+    handled = daemon._handle_runner_policy_control_event(target, ctx)
+
+    assert handled is True
+    assert daemon.account.runner_policy_path(ctx, "Gurio/brr").read_text(
+        encoding="utf-8",
+    ) == "Prefer codex-mini for quick mechanical tasks.\n"
+    updated = proposal.read_text(encoding="utf-8")
+    assert "status: applied" in updated
+    assert "applied_path: runner-policy/Gurio__brr/policy.md" in updated
+    assert protocol.list_pending(target.inbox_dir) == []
+    response = protocol.response_path(
+        target.responses_dir, target.event["id"],
+    ).read_text(encoding="utf-8")
+    assert "Applied runner-policy proposal" in response
+
+
+def test_runner_policy_rejection_closes_without_applying(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "rpol-test-reject"
+    proposal = _write_policy_proposal(ctx, proposal_id)
+    target = _policy_control_target(
+        tmp_path,
+        f"reject runner-policy {proposal_id}",
+    )
+
+    handled = daemon._handle_runner_policy_control_event(target, ctx)
+
+    assert handled is True
+    assert not daemon.account.runner_policy_path(ctx, "Gurio/brr").exists()
+    assert "status: rejected" in proposal.read_text(encoding="utf-8")
+    response = protocol.response_path(
+        target.responses_dir, target.event["id"],
+    ).read_text(encoding="utf-8")
+    assert "Rejected runner-policy proposal" in response
+
+
+def test_runner_policy_approval_requires_same_conversation(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "rpol-test-cross-thread"
+    proposal = _write_policy_proposal(
+        ctx,
+        proposal_id,
+        conversation_key="telegram:42:",
+    )
+    target = _policy_control_target(
+        tmp_path,
+        f"approve runner-policy {proposal_id}",
+        conversation_key="telegram:99:",
+    )
+
+    handled = daemon._handle_runner_policy_control_event(target, ctx)
+
+    assert handled is True
+    assert not daemon.account.runner_policy_path(ctx, "Gurio/brr").exists()
+    assert "status: pending" in proposal.read_text(encoding="utf-8")
+    response = protocol.response_path(
+        target.responses_dir, target.event["id"],
+    ).read_text(encoding="utf-8")
+    assert "different conversation" in response
+
+
 def test_run_worker_writes_terminal_failure_response_on_runner_error(
     tmp_path, monkeypatch,
 ):
