@@ -1,27 +1,45 @@
 ---
 claude:
-  cmd: 'claude --print --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --setting-sources local --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
   hooks: claude
+  provider: anthropic
+  owner: user
+  class: balanced
+  cost_rank: 30
+  quota_source: claude-local
 claude-bare-api-only:
   binary: claude
-  cmd: 'claude --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
-claude-bare-api-only-sonnet:
-  binary: claude
-  cmd: 'claude --model "claude-sonnet-4-6" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
-claude-bare-api-only-opus:
-  binary: claude
-  cmd: 'claude --model "claude-opus-4-8" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
-claude-bare-api-only-fable:
-  binary: claude
-  cmd: 'claude --model "claude-fable-5" --print --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  shell: claude
+  cmd: 'claude --print --output-format json --dangerously-skip-permissions --bare --system-prompt "You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory."'
+  provider: anthropic
+  owner: user
+  class: balanced
+  cost_rank: 30
+  auth_variant: anthropic-api-key
+  auth_env: ANTHROPIC_API_KEY
 codex:
   cmd: 'codex exec --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c base_instructions="You are a brr runner. Follow the supplied prompt and operate on the files available in the working directory." -c include_permissions_instructions=false -c include_apps_instructions=false -c include_collaboration_mode_instructions=false -c include_skill_instructions=false'
   hooks: codex
+  provider: openai
+  owner: user
+  class: balanced
+  cost_rank: 25
+  quota_source: codex-local
 gemini:
   cmd: gemini -p --yolo
   hooks: gemini
+  provider: google
+  owner: user
+  class: economy
+  cost_rank: 10
 ---
 Bundled runner profiles for brr.
+
+Each profile names a **Shell** (the CLI invocation on PATH: `claude`,
+`codex`, `gemini`) and, optionally, a **Core** (the model and its
+cost/quota metadata). A profile with both Shell and Core pinned is one
+selectable Runner. The **resident** inhabits whichever Runner this wake
+was given; `prompts/runners.md` (this file) catalogs what's available.
 
 The runner contract is deliberately abstract: a runner is a process that
 can intelligently operate files in its working directory. brr passes the
@@ -77,7 +95,7 @@ fields. The *config-install mechanism* is runner-specific:
 
 brr only installs hook config for a profile that explicitly declares `hooks:`.
 It never infers hooks from the runner name; a profile with no `hooks:` field
-(the `--bare` aliases, a `runner_cmd` override) uses the heartbeat-polled
+(the `--bare` auth variant, a `runner_cmd` override) uses the heartbeat-polled
 fallback (outbox drain + `portal-state.json` refresh on the daemon timer),
 which carries *outbound* mid-thought flush but not *inbound* injection.
 
@@ -97,7 +115,7 @@ manage runner profiles for a project, create `.brr/runners.md` with the
 same frontmatter shape; brr reads that before the bundled defaults. The
 legacy `.brr/prompts/runners.md` override is still accepted, but new
 configuration should use `.brr/runners.md` because runner profiles are
-execution-medium data, not prompt templates. For a one-off command,
+Shell+Core execution config, not prompt templates. For a one-off command,
 `runner_cmd` in `.brr/config` remains the smallest override.
 
 Each frontmatter key is a runner name. During detection brr checks
@@ -107,17 +125,73 @@ as `claude-bare-api-only`.
 
 The profile captures the headless invocation: non-interactive mode plus
 tool/approval bypass, since the daemon needs the runner to act without
-prompts. Repository orientation, AGENTS.md, dominion context, and the Run
-Context Bundle belong in the assembled prompt, not in these command
-strings.
+prompts. Claude profiles also request ``--output-format json``; brr unwraps
+the JSON ``result`` back into the response file and uses the accounting fields
+for terminal spend/context facets. Repository orientation, AGENTS.md, dominion
+context, and the Run Context Bundle belong in the assembled prompt, not in
+these command strings.
 
 - `cmd` — base command. brr appends the prompt as the final argument.
 - `binary` — optional PATH binary for alias profiles. When set, the
-  profile is opt-in via `runner=` in `.brr/config` (not auto-detected).
+  profile must be named explicitly via `shell=`/`core=` in `.brr/config`
+  (not auto-detected).
 
-Alias profiles with `binary` are for variants of the same CLI, for example
-`claude-bare-api-only` uses `--bare` and requires `ANTHROPIC_API_KEY`
-(OAuth / `~/.claude` subscription auth is not used).
+Optional **Core metadata** (read by `runner_select.py`, the cost-aware
+Core-selection layer) also rides these keys. None is required; a profile
+with none is an uncosted Runner the selector uses as-is:
+
+- `provider` / `model` / `owner` — who runs the Core (`owner: user` for a
+  local subscription/API key, `owner: brnrd` for a paid relay Core).
+- `class` — cost class: `economy` < `balanced` < `strong`, or `relay` for a
+  paid brnrd-owned fallback (never auto-selected; needs spend-plan consent).
+- `cost_rank` — a coarse, **tunable relative ordering hint** (cheapest first),
+  *not* a dollar figure and not a promise of price. The selector sorts by it
+  within a class; projects retune it freely in their own `.brr/runners.md`.
+- `quota_source` — which collector reads this Core's quota (`codex-local`
+  reads the session rollout; `claude-local` is terminal spend/context only).
+- `capability_score` / `capability_source` / `capability_freshness` — optional
+  benchmark-cache hints. These may derive `class` when no hand-set class exists,
+  but never override an explicit `class` and never act as a hard selector.
+
+The selection *policy* is brr's, not a table the user hand-tunes: the user
+sets `shell=`/`core=` (or leaves unset for auto) and optional
+`runner_policy=` (`cost-aware` | `fixed`) in `.brr/config`, and the
+resident picks the cheapest adequate available Runner from there. See
+`kb/design-runner-cores.md`.
+
+Automatic fallback is narrower than first selection. When a runner exits with a
+classified quota/auth/provider failure, brr may retry the same run in the same
+prepared worktree on another local Runner. That fallback excludes paid relay
+profiles, stays in the same or a cheaper class, and avoids the same failure
+domain where metadata makes that visible. Relay remains behind spend-plan
+consent.
+
+Quality escalation is a different path. It is resident-authored, not automatic
+triage: after reading the repo, a cheap Runner can drop an outbox message with
+`respawn: true` and either an explicit `shell:` / `core:` or
+`quality: escalate`. The latter asks brr's deterministic selector for the
+stronger local Core advertised in `portal-state.json`
+(`resources.runner.quality_escalation`) and queues a fresh event for the same
+conversation. Relay profiles remain excluded here too; paid handoff waits for
+the spend-consent flow.
+
+Auto mode also reads brr's bundled Core registry. For each Shell declared in
+the active `runners.md`, brr materializes registry rows such as `claude-haiku`
+or `codex-mini` as invokable profiles by inserting the Core's model flag into
+the base Shell command and inheriting hook/quota metadata from that Shell.
+Those generated profiles let `core=haiku` and cost-aware auto-selection choose a
+concrete Core without requiring a static profile entry for every model. A
+project-owned `.brr/runners.md` remains authoritative: registry profiles are
+generated only for Shells that file declares, and any declared profile with the
+same name wins.
+
+Alias profiles with `binary` and `auth_variant` are for authentication variants
+of the same CLI. For example `claude-bare-api-only` uses `--bare` and requires
+`ANTHROPIC_API_KEY` (OAuth / `~/.claude` subscription auth is not used). The
+Core registry materializes model-pinned profiles for that auth variant too
+(`claude-bare-api-only-sonnet`, `claude-bare-api-only-opus`, etc.), but their
+model / class / cost metadata stays in `runner_cores.py`, not in a second static
+profile catalog.
 
 When the resident chooses a plain current-thread stdout reply, brr reads it
 from stdout and writes it to the event's response file automatically;
@@ -130,8 +204,8 @@ Users can override `cmd` per-repo by setting `runner_cmd` in
 `.brr/config`. The same stdout capture rules apply, and `{prompt}` is
 substituted before exec.
 
-Quota and price signals are metadata about a runner medium, not part of
-the command string. Today brr reads them from `runner.quota.*`,
-`BRR_RUNNER_QUOTA_*`, or `.brr/runner-quota.json`; a fuller runner-medium
+Quota and price signals are metadata about a Core, not part of the
+command string. Today brr reads them from `runner.quota.*`,
+`BRR_RUNNER_QUOTA_*`, or `.brr/runner-quota.json`; a fuller Runner/Core
 registry can grow from this contract without making built-in commands
 pretend to know provider billing.

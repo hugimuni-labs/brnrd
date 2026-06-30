@@ -1013,6 +1013,7 @@ def append_run(
     target_branch: str | None = None,
     branch_source: str | None = None,
     host_context_branch: str | None = None,
+    repo_label: str | None = None,
 ) -> None:
     """Record a run lifecycle row on the conversation log."""
     record = {
@@ -1031,6 +1032,8 @@ def append_run(
         record["branch_source"] = branch_source
     if host_context_branch:
         record["host_context_branch"] = host_context_branch
+    if repo_label:
+        record["repo_label"] = repo_label
     append_record(brr_dir, key, record, event_id=event_id)
 
 

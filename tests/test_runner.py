@@ -94,6 +94,240 @@ def test_resolve_runner_accepts_binary_alias(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path) == "claude-bare-api-only"
 
 
+def test_resolve_runner_shell_pin(tmp_path, monkeypatch):
+    """shell= in config pins the named profile, skipping cost-aware selection."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "shell=claude-bare-api-only-sonnet\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-bare-api-only-sonnet": {
+                "binary": "claude",
+                "cmd": "claude --model claude-sonnet-4-6 --print",
+                "model": "claude-sonnet-4-6",
+                "class": "balanced",
+            },
+            "codex": {"cmd": "codex exec", "class": "economy", "cost_rank": 1},
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in ("claude", "codex") else None,
+    )
+    # shell= wins over cost-aware selection (which would prefer economy codex).
+    assert resolve_runner(tmp_path) == "claude-bare-api-only-sonnet"
+
+
+def test_resolve_runner_event_override_pins_shell(tmp_path, monkeypatch):
+    """A respawned event can carry shell= without rewriting .brr/config."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "codex-mini": {
+                "binary": "codex",
+                "cmd": "codex exec --model gpt-5-mini",
+                "model": "gpt-5-mini",
+                "class": "economy",
+            },
+            "claude-opus": {
+                "binary": "claude",
+                "cmd": "claude --model opus --print",
+                "model": "opus",
+                "class": "strong",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in ("claude", "codex") else None,
+    )
+
+    assert resolve_runner(tmp_path, {"shell": "claude-opus"}) == "claude-opus"
+
+
+def test_resolve_runner_core_pin_filters_by_model(tmp_path, monkeypatch):
+    """core= filters candidates to profiles with a matching model."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "core=claude-sonnet-4-6\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-sonnet": {
+                "binary": "claude",
+                "cmd": "claude --model claude-sonnet-4-6 --print",
+                "model": "claude-sonnet-4-6",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+            "claude-haiku": {
+                "binary": "claude",
+                "cmd": "claude --model claude-haiku-4-5 --print",
+                "model": "claude-haiku-4-5",
+                "class": "economy",
+                "cost_rank": 10,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    # core=claude-sonnet-4-6 filters to the sonnet profile.
+    assert resolve_runner(tmp_path) == "claude-sonnet"
+
+
+def test_resolve_runner_auto_picks_cheapest(tmp_path, monkeypatch):
+    """Without shell= or core=, auto picks the cheapest available profile."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-strong": {
+                "binary": "claude",
+                "cmd": "claude --model opus --print",
+                "class": "strong",
+                "cost_rank": 50,
+            },
+            "claude-economy": {
+                "binary": "claude",
+                "cmd": "claude --model haiku --print",
+                "class": "economy",
+                "cost_rank": 5,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    # Auto should pick the economy (cheapest) profile.
+    assert resolve_runner(tmp_path) == "claude-economy"
+
+
+def test_resolve_runner_auto_prefers_generated_core_profile(tmp_path, monkeypatch):
+    """Auto mode should use the bundled Core registry, not the model-less shell."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    # The generated claude-haiku profile is cheaper than the model-less base
+    # Shell and should be the auto choice.
+    assert resolve_runner(tmp_path) == "claude-haiku"
+
+
+def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkeypatch):
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "codex": {
+                "cmd": "codex exec",
+                "hooks": "codex",
+                "class": "balanced",
+                "cost_rank": 25,
+                "quota_source": "codex-local",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/codex" if name == "codex" else None,
+    )
+
+    catalog = runner_mod.available_runner_catalog(
+        tmp_path, selected="codex-mini",
+    )
+    mini = next(item for item in catalog if item["name"] == "codex-mini")
+
+    assert mini["selected"] is True
+    assert mini["shell"] == "codex"
+    assert mini["model"] == "gpt-5.4-mini"
+    assert mini["class"] == "economy"
+    assert mini["quota_source"] == "codex-local"
+    assert mini["availability"] == "available"
+    assert "cmd" not in mini
+
+
+def test_resolve_runner_core_pin_matches_generated_short_alias(tmp_path, monkeypatch):
+    """core=haiku can select the generated claude-haiku profile."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text("core=haiku\n", encoding="utf-8")
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    assert resolve_runner(tmp_path) == "claude-haiku"
+
+
+def test_build_cmd_for_generated_claude_core_inserts_model(tmp_path, monkeypatch):
+    """Generated Core profiles are invokable, not just selector labels."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print --output-format json",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+        },
+    )
+
+    cmd = _build_cmd("claude-haiku", "fix it", {}, tmp_path)
+
+    assert cmd[:3] == ["claude", "--model", "claude-haiku-4-5-20251001"]
+    assert cmd[-1] == "fix it"
+
+
 def test_project_runners_file_overrides_bundled_profiles(tmp_path, monkeypatch):
     (tmp_path / ".brr").mkdir()
     (tmp_path / ".brr" / "config").write_text("runner=local-agent\n")
@@ -151,6 +385,8 @@ class TestCommandBuilding:
         assert cmd == [
             "claude",
             "--print",
+            "--output-format",
+            "json",
             "--dangerously-skip-permissions",
             # local settings source isolates the run from the user's global
             # and the project's committed settings — NOT --safe-mode, which
@@ -168,6 +404,24 @@ class TestCommandBuilding:
         assert cmd == [
             "claude",
             "--print",
+            "--output-format",
+            "json",
+            "--dangerously-skip-permissions",
+            "--bare",
+            "--system-prompt",
+            _RUNNER_BASE,
+            "fix it",
+        ]
+
+    def test_build_cmd_generated_claude_bare_api_core_headless(self):
+        cmd = _build_cmd("claude-bare-api-only-sonnet", "fix it", {})
+        assert cmd == [
+            "claude",
+            "--model",
+            "claude-sonnet-4-6",
+            "--print",
+            "--output-format",
+            "json",
             "--dangerously-skip-permissions",
             "--bare",
             "--system-prompt",
@@ -183,6 +437,52 @@ class TestCommandBuilding:
             "--yolo",
             "fix it",
         ]
+
+    def test_invoke_runner_unwraps_claude_json_response(self, tmp_path):
+        repo_root = tmp_path
+        (repo_root / ".brr").mkdir()
+        response_path = repo_root / ".brr" / "responses" / "evt-claude.md"
+        outbox = repo_root / ".brr" / "outbox" / "evt-claude"
+        payload = {
+            "type": "result",
+            "result": "final from json\n",
+            "total_cost_usd": 0.01,
+            "modelUsage": {
+                "claude-haiku": {
+                    "inputTokens": 1000,
+                    "cacheReadInputTokens": 0,
+                    "cacheCreationInputTokens": 0,
+                    "contextWindow": 200000,
+                }
+            },
+        }
+        cfg = {
+            "runner_cmd": [
+                sys.executable,
+                "-c",
+                "import json, sys; sys.stdout.write(json.dumps(json.loads(sys.argv[1])))",
+                json.dumps(payload),
+            ]
+        }
+        invocation = RunnerInvocation(
+            kind="daemon-run",
+            label="evt-claude-attempt-1",
+            prompt="ignored",
+            cwd=repo_root,
+            repo_root=repo_root,
+            response_path=str(response_path),
+            env={"BRR_OUTBOX_DIR": str(outbox)},
+        )
+
+        result = invoke_runner("claude", invocation, cfg=cfg)
+
+        assert result.ok
+        assert result.stdout == "final from json\n"
+        assert response_path.read_text(encoding="utf-8") == "final from json\n"
+        snap = json.loads(
+            (outbox / ".claude-result-levels.json").read_text(encoding="utf-8")
+        )
+        assert snap["spend"]["summary"] == "$0.0100 this session (estimated)"
 
     def test_build_cmd_runner_cmd_override_substitutes_prompt_only(self):
         cfg = {"runner_cmd": ["mock", "--flag", "{prompt}"]}

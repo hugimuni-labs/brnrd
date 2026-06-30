@@ -1,22 +1,21 @@
-"""The agent's dominion — durable, owned working memory on a dedicated branch.
+"""The agent's dominion — durable, owned working memory.
 
-The dominion lives on an orphan branch (default ``brr-home``) materialized as
-a long-lived ``git worktree`` at ``.brr/dominion/``. The *branch* is the
-durable thing — it shares no history with ``main``, never merges into it, and
-travels with the repo's remote so ``git fetch`` brings it back on any machine;
-the local checkout is a disposable view. See ``kb/design-agent-dominion.md``.
+The current daemon shape stores resident memory inside the account dominion
+repo, normally under ``repos/<repo-label>/dominion/``. That account repo is a
+local-first git repo: it can stay purely local, or the user can opt into a
+remote for off-machine durability. The older repo-local orphan branch
+(``brr-home`` at ``.brr/dominion/``) remains supported as a legacy fallback
+while installs migrate.
 
-The plain branch name is deliberate: it reads as ordinary infrastructure to
-anyone browsing the repo. The *concept* — the agent's dominion — lives in the
-playbook and design docs, where the ownership weight belongs.
-
-This module owns bootstrap (:func:`ensure_dominion`) and resolving the
-self-inject index into a wake-time digest (:func:`resolve_self_inject`).
+This module owns legacy bootstrap (:func:`ensure_dominion`), account-resident
+seed files, and resolving the self-inject index into a wake-time digest
+(:func:`resolve_self_inject`).
 """
 
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
 import os
 import re
 import time
@@ -53,9 +52,95 @@ _HEAD_RE = re.compile(r"^head:(\d+)$")
 _TAIL_RE = re.compile(r"^tail:(\d+)$")
 
 
+@dataclass(frozen=True)
+class ResidentDominion:
+    """One candidate resident-memory directory for a repo wake."""
+
+    path: Path
+    capture_root: Path
+    label: str
+    legacy: bool = False
+
+
 def dominion_path(repo_root: Path) -> Path:
-    """Return the dominion worktree path (``.brr/dominion/``)."""
+    """Return the legacy repo-local dominion worktree path."""
     return gitops.shared_brr_dir(repo_root) / WORKTREE_DIRNAME
+
+
+def resident_dominion_candidates(
+    repo_root: Path,
+    cfg: dict | None = None,
+    *,
+    repo_label: str | None = None,
+    include_legacy: bool = True,
+) -> list[ResidentDominion]:
+    """Return resident-memory locations, newest account path first.
+
+    The account-scoped path is authoritative when present. The repo-local
+    orphan-branch path remains a fallback so partially migrated installs can
+    still wake with their old memory instead of going blank.
+    """
+
+    if cfg is None:
+        from . import config as conf
+
+        cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return []
+
+    candidates: list[ResidentDominion] = []
+    try:
+        from . import account
+
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        if ctx.enabled:
+            label = repo_label or account.repo_label(repo_root, cfg)
+            candidates.append(
+                ResidentDominion(
+                    path=account.repo_dominion_path(ctx, label),
+                    capture_root=ctx.dominion_repo,
+                    label=f"account:{label}",
+                )
+            )
+            candidates.append(
+                ResidentDominion(
+                    path=ctx.dominion_repo,
+                    capture_root=ctx.dominion_repo,
+                    label="account-root",
+                )
+            )
+    except Exception:
+        pass
+
+    if include_legacy:
+        legacy = dominion_path(repo_root)
+        candidates.append(
+            ResidentDominion(
+                path=legacy,
+                capture_root=legacy,
+                label="legacy-repo-local",
+                legacy=True,
+            )
+        )
+
+    deduped: list[ResidentDominion] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            key = candidate.path.resolve()
+        except OSError:
+            key = candidate.path
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def seed_account_dominion(path: Path) -> None:
+    """Seed missing starter files into an account-scoped resident dominion."""
+
+    _seed(path, readme=_ACCOUNT_README, overwrite=False)
 
 
 def ensure_dominion(
@@ -170,8 +255,8 @@ def mark_needs_sync(brr_dir: Path, reason: str) -> None:
     """Record that the dominion's remote diverged (a push was rejected).
 
     A best-effort hint, written to the runtime dir (gitignored), surfaced
-    in the next wake prompt so the resident reconciles ``brr-home`` itself
-    — pull / merge / resolve / push is git-layer dissonance resolution,
+    in the next wake prompt so the resident reconciles the dominion remote
+    itself — pull / merge / resolve / push is git-layer dissonance resolution,
     the agent's judgement, not the daemon's (``kb/design-self-scheduled-
     thoughts.md`` → sync companion). Cleared by the next successful push.
     """
@@ -227,7 +312,7 @@ def commit(
     must never break the thought that produced it.
 
     **Push is a durability floor, not a merge.** When *push* is on, brr
-    best-effort pushes ``brr-home`` after committing. A *rejected* push
+    best-effort pushes the dominion repo after committing. A *rejected* push
     (the remote diverged — a second machine / failover host wrote it) is
     **not** silently swallowed: it sets a ``needs_sync`` marker so the next
     thought reconciles by hand (fetch / merge / resolve / push is the
@@ -356,15 +441,24 @@ def _render_entry(dominion_dir: Path, mode: str, target: str) -> str:
     return ""  # unknown mode
 
 
-def _seed(path: Path) -> None:
-    """Write the starter files into a freshly created dominion."""
-    (path / "README.md").write_text(_README, encoding="utf-8")
-    (path / PLAYBOOK_FILE).write_text(
-        _SEED_PLAYBOOK.read_text(encoding="utf-8"), encoding="utf-8",
+def _write_seed_file(path: Path, text: str, *, overwrite: bool) -> None:
+    if path.exists() and not overwrite:
+        return
+    path.write_text(text, encoding="utf-8")
+
+
+def _seed(path: Path, *, readme: str = "", overwrite: bool = True) -> None:
+    """Write starter files into a freshly created or newly scoped dominion."""
+    path.mkdir(parents=True, exist_ok=True)
+    _write_seed_file(path / "README.md", readme or _README, overwrite=overwrite)
+    _write_seed_file(
+        path / PLAYBOOK_FILE,
+        _SEED_PLAYBOOK.read_text(encoding="utf-8"),
+        overwrite=overwrite,
     )
-    (path / SELF_INJECT_FILE).write_text(_SELF_INJECT_SEED, encoding="utf-8")
-    (path / "pitfalls.md").write_text(_PITFALLS_SEED, encoding="utf-8")
-    (path / "schedule.md").write_text(_SCHEDULE_SEED, encoding="utf-8")
+    _write_seed_file(path / SELF_INJECT_FILE, _SELF_INJECT_SEED, overwrite=overwrite)
+    _write_seed_file(path / "pitfalls.md", _PITFALLS_SEED, overwrite=overwrite)
+    _write_seed_file(path / "schedule.md", _SCHEDULE_SEED, overwrite=overwrite)
 
 
 _README = """\
@@ -390,6 +484,20 @@ remote is gone.) Leaving it alone costs you nothing: it never touches `main`.
 
 Per-task branches named `brr/<run-id>` are a different thing — ordinary feature
 branches that open PRs, safe to handle like any other.
+"""
+
+_ACCOUNT_README = """\
+# Dominion — resident agent working memory
+
+This directory is the resident-owned working memory for one registered repo
+inside the account dominion repo. It is intentionally separate from the
+project's source checkout and from the shared `kb/`: notes here are the
+resident's workshop until a durable, user-shared fact is promoted outward.
+
+The surrounding account home is local-first. It can remain only on this
+machine, or you can opt into durability by pointing the account git repo at a
+remote and letting brr push it. Default startup does not create a GitHub repo
+or any other forge object on your behalf.
 """
 
 _SELF_INJECT_SEED = """\
@@ -448,7 +556,7 @@ _SCHEDULE_SEED = """\
 #
 # ## reconcile my dominion
 # every: 24h
-# Fetch and reconcile the brr-home branch: pull, resolve any conflicts
-# with the remote, and push. Then skim pitfalls.md and self-inject for
-# anything stale.
+# Fetch and reconcile the account dominion remote if one is configured:
+# pull, resolve any conflicts with the remote, and push. Then skim
+# pitfalls.md and self-inject for anything stale.
 """
