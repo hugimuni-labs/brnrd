@@ -27,7 +27,7 @@ from .proxy import (
     resolve_proxy,
 )
 from .record import Record
-from .store import IssueSummary, clear, ergonomics_dir, read_records, summarize
+from .store import IssueSummary, clear, clear_records, ergonomics_dir, read_records, summarize
 
 __all__ = [
     "Record",
@@ -44,5 +44,6 @@ __all__ = [
     "read_records",
     "summarize",
     "clear",
+    "clear_records",
     "IssueSummary",
 ]

@@ -260,19 +260,98 @@
 .binding-row strong,
 .binding-row small,
 .repo-card strong,
-.repo-card small {
+.repo-card small,
+.activity-row strong,
+.activity-row small {
   display: block;
 }
 
 .binding-row strong,
-.repo-card strong {
+.repo-card strong,
+.activity-row strong {
   overflow-wrap: anywhere;
 }
 
 .binding-row small,
-.repo-card small {
+.repo-card small,
+.activity-row small {
   margin-top: 4px;
   color: var(--muted);
+}
+
+.activity-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  margin: 16px 0;
+}
+
+.activity-filters label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.activity-filters select {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.activity-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.activity-row {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+  padding: 14px;
+}
+
+.activity-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 0.36fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.activity-topline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.activity-status {
+  border-color: rgba(21, 128, 61, 0.22);
+  background: rgba(240, 253, 244, 0.72);
+  color: var(--success);
+}
+
+.activity-meta {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  text-align: right;
+}
+
+.activity-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 0.9rem;
+  font-weight: 800;
 }
 
 .repo-menu {
@@ -437,12 +516,18 @@ input {
 
   .status-grid,
   .dashboard-grid,
-  .binding-form {
+  .binding-form,
+  .activity-filters,
+  .activity-main {
     grid-template-columns: 1fr;
   }
 
   .binding-form label {
     display: block;
+  }
+
+  .activity-meta {
+    text-align: left;
   }
 }
 
@@ -471,6 +556,8 @@ input {
   .section-heading,
   .section-actions,
   .binding-row,
+  .activity-main,
+  .activity-filters,
   .repo-card-topline,
   .repo-card-main,
   .inline-form {
