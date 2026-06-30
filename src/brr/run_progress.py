@@ -103,6 +103,8 @@ class AttemptEntry:
     fallback_runner: str | None = None
     will_retry: bool = False
     will_fallback: bool = False
+    needs_relay_consent: bool = False
+    relay_candidate: str | None = None
 
 
 @dataclass
@@ -302,6 +304,10 @@ def _record_attempt_failure(
         entry.fallback_runner = fallback.strip()
     entry.will_retry = bool(record.get("will_retry"))
     entry.will_fallback = bool(record.get("will_fallback"))
+    entry.needs_relay_consent = bool(record.get("needs_relay_consent"))
+    relay_candidate = record.get("relay_candidate")
+    if isinstance(relay_candidate, str) and relay_candidate.strip():
+        entry.relay_candidate = relay_candidate.strip()
 
 
 def _record_terminal_attempt_failure(
@@ -437,8 +443,20 @@ def _project(
             )
         elif ptype == "attempt_failed":
             reason = record.get("reason")
+            relay_detail = ""
+            if record.get("needs_relay_consent"):
+                candidate = str(record.get("relay_candidate") or "").strip()
+                relay_detail = (
+                    f"; relay available: {candidate}"
+                    if candidate else "; relay available"
+                )
             if reason:
-                view.detail = f"attempt {record.get('attempt', view.attempt)} failed: {reason}"
+                view.detail = (
+                    f"attempt {record.get('attempt', view.attempt)} "
+                    f"failed: {reason}{relay_detail}"
+                )
+            elif relay_detail:
+                view.detail = relay_detail.lstrip("; ")
             _record_attempt_failure(view, record, ts)
         elif ptype == "retrying":
             attempt = record.get("attempt")
@@ -826,6 +844,9 @@ def _format_attempt_ledger(view: RunProgressView) -> list[str]:
             line += f" - {reason}"
         if entry.fallback_runner:
             line += f" -> {entry.fallback_runner}"
+        if entry.needs_relay_consent:
+            candidate = entry.relay_candidate or "brnrd relay"
+            line += f" · relay available: {candidate}"
         lines.append(line)
     return lines
 
