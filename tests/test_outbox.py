@@ -540,7 +540,7 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
         body="work",
         status="running",
         env="host",
-        meta={"branch_name": "brr/live-state"},
+        meta={"branch_name": "brr/live-state", "repo_label": "Gurio/brr"},
     )
 
     path = daemon._write_live_portal_state(
@@ -570,6 +570,7 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     assert payload["run"]["id"] == "run-1"
     assert payload["run"]["phase"] == "running"
     assert payload["run"]["attempt"] == 1
+    assert payload["run"]["repo"] == "Gurio/brr"
     assert payload["run"]["branch"] == "brr/live-state"
     assert payload["attention"] == {
         "needs_attention": True,

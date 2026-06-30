@@ -448,6 +448,7 @@ def test_drain_outbox_queues_respawn_request(tmp_path):
         "---\n"
         "respawn: true\n"
         "shell: codex-mini\n"
+        "repo: Gurio/other\n"
         "reason: needs a stronger core\n"
         "defer_until: +30m\n"
         "---\n"
@@ -483,6 +484,8 @@ def test_drain_outbox_queues_respawn_request(tmp_path):
     assert spawned["conversation_key"] == "telegram:42:"
     assert spawned["chat_id"] == 42
     assert spawned["shell"] == "codex-mini"
+    assert spawned["repo"] == "Gurio/other"
+    assert spawned["repo_label"] == "Gurio/other"
     assert spawned["respawn_reason"] == "needs a stronger core"
     assert spawned["body"] == "carry this exact task forward"
     assert "origin_message_key" not in spawned
@@ -1470,6 +1473,31 @@ def test_resources_facet_threads_runner_catalog():
     catalog = facet["runner"]["catalog"]
     assert catalog[0]["name"] == "codex-mini"
     assert catalog[0]["selected"] is True
+
+
+def test_repo_label_prefers_event_repo():
+    label = daemon._repo_label(
+        Path("/tmp/local-brr"),
+        {"github_repo": "Gurio/brr"},
+        {},
+    )
+
+    assert label == "Gurio/brr"
+
+
+def test_repo_label_falls_back_to_remote(monkeypatch, tmp_path):
+    monkeypatch.setattr(daemon.gitops, "default_remote", lambda _root: "origin")
+    monkeypatch.setattr(
+        daemon.gitops,
+        "remote_url",
+        lambda _root, _remote: "git@github.com:Gurio/brr.git",
+    )
+
+    assert daemon._repo_label(tmp_path, {}, {}) == "Gurio/brr"
+
+
+def test_repo_label_uses_config_before_directory_name(tmp_path):
+    assert daemon._repo_label(tmp_path, {}, {"repo.label": "local/demo"}) == "local/demo"
 
 
 def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path):

@@ -415,6 +415,7 @@ def build_daemon_prompt(
     source: str | None = None,
     environment: str | None = None,
     branch_name: str | None = None,
+    repo_label: str | None = None,
     seed_ref: str | None = None,
     branch_source: str | None = None,
     branch_setup_notice: str | None = None,
@@ -461,6 +462,7 @@ def build_daemon_prompt(
         source=source,
         environment=environment,
         branch_name=branch_name,
+        repo_label=repo_label,
         seed_ref=seed_ref,
         branch_source=branch_source,
         branch_setup_notice=branch_setup_notice,
@@ -538,6 +540,7 @@ def _build_run_context_bundle(
     source: str | None,
     environment: str | None,
     branch_name: str | None,
+    repo_label: str | None,
     seed_ref: str | None,
     branch_source: str | None,
     branch_setup_notice: str | None,
@@ -614,6 +617,8 @@ def _build_run_context_bundle(
     if run_id:
         sections.append(f"- Run ID: {run_id}")
     sections.append(f"- Execution root: {repo_root}")
+    if repo_label:
+        sections.append(f"- Repo: {repo_label}")
     if seed_ref:
         sections.append(f"- Seed ref: {seed_ref}")
     if branch_source:
