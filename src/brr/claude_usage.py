@@ -3,13 +3,13 @@
 Claude's head-less ``--print`` result JSON carries spend and context accounting
 but not subscription quota windows. The quota surface that *does* exist today is
 the interactive TUI's ``/usage`` panel. This module drives that panel through a
-short-lived pseudo-terminal, parses the screen text, and stores the same
-``levels`` snapshot shape the portal facets already consume.
+short-lived pseudo-terminal in ``--ax-screen-reader`` mode (flat text, no chrome),
+types ``/usage``, parses the screen text, and stores the same ``levels`` snapshot
+shape the portal facets already consume.
 
-The collector is deliberately best-effort and throttled by the caller: spawning
-Claude's TUI is much heavier than reading Codex's rollout JSON, so it should be
-treated as a cached daemon-side probe, not a hook command that runs at every
-tool boundary.
+The collector is deliberately best-effort and throttled by the caller: even the
+optimized probe takes a few seconds, so it should be treated as a cached
+daemon-side probe, not a hook command that runs at every tool boundary.
 """
 
 from __future__ import annotations
@@ -34,7 +34,8 @@ _CLAUDE_FLAVOURS = {"claude"}
 COLLECTED_SLOTS: frozenset[str] = frozenset({"quota"})
 
 DEFAULT_MODEL = "haiku"
-DEFAULT_TIMEOUT_SECONDS = 18.0
+DEFAULT_BOOT_SECONDS = 2.5
+DEFAULT_TIMEOUT_SECONDS = 8.0
 DEFAULT_TTL_SECONDS = 300.0
 
 _ENV_CONTAMINANTS = {
@@ -106,6 +107,22 @@ def _reset_text(line: str) -> str | None:
     return raw[6:].strip() or None
 
 
+def _parse_bucket_line(line: str) -> tuple[float, str | None] | None:
+    """Parse a one-line ``Current session: N% used · resets ...`` bucket."""
+    match = _USED_RE.search(line)
+    if not match:
+        return None
+    used = _num(match.group(1))
+    if used is None:
+        return None
+    reset = _reset_text(line)
+    if reset is None:
+        reset_match = re.search(r"resets\s*(.+)", line, flags=re.IGNORECASE)
+        if reset_match and reset_match.group(1).strip():
+            reset = reset_match.group(1).strip()
+    return used, reset
+
+
 def _scan_bucket(lines: list[str], start: int) -> tuple[float, str | None] | None:
     used: float | None = None
     reset: str | None = None
@@ -174,11 +191,11 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
     for idx, line in enumerate(lines):
         key = _line_key(line)
         if key.startswith("currentsession"):
-            found = _scan_bucket(lines, idx)
+            found = _scan_bucket(lines, idx) or _parse_bucket_line(line)
             if found:
                 session = _prefer_bucket(session, found)
         elif key.startswith("currentweek"):
-            found = _scan_bucket(lines, idx)
+            found = _scan_bucket(lines, idx) or _parse_bucket_line(line)
             if found:
                 week = _prefer_bucket(week, found)
 
@@ -216,16 +233,14 @@ def _usage_command(
 ) -> list[str]:
     env = env or os.environ
     chosen = model or env.get("BRR_CLAUDE_USAGE_MODEL") or DEFAULT_MODEL
-    return ["claude", "--model", chosen, "--safe-mode"]
+    return ["claude", "--ax-screen-reader", "--model", chosen, "--safe-mode"]
 
 
-def _read_until(
-    master_fd: int,
-    chunks: list[bytes],
-    deadline: float,
-    *,
-    stop_pattern: bytes | None = None,
-) -> None:
+def _quota_buckets_complete(levels: dict[str, Any]) -> bool:
+    return "session_used_percentage" in levels and "week_used_percentage" in levels
+
+
+def _read_available(master_fd: int, chunks: list[bytes], deadline: float) -> None:
     while time.monotonic() < deadline:
         timeout = min(0.1, max(0.0, deadline - time.monotonic()))
         ready, _, _ = select.select([master_fd], [], [], timeout)
@@ -238,12 +253,18 @@ def _read_until(
         if not data:
             return
         chunks.append(data)
-        if stop_pattern:
-            window = b"".join(chunks[-8:])
-            compact_pattern = stop_pattern.replace(b" ", b"")
-            compact_window = window.replace(b" ", b"")
-            if stop_pattern in window or compact_pattern in compact_window:
-                return
+
+
+def _terminate_process(proc: subprocess.Popen[bytes]) -> None:
+    try:
+        proc.terminate()
+        proc.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def capture_usage_raw(
@@ -255,11 +276,13 @@ def capture_usage_raw(
 ) -> bytes:
     """Drive ``claude`` interactively, type ``/usage``, and return raw TUI bytes.
 
-    The command is run in ``--safe-mode`` so project/local hooks and plugins do
-    not fire recursively. It still uses Claude's normal subscription auth and
-    does not send a model prompt.
+    The command runs in ``--ax-screen-reader`` mode for flat, fast output and in
+    ``--safe-mode`` so project/local hooks and plugins do not fire recursively.
+    It still uses Claude's normal subscription auth and does not send a model
+    prompt.
     """
     deadline = time.monotonic() + max(3.0, float(timeout_seconds))
+    boot_seconds = min(DEFAULT_BOOT_SECONDS, max(0.0, float(timeout_seconds) - 0.5))
     master, slave = pty.openpty()
     try:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 160, 0, 0))
@@ -280,28 +303,17 @@ def capture_usage_raw(
     os.close(slave)
     chunks: list[bytes] = []
     try:
-        _read_until(master, chunks, min(deadline, time.monotonic() + 5.0))
+        boot_deadline = min(deadline, time.monotonic() + boot_seconds)
+        _read_available(master, chunks, boot_deadline)
+        while time.monotonic() < boot_deadline:
+            time.sleep(min(0.05, boot_deadline - time.monotonic()))
         if time.monotonic() < deadline:
             os.write(master, b"/usage\r")
-            _read_until(master, chunks, deadline, stop_pattern=b"Usage credits")
-            _read_until(master, chunks, min(deadline, time.monotonic() + 1.5))
-        # Leave the usage panel before trying to exit; terminate if the TUI keeps
-        # running. The captured data is already in hand.
-        try:
-            os.write(master, b"\x1b")
-            time.sleep(0.1)
-            os.write(master, b"/exit\r")
-        except OSError:
-            pass
-        try:
-            proc.wait(timeout=1.0)
-        except subprocess.TimeoutExpired:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=2.0)
+        while time.monotonic() < deadline:
+            _read_available(master, chunks, min(deadline, time.monotonic() + 0.1))
+            if _quota_buckets_complete(parse_usage_text(b"".join(chunks))):
+                break
+        _terminate_process(proc)
     finally:
         try:
             os.close(master)
