@@ -64,17 +64,18 @@ receipt while using explicit portals for anything meant to communicate. kb
 writes are optional — agents log only when there's something worth logging
 (see AGENTS.md → Knowledge base).
 
-Prompt assembly also injects the resident's dominion digest (per its
-`self-inject` index) and, when the deterministic kb preflight isn't
-clean, a `kb health` block of findings for the resident to fold into
-its work (see [`brr-internals.md`](brr-internals.md) → KB maintenance).
-The daemon path additionally injects `daemon-substrate.md` — brr's
-driver's manual for the daemon-only machinery (single-flight, the
-capture-at-sleep net, self-scheduled wakes) that the host-agnostic
-dominion playbook leaves out; `brr run` skips it. `brr agent inject`
-prints this assembled wake-context (dominion digest + matched pitfalls +
-recent log) so a non-brr wrapper can reuse the same `self-inject`
-semantic.
+Prompt assembly first injects `identity-core.md`, the product-owned
+resident contract, then the resident's dominion digest (per its
+`self-inject` index). It also injects task-scoped surfaces such as matched
+pitfalls, recent `kb/log.md` activity, and, when the deterministic kb
+preflight isn't clean, a `kb health` block of findings for the resident to
+fold into its work (see [`brr-internals.md`](brr-internals.md) → KB
+maintenance). The daemon path additionally injects `daemon-substrate.md` —
+brr's driver's manual for the daemon-only machinery (single-flight, the
+capture-at-sleep net, self-scheduled wakes) that the host-agnostic dominion
+playbook leaves out; `brr run` skips it. `brr agent inject` prints this
+assembled wake-context (identity core + dominion digest + matched pitfalls +
+recent log) so a non-brr wrapper can reuse the same orientation semantic.
 
 ### 4. Response
 
