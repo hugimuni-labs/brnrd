@@ -286,3 +286,61 @@ def slug_repo_label(label: str) -> str:
     """Filesystem-safe repo label for account-store paths."""
 
     return _slug(label.replace("/", "__"))
+
+
+def run_state_blob_url(
+    ctx: AccountContext,
+    run_state_path: Path,
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> str | None:
+    """Project a persisted run-state doc to a web-visible URL, or ``None``.
+
+    The account dominion repo is local-first; once it tracks a forge-hosted
+    remote (the additive brnrd-projection step), a run-state document committed
+    under ``run-state/<label>/<run>.md`` has a stable blob URL. This derives it
+    from the dominion repo's remote so the live card and run surfaces can link
+    the durable run-state object instead of leaking a host-local path that a
+    remote chat reader cannot open. Returns ``None`` for a purely-local
+    dominion (no remote), an unparseable remote, or a path outside the store —
+    callers then fall back to a non-path label rather than an absolute path.
+    """
+    from . import forges
+
+    try:
+        rel = run_state_path.resolve().relative_to(ctx.dominion_repo.resolve())
+    except (OSError, ValueError):
+        return None
+    try:
+        remote = gitops.default_remote(ctx.dominion_repo)
+        if not remote:
+            return None
+        url = gitops.remote_url(ctx.dominion_repo, remote)
+        if not url:
+            return None
+        branch = gitops.current_branch(ctx.dominion_repo)
+        if branch in ("", "HEAD"):
+            # An account dominion can sit on an unborn branch (git init, no
+            # commit yet); ``symbolic-ref`` still names it ("main").
+            res = subprocess.run(
+                ["git", "symbolic-ref", "--short", "HEAD"],
+                cwd=ctx.dominion_repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            branch = res.stdout.strip() if res.returncode == 0 else ""
+        branch = branch or "main"
+        cfg = cfg or {}
+        return forges.view_blob_url(
+            url,
+            branch,
+            rel.as_posix(),
+            override_kind=cfg.get("account.forge.kind") or cfg.get("forge.kind") or None,
+            override_url_base=(
+                cfg.get("account.forge.url_base") or cfg.get("forge.url_base") or None
+            ),
+        )
+    except Exception:
+        return None
