@@ -111,13 +111,31 @@ def test_daemon_activity_snapshot_is_account_readable():
 def test_activity_dashboard_renders_snapshot():
     client = _client()
     _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
     client.put(
         "/v1/daemons/activity",
         json={
             "records": [
                 {
+                    "id": "run:run-1",
+                    "kind": "run",
+                    "source": "telegram",
+                    "summary": "implement the missing parts",
+                    "runner": {"shell": "codex", "core": "gpt-5-codex"},
+                    "status": "running",
+                    "phase": "coding",
+                    "started_at": "2026-06-29T05:59:00Z",
+                    "updated_at": "2026-06-29T06:00:00Z",
+                    "branch": "brr/activity",
+                },
+                {
                     "id": "schedule:daily-sweep",
                     "kind": "scheduled",
+                    "source": "schedule",
                     "summary": "run upkeep",
                     "status": "scheduled",
                     "scheduled_for": "2026-06-29T06:00:00Z",
@@ -128,9 +146,12 @@ def test_activity_dashboard_renders_snapshot():
     )
     _login_cookie(client)
 
-    page = client.get("/activity")
+    page = client.get("/activity?kind=run")
 
     assert page.status_code == 200
     assert "Activity" in page.text
-    assert "run upkeep" in page.text
-    assert "scheduled" in page.text
+    assert "implement the missing parts" in page.text
+    assert "run upkeep" not in page.text
+    assert "codex / gpt-5-codex" in page.text
+    assert "laptop" in page.text
+    assert "status-ok" in page.text

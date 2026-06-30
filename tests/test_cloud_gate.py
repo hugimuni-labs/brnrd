@@ -190,6 +190,72 @@ def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):
     assert protocol.list_pending(inbox_dir) == []
 
 
+def test_loop_publishes_local_activity_snapshot(tmp_path, monkeypatch):
+    from brr.run import Run
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    Run(
+        id="run-cloud-activity",
+        event_id="evt-run",
+        body="wire the activity page",
+        status="running",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={
+            "runner_shell": "codex",
+            "runner_core": "gpt-5-codex",
+            "runner_class": "balanced",
+            "publish_status": "coding",
+            "branch_name": "brr/activity",
+            "pr_number": 205,
+        },
+    ).save(brr_dir / "runs")
+    dom = brr_dir / "dominion"
+    dom.mkdir(parents=True)
+    (dom / "schedule.md").write_text(
+        "## Daily Sweep\nat: 2999-01-01T00:00:00Z\nrun upkeep\n",
+        encoding="utf-8",
+    )
+    respawn = protocol.create_event(
+        inbox_dir,
+        source="telegram",
+        body="retry this on a stronger runner",
+        respawned_from_event="evt-parent",
+        respawn_reason="quality",
+        runner_shell="claude",
+        runner_core="claude-opus",
+        defer_until="2999-01-01T01:00:00Z",
+    )
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    listing = client.get("/v1/accounts/activity", headers=acc)
+    assert listing.status_code == 200
+    rows = {row["id"]: row for row in listing.json()["activity"]}
+    assert rows["run:run-cloud-activity"]["runner"]["shell"] == "codex"
+    assert rows["run:run-cloud-activity"]["phase"] == "coding"
+    assert rows["run:run-cloud-activity"]["branch"] == "brr/activity"
+    assert rows["schedule:daily-sweep"]["kind"] == "scheduled"
+    assert rows[f"respawn:{respawn.stem}"]["defer_until"].startswith("2999-01-01T01:00:00")
+
+
 def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
