@@ -1927,6 +1927,38 @@ def _run_worker(
             attempt_payload["failure_kind"] = last_failure.get("failure_kind")
             if last_failure.get("timed_out"):
                 attempt_payload["timed_out"] = True
+        # Check for relay fallback before emitting the attempt failure. The
+        # packet is the live feedback surface for cards and future portal
+        # readers, so relay availability has to ride the first emission.
+        relay_candidate = None
+        relay_plan = None
+        if (
+            failure_kind
+            and failure_kind in runner_select.AUTO_FALLBACK_FAILURES
+            and not fallback_runner_name
+        ):
+            try:
+                runners = runner_select.available_runners(repo_root)
+                relay_candidate = runner_select.best_relay_runner(runners)
+                if relay_candidate:
+                    # Emit spending plan request. The resident/user approval
+                    # consumer is a later slice; this feedback slice makes the
+                    # available relay path visible without spending tokens.
+                    relay_plan = spending_plan.SpendingPlan(
+                        reason=failure_kind,
+                        model=relay_candidate.model or relay_candidate.name,
+                        provider=relay_candidate.provider or "unknown",
+                        estimated_input_tokens=0,
+                        estimated_output_tokens=0,
+                        consent_state="pending",
+                    )
+                    attempt_payload["needs_relay_consent"] = True
+                    attempt_payload["relay_candidate"] = relay_candidate.summary()
+                    attempt_payload["relay_plan"] = relay_plan.to_dict()
+            except Exception:
+                # Relay check failed; don't block hard failure.
+                relay_candidate = None
+                relay_plan = None
         emit("attempt_failed", **attempt_payload)
         if will_retry:
             clean_retries_used += 1
@@ -1975,38 +2007,6 @@ def _run_worker(
             )
             last_failure = None
             continue
-        # Check for relay fallback before hard failure.
-        # If no local fallback is available but relay runners exist and the
-        # failure is a candidate for relay (quota exhausted, auth error),
-        # emit a spending plan request instead of hard failure.
-        relay_candidate = None
-        relay_plan = None
-        if (
-            failure_kind
-            and failure_kind in runner_select.AUTO_FALLBACK_FAILURES
-            and not fallback_runner_name
-        ):
-            try:
-                runners = runner_select.available_runners(repo_root)
-                relay_candidate = runner_select.best_relay_runner(runners)
-                if relay_candidate:
-                    # Emit spending plan request. The resident can respond with
-                    # relay_consent=approved via a respawn request, or deny it.
-                    relay_plan = spending_plan.SpendingPlan(
-                        reason=f"local_quota_exhausted",
-                        model=relay_candidate.model or relay_candidate.name,
-                        provider=relay_candidate.provider or "unknown",
-                        estimated_input_tokens=0,
-                        estimated_output_tokens=0,
-                        consent_state="pending",
-                    )
-                    attempt_payload["needs_relay_consent"] = True
-                    attempt_payload["relay_candidate"] = relay_candidate.summary()
-                    attempt_payload["relay_plan"] = relay_plan.to_dict()
-            except Exception:
-                # Relay check failed; don't block hard failure
-                relay_candidate = None
-                relay_plan = None
         # Hard failure (timeout / non-zero exit) — no retry, give up now
         # rather than burning another expensive attempt. The give-up
         # branch below carries the captured error up to the gate.
@@ -2027,6 +2027,8 @@ def _run_worker(
         responses_dir,
         resp_path,
         failure_reason,
+        relay_candidate=relay_candidate.summary() if relay_candidate else None,
+        relay_plan=relay_plan.to_dict() if relay_plan else None,
     )
     _defer_pending_siblings_after_failure(
         inbox_dir,
@@ -3523,11 +3525,35 @@ def _failure_reason(
     return f"runner produced no reply after {attempts} attempt(s)"
 
 
-def _terminal_failure_body(reason: str) -> str:
-    return (
+def _terminal_failure_body(
+    reason: str,
+    *,
+    relay_candidate: str | None = None,
+    relay_plan: dict[str, object] | None = None,
+) -> str:
+    body = (
         "I couldn't complete this run.\n\n"
         f"brr is surfacing this because {reason}."
     )
+    if relay_candidate:
+        plan = relay_plan if isinstance(relay_plan, dict) else {}
+        model = str(plan.get("model") or "").strip()
+        provider = str(plan.get("provider") or "").strip()
+        total = str(plan.get("total_estimated_cost_usd") or "").strip()
+        details = [relay_candidate]
+        if model:
+            details.append(f"model {model}")
+        if provider:
+            details.append(f"provider {provider}")
+        if total and total.lower() != "none":
+            details.append(f"estimated total ${total}")
+        body += (
+            "\n\nRelay fallback: brr found "
+            + ", ".join(details)
+            + " as a brnrd relay candidate. It did not spend relay tokens "
+            "automatically; the approval/resume loop is a separate slice."
+        )
+    return body
 
 
 def _deduplicated_event_body() -> str:
@@ -3544,6 +3570,9 @@ def _write_terminal_failure_response(
     responses_dir: Path,
     response_path: Path,
     reason: str,
+    *,
+    relay_candidate: str | None = None,
+    relay_plan: dict[str, object] | None = None,
 ) -> bool:
     """Queue a terminal failure note for addressed events.
 
@@ -3554,7 +3583,15 @@ def _write_terminal_failure_response(
         return False
     if _response_has_body(response_path):
         return False
-    protocol.write_response(responses_dir, event["id"], _terminal_failure_body(reason))
+    protocol.write_response(
+        responses_dir,
+        event["id"],
+        _terminal_failure_body(
+            reason,
+            relay_candidate=relay_candidate,
+            relay_plan=relay_plan,
+        ),
+    )
     _record_response_artifact(emit, task, response_path)
     _set_event_status_if_present(event, "done")
     return True
