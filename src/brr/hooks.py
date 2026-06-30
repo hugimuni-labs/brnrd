@@ -38,6 +38,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import facets
+
 PHASE_POST_TOOL = "post-tool"
 PHASE_STOP = "stop"
 PHASE_SESSION_START = "session-start"
@@ -189,12 +191,29 @@ def format_delta(
     limit = budget.get("budget_seconds")
     if elapsed is not None and limit is not None:
         lines.append(f"- budget: {elapsed}s of {limit}s used.")
+        # "Running so long" is a missing-data signal worth surfacing the
+        # moment it is true (evt-go5z): a run past its soft budget is either
+        # legitimately deep or quietly stuck, and the resident should see the
+        # fact rather than have to compute it from two numbers.
+        if budget.get("long_running"):
+            lines.append(
+                f"- running long: past the {limit}s soft budget — extend via "
+                ".keepalive if the work needs it, else wind down."
+            )
     acked = outbound.get("replies_current") or outbound.get("outbound_messages")
     if acked:
         lines.append(
             f"- delivery so far: current={outbound.get('replies_current', 0)} "
             f"other={outbound.get('replies_other', 0)} "
             f"outbound={outbound.get('outbound_messages', 0)}."
+        )
+    elif stop:
+        # Affirmative-empty: an addressed run that reaches closeout having
+        # sent nothing is suspicious, not silent. Surface the absence at the
+        # boundary so a forgotten reply is caught before the slot is gone.
+        lines.append(
+            "- delivery: no outbound messages sent yet — confirm this run "
+            "left the signal it owed before ending."
         )
     # SCM posture is a boundary signal (seed / stop only): the commit/push
     # reminder a wake about to end needs. Rendered only when there is
@@ -210,38 +229,39 @@ def format_delta(
                 f"{modified} modified file(s) on {branch} — commit and let "
                 "the branch publish before ending."
             )
-    # Work-status posture (cost / quota / parallelism). A boundary signal like
-    # scm: rendered at seed / stop only, where the affirmative picture is worth
-    # a line. Known fields carry their value; not-yet-built ones read
-    # "unavailable" so the resident sees the slot honestly rather than a gap.
-    if (seed or stop) and resources:
+    # Work-status posture (cost / quota / parallelism). Known fields carry
+    # their value; not-yet-built ones read as named states with reasons so the
+    # resident sees the slot honestly rather than a gap. It renders on seed /
+    # stop, and on post-tool updates whenever portal-state changed enough to be
+    # injected at all — live quota is a wall, not a footer-only nicety.
+    rendered_resources = None
+    if resources:
         rendered = _format_resources(resources)
         if rendered:
+            rendered_resources = rendered
             lines.append(rendered)
     # Mid-run, a bare header with no pending work and no movement isn't worth
     # a turn. Seed and stop always render: their empty state ("0 pending") is
     # the affirmative signal, not noise.
-    if not seed and not stop and pending == 0 and pending_files == 0 and not acked:
+    if (
+        not seed and not stop and pending == 0 and pending_files == 0
+        and not acked and not rendered_resources
+    ):
         return None
     return "\n".join(lines)
 
 
 def _format_resources(resources: dict[str, Any]) -> str | None:
-    """One compact 'work status' line: quota/cost/coexisting/remote posture."""
-    def _facet_text(key: str, label: str) -> str:
-        facet = resources.get(key) if isinstance(resources.get(key), dict) else {}
-        if facet.get("status") == "known":
-            summary = str(facet.get("summary") or "").strip()
-            return f"{label}={summary}" if summary else f"{label}=known"
-        return f"{label}=unavailable"
+    """One 'work status' line: the schema's facets, in order.
 
-    parts = [
-        _facet_text("quota", "quota"),
-        _facet_text("cost", "cost"),
-        _facet_text("coexisting_runs", "coexisting-runs"),
-        _facet_text("remote_scm", "remote-scm"),
-    ]
-    return "- resources: " + "; ".join(parts) + "."
+    Delegates to :func:`facets.render_line` so the woven line and the JSON
+    snapshot project from the same facet schema (``kb/design-resident-boundary``
+    §1 — "by schema, not by convention"). Three-state honesty: ``known`` carries
+    its value; ``absent`` names what is genuinely empty; ``unimplemented`` names
+    a not-yet-built collector, with the reason riding along so the resident sees
+    *why* a slot is empty without opening the JSON.
+    """
+    return facets.render_line(resources)
 
 
 # ── Stop fold-in (verbatim, framed as the user's words) ──────────────────
@@ -458,13 +478,16 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
         return {"hooks": [{"type": "command", "command": hook_command(phase, brr_bin)}]}
 
     # PostToolBatch (not PostToolUse): one injection per tool batch, after every
-    # result lands — see ``_POST_TOOL_EVENT``.
+    # result lands — see ``_POST_TOOL_EVENT``. Claude ``statusLine`` is a TUI
+    # footer and does not fire under the daemon's ``claude --print`` mode, so
+    # brr does not register it here; terminal spend/context accounting comes
+    # from the result JSON instead.
     return {
         "hooks": {
             native_event_name("claude", PHASE_POST_TOOL): [_entry(PHASE_POST_TOOL)],
             "Stop": [_entry(PHASE_STOP)],
             "SessionStart": [_entry(PHASE_SESSION_START)],
-        }
+        },
     }
 
 
@@ -541,11 +564,12 @@ def install_hook_config(
     settings_path = settings_dir / "settings.local.json"
     existing: dict[str, Any] = _read_json(settings_path)
     generated = _claude_hook_settings(brr_bin)
-    # User overrides layer on top of brr's defaults; brr owns only the
-    # ``hooks`` block, so a merge preserves any other local settings.
-    merged = {**existing, **generated}
-    if "hooks" in existing:
-        merged["hooks"] = {**existing.get("hooks", {}), **generated["hooks"]}
+    # brr's generated keys are *defaults*; user keys in the local overlay layer
+    # on top and win — except the ``hooks`` block, which brr owns and force-
+    # merges. So a user's own footer or local settings are preserved while
+    # brr's lifecycle hooks always install.
+    merged = {**generated, **existing}
+    merged["hooks"] = {**existing.get("hooks", {}), **generated["hooks"]}
     try:
         settings_dir.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(

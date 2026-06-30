@@ -67,6 +67,36 @@ class Daemon(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class ActivityRecord(Base):
+    __tablename__ = "activity_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "repo_id", "token_id", "record_id",
+            name="uq_activity_repo_token_record",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id"), index=True)
+    token_id: Mapped[str] = mapped_column(ForeignKey("tokens.id"), index=True)
+    daemon_id: Mapped[str | None] = mapped_column(ForeignKey("daemons.id"), nullable=True, index=True)
+    record_id: Mapped[str] = mapped_column(String(128), index=True)
+    kind: Mapped[str] = mapped_column(String(32), default="run", index=True)
+    source: Mapped[str] = mapped_column(String(32), default="")
+    conversation_key: Mapped[str] = mapped_column(String(255), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    runner_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(32), default="")
+    phase: Mapped[str] = mapped_column(String(64), default="")
+    branch: Mapped[str] = mapped_column(String(255), default="")
+    pr_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    defer_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    links_json: Mapped[str] = mapped_column(Text, default="{}")
+    reported_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class Event(Base):
     __tablename__ = "events"
     STATUS_QUEUED = "queued"

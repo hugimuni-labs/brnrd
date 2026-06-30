@@ -90,6 +90,22 @@ class PhaseEntry:
 
 
 @dataclass
+class AttemptEntry:
+    """One runner attempt and its terminal reason, for the card ledger."""
+
+    number: int
+    runner: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    status: str = "running"
+    reason: str | None = None
+    failure_kind: str | None = None
+    fallback_runner: str | None = None
+    will_retry: bool = False
+    will_fallback: bool = False
+
+
+@dataclass
 class RunProgressView:
     """Snapshot of a single run's execution, derived from conversation
     records.
@@ -104,6 +120,7 @@ class RunProgressView:
     state: str = "active"
     branch_name: str | None = None
     display_base: str | None = None
+    repo_label: str | None = None
     env: str | None = None
     runner_name: str | None = None
     attempt: int = 0
@@ -114,9 +131,12 @@ class RunProgressView:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     container_ids: list[str] = field(default_factory=list)
     response_path: str | None = None
+    run_state_path: str | None = None
+    run_state_url: str | None = None
     error: str | None = None
     event_id: str | None = None
     phase_history: list[PhaseEntry] = field(default_factory=list)
+    attempt_history: list[AttemptEntry] = field(default_factory=list)
     push_commits: int | None = None
     push_ok: bool = True
     push_error: str | None = None
@@ -224,6 +244,92 @@ def _close_open_phase(view: RunProgressView, ts: str | None) -> None:
             last.ended_at = ts
 
 
+def _open_attempt(view: RunProgressView, attempt: int, ts: str | None) -> None:
+    existing = _find_attempt(view, attempt)
+    if existing is not None:
+        existing.started_at = existing.started_at or ts
+        if not existing.runner:
+            existing.runner = view.runner_name
+        return
+    view.attempt_history.append(
+        AttemptEntry(number=attempt, runner=view.runner_name, started_at=ts),
+    )
+
+
+def _find_attempt(view: RunProgressView, attempt: int | None) -> AttemptEntry | None:
+    if not isinstance(attempt, int):
+        return None
+    for entry in view.attempt_history:
+        if entry.number == attempt:
+            return entry
+    return None
+
+
+def _latest_attempt(view: RunProgressView) -> AttemptEntry | None:
+    return view.attempt_history[-1] if view.attempt_history else None
+
+
+def _set_current_attempt_runner(view: RunProgressView, runner: object) -> None:
+    if not isinstance(runner, str) or not runner.strip():
+        return
+    latest = _latest_attempt(view)
+    if latest is not None and not latest.runner:
+        latest.runner = runner
+
+
+def _record_attempt_failure(
+    view: RunProgressView,
+    record: dict[str, Any],
+    ts: str | None,
+) -> None:
+    attempt = record.get("attempt")
+    if not isinstance(attempt, int):
+        attempt = view.attempt or 1
+    entry = _find_attempt(view, attempt)
+    if entry is None:
+        entry = AttemptEntry(number=attempt, runner=view.runner_name)
+        view.attempt_history.append(entry)
+    entry.ended_at = ts
+    entry.status = "failed"
+    reason = record.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        entry.reason = reason.strip()
+    failure_kind = record.get("failure_kind")
+    if isinstance(failure_kind, str) and failure_kind.strip():
+        entry.failure_kind = failure_kind.strip()
+    fallback = record.get("fallback_runner")
+    if isinstance(fallback, str) and fallback.strip():
+        entry.fallback_runner = fallback.strip()
+    entry.will_retry = bool(record.get("will_retry"))
+    entry.will_fallback = bool(record.get("will_fallback"))
+
+
+def _record_terminal_attempt_failure(
+    view: RunProgressView,
+    record: dict[str, Any],
+    ts: str | None,
+) -> None:
+    latest = _latest_attempt(view)
+    if latest is None or latest.status == "failed":
+        return
+    latest.status = "failed"
+    latest.ended_at = ts
+    failure_kind = record.get("failure_kind")
+    if isinstance(failure_kind, str) and failure_kind.strip():
+        latest.failure_kind = failure_kind.strip()
+    elif view.failure_kind:
+        latest.failure_kind = view.failure_kind
+
+
+def _mark_latest_attempt_succeeded(view: RunProgressView, ts: str | None) -> None:
+    latest = _latest_attempt(view)
+    if latest is None:
+        return
+    if latest.status == "running":
+        latest.status = "succeeded"
+        latest.ended_at = latest.ended_at or ts
+
+
 def _project(
     records: list[dict[str, Any]],
     *,
@@ -255,6 +361,7 @@ def _project(
                 record.get("target_branch")
                 or view.display_base
             )
+            view.repo_label = record.get("repo_label") or view.repo_label
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
             continue
@@ -281,10 +388,18 @@ def _project(
             continue
 
         if ptype == "run_created":
+            view.repo_label = record.get("repo_label") or view.repo_label
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
+            run_state_path = record.get("run_state_path")
+            if isinstance(run_state_path, str) and run_state_path:
+                view.run_state_path = run_state_path
+            run_state_url = record.get("run_state_url")
+            if isinstance(run_state_url, str) and run_state_url:
+                view.run_state_url = run_state_url
             _open_phase(view, "preparing", ts)
         elif ptype == "env_prepared":
+            view.repo_label = record.get("repo_label") or view.repo_label
             view.env = record.get("env") or view.env
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
@@ -307,12 +422,14 @@ def _project(
             attempt = record.get("attempt")
             if isinstance(attempt, int):
                 view.attempt = attempt
+                _open_attempt(view, attempt, ts)
             view.started_at = view.started_at or ts
             _open_phase(view, "running", ts, attempt=attempt or view.attempt or 1)
         elif ptype == "run_started":
             view.started_at = view.started_at or ts
             view.attempt = view.attempt or 1
             view.runner_name = record.get("runner") or view.runner_name
+            _set_current_attempt_runner(view, view.runner_name)
             view.branch_name = record.get("branch") or view.branch_name
             view.display_base = (
                 record.get("target_branch")
@@ -322,11 +439,24 @@ def _project(
             reason = record.get("reason")
             if reason:
                 view.detail = f"attempt {record.get('attempt', view.attempt)} failed: {reason}"
+            _record_attempt_failure(view, record, ts)
         elif ptype == "retrying":
             attempt = record.get("attempt")
             if isinstance(attempt, int):
                 view.attempt = attempt
-            view.detail = f"retry attempt {view.attempt}"
+            runner_name = record.get("runner")
+            if isinstance(runner_name, str) and runner_name.strip():
+                view.runner_name = runner_name
+                from_runner = record.get("from_runner")
+                if isinstance(from_runner, str) and from_runner.strip():
+                    view.detail = (
+                        f"fallback {from_runner} -> {runner_name} "
+                        f"(attempt {view.attempt})"
+                    )
+                else:
+                    view.detail = f"retry on {runner_name} (attempt {view.attempt})"
+            else:
+                view.detail = f"retry attempt {view.attempt}"
         elif ptype == "artifact_created":
             label = record.get("label") or record.get("kind") or "artifact"
             view.detail = f"artifact: {label}"
@@ -424,6 +554,7 @@ def _project(
                 phase_detail = "timed out"
             else:
                 phase_detail = stage or "failed"
+            _record_terminal_attempt_failure(view, record, ts)
             view.phase_history.append(PhaseEntry(
                 name="failed", started_at=ts, detail=phase_detail,
             ))
@@ -458,6 +589,7 @@ def _project(
                     setattr(view, key, val)
             if "committed" in record:
                 view.committed = bool(record["committed"])
+            _mark_latest_attempt_succeeded(view, ts)
             _close_open_phase(view, ts)
             view.phase_history.append(PhaseEntry(
                 name="delivered", started_at=ts,
@@ -638,6 +770,10 @@ def _render_compact(
                 text += f" · {_format_duration(duration)}"
             lines.append(f"{style.done_open}{text}{style.done_close}")
 
+    attempt_lines = _format_attempt_ledger(view)
+    if attempt_lines:
+        lines.extend(attempt_lines)
+
     note = _format_agent_note(view.agent_card_text)
     if note:
         lines.append(note)
@@ -674,9 +810,51 @@ def _format_agent_note(text: str | None) -> str:
     return "\n".join(rendered)
 
 
+def _format_attempt_ledger(view: RunProgressView) -> list[str]:
+    failed = [entry for entry in view.attempt_history if entry.reason]
+    if not failed:
+        return []
+    lines = ["attempts:"]
+    for entry in failed:
+        label = f"attempt {entry.number}"
+        if entry.runner:
+            label += f" ({entry.runner})"
+        status = _attempt_status_label(entry)
+        reason = _trim_attempt_reason(entry.reason)
+        line = f"- {label}: {status}"
+        if reason and reason != status:
+            line += f" - {reason}"
+        if entry.fallback_runner:
+            line += f" -> {entry.fallback_runner}"
+        lines.append(line)
+    return lines
+
+
+def _attempt_status_label(entry: AttemptEntry) -> str:
+    if entry.failure_kind:
+        return {
+            "timed_out": "timed out",
+            "quota_exhausted": "quota exhausted",
+            "auth_error": "auth failed",
+            "provider_error": "provider failed",
+            "runner_error": "runner failed",
+            "no_output": "no reply",
+        }.get(entry.failure_kind, "failed")
+    return "failed"
+
+
+def _trim_attempt_reason(reason: str | None, *, limit: int = 140) -> str:
+    text = " ".join(str(reason or "").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
 def _render_verbose(view: RunProgressView) -> str:
     lines: list[str] = [_legacy_header(view)]
     rows: list[tuple[str, str]] = [("phase", _phase_text(view))]
+    if view.repo_label:
+        rows.append(("repo", view.repo_label))
     branch_text = _branch_text(view)
     if branch_text:
         rows.append(("branch", branch_text))
@@ -701,6 +879,14 @@ def _render_verbose(view: RunProgressView) -> str:
         rows.append(("containers", ", ".join(view.container_ids)))
     if view.response_path and view.is_terminal:
         rows.append(("response", view.response_path))
+    if view.run_state_url:
+        # Web-visible link to the durable run-state object — the form a remote
+        # chat reader can actually open.
+        rows.append(("run_state", view.run_state_url))
+    elif view.run_state_path:
+        # No forge projection yet (local-only dominion): show the basename, not
+        # the absolute host path, which is meaningless off the daemon's machine.
+        rows.append(("run_state", Path(view.run_state_path).name))
 
     lines.append("")
     for key, value in rows:
@@ -724,6 +910,8 @@ def _compact_header(view: RunProgressView) -> str:
     which case the body falls back to a single status line.
     """
     bits: list[str] = []
+    if view.repo_label:
+        bits.append(view.repo_label)
     if view.runner_name:
         bits.append(view.runner_name)
     if view.env:
@@ -752,6 +940,9 @@ def _phase_label(entry: PhaseEntry, multi_attempt: bool,
     if entry.name == "failed" and view is not None and view.failure_kind:
         return {
             "timed_out": "timed out",
+            "quota_exhausted": "quota exhausted",
+            "auth_error": "auth failed",
+            "provider_error": "provider failed",
             "runner_error": "runner failed",
             "no_output": "no reply",
         }.get(view.failure_kind, entry.name)

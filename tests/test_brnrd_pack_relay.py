@@ -56,13 +56,15 @@ def _daemon_headers(client):
     acc = brnrd_account_headers(
         client.app, github_id="123", login="octocat", email="a@b.com"
     )
-    pid = client.post(
-        "/v1/accounts/projects", json={"name": "demo"}, headers=acc
-    ).json()["project_id"]
+    rid = client.post(
+        "/v1/accounts/repos",
+        json={"repo_full_name": "Gurio/demo"},
+        headers=acc,
+    ).json()["repo_id"]
     pair = client.post("/v1/accounts/pair").json()
     client.post(
         f"/v1/accounts/pair/{pair['pair_code']}/approve",
-        json={"project_id": pid},
+        json={"repo_id": rid},
         headers=acc,
     )
     token = client.get(

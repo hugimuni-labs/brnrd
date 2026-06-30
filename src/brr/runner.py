@@ -318,6 +318,32 @@ def _load_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
     return _profiles_cache
 
 
+def _selection_profiles(repo_root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Declared profiles plus generated bundled Core profiles.
+
+    ``_load_profiles()`` is the active ``runners.md`` source. This view keeps
+    those entries authoritative, then adds invokable profiles derived from the
+    bundled Core registry for any Shell declared in that source. The resolver and
+    command builder use this view so ``core=haiku`` can select ``claude-haiku``
+    even when ``runners.md`` only declares the base ``claude`` Shell.
+    """
+    declared = dict(_load_profiles(repo_root))
+    from . import runner_cores
+
+    generated = runner_cores.generated_profile_entries(declared)
+    merged = dict(generated)
+    merged.update(declared)
+    return merged
+
+
+def profile_metadata(
+    name: str, repo_root: Path | None = None
+) -> dict[str, Any] | None:
+    """Return metadata for a declared or generated runner profile."""
+    profile = _selection_profiles(repo_root).get(name)
+    return dict(profile) if profile is not None else None
+
+
 def _profile_binary(name: str, profiles: dict[str, dict[str, Any]]) -> str:
     profile = profiles.get(name) or {}
     return str(profile.get("binary") or name)
@@ -337,7 +363,7 @@ def profile_hooks_flavour(
     config present), so a caller wires hooks only after confirming the
     flavour here *and* passing that precheck.
     """
-    profile = _load_profiles(repo_root).get(name) or {}
+    profile = _selection_profiles(repo_root).get(name) or {}
     flavour = profile.get("hooks")
     if not flavour:
         return None
@@ -366,26 +392,229 @@ def detect_all_runners(repo_root: Path | None = None) -> list[str]:
     return [name for name in profiles if _runner_available(name, profiles)]
 
 
-def resolve_runner(repo_root: Path) -> str:
+def available_selection_runners(repo_root: Path | None = None) -> list["RunnerProfile"]:
+    """Available declared/generated Runner profiles for selection policy."""
+    from . import runner_select
+
+    profiles = _selection_profiles(repo_root)
+    out: list[runner_select.RunnerProfile] = []
+    for name, profile in profiles.items():
+        if _runner_available(name, profiles):
+            out.append(runner_select.runner_from_profile(name, profile))
+    return out
+
+
+def available_runner_catalog(
+    repo_root: Path | None = None,
+    *,
+    selected: str | None = None,
+) -> list[dict[str, Any]]:
+    """Structured catalog of selectable local Runner profiles.
+
+    This is the control-surface projection over the selector's profile view:
+    declared profiles plus Core-registry-generated profiles, filtered to
+    binaries currently on PATH. It intentionally omits command strings while
+    preserving the fields the resident/user need to reason about a respawn:
+    Shell, Core, class, cost rank, quota source, auth variant, availability,
+    and which profile is active.
+    """
+    profiles = _selection_profiles(repo_root)
+    selected_name = str(selected or "").strip()
+    out: list[dict[str, Any]] = []
+    for name, profile in profiles.items():
+        if not _runner_available(name, profiles):
+            continue
+        record = _catalog_record(name, profile, selected_name)
+        if record:
+            out.append(record)
+    return sorted(
+        out,
+        key=lambda item: (
+            item.get("cost_rank") is None,
+            item.get("cost_rank") if item.get("cost_rank") is not None else 0,
+            str(item.get("name") or ""),
+        ),
+    )
+
+
+def _catalog_record(
+    name: str,
+    profile: dict[str, Any] | None,
+    selected: str,
+) -> dict[str, Any] | None:
+    from . import runner_select
+
+    if not isinstance(profile, dict):
+        return None
+    runner_profile = runner_select.runner_from_profile(name, profile)
+    shell = str(
+        profile.get("shell") or profile.get("binary") or runner_profile.profile
+    ).strip() or None
+    record: dict[str, Any] = {
+        "name": name,
+        "shell": shell,
+        "model": runner_profile.model,
+        "provider": runner_profile.provider,
+        "owner": runner_profile.owner,
+        "class": runner_profile.cost_class,
+        "cost_rank": runner_profile.cost_rank,
+        "quota_source": runner_profile.quota_source,
+        "hooks": runner_profile.hooks,
+        "auth_variant": str(profile.get("auth_variant") or "").strip() or None,
+        "auth_env": str(profile.get("auth_env") or "").strip() or None,
+        "capability_score": runner_profile.capability_score,
+        "capability_source": runner_profile.capability_source,
+        "capability_freshness": runner_profile.capability_freshness,
+        "generated_core": bool(profile.get("generated_core")),
+        "available": True,
+        "availability": "available",
+        "selected": name == selected or runner_profile.profile == selected,
+    }
+    return {key: value for key, value in record.items() if value is not None}
+
+
+def fallback_runner(
+    repo_root: Path,
+    current: str,
+    failure_kind: str | None,
+    *,
+    tried: list[str] | tuple[str, ...] = (),
+) -> str | None:
+    """Return a conservative local fallback Runner profile, if one exists."""
+    from . import runner_select
+
+    candidate = runner_select.automatic_fallback_runner(
+        available_selection_runners(repo_root),
+        current=current,
+        failure_kind=failure_kind,
+        tried=tried,
+    )
+    return candidate.name if candidate is not None else None
+
+
+def quality_escalation_runner(
+    repo_root: Path,
+    current: str,
+    *,
+    target_class: str | None = None,
+    tried: list[str] | tuple[str, ...] = (),
+) -> str | None:
+    """Return a stronger local Runner for an explicit quality escalation."""
+    from . import runner_select
+
+    candidate = runner_select.quality_escalation_runner(
+        available_selection_runners(repo_root),
+        current=current,
+        target_class=target_class or runner_select.STRONG,
+        tried=tried,
+    )
+    return candidate.name if candidate is not None else None
+
+
+def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> str:
     """Determine which runner to use for this repo.
 
-    Reads ``runner`` from ``.brr/config``.  ``auto`` triggers detection.
-    Raises RuntimeError if nothing is found.
+    Resolution order (highest precedence first):
+
+    1. **``shell=``** in ``.brr/config`` — pin a specific profile (Shell or
+       Shell+Core) by name; skips cost-aware selection entirely. This is the
+       new preferred knob (replaces the legacy ``runner=``).
+    2. **``core=``** in ``.brr/config`` — filter available profiles to those
+       whose declared ``model`` matches *core*, then pick the cheapest.
+    3. **Legacy ``runner=``** — same as ``shell=`` for backward compatibility;
+       ``runner=auto`` triggers cost-aware auto-detection.
+    4. **Auto** — cost-aware selection via :func:`runner_select.select_runner`:
+       cheapest available local profile at or below ``economy`` class.
+
+    Raises ``RuntimeError`` when no profile can be resolved.
     """
     from . import config as conf
+    from . import runner_select
+
     cfg = conf.load_config(repo_root)
-    profiles = _load_profiles(repo_root)
-    configured = cfg.get("runner", "auto")
-    if configured != "auto":
-        if _runner_available(configured, profiles):
-            return configured
-        raise RuntimeError(f"Runner '{configured}' not found on PATH.")
-    detected = detect_runner(repo_root)
-    if detected:
-        return detected
+    if overrides:
+        for key in ("shell", "core", "runner", "runner_policy"):
+            value = overrides.get(key)
+            if value not in (None, ""):
+                cfg[key] = value
+    profiles = _selection_profiles(repo_root)
+
+    # shell= is the new explicit pin. When set it is treated as an exact
+    # profile override — no cost-aware movement, no dispatcher hop.
+    shell_pin = str(cfg.get("shell", "")).strip() or None
+    # core= filters the candidate set to profiles whose model matches.
+    core_pin = str(cfg.get("core", "")).strip() or None
+    # Legacy runner= stays for backward compatibility.
+    runner_cfg = str(cfg.get("runner", "auto")).strip()
+
+    # Exact-pin path: shell= or a non-"auto" runner= wins outright.
+    explicit_pin = shell_pin or (runner_cfg if runner_cfg != "auto" else None)
+    if explicit_pin:
+        if _runner_available(explicit_pin, profiles):
+            return explicit_pin
+        raise RuntimeError(
+            f"Runner '{explicit_pin}' not found on PATH. "
+            "Check shell= (or runner=) in .brr/config."
+        )
+
+    # Cost-aware selection: build the available-profile set, optionally
+    # filtered by core=, and let select_runner pick the cheapest. Model-less
+    # base Shell profiles are kept for explicit shell= pins, but they should
+    # not beat generated Core profiles in auto mode when the registry knows
+    # concrete Cores for that Shell.
+    generated_shells = {
+        str(profile.get("shell") or profile.get("binary") or "").strip()
+        for profile in profiles.values()
+        if isinstance(profile, dict) and profile.get("generated_core")
+    }
+    all_profiles = []
+    for name, profile in profiles.items():
+        if not _runner_available(name, profiles):
+            continue
+        shell = str(profile.get("binary") or profile.get("shell") or name).strip()
+        if (
+            not core_pin
+            and shell in generated_shells
+            and not str(profile.get("model") or "").strip()
+        ):
+            continue
+        all_profiles.append(runner_select.runner_from_profile(name, profile))
+    if core_pin:
+        # Filter to profiles whose declared model matches core_pin (exact
+        # or prefix, case-insensitive), plus short profile aliases like
+        # ``core=haiku`` → ``claude-haiku``. Fall back to all if none match so
+        # an unrecognised core= doesn't silently kill all options.
+        core_lower = core_pin.lower()
+
+        def _core_matches(profile: runner_select.RunnerProfile) -> bool:
+            model = (profile.model or "").lower()
+            name = profile.name.lower()
+            return (
+                bool(model)
+                and (model == core_lower or model.startswith(core_lower))
+            ) or name == core_lower or name.endswith(f"-{core_lower}")
+
+        filtered = [
+            p for p in all_profiles
+            if _core_matches(p)
+        ]
+        candidates = filtered or all_profiles
+    else:
+        candidates = all_profiles
+
+    policy = str(
+        cfg.get("runner_policy", runner_select.POLICY_COST_AWARE)
+    ).strip() or runner_select.POLICY_COST_AWARE
+    if policy not in {runner_select.POLICY_COST_AWARE, runner_select.POLICY_FIXED}:
+        policy = runner_select.POLICY_COST_AWARE
+
+    chosen = runner_select.select_runner(candidates, policy=policy)
+    if chosen:
+        return chosen.profile
+
     raise RuntimeError(
-        "No AI runner found.  Install claude, codex, or gemini, "
-        "or set runner= in .brr/config."
+        "No AI runner found. Install claude, codex, or gemini, "
+        "or set shell= (or core=) in .brr/config."
     )
 
 
@@ -419,7 +648,7 @@ def _build_cmd(
             return _replace_placeholders(custom)
         return _replace_placeholders(shlex.split(str(custom)))
 
-    profile = _load_profiles(repo_root).get(runner_name)
+    profile = _selection_profiles(repo_root).get(runner_name)
     if profile:
         cmd = shlex.split(str(profile.get("cmd", runner_name)))
         cmd.extend(extra)
@@ -440,6 +669,25 @@ def _write_response_file(response_path: str, stdout: str) -> None:
     target = Path(response_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(stdout, encoding="utf-8")
+
+
+def _process_runner_stdout(
+    runner_name: str,
+    stdout: str,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Normalize runner-specific stdout before response capture.
+
+    Most runners already print the final reply as plain text. Claude's daemon
+    profile opts into ``--output-format json`` so brr can collect spend/context
+    accounting; for that Shell, unwrap ``result`` back to the user-facing reply
+    and stash the level snapshot for the daemon's final portal refresh.
+    """
+    from . import claude_status
+
+    if claude_status.supported(runner_name):
+        return claude_status.capture_stdout(stdout, env)
+    return stdout
 
 
 def _copy_artifact_to_trace(
@@ -568,6 +816,8 @@ def invoke_runner(
     finally:
         with _proc_lock:
             _active_proc = None
+
+    stdout = _process_runner_stdout(runner_name, stdout, invocation.env)
 
     if invocation.response_path and returncode == 0 and stdout and stdout.strip():
         _write_response_file(invocation.response_path, stdout)
