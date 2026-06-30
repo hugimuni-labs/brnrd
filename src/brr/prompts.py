@@ -208,6 +208,22 @@ def _build_dominion_block(repo_root: Path) -> str:
     )
 
 
+def _build_identity_core_block(_repo_root: Path) -> str:
+    """Render the product-owned resident identity contract.
+
+    The dominion playbook is resident-owned memory and can drift by design.
+    The identity core is the product-owned invariant layer that rides before
+    that memory, so a resident can rewrite its workshop without silently
+    rewriting brr's loyalty, fallibility, and perception/action contract. This
+    is intentionally not a normal per-repo prompt override: appearance should
+    move through typed settings, not runtime prose overrides of the core.
+    """
+    path = _PROMPTS_DIR / "identity-core.md"
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
 def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
     """Render dominion pitfalls whose triggers fire for *task_text*.
 
@@ -436,19 +452,20 @@ def _build_injected_blocks(
 
     Returns the *base* blocks:
 
-    1. Dominion digest (playbook + ``self-inject``)
-    2. Active inter-run plan (CS5) — the plan the resident left itself
-    3. Stored runner policy (CS6) — standing runner preferences
-    4. Decision ledger (CS7) — user-facing through-line of recent decisions
-    5. Pitfalls matching the task
-    6. Recent-activity log tail
-    7. kb health note
+    1. Resident identity core — product-owned invariant contract
+    2. Dominion digest (living playbook + ``self-inject``)
+    3. Active inter-run plan (CS5) — the plan the resident left itself
+    4. Stored runner policy (CS6) — standing runner preferences
+    5. Decision ledger (CS7) — user-facing through-line of recent decisions
+    6. Pitfalls matching the task
+    7. Recent-activity log tail
+    8. kb health note
 
     Each CS5/CS6/CS7 block is silent when no file exists — never a
     constant tax, only present when the resident wrote something.  The
-    ordering puts the resident's own state (dominion + active plan +
-    policy + ledger) before the shared project history so a waking
-    reads their own context before the community's.
+    ordering puts the product identity contract before the resident-owned
+    state (dominion + active plan + policy + ledger), then the shared project
+    history, so a waking can distinguish authority layers in read order.
 
     Shared by ``_join_prompt_parts`` and ``build_injected_context``; whatever
     block is added here surfaces in both paths with no drift.  Mode-toggle
@@ -457,6 +474,9 @@ def _build_injected_blocks(
     ``build_injected_context`` (for the faithful inject-tool view).
     """
     blocks: list[str] = []
+    identity_core = _build_identity_core_block(repo_root)
+    if identity_core:
+        blocks.append(identity_core)
     dominion_block = _build_dominion_block(repo_root)
     if dominion_block:
         blocks.append(dominion_block)
