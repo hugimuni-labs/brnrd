@@ -235,6 +235,133 @@ def _build_pitfalls_block(repo_root: Path, task_text: str) -> str:
     return pitfalls.format_block(matched)
 
 
+def _build_inter_run_plan_block(repo_root: Path) -> str:
+    """Render the active inter-run plan when one exists in the account dominion.
+
+    CS5: the resident leaves a plan in ``plans/<repo-slug>/active.md`` (or
+    ``plans/_cross-repo/active.md`` for cross-repo work) and the daemon
+    injects it at the top of the next wake — perception=injection, no poll
+    needed. The resident updates or retires the plan as the work evolves.
+    Returns ``""`` when no plan file exists or when the dominion is off.
+    """
+    from . import account as acc
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+        return ""
+    try:
+        ctx = acc.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        return ""
+    if not ctx.enabled:
+        return ""
+
+    label = acc.repo_label(repo_root, cfg)
+    plan_path = acc.active_plan_path(ctx, label)
+    cross_path = acc.cross_repo_plans_path(ctx) / "active.md"
+
+    blocks: list[str] = []
+    for path in (plan_path, cross_path):
+        if path.is_file():
+            content = path.read_text(encoding="utf-8").strip()
+            if content:
+                blocks.append(content)
+
+    if not blocks:
+        return ""
+
+    body = "\n\n---\n\n".join(blocks)
+    return (
+        "## Active inter-run plan\n\n"
+        "Persisted between wakes in the account dominion — the plan you left "
+        "yourself. Update `plans/<repo>/active.md` (or retire it by emptying "
+        "the file) as the work evolves.\n\n"
+        f"{body}"
+    )
+
+
+def _build_runner_policy_block(repo_root: Path) -> str:
+    """Render stored runner policy preferences when present in the account dominion.
+
+    CS6: the resident (or operator) writes standing runner preferences to
+    ``runner-policy/<repo-slug>/policy.md`` (or ``runner-policy/_account/policy.md``
+    for account-wide defaults). The daemon injects them so the resident can
+    reference them when selecting a runner or emitting a respawn request.
+    Repo-level policy is listed first; account-wide policy follows.
+    Returns ``""`` when no policy file exists.
+    """
+    from . import account as acc
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    try:
+        ctx = acc.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        return ""
+    if not ctx.enabled:
+        return ""
+
+    label = acc.repo_label(repo_root, cfg)
+    repo_policy = acc.runner_policy_path(ctx, label)
+    acct_policy = acc.account_runner_policy_path(ctx)
+
+    blocks: list[str] = []
+    for path in (repo_policy, acct_policy):
+        if path.is_file():
+            content = path.read_text(encoding="utf-8").strip()
+            if content:
+                blocks.append(content)
+
+    if not blocks:
+        return ""
+
+    return (
+        "## Stored runner policy\n\n"
+        "Standing runner preferences from the account dominion. The daemon "
+        "applies these; to propose a change, update the policy file and the "
+        "daemon will prompt for confirmation before applying.\n\n"
+        + "\n\n".join(blocks)
+    )
+
+
+def _build_decision_ledger_block(repo_root: Path) -> str:
+    """Render the resident-maintained decision ledger when present.
+
+    CS7: the resident creates and maintains ``ledger/decisions.md`` in the
+    account dominion — a user-facing through-line of recent decisions and
+    current plan-position in plain language. Complements ``kb/log.md``
+    (technical, resident-facing) with something a user can read directly.
+    Web-visible via the account dominion remote when one is configured.
+    Returns ``""`` when the ledger file does not exist.
+    """
+    from . import account as acc
+    from . import config as conf
+
+    cfg = conf.load_config(repo_root)
+    try:
+        ctx = acc.resolve_context(repo_root, cfg, create=False)
+    except Exception:
+        return ""
+    if not ctx.enabled:
+        return ""
+
+    ledger_path = acc.decisions_ledger_path(ctx)
+    if not ledger_path.is_file():
+        return ""
+    content = ledger_path.read_text(encoding="utf-8").strip()
+    if not content:
+        return ""
+
+    return (
+        "## Decision ledger\n\n"
+        "Resident-maintained cross-run decisions and plan-position "
+        "(account dominion `ledger/decisions.md`) — the user-facing "
+        "through-line alongside `kb/log.md`.\n\n"
+        f"{content}"
+    )
+
+
 def _build_kb_health_block(repo_root: Path) -> str:
     """Render the deterministic kb-health preflight as a wake-time block.
 
@@ -307,9 +434,21 @@ def _build_injected_blocks(
 ) -> list[str]:
     """The standing, always-on context blocks brr injects into every wake.
 
-    Returns the *base* blocks: dominion digest (playbook + ``self-inject``),
-    pitfalls matching the task, recent-activity log tail, and kb health note.
-    These are the blocks that appear regardless of mode toggles.
+    Returns the *base* blocks:
+
+    1. Dominion digest (playbook + ``self-inject``)
+    2. Active inter-run plan (CS5) — the plan the resident left itself
+    3. Stored runner policy (CS6) — standing runner preferences
+    4. Decision ledger (CS7) — user-facing through-line of recent decisions
+    5. Pitfalls matching the task
+    6. Recent-activity log tail
+    7. kb health note
+
+    Each CS5/CS6/CS7 block is silent when no file exists — never a
+    constant tax, only present when the resident wrote something.  The
+    ordering puts the resident's own state (dominion + active plan +
+    policy + ledger) before the shared project history so a waking
+    reads their own context before the community's.
 
     Shared by ``_join_prompt_parts`` and ``build_injected_context``; whatever
     block is added here surfaces in both paths with no drift.  Mode-toggle
@@ -321,6 +460,18 @@ def _build_injected_blocks(
     dominion_block = _build_dominion_block(repo_root)
     if dominion_block:
         blocks.append(dominion_block)
+    # CS5 — inter-run plan: the resident's own plan survives the wake
+    inter_run_plan = _build_inter_run_plan_block(repo_root)
+    if inter_run_plan:
+        blocks.append(inter_run_plan)
+    # CS6 — stored runner policy: standing preferences the daemon injects
+    runner_policy = _build_runner_policy_block(repo_root)
+    if runner_policy:
+        blocks.append(runner_policy)
+    # CS7 — decision ledger: user-facing through-line of decisions
+    decision_ledger = _build_decision_ledger_block(repo_root)
+    if decision_ledger:
+        blocks.append(decision_ledger)
     if task_text:
         pitfalls_block = _build_pitfalls_block(repo_root, task_text)
         if pitfalls_block:

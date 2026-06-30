@@ -3,6 +3,9 @@
 from brr import dominion
 from brr.prompts import (
     _build_context_block,
+    _build_decision_ledger_block,
+    _build_inter_run_plan_block,
+    _build_runner_policy_block,
     _read_recent_log,
     build_daemon_prompt,
     build_run_prompt,
@@ -996,3 +999,224 @@ class TestIntrospectionMode:
         assert "silent edit" in text
         assert "standing portal" in text
         assert "pre-release" in text
+
+
+# ── CS5 — inter-run plan injection ────────────────────────────────────
+
+
+def _seed_account_home(tmp_path):
+    """Seed a minimal account dominion home for prompt injection tests.
+
+    Sets ``repo.label=local/default`` so the slug is ``local__default``
+    regardless of the tmp directory name, making plan/policy paths predictable.
+    """
+    home = tmp_path / "acct-home"
+    home.mkdir(parents=True)
+    (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".brr" / "config").write_text(
+        f"account.dominion_path={home}\nrepo.label=local/default\n", encoding="utf-8"
+    )
+    return home
+
+
+class TestInterRunPlanInjection:
+    """CS5: active inter-run plan from the account dominion is injected when
+    present; silent when absent so it never becomes a constant per-wake tax."""
+
+    def test_absent_when_no_plan_file(self, tmp_path):
+        _seed_account_home(tmp_path)
+        assert _build_inter_run_plan_block(tmp_path) == ""
+
+    def test_injects_repo_plan_when_present(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        plan_dir = home / "plans" / "local__default"
+        plan_dir.mkdir(parents=True)
+        (plan_dir / "active.md").write_text(
+            "# Implement CS5\n\nNext: wire injection.", encoding="utf-8"
+        )
+
+        result = _build_inter_run_plan_block(tmp_path)
+
+        assert "Active inter-run plan" in result
+        assert "Implement CS5" in result
+        assert "wire injection" in result
+
+    def test_injects_cross_repo_plan_when_present(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        cross_dir = home / "plans" / "_cross-repo"
+        cross_dir.mkdir(parents=True)
+        (cross_dir / "active.md").write_text(
+            "Cross-repo migration plan.", encoding="utf-8"
+        )
+
+        result = _build_inter_run_plan_block(tmp_path)
+
+        assert "Active inter-run plan" in result
+        assert "Cross-repo migration plan" in result
+
+    def test_includes_both_repo_and_cross_repo_plans(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        repo_dir = home / "plans" / "local__default"
+        repo_dir.mkdir(parents=True)
+        (repo_dir / "active.md").write_text("Repo plan.", encoding="utf-8")
+        cross_dir = home / "plans" / "_cross-repo"
+        cross_dir.mkdir(parents=True)
+        (cross_dir / "active.md").write_text("Cross plan.", encoding="utf-8")
+
+        result = _build_inter_run_plan_block(tmp_path)
+
+        assert "Repo plan" in result
+        assert "Cross plan" in result
+
+    def test_absent_when_plan_file_is_empty(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        plan_dir = home / "plans" / "local__default"
+        plan_dir.mkdir(parents=True)
+        (plan_dir / "active.md").write_text("", encoding="utf-8")
+
+        assert _build_inter_run_plan_block(tmp_path) == ""
+
+    def test_plan_block_rides_in_daemon_prompt(self, tmp_path):
+        """CS5 plan appears in the assembled daemon prompt."""
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.", encoding="utf-8")
+        home = _seed_account_home(tmp_path)
+        plan_dir = home / "plans" / "local__default"
+        plan_dir.mkdir(parents=True)
+        (plan_dir / "active.md").write_text("Plan: fix the bug.", encoding="utf-8")
+
+        prompt = build_daemon_prompt("fix it", "evt-1", "/tmp/r.md", tmp_path)
+
+        assert "Active inter-run plan" in prompt
+        assert "Plan: fix the bug" in prompt
+
+
+# ── CS6 — runner policy injection ─────────────────────────────────────
+
+
+class TestRunnerPolicyInjection:
+    """CS6: stored runner policy from the account dominion is injected when
+    present; silent when absent — standing preferences without ambient noise."""
+
+    def test_absent_when_no_policy_file(self, tmp_path):
+        _seed_account_home(tmp_path)
+        assert _build_runner_policy_block(tmp_path) == ""
+
+    def test_injects_repo_policy_when_present(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        policy_dir = home / "runner-policy" / "local__default"
+        policy_dir.mkdir(parents=True)
+        (policy_dir / "policy.md").write_text(
+            "Prefer haiku for quick tasks.", encoding="utf-8"
+        )
+
+        result = _build_runner_policy_block(tmp_path)
+
+        assert "Stored runner policy" in result
+        assert "Prefer haiku" in result
+
+    def test_injects_account_policy_when_present(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        acct_dir = home / "runner-policy" / "_account"
+        acct_dir.mkdir(parents=True)
+        (acct_dir / "policy.md").write_text(
+            "Escalate to opus for design reviews.", encoding="utf-8"
+        )
+
+        result = _build_runner_policy_block(tmp_path)
+
+        assert "Stored runner policy" in result
+        assert "Escalate to opus" in result
+
+    def test_includes_both_repo_and_account_policies(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        repo_dir = home / "runner-policy" / "local__default"
+        repo_dir.mkdir(parents=True)
+        (repo_dir / "policy.md").write_text("Repo policy.", encoding="utf-8")
+        acct_dir = home / "runner-policy" / "_account"
+        acct_dir.mkdir(parents=True)
+        (acct_dir / "policy.md").write_text("Account policy.", encoding="utf-8")
+
+        result = _build_runner_policy_block(tmp_path)
+
+        assert "Repo policy" in result
+        assert "Account policy" in result
+
+    def test_absent_when_policy_file_is_empty(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        policy_dir = home / "runner-policy" / "local__default"
+        policy_dir.mkdir(parents=True)
+        (policy_dir / "policy.md").write_text("   ", encoding="utf-8")
+
+        assert _build_runner_policy_block(tmp_path) == ""
+
+    def test_policy_block_rides_in_daemon_prompt(self, tmp_path):
+        """CS6 runner policy appears in the assembled daemon prompt."""
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.", encoding="utf-8")
+        home = _seed_account_home(tmp_path)
+        policy_dir = home / "runner-policy" / "local__default"
+        policy_dir.mkdir(parents=True)
+        (policy_dir / "policy.md").write_text(
+            "Use haiku for cheap tasks.", encoding="utf-8"
+        )
+
+        prompt = build_daemon_prompt("quick thing", "evt-1", "/tmp/r.md", tmp_path)
+
+        assert "Stored runner policy" in prompt
+        assert "Use haiku" in prompt
+
+
+# ── CS7 — decision ledger injection ───────────────────────────────────
+
+
+class TestDecisionLedgerInjection:
+    """CS7: resident-maintained decision ledger from the account dominion
+    is injected when present; silent when absent — never forced, always fresh."""
+
+    def test_absent_when_no_ledger_file(self, tmp_path):
+        _seed_account_home(tmp_path)
+        assert _build_decision_ledger_block(tmp_path) == ""
+
+    def test_injects_ledger_when_present(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        ledger_dir = home / "ledger"
+        ledger_dir.mkdir(parents=True)
+        (ledger_dir / "decisions.md").write_text(
+            "## 2026-06-30 — account-centered daemon accepted\n\n"
+            "One daemon per account, repo-scoped runs.",
+            encoding="utf-8",
+        )
+
+        result = _build_decision_ledger_block(tmp_path)
+
+        assert "Decision ledger" in result
+        assert "account-centered daemon accepted" in result
+        assert "repo-scoped runs" in result
+
+    def test_absent_when_ledger_file_is_empty(self, tmp_path):
+        home = _seed_account_home(tmp_path)
+        ledger_dir = home / "ledger"
+        ledger_dir.mkdir(parents=True)
+        (ledger_dir / "decisions.md").write_text("", encoding="utf-8")
+
+        assert _build_decision_ledger_block(tmp_path) == ""
+
+    def test_ledger_block_rides_in_daemon_prompt(self, tmp_path):
+        """CS7 decision ledger appears in the assembled daemon prompt."""
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.", encoding="utf-8")
+        home = _seed_account_home(tmp_path)
+        ledger_dir = home / "ledger"
+        ledger_dir.mkdir(parents=True)
+        (ledger_dir / "decisions.md").write_text(
+            "CS4 accepted 2026-06-29.", encoding="utf-8"
+        )
+
+        prompt = build_daemon_prompt("next step", "evt-1", "/tmp/r.md", tmp_path)
+
+        assert "Decision ledger" in prompt
+        assert "CS4 accepted 2026-06-29" in prompt

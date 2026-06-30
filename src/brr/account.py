@@ -36,6 +36,18 @@ RESPONSES_PATH = "dispatch/responses"
 RUN_STATE_PATH = "run-state"
 REPOS_PATH = "repos"
 REPO_DOMINION_DIRNAME = "dominion"
+
+# CS5 — inter-run plan home
+PLANS_PATH = "plans"
+CROSS_REPO_SLUG = "_cross-repo"
+
+# CS6 — stored runner policy
+RUNNER_POLICY_PATH = "runner-policy"
+ACCOUNT_RUNNER_POLICY_SLUG = "_account"
+
+# CS7 — decision ledger
+LEDGER_PATH = "ledger"
+
 GITIGNORE = """\
 /dispatch/inbox/
 /dispatch/responses/
@@ -293,7 +305,7 @@ def resolve_context(
             default_label,
             account_id=account_id,
         )
-        for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUN_STATE_PATH):
+        for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUN_STATE_PATH, PLANS_PATH):
             (dominion_repo / rel).mkdir(parents=True, exist_ok=True)
 
     return AccountContext(
@@ -318,6 +330,79 @@ def repo_dominion_path(ctx: AccountContext, repo_label: str) -> Path:
     """Return the resident-memory directory for one repo inside an account home."""
 
     return ctx.dominion_repo / REPOS_PATH / slug_repo_label(repo_label) / REPO_DOMINION_DIRNAME
+
+
+# ── CS5 — inter-run plan helpers ─────────────────────────────────────
+
+
+def repo_plans_path(ctx: AccountContext, repo_label: str) -> Path:
+    """Return the plans directory for one repo inside an account home.
+
+    The active inter-run plan lives at ``repo_plans_path(...) / "active.md"``.
+    Past plans can be archived under ``repo_plans_path(...) / "archive/"``.
+    """
+    return ctx.dominion_repo / PLANS_PATH / slug_repo_label(repo_label)
+
+
+def active_plan_path(ctx: AccountContext, repo_label: str) -> Path:
+    """Return the active plan file path for one repo.
+
+    Write or update this file to leave a plan that survives across wakes.
+    The daemon injects it at the top of the next wake (perception=injection).
+    Retire by deleting or emptying the file.
+    """
+    return repo_plans_path(ctx, repo_label) / "active.md"
+
+
+def cross_repo_plans_path(ctx: AccountContext) -> Path:
+    """Return the plans directory for cross-repo plans.
+
+    Cross-repo plans (spanning two or more managed repos) live here;
+    they cannot belong to any one repo's namespace.
+    """
+    return ctx.dominion_repo / PLANS_PATH / CROSS_REPO_SLUG
+
+
+# ── CS6 — runner policy helpers ───────────────────────────────────────
+
+
+def runner_policy_path(ctx: AccountContext, repo_label: str) -> Path:
+    """Return the stored runner policy file for one repo.
+
+    Write standing runner preferences here (e.g. "prefer haiku for quick
+    tasks, escalate to opus for design reviews"). The daemon injects the
+    policy into each wake so the resident can reference it when selecting
+    a runner or proposing a respawn.
+    """
+    return (
+        ctx.dominion_repo
+        / RUNNER_POLICY_PATH
+        / slug_repo_label(repo_label)
+        / "policy.md"
+    )
+
+
+def account_runner_policy_path(ctx: AccountContext) -> Path:
+    """Return the account-wide stored runner policy file.
+
+    Applies across all repos registered under this account. Repo-level
+    policy (see :func:`runner_policy_path`) takes precedence.
+    """
+    return ctx.dominion_repo / RUNNER_POLICY_PATH / ACCOUNT_RUNNER_POLICY_SLUG / "policy.md"
+
+
+# ── CS7 — decision ledger helper ──────────────────────────────────────
+
+
+def decisions_ledger_path(ctx: AccountContext) -> Path:
+    """Return the resident-maintained decision ledger file.
+
+    The resident creates and updates this file with key decisions and
+    current plan-position in plain language — the user-facing through-line
+    that complements ``kb/log.md`` (which is more technical). When the
+    account dominion has a remote, this file is web-visible there.
+    """
+    return ctx.dominion_repo / LEDGER_PATH / "decisions.md"
 
 
 def run_state_blob_url(
