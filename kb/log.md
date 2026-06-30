@@ -9387,3 +9387,19 @@ a "dominion diverged from seed" indicator is a standing-portal candidate that
 would turn this whole staleness class into a live signal. Worth a ticket.
 
 Branch: brr/resident-voice-reshape.
+
+## [2026-07-01] implement | CS6b runner-policy proposal approval loop
+
+Shipped the daemon-owned confirmation half of CS6. Residents can now emit an
+outbox file with `runner_policy: propose` frontmatter and a proposed policy
+body; the daemon parks it under `runner-policy/_proposals/<id>.md`, sends an
+approval prompt, and consumes later `approve runner-policy <id>` / `reject
+runner-policy <id>` replies before dispatching a runner. Approval is scoped to
+the original conversation and is the only resident-originated path that mutates
+the stored runner policy files; rejection leaves policy unchanged.
+
+Updated the injected delivery contract, portals manual, CS6 prompt wording, and
+`plan-control-surface.md` so the policy authority split is visible at the point
+of use. Verification: focused protocol/account/daemon/prompt/docs tests green.
+
+Branch: brr/resident-voice-reshape.

@@ -1,6 +1,6 @@
 # Plan: control surface — the dashboard the engine shipped without
 
-Status: active (opened 2026-06-29; CS1-CS7 shipped by 2026-06-30). Successor home for the reshape direction in
+Status: shipped on 2026-07-01 (opened 2026-06-29; CS1-CS7 shipped by 2026-06-30; CS6b shipped 2026-07-01). Successor home for the reshape direction in
 [`review-execution-model-coherence-2026-06-29.md`](review-execution-model-coherence-2026-06-29.md)
 §3. Architecture: [`decision-account-centered-daemon.md`](decision-account-centered-daemon.md).
 The *engine* half lives in [`plan-repo-gardening.md`](plan-repo-gardening.md)
@@ -127,23 +127,27 @@ retired in favour of this single home. Implementation:
   emptying or deleting `active.md`.
 
 ### CS6 — Plain-language config + daemon-owned confirmation
-**Shipped 2026-06-30 (storage + injection half).** The stored runner policy
-infrastructure is in place:
+**Shipped 2026-06-30/2026-07-01.** The stored runner policy infrastructure and
+daemon-owned confirmation loop are in place:
 
 - `account.py`: `RUNNER_POLICY_PATH`, `runner_policy_path()` (repo-scoped),
   `account_runner_policy_path()` (account-wide, `runner-policy/_account/policy.md`).
 - `prompts.py`: `_build_runner_policy_block()` reads both and injects a "Stored
   runner policy" block when either file is present.
-- The resident writes standing preferences to these files; the daemon injects them
-  into each wake so the resident sees them when selecting a runner or proposing a
-  respawn.
+- Operators can edit standing preferences directly; resident-originated changes
+  flow through CS6b. The daemon injects the resulting files into each wake so
+  the resident sees them when selecting a runner or proposing a respawn.
 
-**Not yet shipped:** the *daemon-owned confirmation step* that applies proposed
-policy changes without the resident being able to silently rewrite its own
-selection policy. That requires daemon-side machinery (a proposal handoff +
-operator confirmation loop) and belongs to a later slice. For now, the operator
-writes policy directly to the file; the resident proposes prose changes that the
-operator transcribes.
+**CS6b shipped 2026-07-01:** resident-originated policy changes now use a
+daemon-owned parked portal. The resident emits an outbox file with
+`runner_policy: propose` frontmatter and the proposed markdown policy body.
+The daemon parks it under `runner-policy/_proposals/<id>.md`, sends an approval
+prompt to the conversation, and handles later `approve runner-policy <id>` /
+`reject runner-policy <id>` replies before dispatching a runner. Approval is
+conversation-scoped and is the only resident-originated path that mutates
+`runner-policy/<repo>/policy.md` or `runner-policy/_account/policy.md`;
+rejection leaves the policy unchanged. Direct operator file edits remain
+possible, but the resident no longer silently rewrites its own selection policy.
 
 ### CS7 — Cross-run decision/plan ledger
 **Shipped 2026-06-30 (storage + injection half).** The ledger home is
@@ -167,18 +171,16 @@ CS1, CS2, and CS3 shipped first because they were pure projection / additive and
 made the existing engine legible without touching the process model. CS4 then
 moved the architecture to the account daemon + account dominion repo, unlocking
 CS2's durable run-state docs and the cross-repo home CS5 built on. CS5-CS7 landed
-together in a single wake: the storage + injection infrastructure for plans, runner
-policy, and the decision ledger is small and symmetric — three new block builders
-wired into `_build_injected_blocks()`, three sets of path helpers in `account.py`.
-
-Remaining work is CS6b (the daemon-owned confirmation step for policy changes),
-which requires an explicit proposal+confirm protocol in the daemon. That is a
-follow-on slice when daemon UX capacity is available.
+together in a single wake: the storage + injection infrastructure for plans,
+runner policy, and the decision ledger is small and symmetric — three new block
+builders wired into `_build_injected_blocks()`, three sets of path helpers in
+`account.py`. CS6b then closed the remaining write-authority gap with a narrow
+daemon-control event for policy proposal approval.
 
 ## Current checkpoint
 
-All seven control surface slices are now shipped at their storage + injection
-layer. What landed across CS1-CS7:
+All control-surface slices are now shipped. What landed across CS1-CS7 plus
+CS6b:
 
 - **CS1**: runner mandate catalog projected into every wake.
 - **CS2**: per-run state docs persisted and linked from the card.
@@ -187,16 +189,11 @@ layer. What landed across CS1-CS7:
   resident memory rehomed into the account dominion.
 - **CS5**: inter-run plan home (`plans/<repo-slug>/active.md`) injected each
   wake; cross-repo plans at `plans/_cross-repo/active.md`.
-- **CS6**: runner policy store (`runner-policy/`) injected each wake; the
-  daemon-owned confirmation step (applying proposed changes without the resident
-  silently rewriting selection policy) is deferred to a later slice.
+- **CS6**: runner policy store (`runner-policy/`) injected each wake.
+- **CS6b**: runner-policy proposal files and daemon-owned approval/rejection
+  handling; only approved resident-originated proposals mutate policy files.
 - **CS7**: decision ledger (`ledger/decisions.md`) injected when the resident
   maintains it — the user-facing projection alongside `kb/log.md`.
-
-The one remaining gap is CS6's daemon-owned confirmation step (the handoff where
-a proposed policy change waits for operator approval before being applied). That
-requires an explicit proposal+confirm loop in the daemon and belongs to a CS6b
-slice when the daemon UX is ready for it.
 
 CS4 shipped through four concrete cuts:
 

@@ -212,6 +212,23 @@ def test_account_runner_policy_path(tmp_path):
     )
 
 
+def test_runner_policy_proposals_path(tmp_path):
+    """CS6b: pending policy proposals live under runner-policy/_proposals/."""
+    ctx = account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path / "home",
+        dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
+        responses_dir=tmp_path / "home" / "dispatch" / "responses",
+        run_state_dir=tmp_path / "home" / "run-state",
+        repos={},
+        default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+    assert account.runner_policy_proposals_path(ctx) == (
+        tmp_path / "home" / "runner-policy" / "_proposals"
+    )
+
+
 # ── CS7 — decision ledger home ────────────────────────────────────────
 
 
