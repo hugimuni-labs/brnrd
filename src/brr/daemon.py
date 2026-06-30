@@ -14,12 +14,16 @@ leaves judgement to the agent it wakes. It:
    Concurrency within one resident is cooperative, not parallel across
    workers. See ``kb/design-agent-dominion.md`` §4 and
    ``kb/subject-daemon.md``.
+   The one deliberate control-event exception is runner-policy approval:
+   approval/rejection replies are handled by the daemon before dispatch so a
+   resident cannot silently rewrite its own runner-selection policy.
 4. The worker owns the full pipeline for its event: runner invocation,
    retries, response capture, response release to gates, env finalize,
    and branch push.
 
-There is no command layer: every event either wakes the agent or waits
-for the living agent — the daemon never parses ``/cancel`` or the like.
+There is no general command layer: every event either wakes the agent or
+waits for the living agent, except for the narrow daemon-owned approval
+grammar that applies runner-policy proposals.
 Liveness is enforced from the heartbeat: each tick checks an
 agent-extensible budget (``runner.timeout_seconds``, pushed out by a
 keepalive the agent writes) and kills a runner that outlives it via
@@ -36,6 +40,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -119,6 +124,12 @@ _CARD_CONTROL_NAME = ".card"
 # resident from flooding a thread. Excess bytes are truncated.
 _CARD_CONTROL_MAX_BYTES = 4096
 _INTERNAL_EVENT_SOURCES = {"schedule"}
+_RUNNER_POLICY_PROPOSAL_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
+_RUNNER_POLICY_REPLY_RE = re.compile(
+    r"^\s*(approve|approved|yes|reject|rejected|deny|denied|no)\s+"
+    r"(?:runner[-_ ]?policy|policy)\s+([A-Za-z0-9_.-]{1,96})\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -614,6 +625,357 @@ def _repo_label(
     if value:
         return value
     return repo_root.name
+
+
+def _utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def _frontmatter_doc(meta: dict[str, object], body: str) -> str:
+    lines = ["---"]
+    for key, value in meta.items():
+        if value is None:
+            continue
+        clean = str(value).replace("\n", " ").strip()
+        lines.append(f"{key}: {clean}")
+    lines.append("---")
+    lines.append(body.strip())
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _runner_policy_proposal_requested(fm: dict) -> bool:
+    raw = str(fm.get("runner_policy") or "").strip().lower()
+    return raw in {
+        "1", "true", "yes", "y", "on",
+        "propose", "proposal", "runner", "policy", "runner-policy",
+    }
+
+
+def _runner_policy_scope(fm: dict) -> str:
+    raw = str(fm.get("scope") or "").strip().lower()
+    if raw in {"account", "account-wide", "global"}:
+        return "account"
+    return "repo"
+
+
+def _runner_policy_target_path(
+    ctx: account.AccountContext,
+    *,
+    scope: str,
+    repo_label: str,
+) -> Path:
+    if scope == "account":
+        return account.account_runner_policy_path(ctx)
+    return account.runner_policy_path(ctx, repo_label)
+
+
+def _relative_to_account(ctx: account.AccountContext, path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ctx.dominion_repo.resolve()).as_posix()
+    except (OSError, ValueError):
+        return path.name
+
+
+def _runner_policy_proposal_id(task: Run, event_id: str, body: str) -> str:
+    stamp = time.strftime("%y%m%d-%H%M%S", time.gmtime())
+    digest = hashlib.sha1(
+        f"{task.id}\0{event_id}\0{time.time()}\0{body}".encode("utf-8")
+    ).hexdigest()[:8]
+    return f"rpol-{stamp}-{digest}"
+
+
+def _runner_policy_proposal_message(
+    proposal_id: str,
+    *,
+    scope: str,
+    repo_label: str,
+    policy_rel: str,
+    body: str,
+) -> str:
+    target = "account-wide policy" if scope == "account" else f"{repo_label} policy"
+    excerpt = body.strip()
+    if len(excerpt) > 1800:
+        excerpt = excerpt[:1800].rstrip() + "\n\n[truncated for chat; full proposal is parked]"
+    return (
+        f"Runner-policy proposal `{proposal_id}` is parked for {target}.\n\n"
+        f"Target: `{policy_rel}`\n\n"
+        "Proposed policy:\n\n"
+        f"```markdown\n{excerpt}\n```\n\n"
+        f"Reply `approve runner-policy {proposal_id}` to apply it, or "
+        f"`reject runner-policy {proposal_id}` to leave the current policy unchanged."
+    )
+
+
+def _read_runner_policy_proposal(
+    ctx: account.AccountContext,
+    proposal_id: str,
+) -> dict[str, object] | None:
+    if not _RUNNER_POLICY_PROPOSAL_ID_RE.match(proposal_id):
+        return None
+    path = account.runner_policy_proposals_path(ctx) / f"{proposal_id}.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    meta = protocol.parse_frontmatter(text)
+    if str(meta.get("id") or "") != proposal_id:
+        return None
+    meta["body"] = protocol.frontmatter_body(text).strip()
+    meta["_path"] = path
+    return meta
+
+
+def _commit_account_policy_update(
+    ctx: account.AccountContext,
+    *,
+    proposal_id: str,
+    action: str,
+) -> bool:
+    if not gitops.worktree_dirty(ctx.dominion_repo):
+        return False
+    committed = gitops.commit_all(
+        ctx.dominion_repo,
+        f"runner-policy: {action} proposal {proposal_id}",
+    )
+    if not committed:
+        return False
+    try:
+        remote = gitops.default_remote(ctx.dominion_repo)
+        branch = gitops.current_branch(ctx.dominion_repo)
+        if remote and branch and branch != "HEAD":
+            gitops.push_branch(ctx.dominion_repo, remote, branch)
+    except Exception:  # noqa: BLE001 - durability push is best-effort
+        pass
+    return True
+
+
+def _queue_runner_policy_proposal(
+    emit: _WorkerEmit,
+    task: Run,
+    responses_dir: Path,
+    event_id: str,
+    fm: dict,
+    body: str,
+    *,
+    account_context: account.AccountContext | None,
+) -> bool:
+    if account_context is None or not account_context.enabled:
+        print("[brr] outbox: runner-policy proposal had no account context; dropping")
+        return False
+    proposed = body.strip()
+    if not proposed:
+        print("[brr] outbox: runner-policy proposal had no policy body; dropping")
+        return False
+
+    scope = _runner_policy_scope(fm)
+    repo_label = str(
+        fm.get("repo")
+        or fm.get("repo_label")
+        or task.meta.get("repo_label")
+        or account_context.default_repo.label
+    ).strip()
+    policy_path = _runner_policy_target_path(
+        account_context,
+        scope=scope,
+        repo_label=repo_label,
+    )
+    proposal_id = _runner_policy_proposal_id(task, event_id, proposed)
+    proposal_path = (
+        account.runner_policy_proposals_path(account_context) / f"{proposal_id}.md"
+    )
+    policy_rel = _relative_to_account(account_context, policy_path)
+    proposal_rel = _relative_to_account(account_context, proposal_path)
+    meta = {
+        "id": proposal_id,
+        "status": "pending",
+        "scope": scope,
+        "repo_label": repo_label if scope == "repo" else "",
+        "policy_path": policy_rel,
+        "created": _utc_now(),
+        "created_by_run": task.id,
+        "created_from_event": event_id,
+        "conversation_key": task.conversation_key or emit.conversation_key,
+    }
+    _write_text_atomic(proposal_path, _frontmatter_doc(meta, proposed))
+    _commit_account_policy_update(
+        account_context,
+        proposal_id=proposal_id,
+        action="park",
+    )
+
+    message = _runner_policy_proposal_message(
+        proposal_id,
+        scope=scope,
+        repo_label=repo_label,
+        policy_rel=policy_rel,
+        body=proposed,
+    )
+    ppath = protocol.write_partial(responses_dir, event_id, message)
+    if emit.conversation_key:
+        conversations.append_artifact(
+            emit.brr_dir,
+            emit.conversation_key,
+            kind="runner_policy_proposal",
+            path=str(ppath),
+            run_id=task.id,
+            event_id=event_id,
+            label=f"runner-policy:{proposal_id}",
+            body=message,
+        )
+    emit(
+        "runner_policy_proposed",
+        run_id=task.id,
+        event_id=event_id,
+        proposal_id=proposal_id,
+        scope=scope,
+        repo_label=repo_label if scope == "repo" else None,
+        policy_path=policy_rel,
+        proposal_path=proposal_rel,
+    )
+    return True
+
+
+def _runner_policy_reply(body: str) -> tuple[str, str] | None:
+    match = _RUNNER_POLICY_REPLY_RE.match(body)
+    if not match:
+        return None
+    verb = match.group(1).lower()
+    action = "approve" if verb in {"approve", "approved", "yes"} else "reject"
+    return action, match.group(2)
+
+
+def _write_control_response(target: _DispatchTarget, body: str) -> None:
+    protocol.write_response(target.responses_dir, target.event["id"], body)
+    _set_event_status_if_present(target.event, "done")
+
+
+def _handle_runner_policy_control_event(
+    target: _DispatchTarget,
+    account_context: account.AccountContext,
+) -> bool:
+    parsed = _runner_policy_reply(str(target.event.get("body") or ""))
+    if parsed is None:
+        return False
+    action, proposal_id = parsed
+    proposal = _read_runner_policy_proposal(account_context, proposal_id)
+    if proposal is None:
+        _write_control_response(
+            target,
+            f"I couldn't find runner-policy proposal `{proposal_id}`. No policy changed.",
+        )
+        return True
+
+    event_conv = conversations.conversation_key_for_event(target.event) or ""
+    proposal_conv = str(proposal.get("conversation_key") or "").strip()
+    if proposal_conv and event_conv and proposal_conv != event_conv:
+        _write_control_response(
+            target,
+            f"I did not apply runner-policy proposal `{proposal_id}` because "
+            "the approval came from a different conversation.",
+        )
+        return True
+
+    status = str(proposal.get("status") or "").strip()
+    if status != "pending":
+        _write_control_response(
+            target,
+            f"Runner-policy proposal `{proposal_id}` is already `{status or 'closed'}`. "
+            "No policy changed.",
+        )
+        return True
+
+    if not isinstance(proposal.get("_path"), Path):
+        _write_control_response(
+            target,
+            f"Runner-policy proposal `{proposal_id}` could not be read. No policy changed.",
+        )
+        return True
+
+    if action == "reject":
+        protocol.update_event_meta(
+            proposal,
+            status="rejected",
+            decided=_utc_now(),
+            decided_by_event=target.event["id"],
+        )
+        _commit_account_policy_update(
+            account_context,
+            proposal_id=proposal_id,
+            action="reject",
+        )
+        _write_control_response(
+            target,
+            f"Rejected runner-policy proposal `{proposal_id}`. No policy changed.",
+        )
+        return True
+
+    scope = str(proposal.get("scope") or "repo").strip()
+    repo_label = str(
+        proposal.get("repo_label") or target.repo_label or account_context.default_repo.label
+    ).strip()
+    policy = str(proposal.get("body") or "").strip()
+    if not policy:
+        protocol.update_event_meta(
+            proposal,
+            status="invalid",
+            decided=_utc_now(),
+            decided_by_event=target.event["id"],
+        )
+        _commit_account_policy_update(
+            account_context,
+            proposal_id=proposal_id,
+            action="invalidate",
+        )
+        _write_control_response(
+            target,
+            f"Runner-policy proposal `{proposal_id}` had an empty policy body. "
+            "No policy changed.",
+        )
+        return True
+
+    policy_path = _runner_policy_target_path(
+        account_context,
+        scope=scope,
+        repo_label=repo_label,
+    )
+    _write_text_atomic(policy_path, policy.rstrip() + "\n")
+    policy_rel = _relative_to_account(account_context, policy_path)
+    protocol.update_event_meta(
+        proposal,
+        status="applied",
+        decided=_utc_now(),
+        decided_by_event=target.event["id"],
+        applied_path=policy_rel,
+    )
+    _commit_account_policy_update(
+        account_context,
+        proposal_id=proposal_id,
+        action="apply",
+    )
+    _write_control_response(
+        target,
+        f"Applied runner-policy proposal `{proposal_id}` to `{policy_rel}`.",
+    )
+    return True
+
+
+def _handle_daemon_control_events(
+    targets: list[_DispatchTarget],
+    account_context: account.AccountContext,
+) -> list[_DispatchTarget]:
+    remaining: list[_DispatchTarget] = []
+    for target in targets:
+        if _handle_runner_policy_control_event(target, account_context):
+            continue
+        remaining.append(target)
+    return remaining
 
 
 def _event_files_present(inbox_dir: Path) -> bool:
@@ -1309,6 +1671,7 @@ def _run_worker(
             _drain_outbox(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
                 repo_root=repo_root,
+                account_context=account_context,
                 stats=output_stats,
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -1357,6 +1720,7 @@ def _run_worker(
             _drain_outbox(
                 emit, task, responses_dir, eid, outbox_dir, inbox_dir,
                 repo_root=repo_root,
+                account_context=account_context,
                 stats=output_stats,
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -1413,6 +1777,7 @@ def _run_worker(
         _drain_outbox(
             emit, task, responses_dir, eid, outbox_dir, inbox_dir,
             repo_root=repo_root,
+            account_context=account_context,
             stats=output_stats,
         )
         _drain_agent_card(emit, task, eid, card_path, card_state)
@@ -2454,6 +2819,7 @@ def _drain_outbox(
     inbox_dir: Path | None = None,
     *,
     repo_root: Path | None = None,
+    account_context: account.AccountContext | None = None,
     stats: dict[str, int] | None = None,
 ) -> int:
     """Promote interim/interleaved responses the resident dropped in its outbox.
@@ -2520,6 +2886,22 @@ def _drain_outbox(
         # ``protocol.parse_outbox_message``.
         fm, body = protocol.parse_outbox_message(text)
         body = body.strip()
+        if _runner_policy_proposal_requested(fm):
+            if _queue_runner_policy_proposal(
+                emit,
+                task,
+                responses_dir,
+                event_id,
+                fm,
+                body,
+                account_context=account_context,
+            ):
+                promoted += 1
+                if stats is not None:
+                    stats["current"] = stats.get("current", 0) + 1
+                    stats["runner_policy"] = stats.get("runner_policy", 0) + 1
+            fpath.unlink(missing_ok=True)
+            continue
         if _truthy(fm.get("respawn")):
             if _queue_respawn_request(
                 emit, task, repo_root, inbox_dir, event_id, fm, body
@@ -3509,6 +3891,11 @@ def start(
             burst_hold = 0.0
             if current is None and not reload_requested:
                 pending = _dispatchable_targets(account_context, repo_root, cfg)
+                if pending:
+                    pending = _handle_daemon_control_events(
+                        pending,
+                        account_context,
+                    )
                 if pending:
                     burst_hold = _burst_settle_delay(
                         [target.event for target in pending],
