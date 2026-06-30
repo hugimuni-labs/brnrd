@@ -162,17 +162,19 @@ def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
     assert "self-inject: full playbook.md" in digest  # provenance marker
     # The rich seed (not the old stub) shipped and was injected in full.
     assert "memory palace" in digest  # society-of-mind framing
-    assert "is genuinely yours to shape" in digest
+    assert "workshop interpretation" in digest
+    assert "build it like it's yours" in digest
 
 
 def test_seed_playbook_fits_default_inject_budget_in_full(tmp_path):
-    """The seed playbook must inject *in full* under the default budget,
+    """The living playbook seed must inject *in full* under the default budget,
     with headroom for the agent's own entries.
 
     It silently grew past the budget once (2026-06-09: 13.3 KiB vs a
     12288-byte budget, so the closing section was clipped on every wake);
-    the budget was bumped to fit. This guard fails if the seed outgrows
-    the budget again, forcing a deliberate bump rather than silent loss.
+    the budget was bumped to fit. The 2026-06-30 identity-core split made the
+    seed smaller again, but this guard still fails if the seed outgrows the
+    budget, forcing a deliberate bump rather than silent loss.
     """
     repo = _repo(tmp_path)
     path = dominion.ensure_dominion(repo, push=False)
@@ -205,9 +207,14 @@ def test_build_injected_context_matches_runner_injection(tmp_path):
 
     context = prompts.build_injected_context(repo, task_text="fix the parser")
 
-    # It carries the dominion digest (playbook + self-inject)...
+    # It carries the product-owned identity core and the resident-owned
+    # dominion digest (playbook + self-inject)...
+    assert "Resident Identity Core" in context
     assert "Your dominion (working memory)" in context
     assert "Playbook — your standing orientation" in context
+    assert context.index("Resident Identity Core") < context.index(
+        "Your dominion (working memory)"
+    )
     # ...and is verbatim what the runner path embeds into a full prompt, so
     # whatever blocks we add to the runner show up in the tool with no drift.
     assert context in prompts.build_run_prompt("fix the parser", repo)
