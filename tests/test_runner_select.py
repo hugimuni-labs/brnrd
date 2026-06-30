@@ -327,8 +327,10 @@ def test_respawn_request_shape():
         consent="spend-plan",
         at="2026-06-29T01:00:00Z",
         defer_until="2026-06-29T01:00:00Z",
+        repo="Gurio/brr",
     )
     assert req.proposed_runner == "claude-bare-api-only-opus"
     assert req.consent == "spend-plan"
     assert req.at == "2026-06-29T01:00:00Z"
     assert req.defer_until == "2026-06-29T01:00:00Z"
+    assert req.repo == "Gurio/brr"
