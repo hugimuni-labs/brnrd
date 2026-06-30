@@ -373,6 +373,28 @@ def test_render_text_compact_has_runner_env_branch_header(tmp_path):
     assert "running" in text
 
 
+def test_render_text_compact_prefixes_repo_when_known(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:repo-header:"
+    conversations.append_run(
+        brr_dir, key,
+        run_id="run-repo", event_id="evt-repo",
+        env="host", status="running",
+        branch_name="brr/run-repo",
+        repo_label="Gurio/brr",
+    )
+    _emit(brr_dir, key, "run_created", run_id="run-repo",
+          env="host", repo_label="Gurio/brr")
+    _emit(brr_dir, key, "run_started", run_id="run-repo",
+          runner="codex", branch="brr/run-repo", env="host")
+
+    view = run_progress.project_run(brr_dir, key, "run-repo")
+    assert view is not None
+    text = run_progress.render_text(view, compact=True)
+
+    assert text.splitlines()[0] == "Gurio/brr · codex · host · brr/run-repo"
+
+
 def test_push_done_carries_forge_view_url_into_view(tmp_path):
     """A ``push_done`` packet that includes a forge URL stores it on
     the projection so renderers can surface a clickable link."""

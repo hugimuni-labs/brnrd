@@ -120,6 +120,7 @@ class RunProgressView:
     state: str = "active"
     branch_name: str | None = None
     display_base: str | None = None
+    repo_label: str | None = None
     env: str | None = None
     runner_name: str | None = None
     attempt: int = 0
@@ -358,6 +359,7 @@ def _project(
                 record.get("target_branch")
                 or view.display_base
             )
+            view.repo_label = record.get("repo_label") or view.repo_label
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
             continue
@@ -384,10 +386,12 @@ def _project(
             continue
 
         if ptype == "run_created":
+            view.repo_label = record.get("repo_label") or view.repo_label
             view.env = record.get("env") or view.env
             view.event_id = record.get("event_id") or view.event_id
             _open_phase(view, "preparing", ts)
         elif ptype == "env_prepared":
+            view.repo_label = record.get("repo_label") or view.repo_label
             view.env = record.get("env") or view.env
             view.branch_name = record.get("branch_name") or view.branch_name
             view.display_base = (
@@ -841,6 +845,8 @@ def _trim_attempt_reason(reason: str | None, *, limit: int = 140) -> str:
 def _render_verbose(view: RunProgressView) -> str:
     lines: list[str] = [_legacy_header(view)]
     rows: list[tuple[str, str]] = [("phase", _phase_text(view))]
+    if view.repo_label:
+        rows.append(("repo", view.repo_label))
     branch_text = _branch_text(view)
     if branch_text:
         rows.append(("branch", branch_text))
@@ -888,6 +894,8 @@ def _compact_header(view: RunProgressView) -> str:
     which case the body falls back to a single status line.
     """
     bits: list[str] = []
+    if view.repo_label:
+        bits.append(view.repo_label)
     if view.runner_name:
         bits.append(view.runner_name)
     if view.env:
