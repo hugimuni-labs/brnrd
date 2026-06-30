@@ -120,9 +120,18 @@ def _runner_parts(runner: dict[str, Any]) -> tuple[str, str, str]:
     return shell or "unknown", core, summary
 
 
-def _activity_views(db: Session, repos: list[Repo]) -> list[dict[str, Any]]:
+def _activity_views(
+    db: Session,
+    repos: list[Repo],
+    *,
+    repo_id: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
     repo_by_id = {repo.id: repo for repo in repos}
     repo_ids = set(repo_by_id)
+    if repo_id:
+        repo_ids = {repo_id} if repo_id in repo_ids else set()
     if not repo_ids:
         return []
 
@@ -131,10 +140,13 @@ def _activity_views(db: Session, repos: list[Repo]) -> list[dict[str, Any]]:
         for daemon in db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
     }
 
+    stmt = select(ActivityRecord).where(ActivityRecord.repo_id.in_(repo_ids))
+    if kind:
+        stmt = stmt.where(ActivityRecord.kind == kind)
+    if status:
+        stmt = stmt.where(ActivityRecord.status == status)
     rows = db.execute(
-        select(ActivityRecord)
-        .where(ActivityRecord.repo_id.in_(repo_ids))
-        .order_by(
+        stmt.order_by(
             ActivityRecord.updated_at.desc().nullslast(),
             ActivityRecord.reported_at.desc(),
         )
@@ -335,3 +347,41 @@ def dashboard(request: Request, installation_id: str | None = None, notice: str 
         return RedirectResponse(url="/login?next=/", status_code=303)
     notice = notice or _github_auto_sync_if_needed(request, db, account.id)
     return _render(request, "dashboard.html", _activity_dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
+
+
+@router.get("/activity", response_class=HTMLResponse)
+def activity_page(request: Request, repo_id: str | None = None, kind: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/activity", status_code=303)
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url="/login?next=/activity", status_code=303)
+    repos = _repos(db, account.id)
+    base_views = _activity_views(db, repos, repo_id=repo_id or None)
+    views = _activity_views(
+        db,
+        repos,
+        repo_id=repo_id or None,
+        kind=kind or None,
+        status=status or None,
+    )
+    kinds = sorted({view["record"].kind for view in base_views} | {"run", "scheduled", "respawn"})
+    statuses = sorted({view["record"].status for view in base_views if view["record"].status} | {"running", "pending", "scheduled"})
+    return _render(
+        request,
+        "activity.html",
+        {
+            "body_class": "dashboard-page",
+            "title": "brnrd activity",
+            "logged_in": True,
+            "account": account,
+            "repos": repos,
+            "activity_views": views,
+            "selected_repo_id": repo_id or "",
+            "selected_kind": kind or "",
+            "selected_status": status or "",
+            "kinds": kinds,
+            "statuses": statuses,
+        },
+    )
