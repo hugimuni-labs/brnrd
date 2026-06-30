@@ -1,6 +1,6 @@
 # Project
 
-> Revision: 2026-06-20. Structural arc:
+> Revision: 2026-06-30. Structural arc:
 > [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
 > Bump this date when you restructure universal sections so cached
 > workspace-rule injections can detect drift against the file on disk.
@@ -36,8 +36,8 @@ Three stages, and how to read this file in each:
   bundle is the hot path: obey it for delivery, branch, runtime
   paths, and `.brr/` access — it overrides the generic workflow
   wording for those points. When brr hosts you as a **resident**, your
-  own playbook — kept in your dominion (`.brr/dominion/`) and injected
-  on wake from its self-inject index — is your standing self-orientation;
+  own playbook — kept in the dominion path named by the wake prompt and
+  injected on wake from its self-inject index — is your standing self-orientation;
   this file is the repo contract that playbook rests on, so read them as
   complementary layers rather than rivals. Workflow → *When the brr
   daemon runs you* backs it up; everything else (Stewardship, kb,
@@ -67,6 +67,14 @@ may not match this task. The recurring drift cases:
 
 Daemon and setup stages take their hot-path context from the prompt and
 don't have these drift cases.
+
+**Vocabulary anchor.** A **Runner** = a **Shell** (the CLI on PATH:
+`claude`, `codex`, `gemini`) + a **Core** (the model: `opus`, `sonnet`,
+`gpt-5-codex`). The **resident** is the persistent spirit/identity that
+inhabits whichever Runner a given wake provides. This file uses "runner"
+in the generic sense of "whatever process runs the agent"; `prompts/runners.md`
+catalogs the concrete Shell+Core profiles. In user-facing config, the
+knobs are `shell=` and `core=`, not a `runner=` profile selector.
 
 ## Stewardship
 
@@ -176,12 +184,13 @@ what older versions of this file split between "Session startup" and
      `Recent Activity (from kb/log.md)` extract plus the bundle's
      `Recent in this conversation` block — those satisfy this step
      unless you need older history than the extract carries.
-3. If a **dominion** exists here, read its playbook
-   (`.brr/dominion/playbook.md`) — your standing self-orientation as this
-   repo's resident, which past wakes may have reshaped. Its daemon
-   mechanics (scheduled wakes, outbox delivery, liveness) only bind when
-   brr hosts you; the ownership and memory stance applies whenever you
-   act here.
+3. If a **dominion** exists here, read its playbook — your standing
+   self-orientation as this repo's resident, which past wakes may have
+   reshaped. In current brr daemon runs, the Run Context Bundle names the
+   account-scoped dominion path; older repo-local installs may still use
+   `.brr/dominion/playbook.md` as a legacy fallback. Its daemon mechanics
+   (scheduled wakes, outbox delivery, liveness) only bind when brr hosts you;
+   the ownership and memory stance applies whenever you act here.
    - Under brr it's already injected as the *Your dominion (working
      memory)* block — so this step is for plain editor sessions.
    - It's gitignored runtime; skip it if brr hasn't bootstrapped a
@@ -296,8 +305,9 @@ delivery / runtime recovery), the branch plan, the recent conversation,
 and the original event body. The generated run context file (named in
 `Mode → Runtime recovery`) is recovery detail: open it only when the
 bundle didn't include something you need. Don't explore or modify
-`.brr/` beyond the run context file, your own dominion (`.brr/dominion/`,
-yours to curate freely), and any paths the task explicitly requires.
+`.brr/` beyond the run context file, your own dominion (the path named by the
+wake prompt; legacy installs may still use `.brr/dominion/`), and any paths the
+task explicitly requires.
 
 ## Knowledge base
 

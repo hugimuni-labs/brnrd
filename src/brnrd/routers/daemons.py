@@ -6,12 +6,12 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .. import ids, inbox as inbox_service, schemas
 from ..auth import Principal, get_db, require_daemon
-from ..models import Daemon, Event
+from ..models import ActivityRecord, Daemon, Event
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
 
@@ -30,6 +30,45 @@ def _touch_daemon(db: Session, principal: Principal) -> None:
     db.commit()
 
 
+def _current_daemon(db: Session, principal: Principal) -> Daemon | None:
+    return db.execute(
+        select(Daemon).where(
+            Daemon.repo_id == principal.repo_id,
+            Daemon.token_id == principal.token.id,
+        )
+    ).scalar_one_or_none()
+
+
+def _activity_out(row: ActivityRecord) -> schemas.ActivityRecordOut:
+    try:
+        runner = json.loads(row.runner_json or "{}")
+    except ValueError:
+        runner = {}
+    try:
+        links = json.loads(row.links_json or "{}")
+    except ValueError:
+        links = {}
+    return schemas.ActivityRecordOut(
+        id=row.record_id,
+        repo_id=row.repo_id,
+        kind=row.kind,
+        source=row.source,
+        conversation_key=row.conversation_key,
+        summary=row.summary,
+        runner=runner if isinstance(runner, dict) else {},
+        status=row.status,
+        phase=row.phase,
+        branch=row.branch,
+        pr_number=row.pr_number,
+        started_at=row.started_at,
+        updated_at=row.updated_at,
+        scheduled_for=row.scheduled_for,
+        defer_until=row.defer_until,
+        links=links if isinstance(links, dict) else {},
+        reported_at=row.reported_at,
+    )
+
+
 @router.post("/register", response_model=schemas.DaemonRegistered)
 def register(payload: schemas.DaemonRegister, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     repo_id = principal.repo_id
@@ -46,6 +85,54 @@ def register(payload: schemas.DaemonRegister, principal: Principal = Depends(req
     db.add(daemon)
     db.commit()
     return schemas.DaemonRegistered(daemon_id=daemon.id, repo_id=repo_id)
+
+
+@router.put("/activity", response_model=schemas.ActivityList)
+def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon token's current Activity snapshot for its repo."""
+    daemon = _current_daemon(db, principal)
+    now = datetime.now(timezone.utc)
+    db.execute(
+        delete(ActivityRecord).where(
+            ActivityRecord.repo_id == principal.repo_id,
+            ActivityRecord.token_id == principal.token.id,
+        )
+    )
+    rows: list[ActivityRecord] = []
+    seen: set[str] = set()
+    for record in payload.records:
+        if record.id in seen:
+            continue
+        seen.add(record.id)
+        row = ActivityRecord(
+            id=ids.activity_id(),
+            repo_id=principal.repo_id,
+            token_id=principal.token.id,
+            daemon_id=daemon.id if daemon else None,
+            record_id=record.id,
+            kind=record.kind,
+            source=record.source,
+            conversation_key=record.conversation_key,
+            summary=record.summary,
+            runner_json=json.dumps(record.runner, separators=(",", ":")),
+            status=record.status,
+            phase=record.phase,
+            branch=record.branch,
+            pr_number=None if record.pr_number is None else str(record.pr_number),
+            started_at=record.started_at,
+            updated_at=record.updated_at,
+            scheduled_for=record.scheduled_for,
+            defer_until=record.defer_until,
+            links_json=json.dumps(record.links, separators=(",", ":")),
+            reported_at=now,
+        )
+        db.add(row)
+        rows.append(row)
+    if daemon is not None:
+        daemon.online = True
+        daemon.last_seen_at = now
+    db.commit()
+    return schemas.ActivityList(activity=[_activity_out(row) for row in rows])
 
 
 @router.get("/inbox", response_model=schemas.InboxResponse)
