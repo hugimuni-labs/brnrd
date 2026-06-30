@@ -176,7 +176,7 @@ Things we explicitly do **not** hold:
                        User's local machine
 ┌─────────────────────────────────────────────────────────────────┐
 │  ~/.config/brr/projects.toml      (registry of brr-init'd repos)│
-│  ~/.local/state/brr/account/      (brnrd binding, sub status,   │
+│  ~/.local/state/brnrd/account/    (brnrd binding, sub status,   │
 │                                    cached account-scope config) │
 │                                                                 │
 │  ┌────────────┐    ┌────────────┐    ┌────────────┐             │
@@ -243,7 +243,7 @@ pre-pass-IV per-project-daemon framing):
 3. **Account binding is machine-scoped.** The brnrd account
    binding (auth token, subscription status, brnrd URL,
    cached account-scope config) lives at
-   `~/.local/state/brr/account/` — not per repo. When the
+   `~/.local/state/brnrd/account/` — not per repo. When the
    user runs `brnrd connect` from a second project, the
    binding is already there; only the per-project project_id
    binding gets added. See
@@ -1883,7 +1883,7 @@ branch + symlink + autosync shape.
      `brr.toml`), discovered via `~/.config/brr/projects.toml`;
      one `httpx.AsyncClient` (HTTP/2-pooled) carries traffic
      for all projects to brnrd; account binding lives at
-     `~/.local/state/brr/account/`, not per repo. Inbox
+     `~/.local/state/brnrd/account/`, not per repo. Inbox
      long-poll returns events for ALL the daemon's projects
      in one batch, tagged with project_id; the daemon
      dispatches each to the right per-project asyncio task.

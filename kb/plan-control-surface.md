@@ -38,8 +38,9 @@ object) carrying runner/core, **repo**, boundary, elapsed, commits, plan
 position, attempt history. The card links to it. **Home reconciled (evt-puhl,
 evt-qhk6):** the maintainer wants a larger, durable, beautifully-rendered
 run-state object — so this lives in the **account dominion repo** (the
-per-account home the resident's dominion consolidated into), the durable
-brnrd-projectable store, not an ephemeral gist. See
+per-account home the resident's dominion consolidated into), the local-first
+brnrd-projectable store, not an ephemeral gist and not a GitHub repo created
+without opt-in. See
 `decision-account-centered-daemon.md` → "Account-scoped store".
 ("gist-per-run" was a placeholder for "a per-run state doc somewhere
 web-visible.") Only the durable persistence half waits on the account repo
@@ -64,12 +65,15 @@ message events → dispatcher output) and *which Runner* (reuse the 2A Shell/Cor
 pin-skip path). Keep single-flight across repos for v1. **OSS invariant:
 local-only first, brnrd projection additive.**
 
-Also part of CS4 (the account repo itself, confirmed evt-qhk6): the daemon
-**auto-creates** the account dominion repo on first `brr up`/install, with an
-**override** to designate an existing repo (or stay purely local); the
-account-scoped **dispatch inbox** (message-event queue the cheap dispatcher reads)
-lives in that repo. The resident's dominion consolidates into it — no longer a
-per-repo `brr-home` branch. See decision page → "Account-scoped store".
+Also part of CS4 (the account repo itself, confirmed evt-qhk6; remote default
+clarified 2026-06-30): the daemon auto-creates only a **local** account dominion
+git repo on first `brr up`/install, with an override to designate an existing
+repo/path. Remote durability is explicit: existing git remote now, user-approved
+forge repo creation through OAuth later, and S3-compatible storage as a future
+backend. The account-scoped **dispatch inbox** (message-event queue the cheap
+dispatcher reads) lives in that repo. The resident's dominion consolidates into
+it — no longer a per-repo `brr-home` branch. See decision page → "Account-scoped
+store".
 
 **First implementation slice shipped 2026-06-30.** The local daemon now resolves
 an account context (`src/brr/account.py`) before dispatch: the current checkout
@@ -80,7 +84,7 @@ repo owns `account/repos.json`, `dispatch/inbox`, `dispatch/responses`, and
 account dispatch inbox, routes account message events by `repo:`/`repo_label`,
 and keeps forge events direct when they appear in a registered repo's own inbox.
 Run-state markdown documents are persisted under the account dominion. Manual
-operator instructions for moving this repo's current `.brr/dominion` live in
+operator instructions for moving this repo's old `.brr/dominion` live in
 `brr docs account-daemon`.
 
 **Run-state URL projection shipped 2026-06-30.** `forges.view_blob_url`
@@ -100,11 +104,14 @@ no-op'd event routing). A `tests/conftest.py` autouse fixture now redirects
 `XDG_STATE_HOME` per test, so the default account location is pristine and
 disposable.
 
-Remaining CS4 work: move wake-time dominion injection/capture from the old
-repo-local worktree to the account dominion path. This is the process-model
-change that **waits on the operator migration** (`brr docs account-daemon`) —
-the resident's memory plumbing should not be re-pointed mid-migration while the
-live dominion still sits at `.brr/dominion`.
+**Wake-time dominion rehome shipped 2026-06-30.** Prompt injection, matched
+pitfalls, `schedule.md`, thread-of-record hints, and capture-at-sleep now prefer
+`repos/<repo>/dominion/` inside the account dominion repo. `.brr/dominion` stays
+readable/captured as a legacy fallback so partially migrated installs wake with
+memory rather than going blank. Fresh default account homes use
+`$XDG_STATE_HOME/brnrd/...`; an existing `$XDG_STATE_HOME/brr/...` account home
+is accepted as a legacy fallback until the operator moves it or sets
+`account.dominion_path`.
 
 ### CS5 — Inter-run plan home + injection
 A web-visible plan store; the daemon preloads/auto-injects it into the wake the

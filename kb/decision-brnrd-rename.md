@@ -41,15 +41,17 @@ The maintainer settled it (evt-qhk6, 2026-06-29): *"keep-brr-as-local-verb — I
 agree, let's keep brr command (or brnrd brr, but brr is unlikely to collide with
 the PyPI package, so it is a way)."* **Option (b) is chosen.** `brnrd` is the
 brand/package/service/identity; `brr` persists as the short local CLI verb and the
-resident/runner-facing surface, and it absorbs the costly runtime-state names
-(`.brr/`, `brr-home`) so the brand rename lands without a flag-day on every
-install's dominion. The PyPI-collision worry is noted as low (the local `brr` verb
+resident/runner-facing surface, and it absorbs the costly repo-local runtime
+names (notably `.brr/`) so the brand rename lands without a flag-day on every
+install. The account-level home now tilts to `brnrd` naming because it is new
+local-first state, not a pre-existing project branch. The PyPI-collision worry
+is noted as low (the local `brr` verb
 ships from the `brnrd` wheel via `[project.scripts]`; it is not a separate PyPI
 package). The two shapes that were on the table:
 
 - **(a) One name everywhere.** Retire `brr` fully: CLI `brnrd`, package `brnrd`,
-  dominion `brnrd-home`, runtime dir `.brnrd/`. Cleanest brand; costliest
-  migration (touches runtime-state names every install depends on).
+  runtime dir `.brnrd/`. Cleanest brand; costliest migration (touches
+  runtime-state names every install depends on).
 - **(b) brnrd is the name; `brr` survives only as a short local/runner-facing
   CLI verb.** This maps cleanly onto the account-vs-repo split the architecture
   already drew: **brnrd** = the account daemon + hosted service + brand + bot +
@@ -58,21 +60,19 @@ package). The two shapes that were on the table:
   second product.
 
 - **(b) is the chosen shape** (recorded above). The reasoning that carried it:
-  the costliest, most state-entangled names are exactly the local/runtime ones —
-  the dominion branch `brr-home` and the runtime dir `.brr/` are load-bearing for
-  **every existing install's memory and in-flight runs**. Renaming
-  brand/package/identity is worth it; renaming those runtime-state names needs a
-  migration shim or a deliberate keep, and folding them into "the local `brr`
-  surface" lets the brand rename land without a flag-day on everyone's dominion.
+  the costliest, most state-entangled name is the repo-local `.brr/` runtime dir,
+  which holds every existing install's in-flight runs. Renaming
+  brand/package/identity is worth it; renaming that runtime dir needs a migration
+  shim or a deliberate keep, and folding it into "the local `brr` surface" lets
+  the brand rename land without a flag-day.
 
 Note the cross-link to the account-dominion consolidation
 ([`decision-account-centered-daemon.md`](decision-account-centered-daemon.md) →
 "Account-scoped store"): the maintainer also confirmed the resident's dominion
 moves from a per-repo `brr-home` orphaned branch to a **per-account dominion
-repo**. That account dominion repo keeping the `brr-home` name is consistent with
-(b) — runtime-state naming stays under the local `brr` surface — though the
-account-repo name is itself a minor open detail there (`brr-home` vs `brnrd-home`,
-no migration cost since the account repo is new).
+repo**. Because that account repo is new local-first state, the current naming
+leans `brnrd-home` / "account dominion repo"; legacy `brr-home` survives only as
+the old repo-local fallback.
 
 ## Migration scope (honest — this is multiple dedicated wakes, not one sed)
 
@@ -85,10 +85,10 @@ Roughly, in increasing cost / risk:
    (b), `brr` stays as an alias verb.
 3. **Identity + infra**: claim PyPI `brnrd`, GitHub `brnrd-dev` / `brnrd-bot` +
    the GitHub App, `brnrd.dev`.
-4. **Runtime-state names** — **kept** under (b): `brr-home` dominion branch and
-   `.brr/` runtime dir stay as-is (no rename), avoiding the state-touching
-   migration for every install. This is the payoff of (b): step 4 drops out
-   entirely instead of needing a migration/compat shim.
+4. **Runtime-state names** — **mixed** under (b): `.brr/` runtime dir stays as-is
+   (no rename) to avoid touching in-flight project state; the new account home
+   uses the `brnrd` namespace with a legacy fallback for earlier
+   `$XDG_STATE_HOME/brr/...` account homes.
 
 Sequence: name + sub-fork are now **locked** (brnrd brand; `brr` local verb), so
 land in staged, reversible chunks: 1 (brand/docs) → 2/3 (package/CLI + identity,

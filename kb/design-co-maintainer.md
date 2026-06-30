@@ -56,7 +56,7 @@ This builds on shipped work; it does not re-design it. The pieces:
 - **Delivery that isn't one-shot** — [`design-multi-response.md`](design-multi-response.md):
   interim + multiple + interleaved responses via `.brr/outbox/<eid>/`.
 - **Proactivity + ownership of sync** — [`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md):
-  the resident owns its schedule and its `brr-home` sync + conflict
+  the resident owns its schedule and its account-dominion sync + conflict
   resolution.
 - **Conversations as routing + history, not identity** —
   [`decision-drop-streams.md`](decision-drop-streams.md) and the per-event-pipeline
@@ -267,7 +267,7 @@ snapshot (§4.2 tier 1) gains a **forge-state facet**:
   "did that land?" resolves against the actual PR state.
 
 Conflict resolution rides on existing ownership: the resident owns
-`brr-home` sync + merge (from [`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md))
+account-dominion sync + merge (from [`design-self-scheduled-thoughts.md`](design-self-scheduled-thoughts.md))
 and branch publication via the publish kernel
 ([`design-publish-kernel.md`](design-publish-kernel.md)); forge-awareness
 gives it the picture to do so without surprises.

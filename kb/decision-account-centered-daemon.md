@@ -113,14 +113,13 @@ brr's bookkeeping there. An orphaned branch threads the needle:
   **daemon surfacing it** (card link + auto-injection between wakes) — the user
   never needs the ref; brr brings the plan to them.
 
-Crucially this **reuses brr's existing dominion pattern** (`brr-home` is already
-an orphaned branch holding the resident's durable memory) rather than inventing a
-new mechanism — a dedicated user-facing sibling (e.g. `brr-plans`), or a
-designated namespace, kept distinct from the private dominion. A gist stays the
-weakest option (off-repo, separate auth). Cross-repo plans, which can't live in a
-single repo's branch, point at an **account-level** store (the account daemon's
-own orphaned branch, or a designated home repo) — the case that genuinely needs
-the account model. Final placement is the maintainer's call on execution.
+This now reuses the **dominion pattern lifted to account scope** rather than
+creating repo-scoped branches in every project. A local account dominion repo
+holds the durable state; repo-scoped material is tagged by repo inside it. A
+gist stays the weakest option for structured account state (off-repo, separate
+auth), though a secret gist can remain a lightweight renderer/plan publication
+fallback when a full repo feels too heavy. Cross-repo plans naturally live in
+the account store because they cannot belong to one managed repo's branch.
 
 ### 5. User view surface + control plane
 
@@ -154,8 +153,9 @@ queue** (the message-event inbox the cheap dispatcher reads). The maintainer
 named the gap directly: *"brnrd daemon doesn't have a repo… where to keep the
 plan then?"*
 
-**Recommendation: a dedicated, daemon-created account repo** (private; working
-name `brnrd-home`) — **not** a fork of the brnrd source, **not** a gist.
+**Recommendation: a local-first account dominion repo** (working name
+`brnrd-home` when/if projected to a forge) — **not** a fork of the brnrd source,
+**not** a gist, and not created in the user's GitHub account without opt-in.
 
 - *Why not fork-the-source* (the maintainer's "each install forks brr on behalf
   of the user"): it solves the right problem — give the daemon a repo — by the
@@ -165,28 +165,27 @@ name `brnrd-home`) — **not** a fork of the brnrd source, **not** a gist.
   insight (the daemon should own a git repo), drop the entanglement.
 - *Why not a gist*: off-repo, separate auth, no structure — already this page's
   weakest option for plans; the same verdict holds for the whole account store.
-- *Why a fresh account repo*: it is exactly the **dominion pattern lifted from
-  repo-scope to account-scope**. `brr-home` is today an orphaned branch holding
-  the resident's durable per-repo memory; the account repo is its account-scoped
-  form as a *standalone repo* (because account state can't hang off any one
-  managed repo's branch). It holds the **OSS self-deploy invariant**: when
-  self-deployed it is just a local git repo; brnrd cloud mirrors/projects it.
+- *Why an account repo*: it is exactly the **dominion pattern lifted from
+  repo-scope to account-scope**. The account repo is local-first because account
+  state cannot hang off any one managed repo's branch. It holds the **OSS
+  self-deploy invariant**: when self-deployed it is just a local git repo; a
+  brnrd cloud projection or user-supplied remote is additive.
 
 **The dominion *moves* to account scope — it is not a sibling (confirmed,
-evt-qhk6).** The maintainer settled the relationship between `brr-home` and the
-account repo: *"move brr-home orphaned branch per repo to the brr-home / dominion
-repo per account? love it."* So this is a **consolidation, not a duplication** —
-the resident's dominion stops being a per-repo orphaned branch and becomes the
-**account dominion repo**. This follows from the daemon being per-account: one
-resident per account ⇒ one dominion per account. Repo-specific memory becomes a
-section/path *within* the account dominion (tagged by repo), not a separate store
-per repo. The account dominion repo therefore unifies two things under one home:
-the resident's durable memory (the old `brr-home` role) **and** the account store
-below (cross-repo plans, run-state registry, account config/registry, dispatch
-inbox). Naming stays a minor open detail — `brr-home` (consistent with keeping
-runtime-state names under the local `brr` surface, per
-[`decision-brnrd-rename.md`](decision-brnrd-rename.md) option (b)) vs `brnrd-home`;
-no migration cost either way since the account repo is newly created.
+evt-qhk6; default creation clarified 2026-06-30).** This is a consolidation, not
+a duplication: the resident's dominion stops being a per-repo orphaned branch and
+becomes a repo-tagged directory inside the **account dominion repo**. This
+follows from the daemon being per-account: one resident per account ⇒ one
+dominion per account. The account dominion repo therefore unifies two things
+under one home: the resident's durable memory and the account store below
+(cross-repo plans, run-state registry, account config/registry, dispatch inbox).
+Naming now tilts to `brnrd-home` / "account dominion repo" for the account-level
+container, with `dominion/` kept inside it for the resident-owned directory.
+
+Remote creation is deliberately opt-in: fresh startup creates only a local git
+repo under the account state directory. A user who wants durability can point it
+at an existing repo, approve creation of a new forge repo via OAuth, or later
+choose another backend (for example S3-compatible storage).
 
 **What lives in the account repo:** cross-repo inter-run plans (resolves the
 cross-repo sub-fork of open question #1); the **run-state registry** (see the
@@ -229,10 +228,10 @@ account-scoped dispatch inbox — the message-event queue the cheap dispatcher r
 repo's `.brr/`. Maintainer: *"dispatch/inbox state — makes sense yes, let's do
 it."*
 
-Still open for the maintainer (execution, minor): the account repo's
-name/visibility (private `brr-home` — consistent with the kept local `brr` surface
-— vs `brnrd-home` vs a namespace under the user's account). Ties to the
-[`decision-brnrd-rename.md`](decision-brnrd-rename.md) naming work.
+Still open for execution: the exact remote backend UI. The local model is
+settled; durability choices should be explicit and backend-abstracted (existing
+git remote, GitHub repo creation through OAuth as an opt-in default, future
+S3-compatible bucket).
 
 ## OSS self-deploy invariant
 
@@ -342,14 +341,12 @@ the load-bearing notes:
 
 ## Open questions (genuine — surface, don't force)
 
-- **Inter-run plan physical location.** Refined (evt-ohsp): **orphaned branch**
-  surfaced by the daemon, recommended over a working-tree tracked file (which
-  pollutes the user's checkout) — reusing the dominion's `brr-home` pattern. The
-  **cross-repo half is resolved** (evt-puhl): cross-repo plans live in the
-  **account dominion repo** — see "Account-scoped store" above. With the dominion
-  now consolidated to account scope (evt-qhk6), the simplest shape is that **all**
-  inter-run plans ride the account dominion repo (repo-scoped ones tagged by
-  repo), retiring the separate per-repo plan branch — but that final cut (one
+- **Inter-run plan physical location.** Refined (evt-ohsp): keep plans out of
+  the project working tree, surfaced by the daemon, with cross-repo plans in the
+  **account dominion repo** — see "Account-scoped store" above. With the
+  dominion now consolidated to account scope (evt-qhk6), the simplest shape is
+  that **all** inter-run plans ride the account dominion repo (repo-scoped ones
+  tagged by repo), retiring the separate per-repo plan branch — but that final cut (one
   account home vs a per-repo `brr-plans` sibling) is the CS5 sub-fork still to
   confirm on execution.
 - **Multi-account on one laptop.** Rare; defer. The account model should not

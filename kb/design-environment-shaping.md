@@ -382,8 +382,9 @@ that storage choice before this shipped, and `brr kb check` was never built.
 What landed instead:
 
 - **Storage is the dominion**, not shared kb pages: the resident records
-  pitfalls in `.brr/dominion/pitfalls.md` (owned, durable, low-ceremony) — a
-  `## ` heading, a `trigger:` line of keywords/loci, then the lesson.
+  pitfalls in the resident dominion's `pitfalls.md` (owned, durable,
+  low-ceremony; account-scoped now, legacy `.brr/dominion/` during migration) —
+  a `## ` heading, a `trigger:` line of keywords/loci, then the lesson.
 - **Surfacing is a deterministic daemon-side matcher**
   ([`pitfalls.py`](../src/brr/pitfalls.py)), not a kb collector: on each wake
   brr matches the task text against pitfall triggers and injects the matches

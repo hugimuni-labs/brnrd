@@ -157,7 +157,7 @@ account that owns all of them.
 | Binary | Scope | Reads / writes |
 |--------|-------|----------------|
 | **`brr`** | Per-project (run from inside a brr-init'd repo); per-machine (daemon control) | `brr.toml`, `.brr/config`, talks to local daemon via Unix socket / pidfile |
-| **`brnrd`** | Per-account (machine-scoped account binding) | `~/.local/state/brr/account/` (or platform-equivalent), talks to brnrd HTTP API; signals local daemon over Unix socket when an account-scope setting changes that the daemon should pick up |
+| **`brnrd`** | Per-account (machine-scoped account binding) | `~/.local/state/brnrd/` (or platform-equivalent), talks to brnrd HTTP API; signals local daemon over Unix socket when an account-scope setting changes that the daemon should pick up |
 
 `brr brnrd <subcmd>` stays at launch as a **convenience
 alias** — internally it dispatches to the same code path

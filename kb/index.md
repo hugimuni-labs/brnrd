@@ -40,8 +40,10 @@ dive-in map) and are stable until something contradicts them.
   plans live in-repo, known and visible; a local-first view surface with an
   optional brnrd projection (OSS self-deploy invariant). Resolves the two
   forks parked by the execution-model review. Adds the **account-scoped
-  store** recommendation (a daemon-created `brnrd-home` repo for cross-repo
-  plans, run-state objects, and account config — not a source fork, not a gist).
+  store** recommendation: a local-first account dominion repo (working remote
+  name `brnrd-home`) for cross-repo plans, run-state objects, account config,
+  and resident memory — not a source fork, not a gist, and not a forge repo
+  created without opt-in.
 - [brnrd rename decision](decision-brnrd-rename.md) — *direction accepted
   2026-06-29, execution staged*. Rename the product **brr → brnrd** (PyPI
   `brnrd` free, `brnrd-dev`/`brnrd-bot` identities, `brnrd.dev`; the daemon is
@@ -110,9 +112,9 @@ dive-in map) and are stable until something contradicts them.
   spawn-per-event into a **resident agent**: the agent *is* its durable memory,
   a *thought* is a runner woken by an event or self-scheduled cron, execution is
   **single-flight** (reflex/deliberation split, replacing the threaded pool),
-  and durable memory splits into a **forge-backed orphan-branch dominion**
-  (owned, auto-injected digest) plus the curated kb, joined by a promotion
-  bridge. Folds the **playbook** as the convergence point (multi-response,
+  and durable memory splits into an **account-scoped local-first dominion**
+  (owned, auto-injected digest; optional remote) plus the curated kb, joined by
+  a promotion bridge. Folds the **playbook** as the convergence point (multi-response,
   ownership, pain-evaluation input, wake-as-action-and-growth). Reshapes
   [`design-concurrent-execution.md`](design-concurrent-execution.md).
   **Substrate shipped across slices 1–6** (2026-06: dominion worktree +
@@ -136,10 +138,10 @@ dive-in map) and are stable until something contradicts them.
   `every:` interval) and the reflex loop fires due entries as ordinary
   inbox events. Cron is just one shape of "the resident emits an event to
   its own future"; ambient initiative emerges as a recurring self-thought.
-  Companion decision — **the agent owns `brr-home` sync + conflict
-  resolution** (daemon keeps a local durability floor + best-effort push;
-  a rejected push sets a `needs_sync` marker the wake prompt surfaces;
-  fetch/merge/resolve/push is the agent's judgement). Realises
+  Companion decision — **the agent owns account-dominion sync + conflict
+  resolution** (daemon keeps a local durability floor + best-effort push when a
+  remote is configured; a rejected push sets a `needs_sync` marker the wake
+  prompt surfaces; fetch/merge/resolve/push is the agent's judgement). Realises
   [`design-agent-dominion.md`](design-agent-dominion.md) §4 self-scheduling
   and refines §5 persistence.
 - [Context introspection — "look at it" mode](design-context-introspection.md) —
@@ -786,7 +788,7 @@ dive-in map) and are stable until something contradicts them.
   three-step working-branch rule (`event.branch_target` →
   `daemon.last_spawned_branch[project_id]` → repo default),
   and the machine-scoped account-binding layout at
-  `~/.local/state/brr/account/` (binding / subscription /
+  `~/.local/state/brnrd/account/` (binding / subscription /
   cached settings). Three-scope config model: `project` (`brr.toml` at repo root,
   committed — teammates + brnrd-side spawns see it), `local`
   (`.brr/config`, gitignored, this machine only), `account`

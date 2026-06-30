@@ -271,8 +271,8 @@ synthesis — the same principle, applied to the manual).
   per-run authority; the manual is the one conceptual home.
 
 Remaining third voice: the **dominion playbook** still re-narrates the
-same protocol (it's the resident's own memory, a `brr-home` commit, not
-this repo branch) — trimming it to a pointer is the resident's follow-up.
+same protocol (it's the resident's own memory in the account dominion repo,
+not this repo branch) — trimming it to a pointer is the resident's follow-up.
 
 ## Prioritized sequence (token- and pain-aware)
 

@@ -1441,7 +1441,12 @@ def _run_worker(
         # call site covers success, retry, and hard failure: a clean
         # dominion no-ops, and on retry the next pass just re-captures any
         # new writes (idempotent — see _capture_dominion).
-        _capture_dominion(repo_root, cfg, task)
+        _capture_dominion(
+            repo_root,
+            cfg,
+            task,
+            account_context=account_context,
+        )
         if result.trace_dir:
             trace_dirs.append(str(result.trace_dir.relative_to(brr_dir)))
         try:
@@ -2743,28 +2748,36 @@ def _fire_due_schedules(
     brr_dir: Path,
     inbox_dir: Path,
     cfg: dict,
+    *,
+    account_context: account.AccountContext | None = None,
 ) -> None:
     """Emit inbox events for any self-scheduled thoughts that are now due.
 
-    The reflex half of self-invocation: the resident owns its
-    ``.brr/dominion/schedule.md`` specs; this reads them against the
-    daemon-owned firing-state and the clock, and fires due entries as
-    ordinary ``schedule``-source events (picked up by the normal
-    spawn-one-when-idle path). Specs live in the dominion; firing-state
-    lives in the runtime dir — the daemon never writes the agent's
-    ``schedule.md``. Best-effort: any failure is swallowed so scheduling
-    never wedges the loop. See ``kb/design-self-scheduled-thoughts.md``.
+    The reflex half of self-invocation: the resident owns ``schedule.md`` in
+    its account-scoped dominion (legacy repo-local fallback supported); this
+    reads it against daemon-owned firing-state and the clock, and fires due
+    entries as ordinary ``schedule``-source events. Specs live in the
+    dominion; firing-state lives in the runtime dir — the daemon never writes
+    the agent's ``schedule.md``. Best-effort: any failure is swallowed so
+    scheduling never wedges the loop. See ``kb/design-self-scheduled-
+    thoughts.md``.
     """
     if not _schedule_enabled(cfg):
         return
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return
-    dom = dominion.dominion_path(repo_root)
-    if not dom.is_dir():
-        return
     try:
-        entries = schedule_mod.parse_schedule(dom)
-        if not entries:
+        candidates = dominion.resident_dominion_candidates(repo_root, cfg)
+        dom = None
+        entries = []
+        for candidate in candidates:
+            if not candidate.path.is_dir():
+                continue
+            entries = schedule_mod.parse_schedule(candidate.path)
+            if entries:
+                dom = candidate.path
+                break
+        if dom is None or not entries:
             return
         state = schedule_mod.load_state(brr_dir)
         grace = float(
@@ -2785,7 +2798,11 @@ def _fire_due_schedules(
             protocol.create_event(
                 inbox_dir, "schedule", body,
                 schedule_id=entry.id, conversation_key=conv,
-                repo_label=_repo_label(repo_root, {}, cfg),
+                repo_label=(
+                    account_context.default_repo.label
+                    if account_context is not None and account_context.enabled
+                    else _repo_label(repo_root, {}, cfg)
+                ),
             )
             print(f"[brr] schedule: fired {entry.id}")
         if new_state != state:
@@ -2817,36 +2834,65 @@ def _capture_dominion(
     repo_root: Path,
     cfg: dict,
     task: Run,
+    *,
+    account_context: account.AccountContext | None = None,
 ) -> None:
     """Commit whatever the resident wrote into its dominion this thought.
 
-    The persistence step of the agent-as-memory model: the resident edits
-    ``.brr/dominion/`` freely during a thought; brr captures those edits
+    The persistence step of the agent-as-memory model: the resident edits its
+    account-scoped dominion freely during a thought; brr captures those edits
     at sleep so they survive to the next wake without the agent running a
-    commit dance. Serialized + best-effort (see
-    :func:`dominion.commit`) — a clean dominion is a silent no-op, and any
-    failure is swallowed so capturing memory never breaks the run. Runs on
-    both the success and failure exits (a failed thought may still have
-    recorded the pain that caused it).
+    commit dance. The legacy repo-local dominion is still captured when present
+    so partially migrated installs do not lose notes.
     """
     if not bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
         return
-    branch = str(
-        cfg.get("dominion.branch", cfg.get("dominion_branch", dominion.DEFAULT_BRANCH))
-    )
-    remote = gitops.default_remote(repo_root)
     push = bool(
         cfg.get("dominion.push_on_capture", cfg.get("dominion_push_on_capture", True))
     )
-    committed = dominion.commit(
-        dominion.dominion_path(repo_root),
-        f"brr-home: capture working memory after run {task.id}",
-        remote=remote,
-        branch=branch,
-        push=push and bool(remote),
-    )
-    if committed:
-        print(f"[brr] dominion: captured working memory after {task.id}")
+    candidates = dominion.resident_dominion_candidates(repo_root, cfg)
+    if account_context is not None and account_context.enabled:
+        candidates.insert(
+            0,
+            dominion.ResidentDominion(
+                path=account.repo_dominion_path(
+                    account_context,
+                    str(task.meta.get("repo_label") or account_context.default_repo.label),
+                ),
+                capture_root=account_context.dominion_repo,
+                label="account",
+            ),
+        )
+    seen_roots: set[Path] = set()
+    for candidate in candidates:
+        root = candidate.capture_root
+        if not root.is_dir():
+            continue
+        try:
+            key = root.resolve()
+        except OSError:
+            key = root
+        if key in seen_roots:
+            continue
+        seen_roots.add(key)
+        remote = gitops.default_remote(root)
+        branch = gitops.current_branch(root)
+        if branch == "HEAD":
+            branch = None
+        message = (
+            f"brnrd-home: capture account memory after run {task.id}"
+            if not candidate.legacy
+            else f"brr-home: capture working memory after run {task.id}"
+        )
+        committed = dominion.commit(
+            root,
+            message,
+            remote=remote,
+            branch=branch,
+            push=push and bool(remote),
+        )
+        if committed:
+            print(f"[brr] dominion: captured working memory after {task.id}")
 
 
 def _capture_worktree(
@@ -3236,6 +3282,12 @@ def _run_worker_and_finalize(
             stage="finished",
             cfg=cfg,
         )
+        _capture_dominion(
+            repo_root,
+            cfg,
+            task,
+            account_context=account_context,
+        )
         _retire_internal_event(event, responses_dir)
         return task
     finally:
@@ -3356,7 +3408,10 @@ def start(
         if dev_reload_mode else None
     )
 
-    if bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True))):
+    if (
+        bool(cfg.get("dominion.enabled", cfg.get("dominion_enabled", True)))
+        and (not account_context.enabled or bool(cfg.get("dominion.legacy_repo_local", False)))
+    ):
         try:
             dpath = dominion.ensure_dominion(
                 repo_root,
@@ -3370,6 +3425,14 @@ def start(
             print(f"[brr] dominion bootstrap skipped: {exc}")
 
     if account_context.enabled and account_context.dominion_repo.exists():
+        try:
+            repo_dominion = account.repo_dominion_path(
+                account_context,
+                account.repo_label(repo_root, cfg),
+            )
+            dominion.seed_account_dominion(repo_dominion)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[brr] account dominion seed skipped: {exc}")
         print(f"[brr] account dominion ready: {account_context.dominion_repo}")
 
     gate_threads = _start_account_gates(account_context, repo_root)
@@ -3430,7 +3493,13 @@ def start(
             # land in the inbox as ordinary events and queue behind a
             # running thought like any other (kb/design-self-scheduled-
             # thoughts.md). Runs every tick, busy or idle.
-            _fire_due_schedules(repo_root, brr_dir, inbox_dir, cfg)
+            _fire_due_schedules(
+                repo_root,
+                brr_dir,
+                inbox_dir,
+                cfg,
+                account_context=account_context,
+            )
 
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
