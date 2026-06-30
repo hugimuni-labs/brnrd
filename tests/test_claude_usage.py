@@ -48,6 +48,38 @@ def test_parse_usage_text_tolerates_squashed_tui_words():
     assert "week 55% left" in levels["quota"]["summary"]
 
 
+def test_parse_usage_text_handles_compact_one_line_buckets():
+    levels = claude_usage.parse_usage_text(
+        "Current session: 7% used · resets Jun 30, 6:20pm (Europe/Berlin)\n"
+        "Current week (all models): 70% used · resets Jul 3, 12am (Europe/Berlin)\n"
+    )
+
+    assert levels["session_used_percentage"] == 7
+    assert levels["week_used_percentage"] == 70
+    assert "session 93% left" in levels["quota"]["summary"]
+    assert "week 30% left" in levels["quota"]["summary"]
+
+
+def test_parse_usage_text_handles_screen_reader_duplicate_percentages():
+    levels = claude_usage.parse_usage_text(
+        "Current session\n7% 7% used\nResets 6:20pm (Europe/Berlin)\n"
+        "Current week (all models)\n70% 70% used\nResets Jul 3, 12am (Europe/Berlin)\n"
+    )
+
+    assert levels["session_used_percentage"] == 7
+    assert levels["week_used_percentage"] == 70
+
+
+def test_usage_command_uses_ax_screen_reader_and_safe_mode():
+    assert claude_usage._usage_command() == [
+        "claude",
+        "--ax-screen-reader",
+        "--model",
+        "haiku",
+        "--safe-mode",
+    ]
+
+
 def test_capture_levels_returns_error_snapshot_on_probe_failure(monkeypatch):
     def _boom(**_kwargs):
         raise RuntimeError("no tty")
