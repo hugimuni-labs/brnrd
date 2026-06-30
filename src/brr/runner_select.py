@@ -481,5 +481,6 @@ class RespawnRequest:
     consent: str | None = None
     at: str | None = None
     defer_until: str | None = None
+    repo: str | None = None
     relay_consent: str = "pending"
     """Relay spend consent: 'pending', 'approved', 'denied', or 'capped'."""
