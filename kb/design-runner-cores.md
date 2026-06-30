@@ -25,6 +25,13 @@ decision in [`decision-llm-relay.md`](decision-llm-relay.md). It answers the
 respawns should use a stronger model, and brnrd-owned relay credits should be a
 smooth fallback when local runner quota is gone.
 
+Lineage and validation: this page (with
+[`plan-resident-portals.md`](plan-resident-portals.md) §G1) **supersedes** the
+earlier capacity-aware dispatch sketch in
+[`design-runner-management.md`](design-runner-management.md); the cross-runner
+state-interweave validation behind the unified abstraction is in
+[`research-runner-interweave-2026-06-26.md`](research-runner-interweave-2026-06-26.md).
+
 ## Reconciled current state
 
 brr currently has **runner profiles** (Shell+Core combos), not a separate **media layer**:

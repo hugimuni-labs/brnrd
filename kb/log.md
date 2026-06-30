@@ -9180,3 +9180,38 @@ from repo-local `.brr/dominion` to the account dominion after the operator
 migration, and run-state docs still need a web-visible projection URL.
 
 Branch: brr/initial-context-reweave.
+
+## [2026-06-30] implement | control-surface CS4 run-state URLs + test isolation
+
+Advanced the remaining CS4 control-surface work on `brr/initial-context-reweave`:
+
+- **Run-state docs are now web-visible.** Added `forges.view_blob_url` (per-kind
+  GitHub/GitLab/Bitbucket/Gitea blob templates) and `account.run_state_blob_url`,
+  which derives a run-state doc's URL from the account dominion's remote and the
+  doc's repo-relative path (resolving the branch even on an unborn `git init`
+  repo). `_persist_run_state_doc` records both `run_state_path` (a host-local dev
+  breadcrumb) and, when a remote exists, `run_state_url`. The progress card now
+  renders the URL when present and otherwise falls back to the doc *basename* —
+  it no longer leaks an absolute `~/.local/state/...` path that a remote chat
+  reader can't open. The projection is additive (lit by adding a remote), per the
+  OSS local-first invariant.
+- **Fixed CS4 test pollution.** The account context auto-created its store in the
+  developer's real `~/.local/state` during full-daemon tests, and a stale
+  registry there leaked one test's `default_repo` into another — silently no-op'ing
+  event routing (two daemon tests failed nondeterministically). New
+  `tests/conftest.py` autouse fixture redirects `XDG_STATE_HOME` per test, so the
+  default account location is pristine and disposable. Full suite green (1174).
+
+The one remaining CS4 step — rehoming the resident's wake-time dominion
+injection/capture onto the account dominion path — is deliberately **left for
+after the operator runs the `brr docs account-daemon` migration**; re-pointing
+the resident's memory plumbing while the live dominion still sits at
+`.brr/dominion` is the risky mid-migration move to avoid.
+
+Gardening: cleared the three peer-orphan pages (`design-runner-management`,
+`research-runner-interweave-2026-06-26`, `plan-financial-growth`) by adding
+inbound links from their natural parents (`design-runner-cores`,
+`decision-pricing-shape`). Oversized-page splits and the `design-diffense`
+proposal-scaffolding compression remain a future gardening chunk.
+
+Branch: brr/initial-context-reweave.

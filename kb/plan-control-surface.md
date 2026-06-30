@@ -83,9 +83,28 @@ Run-state markdown documents are persisted under the account dominion. Manual
 operator instructions for moving this repo's current `.brr/dominion` live in
 `brr docs account-daemon`.
 
+**Run-state URL projection shipped 2026-06-30.** `forges.view_blob_url`
+projects a file committed to a forge-hosted repo to a clickable web URL, and
+`account.run_state_blob_url` derives a run-state doc's URL from the account
+dominion's remote. `_persist_run_state_doc` now records both `run_state_path`
+(a host-local dev breadcrumb) and, when the dominion tracks a remote,
+`run_state_url`; the progress card renders the URL when present and falls back
+to the doc *basename* (never the absolute host path, which a remote chat reader
+cannot open). A purely-local dominion simply carries no URL yet — the projection
+is additive, lit by adding a remote, per the OSS invariant.
+
+Also fixed in passing: the account context auto-created its store in the
+developer's **real** `~/.local/state` during full-daemon tests, and a stale
+registry there then leaked one test's `default_repo` into another (silently
+no-op'd event routing). A `tests/conftest.py` autouse fixture now redirects
+`XDG_STATE_HOME` per test, so the default account location is pristine and
+disposable.
+
 Remaining CS4 work: move wake-time dominion injection/capture from the old
-repo-local worktree to the account dominion path after the operator migration,
-and project account run-state docs as web-visible URLs instead of local paths.
+repo-local worktree to the account dominion path. This is the process-model
+change that **waits on the operator migration** (`brr docs account-daemon`) —
+the resident's memory plumbing should not be re-pointed mid-migration while the
+live dominion still sits at `.brr/dominion`.
 
 ### CS5 — Inter-run plan home + injection
 A web-visible plan store; the daemon preloads/auto-injects it into the wake the
@@ -130,10 +149,12 @@ docs, and the manual dominion move instructions.
 
 No remaining CS4 fork waits on a maintainer decision: account daemon, `brr` as
 the local verb, account dominion repo, auto-create-with-override, and account
-dispatch inbox are all accepted. The next CS4 implementation wake should move
-the resident's wake-time dominion injection/capture onto the account dominion
-path and then make the run-state doc link web-visible. Only CS5's narrow
-repo-scoped-plan-home cut and CS6/CS7's UX details remain later decisions.
+dispatch inbox are all accepted. The run-state doc link is now web-visible
+(`run_state_url`). The one remaining CS4 step — moving the resident's wake-time
+dominion injection/capture onto the account dominion path — is **gated on the
+operator running the `brr docs account-daemon` migration**, not on code. Only
+CS5's narrow repo-scoped-plan-home cut and CS6/CS7's UX details remain later
+decisions.
 
 Concrete CS4 entry:
 
