@@ -123,3 +123,110 @@ def test_run_state_blob_url_projects_to_forge_remote(tmp_path):
         "https://github.com/Gurio/account/blob/main/"
         "run-state/Gurio__brr/run-260630.md"
     )
+
+
+# ── CS5 — inter-run plan home ─────────────────────────────────────────
+
+
+def test_resolve_context_creates_plans_directory(tmp_path):
+    """CS5: resolve_context creates the plans/ directory alongside the other
+    account-store directories so the resident can immediately write a plan."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "home"
+
+    account.resolve_context(repo, {"account.dominion_path": str(home)})
+
+    assert (home / "plans").is_dir()
+
+
+def test_active_plan_path_is_repo_tagged(tmp_path):
+    """CS5: the active plan path is tagged by repo label inside plans/."""
+    ctx = account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path / "home",
+        dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
+        responses_dir=tmp_path / "home" / "dispatch" / "responses",
+        run_state_dir=tmp_path / "home" / "run-state",
+        repos={},
+        default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+    assert account.active_plan_path(ctx, "Gurio/brr") == (
+        tmp_path / "home" / "plans" / "Gurio__brr" / "active.md"
+    )
+
+
+def test_cross_repo_plans_path(tmp_path):
+    """CS5: cross-repo plans live under plans/_cross-repo/."""
+    ctx = account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path / "home",
+        dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
+        responses_dir=tmp_path / "home" / "dispatch" / "responses",
+        run_state_dir=tmp_path / "home" / "run-state",
+        repos={},
+        default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+    assert account.cross_repo_plans_path(ctx) == (
+        tmp_path / "home" / "plans" / "_cross-repo"
+    )
+
+
+# ── CS6 — runner policy home ──────────────────────────────────────────
+
+
+def test_runner_policy_path_is_repo_tagged(tmp_path):
+    """CS6: the runner policy path is tagged by repo label."""
+    ctx = account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path / "home",
+        dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
+        responses_dir=tmp_path / "home" / "dispatch" / "responses",
+        run_state_dir=tmp_path / "home" / "run-state",
+        repos={},
+        default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+    assert account.runner_policy_path(ctx, "Gurio/brr") == (
+        tmp_path / "home" / "runner-policy" / "Gurio__brr" / "policy.md"
+    )
+
+
+def test_account_runner_policy_path(tmp_path):
+    """CS6: the account-wide runner policy lives under runner-policy/_account/."""
+    ctx = account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path / "home",
+        dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
+        responses_dir=tmp_path / "home" / "dispatch" / "responses",
+        run_state_dir=tmp_path / "home" / "run-state",
+        repos={},
+        default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+    assert account.account_runner_policy_path(ctx) == (
+        tmp_path / "home" / "runner-policy" / "_account" / "policy.md"
+    )
+
+
+# ── CS7 — decision ledger home ────────────────────────────────────────
+
+
+def test_decisions_ledger_path(tmp_path):
+    """CS7: the decision ledger lives at ledger/decisions.md."""
+    ctx = account.AccountContext(
+        account_id="default",
+        dominion_repo=tmp_path / "home",
+        dispatch_inbox=tmp_path / "home" / "dispatch" / "inbox",
+        responses_dir=tmp_path / "home" / "dispatch" / "responses",
+        run_state_dir=tmp_path / "home" / "run-state",
+        repos={},
+        default_repo=account.AccountRepo(label="Gurio/brr", root=tmp_path),
+    )
+
+    assert account.decisions_ledger_path(ctx) == (
+        tmp_path / "home" / "ledger" / "decisions.md"
+    )
