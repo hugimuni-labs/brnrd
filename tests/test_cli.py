@@ -48,7 +48,7 @@ def test_removed_diagnostic_commands_are_not_public(tmp_path, monkeypatch, comma
 
 
 def test_docs_lists_topics(capsys):
-    # `brr docs` (no topic) lists the bundled topics. Re-introduced as the
+    # `brnrd docs` (no topic) lists the bundled topics. Re-introduced as the
     # inspect surface for the portals manual (G5) — the docs module and
     # decision-bundled-docs.md always assumed this command existed.
     assert main(["docs"]) == 0

@@ -51,5 +51,5 @@ quality bar is the pack's, not the diff's.
 
 - `kb/design-diffense.md` — the card model and the six clamps.
 - `kb/diffense-prototype-pr64-pack.json` — a worked pack to shape after.
-- `brr docs portals` — the outbox / `gate:` control-file protocol the
+- `brnrd docs portals` — the outbox / `gate:` control-file protocol the
   publish step rides on.
