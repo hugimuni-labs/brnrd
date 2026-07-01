@@ -75,8 +75,9 @@ def _telegram_pair_response(settings: Any, repo: Repo, code: str) -> schemas.Tel
     deep_link = f"https://t.me/{username}?start={code}" if username else None
     if deep_link:
         instructions = (
-            f"Open {deep_link} or send `/start {code}` to bind this chat "
-            f"to repo '{repo.repo_full_name}'."
+            f"Open {deep_link}, then press Start if Telegram prompts. "
+            f"If Telegram only opens the chat, send `/start {code}` to "
+            f"bind this chat to repo '{repo.repo_full_name}'."
         )
     else:
         instructions = (
