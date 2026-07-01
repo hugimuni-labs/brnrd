@@ -75,6 +75,7 @@ class PairStatus(BaseModel):
     account_id: str | None = None
     repo_id: str | None = None
     daemon_token: str | None = None
+    telegram_pair: TelegramPairStarted | None = None
 
 
 class DaemonRegister(BaseModel):
