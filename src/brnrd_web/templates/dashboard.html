@@ -84,6 +84,9 @@
                       <details class="repo-menu">
                         <summary aria-label="Repo actions">⋯</summary>
                         <div class="repo-menu-popover">
+                          <form method="post" action="/repos/{{ repo.id }}/telegram-pair">
+                            <button class="menu-action" type="submit">Pair Telegram chat</button>
+                          </form>
                           <form method="post" action="/repos/{{ repo.id }}/invite-bot">
                             <button class="menu-action" type="submit">Invite @{{ github_bot_user_login }}</button>
                           </form>

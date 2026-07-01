@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import httpx
 
@@ -27,6 +28,7 @@ _MAX_CHUNKS = 12
 class ParsedMessage:
     chat_id: str
     text: str
+    message_date: datetime | None
     message_id: int | None
     topic_id: int | None
     user: str
@@ -45,10 +47,16 @@ def parse_update(payload: dict) -> ParsedMessage | None:
     text = (msg.get("text") or "").strip()
     if chat_id is None or not text:
         return None
+    raw_date = msg.get("date")
+    try:
+        message_date = datetime.fromtimestamp(int(raw_date), timezone.utc)
+    except (TypeError, ValueError, OSError):
+        message_date = None
     sender = msg.get("from") or {}
     return ParsedMessage(
         chat_id=str(chat_id),
         text=text,
+        message_date=message_date,
         message_id=msg.get("message_id"),
         topic_id=msg.get("message_thread_id"),
         user=sender.get("first_name", "?"),
