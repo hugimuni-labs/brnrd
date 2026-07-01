@@ -127,13 +127,14 @@ def test_connect_persists_token(tmp_path, monkeypatch):
         return next(scripted)
 
     monkeypatch.setattr(cloud, "_request", fake_request)
+    output: list[str] = []
     state = cloud.connect(
         brr_dir,
         brnrd_url="http://brnrd.example",
         daemon_name="laptop",
         poll_interval_s=0,
         timeout_s=5,
-        out=lambda *_: None,
+        out=output.append,
     )
     assert state["token"] == "bd_tok"
     assert state["account_id"] == "acct_x"
@@ -143,6 +144,10 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     assert cloud._load_state(brr_dir)["token"] == "bd_tok"
     assert cloud.is_configured(brr_dir)
     assert ("POST", "/v1/accounts/pair") in seen
+    assert output == [
+        "[brr] Approve this daemon at: u",
+        "[brr] Connected to brnrd repo proj_x.",
+    ]
 
 
 def test_drain_deliver_and_cursor_resume(tmp_path, monkeypatch):

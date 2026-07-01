@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -72,6 +74,7 @@ def _message(
     *,
     message_id=1,
     thread_id=None,
+    date=None,
     name="Ada",
     user_id=42,
     username="ada_l",
@@ -80,6 +83,7 @@ def _message(
         "chat": {"id": chat_id},
         "from": {"id": user_id, "first_name": name, "username": username},
         "message_id": message_id,
+        "date": int(time.time()) if date is None else date,
         "text": text,
     }
     if thread_id is not None:
@@ -192,6 +196,31 @@ def test_unbound_chat_gets_setup_error(env):
     assert len(sends) == 1
     assert sends[0]["chat_id"] == "404"
     assert "not paired" in sends[0]["text"]
+
+
+def test_pre_pair_backlog_is_ignored_after_chat_binds(env):
+    app, client, sends = env
+    acc = _account(client)
+    rid = _repo(client, acc, name="alpha")
+    code = _tg_pair_code(client, acc, rid)
+    stale_date = int(time.time()) - 120
+    client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, f"/start {code}", message_id=10),
+        headers=_HDR,
+    )
+    sends.clear()
+
+    r = client.post(
+        "/v1/webhooks/telegram",
+        json=_message(555, "this was sent before pairing", message_id=9, date=stale_date),
+        headers=_HDR,
+    )
+    assert r.status_code == 200
+
+    with app.state.SessionLocal() as db:
+        assert db.execute(select(Event)).scalars().all() == []
+    assert sends == []
 
 
 def test_repo_command_switches_bound_chat(env):

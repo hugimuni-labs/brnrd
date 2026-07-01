@@ -15,7 +15,7 @@ from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Account, Repo  # noqa: E402
+from brnrd.models import Account, Repo, TgPairCode  # noqa: E402
 from brnrd.oauth import GitHubIdentity, OAuthError  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
 
@@ -24,23 +24,29 @@ _GITHUB_ID = "12345"
 _LOGIN = "octocat"
 
 
-@pytest.fixture()
-def client():
+def _make_client(**settings_overrides):
+    kwargs = dict(
+        database_url="sqlite:///:memory:",
+        public_base_url="https://brnrd.example",
+        github_oauth_client_id="gh-client",
+        github_oauth_client_secret="gh-secret",
+        github_oauth_authorize_url="https://github.example/login/oauth/authorize",
+        github_oauth_token_url="https://github.example/login/oauth/access_token",
+        github_api_base_url="https://api.github.example",
+    )
+    kwargs.update(settings_overrides)
     app = create_app(
-        Settings(
-            database_url="sqlite:///:memory:",
-            public_base_url="https://brnrd.example",
-            github_oauth_client_id="gh-client",
-            github_oauth_client_secret="gh-secret",
-            github_oauth_authorize_url="https://github.example/login/oauth/authorize",
-            github_oauth_token_url="https://github.example/login/oauth/access_token",
-            github_api_base_url="https://api.github.example",
-        )
+        Settings(**kwargs)
     )
     # brnrd is served over HTTPS in production (public_base_url is https),
     # so the session/OAuth cookies carry the Secure flag. Model that here
     # so a Secure cookie round-trips back to the app on follow-up requests.
     return TestClient(app, base_url="https://testserver")
+
+
+@pytest.fixture()
+def client():
+    return _make_client()
 
 
 def _account_and_repo(client):
@@ -222,3 +228,23 @@ def test_approve_makes_poll_return_token(client, monkeypatch):
     assert polled["status"] == "paired"
     assert polled["daemon_token"]
     assert polled["repo_id"] == repo_id
+
+
+def test_approve_offers_telegram_pair_link(monkeypatch):
+    client = _make_client(telegram_bot_username="@brnrd_bot")
+    repo_id = _account_and_repo(client)
+    _login_web(client, monkeypatch)
+    pair = client.post("/v1/accounts/pair").json()
+
+    approve = client.post(
+        f"/connect/{pair['pair_code']}",
+        data={"repo_id": repo_id},
+        follow_redirects=False,
+    )
+    assert approve.status_code == 200
+    assert "Your daemon is connected" in approve.text
+    assert "https://t.me/brnrd_bot?start=TG-" in approve.text
+
+    with client.app.state.SessionLocal() as db:
+        tg_pair = db.execute(select(TgPairCode)).scalar_one()
+        assert tg_pair.repo_id == repo_id
