@@ -17,14 +17,16 @@ from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 
 
-def _client() -> TestClient:
+def _client(**settings_overrides) -> TestClient:
+    kwargs = dict(
+        database_url="sqlite:///:memory:",
+        public_base_url="https://brnrd.example",
+        github_oauth_client_id="gh-client",
+        github_oauth_client_secret="gh-secret",
+    )
+    kwargs.update(settings_overrides)
     app = create_app(
-        Settings(
-            database_url="sqlite:///:memory:",
-            public_base_url="https://brnrd.example",
-            github_oauth_client_id="gh-client",
-            github_oauth_client_secret="gh-secret",
-        )
+        Settings(**kwargs)
     )
     return TestClient(app, base_url="https://testserver")
 
@@ -72,3 +74,17 @@ def test_dashboard_disconnect_removes_repo():
     assert r.status_code == 303
     with client.app.state.SessionLocal() as db:
         assert db.get(Repo, repo_id) is None
+
+
+def test_dashboard_can_issue_telegram_pair_link():
+    client = _client(telegram_bot_username="@brnrd_bot")
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token)
+
+    page = client.get("/")
+    assert page.status_code == 200
+    assert f"/repos/{repo_id}/telegram-pair" in page.text
+
+    r = client.post(f"/repos/{repo_id}/telegram-pair")
+    assert r.status_code == 200
+    assert "https://t.me/brnrd_bot?start=TG-" in r.text
