@@ -6,7 +6,7 @@ from brr import account
 from _helpers import write_repo_scaffold
 
 
-def test_resolve_context_creates_account_dominion_and_registry(tmp_path):
+def test_resolve_context_creates_account_home_and_registry(tmp_path):
     repo_a = tmp_path / "repo-a"
     repo_b = tmp_path / "repo-b"
     repo_a.mkdir()
@@ -19,18 +19,25 @@ def test_resolve_context_creates_account_dominion_and_registry(tmp_path):
         repo_a,
         {
             "repo.label": "Gurio/a",
-            "account.dominion_path": str(home),
+            "home.kind": "account",
+            "home.path": str(home),
+            "account.id": "acct-1",
             "account.repo.Gurio/b": str(repo_b),
             "account.default_repo": "Gurio/b",
         },
     )
 
     assert ctx.dominion_repo == home
+    assert ctx.home_root == home
+    assert ctx.kind == "account"
+    assert ctx.account_id == "acct-1"
     assert ctx.default_repo.root == repo_b
     assert ctx.dispatch_inbox == home / "dispatch" / "inbox"
     assert ctx.responses_dir == home / "dispatch" / "responses"
     assert ctx.run_state_dir == home / "run-state"
     registry = json.loads((home / "account" / "repos.json").read_text())
+    assert registry["home_kind"] == "account"
+    assert registry["home_id"] == "acct-1"
     assert registry["default_repo"] == "Gurio/b"
     assert {item["label"] for item in registry["repos"]} == {"Gurio/a", "Gurio/b"}
     assert (home / ".gitignore").read_text(encoding="utf-8").splitlines() == [
@@ -40,7 +47,7 @@ def test_resolve_context_creates_account_dominion_and_registry(tmp_path):
     ]
 
 
-def test_default_account_home_uses_brnrd_namespace(monkeypatch, tmp_path):
+def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
     repo = tmp_path / "repo"
@@ -49,23 +56,29 @@ def test_default_account_home_uses_brnrd_namespace(monkeypatch, tmp_path):
 
     ctx = account.resolve_context(repo)
 
-    assert ctx.dominion_repo == state_home / "brnrd" / "accounts" / "default" / "dominion"
+    assert ctx.kind == "project"
+    assert ctx.account_id == ""
+    assert ctx.dominion_repo.parent.parent == state_home / "brnrd" / "projects"
+    assert ctx.dominion_repo.name == "home"
+    assert ctx.dominion_repo.parent.name.startswith("repo-")
 
 
-def test_default_account_home_reads_existing_brr_namespace_as_legacy(
-    monkeypatch, tmp_path,
-):
+def test_project_home_uses_path_hash_for_same_basename(monkeypatch, tmp_path):
     state_home = tmp_path / "state"
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
-    legacy = state_home / "brr" / "accounts" / "default"
-    (legacy / "dominion").mkdir(parents=True)
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    write_repo_scaffold(repo)
+    repo_a = tmp_path / "a" / "repo"
+    repo_b = tmp_path / "b" / "repo"
+    repo_a.mkdir(parents=True)
+    repo_b.mkdir(parents=True)
+    write_repo_scaffold(repo_a)
+    write_repo_scaffold(repo_b)
 
-    ctx = account.resolve_context(repo, create=False)
+    ctx_a = account.resolve_context(repo_a)
+    ctx_b = account.resolve_context(repo_b)
 
-    assert ctx.dominion_repo == legacy / "dominion"
+    assert ctx_a.dominion_repo != ctx_b.dominion_repo
+    assert ctx_a.dominion_repo.parent.name.startswith("repo-")
+    assert ctx_b.dominion_repo.parent.name.startswith("repo-")
 
 
 def test_repo_dominion_path_is_repo_tagged(tmp_path):
@@ -95,7 +108,7 @@ def test_run_state_blob_url_none_for_local_only_dominion(tmp_path):
     repo.mkdir()
     write_repo_scaffold(repo)
     ctx = account.resolve_context(
-        repo, {"account.dominion_path": str(tmp_path / "home")},
+        repo, {"home.path": str(tmp_path / "home")},
     )
     doc = ctx.run_state_dir / "local" / "run.md"
     doc.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +123,7 @@ def test_run_state_blob_url_projects_to_forge_remote(tmp_path):
     repo.mkdir()
     write_repo_scaffold(repo)
     home = tmp_path / "home"
-    ctx = account.resolve_context(repo, {"account.dominion_path": str(home)})
+    ctx = account.resolve_context(repo, {"home.path": str(home)})
     subprocess.run(
         ["git", "remote", "add", "origin", "git@github.com:Gurio/account.git"],
         cwd=home, check=True,
@@ -136,7 +149,7 @@ def test_resolve_context_creates_plans_directory(tmp_path):
     write_repo_scaffold(repo)
     home = tmp_path / "home"
 
-    account.resolve_context(repo, {"account.dominion_path": str(home)})
+    account.resolve_context(repo, {"home.path": str(home)})
 
     assert (home / "plans").is_dir()
 

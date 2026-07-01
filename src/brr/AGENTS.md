@@ -6,7 +6,7 @@
 > workspace-rule injections can detect drift against the file on disk.
 
 This file is brr's playbook — the contract every AI tool follows in
-this repo, and the template adopters receive when they run `brr init`.
+this repo, and the template adopters receive when they run `brnrd init`.
 The canonical copy lives at `src/brr/AGENTS.md`; the repo root
 `AGENTS.md` is a symlink. Python >=3.10; see [`README.md`](README.md)
 for the user-facing product overview.
@@ -260,7 +260,7 @@ author, stop and surface the conflict instead.
 ### When the brr daemon runs you
 
 Everything in this subsection applies only when you're being launched
-by `brr up` / the daemon worker — the Run Context Bundle's `### Mode`
+by `brnrd up` / the daemon worker — the Run Context Bundle's `### Mode`
 section confirms the stage. In an ad-hoc session (Cursor, Codex CLI,
 Claude Code without brr orchestrating), skip the subsection — the
 machinery it describes isn't in play.
@@ -585,7 +585,7 @@ Before marking a task complete:
 
 - `.brr/` is a runtime directory (gitignored) — do not commit its contents.
 - `src/brr/AGENTS.md` is brr's playbook *and* the template adopters receive
-  via `brr init`. Universal sections (How to read this playbook, Stewardship,
+  via `brnrd init`. Universal sections (How to read this playbook, Stewardship,
   Workflow, Knowledge base, Artifacts, Operating rules, Self-review,
   Guardrails) apply to every brr-managed project; project-specific sections
   (Project, Build and run, Code guidelines, Constraints) are rewritten per

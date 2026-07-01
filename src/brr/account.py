@@ -1,22 +1,16 @@
-"""Account-scoped local state for the daemon.
+"""Home-scoped local state for the daemon.
 
-CS4 lifts the daemon's organizing scope from "this checkout" to "this
-account, with repo-scoped runs underneath it".  This module owns the small
-local account context used by the daemon: a repo registry, a default repo, an
-account-owned dispatch inbox, and a durable run-state home.
-
-The store is local-first. By default it lives under the user's XDG state
-directory (or ``~/.local/state``) in the ``brnrd`` namespace and is initialized
-as a plain local git repo. Remote durability is opt-in: once the user points
-that repo at a remote, brr can push it, but default startup never creates a
-forge repo in the user's account. Tests and explicit installs can override the
-location with ``account.dominion_path`` / ``BRNRD_ACCOUNT_DOMINION`` (legacy
-``BRR_ACCOUNT_DOMINION`` is still accepted).
+The daemon stores durable resident/run/control state in a local-first brnrd
+home. A home is selected by lane: an unconnected repo gets a project home
+derived from its repo identity and absolute path; an explicitly connected
+account lane gets an account home. There is no universal ``accounts/default``
+fallback.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 import re
@@ -26,10 +20,8 @@ from typing import Any
 
 from . import gitops
 
-DEFAULT_ACCOUNT_ID = "default"
 DEFAULT_REPO_LABEL = "local/default"
 DEFAULT_STATE_NAMESPACE = "brnrd"
-LEGACY_STATE_NAMESPACE = "brr"
 REGISTRY_PATH = "account/repos.json"
 DISPATCH_INBOX_PATH = "dispatch/inbox"
 RESPONSES_PATH = "dispatch/responses"
@@ -49,6 +41,8 @@ RUNNER_POLICY_PROPOSALS_SLUG = "_proposals"
 # CS7 — decision ledger
 LEDGER_PATH = "ledger"
 
+KNOWLEDGE_PATH = "knowledge"
+
 GITIGNORE = """\
 /dispatch/inbox/
 /dispatch/responses/
@@ -65,8 +59,8 @@ class AccountRepo:
 
 
 @dataclass(frozen=True)
-class AccountContext:
-    """Resolved account-level state for one daemon process."""
+class HomeContext:
+    """Resolved brnrd-home state for one daemon process."""
 
     account_id: str
     dominion_repo: Path
@@ -76,11 +70,17 @@ class AccountContext:
     repos: dict[str, AccountRepo]
     default_repo: AccountRepo
     enabled: bool = True
+    kind: str = "project"
+    home_id: str = ""
+    home_root: Path | None = None
 
     def repo_for_label(self, label: str | None) -> AccountRepo | None:
         if not label:
             return None
         return self.repos.get(label)
+
+
+AccountContext = HomeContext
 
 
 def _truthy(value: object, default: bool = True) -> bool:
@@ -96,7 +96,7 @@ def _truthy(value: object, default: bool = True) -> bool:
 
 def _slug(value: str) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-._")
-    return text or DEFAULT_ACCOUNT_ID
+    return text or "home"
 
 
 def _expand_path(raw: object, *, base: Path | None = None) -> Path | None:
@@ -116,12 +116,25 @@ def _xdg_state_home() -> Path:
     return Path.home() / ".local" / "state"
 
 
-def _default_account_root(account_id: str) -> Path:
-    root = _xdg_state_home() / DEFAULT_STATE_NAMESPACE / "accounts" / _slug(account_id)
-    legacy = _xdg_state_home() / LEGACY_STATE_NAMESPACE / "accounts" / _slug(account_id)
-    if not root.exists() and legacy.exists():
-        return legacy
-    return root
+def _path_hash(path: Path) -> str:
+    try:
+        basis = str(path.resolve())
+    except OSError:
+        basis = str(path.absolute())
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:10]
+
+
+def _repo_slug(repo_root: Path, cfg: dict[str, Any] | None = None) -> str:
+    return _slug(repo_label(repo_root, cfg).replace("/", "__"))
+
+
+def _default_project_home(repo_root: Path, cfg: dict[str, Any] | None = None) -> Path:
+    name = f"{_repo_slug(repo_root, cfg)}-{_path_hash(repo_root)}"
+    return _xdg_state_home() / DEFAULT_STATE_NAMESPACE / "projects" / name / "home"
+
+
+def _default_account_home(account_id: str) -> Path:
+    return _xdg_state_home() / DEFAULT_STATE_NAMESPACE / "accounts" / _slug(account_id) / "home"
 
 
 def _is_git_worktree(repo_root: Path) -> bool:
@@ -181,11 +194,15 @@ def _write_registry(
     default_repo: str,
     *,
     account_id: str,
+    home_kind: str = "account",
+    home_id: str = "",
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "account_id": account_id,
         "default_repo": default_repo,
+        "home_id": home_id or account_id,
+        "home_kind": home_kind,
         "repos": [
             {"label": label, "path": str(repo.root)}
             for label, repo in sorted(repos.items())
@@ -246,44 +263,67 @@ def _configured_repos(
     return repos
 
 
+def _connected_account_id(repo_root: Path) -> str | None:
+    """Return a connected brnrd account id from repo-local cloud state."""
+
+    try:
+        brr_dir = gitops.shared_brr_dir(repo_root)
+    except Exception:
+        return None
+    state_path = brr_dir / "gates" / "cloud.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not (state.get("token") and state.get("brnrd_url") and state.get("repo_id")):
+        return None
+    value = str(state.get("account_id") or state.get("account") or "").strip()
+    return value or "connected"
+
+
+def _explicit_home(cfg: dict[str, Any]) -> Path | None:
+    return (
+        _expand_path(os.environ.get("BRNRD_HOME"))
+        or _expand_path(cfg.get("home.path"))
+        or _expand_path(cfg.get("home_root"))
+    )
+
+
 def resolve_context(
     repo_root: Path,
     cfg: dict[str, Any] | None = None,
     *,
     create: bool = True,
-) -> AccountContext:
-    """Resolve the account context for a daemon started from *repo_root*.
-
-    Existing single-repo installs remain valid: the current checkout is always
-    registered as the default repo when no broader registry exists.  The
-    account dominion repo is auto-created only from a real git checkout (or
-    when an explicit account path is configured), which keeps lightweight unit
-    tests and scratch directories from writing into a user's home directory.
-    """
+) -> HomeContext:
+    """Resolve the brnrd home for a daemon started from *repo_root*."""
 
     cfg = cfg or {}
-    account_id = str(
+    explicit_account_id = str(
         cfg.get("account.id")
         or cfg.get("account_id")
         or cfg.get("forge.identity")
-        or DEFAULT_ACCOUNT_ID
-    ).strip() or DEFAULT_ACCOUNT_ID
-    explicit_dominion = (
-        _expand_path(os.environ.get("BRNRD_ACCOUNT_DOMINION"))
-        or _expand_path(os.environ.get("BRR_ACCOUNT_DOMINION"))
-        or _expand_path(cfg.get("account.dominion_path"))
-        or _expand_path(cfg.get("account.dominion_repo"))
+        or ""
+    ).strip()
+    connected_account_id = _connected_account_id(repo_root)
+    explicit_home = _explicit_home(cfg)
+    kind = str(cfg.get("home.kind") or "").strip().lower()
+    if kind not in {"project", "account"}:
+        kind = "account" if explicit_account_id or connected_account_id else "project"
+    account_id = explicit_account_id or (connected_account_id if kind == "account" else "")
+    home_id = account_id if kind == "account" else f"{_repo_slug(repo_root, cfg)}-{_path_hash(repo_root)}"
+    home_root = explicit_home or (
+        _default_account_home(account_id) if kind == "account"
+        else _default_project_home(repo_root, cfg)
     )
-    dominion_repo = explicit_dominion or (_default_account_root(account_id) / "dominion")
-    should_create = create and _truthy(cfg.get("account.autocreate"), True) and (
-        explicit_dominion is not None or _is_git_worktree(repo_root)
+    should_create = create and _truthy(cfg.get("home.autocreate", cfg.get("account.autocreate")), True) and (
+        explicit_home is not None or _is_git_worktree(repo_root)
     )
     if should_create:
-        dominion_repo.mkdir(parents=True, exist_ok=True)
-        _init_git_repo(dominion_repo)
-        _write_gitignore(dominion_repo)
+        home_root.mkdir(parents=True, exist_ok=True)
+        _init_git_repo(home_root)
+        _write_gitignore(home_root)
 
-    registry_path = dominion_repo / REGISTRY_PATH
+    registry_path = home_root / REGISTRY_PATH
     repos, registry_default = _load_registry(registry_path)
     repos.update(_configured_repos(cfg, base=repo_root))
 
@@ -305,19 +345,24 @@ def resolve_context(
             repos,
             default_label,
             account_id=account_id,
+            home_kind=kind,
+            home_id=home_id,
         )
         for rel in (DISPATCH_INBOX_PATH, RESPONSES_PATH, RUN_STATE_PATH, PLANS_PATH):
-            (dominion_repo / rel).mkdir(parents=True, exist_ok=True)
+            (home_root / rel).mkdir(parents=True, exist_ok=True)
 
-    return AccountContext(
+    return HomeContext(
         account_id=account_id,
-        dominion_repo=dominion_repo,
-        dispatch_inbox=dominion_repo / DISPATCH_INBOX_PATH,
-        responses_dir=dominion_repo / RESPONSES_PATH,
-        run_state_dir=dominion_repo / RUN_STATE_PATH,
+        dominion_repo=home_root,
+        dispatch_inbox=home_root / DISPATCH_INBOX_PATH,
+        responses_dir=home_root / RESPONSES_PATH,
+        run_state_dir=home_root / RUN_STATE_PATH,
         repos=repos,
         default_repo=default_repo,
         enabled=_truthy(cfg.get("account.enabled"), True),
+        kind=kind,
+        home_id=home_id,
+        home_root=home_root,
     )
 
 
@@ -325,6 +370,43 @@ def slug_repo_label(label: str) -> str:
     """Filesystem-safe repo label for account-store paths."""
 
     return _slug(label.replace("/", "__"))
+
+
+def context_home_root(ctx: HomeContext) -> Path:
+    """Return the brnrd home root for *ctx*."""
+
+    return ctx.home_root or ctx.dominion_repo
+
+
+def knowledge_path(ctx: HomeContext) -> Path:
+    """Return the home-level knowledge directory."""
+
+    return context_home_root(ctx) / KNOWLEDGE_PATH
+
+
+def register_repo(
+    ctx: HomeContext,
+    repo_root: Path,
+    *,
+    label: str | None = None,
+    make_default: bool = True,
+) -> AccountRepo:
+    """Register *repo_root* in the resolved home registry."""
+
+    repo_label_value = label or repo_label(repo_root)
+    repos = dict(ctx.repos)
+    repo = AccountRepo(label=repo_label_value, root=repo_root)
+    repos[repo_label_value] = repo
+    default_label = repo_label_value if make_default else ctx.default_repo.label
+    _write_registry(
+        context_home_root(ctx) / REGISTRY_PATH,
+        repos,
+        default_label,
+        account_id=ctx.account_id,
+        home_kind=ctx.kind,
+        home_id=ctx.home_id,
+    )
+    return repo
 
 
 def repo_dominion_path(ctx: AccountContext, repo_label: str) -> Path:

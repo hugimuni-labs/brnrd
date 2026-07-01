@@ -8,6 +8,8 @@ import pytest
 
 from brr.cli import main
 
+from _helpers import init_git_repo
+
 
 def _write_review_pack(path):
     path.write_text(
@@ -202,6 +204,59 @@ def test_portal_state_errors_without_file(capsys, monkeypatch):
 def test_run_requires_instruction():
     with pytest.raises(SystemExit):
         main(["run"])
+
+
+def test_bind_accepts_repo_and_gate(monkeypatch, tmp_path, capsys):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    calls = []
+
+    class Gate:
+        @staticmethod
+        def bind(brr_dir):
+            calls.append(brr_dir)
+
+    monkeypatch.setattr("brr.cli._load_gate", lambda name: Gate)
+
+    assert main(["bind", str(repo), "telegram"]) is None
+
+    out = capsys.readouterr().out
+    assert calls == [repo / ".brr"]
+    assert "project home" in out
+    assert "telegram" in out
+
+
+def test_add_registers_repo_in_connected_account_home(monkeypatch, tmp_path, capsys):
+    current = tmp_path / "current"
+    target = tmp_path / "target"
+    init_git_repo(current)
+    init_git_repo(target)
+    cloud_dir = current / ".brr" / "gates"
+    cloud_dir.mkdir(parents=True)
+    (cloud_dir / "cloud.json").write_text(
+        json.dumps({
+            "brnrd_url": "https://brnrd.example",
+            "token": "tok",
+            "account_id": "acct-1",
+            "repo_id": "repo-1",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(current)
+
+    assert main(["add", str(target)]) is None
+
+    out = capsys.readouterr().out
+    assert "added target" in out
+    # tests/conftest isolates XDG_STATE_HOME at a generated temp path, so read
+    # the resolver instead of guessing its parent from this test's tmp_path.
+    from brr import account, config as conf
+
+    ctx = account.resolve_context(current, conf.load_config(current), create=False)
+    registry = json.loads((ctx.dominion_repo / "account" / "repos.json").read_text())
+    assert {item["label"] for item in registry["repos"]} == {"current", "target"}
+    assert registry["home_kind"] == "account"
+    assert registry["account_id"] == "acct-1"
 
 
 def test_review_prints_pr_title_and_body(tmp_path, capsys):
@@ -444,6 +499,8 @@ def test_agent_requires_subcommand(tmp_path, monkeypatch):
 
 
 def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
     calls = []
 
     class FakeGate:
@@ -452,11 +509,10 @@ def test_bind_dispatches_to_gate_bind(monkeypatch, tmp_path):
             calls.append(brr_dir)
 
     monkeypatch.setattr("brr.cli._load_gate", lambda name: FakeGate)
-    monkeypatch.setattr("brr.cli._brr_dir", lambda: tmp_path / ".brr")
 
-    main(["bind", "telegram"])
+    main(["bind", str(repo), "telegram"])
 
-    assert calls == [tmp_path / ".brr"]
+    assert calls == [repo / ".brr"]
 
 
 def test_setup_dispatches_to_gate_setup(monkeypatch, tmp_path):
