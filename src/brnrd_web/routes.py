@@ -306,7 +306,7 @@ def pair_repo_telegram(repo_id: str, request: Request, db: Session = Depends(get
         pair = telegram_pair_core(db, request.app.state.settings, account_id, repo_id)
     except HTTPException as exc:
         return _render(request, "message.html", {"title": "Telegram pair failed", "eyebrow": "Telegram pairing", "heading": "Could not create pair link", "message": str(exc.detail), "severity": "error"}, status_code=exc.status_code)
-    return _render(request, "message.html", {"title": "Pair Telegram", "eyebrow": "Telegram pairing", "heading": "Pair this Telegram chat", "message": pair.instructions, "action_url": pair.deep_link, "action_label": "Open Telegram", "severity": "success"})
+    return _render(request, "message.html", {"title": "Pair Telegram", "eyebrow": "Telegram pairing", "heading": "Pair this Telegram chat", "message": pair.instructions, "action_url": pair.deep_link, "action_label": "Open Telegram and press Start" if pair.deep_link else None, "severity": "success"})
 
 
 @router.post("/repos/{repo_id}/disconnect", response_class=HTMLResponse)
@@ -393,4 +393,4 @@ def connect_submit(code: str, request: Request, repo_id: str = Form(...), db: Se
     message = "Your daemon is connected. You can return to your terminal."
     if pair is not None:
         message += f" To use Telegram, bind the chat too: {pair.instructions}"
-    return _render(request, "message.html", {"title": "Approved", "eyebrow": "Daemon approval", "heading": "Approved", "message": message, "action_url": pair.deep_link if pair else None, "action_label": "Open Telegram" if pair and pair.deep_link else None, "severity": "success"})
+    return _render(request, "message.html", {"title": "Approved", "eyebrow": "Daemon approval", "heading": "Approved", "message": message, "action_url": pair.deep_link if pair else None, "action_label": "Open Telegram and press Start" if pair and pair.deep_link else None, "severity": "success"})
