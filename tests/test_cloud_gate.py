@@ -117,6 +117,11 @@ def test_connect_persists_token(tmp_path, monkeypatch):
                 "account_id": "acct_x",
                 "repo_id": "proj_x",
                 "daemon_token": "bd_tok",
+                "telegram_pair": {
+                    "pair_code": "TG-TEST",
+                    "instructions": "Open https://t.me/brnrd_bot?start=TG-TEST",
+                    "deep_link": "https://t.me/brnrd_bot?start=TG-TEST",
+                },
             },
         ]
     )
@@ -147,6 +152,7 @@ def test_connect_persists_token(tmp_path, monkeypatch):
     assert output == [
         "[brr] Approve this daemon at: u",
         "[brr] Connected to brnrd repo proj_x.",
+        "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
     ]
 
 
