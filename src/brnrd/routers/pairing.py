@@ -70,6 +70,46 @@ def approve_pair(code: str, payload: schemas.PairApprove, principal: Principal =
     return schemas.PairStatus(status="approved", account_id=principal.account_id, repo_id=repo_id)
 
 
+def _telegram_pair_response(settings: Any, repo: Repo, code: str) -> schemas.TelegramPairStarted:
+    username = settings.telegram_bot_username.lstrip("@")
+    deep_link = f"https://t.me/{username}?start={code}" if username else None
+    if deep_link:
+        instructions = (
+            f"Open {deep_link} or send `/start {code}` to bind this chat "
+            f"to repo '{repo.repo_full_name}'."
+        )
+    else:
+        instructions = (
+            f"Send `/start {code}` to your brnrd Telegram bot to bind this "
+            f"chat to repo '{repo.repo_full_name}'."
+        )
+    return schemas.TelegramPairStarted(
+        pair_code=code,
+        instructions=instructions,
+        deep_link=deep_link,
+    )
+
+
+def _active_telegram_pair(db: Session, account_id: str, repo_id: str) -> TgPairCode | None:
+    now = datetime.now(timezone.utc)
+    rows = db.execute(
+        select(TgPairCode)
+        .where(
+            TgPairCode.account_id == account_id,
+            TgPairCode.repo_id == repo_id,
+            TgPairCode.consumed.is_(False),
+        )
+        .order_by(TgPairCode.expires_at.desc())
+    ).scalars()
+    for row in rows:
+        expires = row.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires >= now:
+            return row
+    return None
+
+
 def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str) -> schemas.TelegramPairStarted:
     repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
@@ -82,13 +122,19 @@ def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str
         raise HTTPException(status_code=503, detail="could not allocate pair code")
     db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=account_id, repo_id=repo.id, expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)))
     db.commit()
-    username = settings.telegram_bot_username.lstrip("@")
-    deep_link = f"https://t.me/{username}?start={code}" if username else None
-    if deep_link:
-        instructions = f"Open {deep_link} or send `/start {code}` to bind this chat to repo '{repo.repo_full_name}'."
-    else:
-        instructions = f"Send `/start {code}` to your brnrd Telegram bot to bind this chat to repo '{repo.repo_full_name}'."
-    return schemas.TelegramPairStarted(pair_code=code, instructions=instructions, deep_link=deep_link)
+    return _telegram_pair_response(settings, repo, code)
+
+
+def telegram_pair_for_connect(
+    db: Session, settings: Any, account_id: str, repo_id: str
+) -> schemas.TelegramPairStarted:
+    repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
+    if repo is None:
+        raise HTTPException(status_code=404, detail="repo not found")
+    existing = _active_telegram_pair(db, account_id, repo_id)
+    if existing is not None:
+        return _telegram_pair_response(settings, repo, existing.code)
+    return telegram_pair_core(db, settings, account_id, repo_id)
 
 
 @router.post("/telegram", response_model=schemas.TelegramPairStarted)
@@ -97,7 +143,7 @@ def start_telegram_pair(payload: schemas.TelegramPairStart, request: Request, pr
 
 
 @router.get("/{code}", response_model=schemas.PairStatus)
-def poll_pair(code: str, poll_secret: str = Query(...), db: Session = Depends(get_db)):
+def poll_pair(code: str, request: Request, poll_secret: str = Query(...), db: Session = Depends(get_db)):
     pair = _get_pair(db, code)
     if not hmac.compare_digest(hash_token(poll_secret), pair.poll_secret_hash):
         raise HTTPException(status_code=401, detail="bad poll secret")
@@ -105,6 +151,14 @@ def poll_pair(code: str, poll_secret: str = Query(...), db: Session = Depends(ge
         return schemas.PairStatus(status="pending")
     if pair.status == PairRequest.STATUS_APPROVED:
         token = pair.minted_token
+        telegram_pair = None
+        if pair.account_id and pair.repo_id:
+            telegram_pair = telegram_pair_for_connect(
+                db,
+                request.app.state.settings,
+                pair.account_id,
+                pair.repo_id,
+            )
         pair.status = PairRequest.STATUS_CONSUMED
         pair.minted_token = None
         db.commit()
@@ -113,5 +167,6 @@ def poll_pair(code: str, poll_secret: str = Query(...), db: Session = Depends(ge
             account_id=pair.account_id,
             repo_id=pair.repo_id,
             daemon_token=token,
+            telegram_pair=telegram_pair,
         )
     return schemas.PairStatus(status="paired", account_id=pair.account_id, repo_id=pair.repo_id)
