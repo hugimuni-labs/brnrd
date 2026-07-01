@@ -20,6 +20,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _env_first(*names: str, default: str = "") -> str:
     for name in names:
         value = os.environ.get(name)
@@ -41,6 +48,7 @@ class Settings:
     telegram_bot_token: str = os.environ.get("BRNRD_TELEGRAM_BOT_TOKEN", "")
     telegram_webhook_secret: str = os.environ.get("BRNRD_TELEGRAM_WEBHOOK_SECRET", "")
     telegram_bot_username: str = os.environ.get("BRNRD_TELEGRAM_BOT_USERNAME", "")
+    telegram_auto_webhook: bool = _env_bool("BRNRD_TELEGRAM_AUTO_WEBHOOK", True)
 
     session_cookie: str = os.environ.get("BRNRD_SESSION_COOKIE", "brnrd_session")
 
