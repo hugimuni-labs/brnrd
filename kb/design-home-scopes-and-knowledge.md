@@ -1,7 +1,10 @@
 # Design: home scopes and knowledge placement
 
 Status: active (2026-07-01 design round; rounds 2 and 3 folded in below —
-round 3 governs where it sharpens round 2)
+round 3 governs where it sharpens round 2). Execution: see
+[`plan-home-scopes-execution.md`](plan-home-scopes-execution.md) — the
+phase-by-phase, no-backwards-compat implementation plan, with maintainer
+migration steps and a both-lanes validation checklist.
 
 ## 2026-07-01 round 3 — full brr retirement, issues-as-channel, KB-as-checkout, lean GH gate (evt-mo3g)
 

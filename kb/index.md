@@ -51,6 +51,13 @@ dive-in map) and are stable until something contradicts them.
   project-local lane, rename the durable store to **brnrd home**, and make
   repo-committed `kb/` a portable wiki option rather than an unavoidable
   full-tool default.
+- [Home-scopes execution plan](plan-home-scopes-execution.md) — *active
+  2026-07-01*. The precise, phase-by-phase implementation of the home-scopes
+  design for a mid-tier runner: kill the `accounts/default` fallback (project
+  vs account home), `brnrd bind`/`add` verbs on a single `brnrd` command, the
+  inject→checkout→query knowledge ladder, and the lean GH gate. Drops the
+  round-1 compat scaffolding (no backwards compatibility yet). Carries the
+  maintainer's manual migration steps and a both-lanes validation checklist.
 - [brnrd rename decision](decision-brnrd-rename.md) — *direction accepted
   2026-06-29, execution staged*. Rename the product **brr → brnrd** (PyPI
   `brnrd` free, `brnrd-dev`/`brnrd-bot` identities, `brnrd.dev`; the daemon is

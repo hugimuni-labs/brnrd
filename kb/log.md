@@ -9518,3 +9518,39 @@ section that governs where it differs from rounds 1–2:
   filtering without a distinct identity is what you're stuck with until (a) ships.
   Makes `brnrd-bot` a dependency of both the lean gate and proactive issue action.
   Breadcrumbed on `design-brnrd-github-bot-user.md`.
+
+## [2026-07-01] plan | home-scopes execution plan: no-compat, phase-by-phase, both-lanes validation
+
+Maintainer asked (evt) for "the detailed plan for a simpler model to precisely
+execute" plus "instructions for me to migrate/switch (we need not to honour
+backwards compatibility yet)" and validation that "both ways work smoothly."
+Wrote `plan-home-scopes-execution.md` executing the settled home-scopes design
+(rounds 1–3).
+
+The load-bearing move: **no backwards compatibility** collapses the design's
+round-1 6-step compat-preserving migration (the `home`-as-alias-over-account
+layer, "keep tests green first", slow `brr init` softening) into a small set of
+**direct edits**. Pre-release, one dogfood install, no external users → cut
+straight to target shape and hand-migrate the one install.
+
+Seven phases, each grounded in real files/functions and ending in a verify step:
+1. Kill the `accounts/default` fallback in `account.py:resolve_context` —
+   project home (`projects/<slug>-<hash>`) vs account home; path-hash resolves
+   the same-basename collision the design flagged.
+2. `brnrd bind`/`add` verbs, retire the `brr` binary (`pyproject` scripts;
+   package-dir rename kept separate as riskier Phase 6).
+3. Knowledge chain: inject (primary) → gitignored **checkout** the runner
+   commits to → `brnrd kb` query. Retires the read-only-mount rung.
+4. Lean GH gate — depends on `brnrd-bot` identity to drop self-events safely.
+5. Agent-facing prose `brr`→`brnrd` (own wake). 6. package rename (optional/
+   risky). 7. `.brr/`→`.brnrd/` state dir (deferred remnant).
+
+Also carries maintainer migration steps (stop daemon → reuse existing dominion
+via `BRNRD_HOME` or dir-move → `brnrd bind . telegram` → restart) and a
+both-lanes validation checklist whose core assertion is the **transport-agnostic
+invariant**: bind-delivered and add-routed events must enter the same
+single-flight loop with the same envelope — if the daemon needs different code
+paths past the gate boundary, the abstraction leaked.
+
+Ship order for fastest working-both-ways: 1 → 2 → 3, validate, then 4/5/6 as
+separate wakes. Linked from index.md and the design page.
