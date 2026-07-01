@@ -130,9 +130,9 @@ def probe_stale_image(p: ProbeContext) -> list[Finding]:
                 "bundled_dockerfile_modified": _iso(df_mtime),
                 "hint": (
                     "the runner image predates brr's current bundled "
-                    "Dockerfile; rebuild it (`brr init -i`, or docker build "
+                    "Dockerfile; rebuild it (`brnrd init -i`, or docker build "
                     "from the bundled Dockerfile) so the container carries "
-                    "the brr CLI/runtime deps and tooling this brr version "
+                    "the brnrd CLI/runtime deps and tooling this brr version "
                     "expects."
                 ),
             },
@@ -205,7 +205,7 @@ def probe_disk(p: ProbeContext) -> list[Finding]:
 
 
 def probe_doc_drift(p: ProbeContext) -> list[Finding]:
-    """The adopter's ``AGENTS.md`` is a copy ``brr init`` wrote; the
+    """The adopter's ``AGENTS.md`` is a copy ``brnrd init`` wrote; the
     bundled template ships with the installed brr. After ``pip install
     -U brr`` the two can diverge, leaving agents on stale guidance.
     Compare and nudge a re-sync. In brr's own repo the repo file is a

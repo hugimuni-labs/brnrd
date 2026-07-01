@@ -1,4 +1,4 @@
-"""Linux systemd user-service integration for ``brr daemon``."""
+"""Linux systemd user-service integration for ``brnrd daemon``."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env brr daemon up --foreground
+ExecStart=/usr/bin/env brnrd daemon up --foreground
 Restart=on-failure
 RestartSec=5s
 Environment=BRR_INSTALL_MANAGED=1
@@ -220,8 +220,8 @@ def install(
     if "[[projects]]" in registry_path.read_text(encoding="utf-8"):
         print(f"[brr] project registry: {registry_path}")
     else:
-        print("[brr] no projects registered yet — run `brr init` in a repo to add one")
-    print("[brr] next: `brr daemon status`, `brr daemon logs`, `brr daemon uninstall`")
+        print("[brr] no projects registered yet — run `brnrd init` in a repo to add one")
+    print("[brr] next: `brnrd daemon status`, `brnrd daemon logs`, `brnrd daemon uninstall`")
 
 
 def uninstall(

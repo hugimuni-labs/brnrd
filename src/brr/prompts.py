@@ -422,6 +422,16 @@ def _build_kb_health_block(repo_root: Path) -> str:
     )
 
 
+def _build_knowledge_sources_block(repo_root: Path) -> str:
+    """Render the compact home→repo→docs knowledge slice."""
+
+    from . import config as conf
+    from . import knowledge
+
+    cfg = conf.load_config(repo_root)
+    return knowledge.render_injection(repo_root, cfg)
+
+
 def _build_introspection_block(repo_root: Path) -> str:
     """Render the introspection/development invitation when toggled on.
 
@@ -500,6 +510,9 @@ def _build_injected_blocks(
         pitfalls_block = _build_pitfalls_block(repo_root, task_text)
         if pitfalls_block:
             blocks.append(pitfalls_block)
+    knowledge_block = _build_knowledge_sources_block(repo_root)
+    if knowledge_block:
+        blocks.append(knowledge_block)
     context = _build_context_block(repo_root)
     if context:
         blocks.append(context)
@@ -583,7 +596,7 @@ def diffense_emit_enabled(cfg: dict[str, Any] | None) -> bool:
 
 
 def build_init_prompt(repo_root: Path) -> str:
-    """Build the prompt for ``brr init`` — setup.md + bundled AGENTS.md.
+    """Build the prompt for ``brnrd init`` — setup.md + bundled AGENTS.md.
 
     brr's own ``AGENTS.md`` (bundled inside the package) is the model
     adopters' setup agent uses. Universal sections copy verbatim;
@@ -596,7 +609,7 @@ def build_init_prompt(repo_root: Path) -> str:
 
 
 def build_run_prompt(task: str, repo_root: Path) -> str:
-    """Build the prompt for ``brr run`` — run.md + recent context + task."""
+    """Build the prompt for ``brnrd run`` — run.md + recent context + task."""
     preamble = read_prompt("run.md", repo_root)
     return _join_prompt_parts(
         preamble, repo_root, f"---\nTask: {task}", task_text=task,
@@ -641,7 +654,7 @@ def build_daemon_prompt(
     The daemon path also injects ``daemon-substrate.md`` — brr's driver's
     manual for the daemon-specific machinery (single-flight, capture net,
     self-scheduled wakes, the outbox/keepalive contract) that the
-    host-agnostic playbook deliberately leaves out. ``brr run`` skips it:
+    host-agnostic playbook deliberately leaves out. ``brnrd run`` skips it:
     a one-shot has no daemon to fire schedules or drain an outbox.
     """
     preamble = read_prompt("run.md", repo_root)
