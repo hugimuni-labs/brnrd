@@ -12,7 +12,10 @@ Shipped so far:
   `POST /v1/webhooks/telegram`, Telegram chat-pairing, a
   platform-dispatching forwarder, and a thin `src/brnrd_web` dashboard
   (login + the device-flow approve page) so connect is human-
-  completable. See "Second slice" below.
+  completable. 2026-07-01 follow-up: daemon approval and the dashboard
+  now issue Telegram chat-pair links for the selected repo, and the
+  webhook ignores clearly stale pre-pair backlog after a chat binds. See
+  "Second slice" below.
 - **Identity pivot (2026-06-03).** brnrd account identity moved to
   GitHub OAuth through the managed GitHub App / OAuth web flow.
   Email+password account creation and login were removed before launch;
@@ -136,7 +139,7 @@ one.
 | GET | `/login` | — | GitHub login entry point |
 | GET | `/auth/github/start` | — | starts GitHub OAuth with state + PKCE cookies |
 | GET | `/auth/github/callback` | state + PKCE cookies | creates/updates the GitHub-backed account and sets the `brnrd_session` cookie |
-| GET/POST | `/connect/{code}` | session cookie | the device-flow approve page (lists projects, calls `approve_core`) |
+| GET/POST | `/connect/{code}` | session cookie | the device-flow approve page (lists projects, calls `approve_core`, then offers a Telegram chat-pair link for the same repo) |
 
 Routing home: a bound chat's message enqueues with an opaque
 `reply_to = {platform, chat_id, topic_id, message_id}`. When the
@@ -144,6 +147,9 @@ runner's response comes back through `POST /v1/daemons/responses`, the
 **platform-dispatching forwarder** (`inbox.make_default_forwarder`)
 reads `reply_to['platform']` and posts the body via the Telegram Bot
 API, threaded under the source message — still without persisting it.
+If Telegram delivers an old message after the chat route has been
+created, and the message timestamp clearly predates that route, the
+webhook drops it instead of treating pre-pair backlog as current work.
 
 Chat→project binding is global-unique on `(platform, chat_id)`: a
 `/start` from a chat already bound to a *different* account is refused
@@ -153,7 +159,9 @@ Code-reuse notes for the slice:
 
 - `approve_core(db, account_id, code, project_id)` was factored out of
   the API approve endpoint so the web `/connect/{code}` page mints the
-  exact same daemon token by the exact same path.
+  exact same daemon token by the exact same path. `telegram_pair_core`
+  does the same for reusable Telegram pair-code creation, used by the
+  API, the dashboard repo action, and the daemon-approval success page.
 - `account_for_github_identity` / `issue_session_token` back the OAuth
   callback: GitHub id is the stable account key; login/email are
   refreshed on each login; the session token remains a brnrd bearer

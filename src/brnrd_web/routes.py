@@ -30,7 +30,7 @@ from brnrd.models import (
 from brnrd.platforms import github_app as gh_app_client
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
 from brnrd.routers.github_app import sync_app_installations_for_account
-from brnrd.routers.pairing import approve_core
+from brnrd.routers.pairing import approve_core, telegram_pair_core
 from brnrd.security import hash_token
 
 router = APIRouter(tags=["web"])
@@ -297,6 +297,18 @@ def invite_repo_bot(repo_id: str, request: Request, db: Session = Depends(get_db
     return RedirectResponse(url=f"/?notice={notice}", status_code=303)
 
 
+@router.post("/repos/{repo_id}/telegram-pair", response_class=HTMLResponse)
+def pair_repo_telegram(repo_id: str, request: Request, db: Session = Depends(get_db)):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/", status_code=303)
+    try:
+        pair = telegram_pair_core(db, request.app.state.settings, account_id, repo_id)
+    except HTTPException as exc:
+        return _render(request, "message.html", {"title": "Telegram pair failed", "eyebrow": "Telegram pairing", "heading": "Could not create pair link", "message": str(exc.detail), "severity": "error"}, status_code=exc.status_code)
+    return _render(request, "message.html", {"title": "Pair Telegram", "eyebrow": "Telegram pairing", "heading": "Pair this Telegram chat", "message": pair.instructions, "action_url": pair.deep_link, "action_label": "Open Telegram", "severity": "success"})
+
+
 @router.post("/repos/{repo_id}/disconnect", response_class=HTMLResponse)
 def disconnect_repo(repo_id: str, request: Request, db: Session = Depends(get_db)):
     account_id = _account_id(request, db)
@@ -374,4 +386,11 @@ def connect_submit(code: str, request: Request, repo_id: str = Form(...), db: Se
         approve_core(db, account_id, code, repo_id)
     except HTTPException as exc:
         return _render(request, "message.html", {"title": "Approve failed", "eyebrow": "Daemon approval", "heading": "Could not approve", "message": str(exc.detail), "severity": "error"}, status_code=exc.status_code)
-    return _render(request, "message.html", {"title": "Approved", "eyebrow": "Daemon approval", "heading": "Approved", "message": "Your daemon is connected. You can return to your terminal.", "severity": "success"})
+    try:
+        pair = telegram_pair_core(db, request.app.state.settings, account_id, repo_id)
+    except HTTPException:
+        pair = None
+    message = "Your daemon is connected. You can return to your terminal."
+    if pair is not None:
+        message += f" To use Telegram, bind the chat too: {pair.instructions}"
+    return _render(request, "message.html", {"title": "Approved", "eyebrow": "Daemon approval", "heading": "Approved", "message": message, "action_url": pair.deep_link if pair else None, "action_label": "Open Telegram" if pair and pair.deep_link else None, "severity": "success"})

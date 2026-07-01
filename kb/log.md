@@ -9606,3 +9606,24 @@ skip the call. Documented the deployment contract in
 Validation: targeted Telegram/cloud/backend tests passed, then full `pytest`
 passed (1226 tests, 1 existing FastAPI/httpx warning). The live brnrd.dev
 process needs a deploy/restart of this code for the self-heal to run.
+
+## [2026-07-01] fix | brnrd Telegram chat pairing after daemon connect
+
+Maintainer validated that `brnrd connect https://brnrd.dev` could approve a
+local daemon while `@brnrd_bot` still answered "chat is not paired", because
+daemon device-flow approval and Telegram chat binding were separate flows and
+the web approval page did not surface the second step. The CLI output also
+printed the same pair code twice (embedded in the approval URL and as a
+separate line).
+
+Connected the flows without pretending browser approval can infer a Telegram
+chat: `/connect/{code}` now mints and displays a Telegram chat-pair link/code
+for the selected repo after daemon approval, and each repo card in the
+dashboard can generate a fresh Telegram pair link later. The cloud gate's
+`brnrd connect` output now prints only the approval URL and final connected
+line. Telegram webhook parsing records the platform message timestamp, and
+bound-chat handling drops clearly stale messages that predate the route so
+pre-pair backlog does not become new tasks after binding.
+
+Validation: targeted Telegram/web/dashboard/cloud tests passed, then full
+`pytest` passed (1229 tests, 1 existing FastAPI/httpx warning).
