@@ -298,22 +298,22 @@ regardless of status, so a human can recover work.
   ``PYTHONPATH=<repo>/src`` automatically when the mounted tree looks like
   a brr checkout. If you're on an older daemon, set that by hand or rebuild
   after pulling. For non-brr repos, rebuild the runner image when brr itself
-  changes (``brr init -i``).
+  changes (``brnrd init -i``).
 - **`brr review` runs the wrong tool (image-renderer help)** — PyPI's
   ``brr`` package is an unrelated terminal image renderer. Older bundled
   Dockerfiles ``pip install 'brr>=0.1.0'`` pulled that by mistake.
-  Rebuild from the current bundled Dockerfile (`brr init -i`): it copies
+  Rebuild from the current bundled Dockerfile (`brnrd init -i`): it copies
   this checkout into the build context and ``pip install /opt/brr``.
   Custom images: never ``pip install brr`` from PyPI; install from a git
   URL or ``COPY`` + ``pip install .`` instead.
 - **`brr`, `requests`, `python`, `ssh`, or `rg` is missing** — rebuild the
-  local image from the current bundled Dockerfile (`brr init -i` can do this
+  local image from the current bundled Dockerfile (`brnrd init -i` can do this
   during setup). Older `brr-runner:*` images predate the baseline dev toolbox
   and brr's self-tooling install.
 - **File ownership leaked to root on host** — should not happen with
   a recent brr-runner image, which runs as the host UID. If you see
   it, you're likely on a stale image — rebuild from the current
-  bundled Dockerfile (`brr init -i`). One-shot recovery while you're
+  bundled Dockerfile (`brnrd init -i`). One-shot recovery while you're
   rebuilding: `sudo chown -R "$(id -un):$(id -gn)" .git`.
 - **Credentials not picked up inside the container** — confirm the
   matching `~/.<runner>/` exists on host *and* the image runs with

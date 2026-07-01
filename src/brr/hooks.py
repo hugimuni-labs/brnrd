@@ -1,9 +1,9 @@
-"""Runner hooks back channel — ``brr hook <phase>``.
+"""Runner hooks back channel — ``brnrd hook <phase>``.
 
 Tier 2 of the runner interface (``kb/design-runner-back-channel.md``).
 Some target CLI agents expose runner-native lifecycle hooks: callbacks at
 tool/turn boundaries whose JSON result is injected back into the agent's
-context. brr exposes **one** endpoint, ``brr hook <phase>``, reading a JSON
+context. brr exposes **one** endpoint, ``brnrd hook <phase>``, reading a JSON
 event on stdin and writing a JSON result on stdout. brr owns the abstract
 *phases*; each hook-backed runner profile maps its native hook names onto
 them, and brr renders the one neutral result into that runner's native fields.
@@ -15,7 +15,7 @@ Two directions across the single endpoint:
   outbox / ``.card`` *immediately* instead of waiting for the next
   heartbeat tick. The hook **never drains itself** — ``daemon._drain_outbox``
   is in-process-coupled (worker emit + conversation indexing) and guarded
-  by a ``threading.Lock``, so a separate ``brr hook`` process draining in
+  by a ``threading.Lock``, so a separate ``brnrd hook`` process draining in
   parallel would double-deliver. The hook only signals; the daemon stays
   the sole drainer.
 - **Inbound injection** (daemon → runner): the hook reads the
@@ -468,7 +468,7 @@ def hook_config_supported(flavour: str | None) -> bool:
     return bool(flavour) and flavour in _FILE_CONFIG_FLAVOURS
 
 
-def hook_command(phase: str, brr_bin: str = "brr") -> str:
+def hook_command(phase: str, brr_bin: str = "brnrd") -> str:
     """The shell command a native hook runs for *phase*."""
     return f"{brr_bin} hook {phase}"
 
@@ -491,17 +491,17 @@ def _claude_hook_settings(brr_bin: str) -> dict[str, Any]:
     }
 
 
-def codex_hook_capability(*, brr_bin: str = "brr") -> bool:
-    """Runtime precheck for codex's argv-injected hooks: brr on PATH.
+def codex_hook_capability(*, brr_bin: str = "brnrd") -> bool:
+    """Runtime precheck for codex's argv-injected hooks: brnrd on PATH.
 
     Codex needs no writable config file (the config rides on the runner argv),
-    so the only prerequisite is that the ``brr hook`` endpoint each hook command
-    invokes is resolvable.
+    so the only prerequisite is that the ``brnrd hook`` endpoint each hook
+    command invokes is resolvable.
     """
     return shutil.which(brr_bin) is not None
 
 
-def codex_hook_args(brr_bin: str = "brr") -> list[str]:
+def codex_hook_args(brr_bin: str = "brnrd") -> list[str]:
     """Argv tokens that install codex's native hook config inline.
 
     Returns ``-c hooks.<Event>=[…]`` overrides for each phase, to append to a
@@ -528,12 +528,12 @@ def codex_hook_args(brr_bin: str = "brr") -> list[str]:
 
 
 def hook_capability(
-    flavour: str | None, cwd: Path | None, *, brr_bin: str = "brr"
+    flavour: str | None, cwd: Path | None, *, brr_bin: str = "brnrd"
 ) -> bool:
     """Runtime precheck: is this run actually hooks-capable?
 
     Asserts (not assumes) the per-runner prerequisites: brr can emit config
-    for the flavour, the brr endpoint is invocable on PATH, and the run cwd
+    for the flavour, the brnrd endpoint is invocable on PATH, and the run cwd
     is a writable place to drop the native config. Returns False — degrade
     cleanly to the heartbeat-polled model — when any prerequisite is missing.
     """
@@ -547,7 +547,7 @@ def hook_capability(
 
 
 def install_hook_config(
-    flavour: str | None, cwd: Path, *, brr_bin: str = "brr"
+    flavour: str | None, cwd: Path, *, brr_bin: str = "brnrd"
 ) -> Path | None:
     """Write *flavour*'s native per-run hook config into *cwd*.
 
