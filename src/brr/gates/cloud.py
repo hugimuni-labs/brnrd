@@ -26,7 +26,7 @@ class BrnrdAuthError(RuntimeError):
     pass
 
 
-_AUTH_HINT = "Re-run `brr brnrd connect` to link this daemon to your brnrd repo."
+_AUTH_HINT = "Re-run `brnrd connect` to link this daemon to your brnrd repo."
 
 
 def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S) -> dict:
@@ -99,19 +99,27 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
         if status.get("status") == "paired" and status.get("daemon_token"):
             break
         if time.monotonic() > deadline:
-            raise TimeoutError("pairing timed out — re-run `brr brnrd connect`")
+            raise TimeoutError("pairing timed out — re-run `brnrd connect`")
         time.sleep(poll_interval_s)
     state = _load_state(brr_dir)
     capabilities = dict(state.get("capabilities") or {})
     capabilities.update(_repo_capabilities(brr_dir))
-    state.update({"brnrd_url": brnrd_url.rstrip("/"), "token": status["daemon_token"], "repo_id": status["repo_id"], "daemon_name": daemon_name, "capabilities": capabilities, "since": state.get("since", 0)})
+    state.update({
+        "brnrd_url": brnrd_url.rstrip("/"),
+        "token": status["daemon_token"],
+        "account_id": status.get("account_id"),
+        "repo_id": status["repo_id"],
+        "daemon_name": daemon_name,
+        "capabilities": capabilities,
+        "since": state.get("since", 0),
+    })
     _save_state(brr_dir, state)
     out(f"[brr] Connected to brnrd repo {status['repo_id']}.")
     return state
 
 
 def setup(brr_dir: Path) -> None:
-    print("[brr] Run `brr brnrd connect` to link this daemon to a brnrd repo.")
+    print("[brr] Run `brnrd connect` to link this daemon to a brnrd repo.")
 
 
 def auth(brr_dir: Path) -> None:

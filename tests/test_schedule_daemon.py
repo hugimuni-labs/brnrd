@@ -54,7 +54,7 @@ def test_fire_due_reads_account_dominion_before_legacy(tmp_path):
     legacy = dominion.ensure_dominion(repo, push=False)
     _write_schedule(legacy, "")
     home = tmp_path / "account-home"
-    cfg = {"account.dominion_path": str(home), "repo.label": "Gurio/brr"}
+    cfg = {"home.path": str(home), "repo.label": "Gurio/brr"}
     ctx = account.resolve_context(repo, cfg)
     repo_dom = account.repo_dominion_path(ctx, "Gurio/brr")
     dominion.seed_account_dominion(repo_dom)
