@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -69,9 +70,8 @@ def approve_pair(code: str, payload: schemas.PairApprove, principal: Principal =
     return schemas.PairStatus(status="approved", account_id=principal.account_id, repo_id=repo_id)
 
 
-@router.post("/telegram", response_model=schemas.TelegramPairStarted)
-def start_telegram_pair(payload: schemas.TelegramPairStart, request: Request, principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
-    repo = db.execute(select(Repo).where(Repo.id == payload.repo_id, Repo.account_id == principal.account_id)).scalar_one_or_none()
+def telegram_pair_core(db: Session, settings: Any, account_id: str, repo_id: str) -> schemas.TelegramPairStarted:
+    repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
     for _ in range(8):
@@ -80,8 +80,7 @@ def start_telegram_pair(payload: schemas.TelegramPairStart, request: Request, pr
             break
     else:
         raise HTTPException(status_code=503, detail="could not allocate pair code")
-    settings = request.app.state.settings
-    db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=principal.account_id, repo_id=repo.id, expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)))
+    db.add(TgPairCode(id=ids.tg_pair_code_id(), code=code, account_id=account_id, repo_id=repo.id, expires_at=datetime.now(timezone.utc) + timedelta(seconds=settings.pair_ttl_s)))
     db.commit()
     username = settings.telegram_bot_username.lstrip("@")
     deep_link = f"https://t.me/{username}?start={code}" if username else None
@@ -90,6 +89,11 @@ def start_telegram_pair(payload: schemas.TelegramPairStart, request: Request, pr
     else:
         instructions = f"Send `/start {code}` to your brnrd Telegram bot to bind this chat to repo '{repo.repo_full_name}'."
     return schemas.TelegramPairStarted(pair_code=code, instructions=instructions, deep_link=deep_link)
+
+
+@router.post("/telegram", response_model=schemas.TelegramPairStarted)
+def start_telegram_pair(payload: schemas.TelegramPairStart, request: Request, principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
+    return telegram_pair_core(db, request.app.state.settings, principal.account_id, payload.repo_id)
 
 
 @router.get("/{code}", response_model=schemas.PairStatus)
