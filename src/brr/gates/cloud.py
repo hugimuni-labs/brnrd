@@ -114,6 +114,14 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     })
     _save_state(brr_dir, state)
     out(f"[brr] Connected to brnrd repo {status['repo_id']}.")
+    pair = status.get("telegram_pair") or {}
+    if isinstance(pair, dict):
+        deep_link = str(pair.get("deep_link") or "").strip()
+        instructions = str(pair.get("instructions") or "").strip()
+        if deep_link:
+            out(f"[brnrd] Pair Telegram chat: {deep_link}")
+        elif instructions:
+            out(f"[brnrd] Telegram pairing: {instructions}")
     return state
 
 
