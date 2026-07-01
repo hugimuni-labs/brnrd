@@ -23,6 +23,12 @@ deliberate remnant is the on-disk `.brr/` runtime dir (a state migration, not an
 agent-facing surface). The agent-facing prose pass is a dedicated wake — see
 round 3 in the home-scopes design.
 
+**Round-4 exploration (2026-07-01):** a proposal to revive `brr` as *lore* —
+the in-fiction name for worker runs brnrd spawns — not as a command or
+agent-facing surface. Does not reopen the round-3 CLI/prose retirement;
+recommendation is to *reserve* the name until worker runs are user-visible.
+See [`design-brand-brnrd-brr.md`](design-brand-brnrd-brr.md).
+
 Amends [`decision-cli-shape.md`](decision-cli-shape.md) (which had `brr` and
 `brnrd` as sibling binaries from one package, with `brr` primary). Rests on
 [`decision-account-centered-daemon.md`](decision-account-centered-daemon.md)

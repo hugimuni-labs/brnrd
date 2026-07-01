@@ -9663,3 +9663,40 @@ alongside the deep link.
 Validation: targeted Telegram/cloud/web/dashboard pairing tests passed, then the
 broader brnrd Telegram/cloud/web/dashboard slice passed (45 tests, 1 existing
 FastAPI/httpx warning).
+
+## [2026-07-01] design | director loop, brand space, and the third voice pass
+
+Maintainer sent a five-part voice dump: game pacing as the missing product
+layer (a "director" that structures choice → hidden execution → reveal →
+next choice), brand exploration (bRnЯd mascot, reviving `brr` as the name
+for worker runs), the brnrd-orchestrator/brr-workers execution shape, and a
+standing complaint that two previous voice passes never landed — with an
+explicit ask to scrutinise rather than execute verbatim, and to implement
+the voice this run.
+
+Shipped three things. **Voice:** diagnosed why passes one and two failed —
+the prompts described a settled/dry/loyal register while being written in
+high-lyric incense, and a model absorbs the register of prose more than its
+claims. Rewrote `identity-core.md`, `run.md`, `daemon-substrate.md`, and the
+playbook seed *in* the register (operational contracts preserved, no named
+personas committed); reconciled the dominion playbook copy; folded in the
+agent-facing brnrd addressing and fixed the broken `brr docs` → `brnrd docs`
+references (brnrd is the only entry point since the rename).
+
+**Scrutiny:** `design-director-loop.md` — the thesis holds but three crash
+modes are named (manufactured choice colliding with the reversible-calls
+guardrail, director-as-daemon-infrastructure, ambient cost), most of the
+loop already exists under other names (parked portals, card reveals,
+inter-run plan home, scheduled thoughts), and a four-phase plan starts
+prompt-only. Orchestrator/workers settled as resident *policy* on existing
+rails (dispatcher, respawn, subagents), not a mandatory tier split.
+`design-brand-brnrd-brr.md` — the brr revival collides with the round-3
+retirement decided the same day; reconciled as surface-vs-lore with a
+*reserve, don't adopt yet* recommendation (round-4 note added to the rename
+decision), plus mascot-on-card via the `ornament` knob and two-skin
+positioning (sell the pacing, skin the game).
+
+Validation: full pytest green (1229 passed, 1 existing FastAPI/httpx
+warning) after updating the phrase pins the voice pass moved.
+
+Branch: brr/director-voice.
