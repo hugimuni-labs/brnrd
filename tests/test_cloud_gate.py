@@ -153,6 +153,7 @@ def test_connect_persists_token(tmp_path, monkeypatch):
         "[brr] Approve this daemon at: u",
         "[brr] Connected to brnrd repo proj_x.",
         "[brnrd] Pair Telegram chat: https://t.me/brnrd_bot?start=TG-TEST",
+        "[brnrd] If Telegram only opens the chat, send: /start TG-TEST",
     ]
 
 
