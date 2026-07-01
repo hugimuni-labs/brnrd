@@ -66,7 +66,7 @@ def approve_core(db: Session, account_id: str, code: str, repo_id: str) -> str:
 @router.post("/{code}/approve", response_model=schemas.PairStatus)
 def approve_pair(code: str, payload: schemas.PairApprove, principal: Principal = Depends(require_account), db: Session = Depends(get_db)):
     repo_id = approve_core(db, principal.account_id, code, payload.repo_id)
-    return schemas.PairStatus(status="approved", repo_id=repo_id)
+    return schemas.PairStatus(status="approved", account_id=principal.account_id, repo_id=repo_id)
 
 
 @router.post("/telegram", response_model=schemas.TelegramPairStarted)
@@ -104,5 +104,10 @@ def poll_pair(code: str, poll_secret: str = Query(...), db: Session = Depends(ge
         pair.status = PairRequest.STATUS_CONSUMED
         pair.minted_token = None
         db.commit()
-        return schemas.PairStatus(status="paired", repo_id=pair.repo_id, daemon_token=token)
-    return schemas.PairStatus(status="paired", repo_id=pair.repo_id)
+        return schemas.PairStatus(
+            status="paired",
+            account_id=pair.account_id,
+            repo_id=pair.repo_id,
+            daemon_token=token,
+        )
+    return schemas.PairStatus(status="paired", account_id=pair.account_id, repo_id=pair.repo_id)

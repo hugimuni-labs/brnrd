@@ -1,61 +1,73 @@
-# Account Daemon
+# brnrd Home Selection
 
-The local daemon is moving from one foreground process per repo to one
-foreground process per account, with repo-scoped runs underneath it.
+The local daemon stores durable resident/run/control state in a git-backed
+**brnrd home**. The home can be project-local or account-scoped; both lanes use
+the same daemon loop, file protocol, run-state paths, repo-tagged resident
+memory, and runner policy machinery.
 
-In the CS4 slice, `brr up` resolves an account context before dispatching work:
+## Project Lane
 
-- The current checkout remains the default repo, so existing single-repo installs
-  keep working.
-- Extra repos can be registered with flat config keys:
-  `account.repo.<label>=/absolute/path/to/repo`.
-- `account.default_repo=<label>` picks the fallback repo for message events that
-  do not name a target.
-- `account.dominion_path=/path/to/account-home` designates an existing local
-  account dominion repo. Without it, a real git checkout auto-creates a
-  **local-only** git repo under the local account state directory
-  (`$XDG_STATE_HOME/brnrd/accounts/<account>/dominion`, usually
-  `~/.local/state/brnrd/accounts/default/dominion`). An existing legacy
-  `$XDG_STATE_HOME/brr/accounts/<account>/dominion` is still read as a
-  migration fallback when the `brnrd` path does not exist.
-- Remote durability is explicit. brr does not create a GitHub repo, gist, or
-  forge object by default; point the account dominion repo at an existing git
-  remote, a new user-approved forge repo, or a future backend when you want
-  off-machine storage.
-- Message events dropped into the account dispatch inbox can carry
-  `repo: <label>` and are run in that registered checkout.
-- Forge events can stay in the target repo's own `.brr/inbox`; the account
-  daemon keeps that direct route.
+For a repo with no brnrd service connection and no explicit account identity,
+`brnrd up` selects a project home:
 
-The account dominion repo currently owns:
+```text
+$XDG_STATE_HOME/brnrd/projects/<repo-slug>-<path-hash>/home/
+```
 
-- `account/repos.json` — account id, repo registry, default repo;
-- `dispatch/inbox/` and `dispatch/responses/` — account-scoped message dispatch;
-- `repos/<repo>/dominion/` — the resident's repo-scoped working memory
-  (`self-inject`, playbook, pitfalls, schedule, notes);
-- `run-state/<repo>/<run>.md` — durable run-state documents.
+The repo slug comes from repo config or forge remote when available; the path
+hash keeps two local repos with the same basename from colliding. There is no
+silent `accounts/default` fallback.
 
-## Moving This Repo's Current Dominion
+Use this lane for local dogfooding and one-repo bots:
 
-The old repo-local dominion is the orphan branch/worktree materialized at
-`.brr/dominion`. The account-scoped path is now the primary wake-time source,
-with the old path kept only as a migration fallback. Move this repo's resident
-memory into a repo-tagged area of the account dominion:
+```bash
+brnrd bind . telegram
+brnrd up
+```
 
-1. Stop the daemon.
-2. Ensure the account home exists by running `brr up` once, or configure
-   `account.dominion_path` and create that local git repo explicitly.
-3. Copy `.brr/dominion/` into the account home under a repo tag such as
-   `repos/Gurio__brr/dominion/`.
-4. Preserve `self-inject`, `playbook.md`, `pitfalls.md`, `schedule.md`, and any
-   resident notes you still want injected.
-5. Commit the account dominion repo. Add a git remote only if you want
-   off-machine durability now.
-6. Restart `brr up` and verify the Run Context Bundle points at the account
-   dominion before deleting the old repo-local dominion worktree.
+The gate remains repo-local in `.brr/gates/...`; durable state lands in the
+project home.
 
-If you already followed the early CS4 instructions under
-`~/.local/state/brr/...`, the copy shape was right. The namespace was the stale
-part: either leave it as the legacy fallback for now, move the account directory
-to `~/.local/state/brnrd/...`, or set `account.dominion_path` to the exact path
-you want.
+## Account Lane
+
+For multi-repo routing through brnrd service, connect once and add repos:
+
+```bash
+brnrd connect https://brnrd.dev
+brnrd add .
+brnrd up
+```
+
+`brnrd connect` persists the connected `account_id` in the repo's cloud gate
+state. `brnrd add <repo>` registers the target repo in:
+
+```text
+$XDG_STATE_HOME/brnrd/accounts/<account-id>/home/account/repos.json
+```
+
+That registry carries the default repo and any additional repo labels. Remote
+chat events can then route by repo identity; forge events stay naturally
+repo-addressed.
+
+## Explicit Home
+
+Set `BRNRD_HOME=/path/to/home` or `home.path=/path/to/home` in `.brr/config`
+when you want to pin the selected home. `BRNRD_HOME` points at the home root
+itself, not at a nested `dominion/` path.
+
+## Home Layout
+
+Current durable paths under a home:
+
+- `account/repos.json` — repo registry for account homes;
+- `dispatch/inbox/` and `dispatch/responses/` — account-dispatch queues;
+- `repos/<repo>/dominion/` — resident-owned repo memory;
+- `run-state/<repo>/<run>.md` — durable run-state documents;
+- `plans/<repo>/active.md` — inter-run plans;
+- `runner-policy/...` — stored runner preferences and proposals;
+- `ledger/decisions.md` — resident-maintained decision through-line;
+- `knowledge/` — home knowledge used before repo `kb/` and repo docs.
+
+Remote durability is explicit. brnrd does not create a GitHub repo, gist, or
+forge object by default; point the home git repo at a remote only when you want
+off-machine storage.

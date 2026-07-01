@@ -20,7 +20,7 @@ def _isolate_account_state(tmp_path_factory, monkeypatch):
     ``default_repo``) leaks into an unrelated test and event routing silently
     no-ops. Pointing ``XDG_STATE_HOME`` at a fresh temp dir per test makes the
     default account location pristine and disposable. Tests that set
-    ``account.dominion_path`` explicitly are unaffected.
+    ``home.path`` explicitly are unaffected.
     """
     state_home = tmp_path_factory.mktemp("xdg-state")
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
