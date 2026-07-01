@@ -12,6 +12,12 @@ AGENTS.md; the *why* of any given choice lives in
 [`decision-kb-shape.md`](decision-kb-shape.md); this page is *what
 brr's kb actually is today and how it works*.
 
+Open design fork (2026-07-01): now that resident memory and run-control state
+live in a local-first brnrd home, repo-committed `kb/` should likely become the
+portable/wiki option rather than an unavoidable full-tool default. The current
+repo KB remains the working source of truth until that design is accepted; see
+[`design-home-scopes-and-knowledge.md`](design-home-scopes-and-knowledge.md).
+
 ## What the kb is for
 
 The kb makes the project's structured knowledge survive between

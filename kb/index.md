@@ -44,6 +44,13 @@ dive-in map) and are stable until something contradicts them.
   name `brnrd-home`) for cross-repo plans, run-state objects, account config,
   and resident memory — not a source fork, not a gist, and not a forge repo
   created without opt-in.
+- [Home scopes and knowledge placement design](design-home-scopes-and-knowledge.md) —
+  *active 2026-07-01*. Reopens the default onboarding and KB-location pieces
+  after the account daemon landed: keep the account router for multi-repo /
+  service users, restore the one-repo/one-bot OSS path as a first-class
+  project-local lane, rename the durable store to **brnrd home**, and make
+  repo-committed `kb/` a portable wiki option rather than an unavoidable
+  full-tool default.
 - [brnrd rename decision](decision-brnrd-rename.md) — *direction accepted
   2026-06-29, execution staged*. Rename the product **brr → brnrd** (PyPI
   `brnrd` free, `brnrd-dev`/`brnrd-bot` identities, `brnrd.dev`; the daemon is

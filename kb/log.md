@@ -9433,3 +9433,23 @@ fail after surfacing the candidate. Updated `plan-relay-spend-consent.md` and
 portal relay state, wallet balance, audit/billing, and approval-resume consumer
 as deferred. Verification: daemon progress, run-progress, runner selector,
 spending-plan, and facet tests green.
+
+## [2026-07-01] plan | home scopes and knowledge placement design round
+
+Pushed the two local `main` commits that completed activity dashboard integration
+and relay fallback feedback. Then reopened the account-centered daemon decision
+around the user-visible bifurcation it left unresolved: one-repo/one-bot OSS
+self-deploy versus one-account/multi-repo brnrd routing, and whether `kb/`
+still belongs in every project repo now that dominion/run-control state moved
+into local account storage.
+
+Wrote `design-home-scopes-and-knowledge.md`: recommend one shared **brnrd home**
+substrate with two native onboarding lanes. Project-local installs get a
+repo-derived project home and repo-local Telegram gate, so five repos can mean
+five isolated bots without an accidental `accounts/default` router. Account
+router installs get an account home, registered repos, and channel/topic route
+state. The design also softens mandatory repo KB creation: `AGENTS.md` stays in
+the repo; repo `kb/` becomes the portable wiki option; resident/run/cross-repo
+knowledge lives in brnrd home and promotes to repo docs only when it becomes
+shared project knowledge. Added breadcrumbs from the account daemon decision,
+the KB subject hub, and the index.

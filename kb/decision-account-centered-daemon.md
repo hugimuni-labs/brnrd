@@ -2,6 +2,12 @@
 
 Status: accepted on 2026-06-29 (maintainer, evt-ogga)
 
+**Follow-up fork (2026-07-01).** This decision still describes the
+multi-repo/account-router lane, but no longer settles the default shape for a
+single-repo OSS install or the long-term location of the agent-maintained KB.
+That active design round lives in
+[`design-home-scopes-and-knowledge.md`](design-home-scopes-and-knowledge.md).
+
 Resolves the two architecture forks parked in
 [`review-execution-model-coherence-2026-06-29.md`](review-execution-model-coherence-2026-06-29.md)
 §3 ("Genuine forks — need a maintainer decision"). The control-surface work
