@@ -16,7 +16,7 @@
 # ``GITHUB_TOKEN`` env var rather than a bind mount, because gh's keyring
 # backend isn't reachable from inside the container.
 #
-# ``brr init -i`` copies ``pyproject.toml``, ``README.md``, and ``src/`` into
+# ``brnrd init -i`` copies ``pyproject.toml``, ``README.md``, and ``src/`` into
 # the build context and installs this checkout with ``pip install /opt/brr``.
 # Do **not** ``pip install brr`` from PyPI here — that name is an unrelated
 # terminal image renderer.
