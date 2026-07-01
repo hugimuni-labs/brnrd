@@ -228,6 +228,8 @@ def test_approve_makes_poll_return_token(client, monkeypatch):
     assert polled["status"] == "paired"
     assert polled["daemon_token"]
     assert polled["repo_id"] == repo_id
+    assert polled["telegram_pair"]["pair_code"].startswith("TG-")
+    assert f"/start {polled['telegram_pair']['pair_code']}" in polled["telegram_pair"]["instructions"]
 
 
 def test_approve_offers_telegram_pair_link(monkeypatch):
@@ -245,6 +247,13 @@ def test_approve_offers_telegram_pair_link(monkeypatch):
     assert "Your daemon is connected" in approve.text
     assert "https://t.me/brnrd_bot?start=TG-" in approve.text
 
+    polled = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+
     with client.app.state.SessionLocal() as db:
         tg_pair = db.execute(select(TgPairCode)).scalar_one()
         assert tg_pair.repo_id == repo_id
+        assert polled["telegram_pair"]["pair_code"] == tg_pair.code
+        assert polled["telegram_pair"]["deep_link"] == f"https://t.me/brnrd_bot?start={tg_pair.code}"
