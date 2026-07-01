@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
@@ -38,13 +40,41 @@ _INDEX_HTML = """<!doctype html>
 """
 
 
+def _maybe_register_telegram_webhook(settings: Settings) -> None:
+    if not settings.telegram_auto_webhook:
+        return
+    if not (settings.telegram_bot_token and settings.telegram_webhook_secret):
+        return
+    base = settings.public_base_url.rstrip("/")
+    if not base.startswith("https://"):
+        return
+    from .platforms import telegram
+
+    url = f"{base}/v1/webhooks/telegram"
+    try:
+        telegram.set_webhook(
+            settings.telegram_bot_token,
+            url,
+            secret_token=settings.telegram_webhook_secret,
+            timeout=10.0,
+        )
+    except Exception as e:
+        print(f"[brnrd] telegram webhook registration failed: {e}")
+
+
 def create_app(
     settings: Settings | None = None,
     *,
     forwarder: Forwarder | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
-    app = FastAPI(title="brnrd", version="0.1.0")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        _maybe_register_telegram_webhook(settings)
+        yield
+
+    app = FastAPI(title="brnrd", version="0.1.0", lifespan=lifespan)
 
     engine = make_engine(settings.database_url)
     Base.metadata.create_all(engine)
