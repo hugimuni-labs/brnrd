@@ -230,7 +230,7 @@ def test_build_injected_context_prefers_account_dominion(tmp_path):
     conf.write_config(
         repo,
         {
-            "account.dominion_path": str(home),
+            "home.path": str(home),
             "repo.label": "Gurio/brr",
             "diffense.emit_pack": False,
             "introspect.enabled": False,
@@ -238,7 +238,7 @@ def test_build_injected_context_prefers_account_dominion(tmp_path):
     )
     ctx = account.resolve_context(
         repo,
-        {"account.dominion_path": str(home), "repo.label": "Gurio/brr"},
+        {"home.path": str(home), "repo.label": "Gurio/brr"},
     )
     repo_dom = account.repo_dominion_path(ctx, "Gurio/brr")
     dominion.seed_account_dominion(repo_dom)
