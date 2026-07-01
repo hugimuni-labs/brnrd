@@ -292,7 +292,7 @@ regardless of status, so a human can recover work.
   the corresponding `*_API_KEY` is exported in the daemon's
   environment. Both paths surface in the `docker run` argv visible in
   trace mode.
-- **`brr docs <topic>` missing a topic the checkout has** — when dogfooding
+- **`brnrd docs <topic>` missing a topic the checkout has** — when dogfooding
   brr itself in docker, the bind-mounted ``src/`` should win over the
   image's baked ``pip install /opt/brr``. Recent brr injects
   ``PYTHONPATH=<repo>/src`` automatically when the mounted tree looks like

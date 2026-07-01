@@ -233,9 +233,9 @@ class TestPromptBuilding:
         assert "Review pack (diffense)" in prompt
         assert "brr review --check" in prompt
         # The heavy publish plumbing is now inspected, not injected: the
-        # block points at `brr docs review-pack` instead of re-narrating
+        # block points at `brnrd docs review-pack` instead of re-narrating
         # the relay/gist/frontmatter procedure every diffense wake.
-        assert "brr docs review-pack" in prompt
+        assert "brnrd docs review-pack" in prompt
         # The pack path is explicit and absolute in the shared runtime dir
         # so it survives worktree teardown.
         assert "Review pack path: /repo/.brr/diffense/task-9/pack.json" in prompt
@@ -392,7 +392,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
         )
-        assert "How brr drives you" in prompt
+        assert "How the daemon drives you" in prompt
         assert "single-flight" in prompt
         assert "schedule.md" in prompt  # self-scheduled wakes live here now
 
@@ -400,7 +400,7 @@ class TestPromptBuilding:
         """`brnrd run` is a one-shot: no daemon to fire schedules or drain an
         outbox, so it doesn't carry the driver's manual."""
         prompt = build_run_prompt("ship it", tmp_path)
-        assert "How brr drives you" not in prompt
+        assert "How the daemon drives you" not in prompt
         assert "schedule.md" not in prompt
 
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
@@ -834,7 +834,7 @@ class TestPromptBuilding:
         # The portals manual is inspected, not injected: the daemon prompt
         # carries a one-line pointer to it (the protocol choreography lives
         # there, not re-narrated in full on every wake).
-        assert "brr docs portals" in prompt
+        assert "brnrd docs portals" in prompt
 
     def test_daemon_prompt_frames_delivery_as_conversational(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -869,7 +869,7 @@ class TestPromptBuilding:
         for form in ("*inbound*", "*outbound*", "*parked*"):
             assert form in prompt
         assert "injected summary" in prompt
-        assert "brr docs portals" in prompt
+        assert "brnrd docs portals" in prompt
 
 
 # ── Phase 3 guardrails: revisit-signal handling ──────────────────────
@@ -912,7 +912,7 @@ class TestRevisitSignalGuardrails:
         # the stance lives in the resident playbook and AGENTS.md →
         # Stewardship, which this section leans on instead of
         # re-enumerating trigger phrases.
-        assert "engage with the substance" in prompt
+        assert "judgement on the substance" in prompt
         assert "ownership stance" in prompt
 
     def test_run_prompt_biases_to_resolve_and_act(self):
@@ -953,7 +953,7 @@ class TestDaemonModeGuardrails:
         # the playbook, but daemon wakes should not be told to re-open a
         # contract already present in their outer context.
         assert (
-            "entry point for agents that do not already have the playbook injected"
+            "entry point for agents that don't already have it injected"
             in prompt
         )
         assert "daemon wake" in prompt
