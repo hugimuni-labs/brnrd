@@ -152,6 +152,11 @@ If Telegram delivers an old message after the chat route has been
 created, and the message timestamp clearly predates that route, the
 webhook drops it instead of treating pre-pair backlog as current work.
 
+Telegram pairing is complete only after the bot receives `/start
+<TG-code>` and consumes the code; a `t.me/...start=<code>` redirect can
+merely open the chat in some clients. The web and CLI surfaces therefore
+carry both the deep link and the explicit fallback command.
+
 Chat→project binding is global-unique on `(platform, chat_id)`: a
 `/start` from a chat already bound to a *different* account is refused
 (the bot replies), so one chat can't be silently re-pointed.

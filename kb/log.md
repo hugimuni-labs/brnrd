@@ -9645,3 +9645,21 @@ gate prints the Telegram deep link during `brnrd connect`.
 Validation: targeted pairing/cloud/Telegram tests passed, then the brnrd
 inbox/web/dashboard/Telegram/cloud cluster passed (59 tests, 1 existing
 FastAPI/httpx warning).
+
+## [2026-07-01] fix | Telegram pair links explain the Start step
+
+Maintainer retried the hosted `@brnrd_bot` pairing flow and saw a Telegram
+redirect, but the bot still did not answer. Live checks with the current daemon
+token could authenticate/register against brnrd.dev, and the hosted inbox for
+this repo was still empty, so nothing had reached local cloud draining.
+
+The remaining product mismatch was that the UI/CLI treated a `t.me` redirect as
+if it meant Telegram had delivered `/start TG-...` to the bot. That is not true
+across Telegram clients: the deep link may only open the chat until the user
+presses Start or sends the command. The pair instructions now explicitly say to
+press Start, and `brnrd connect` prints the fallback `/start TG-...` command
+alongside the deep link.
+
+Validation: targeted Telegram/cloud/web/dashboard pairing tests passed, then the
+broader brnrd Telegram/cloud/web/dashboard slice passed (45 tests, 1 existing
+FastAPI/httpx warning).

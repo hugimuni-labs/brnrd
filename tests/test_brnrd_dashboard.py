@@ -88,3 +88,4 @@ def test_dashboard_can_issue_telegram_pair_link():
     r = client.post(f"/repos/{repo_id}/telegram-pair")
     assert r.status_code == 200
     assert "https://t.me/brnrd_bot?start=TG-" in r.text
+    assert "Open Telegram and press Start" in r.text
