@@ -246,6 +246,7 @@ def test_approve_offers_telegram_pair_link(monkeypatch):
     assert approve.status_code == 200
     assert "Your daemon is connected" in approve.text
     assert "https://t.me/brnrd_bot?start=TG-" in approve.text
+    assert "Open Telegram and press Start" in approve.text
 
     polled = client.get(
         f"/v1/accounts/pair/{pair['pair_code']}",

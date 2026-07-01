@@ -118,8 +118,11 @@ def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON
     if isinstance(pair, dict):
         deep_link = str(pair.get("deep_link") or "").strip()
         instructions = str(pair.get("instructions") or "").strip()
+        pair_code = str(pair.get("pair_code") or "").strip()
         if deep_link:
             out(f"[brnrd] Pair Telegram chat: {deep_link}")
+            if pair_code:
+                out(f"[brnrd] If Telegram only opens the chat, send: /start {pair_code}")
         elif instructions:
             out(f"[brnrd] Telegram pairing: {instructions}")
     return state
