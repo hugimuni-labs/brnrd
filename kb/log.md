@@ -9585,3 +9585,24 @@ environment; a leftover `brr` pyenv shim points at another Python version and
 fails here, so it is outside this package's emitted scripts. Maintainer
 validation of the bind lane and add/account lane remains the next gate before
 Phase 4.
+
+## [2026-07-01] fix | brnrd Telegram webhook self-registration
+
+Maintainer reported that the hosted `@brnrd_bot` route on brnrd.dev had stopped
+delivering while the native Telegram gate still worked. Live checks showed the
+local cloud gate could authenticate and long-poll brnrd.dev, but there were no
+cloud events queued for its daemon token; the backend had a tested Telegram
+webhook receiver but no repo-owned startup/deploy step that called Telegram
+`setWebhook`, so a manual webhook reset or token-side drift could silently break
+ingress.
+
+Added a backend startup hook that, when `BRNRD_TELEGRAM_BOT_TOKEN`,
+`BRNRD_TELEGRAM_WEBHOOK_SECRET`, and an HTTPS `BRNRD_PUBLIC_BASE_URL` are set,
+registers Telegram's webhook to `<public-base>/v1/webhooks/telegram` with the
+configured secret token. Local HTTP and explicit `BRNRD_TELEGRAM_AUTO_WEBHOOK=0`
+skip the call. Documented the deployment contract in
+`plan-brnrd-inbox-prototype.md`.
+
+Validation: targeted Telegram/cloud/backend tests passed, then full `pytest`
+passed (1226 tests, 1 existing FastAPI/httpx warning). The live brnrd.dev
+process needs a deploy/restart of this code for the self-heal to run.

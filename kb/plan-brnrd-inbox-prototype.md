@@ -255,9 +255,15 @@ only brnrd is hosted. `.upsun/config.yaml` + `.environment` configure a
 `BRNRD_PUBLIC_BASE_URL` (the primary route) are derived in
 `.environment` from the platform's relationship/route vars; secrets
 (bot token, webhook secret) ride `upsun variable:create` and are never
-committed. Postgres is a clean drop-in: `db.make_engine` gates its
-SQLite-only `connect_args` and `Event.seq` is an autoincrement PK
-(→ `SERIAL`), so `create_all` on startup suffices (no Alembic yet).
+committed. When `BRNRD_TELEGRAM_BOT_TOKEN`,
+`BRNRD_TELEGRAM_WEBHOOK_SECRET`, and an HTTPS `BRNRD_PUBLIC_BASE_URL`
+are present, app startup registers Telegram's webhook to
+`<public-base>/v1/webhooks/telegram` with the configured secret token;
+`BRNRD_TELEGRAM_AUTO_WEBHOOK=0` disables that self-healing path for
+manual or local setups. Postgres is a clean drop-in:
+`db.make_engine` gates its SQLite-only `connect_args` and `Event.seq`
+is an autoincrement PK (→ `SERIAL`), so `create_all` on startup suffices
+(no Alembic yet).
 
 Gotcha: a Telegram bot takes exactly one consumer — `getUpdates` (the
 local `telegram` gate) and `setWebhook` (brnrd) are mutually exclusive
