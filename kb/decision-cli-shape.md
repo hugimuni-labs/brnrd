@@ -8,6 +8,15 @@
 > structure below still holds — it just hangs under `brnrd` (with `brr` as the
 > local alias). Read the verb taxonomy here; read the rename decision for which
 > name is primary.
+>
+> **Further superseded (2026-07-01, evt-cayp):** the sibling-binary split (`brr`
+> per-project + `brnrd` per-account) is retired. The rename sub-fork reversed to
+> option **(a)** — one command, `brnrd`, no `brr` sibling and no `brr` alias. The
+> seven-verb taxonomy is unchanged; it hangs under the single `brnrd` binary. The
+> per-project/per-account scope split that justified two binaries dissolves under
+> the [bind/add event-source model](design-home-scopes-and-knowledge.md) (round
+> 2), where both are just repos the one daemon serves. The `.brr/` runtime dir is
+> a separate, deferrable rename — not tied to dropping the command.
 
 **Status: accepted 2026-05-26** (locked in PR #40 MR review,
 locking pass IV — `brnrd` promoted to a **sibling top-level

@@ -9453,3 +9453,32 @@ the repo; repo `kb/` becomes the portable wiki option; resident/run/cross-repo
 knowledge lives in brnrd home and promotes to repo docs only when it becomes
 shared project knowledge. Added breadcrumbs from the account daemon decision,
 the KB subject hub, and the index.
+
+## [2026-07-01] plan | home-scopes round 2: bind/add axis, one command, docs split
+
+Maintainer read the home-scopes design and sharpened it (evt-cayp). Folded four
+moves into `design-home-scopes-and-knowledge.md` (round 2 section, governs where
+it differs from round 1):
+
+- **Event-source axis (bind/add).** Reframed the primary distinction from *home
+  scope* to *where events come from*: `brnrd bind <repo> <gate>` = gate delivers
+  directly to the local daemon (local-first, no service needed); `brnrd add
+  <repo>` (after `connect`) = brnrd service routes events. Both feed one
+  transport-agnostic single-flight loop; project/account home falls out as a
+  consequence. Blessed the maintainer's "generic arch handles both smoothly."
+- **One command (rename option (a)).** Maintainer reversed the evt-qhk6
+  resolution (b): retire the `brr` command, single CLI `brnrd`. Recorded the
+  reversal on `decision-brnrd-rename.md` and the sibling-binary retirement on
+  `decision-cli-shape.md`. Reconciliation to keep it cheap: separate command name
+  from `.brr/` runtime dir so the dir rename stays an independent, deferrable
+  migration — not a flag-day.
+- **KB → public docs site + private home KB.** Split brr's own KB by audience
+  (adopter-facing docs website vs private economics/billing/forks in home); this
+  replaces the planned KB gardening pass. Pushed back on copy-into-repo access:
+  inject relevant knowledge (perception), bind-mount for containers, `brnrd kb`
+  query for the tail — never copy the home into the tree (stale + leak/commit
+  risk).
+- **GH gate = transport vs action channel.** Named the connecting shape: a gate
+  is pure event transport (connect token); the agent's *action* on the forge is a
+  separate, richer channel (the `gh` CLI). Perception/action split at the gate
+  boundary — keep gates thin and uniform, richness in the agent's tools.

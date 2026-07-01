@@ -2,7 +2,14 @@
 
 Status: **direction accepted** by the maintainer (evt-puhl, 2026-06-29);
 **sub-fork resolved to (b)** (evt-qhk6, 2026-06-29 — `brr` survives as the local
-verb); execution staged across dedicated migration wakes (see migration below).
+verb); **reversed to (a)** (evt-cayp, 2026-07-01 — *"we are deprecating the brr
+command, we only gonna leave the brnrd command"*): retire the `brr` command
+entirely, single CLI surface `brnrd`. The reconciliation that keeps (a) cheap —
+separate the command name from the on-disk runtime dir, so `.brr/` can rename to
+`.brnrd/` on its own schedule rather than as a flag-day — is recorded in
+[`design-home-scopes-and-knowledge.md`](design-home-scopes-and-knowledge.md)
+(round 2). Execution staged across dedicated migration wakes (see migration
+below).
 
 Amends [`decision-cli-shape.md`](decision-cli-shape.md) (which had `brr` and
 `brnrd` as sibling binaries from one package, with `brr` primary). Rests on
