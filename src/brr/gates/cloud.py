@@ -92,7 +92,6 @@ def relay_pack(brr_dir: Path, pack: dict, *, ttl_s: int | None = None) -> str | 
 def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
     pair = _request(brnrd_url, "POST", "/v1/accounts/pair")
     out(f"[brr] Approve this daemon at: {pair['pair_url']}")
-    out(f"[brr] Pair code: {pair['pair_code']}")
     deadline = time.monotonic() + timeout_s
     while True:
         status = _request(brnrd_url, "GET", f"/v1/accounts/pair/{pair['pair_code']}", params={"poll_secret": pair["poll_secret"]})
