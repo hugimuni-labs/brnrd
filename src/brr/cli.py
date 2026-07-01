@@ -319,7 +319,7 @@ def cmd_docs(args):
         return 0
     text = docs.read_topic(args.topic, repo_root=repo_root)
     if text is None:
-        print(f"[brr docs] unknown topic: {args.topic}", file=sys.stderr)
+        print(f"[brnrd docs] unknown topic: {args.topic}", file=sys.stderr)
         print(docs.format_listing(repo_root), file=sys.stderr)
         return 1
     print(text)
