@@ -868,7 +868,7 @@ def _build_run_context_bundle(
         "back, like the PLAN→approve handoff). This list is the injected "
         "summary of that grammar; the full control-file protocol and the shape "
         "of an average daemon run live in the portals manual — run "
-        "`brr docs portals` when a step is unfamiliar. Use these portals to "
+        "`brnrd docs portals` when a step is unfamiliar. Use these portals to "
         "stay in the conversation: keep visible state honest, fold queued "
         "input at plan boundaries when it belongs in this run, and check for a "
         "last-minute follow-up before terminal delivery."
@@ -916,7 +916,7 @@ def _build_run_context_bundle(
             "`runner_policy: propose` parks a runner-policy change for "
             "operator approval before the daemon writes the account dominion "
             "policy file. See "
-            "`brr docs portals` for the full field list and choreography."
+            "`brnrd docs portals` for the full field list and choreography."
         )
         sections.append(
             f"- A live inbox view at `{outbox_path}/inbox.json` is refreshed "
