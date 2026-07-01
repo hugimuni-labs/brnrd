@@ -1,4 +1,4 @@
-"""Native service-manager integration for ``brr daemon``."""
+"""Native service-manager integration for ``brnrd daemon``."""
 
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ def install(
             print("[brr] launchd service written; it will load at next login")
         _print_projects(result.enabled_projects)
         print(
-            "[brr] next: `brr daemon status`, `brr daemon logs`, "
-            "`brr daemon uninstall`",
+            "[brr] next: `brnrd daemon status`, `brnrd daemon logs`, "
+            "`brnrd daemon uninstall`",
         )
         return None
     _unsupported("install")
@@ -150,7 +150,7 @@ def _print_projects(projects: list[Path]) -> None:
         for project in projects:
             print(f"  - {project}")
     else:
-        print("[brr] no projects registered yet - run `brr init` in a repo to add one")
+        print("[brr] no projects registered yet - run `brnrd init` in a repo to add one")
 
 
 def _print_direct_status(direct_brr_dir: Path | None) -> int:
