@@ -178,7 +178,7 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
                 "daemon_label": daemon_label,
                 "daemon_last_seen": _age_label(latest.last_seen_at if latest else None),
                 "latest_daemon_name": latest.daemon_name if latest else "",
-                "setup_command": f"cd {repo.repo_name}\nbrr brnrd connect --url https://brnrd.dev\nbrr daemon up",
+                "setup_command": f"cd {repo.repo_name}\nbrnrd connect https://brnrd.dev\nbrnrd up",
                 "sort_time": last_activity or datetime.min.replace(tzinfo=timezone.utc),
             }
         )
@@ -246,7 +246,7 @@ def _ensure_bot_collaborator(request: Request, db: Session, account_id: str, rep
 
 def _notice_text(value: str | None) -> str | None:
     return {
-        "repo-connected": "Repo enabled. Set up a local brr daemon to start draining work.",
+        "repo-connected": "Repo enabled. Set up a local brnrd daemon to start draining work.",
         "repo-connected-bot-invited": "Repo enabled. brnrd invited the bot user for native GitHub mentions; accept the invitation as the bot user if needed.",
         "repo-connected-bot-present": "Repo enabled. The bot user is already visible to this repo.",
         "repo-connected-bot-invite-skipped": "Repo enabled. Could not find a synced installation for the bot-user invite.",

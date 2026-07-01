@@ -403,6 +403,58 @@ def test_telegram_pair_omits_deep_link_without_username(env):
     assert f"/start {body['pair_code']}" in body["instructions"]
 
 
+def test_startup_registers_hosted_telegram_webhook(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.set_webhook",
+        lambda token, url, *, secret_token, timeout=30.0: calls.append(
+            {
+                "token": token,
+                "url": url,
+                "secret_token": secret_token,
+                "timeout": timeout,
+            }
+        ),
+    )
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        public_base_url="https://brnrd.dev/",
+        telegram_bot_token="bot:TOKEN",
+        telegram_webhook_secret=_SECRET,
+    )
+
+    with TestClient(create_app(settings)):
+        pass
+
+    assert calls == [
+        {
+            "token": "bot:TOKEN",
+            "url": "https://brnrd.dev/v1/webhooks/telegram",
+            "secret_token": _SECRET,
+            "timeout": 10.0,
+        }
+    ]
+
+
+def test_startup_skips_telegram_webhook_for_local_http(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        "brnrd.platforms.telegram.set_webhook",
+        lambda *a, **k: calls.append({"args": a, "kwargs": k}),
+    )
+    settings = Settings(
+        database_url="sqlite:///:memory:",
+        public_base_url="http://localhost:8000",
+        telegram_bot_token="bot:TOKEN",
+        telegram_webhook_secret=_SECRET,
+    )
+
+    with TestClient(create_app(settings)):
+        pass
+
+    assert calls == []
+
+
 def _bound_telegram_event(app, client, *, message_id=77):
     """Bind chat 555 and enqueue one task message; return its event_id."""
     acc = _account(client)

@@ -73,7 +73,7 @@ fold into its work (see [`brr-internals.md`](brr-internals.md) → KB
 maintenance). The daemon path additionally injects `daemon-substrate.md` —
 brr's driver's manual for the daemon-only machinery (single-flight, the
 capture-at-sleep net, self-scheduled wakes) that the host-agnostic dominion
-playbook leaves out; `brr run` skips it. `brr agent inject` prints this
+playbook leaves out; `brnrd run` skips it. `brnrd agent inject` prints this
 assembled wake-context (identity core + dominion digest + matched pitfalls +
 recent log) so a non-brr wrapper can reuse the same orientation semantic.
 
@@ -161,7 +161,7 @@ already-committed commits) would sit local-only in the preserved worktree.
 Best-effort, gated by `salvage.enabled` (default on), and silent when the
 branch carries no commits beyond the seed.
 
-When `brr up --dev-reload` or `dev_reload=true` is active, this is also
+When `brnrd up --dev-reload` or `dev_reload=true` is active, this is also
 the safe boundary where the daemon may re-exec itself if brr package
 files changed. Reload never interrupts a running worker.
 

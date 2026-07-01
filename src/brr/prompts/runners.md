@@ -70,14 +70,14 @@ works. See `kb/design-runner-back-channel.md` for the full design.
   load-bearing for *correctness*, but it is the substrate of a fuller resident.
 
 Boundary injection rides each runner's **native lifecycle hooks**: the runner
-invokes a brr callback (`brr hook <phase>`) at tool/turn boundaries and weaves
+invokes a brr callback (`brnrd hook <phase>`) at tool/turn boundaries and weaves
 the JSON result back into its context. A profile opts in with a `hooks:
 <flavour>` field. brr owns the abstract phases (`post-tool` / `stop` /
 `session-start`) and renders one neutral result into each flavour's native
 fields. The *config-install mechanism* is runner-specific:
   - **claude** — `hooks: claude`. brr writes a per-run
     `.claude/settings.local.json` registering `PostToolBatch` / `Stop` /
-    `SessionStart` → `brr hook <phase>`. Injection lands via
+    `SessionStart` → `brnrd hook <phase>`. Injection lands via
     `hookSpecificOutput.additionalContext`; `Stop` `decision:block` continues
     the turn for premature-stop control. **Fire-verified** on Claude Code
     2.1.191. `PostToolBatch` (not `PostToolUse`) is the post-tool seam — once

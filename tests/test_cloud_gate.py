@@ -112,7 +112,12 @@ def test_connect_persists_token(tmp_path, monkeypatch):
         [
             {"pair_code": "BR-TEST", "pair_url": "u", "poll_secret": "s"},
             {"status": "pending"},
-            {"status": "paired", "repo_id": "proj_x", "daemon_token": "bd_tok"},
+            {
+                "status": "paired",
+                "account_id": "acct_x",
+                "repo_id": "proj_x",
+                "daemon_token": "bd_tok",
+            },
         ]
     )
     seen = []
@@ -131,6 +136,7 @@ def test_connect_persists_token(tmp_path, monkeypatch):
         out=lambda *_: None,
     )
     assert state["token"] == "bd_tok"
+    assert state["account_id"] == "acct_x"
     assert state["repo_id"] == "proj_x"
     assert state["daemon_name"] == "laptop"
     # Persisted to .brr/gates/cloud.json and reports configured.
