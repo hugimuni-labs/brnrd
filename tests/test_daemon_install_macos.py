@@ -15,12 +15,12 @@ def _ok(cmd, **_kwargs):
 
 
 def test_render_plist_matches_launchagent_shape(tmp_path):
-    text = macos.render_plist("/usr/local/bin/brr", home=tmp_path)
+    text = macos.render_plist("/usr/local/bin/brnrd", home=tmp_path)
     data = plistlib.loads(text.encode("utf-8"))
 
     assert data["Label"] == "dev.brnrd.brr"
     assert data["ProgramArguments"] == [
-        "/usr/local/bin/brr",
+        "/usr/local/bin/brnrd",
         "daemon",
         "up",
         "--foreground",
@@ -43,7 +43,7 @@ def test_install_writes_plist_registry_and_launchctl_commands(tmp_path):
         return _ok(cmd)
 
     result = macos.install(
-        brr_path="/opt/homebrew/bin/brr",
+        brr_path="/opt/homebrew/bin/brnrd",
         home=home,
         config_home=config_home,
         run=fake_run,
@@ -58,7 +58,7 @@ def test_install_writes_plist_registry_and_launchctl_commands(tmp_path):
 
     data = plistlib.loads(result.plist_path.read_bytes())
     assert data["ProgramArguments"] == [
-        "/opt/homebrew/bin/brr",
+        "/opt/homebrew/bin/brnrd",
         "daemon",
         "up",
         "--foreground",
@@ -87,7 +87,7 @@ def test_install_no_start_skips_launchctl(tmp_path):
 
     result = macos.install(
         no_start=True,
-        brr_path="/usr/local/bin/brr",
+        brr_path="/usr/local/bin/brnrd",
         home=tmp_path / "home",
         config_home=tmp_path / "config",
         run=lambda cmd, **kwargs: calls.append((cmd, kwargs)) or _ok(cmd),

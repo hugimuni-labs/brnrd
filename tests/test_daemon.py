@@ -1691,7 +1691,7 @@ def test_account_dispatch_inbox_routes_message_event_to_registered_repo(tmp_path
     write_repo_scaffold(repo_b)
     cfg = {
         "repo.label": "Gurio/a",
-        "account.dominion_path": str(tmp_path / "account-home"),
+        "home.path": str(tmp_path / "account-home"),
         "account.repo.Gurio/b": str(repo_b),
     }
     ctx = daemon.account.resolve_context(repo_a, cfg)
@@ -1720,7 +1720,7 @@ def test_account_dispatch_keeps_forge_events_on_repo_local_route(tmp_path):
     write_repo_scaffold(repo_b)
     cfg = {
         "repo.label": "Gurio/a",
-        "account.dominion_path": str(tmp_path / "account-home"),
+        "home.path": str(tmp_path / "account-home"),
         "account.repo.Gurio/b": str(repo_b),
     }
     ctx = daemon.account.resolve_context(repo_a, cfg)
@@ -1745,7 +1745,7 @@ def test_account_run_state_doc_persists_run_snapshot(tmp_path):
         repo,
         {
             "repo.label": "Gurio/brr",
-            "account.dominion_path": str(tmp_path / "account-home"),
+            "home.path": str(tmp_path / "account-home"),
         },
     )
     task = Run(
@@ -1781,7 +1781,7 @@ def test_capture_dominion_commits_account_home(tmp_path):
     write_repo_scaffold(repo)
     cfg = {
         "repo.label": "Gurio/brr",
-        "account.dominion_path": str(tmp_path / "account-home"),
+        "home.path": str(tmp_path / "account-home"),
     }
     ctx = daemon.account.resolve_context(repo, cfg)
     subprocess.run(

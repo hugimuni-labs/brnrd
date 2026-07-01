@@ -61,8 +61,8 @@ they need to re-check runtime details, they should read the generated
 `.brr/runs/<run-id>/context.md` file named in the bundle. That file
 replaces the old command cheat sheet for run/event recovery.
 
-The agent does not run daemon lifecycle commands. `brr up` and
-`brr down` are managed by the human operator.
+The agent does not run daemon lifecycle commands. `brnrd up` and
+`brnrd down` are managed by the human operator.
 
 ## Developer reload
 
@@ -70,7 +70,7 @@ For brr self-development, use an editable install and start the
 foreground daemon with:
 
 ```
-brr up --dev-reload
+brnrd up --dev-reload
 ```
 
 This is an opt-in developer mode, not the default daemon lifecycle. It
@@ -81,7 +81,7 @@ safe boundary: before starting the next pending run, or after the
 current run has produced its response, finalized, and attempted push.
 
 The same mode can be enabled with `dev_reload=true` in `.brr/config`.
-Normal `brr up` stays a stable foreground process; use an external
+Normal `brnrd up` stays a stable foreground process; use an external
 supervisor if you want restart policy outside local development.
 
 ## Override model
