@@ -1,4 +1,4 @@
-"""brr CLI — thin dispatch layer over the library modules."""
+"""brnrd CLI — thin dispatch layer over the library modules."""
 
 from __future__ import annotations
 
@@ -9,14 +9,14 @@ from pathlib import Path
 def main(argv: list[str] | None = None) -> None:
     from . import __version__
     parser = argparse.ArgumentParser(
-        prog="brr",
-        description="Playbook + knowledge base for AI agents, with remote execution",
+        prog="brnrd",
+        description="Resident agent runtime for local and managed repo work",
     )
-    parser.add_argument("--version", action="version", version=f"brr {__version__}")
+    parser.add_argument("--version", action="version", version=f"brnrd {__version__}")
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("init", help="set up a repo for brr")
+    p = sub.add_parser("init", help="set up a repo for brnrd")
     p.add_argument("url", nargs="?", default=None, help="clone URL (optional)")
     p.add_argument("-i", "--interactive", action="store_true",
                    help="ask setup questions (runner, config) with timed defaults")
@@ -50,9 +50,23 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("gate", help="gate name (telegram, slack, git)")
     p.set_defaults(func=cmd_auth)
 
-    p = sub.add_parser("bind", help="bind repo to a gate channel or watch")
+    p = sub.add_parser("bind", help="bind a repo-local gate to this repo")
+    p.add_argument("repo", help="repo path to bind")
     p.add_argument("gate", help="gate name (telegram, slack, git)")
     p.set_defaults(func=cmd_bind)
+
+    p = sub.add_parser("add", help="add a repo to the connected account home")
+    p.add_argument("repo", help="repo path to add")
+    p.set_defaults(func=cmd_add)
+
+    p = sub.add_parser("connect", help="link this daemon to brnrd")
+    p.add_argument("url", nargs="?", default=None,
+                   help="brnrd base URL (default: $BRNRD_URL or https://brnrd.dev)")
+    p.add_argument("--url", dest="url_option", default=None,
+                   help="brnrd base URL (same as positional URL)")
+    p.add_argument("--daemon-name", default=None,
+                   help="name to register this daemon under (default: hostname)")
+    p.set_defaults(func=cmd_brnrd_connect)
 
     p = sub.add_parser("setup", help="configure a gate in one step")
     p.add_argument("gate", help="gate name (telegram, slack, git)")
@@ -107,17 +121,6 @@ def main(argv: list[str] | None = None) -> None:
                    help="print existing log lines and exit")
     p.set_defaults(func=cmd_daemon_logs)
 
-    brnrd_p = sub.add_parser("brnrd", help="brnrd managed backend")
-    brnrd_sub = brnrd_p.add_subparsers(dest="brnrd_command", required=True)
-
-    p = brnrd_sub.add_parser(
-        "connect", help="link this daemon to a brnrd repo (device-flow)")
-    p.add_argument("--url", default=None,
-                   help="brnrd base URL (default: $BRNRD_URL or https://brnrd.dev)")
-    p.add_argument("--daemon-name", default=None,
-                   help="name to register this daemon under (default: hostname)")
-    p.set_defaults(func=cmd_brnrd_connect)
-
     erg_p = sub.add_parser(
         "ergonomics", help="inspect locally captured agent-ergonomics records")
     erg_sub = erg_p.add_subparsers(dest="ergonomics_command", required=True)
@@ -148,6 +151,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("topic", nargs="?", default=None,
                    help="doc topic to print (e.g. portals, execution-map)")
     p.set_defaults(func=cmd_docs)
+
+    p = sub.add_parser("kb", help="search home/repo knowledge")
+    p.add_argument("query", help="search term")
+    p.add_argument("--limit", type=int, default=20,
+                   help="maximum matching lines to print")
+    p.set_defaults(func=cmd_kb)
 
     portal_p = sub.add_parser("portal", help="inspect daemon portal state")
     portal_sub = portal_p.add_subparsers(dest="portal_command", required=True)
@@ -220,10 +229,35 @@ def _repo_root() -> Path:
     return gitops.ensure_git_repo()
 
 
+def _repo_root_from_arg(raw: str) -> Path:
+    import subprocess
+
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"not a git repository: {raw}")
+    return Path(result.stdout.strip())
+
+
 def _brr_dir() -> Path:
     from . import gitops
 
     return gitops.shared_brr_dir(_repo_root())
+
+
+def _brr_dir_for_repo(repo_root: Path) -> Path:
+    from . import gitops
+
+    return gitops.shared_brr_dir(repo_root)
 
 
 def _maybe_brr_dir() -> Path | None:
@@ -268,7 +302,7 @@ def cmd_agent_inject(args):
     text = prompts.build_injected_context(repo_root, task_text=args.task)
     if not text.strip():
         print("[brr agent inject] no dominion here yet — bootstrap one with "
-              "`brr init` or by starting the daemon", file=sys.stderr)
+              "`brnrd init` or by starting the daemon", file=sys.stderr)
         return 1
     print(text)
     return 0
@@ -289,6 +323,28 @@ def cmd_docs(args):
         print(docs.format_listing(repo_root), file=sys.stderr)
         return 1
     print(text)
+    return 0
+
+
+def cmd_kb(args):
+    from . import config as conf
+    from . import knowledge
+
+    repo_root = _repo_root()
+    cfg = conf.load_config(repo_root)
+    checkout = knowledge.ensure_checkout(repo_root, cfg)
+    hits = knowledge.search(repo_root, args.query, cfg, limit=args.limit)
+    if not hits:
+        print(f"[brnrd kb] no matches for {args.query!r}")
+        print(f"[brnrd kb] checkout: {checkout}")
+        return 1
+    for hit in hits:
+        rel = hit.path
+        try:
+            rel = hit.path.relative_to(repo_root)
+        except ValueError:
+            pass
+        print(f"{hit.source}: {rel}:{hit.line_no}: {hit.line}")
     return 0
 
 
@@ -731,8 +787,33 @@ def cmd_auth(args):
 
 
 def cmd_bind(args):
+    from . import account
+    from . import config as conf
+
+    repo_root = _repo_root_from_arg(args.repo)
+    cfg = dict(conf.load_config(repo_root))
+    cfg["home.kind"] = "project"
+    ctx = account.resolve_context(repo_root, cfg)
     gate_mod = _load_gate(args.gate)
-    gate_mod.bind(_brr_dir())
+    gate_mod.bind(_brr_dir_for_repo(repo_root))
+    print(f"[brnrd] bound {args.gate} for {account.repo_label(repo_root, cfg)}")
+    print(f"[brnrd] project home: {ctx.dominion_repo}")
+
+
+def cmd_add(args):
+    from . import account
+    from . import config as conf
+
+    account_repo_root = _repo_root()
+    cfg = conf.load_config(account_repo_root)
+    ctx = account.resolve_context(account_repo_root, cfg)
+    if ctx.kind != "account":
+        raise SystemExit("brnrd add requires a connected account home; run `brnrd connect` first")
+    repo_root = _repo_root_from_arg(args.repo)
+    target_cfg = conf.load_config(repo_root)
+    label = account.repo_label(repo_root, target_cfg)
+    account.register_repo(ctx, repo_root, label=label)
+    print(f"[brnrd] added {label} to account home {ctx.dominion_repo}")
 
 
 def cmd_setup(args):
@@ -812,10 +893,10 @@ def cmd_brnrd_connect(args):
     from .gates import cloud
 
     brr_dir = _brr_dir()
-    url = args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
+    url = args.url_option or args.url or os.environ.get("BRNRD_URL", "https://brnrd.dev")
     daemon_name = args.daemon_name or socket.gethostname()
     cloud.connect(brr_dir, brnrd_url=url, daemon_name=daemon_name)
-    print("[brr] Start the daemon with `brr daemon up` to begin draining the brnrd inbox.")
+    print("[brnrd] Start the daemon with `brnrd up` to begin draining the brnrd inbox.")
 
 
 def _fmt_ts(epoch: float) -> str:

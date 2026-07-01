@@ -397,7 +397,7 @@ class TestPromptBuilding:
         assert "schedule.md" in prompt  # self-scheduled wakes live here now
 
     def test_run_prompt_omits_driver_manual(self, tmp_path):
-        """`brr run` is a one-shot: no daemon to fire schedules or drain an
+        """`brnrd run` is a one-shot: no daemon to fire schedules or drain an
         outbox, so it doesn't carry the driver's manual."""
         prompt = build_run_prompt("ship it", tmp_path)
         assert "How brr drives you" not in prompt
@@ -1045,7 +1045,7 @@ def _seed_account_home(tmp_path):
     home.mkdir(parents=True)
     (tmp_path / ".brr").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".brr" / "config").write_text(
-        f"account.dominion_path={home}\nrepo.label=local/default\n", encoding="utf-8"
+        f"home.path={home}\nrepo.label=local/default\n", encoding="utf-8"
     )
     return home
 
