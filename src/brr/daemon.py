@@ -1,6 +1,6 @@
 """Daemon — reflex loop that scans the inbox, wakes the agent, pushes results.
 
-The daemon is a single foreground process (``brr up``) and a deliberately
+The daemon is a single foreground process (``brnrd up``) and a deliberately
 thin **reflex** layer: it does as little orchestration as possible and
 leaves judgement to the agent it wakes. It:
 
@@ -105,7 +105,7 @@ _FAILURE_DEFER_SECONDS_DEFAULT = 300.0
 # shortening this interval.
 _HEARTBEAT_INTERVAL = 10.0
 # Sub-heartbeat poll cadence for the runner hooks back-channel flush signal
-# (``.flush``, dropped by ``brr hook post-tool``). The heartbeat itself
+# (``.flush``, dropped by ``brnrd hook post-tool``). The heartbeat itself
 # stays at 10s; this only governs how fast the daemon notices the signal
 # and drains the outbox in response, so a mid-thought reply lands promptly
 # instead of waiting out the tick. See kb/design-runner-back-channel.md.
@@ -3799,7 +3799,7 @@ def start(
         raise SystemExit("[brr] daemon already running")
     reload_mod.clear_reexec_marker()
     if not (repo_root / "AGENTS.md").exists():
-        raise SystemExit("[brr] run `brr init` first")
+        raise SystemExit("[brr] run `brnrd init` first")
 
     _write_pid(brr_dir)
     running = True
@@ -3856,7 +3856,7 @@ def start(
 
     gate_threads = _start_account_gates(account_context, repo_root)
     if not gate_threads:
-        print("[brr] warning: no gates configured — inbox will only receive events from `brr run` or scripts")
+        print("[brr] warning: no gates configured — inbox will only receive events from `brnrd run` or scripts")
 
     if reload_watcher is not None:
         print("[brr] developer reload enabled")
@@ -3975,7 +3975,7 @@ def start(
             # Event-driven idle wait: block until a fresh in-process event
             # wakes us or the poll tick elapses, whichever comes first.
             # The tick still bounds latency for cross-process writers (the
-            # ``brr run`` CLI) and time-based work (due schedules), which
+            # ``brnrd run`` CLI) and time-based work (due schedules), which
             # don't set the signal. While holding a burst to settle, shorten
             # the wait to the remaining window so dispatch fires promptly
             # once it goes quiet — a fresh event also wakes us early and

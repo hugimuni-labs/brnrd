@@ -25,7 +25,7 @@ from typing import Any
 # in-process event (a gate thread enqueuing a message, a self-scheduled
 # thought firing) is picked up promptly instead of sleeping out a full
 # poll tick. ``create_event`` sets it whenever it writes a ``pending``
-# event in this process; cross-process writers (the ``brr run`` CLI) can't
+# event in this process; cross-process writers (the ``brnrd run`` CLI) can't
 # reach it, so the daemon's periodic poll stays the backstop for those.
 _inbox_wake = threading.Event()
 
