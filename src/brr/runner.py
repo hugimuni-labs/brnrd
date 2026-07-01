@@ -873,7 +873,7 @@ def run_executor(
 
 
 def run_task(instruction: str) -> str:
-    """Run a user instruction via the configured runner (for ``brr run``)."""
+    """Run a user instruction via the configured runner (for ``brnrd run``)."""
     from . import gitops
     repo_root = gitops.ensure_git_repo()
     from . import config as conf

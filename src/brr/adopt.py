@@ -1,4 +1,4 @@
-"""Repository adoption — ``brr init``.
+"""Repository adoption — ``brnrd init``.
 
 Sets up the ``.brr/`` runtime directory, detects a runner, and
 delegates AGENTS.md + kb/ creation to the runner itself. The runner
@@ -119,7 +119,7 @@ def init_repo(url: str | None = None, *, interactive: bool = False) -> None:
     if not available:
         raise SystemExit(
             "[brr] no runner found on PATH (claude, codex, gemini).\n"
-            "       Install one and re-run `brr init`."
+            "       Install one and re-run `brnrd init`."
         )
 
     if interactive and sys.stdin.isatty():
@@ -336,12 +336,12 @@ def _run_setup(runner_name: str, repo_root: Path) -> None:
         result.raise_for_error()
     except RuntimeError as e:
         print(f"[brr] setup failed: {e}")
-        print("[brr] re-run `brr init` to retry")
+        print("[brr] re-run `brnrd init` to retry")
         raise SystemExit(1)
     if not result.validation_ok:
         missing = ", ".join(artifact.label for artifact in result.missing_artifacts)
         print(f"[brr] setup failed: missing required output(s): {missing}")
-        print("[brr] re-run `brr init` to retry")
+        print("[brr] re-run `brnrd init` to retry")
         raise SystemExit(1)
     if result.output.strip():
         print(result.output)
@@ -364,4 +364,4 @@ def _verify(repo_root: Path) -> None:
     if ok:
         print("[brr] init complete")
     else:
-        print("[brr] init incomplete — re-run `brr init` to retry")
+        print("[brr] init incomplete — re-run `brnrd init` to retry")
