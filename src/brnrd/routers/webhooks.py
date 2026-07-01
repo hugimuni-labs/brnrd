@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
@@ -22,6 +22,7 @@ router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 
 _UNPAIRED_TEXT = "This chat is not paired to a brnrd account yet. Pair a repo from the dashboard, then send /repos or /repo owner/name."
 _UNBOUND_REPO_TEXT = "This repository is not connected to brnrd yet. Open brnrd.dev, connect the repo, then call the bot again."
+_BACKLOG_GRACE = timedelta(seconds=1)
 
 
 def _reply(settings, parsed: tg.ParsedMessage, text: str) -> None:
@@ -51,6 +52,15 @@ def _channel_route(db: Session, parsed: tg.ParsedMessage) -> ChannelRoute | None
         if route is not None:
             return route
     return db.execute(select(ChannelRoute).where(ChannelRoute.platform == "telegram", ChannelRoute.channel_id == parsed.chat_id, ChannelRoute.topic_id.is_(None))).scalar_one_or_none()
+
+
+def _message_precedes_route(parsed: tg.ParsedMessage, route: ChannelRoute) -> bool:
+    if parsed.message_date is None:
+        return False
+    created = route.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return parsed.message_date < created - _BACKLOG_GRACE
 
 
 def _account_repos(db: Session, account_id: str) -> list[Repo]:
@@ -244,6 +254,8 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             _handle_start(db, settings, parsed, code)
             return {"ok": True}
         route = _channel_route(db, parsed)
+        if route is not None and _message_precedes_route(parsed, route):
+            return {"ok": True}
         command = _slash_command(parsed.text)
         if command is not None and _handle_command(db, settings, parsed, command[0], command[1], route):
             return {"ok": True}
