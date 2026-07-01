@@ -111,6 +111,22 @@ def send_message(
         resp.raise_for_status()
 
 
+def set_webhook(
+    token: str,
+    url: str,
+    *,
+    secret_token: str,
+    timeout: float = 30.0,
+) -> None:
+    """Register the hosted Telegram webhook for this bot token."""
+    resp = httpx.post(
+        _API.format(token=token, method="setWebhook"),
+        json={"url": url, "secret_token": secret_token},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+
+
 class CardGone(RuntimeError):
     """A progress card can't be edited (deleted/expired) — resend.
 

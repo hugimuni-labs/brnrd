@@ -40,7 +40,7 @@ postgres = [
 dev = ["pytest>=7.0", "brr[backend]"]
 
 [project.scripts]
-brr = "brr.cli:main"
+brnrd = "brr.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

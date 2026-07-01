@@ -1,4 +1,4 @@
-"""Tests for the runner hooks back channel (``brr hook <phase>``)."""
+"""Tests for the runner hooks back channel (``brnrd hook <phase>``)."""
 
 from __future__ import annotations
 
@@ -326,9 +326,9 @@ def test_stop_folds_pending_body_verbatim(tmp_path):
 
 
 def test_codex_hook_args_wellformed(tmp_path, monkeypatch):
-    monkeypatch.setattr(hooks.shutil, "which", lambda _name: "/usr/bin/brr")
+    monkeypatch.setattr(hooks.shutil, "which", lambda _name: "/usr/bin/brnrd")
     assert hooks.codex_hook_capability() is True
-    args = hooks.codex_hook_args("brr")
+    args = hooks.codex_hook_args()
     # Three -c overrides, one per phase, each a single argv token.
     assert args.count("-c") == 3
     joined = " ".join(args)
@@ -336,9 +336,9 @@ def test_codex_hook_args_wellformed(tmp_path, monkeypatch):
     assert "hooks.Stop=" in joined
     assert "hooks.SessionStart=" in joined
     # Omitted matcher is intentional: Codex treats it as match-all for
-    # supported events, so every tool/stop/session boundary reaches brr.
+    # supported events, so every tool/stop/session boundary reaches brnrd.
     assert "matcher" not in joined
-    assert 'command="brr hook post-tool"' in joined
+    assert 'command="brnrd hook post-tool"' in joined
 
 
 def test_gemini_block_uses_deny_exit_2(tmp_path):
@@ -386,20 +386,20 @@ def test_hook_config_supported_only_claude_today():
 
 
 def test_install_hook_config_writes_wellformed_claude_settings(tmp_path):
-    path = hooks.install_hook_config("claude", tmp_path, brr_bin="brr")
+    path = hooks.install_hook_config("claude", tmp_path)
     assert path == tmp_path / ".claude" / "settings.local.json"
     settings = json.loads(path.read_text(encoding="utf-8"))
     hook_block = settings["hooks"]
     # All three abstract phases map to their native claude event names,
-    # each invoking ``brr hook <phase>`` — the keystone the wiring relies on.
+    # each invoking ``brnrd hook <phase>`` — the keystone the wiring relies on.
     assert set(hook_block) == {"PostToolBatch", "Stop", "SessionStart"}
     cmds = {
         name: entries[0]["hooks"][0]["command"]
         for name, entries in hook_block.items()
     }
-    assert cmds["PostToolBatch"] == "brr hook post-tool"
-    assert cmds["Stop"] == "brr hook stop"
-    assert cmds["SessionStart"] == "brr hook session-start"
+    assert cmds["PostToolBatch"] == "brnrd hook post-tool"
+    assert cmds["Stop"] == "brnrd hook stop"
+    assert cmds["SessionStart"] == "brnrd hook session-start"
     # statusLine is a TUI footer and does not fire under daemon --print runs,
     # so brr must not register a dead collector by default.
     assert "statusLine" not in settings
@@ -446,15 +446,15 @@ def test_install_hook_config_unsupported_flavour_is_noop(tmp_path):
 
 
 def test_hook_capability_precheck(tmp_path, monkeypatch):
-    # Pretend brr is on PATH so the precheck's only variables are flavour /
+    # Pretend brnrd is on PATH so the precheck's only variables are flavour /
     # cwd writability.
-    monkeypatch.setattr(hooks.shutil, "which", lambda _name: "/usr/bin/brr")
+    monkeypatch.setattr(hooks.shutil, "which", lambda _name: "/usr/bin/brnrd")
     assert hooks.hook_capability("claude", tmp_path) is True
     # Unsupported flavour → degrade.
     assert hooks.hook_capability("codex", tmp_path) is False
     assert hooks.hook_capability(None, tmp_path) is False
     # Missing cwd → degrade.
     assert hooks.hook_capability("claude", tmp_path / "nope") is False
-    # brr not invocable → degrade.
+    # brnrd not invocable → degrade.
     monkeypatch.setattr(hooks.shutil, "which", lambda _name: None)
     assert hooks.hook_capability("claude", tmp_path) is False

@@ -1,4 +1,4 @@
-"""macOS LaunchAgent support for ``brr daemon``."""
+"""macOS LaunchAgent support for ``brnrd daemon``."""
 
 from __future__ import annotations
 
@@ -138,9 +138,9 @@ def install(
     config_home: Path | None = None,
     run: RunFn = subprocess.run,
 ) -> InstallResult:
-    brr_bin = str(brr_path or shutil.which("brr") or "")
+    brr_bin = str(brr_path or shutil.which("brnrd") or "")
     if not brr_bin:
-        raise SystemExit("[brr] cannot find `brr` on PATH; install the CLI before registering launchd")
+        raise SystemExit("[brr] cannot find `brnrd` on PATH; install the CLI before registering launchd")
 
     ensure_project_registry(config_home=config_home)
     launch_agents_dir(home=home).mkdir(parents=True, exist_ok=True)
