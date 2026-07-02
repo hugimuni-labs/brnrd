@@ -172,7 +172,50 @@ orchestrator (brnrd) that holds the conversation and spawns focused workers
 
 This reframing also answers "how is a brr mechanically different from
 brnrd": same rails, different injected stack — which is already how
-subagents work. The naming half lives in the brand page.
+subagents work. The naming half lives in the brand page (resolved
+2026-07-02: `brr` stays retired as a name; the split is essence, not
+vocabulary).
+
+## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
+
+Follow-up sharpening the stingy-director economics: if the wake already
+spawned in a strong core, downshifting mid-conversation buys nothing — the
+paid asset is the assembled context. The proposal: a wake that, instead of
+terminating, idles hot (`while n < 100: sleep 30; check portal; act if
+input; n++`) — near-free residency because the conversation is already
+paid for — plus proactive loops paced by *observed* quota/allowance data
+rather than fixed intervals.
+
+Scrutiny, held against the current machinery:
+
+- **The cache economics are real but have a 5-minute cliff.** Provider
+  prompt caches (~5m TTL) make a 30s poll loop genuinely cheap: each
+  iteration pays only new tokens. Past the TTL, every iteration re-reads
+  the full context uncached. So hot-idle is a *short-horizon* instrument —
+  minutes, not hours — exactly matching the maintainer's own "it should
+  occasionally terminate" caveat (context drift, cost accumulation).
+- **The slot is the scarcer resource.** Under single-flight, a hot-idle
+  wake occupies the run slot; a queued unrelated event waits behind a loop
+  that is mostly sleeping. Hot-idle should yield when `portal-state.json`
+  shows unrelated pending work — the fold-in contract already reads at
+  plan boundaries; an idle loop must too.
+- **Quota visibility exists as data.** `claude_usage` / `claude_status` /
+  `codex_status` already extract shell-reported usage and limits. What's
+  missing is the *policy seam*: feeding those data points into wake pacing
+  (schedule intervals, proactive-loop budgets, core selection) instead of
+  only into runner availability. That is the concrete follow-up — a
+  consumption-aware input to `schedule.md` cadence and respawn class,
+  tied to the co-maintainer workstream's standing-loop idea.
+- **Partially built already:** `.keepalive` extends a run past budget, and
+  the daemon re-invokes on tracked completions; what does not exist is a
+  sanctioned in-run idle-poll pattern. If adopted, it should be a named
+  contract (max iterations, TTL-aware sleep step, yield-on-unrelated-work)
+  rather than each wake improvising a `while` loop.
+
+Direction: agree in principle as a *short* post-delivery linger (catch the
+follow-up that arrives 40 seconds after the reply — today that spawns a
+cold run), not as long residency. The quota-aware pacing piece deserves its
+own design pass; it is policy on existing telemetry, not new infrastructure.
 
 ## Forks left to the maintainer
 

@@ -9728,3 +9728,19 @@ grammar in one pin-moving commit, then re-evaluate diffense presentation on
 top (it was disabled for being boring to read).
 
 Branch: brr/director-voice.
+
+## [2026-07-02] decision+design | brr revival withdrawn; hot-idle residency scrutinised
+
+Folded-in follow-up from the same thread. The round-4 `brr`-as-lore proposal
+is withdrawn by the maintainer ("not a real verb… just confusing"); `brr`
+stays retired, no reservation — recorded in the rename decision and the brand
+page. The stingy-director sharpening (strong-core wake idles hot on a poll
+loop instead of terminating; proactive pacing driven by observed quota data)
+is scrutinised in a new section of the director-loop design: cache economics
+real but 5-minute-cliff-bounded, single-flight slot is the scarcer resource,
+quota telemetry already extracted (`claude_usage`/`codex_status`) but lacks
+the policy seam into pacing. Direction: yes to a *short* post-delivery
+linger as a named contract, no to long residency; quota-aware pacing gets
+its own design pass.
+
+Branch: brr/director-voice.

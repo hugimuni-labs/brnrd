@@ -35,6 +35,12 @@ spawned work user-visible. A name is a reveal; reveals are pacing. This is
 the maintainer's call — it's brand, and it's his taste domain — but the
 sequencing argument is architecture, not taste.
 
+**Resolved 2026-07-02:** the maintainer withdrew the revival — "not a real
+verb… just confusing; how the thoughts are called doesn't matter, the
+essence is important." `brr` stays retired, no reservation held; worker runs
+get named (or not) when they become a visible product object. Recorded in
+[`decision-brnrd-rename.md`](decision-brnrd-rename.md) round 4.
+
 ## The character space
 
 The raw material is good and unusually coherent:
