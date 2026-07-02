@@ -116,6 +116,26 @@ def load_snapshot(path: Path, runner_name: str) -> RunnerQuotaSnapshot | None:
     return _snapshot_from_data(data, runner_name)
 
 
+def summary_from_levels(levels: Mapping[str, Any] | None) -> str | None:
+    """Extract a quota one-liner from a Shell level snapshot, if present.
+
+    This is the policy seam between cached collector output
+    (``.claude-usage-levels.json``, Codex rollout levels, etc.) and the
+    wake prompt's ``runner_quota`` line. When both exist, the levels
+    summary wins — matching :func:`brr.facets.build`.
+    """
+    if not isinstance(levels, dict):
+        return None
+    quota = levels.get("quota")
+    if isinstance(quota, dict):
+        text = str(quota.get("summary") or "").strip()
+        return _sanitize(text) if text else None
+    if isinstance(quota, str):
+        text = quota.strip()
+        return _sanitize(text) if text else None
+    return None
+
+
 def format_snapshot(snapshot: RunnerQuotaSnapshot) -> str | None:
     """Render a snapshot as a prompt-sized one-liner."""
     parts: list[str] = []
