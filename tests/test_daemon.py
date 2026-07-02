@@ -1,7 +1,9 @@
 """Tests for the daemon worker after the triage stage was removed."""
 
+import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1885,3 +1887,121 @@ def test_collect_levels_for_claude_merges_usage_and_result(monkeypatch, tmp_path
     assert levels["spend"]["summary"] == "$0.0100 this session"
     assert levels["context_window"]["summary"] == "95% context left (est)"
     assert levels["source"] == "claude /usage PTY + claude result JSON"
+
+
+def test_run_worker_weaves_same_thread_siblings_into_prompt(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    conv = "telegram:chat:42"
+    now = time.time()
+    lead_path = tmp_path / ".brr" / "inbox" / "evt-lead.md"
+    follow_path = tmp_path / ".brr" / "inbox" / "evt-follow.md"
+    lead_path.write_text(
+        f"---\nid: evt-lead\nstatus: pending\nsource: telegram\n"
+        f"conversation_key: {conv}\n---\ndoes the voice hold?\n",
+        encoding="utf-8",
+    )
+    follow_path.write_text(
+        f"---\nid: evt-follow\nstatus: pending\nsource: telegram\n"
+        f"conversation_key: {conv}\n---\naddress this as changes right away\n",
+        encoding="utf-8",
+    )
+    os.utime(lead_path, (now - 1.0, now - 1.0))
+    os.utime(follow_path, (now - 0.5, now - 0.5))
+    lead = {
+        "id": "evt-lead",
+        "status": "pending",
+        "body": "does the voice hold?",
+        "source": "telegram",
+        "conversation_key": conv,
+        "_path": lead_path,
+    }
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    captured: dict[str, object] = {}
+
+    def _prompt(task_body, _eid, _rp, _root, **kw):
+        captured["task_body"] = task_body
+        captured.update(kw)
+        return "PROMPT"
+
+    monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", _prompt)
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        lead, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    assert "does the voice hold?" in str(captured["task_body"])
+    assert "address this as changes right away" in str(captured["task_body"])
+    pending = captured.get("pending_events") or []
+    assert all(ev.get("id") != "evt-follow" for ev in pending)
+
+
+def test_run_worker_threads_level_quota_into_prompt(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-level-quota")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "claude")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.runner_quota,
+        "describe_runner_quota",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        daemon,
+        "_collect_levels",
+        lambda *_a, **_k: (
+            {"quota": {"summary": "session 88% left; week 40% left"}},
+            frozenset({"quota"}),
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def _prompt(_task, _eid, _rp, _root, **kw):
+        captured.update(kw)
+        return "PROMPT"
+
+    monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", _prompt)
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation,
+            runner_name=runner_name,
+            command=["mock"],
+            stdout="ok\n",
+            stderr="",
+            returncode=0,
+            trace_dir=None,
+            artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    assert task.status == "done"
+    assert captured["runner_quota"] == "session 88% left; week 40% left"
