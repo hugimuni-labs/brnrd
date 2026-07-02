@@ -608,9 +608,26 @@ def build_init_prompt(repo_root: Path) -> str:
     return f"{setup}\n\n{template}"
 
 
-def build_run_prompt(task: str, repo_root: Path) -> str:
-    """Build the prompt for ``brnrd run`` — run.md + recent context + task."""
+def _read_preamble_with_weave(repo_root: Path) -> str:
+    """Read ``run.md`` plus the working-register contract (``weave.md``).
+
+    The weave rides every runner path — one-shot and daemon alike — because
+    it governs the resident's *own* working surfaces (card notes, stderr
+    narration, dominion scratch), which exist under any host. It sits right
+    after the host-agnostic operational preamble and before any host-specific
+    machinery so read order mirrors authority: how you operate, how you
+    write while operating, then who is driving.
+    """
     preamble = read_prompt("run.md", repo_root)
+    weave = read_prompt("weave.md", repo_root)
+    if weave.strip():
+        preamble = f"{preamble.rstrip()}\n\n{weave.strip()}"
+    return preamble
+
+
+def build_run_prompt(task: str, repo_root: Path) -> str:
+    """Build the prompt for ``brnrd run`` — run.md + weave + context + task."""
+    preamble = _read_preamble_with_weave(repo_root)
     return _join_prompt_parts(
         preamble, repo_root, f"---\nTask: {task}", task_text=task,
     )
@@ -657,7 +674,7 @@ def build_daemon_prompt(
     host-agnostic playbook deliberately leaves out. ``brnrd run`` skips it:
     a one-shot has no daemon to fire schedules or drain an outbox.
     """
-    preamble = read_prompt("run.md", repo_root)
+    preamble = _read_preamble_with_weave(repo_root)
     substrate = read_prompt("daemon-substrate.md", repo_root)
     if substrate.strip():
         preamble = f"{preamble.rstrip()}\n\n{substrate.strip()}"
