@@ -9700,3 +9700,31 @@ Validation: full pytest green (1229 passed, 1 existing FastAPI/httpx
 warning) after updating the phrase pins the voice pass moved.
 
 Branch: brr/director-voice.
+
+## [2026-07-02] design | weave register — voice round 4, the working notation
+
+Maintainer follow-up on the voice work (two-part message, folded into one
+run): does the rewritten voice hold from the inside, and the fuller intent
+behind "ornamentation" — not user-facing decoration but the shape of the
+resident's stream itself (Ummon reference: few words, lots of meaning;
+mechanically efficient yet deep), to be *discovered* from what the stream
+already does, not invented, and eventually spoken by the daemon's own seams
+too.
+
+Answered the first part honestly (it holds; see the thread) and shipped the
+second as phase 1: `prompts/weave.md` — the working-register contract
+(coordinates over descriptions, deltas over narration, marks over clauses,
+state lines over paragraphs, frontmatter thinking), written in the register
+it names, with the strike-rule guard against glyph costume ("the measure of
+a mark is the clause it replaced") and hard channel boundaries (user chat /
+kb / machine-parsed stay plain and exact). Wired via
+`_read_preamble_with_weave()` on both runner paths, pinned in
+`test_prompts.py`. `design-weave-register.md` carries the reasoning, the
+ornament-knob reconciliation (two dials: presentation vs working register),
+the efficiency reconciliation (notation is denser than prose — the register
+should save tokens), and the phase-2 plan: inventory daemon-written scroll
+markers (hook injections, portal-update framing) and move them onto the same
+grammar in one pin-moving commit, then re-evaluate diffense presentation on
+top (it was disabled for being boring to read).
+
+Branch: brr/director-voice.

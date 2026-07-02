@@ -403,6 +403,16 @@ class TestPromptBuilding:
         assert "How the daemon drives you" not in prompt
         assert "schedule.md" not in prompt
 
+    def test_prompts_include_weave_register(self, tmp_path):
+        """Both runner paths carry the working-register contract (weave.md):
+        the resident's dense native notation for the surfaces only it and
+        the machinery read. Host-agnostic, so the one-shot path gets it too."""
+        assert "your working register" in build_run_prompt("ship it", tmp_path)
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
+        )
+        assert "your working register" in prompt
+
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
         prompt = build_daemon_prompt(
             "work on A", "evt-A", "/tmp/resp.md", tmp_path,

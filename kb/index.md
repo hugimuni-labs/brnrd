@@ -79,6 +79,12 @@ dive-in map) and are stable until something contradicts them.
   copy sober), `brr` reserved — not adopted — as the worker-run name, and
   the third-round voice fix: the wake scroll now written *in* the register
   it prescribes, not about it.
+- [Weave register design](design-weave-register.md) — *active, phase 1
+  shipped 2026-07-02*. Round 4 of the voice work: the resident's working
+  notation (coordinates, deltas, verdict marks) canonized as
+  `prompts/weave.md` and injected on both runner paths — discovered from
+  what the stream already emits, with hard channel boundaries and a
+  phase-2 plan for daemon-side markers to speak the same grammar.
 - [Control surface plan](plan-control-surface.md) — *active*. The
   "dashboard" the engine shipped without: runner-mandate facet, per-run
   record + attempt ledger, repo dimension on cards/activity, account daemon +
