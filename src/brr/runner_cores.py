@@ -263,7 +263,11 @@ def generated_profile_entries(
     daemon also needs a concrete profile name it can pass to ``_build_cmd``.
     This helper derives those profiles from the Shell's declared base profile:
     copy hook/quota metadata from the base Shell, insert the Core's model flag
-    into the base command, and keep project-declared profiles authoritative.
+    into the base command, and keep project-declared profiles authoritative
+    *per field*: the caller (``runner._selection_profiles``) overlays declared
+    fields on top of the generated twin, so a declaration that only pins
+    ``cmd`` still inherits the registry's model/class/cost metadata instead
+    of silently shedding it.
     If a declared base profile carries an ``auth_variant`` flag (for example
     Claude's ``--bare`` / ``ANTHROPIC_API_KEY`` path), generate the same Core
     names under that base profile too. The Core metadata still comes from this
@@ -288,7 +292,7 @@ def generated_profile_entries(
             continue
         for base_name, base in bases:
             name = _generated_profile_name(core_name, shell, base_name)
-            if name in declared or name in out:
+            if name in out:
                 continue
             cmd = _cmd_with_model(shell, _str(base.get("cmd")) or shell, model)
             generated: dict[str, Any] = {
