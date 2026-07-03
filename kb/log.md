@@ -9932,3 +9932,41 @@ Focused verification: `test_post_delivery_attend_*`,
 `test_daemon_prompt_carries_next_move_and_linger`.
 
 Branch: main.
+
+## [2026-07-03] fix | Runner catalog: correct metadata, no bloat
+
+The wake-prompt Runner catalog was bloated and sometimes wrong (12 entries,
+`core=default` on model-pinned profiles, `availability=available` noise on
+every line). Three causes, three fixes:
+
+- **Per-field profile merge** — a declared profile whose name collides with a
+  registry-generated twin now overlays its fields on the twin
+  (`runner._selection_profiles`) instead of replacing it wholesale, so a
+  project override that pins only `cmd` no longer sheds model/class/cost
+  metadata. `runner_cores.generated_profile_entries` emits twins for declared
+  names to make that merge possible; declared fields stay authoritative.
+- **auth_env availability gate** — `_runner_available` now requires a
+  profile's declared `auth_env` (e.g. `ANTHROPIC_API_KEY` for
+  `claude-bare-api-only*`) to be present, so keyless API-only variants stop
+  being listed as available and stop being doomed fallback targets.
+- **Render trim** — `prompts._render_runner_catalog` renders `availability=`
+  only when it is *not* "available"; the catalog is pre-filtered to invokable
+  profiles, so the constant field was pure noise.
+
+Root cause on this host was also config drift: the local `.brr/runners.md`
+(gitignored) had lost all Core metadata, still used `--safe-mode` (silently
+hook-killing per the bundled runners.md), and statically shadowed the
+registry's bare-api model variants. Re-mirrored from bundled frontmatter with
+a drift note in the file (backup at `/tmp/runners.md.bak-260703`).
+
+Also folded in: `prompts/weave.md` spiral-unfolding rule now says open
+decision forks ride in the first, densest turn of a reply — named fork +
+recommended arm up top — so the reader can react at the speed of the skim
+(maintainer ask, telegram 2026-07-03).
+
+Verification: `test_available_runner_catalog_excludes_profiles_missing_auth_env`,
+`test_declared_profile_inherits_registry_metadata_per_field`,
+`test_generated_profile_entries_emit_twin_for_declared_name`,
+`test_runner_catalog_renders_only_unusual_availability`; full suite 1252 passed.
+
+Branch: brr/runner-catalog-trim.

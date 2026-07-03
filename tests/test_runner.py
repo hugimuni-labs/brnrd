@@ -281,6 +281,92 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
     assert "cmd" not in mini
 
 
+def test_available_runner_catalog_excludes_profiles_missing_auth_env(
+    tmp_path, monkeypatch,
+):
+    """API-key auth variants without their key are not invokable ⇒ not listed."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+            "claude-bare-api-only": {
+                "binary": "claude",
+                "shell": "claude",
+                "cmd": "claude --print --bare",
+                "class": "balanced",
+                "cost_rank": 30,
+                "auth_variant": "anthropic-api-key",
+                "auth_env": "ANTHROPIC_API_KEY",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    names = {
+        item["name"]
+        for item in runner_mod.available_runner_catalog(tmp_path)
+    }
+    assert "claude" in names
+    assert not any(name.startswith("claude-bare-api-only") for name in names)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    names = {
+        item["name"]
+        for item in runner_mod.available_runner_catalog(tmp_path)
+    }
+    assert "claude-bare-api-only" in names
+
+
+def test_declared_profile_inherits_registry_metadata_per_field(
+    tmp_path, monkeypatch,
+):
+    """A declared name colliding with a registry twin keeps its own fields
+    but no longer sheds the registry's Core metadata (the core=default bug)."""
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {
+                "cmd": "claude --print",
+                "hooks": "claude",
+                "class": "balanced",
+                "cost_rank": 30,
+            },
+            # Declared override pins only cmd — the drifted-dogfood shape.
+            "claude-sonnet": {
+                "binary": "claude",
+                "cmd": 'claude --model "claude-sonnet-4-6" --print --custom',
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+
+    catalog = runner_mod.available_runner_catalog(tmp_path)
+    sonnet = next(item for item in catalog if item["name"] == "claude-sonnet")
+    assert sonnet["model"] == "claude-sonnet-4-6"
+    assert sonnet["class"] == "balanced"
+
+    cmd = _build_cmd("claude-sonnet", "fix it", {}, tmp_path)
+    assert "--custom" in cmd  # declared cmd stays authoritative
+
+
 def test_resolve_runner_core_pin_matches_generated_short_alias(tmp_path, monkeypatch):
     """core=haiku can select the generated claude-haiku profile."""
     (tmp_path / ".brr").mkdir()
