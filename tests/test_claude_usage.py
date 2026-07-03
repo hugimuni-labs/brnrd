@@ -70,6 +70,37 @@ def test_parse_usage_text_handles_screen_reader_duplicate_percentages():
     assert levels["week_used_percentage"] == 70
 
 
+def test_parse_usage_text_keeps_model_week_bucket_separate():
+    levels = claude_usage.parse_usage_text(
+        "Current session\n0% 0% used\nResets 4:50pm (Europe/Berlin)\n"
+        "Current week (all models)\n5% 5% used\n"
+        "Resets Jul 10, 12am (Europe/Berlin)\n"
+        "Current week (Fable)\n8% 8% used\n"
+        "Resets Jul 10, 12am (Europe/Berlin)\n"
+    )
+
+    assert levels["week_used_percentage"] == 5
+    assert levels["week_models"]["Fable"] == {
+        "used_percentage": 8,
+        "reset": "Jul 10, 12am (Europe/Berlin)",
+    }
+    assert levels["quota"]["summary"] == (
+        "session 100% left (resets 4:50pm (Europe/Berlin)); "
+        "week 95% left (resets Jul 10, 12am (Europe/Berlin)); "
+        "Fable week 92% left"
+    )
+
+
+def test_parse_usage_text_bare_week_reset_paren_is_not_a_model_label():
+    levels = claude_usage.parse_usage_text(
+        "Current session: 7% used · resets Jun 30, 6:20pm (Europe/Berlin)\n"
+        "Current week: 70% used · resets Jul 3, 12am (Europe/Berlin)\n"
+    )
+
+    assert levels["week_used_percentage"] == 70
+    assert "week_models" not in levels
+
+
 def test_usage_command_uses_ax_screen_reader_and_safe_mode():
     assert claude_usage._usage_command() == [
         "claude",
@@ -104,6 +135,15 @@ def test_load_or_refresh_snapshot_uses_fresh_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(claude_usage, "capture_levels", _unexpected)
 
     assert claude_usage.load_or_refresh_snapshot(tmp_path) == cached
+
+
+def test_ttl_env_var_overrides_default():
+    assert claude_usage._ttl_seconds({}) == claude_usage.DEFAULT_TTL_SECONDS
+    assert claude_usage._ttl_seconds({claude_usage.TTL_ENV_VAR: "45"}) == 45.0
+    assert (
+        claude_usage._ttl_seconds({claude_usage.TTL_ENV_VAR: "bogus"})
+        == claude_usage.DEFAULT_TTL_SECONDS
+    )
 
 
 def test_load_or_refresh_snapshot_writes_negative_cache(tmp_path, monkeypatch):
