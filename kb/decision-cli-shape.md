@@ -18,7 +18,7 @@
 > 2), where both are just repos the one daemon serves. The `.brr/` runtime dir is
 > a separate, deferrable rename — not tied to dropping the command.
 
-**Status: accepted 2026-05-26** (locked in PR #40 MR review,
+Status: accepted on 2026-05-26 (locked in PR #40 MR review,
 locking pass IV — `brnrd` promoted to a **sibling top-level
 binary** alongside `brr`, shipped from the same package;
 `brr brnrd <subcmd>` retained as an alias for
