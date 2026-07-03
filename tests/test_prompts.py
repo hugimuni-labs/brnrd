@@ -272,10 +272,8 @@ class TestPromptBuilding:
             runner_medium="codex",
             runner_quota="weekly 0% - resets 2026-06-17T01:29Z",
         )
-        assert (
-            "- Runner: codex (weekly 0% - resets 2026-06-17T01:29Z)"
-            in prompt
-        )
+        assert "- Runner: codex" in prompt
+        assert "- Quota: weekly 0% - resets 2026-06-17T01:29Z" in prompt
 
     def test_daemon_prompt_surfaces_repo_label(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -315,7 +313,7 @@ class TestPromptBuilding:
             ],
         )
 
-        assert "### Runner Mandate" in prompt
+        assert "### Runner catalog" in prompt
         assert (
             "- selected codex-mini: shell=codex, core=gpt-5.4-mini, "
             "class=economy, cost_rank=20, quota=codex-local, "
@@ -352,7 +350,7 @@ class TestPromptBuilding:
             run_id="task-9",
             runner_medium="codex",
         )
-        assert "Codex runner note" in prompt
+        assert "codex Shell:" in prompt
         assert "runner-local under brr" in prompt
         assert ".card" in prompt
         assert "plain current-thread fallback" in prompt
@@ -362,10 +360,11 @@ class TestPromptBuilding:
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
         )
-        # "mid-thought" now rides unconditionally in daemon-substrate's
-        # delivery-contract line (round-5 reweave), so the outbox-specific
-        # absence pin is the directory contract itself.
-        assert "outbox directory" not in prompt
+        # The standing outbox rules now ride unconditionally in
+        # daemon-substrate's delivery-portals block (contract-compression
+        # pass), so the outbox-specific absence pin is the live value
+        # bullet the bundle renders only when a path exists.
+        assert "- outbox:" not in prompt
 
     def test_daemon_prompt_states_budget_and_keepalive(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -386,7 +385,9 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "Budget:" not in prompt
-        assert ".keepalive" not in prompt
+        # daemon-substrate names `.keepalive` as a standing rule; the
+        # absence pin is the live path bullet, rendered only with a budget.
+        assert "/repo/.brr/outbox/evt-1/.keepalive" not in prompt
 
     def test_daemon_prompt_includes_driver_manual(self, tmp_path):
         """The daemon path injects brr's driver's manual — the daemon-only
@@ -530,7 +531,7 @@ class TestPromptBuilding:
         )
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "Run context file: /repo/.brr/runs/run-123/context.md" in prompt
-        assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
+        assert "- stdout capture: /tmp/resp.md" in prompt
         assert "fix it" in prompt
         assert "kb/log-" not in prompt
         assert "gh pr create" not in prompt
@@ -602,7 +603,7 @@ class TestPromptBuilding:
         assert "Host context branch: feature/host" in prompt
         # No target branch → nudge the agent to rename the brr/<run-id>
         # placeholder to something descriptive.
-        assert "rename the branch" in prompt
+        assert "themed work ⇒ rename" in prompt
         assert "brr/<short-slug>" in prompt
         # The forge-locked `gh pr create` nudge is gone — brr now emits
         # a forge URL in the response card automatically, and PR
@@ -626,7 +627,7 @@ class TestPromptBuilding:
             seed_ref="main",
         )
 
-        assert "remotely" in prompt
+        assert "chat client" in prompt
         assert "basename only" in prompt
         assert ".brr/worktrees/" in prompt  # cited as the bad pattern
         assert "forge-hosted branch URL" in prompt
@@ -858,18 +859,20 @@ class TestPromptBuilding:
             outbox_path="/repo/.brr/outbox/evt-1",
             run_id="task-9",
         )
-        assert "stay in the conversation" in prompt
-        assert "substantial work should use the card" in prompt
-        assert "not waiting in the dark" in prompt
+        assert "fold a related follow-up in" in prompt
+        assert "card + mid-thought replies" in prompt
+        assert "waiting in the dark" in prompt
 
     def test_delivery_contract_carries_portal_model_summary(self, tmp_path):
-        # The delivery contract injects a *summary* of the portal grammar so
-        # the inbound/outbound/parked model rides hot without re-narrating the
-        # whole manual. It must name the three forms and point at the manual as
-        # the pull-only full reference — the anti-drift link the maintainer
-        # asked for. The reciprocal half is pinned in test_docs.py
-        # (test_portals_manual_links_back_to_delivery_contract); keep the two
-        # tests in step so contract and manual can't silently diverge.
+        # The portal-grammar summary (inbound/outbound/parked) now rides in
+        # daemon-substrate's delivery-portals block (contract-compression
+        # pass); the bundle's Delivery contract carries only live values plus
+        # the pointer at the standing rules and the manual. Both halves must
+        # name the manual as the pull-only full reference — the anti-drift
+        # link the maintainer asked for. The reciprocal half is pinned in
+        # test_docs.py (test_portals_manual_links_back_to_delivery_contract);
+        # keep the two tests in step so contract and manual can't silently
+        # diverge.
         prompt = build_daemon_prompt(
             "ship it",
             "evt-1",
@@ -879,9 +882,9 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "portals" in prompt
-        for form in ("*inbound*", "*outbound*", "*parked*"):
+        for form in ("inbound", "outbound", "parked"):
             assert form in prompt
-        assert "injected summary" in prompt
+        assert "Standing rules" in prompt
         assert "brnrd docs portals" in prompt
 
 
