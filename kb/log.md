@@ -9831,3 +9831,32 @@ worker stack #215, post-delivery linger #216), plus the voice tail
 (user_commitment plumbing #217, AGENTS.md house-voice pass).
 
 Branch: brr/director-voice.
+
+## [2026-07-03] feature | stream A opens: next-move contract (A1/#211) + post-delivery linger v1 (B5/#216) + reader-model line (#217 v1)
+
+Three slices on brr/stream-a-pacing, all prompt/doc-side after one code
+reading settled the shape: `daemon.py::_result_satisfied_delivery` already
+counts a mid-thought outbox reply as the satisfying signal
+(`current_reply`), so the linger needs no daemon change — outbox delivers,
+`.keepalive` holds the slot, `portal-state.json` carries the yield signal.
+
+- A1: portals manual grew §"The next move" (an addressed reply ends
+  `done — receipt` | `continuing — what's next` | `blocked — what's
+  needed` | genuine fork: 2–4 numbered options + recommendation + one-line
+  reason; manufacturing options named the failure mode), with the compact
+  rule in daemon-substrate's delivery-portals block.
+- B5 v1: §"The post-delivery linger" — deliver via outbox first, backoff
+  30s → cap 240s (inside the ~5m provider cache window), absolute yield on
+  any unrelated pending event, default horizon 10–15m past last delivery.
+  Parameters from the maintainer's live ask; the 10–20h vigil variant is
+  deferred to quota policy (#214) + compaction.
+- #217 v1: `user_commitment` config key (maintainer had already set
+  `full`) now rides the communication snapshot as a "Reader model" bundle
+  line; per-correspondent gate declaration stays open under #217.
+
+Pins in test_docs.py / test_prompts.py (manual and substrate halves
+cross-referenced); full suite green. Plan page updated with shipped
+markers + the v1-outcome note; introspection.md rework added to the voice
+tail (maintainer confirmed it was planned).
+
+Branch: brr/stream-a-pacing.

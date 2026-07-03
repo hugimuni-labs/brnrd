@@ -23,7 +23,7 @@ the design page win.
 
 ## Workstream A — structured pacing ("gamification" without dopamine)
 
-### A1 — run-end next-move contract (prompt only) — owner: resident — [#211](https://github.com/Gurio/brr/issues/211)
+### A1 — run-end next-move contract (prompt only) — owner: resident — [#211](https://github.com/Gurio/brr/issues/211) — *shipped 2026-07-03*
 
 Phase 1 of the design. Add "the next move" to `docs/portals.md` and one
 compact rule to the delivery-portals block in
@@ -120,7 +120,7 @@ Touch points: `prompts.py` (a worker preamble variant), respawn path in
 `daemon.py`, tests. Depends on: B3 naming the two stacks.
 Effort: 1–2 wakes. Cleanly spec-able.
 
-### B5 — post-delivery linger (named contract) — owner: delegable, resident reviews — [#216](https://github.com/Gurio/brr/issues/216)
+### B5 — post-delivery linger (named contract) — owner: delegable, resident reviews — [#216](https://github.com/Gurio/brr/issues/216) — *v1 shipped 2026-07-03*
 
 The hot-idle scrutiny's surviving slice: a *short* post-delivery linger to
 catch the follow-up that lands ~40s after the reply (observed live
@@ -133,17 +133,41 @@ sleep step (stay inside the ~5m provider cache), yield immediately when
 tests. Depends on: B1 (linger spends quota; the policy says when it's
 worth it).
 
+*v1 outcome (2026-07-03):* shipped as pure contract — portals manual
+§"post-delivery linger" + a compact substrate rule — after confirming in
+`daemon.py::_result_satisfied_delivery` that a mid-thought outbox reply on
+the current thread already counts as the satisfying signal (`current_reply`
+via `output_stats["current"]`), so a linger needs **no daemon change**:
+outbox delivers, `.keepalive` holds the slot, `portal-state.json` gives the
+yield signal. No `.linger` file — card + keepalive already carry the
+posture. Parameters set by the maintainer's live ask (exponential backoff
+30s → cap 240s inside the ~5m provider cache window; absolute yield on any
+unrelated pending event; default horizon 10–15m past last delivery). The
+multi-hour vigil the maintainer floated (up to 10–20h at 2–3m polls) is
+deliberately **not** in v1: it needs compaction + B1's quota floors to be
+honest about spend; revisit under #214. First live firing same run
+(run-260703-1503-k3ah): delivered via outbox, lingered ~14m through 5
+polls (30→60→120→240→240s), watched the outbox drain and the folded
+event retire through `change_token` movement, exited quiet at horizon —
+contract held end to end with zero daemon support.
+
 ## Voice workstream — remaining tail (context, not new scope)
 
 - AGENTS.md house-voice pass — resident, own commit (round-6 direction:
   settled/dry/exact + register density in enumerable sections; no resident
   intimacy, no glyph-load-bearing — it must load-bear solo for foreign
   agents and adopter seeds).
-- `user_commitment: full | profane` gate field ([#217](https://github.com/Gurio/brr/issues/217)) — delegable plumbing once
-  the product shape is confirmed: per-user declaration at the gate
-  boundary (Telegram command or account config), threaded into the bundle;
-  `full` lets replies keep weave density — this is the sanctioned
-  "register in chat, configurably" the maintainer asked about.
+- `user_commitment: full | profane` gate field ([#217](https://github.com/Gurio/brr/issues/217)) — *v1 shipped
+  2026-07-03*: the maintainer set `user_commitment=full` in `.brr/config`;
+  the daemon now threads that key into the communication snapshot and the
+  bundle renders a "Reader model" line (`full` licenses weave-density
+  replies; other values unfold to plain prose; absent = profane default,
+  no line). Per-correspondent declaration at the gate boundary (Telegram
+  command / account config) remains the eventual shape — #217 stays open
+  for that.
+- `introspection.md` rework — round-6 finding, maintainer confirmed
+  planned (2026-07-03): re-cut the development-mode attention block to the
+  register-era voice; resident-owned, own commit.
 
 ## Sequencing (cheapest feel-win first)
 
