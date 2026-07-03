@@ -190,6 +190,29 @@ This is a named contract, not an improvised while-loop:
    ⇒ fold it in, reply, reset the backoff. **Any unrelated pending event
    ⇒ yield immediately** — exit so the single-flight slot frees; a
    linger never starves the queue.
+
+   The mechanical shape — one bounded shell command per quiet interval,
+   never an unbounded sleep loop:
+
+   ```sh
+   # One linger poll: waits up to $INTERVAL seconds, exits 0 the moment
+   # attention-relevant state moves, 124 when the interval passes quiet.
+   last=$(jq -r .change_token "$BRR_PORTAL_STATE")
+   timeout "$INTERVAL" sh -c '
+     while sleep 10; do
+       [ "$(jq -r .change_token "$BRR_PORTAL_STATE")" != "'"$last"'" ] && exit 0
+     done'
+   ```
+
+   Run it with `INTERVAL=30`, then `60`, `120`, `240`, `240`, … — the
+   backoff lives in the *sequence of calls*, not inside one long-running
+   command. After each call: exit 0 ⇒ read `portal-state.json` and
+   `inbox.json`, decide fold-in vs yield; exit 124 ⇒ double the interval
+   and go again (or exit if the horizon passed). Keeping each poll a
+   separate tool call matters beyond tidiness: on hook-capable Shells the
+   portal update fires *between* calls, so pending events are pushed into
+   your context at every poll boundary — the yield rule gets checked even
+   when you forget to check it.
 5. **Bound the horizon.** Default: 10–15 minutes past the last delivery;
    extend only while the exchange is actually flowing. Multi-hour vigils
    are scheduled wakes' territory, or quota-aware pacing policy (#214) —
