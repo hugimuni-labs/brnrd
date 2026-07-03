@@ -44,11 +44,59 @@ add, edit, retire freely. This is the seam between reacting and
 making progress on what matters," with the interval as its own brake. A
 thought that wakes for nothing is friction paid every cycle.
 
-delivery contract: per-run, in the bundle — how to message the user
-mid-thought, the time budget for this thought, how to extend it.
+delivery portals: the bundle's Delivery contract carries this run's live
+*values* (paths, budget, branch); these are the standing rules behind them.
+Portals are the seams where a run turns to the world — inbound
+(`inbox.json`, `portal-state.json`), outbound (chat reply, `.card`), parked
+(PLAN→approve, `respawn:`).
+
+- stdout — a compatibility fallback, not the delivery model. One plain
+  current-thread reply called for ⇒ final stdout is the exact content
+  (run.md §Delivery holds the closeout discipline). brr captures stdout to
+  the bundle-named response path — never write that file yourself. An
+  addressed run must leave a satisfying signal; none ⇒ brr sends an
+  explicit failure note rather than dropping the thread.
+- outbox — a markdown file in the run's outbox directory = one chat
+  message, delivered mid-thought, in order (stage `*.tmp`, rename =
+  atomic). Quick self-contained ask ⇒ stdout suffices; substantial work ⇒
+  card + mid-thought replies, so the user isn't waiting in the dark.
+- outbox frontmatter routes a file elsewhere: `event: <id>` → answer a
+  *different* pending event and mark it handled (one complete reply per
+  folded-in event) | `gate: <name>` → send with no waiting event |
+  `gate: forge` is the explicit PR handoff — `head` / `base` / `title`
+  frontmatter, PR body as the message; diffense can supply title/body from
+  a checked pack but does not own PR creation | `respawn: true` → park a
+  handoff to another run; name `shell:` / `core:`, or `quality: escalate`
+  for the stronger local Core | `runner_policy: propose` → park a policy
+  change for operator approval.
+- inbox.json — live pending-event view, heartbeat-refreshed. Re-read at
+  plan / todo boundaries; once more immediately before a terminal closeout
+  — fold a related follow-up in, or say why it stays queued. Doesn't catch
+  messages that arrive after the runner has already returned. Daemon-owned;
+  don't edit.
+- portal-state.json (env `BRR_PORTAL_STATE`) — pending events,
+  delivery/card posture, budget/keepalive state, `change_token` = "did
+  attention-relevant state move since my last read". Daemon-owned;
+  inspect, don't edit.
+- .keepalive — outlast the budget: first line ISO-8601 or `+<duration>`
+  (`+30m`); rewrite to extend. Control file, never delivered.
+- .card — narrate the live progress card: note body only (brr adds the
+  `note:` label); rewrite as context shifts, empty/delete to withdraw.
+  Control file, never delivered.
+- remote reader — the user reads replies in a chat client (Telegram /
+  Slack); files by basename only (`subject-envs.md`, `run_progress.py`),
+  never host paths like `.brr/worktrees/<run-id>/kb/foo.md` — they don't
+  exist on the user's machine and won't render. brr appends the
+  forge-hosted branch URL to the card when one exists; don't fabricate one.
+- receipts — wrote files ⇒ commit on the current branch; the diff is the
+  receipt, uncommitted work disappears. Don't explore or modify other
+  `.brr/` files beyond what the run asks. Themed work on a placeholder
+  `brr/<run-id>` branch ⇒ rename the branch to a descriptive
+  `brr/<short-slug>` before committing (keep the `brr/` prefix);
+  read-only / discussion runs keep the placeholder.
 
 portals manual: `brnrd docs portals` — the full control-file protocol and
 the shape of an average run: receive → orient → plan-or-execute → narrate →
-deliver → decompose/defer. The bundle carries the live *values*; the manual
-carries the *choreography*. Glance at it when a run's shape is unfamiliar;
-don't carry it all in working memory.
+deliver → decompose/defer. The bundle carries the live *values*; this block
+carries the rules; the manual carries the *choreography*. Glance at it when
+a run's shape is unfamiliar; don't carry it all in working memory.

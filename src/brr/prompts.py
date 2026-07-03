@@ -804,15 +804,14 @@ def _build_run_context_bundle(
     if environment:
         sections.append(f"- Environment: {environment}")
     if runner_medium:
-        runner_label = runner_medium
-        if runner_quota:
-            runner_label = f"{runner_label} ({runner_quota})"
         sections.append(
-            f"- Runner: {runner_label} — the Shell+Core this thought runs in. "
-            "A failure here (quota exhausted, provider error) costs the user "
-            "a manual reroute, so chunk work and commit early when the budget "
-            "is tight."
+            f"- Runner: {runner_medium} — the Shell+Core this thought runs "
+            "in. A failure here (quota exhausted, provider error) ⇒ the user "
+            "pays a manual reroute, so chunk work and commit early when the "
+            "budget is tight."
         )
+        if runner_quota:
+            sections.append(f"- Quota: {runner_quota}")
     sections.append(
         "- Delivery: situational outputs captured by brr "
         "(see Delivery contract below)"
@@ -833,7 +832,7 @@ def _build_run_context_bundle(
     mandate_lines = _render_runner_catalog(runner_catalog)
     if mandate_lines:
         sections.append("")
-        sections.append("### Runner Mandate")
+        sections.append("### Runner catalog")
         sections.append(
             "Selectable local Shell+Core profiles from the same catalog brr "
             "uses for cost-aware selection and respawn decisions:"
@@ -877,143 +876,54 @@ def _build_run_context_bundle(
     sections.append("")
     sections.append("### Delivery contract")
     sections.append(
-        "These are the per-run *values* and the operative rules. The surfaces "
-        "below are **portals** — the seams where this run turns to the world: "
-        "*inbound* (input flows in, like `portal-state.json` / `inbox.json`), "
-        "*outbound* (you emit to a surface — a chat reply, the `.card`), and "
-        "*parked* (you emit and park the continuation until something refluxes "
-        "back, like the PLAN→approve handoff). This list is the injected "
-        "summary of that grammar; the full control-file protocol and the shape "
-        "of an average daemon run live in the portals manual — run "
-        "`brnrd docs portals` when a step is unfamiliar. Use these portals to "
-        "stay in the conversation: keep visible state honest, fold queued "
-        "input at plan boundaries when it belongs in this run, and check for a "
-        "last-minute follow-up before terminal delivery."
+        "Live values for this run's portals. Standing rules: §How the daemon "
+        "drives you → delivery portals; full choreography: "
+        "`brnrd docs portals`."
     )
     sections.append(
-        "- Stdout is the compatibility/current-thread fallback, not the "
-        "delivery model. When the situation calls for one plain current-thread "
-        "reply, print the exact intended content as your final stdout message "
-        "— no preamble, no meta acknowledgment, no commentary outside it. "
-        "Stream progress, debug, and tool output to stderr."
-    )
-    sections.append(
-        f"- brr captures stdout and stores it at {response_path} as one "
-        "possible output artifact. Don't write that file yourself, and don't "
-        "substitute a file path for the answer. If an addressed run produces "
-        "no satisfying signal, brr sends an explicit failure note instead of "
-        "dropping the thread."
+        f"- stdout capture: {response_path} (brr-written; final stdout = the "
+        "one plain current-thread reply)"
     )
     if outbox_path:
         sections.append(
-            f"- Your outbox directory is `{outbox_path}`. Write a markdown "
-            "file into it to send the user a reply *mid-thought*; brr "
-            "delivers each as its own chat message, in order, while you keep "
-            "working. One file is one message (stage `*.tmp` and rename for "
-            "an atomic write). For an addressed event, make sure the run "
-            "leaves a satisfying operational signal; when you intend to "
-            "communicate, use stdout or an explicit portal rather than "
-            "assuming every completion shape is a chat reply. A quick "
-            "self-contained request can still end through stdout; substantial "
-            "work should use the card and, when useful, mid-thought replies "
-            "so the user is not waiting in the dark."
+            f"- outbox: `{outbox_path}/` — one file = one mid-thought chat "
+            "message; frontmatter routes (`event:` / `gate:` / `respawn:`)"
         )
         sections.append(
-            "- Outbox frontmatter routes a file elsewhere: `event: <id>` "
-            "delivers to a *different* pending event's thread and marks it "
-            "handled (one complete reply per folded-in event); `gate: <name>` "
-            "(e.g. `gate: telegram`) sends to a destination with no waiting "
-            "event. `gate: forge` is the explicit PR handoff: when a pushed "
-            "branch should become or refresh a PR, write `head`, `base`, and "
-            "`title` frontmatter and put the PR body in the message. Diffense "
-            "can supply that title/body when a checked review pack exists, but "
-            "it does not own PR creation. `respawn: true` parks a handoff to "
-            "another run; name `shell:` / `core:` explicitly or use "
-            "`quality: escalate` to let brr pick the stronger local Core. "
-            "`runner_policy: propose` parks a runner-policy change for "
-            "operator approval before the daemon writes the account dominion "
-            "policy file. See "
-            "`brnrd docs portals` for the full field list and choreography."
+            f"- inbox: `{outbox_path}/inbox.json` — re-read at plan / todo "
+            "boundaries, and immediately before a terminal closeout"
         )
         sections.append(
-            f"- A live inbox view at `{outbox_path}/inbox.json` is refreshed "
-            "each heartbeat: at plan / todo boundaries, re-read it before "
-            "deciding whether to continue, fold in a quick event, or leave "
-            "waiting work for its own wake. Re-read it once more immediately "
-            "before a terminal closeout; if a related follow-up is waiting, "
-            "fold it in or say explicitly why it should stay queued. This "
-            "does not catch messages that arrive after the runner has already "
-            "returned, but it prevents avoidable orphaned follow-ups. "
-            "Daemon-owned — don't edit it."
-        )
-        sections.append(
-            f"- A live daemon-state portal at `{outbox_path}/portal-state.json` "
-            "is also refreshed each heartbeat and exposed to the runner as "
-            "`BRR_PORTAL_STATE`. Prefer it when you need the current pending "
-            "events, delivery/card posture, budget/keepalive state, or a "
-            "`change_token` showing whether attention-relevant state changed "
-            "since your last read. Daemon-owned — inspect it, don't edit it."
+            f"- portal state: `{outbox_path}/portal-state.json` (env "
+            "`BRR_PORTAL_STATE`) — pending events, posture, `change_token`"
         )
         if runner_medium == "codex":
             sections.append(
-                "- Codex runner note: Codex-native progress/final channels "
-                "are runner-local under brr. User-visible mid-run "
-                "communication goes through `.card`, outbox replies, or "
-                "`gate:` sends; stdout remains only the plain current-thread "
-                "fallback."
+                "- codex Shell: native progress/final channels are "
+                "runner-local under brr — user-visible mid-run communication "
+                "goes through `.card` / outbox / `gate:`; stdout stays the "
+                "plain current-thread fallback"
             )
         if budget_seconds:
             sections.append(
-                f"- To outlast your budget without getting killed mid-run, "
-                f"write `{outbox_path}/.keepalive` — first line an ISO-8601 "
-                "time or `+<duration>` like `+30m`; rewrite to extend. A "
-                "control file, never delivered."
+                f"- keepalive: `{outbox_path}/.keepalive` — first line "
+                "ISO-8601 or `+<duration>` (`+30m`); rewrite to extend"
             )
         sections.append(
-            f"- To narrate the live progress card, write a line or two into "
-            f"`{outbox_path}/.card`; write only the note body, because brr "
-            "adds the `note:` label when it renders the live phase. Rewrite "
-            "as context shifts; empty/delete to withdraw. A control file, "
-            "never delivered as a chat reply."
+            f"- card: `{outbox_path}/.card` — note body only; rewrite as "
+            "context shifts"
         )
-    sections.append(
-        "- The user reads your reply remotely (Telegram / Slack / etc.). "
-        "Refer to files by basename only — `subject-envs.md`, "
-        "`run_progress.py` — never with absolute or worktree-relative "
-        "paths like `/home/.../.brr/worktrees/<run-id>/kb/foo.md` or "
-        "`.brr/worktrees/<run-id>/kb/foo.md`. Those paths exist on the "
-        "host running brr, not on the user's machine, and chat clients "
-        "won't render or link them. brr already appends a "
-        "forge-hosted branch URL to the response card when one is available; "
-        "you don't need to fabricate a link."
-    )
-    sections.append(
-        "- If you wrote files (kb pages, code, fixtures, anything), commit "
-        "them on the current branch. The diff is the receipt that the work "
-        "happened — without a commit, the work disappears."
-    )
-    sections.append(
-        "- Don't explore or modify any other files in .brr/ beyond what "
-        "this run explicitly asks for."
-    )
     if branch_name and seed_ref:
-        sections.append(
-            f"- You start on `{branch_name}`, sprouted from `{seed_ref}`. "
-            "Commit here by default; brr publishes whichever branch you "
-            "end on after the run."
+        branch_line = (
+            f"- branch: `{branch_name}` ⇐ `{seed_ref}` — commit here; brr "
+            "publishes the branch you end on"
         )
         if branch_name.startswith("brr/"):
-            sections.append(
-                f"- The placeholder branch name `{branch_name}` is opaque on "
-                "a forge branch list. If your work has a clear theme — a "
-                "feature, a fix, a refactor — rename the branch before "
-                "committing to something descriptive like "
-                "`brr/<short-slug>` (e.g. `brr/remove-status-module`, "
-                "`brr/forge-url-inference`). Keep the `brr/` prefix so the "
-                "branch is recognisable as brr-originated. Read-only, "
-                "research, or pure-discussion runs can keep the "
-                "placeholder name."
+            branch_line += (
+                "; themed work ⇒ rename to a descriptive `brr/<short-slug>` "
+                "before committing"
             )
+        sections.append(branch_line)
 
     inbox_block = _format_pending_events(pending_events)
     if inbox_block:
@@ -1022,9 +932,9 @@ def _build_run_context_bundle(
         sections.append(
             "Other events were waiting when you woke. You can fold a quick, "
             "related one in now (answer it via the outbox `event: <id>` "
-            "contract above) instead of leaving it for its own spawn — your "
-            "call. For the current list and surrounding run posture, read "
-            "the live `portal-state.json` in your outbox at plan / todo "
+            "frontmatter route) instead of leaving it for its own spawn — "
+            "your call. For the current list and surrounding run posture, "
+            "read the live `portal-state.json` in your outbox at plan / todo "
             "boundaries; `inbox.json` remains the focused pending-event list."
         )
         sections.append("")
