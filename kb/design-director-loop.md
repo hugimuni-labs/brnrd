@@ -77,7 +77,7 @@ thing is how much of the director already shipped under other names:
 | Reveal moments | Progress card narration (`.card`); mid-thought outbox replies; diffense review pack; `gate: forge` PR handoff |
 | Quest log / ranked standing moves | **Inter-run plan home** — decided in [`decision-account-centered-daemon.md`](decision-account-centered-daemon.md) §4: repo-tagged plans in the account dominion repo, daemon-injected between wakes, card-linked |
 | Progression surfaces | Issues, PRs, commits, `kb/log.md`, the activity dashboard |
-| "Keep the run open for follow-ups" | keepalive + `inbox.json` folding at plan boundaries |
+| "Keep the run open for follow-ups" | runner-owned `.keepalive` + `inbox.json` folding at plan boundaries; daemon-owned `delivered · attending` floor after current-thread delivery |
 | Director's own clock | `schedule.md` self-scheduled thoughts |
 
 So the thesis is not a new subsystem; it is a **completion criterion** for
@@ -214,8 +214,11 @@ Scrutiny, held against the current machinery:
 
 Direction: agree in principle as a *short* post-delivery linger (catch the
 follow-up that arrives 40 seconds after the reply — today that spawns a
-cold run), not as long residency. The quota-aware pacing piece deserves its
-own design pass; it is policy on existing telemetry, not new infrastructure.
+cold run), not as long residency. Shipped shape has two layers: runner-owned
+linger for true same-thought fold-in, and daemon-owned `attending` for the
+post-return safety net/card truth. The quota-aware pacing piece deserves
+its own design pass; it is policy on existing telemetry, not new
+infrastructure.
 
 Telemetry update (2026-07-03): the Claude `/usage` PTY probe is down from
 ~18s to ~3.5s, its cache TTL now 10s (maintainer's call — under the 30s

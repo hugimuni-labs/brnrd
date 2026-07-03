@@ -9904,3 +9904,31 @@ question stays in [`design-director-loop.md`](design-director-loop.md) and
 set the reply seam. Shipped in commit `0c97bcf` on `brr/linger-net`.
 
 Branch: brr/linger-net.
+
+## [2026-07-03] implement | Daemon-owned post-delivery attending floor
+
+Follow-up to the linger safety-net audit: the prompt-only contract was not
+enough. Hooks can fold a follow-up only when it is already pending before
+runner stop; once the runner has returned, card state and the slot posture are
+daemon-owned.
+
+`daemon.py` now emits an `attending` packet after a successful configured-gate
+current-thread delivery, holds the single-flight slot briefly
+(`delivery.post_delivery_attend_seconds`, default 90s), yields immediately
+when any pending event appears, and then lets terminal `done` restore the
+final `delivered` state. `run_progress.py` renders the nonterminal phase as
+`delivered · attending`; Telegram inherits the card packet set, and Slack /
+GitHub mark `attending` renderable. The portals manual, daemon substrate
+prompt, and director-loop kb now distinguish runner-owned same-thought linger
+from this daemon-owned post-return safety floor. While diagnosing the live
+failure, `hooks_installed` also became a real persisted update packet instead
+of an emitted-but-dropped breadcrumb, so future wakes can tell "config
+installed" apart from "hook fired".
+
+Focused verification: `test_post_delivery_attend_*`,
+`test_render_text_compact_attending_is_nonterminal_delivery_phase`,
+`test_hooks_installed_packet_is_persisted`,
+`test_portals_manual_defines_post_delivery_linger`, and
+`test_daemon_prompt_carries_next_move_and_linger`.
+
+Branch: main.

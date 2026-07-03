@@ -133,36 +133,35 @@ sleep step (stay inside the ~5m provider cache), yield immediately when
 tests. Depends on: B1 (linger spends quota; the policy says when it's
 worth it).
 
-*v1 outcome (2026-07-03):* shipped as pure contract — portals manual
-§"post-delivery linger" + a compact substrate rule — after confirming in
-`daemon.py::_result_satisfied_delivery` that a mid-thought outbox reply on
-the current thread already counts as the satisfying signal (`current_reply`
-via `output_stats["current"]`), so a linger needs **no daemon change**:
-outbox delivers, `.keepalive` holds the slot, `portal-state.json` gives the
-yield signal. No `.linger` file — card + keepalive already carry the
-posture. Parameters set by the maintainer's live ask (exponential backoff
-30s → cap 240s inside the ~5m provider cache window; absolute yield on any
-unrelated pending event; default horizon 10–15m past last delivery). The
-multi-hour vigil the maintainer floated (up to 10–20h at 2–3m polls) is
-deliberately **not** in v1: it needs compaction + B1's quota floors to be
-honest about spend; revisit under #214. First live firing same run
-(run-260703-1503-k3ah): delivered via outbox, lingered ~14m through 5
-polls (30→60→120→240→240s), watched the outbox drain and the folded
-event retire through `change_token` movement, exited quiet at horizon —
-contract held end to end with zero daemon support.
+*v1 outcome (2026-07-03):* shipped as two explicit layers. Runner-owned
+linger remains the same-thought path: outbox delivers the satisfying signal,
+`.keepalive` holds the slot, `.card` names the posture, `portal-state.json`
+gives the yield signal, and the manual pins the bounded poll pattern
+(30s → cap 240s inside the ~5m provider cache window; absolute yield on any
+unrelated pending event; default horizon 10–15m past last delivery). No
+`.linger` file — card + keepalive already carry the runner-owned posture.
+The first live firing (run-260703-1503-k3ah) delivered via outbox, lingered
+~14m through 5 polls (30→60→120→240→240s), watched the outbox drain and the
+folded event retire through `change_token` movement, and exited quiet at
+horizon.
 
-*Closed 2026-07-03* after the safety-net audit: `.keepalive` extensions
-verified live up to `hard_cap = max(4×budget, budget+1h)` checked per 10s
-heartbeat (`daemon.py::_budget_exceeded`), so a keepalive-holding linger
-can't be reaped inside its horizon; a mechanical tail-sleep example
-(bounded `timeout` poll per tool call, backoff in the call sequence)
-landed in the portals manual for lesser-light cores — per-call polling
-also lets portal-update hooks push pending events between polls, which is
-the yield-rule safety net. Remaining scope split to
-[#219](https://github.com/Gurio/brr/issues/219): a non-terminal
-`attending` card phase (`interim_response` on the lead event + live
-keepalive ⇒ "delivered · attending"), so a lingering run stops reading as
-unfinished work.
+The follow-up safety-net audit then added a daemon-owned attending floor
+rather than leaving this entirely prompt-shaped: after a configured gate
+current-thread delivery (`current_reply`), the daemon emits an `attending`
+packet, renders the nonterminal card phase as `delivered · attending`, holds
+the single-flight slot briefly (`delivery.post_delivery_attend_seconds`,
+default 90s), and yields immediately when any pending event appears. This
+does **not** overclaim same-thought residency — the runner has returned, so a
+follow-up caught by this floor becomes the next run. It answers the live
+failure mode the maintainer pointed at: hooks only fold what is pending
+before runner stop; the daemon owns card state after the runner exits.
+
+*Closed 2026-07-03.* Keepalive extensions were verified live up to
+`hard_cap = max(4×budget, budget+1h)` checked per 10s heartbeat
+(`daemon.py::_budget_exceeded`), so a runner-owned linger cannot be reaped
+inside its horizon. The multi-hour vigil the maintainer floated (up to
+10–20h at 2–3m polls) stays deliberately outside v1: it needs compaction +
+B1's quota floors to be honest about spend; revisit under #214.
 
 ## Voice workstream — remaining tail (context, not new scope)
 
