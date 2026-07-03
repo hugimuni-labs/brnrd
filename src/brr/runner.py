@@ -331,8 +331,22 @@ def _selection_profiles(repo_root: Path | None = None) -> dict[str, dict[str, An
     from . import runner_cores
 
     generated = runner_cores.generated_profile_entries(declared)
-    merged = dict(generated)
-    merged.update(declared)
+    merged: dict[str, dict[str, Any]] = {
+        name: dict(profile) for name, profile in generated.items()
+    }
+    for name, profile in declared.items():
+        twin = merged.get(name)
+        if twin is None:
+            merged[name] = dict(profile)
+            continue
+        # Declared wins per field; the registry twin fills what the
+        # declaration omits (model, class, cost_rank, auth metadata).
+        # A full replace here made a bare project override silently shed
+        # all Core metadata and render as ``core=default`` in the catalog.
+        record = dict(twin)
+        record.pop("generated_core", None)
+        record.update(profile)
+        merged[name] = record
     return merged
 
 
@@ -372,7 +386,21 @@ def profile_hooks_flavour(
 
 
 def _runner_available(name: str, profiles: dict[str, dict[str, Any]]) -> bool:
-    return shutil.which(_profile_binary(name, profiles)) is not None
+    """A profile is available when it is actually invokable right now.
+
+    Two gates: the Shell binary must be on PATH, and a profile that declares
+    an ``auth_env`` requirement (API-key auth variants such as
+    ``claude-bare-api-only``) needs that variable present in the environment.
+    Listing a keyless API-only profile as available produced doomed fallback
+    spawns and a bloated Runner catalog in the wake prompt.
+    """
+    if shutil.which(_profile_binary(name, profiles)) is None:
+        return False
+    profile = profiles.get(name) or {}
+    auth_env = str(profile.get("auth_env") or "").strip()
+    if auth_env and not os.environ.get(auth_env):
+        return False
+    return True
 
 
 def detect_runner(repo_root: Path | None = None) -> str | None:
