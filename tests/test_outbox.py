@@ -21,6 +21,23 @@ def _emit(brr_dir, key, ptype, **payload):
         type=ptype, conversation_key=key, payload=payload))
 
 
+def test_hooks_installed_packet_is_persisted(tmp_path):
+    brr_dir = tmp_path / ".brr"
+
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="hooks_installed",
+        conversation_key="telegram:1:",
+        event_id="evt-1",
+        payload={"run_id": "run-a", "flavour": "codex"},
+    ))
+
+    record = conversations.read_records(brr_dir, "telegram:1:")[-1]
+    assert record["kind"] == "update"
+    assert record["type"] == "hooks_installed"
+    assert record["run_id"] == "run-a"
+    assert record["flavour"] == "codex"
+
+
 class TestDrainOutbox:
     def _drain(self, tmp_path, monkeypatch, files):
         brr_dir = tmp_path / ".brr"
