@@ -182,8 +182,9 @@ what older versions of this file split between "Session startup" and
      then targeted reads of any entry you want in full.
    - When the brr daemon is hosting you, the prompt already embeds a
      `Recent Activity (from kb/log.md)` extract plus the bundle's
-     `Recent in this conversation` block — those satisfy this step
-     unless you need older history than the extract carries.
+     recent-turns block (under `### Communication snapshot`) — those
+     satisfy this step unless you need older history than the extract
+     carries.
 3. If a **dominion** exists here, read its playbook — your standing
    self-orientation as this repo's resident, which past wakes may have
    reshaped. In current brr daemon runs, the Run Context Bundle names the

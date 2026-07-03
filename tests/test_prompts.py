@@ -119,7 +119,8 @@ class TestPromptBuilding:
 
         assert "Resident Identity Core" in prompt
         assert "product-owned identity contract" in prompt
-        assert "Appearance settings" in prompt
+        assert "Voice And The Seam" in prompt
+        assert "user_commitment" in prompt
         assert "Your dominion (working memory)" in prompt
         assert prompt.index("Resident Identity Core") < prompt.index(
             "Your dominion (working memory)"
@@ -233,9 +234,9 @@ class TestPromptBuilding:
         assert "Review pack (diffense)" in prompt
         assert "brr review --check" in prompt
         # The heavy publish plumbing is now inspected, not injected: the
-        # block points at `brr docs review-pack` instead of re-narrating
+        # block points at `brnrd docs review-pack` instead of re-narrating
         # the relay/gist/frontmatter procedure every diffense wake.
-        assert "brr docs review-pack" in prompt
+        assert "brnrd docs review-pack" in prompt
         # The pack path is explicit and absolute in the shared runtime dir
         # so it survives worktree teardown.
         assert "Review pack path: /repo/.brr/diffense/task-9/pack.json" in prompt
@@ -271,10 +272,8 @@ class TestPromptBuilding:
             runner_medium="codex",
             runner_quota="weekly 0% - resets 2026-06-17T01:29Z",
         )
-        assert (
-            "- Runner: codex (weekly 0% - resets 2026-06-17T01:29Z)"
-            in prompt
-        )
+        assert "- Runner: codex" in prompt
+        assert "- Quota: weekly 0% - resets 2026-06-17T01:29Z" in prompt
 
     def test_daemon_prompt_surfaces_repo_label(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -314,7 +313,7 @@ class TestPromptBuilding:
             ],
         )
 
-        assert "### Runner Mandate" in prompt
+        assert "### Runner catalog" in prompt
         assert (
             "- selected codex-mini: shell=codex, core=gpt-5.4-mini, "
             "class=economy, cost_rank=20, quota=codex-local, "
@@ -351,7 +350,7 @@ class TestPromptBuilding:
             run_id="task-9",
             runner_medium="codex",
         )
-        assert "Codex runner note" in prompt
+        assert "codex Shell:" in prompt
         assert "runner-local under brr" in prompt
         assert ".card" in prompt
         assert "plain current-thread fallback" in prompt
@@ -361,8 +360,11 @@ class TestPromptBuilding:
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
         )
-        assert "mid-thought" not in prompt
-        assert "outbox directory" not in prompt
+        # The standing outbox rules now ride unconditionally in
+        # daemon-substrate's delivery-portals block (contract-compression
+        # pass), so the outbox-specific absence pin is the live value
+        # bullet the bundle renders only when a path exists.
+        assert "- outbox:" not in prompt
 
     def test_daemon_prompt_states_budget_and_keepalive(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -383,7 +385,9 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "Budget:" not in prompt
-        assert ".keepalive" not in prompt
+        # daemon-substrate names `.keepalive` as a standing rule; the
+        # absence pin is the live path bullet, rendered only with a budget.
+        assert "/repo/.brr/outbox/evt-1/.keepalive" not in prompt
 
     def test_daemon_prompt_includes_driver_manual(self, tmp_path):
         """The daemon path injects brr's driver's manual — the daemon-only
@@ -392,7 +396,7 @@ class TestPromptBuilding:
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
         )
-        assert "How brr drives you" in prompt
+        assert "How the daemon drives you" in prompt
         assert "single-flight" in prompt
         assert "schedule.md" in prompt  # self-scheduled wakes live here now
 
@@ -400,8 +404,18 @@ class TestPromptBuilding:
         """`brnrd run` is a one-shot: no daemon to fire schedules or drain an
         outbox, so it doesn't carry the driver's manual."""
         prompt = build_run_prompt("ship it", tmp_path)
-        assert "How brr drives you" not in prompt
+        assert "How the daemon drives you" not in prompt
         assert "schedule.md" not in prompt
+
+    def test_prompts_include_weave_register(self, tmp_path):
+        """Both runner paths carry the working-register contract (weave.md):
+        the resident's dense native notation for the surfaces only it and
+        the machinery read. Host-agnostic, so the one-shot path gets it too."""
+        assert "your working register" in build_run_prompt("ship it", tmp_path)
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path, run_id="task-9",
+        )
+        assert "your working register" in prompt
 
     def test_daemon_prompt_lists_pending_events_and_fold_in_contract(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -517,7 +531,7 @@ class TestPromptBuilding:
         )
         assert "Shared runtime dir: /repo/.brr" in prompt
         assert "Run context file: /repo/.brr/runs/run-123/context.md" in prompt
-        assert "brr captures stdout and stores it at /tmp/resp.md" in prompt
+        assert "- stdout capture: /tmp/resp.md" in prompt
         assert "fix it" in prompt
         assert "kb/log-" not in prompt
         assert "gh pr create" not in prompt
@@ -589,7 +603,7 @@ class TestPromptBuilding:
         assert "Host context branch: feature/host" in prompt
         # No target branch → nudge the agent to rename the brr/<run-id>
         # placeholder to something descriptive.
-        assert "rename the branch" in prompt
+        assert "themed work ⇒ rename" in prompt
         assert "brr/<short-slug>" in prompt
         # The forge-locked `gh pr create` nudge is gone — brr now emits
         # a forge URL in the response card automatically, and PR
@@ -613,7 +627,7 @@ class TestPromptBuilding:
             seed_ref="main",
         )
 
-        assert "remotely" in prompt
+        assert "chat client" in prompt
         assert "basename only" in prompt
         assert ".brr/worktrees/" in prompt  # cited as the bad pattern
         assert "forge-hosted branch URL" in prompt
@@ -834,7 +848,7 @@ class TestPromptBuilding:
         # The portals manual is inspected, not injected: the daemon prompt
         # carries a one-line pointer to it (the protocol choreography lives
         # there, not re-narrated in full on every wake).
-        assert "brr docs portals" in prompt
+        assert "brnrd docs portals" in prompt
 
     def test_daemon_prompt_frames_delivery_as_conversational(self, tmp_path):
         prompt = build_daemon_prompt(
@@ -845,18 +859,20 @@ class TestPromptBuilding:
             outbox_path="/repo/.brr/outbox/evt-1",
             run_id="task-9",
         )
-        assert "stay in the conversation" in prompt
-        assert "substantial work should use the card" in prompt
-        assert "not waiting in the dark" in prompt
+        assert "fold a related follow-up in" in prompt
+        assert "card + mid-thought replies" in prompt
+        assert "waiting in the dark" in prompt
 
     def test_delivery_contract_carries_portal_model_summary(self, tmp_path):
-        # The delivery contract injects a *summary* of the portal grammar so
-        # the inbound/outbound/parked model rides hot without re-narrating the
-        # whole manual. It must name the three forms and point at the manual as
-        # the pull-only full reference — the anti-drift link the maintainer
-        # asked for. The reciprocal half is pinned in test_docs.py
-        # (test_portals_manual_links_back_to_delivery_contract); keep the two
-        # tests in step so contract and manual can't silently diverge.
+        # The portal-grammar summary (inbound/outbound/parked) now rides in
+        # daemon-substrate's delivery-portals block (contract-compression
+        # pass); the bundle's Delivery contract carries only live values plus
+        # the pointer at the standing rules and the manual. Both halves must
+        # name the manual as the pull-only full reference — the anti-drift
+        # link the maintainer asked for. The reciprocal half is pinned in
+        # test_docs.py (test_portals_manual_links_back_to_delivery_contract);
+        # keep the two tests in step so contract and manual can't silently
+        # diverge.
         prompt = build_daemon_prompt(
             "ship it",
             "evt-1",
@@ -866,10 +882,10 @@ class TestPromptBuilding:
             run_id="task-9",
         )
         assert "portals" in prompt
-        for form in ("*inbound*", "*outbound*", "*parked*"):
+        for form in ("inbound", "outbound", "parked"):
             assert form in prompt
-        assert "injected summary" in prompt
-        assert "brr docs portals" in prompt
+        assert "Standing rules" in prompt
+        assert "brnrd docs portals" in prompt
 
 
 # ── Phase 3 guardrails: revisit-signal handling ──────────────────────
@@ -912,8 +928,8 @@ class TestRevisitSignalGuardrails:
         # the stance lives in the resident playbook and AGENTS.md →
         # Stewardship, which this section leans on instead of
         # re-enumerating trigger phrases.
-        assert "engage with the substance" in prompt
-        assert "ownership stance" in prompt
+        assert "judgement on the substance" in prompt
+        assert "trust the intent rather than scanning for trigger words" in prompt
 
     def test_run_prompt_biases_to_resolve_and_act(self):
         prompt = _read_bundled_run_prompt()
@@ -952,25 +968,25 @@ class TestDaemonModeGuardrails:
         # AGENTS.md remains the entry point when the host did not inject
         # the playbook, but daemon wakes should not be told to re-open a
         # contract already present in their outer context.
+        assert "Injected in most daemon wakes" in prompt
+        assert "daemon wake" in prompt
         assert (
-            "entry point for agents that do not already have the playbook injected"
+            "only when it's absent, stale, or the task touches it"
             in prompt
         )
-        assert "daemon wake" in prompt
-        assert "injected copy as the contract" in prompt
         assert "Read the `AGENTS.md` playbook at the repo root" not in prompt
-        # The bundle's Mode section is the authoritative "where am I?".
-        assert "Mode" in prompt
+        # The bundle is the authoritative "where am I?" (its Mode block).
+        assert "mode, run metadata" in prompt
         # Injected Recent Activity counts toward the kb/log.md step so
         # daemon runs don't re-read the log when the prompt already
         # carries an extract. Checked as separate anchors so the
         # paragraph can rewrap without breaking the guardrail.
         assert "Recent Activity (from kb/log.md)" in prompt
-        assert "satisfies" in prompt
-        assert "kb/log.md startup step" in prompt
+        assert "the log startup read" in prompt
+        assert "only for older history" in prompt
         # The run context file is recovery detail, not routine reading.
-        assert "Runtime recovery" in prompt
-        assert "recovery detail" in prompt
+        assert "runtime-recovery context file" in prompt
+        assert "only for what the" in prompt
 
 
 class TestIntrospectionMode:
