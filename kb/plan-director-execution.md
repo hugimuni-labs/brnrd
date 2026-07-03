@@ -145,7 +145,11 @@ posture. Parameters set by the maintainer's live ask (exponential backoff
 unrelated pending event; default horizon 10–15m past last delivery). The
 multi-hour vigil the maintainer floated (up to 10–20h at 2–3m polls) is
 deliberately **not** in v1: it needs compaction + B1's quota floors to be
-honest about spend; revisit under #214.
+honest about spend; revisit under #214. First live firing same run
+(run-260703-1503-k3ah): delivered via outbox, lingered ~14m through 5
+polls (30→60→120→240→240s), watched the outbox drain and the folded
+event retire through `change_token` movement, exited quiet at horizon —
+contract held end to end with zero daemon support.
 
 ## Voice workstream — remaining tail (context, not new scope)
 
