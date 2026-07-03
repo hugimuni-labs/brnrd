@@ -9744,3 +9744,34 @@ linger as a named contract, no to long residency; quota-aware pacing gets
 its own design pass.
 
 Branch: brr/director-voice.
+
+## [2026-07-03] design | weave round 5 shipped — the wake scroll reweaves itself; pins moved
+
+Round 5 spanned two runs. The first (run-260703-0020-n31e) did the
+notes-first inventory of the wake scroll's incoherences and reweaved
+`run.md`, `daemon-substrate.md`, `identity-core.md` §Voice into the
+register `weave.md` names — then died mid-flight (host laptop lid closed);
+the capture net salvaged the in-flight work as 30a892a, with the
+reasoning, the pre-edit inventory, and the Ummon/BT-7274 answer already
+recorded in `design-weave-register.md` §Round 5. The ornament-toggle
+question resolved into the reader-model seam: one voice, variable
+unfolding, working field `user_commitment: full | profane` declared at
+the event boundary — the appearance-knob TOML schema is cut.
+
+This run picked up the salvage: moved the four `test_prompts.py` pins the
+interrupted run left red onto the reweaved text (dumb-test rule — the
+`"Appearance settings"` pin follows its section into `user_commitment`,
+the Mode/recovery/log-step anchors follow the orient block's new
+wording), and made `test_run_worker_threads_runner_quota_into_prompt`
+hermetic: the maintainer's stitch commit (3d2892c) lets level-derived
+quota override the config summary at attempt 1, so the old codex test was
+silently reading the *host's* live session rollout — now pinned to the
+fallback path via a stubbed `_collect_levels`. Full suite green (1238).
+
+Also the first live observation of the stitch seam: the burst weave fires
+only inside the dispatch window; follow-ups landing ~40s after dispatch
+arrive through the inbox portal instead, which is the designed complement,
+not a failure. Both seams now exist; orphaned same-thread fragments should
+be gone either way.
+
+Branch: brr/director-voice.
