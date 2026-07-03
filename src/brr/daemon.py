@@ -110,6 +110,13 @@ _HEARTBEAT_INTERVAL = 10.0
 # and drains the outbox in response, so a mid-thought reply lands promptly
 # instead of waiting out the tick. See kb/design-runner-back-channel.md.
 _FLUSH_POLL_INTERVAL = 1.0
+# Daemon-owned floor under the prompt-level post-delivery linger. The runner
+# can still keep the same thought alive with outbox + .keepalive; this dwell
+# covers the common failure where the runner exits after a reply. It holds the
+# single-flight slot briefly, renders an explicit attending card phase, and
+# yields the moment any pending event appears.
+_POST_DELIVERY_ATTEND_SECONDS_DEFAULT = 90.0
+_POST_DELIVERY_ATTEND_POLL_INTERVAL = 1.0
 _LIVE_INBOX_NAME = "inbox.json"
 _LIVE_PORTAL_STATE_NAME = "portal-state.json"
 # Agent-owned card narration: the resident writes this control dotfile
@@ -1889,6 +1896,7 @@ def _run_worker(
         )
         if satisfied:
             print(f"[brr] worker {eid}: response ready ({signal})")
+            task.meta["success_signal"] = signal
             if trace_dirs:
                 task.meta["trace_dirs"] = ", ".join(trace_dirs)
             if _response_has_body(resp_path):
@@ -1904,8 +1912,17 @@ def _run_worker(
             with _branch_lock(branch_plan.target_branch):
                 task = env_backend.finalize(env_ctx, task, runs_dir)
             _cleanup_traces_on_success(brr_dir, runs_dir, task)
-            _remove_outbox(outbox_dir)
             _emit_preserved_containers(emit, task)
+            attend_result = _post_delivery_attend(
+                emit,
+                task,
+                event,
+                inbox_dir,
+                cfg,
+                signal=signal,
+                attempt=attempt,
+            )
+            _remove_outbox(outbox_dir)
             # Payload carries the multi-thread delivery shape so the card
             # can reflect "delivered to N threads" / "sent N out-of-bound"
             # / "no reply — committed work" instead of collapsing
@@ -1922,6 +1939,7 @@ def _run_worker(
                 outbound_messages=output_stats.get("outbound", 0),
                 respawn_requests=output_stats.get("respawn", 0),
                 committed=has_new_commit,
+                post_delivery_attend=attend_result,
             )
             return task
 
@@ -3529,6 +3547,130 @@ def _result_satisfied_delivery(
     if not _event_requires_thread_delivery(event):
         return True, "internal"
     return False, ""
+
+
+def _seconds_config(
+    cfg: dict,
+    *keys: str,
+    default: float,
+) -> float:
+    for key in keys:
+        if key not in cfg:
+            continue
+        raw = cfg.get(key)
+        if isinstance(raw, bool):
+            return default if raw else 0.0
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError):
+            return default
+        return max(0.0, seconds)
+    return default
+
+
+def _post_delivery_attend_seconds(cfg: dict) -> float:
+    """Configured daemon-owned dwell after a current-thread delivery.
+
+    ``delivery.post_delivery_linger_seconds`` is accepted as an alias because
+    the docs and older discussion called the whole behavior "linger". The code
+    uses "attend" for the daemon floor so it does not overclaim same-thought
+    runner residency.
+    """
+    return _seconds_config(
+        cfg,
+        "delivery.post_delivery_attend_seconds",
+        "delivery.post_delivery_linger_seconds",
+        default=_POST_DELIVERY_ATTEND_SECONDS_DEFAULT,
+    )
+
+
+def _post_delivery_attend_poll_interval(cfg: dict) -> float:
+    return _seconds_config(
+        cfg,
+        "delivery.post_delivery_attend_poll_seconds",
+        default=_POST_DELIVERY_ATTEND_POLL_INTERVAL,
+    )
+
+
+def _should_post_delivery_attend(
+    brr_dir: Path,
+    task: Run,
+    event: dict,
+    *,
+    signal: str,
+    seconds: float,
+) -> bool:
+    if seconds <= 0:
+        return False
+    if signal != "current_reply":
+        return False
+    if not _event_requires_thread_delivery(event):
+        return False
+    if not task.conversation_key:
+        return False
+    source = str(event.get("source") or task.source or "").strip()
+    if not source:
+        return False
+    return _gate_can_deliver(brr_dir, source)
+
+
+def _post_delivery_attend(
+    emit: _WorkerEmit,
+    task: Run,
+    event: dict,
+    inbox_dir: Path,
+    cfg: dict,
+    *,
+    signal: str,
+    attempt: int,
+) -> str:
+    """Hold the daemon slot briefly after a delivered current-thread reply.
+
+    This is deliberately weaker than runner-owned linger: the runner process has
+    already returned, so a same-thread follow-up will become the next run rather
+    than being answered inside the same thought. The value is still real: the
+    card says "delivered · attending", the slot stays warm-ish for provider
+    cache reuse, and unrelated work is not starved because any pending event
+    ends the dwell immediately.
+
+    Returns ``skipped | pending | quiet`` for tests and packet metadata.
+    """
+    seconds = _post_delivery_attend_seconds(cfg)
+    if not _should_post_delivery_attend(
+        emit.brr_dir, task, event, signal=signal, seconds=seconds,
+    ):
+        return "skipped"
+
+    poll = _post_delivery_attend_poll_interval(cfg)
+    if poll <= 0:
+        poll = _POST_DELIVERY_ATTEND_POLL_INTERVAL
+    poll = min(poll, max(seconds, 0.001))
+    event_id = str(event.get("id") or task.event_id or emit.event_id)
+    emit(
+        "attending",
+        run_id=task.id,
+        event_id=event_id,
+        seconds=int(seconds),
+        reason="watching for follow-up after delivery",
+    )
+    started = time.monotonic()
+    deadline = started + seconds
+    next_heartbeat = started + _HEARTBEAT_INTERVAL
+    while True:
+        if _pending_events_for_agent(inbox_dir, event_id):
+            return "pending"
+        now = time.monotonic()
+        if now >= deadline:
+            return "quiet"
+        if now >= next_heartbeat:
+            emit(
+                "heartbeat",
+                run_id=task.id,
+                attempt=attempt,
+                elapsed_seconds=int(now - started),
+            )
+            next_heartbeat = now + _HEARTBEAT_INTERVAL
+        time.sleep(min(poll, max(0.0, deadline - now)))
 
 
 def _failure_reason(
