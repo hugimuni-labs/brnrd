@@ -646,6 +646,33 @@ def test_render_text_compact_terminal_reports_total_elapsed(tmp_path):
     assert "pushed 2 commits" in last_line
 
 
+def test_render_text_compact_attending_is_nonterminal_delivery_phase(tmp_path):
+    """Daemon-owned post-delivery dwell renders as an active
+    ``delivered · attending`` phase; terminal ``delivered`` remains the
+    final packet when the dwell ends."""
+    brr_dir = tmp_path / ".brr"
+    key = "telegram:8a:"
+    _emit(brr_dir, key, "run_created", run_id="run-a", env="host")
+    _emit(brr_dir, key, "attempt_started", run_id="run-a", attempt=1)
+    _emit(brr_dir, key, "finalizing", run_id="run-a", stage="done")
+    _emit(brr_dir, key, "attending", run_id="run-a", event_id="evt-a",
+          reason="watching for follow-up after delivery")
+
+    view = run_progress.project_run(brr_dir, key, "run-a")
+    assert view is not None
+    assert view.phase == "attending"
+    assert view.state == "active"
+    text = run_progress.render_text(view, compact=True)
+    assert "delivered · attending" in text
+    assert text.rstrip().splitlines()[-1].startswith("delivered · attending")
+
+    _emit(brr_dir, key, "done", run_id="run-a", event_id="evt-a")
+    done = run_progress.project_run(brr_dir, key, "run-a")
+    assert done is not None
+    assert done.phase == "delivered"
+    assert done.state == "succeeded"
+
+
 def test_render_text_compact_reports_push_failure(tmp_path):
     """A failed push is post-response housekeeping: the response can be
     delivered, but the progress card must not claim the commits were
