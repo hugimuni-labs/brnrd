@@ -9892,3 +9892,15 @@ whether it wanted a safety net. Audit answered yes on both counts:
   design-director-loop.md updated.
 
 Branch: brr/linger-net.
+
+## [2026-07-03] implement | Spiral reply shape for mid-run updates
+
+`src/brr/prompts/weave.md` now says user-facing replies should unfold
+spirally: the densest, most complete line first, then detail outward so a
+mid-run skim gets the verdict immediately and later correction can land
+without waiting for a second pass. The broader workflow / director-loop
+question stays in [`design-director-loop.md`](design-director-loop.md) and
+[`plan-director-execution.md`](plan-director-execution.md); this pass only
+set the reply seam. Shipped in commit `0c97bcf` on `brr/linger-net`.
+
+Branch: brr/linger-net.
