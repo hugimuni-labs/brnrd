@@ -157,3 +157,15 @@ def test_relative_snapshot_file_resolves_under_brr_dir(tmp_path):
     )
 
     assert summary == "weekly 75%"
+
+
+def test_summary_from_levels_reads_quota_slot():
+    summary = runner_quota.summary_from_levels(
+        {"quota": {"summary": "session 12% left; week 40% left"}},
+    )
+    assert summary == "session 12% left; week 40% left"
+
+
+def test_summary_from_levels_returns_none_without_quota():
+    assert runner_quota.summary_from_levels({}) is None
+    assert runner_quota.summary_from_levels(None) is None
