@@ -120,7 +120,7 @@ Touch points: `prompts.py` (a worker preamble variant), respawn path in
 `daemon.py`, tests. Depends on: B3 naming the two stacks.
 Effort: 1–2 wakes. Cleanly spec-able.
 
-### B5 — post-delivery linger (named contract) — owner: delegable, resident reviews — [#216](https://github.com/Gurio/brr/issues/216) — *v1 shipped 2026-07-03*
+### B5 — post-delivery linger (named contract) — owner: delegable, resident reviews — [#216](https://github.com/Gurio/brr/issues/216) — *closed 2026-07-03*
 
 The hot-idle scrutiny's surviving slice: a *short* post-delivery linger to
 catch the follow-up that lands ~40s after the reply (observed live
@@ -151,6 +151,19 @@ polls (30→60→120→240→240s), watched the outbox drain and the folded
 event retire through `change_token` movement, exited quiet at horizon —
 contract held end to end with zero daemon support.
 
+*Closed 2026-07-03* after the safety-net audit: `.keepalive` extensions
+verified live up to `hard_cap = max(4×budget, budget+1h)` checked per 10s
+heartbeat (`daemon.py::_budget_exceeded`), so a keepalive-holding linger
+can't be reaped inside its horizon; a mechanical tail-sleep example
+(bounded `timeout` poll per tool call, backoff in the call sequence)
+landed in the portals manual for lesser-light cores — per-call polling
+also lets portal-update hooks push pending events between polls, which is
+the yield-rule safety net. Remaining scope split to
+[#219](https://github.com/Gurio/brr/issues/219): a non-terminal
+`attending` card phase (`interim_response` on the lead event + live
+keepalive ⇒ "delivered · attending"), so a lingering run stops reading as
+unfinished work.
+
 ## Voice workstream — remaining tail (context, not new scope)
 
 - AGENTS.md house-voice pass — resident, own commit (round-6 direction:
@@ -162,9 +175,9 @@ contract held end to end with zero daemon support.
   the daemon now threads that key into the communication snapshot and the
   bundle renders a "Reader model" line (`full` licenses weave-density
   replies; other values unfold to plain prose; absent = profane default,
-  no line). Per-correspondent declaration at the gate boundary (Telegram
-  command / account config) remains the eventual shape — #217 stays open
-  for that.
+  no line). *#217 closed 2026-07-03*; per-correspondent declaration at the
+  gate boundary (Telegram command / account config) remains the eventual
+  shape — re-ticket when it becomes real.
 - `introspection.md` rework — round-6 finding, maintainer confirmed
   planned (2026-07-03): re-cut the development-mode attention block to the
   register-era voice; resident-owned, own commit.

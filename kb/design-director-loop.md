@@ -234,6 +234,11 @@ Execution tickets for this design:
 - None hard-blocking for phases 1–2. Phase 3's physical file location has a
   parked sub-fork (CS5) in the account-daemon decision — confirm on
   execution.
-- Whether option sets render as plain numbered text everywhere or as native
-  buttons on gates that support them (Telegram inline keyboards) — cosmetic,
-  decide when phase 2 lands.
+- ~~Whether option sets render as plain numbered text everywhere or as native
+  buttons on gates that support them (Telegram inline keyboards)~~ —
+  **settled 2026-07-03 (maintainer): plain numbered text everywhere.** A
+  compact numbered closeout invites exactly the reply shape the loop wants —
+  free-form, multi-part, composable ("1a 2a 3c and do x please") — while
+  inline buttons collapse the exchange to one tap per option set and fight
+  the mixed reply. The MUD instinct was right; the tech is ready now.
+  No button rendering work is planned.

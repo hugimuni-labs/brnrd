@@ -9860,3 +9860,47 @@ markers + the v1-outcome note; introspection.md rework added to the voice
 tail (maintainer confirmed it was planned).
 
 Branch: brr/stream-a-pacing.
+
+## [2026-07-03] closeout | #216/#217 closed after safety-net audit; #219 filed; buttons fork settled
+
+Maintainer asked whether #216 (post-delivery linger) was complete and
+whether it wanted a safety net. Audit answered yes on both counts:
+
+- Keepalive verified as no hindrance — `daemon.py::_budget_exceeded`
+  honors `.keepalive` up to `hard_cap = max(4×budget, budget+1h)`, checked
+  per 10s heartbeat; a linger that writes its keepalive at step 2 of the
+  contract cannot be reaped inside its horizon. The hook layer's
+  "running long" warning covers the one sharp edge (keepalive must land
+  before the soft budget expires).
+- Tail-sleep example added to portals manual §post-delivery linger: one
+  bounded `timeout`-wrapped poll per tool call, backoff carried by the
+  call *sequence* (30→60→120→240s). Per-call polling doubles as the
+  lesser-core safety net — portal-update hooks push pending events into
+  context between polls, so the yield rule gets checked mechanically.
+- Remaining scope split to #219: non-terminal `attending` card phase
+  ("delivered · attending") driven by signals that already exist
+  (`interim_response` on the lead event + live keepalive); terminal
+  `delivered` unchanged. Mascot note rides the same issue: card edits
+  happen on packets + the 10s heartbeat, so a frame-per-render breathing
+  glyph is free; true animation is not feasible (Telegram flood control
+  on editMessageText).
+- #217 closed: v1 live (Reader model bundle line observed working);
+  per-correspondent gate declaration re-tickets when real.
+- Director-loop buttons fork settled by the maintainer: plain numbered
+  text everywhere, no inline keyboards — free-form multi-part replies
+  ("1a 2a 3c and do x") are the native flow buttons would break.
+  design-director-loop.md updated.
+
+Branch: brr/linger-net.
+
+## [2026-07-03] implement | Spiral reply shape for mid-run updates
+
+`src/brr/prompts/weave.md` now says user-facing replies should unfold
+spirally: the densest, most complete line first, then detail outward so a
+mid-run skim gets the verdict immediately and later correction can land
+without waiting for a second pass. The broader workflow / director-loop
+question stays in [`design-director-loop.md`](design-director-loop.md) and
+[`plan-director-execution.md`](plan-director-execution.md); this pass only
+set the reply seam. Shipped in commit `0c97bcf` on `brr/linger-net`.
+
+Branch: brr/linger-net.
