@@ -1314,6 +1314,16 @@ def _run_worker(
     task.meta.update(branch_plan.meta_items())
 
     event_body_for_prompt = event.get("body", "") or ""
+    woven_body, woven_sibling_ids = _weave_burst_siblings_into_body(
+        inbox_dir,
+        event,
+        cfg,
+        correspondent_key=correspondent_key,
+        conversation_key=conv_key,
+    )
+    if woven_body:
+        event_body_for_prompt = woven_body
+        task.body = woven_body
 
     try:
         env_backend = envs.get_env(task.env)
@@ -1434,6 +1444,11 @@ def _run_worker(
     # orientation at wake. A live copy is also refreshed in the outbox
     # below and on every heartbeat.
     pending_events_snapshot = _pending_events_for_agent(inbox_dir, eid)
+    if woven_sibling_ids:
+        pending_events_snapshot = [
+            ev for ev in pending_events_snapshot
+            if str(ev.get("id") or "") not in woven_sibling_ids
+        ]
     _write_live_inbox(outbox_dir, inbox_dir, eid)
 
     # Other thoughts awake right now (presence registry), excluding this
@@ -1602,6 +1617,13 @@ def _run_worker(
             )
         else:
             prompt_instruction = task.body
+
+        if attempt == 1:
+            run_levels, _ = _collect_levels(
+                runner_name, outbox_dir, run_root, refresh=False,
+            )
+            level_quota = runner_quota.summary_from_levels(run_levels)
+            quota_summary = level_quota or quota_summary
 
         prompt = prompts.build_daemon_prompt(
             prompt_instruction,
@@ -2428,7 +2450,7 @@ def _collect_levels(
       portal-state snapshot, they do not run the scrape themselves.
 
     When *refresh* is ``False`` only the on-disk cache is read — the
-    blocking ~18s PTY scrape is skipped entirely. The heartbeat path passes
+    blocking multi-second PTY scrape is skipped entirely. The heartbeat path passes
     ``refresh=True`` (the default) so the cache stays current on the 30s
     cadence; the event-driven flush path passes ``refresh=False`` so it
     never stalls a boundary reply waiting for a stale-cache refresh.
@@ -3720,6 +3742,106 @@ def _run_worker_and_finalize(
 
 
 # ── Burst coalescing (dispatch debounce) ────────────────────────────
+
+
+def _events_share_thread(
+    lead_event: dict,
+    other: dict,
+    *,
+    correspondent_key: str,
+    conversation_key: str,
+) -> bool:
+    """True when *other* belongs to the same human/thread as *lead_event*."""
+    lead_conv = (
+        conversation_key
+        or conversations.conversation_key_for_event(lead_event)
+        or ""
+    )
+    other_conv = conversations.conversation_key_for_event(other) or ""
+    if lead_conv and other_conv:
+        return lead_conv == other_conv
+    lead_corr = (
+        correspondent_key
+        or conversations.correspondent_key_for_event(lead_event)
+        or ""
+    )
+    other_corr = conversations.correspondent_key_for_event(other) or ""
+    if lead_corr and other_corr:
+        return lead_corr == other_corr
+    return False
+
+
+def _weave_burst_siblings_into_body(
+    inbox_dir: Path,
+    lead_event: dict,
+    cfg: dict,
+    *,
+    correspondent_key: str,
+    conversation_key: str,
+) -> tuple[str | None, set[str]]:
+    """Merge same-thread burst siblings into one wake task body.
+
+    Burst coalescing already lands rapid fragments in one wake, but only
+    the lead event's body reached the task text — siblings sat in the inbox
+    capsule until the resident read it. Same-thread events that arrived
+    within the burst window are woven here so actionable follow-ups are
+    visible without relying on an early ``inbox.json`` read.
+    """
+    burst_window = float(
+        cfg.get("dispatch.burst_window_seconds", _BURST_WINDOW_DEFAULT)
+    )
+    burst_max_wait = float(
+        cfg.get("dispatch.burst_max_wait_seconds", _BURST_MAX_WAIT_DEFAULT)
+    )
+    if burst_window <= 0:
+        return None, set()
+    max_spread = max(burst_window, burst_max_wait)
+
+    lead_id = str(lead_event.get("id") or "").strip()
+    lead_body = str(lead_event.get("body") or "").strip()
+    if not lead_id or not lead_body:
+        return None, set()
+
+    lead_mtime = _event_mtime(lead_event)
+    siblings: list[tuple[float, dict]] = []
+    for ev in protocol.list_pending(inbox_dir):
+        eid = str(ev.get("id") or "").strip()
+        if not eid or eid == lead_id or ev.get("status") != "pending":
+            continue
+        body = str(ev.get("body") or "").strip()
+        if not body:
+            continue
+        if not _events_share_thread(
+            lead_event,
+            ev,
+            correspondent_key=correspondent_key,
+            conversation_key=conversation_key,
+        ):
+            continue
+        mtime = _event_mtime(ev)
+        if lead_mtime > 0 and mtime > 0 and abs(mtime - lead_mtime) > max_spread:
+            continue
+        siblings.append((mtime, ev))
+
+    if not siblings:
+        return None, set()
+
+    siblings.sort(key=lambda item: (item[0], str(item[1].get("id") or "")))
+    parts = [lead_body]
+    woven_ids: set[str] = set()
+    for _mtime, ev in siblings:
+        parts.append(str(ev.get("body") or "").strip())
+        woven_ids.add(str(ev["id"]))
+
+    woven = parts[0]
+    for idx, ev in enumerate((item[1] for item in siblings), start=1):
+        sibling_body = str(ev.get("body") or "").strip()
+        woven += (
+            f"\n\n---\n\n"
+            f"Follow-up {idx} (event {ev['id']}):\n"
+            f"{sibling_body}"
+        )
+    return woven, woven_ids
 
 
 def _event_mtime(event: dict) -> float:
