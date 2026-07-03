@@ -220,6 +220,27 @@ def main(argv: list[str] | None = None) -> None:
                    help="include bundled Cores whose Shell is not on PATH")
     p.set_defaults(func=cmd_runners_list)
 
+    bench_p = sub.add_parser(
+        "bench",
+        help="probe daemon/runner seams with a scripted lesser-light run")
+    bench_sub = bench_p.add_subparsers(dest="bench_command", required=True)
+
+    p = bench_sub.add_parser("scenarios", help="list bench scenarios")
+    p.set_defaults(func=cmd_bench_scenarios)
+
+    p = bench_sub.add_parser(
+        "run",
+        help="run one scenario in a sandbox (spends real runner quota)")
+    p.add_argument("--scenario", default="simple-ask",
+                   help="scenario name (see `brr bench scenarios`)")
+    p.add_argument("--shell", default="claude-haiku",
+                   help="runner profile to pin in the sandbox")
+    p.add_argument("--root", default=None,
+                   help="sandbox root directory (default: ~/.cache/brr/bench/<stamp>)")
+    p.add_argument("--timeout", type=int, default=None,
+                   help="override the scenario timeout in seconds")
+    p.set_defaults(func=cmd_bench_run)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -584,6 +605,46 @@ def cmd_runners_list(args):
             print("  ".join(parts))
 
     return 0
+
+
+def cmd_bench_scenarios(args):
+    from . import bench
+
+    for scenario in bench.SCENARIOS.values():
+        followups = f", {len(scenario.followups)} follow-up(s)" if scenario.followups else ""
+        print(f"{scenario.name:<16} probes: {', '.join(scenario.probes)}{followups}")
+        print(f"{'':<16} {scenario.description}")
+    return 0
+
+
+def cmd_bench_run(args):
+    import dataclasses
+
+    from . import bench
+
+    scenario = bench.SCENARIOS.get(args.scenario)
+    if scenario is None:
+        print(f"[brr] unknown scenario '{args.scenario}' — see `brr bench scenarios`")
+        return 2
+    if args.timeout:
+        scenario = dataclasses.replace(scenario, timeout_seconds=args.timeout)
+    root = (
+        Path(args.root).expanduser().resolve()
+        if args.root
+        else bench.default_root(scenario.name, args.shell)
+    )
+    print(f"[brr] bench: {scenario.name} @ {args.shell} → {root}")
+    print("[brr] bench: spawning sandbox daemon (spends real runner quota)…")
+    transcript, results = bench.run_scenario(scenario, shell=args.shell, root=root)
+    passed = sum(1 for r in results if r.passed)
+    for r in results:
+        mark = "✓" if r.passed else "✗"
+        print(f"  {mark} {r.name}: {r.detail}")
+    status = "TIMED OUT — " if transcript.timed_out else ""
+    print(f"[brr] bench: {status}{passed}/{len(results)} probes ✓")
+    print(f"[brr] bench: report → {root / 'report.md'}")
+    print(f"[brr] bench: transcript → {root / 'transcript.md'}")
+    return 0 if passed == len(results) else 1
 
 
 def cmd_portal_state(args):
