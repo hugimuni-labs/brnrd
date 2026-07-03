@@ -170,14 +170,23 @@ def test_generated_profile_entries_do_not_reintroduce_undeclared_shells():
     assert profiles == {}
 
 
-def test_generated_profile_entries_preserve_declared_override():
+def test_generated_profile_entries_emit_twin_for_declared_name():
+    """A declared name no longer suppresses its registry twin.
+
+    Declared profiles stay authoritative *per field*: the caller
+    (``runner._selection_profiles``) overlays declared fields on the twin,
+    so a declaration pinning only ``cmd`` inherits model/class/cost metadata
+    instead of rendering as ``core=default`` in the Runner catalog.
+    """
     profiles = runner_cores.generated_profile_entries(
         {
             "claude": {"cmd": "claude --print"},
             "claude-haiku": {"cmd": "custom"},
         }
     )
-    assert "claude-haiku" not in profiles
+    twin = profiles["claude-haiku"]
+    assert twin["model"] == "claude-haiku-4-5-20251001"
+    assert twin["class"] == "economy"
 
 
 def test_generated_profile_entries_materialize_cli_probed_model(monkeypatch):
