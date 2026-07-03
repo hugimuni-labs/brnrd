@@ -36,7 +36,14 @@ COLLECTED_SLOTS: frozenset[str] = frozenset({"quota"})
 DEFAULT_MODEL = "haiku"
 DEFAULT_BOOT_SECONDS = 2.5
 DEFAULT_TIMEOUT_SECONDS = 8.0
-DEFAULT_TTL_SECONDS = 300.0
+# The optimized probe costs ~3s; on the daemon's 30s heartbeat a 120s TTL
+# refreshes quota roughly every fourth beat — fresh enough for quota-aware
+# pacing without spawning a TUI per beat. Override: BRR_CLAUDE_USAGE_TTL.
+DEFAULT_TTL_SECONDS = 120.0
+TTL_ENV_VAR = "BRR_CLAUDE_USAGE_TTL"
+# After session+week parse, keep reading briefly: per-model week buckets
+# ("Current week (Fable)") render after the all-models bucket.
+COMPLETE_GRACE_SECONDS = 0.5
 
 _ENV_CONTAMINANTS = {
     "CLAUDE_CODE_SAFE_MODE",
@@ -177,6 +184,27 @@ def _prefer_bucket(
     return current
 
 
+_WEEK_LABEL_RE = re.compile(r"\s*current\s*week\s*\(([^)]*)\)", re.IGNORECASE)
+
+
+def _week_model_label(line: str) -> str | None:
+    """Model name for a per-model week bucket, ``None`` for the primary week.
+
+    ``Current week (all models)`` and bare ``Current week`` are the primary
+    weekly quota. ``Current week (Fable)`` — a per-model bucket the TUI added
+    alongside it — returns ``"Fable"``. Only the parenthetical immediately
+    after "Current week" counts; a reset timezone paren later in a compact
+    one-line bucket must not be mistaken for a model label.
+    """
+    match = _WEEK_LABEL_RE.match(line)
+    if not match:
+        return None
+    content = match.group(1).strip()
+    if not content or _line_key(content) == "allmodels":
+        return None
+    return content
+
+
 def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
     """Normalize a Claude ``/usage`` terminal capture into a levels snapshot."""
     text = _clean_terminal_text(raw)
@@ -187,6 +215,7 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
     ]
     session: tuple[float, str | None] | None = None
     week: tuple[float, str | None] | None = None
+    week_models: dict[str, tuple[float, str | None]] = {}
 
     for idx, line in enumerate(lines):
         key = _line_key(line)
@@ -197,7 +226,13 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         elif key.startswith("currentweek"):
             found = _scan_bucket(lines, idx) or _parse_bucket_line(line)
             if found:
-                week = _prefer_bucket(week, found)
+                label = _week_model_label(line)
+                if label is None:
+                    week = _prefer_bucket(week, found)
+                else:
+                    week_models[label] = _prefer_bucket(
+                        week_models.get(label), found
+                    )
 
     levels: dict[str, Any] = {
         "source": "claude /usage PTY",
@@ -213,6 +248,17 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         bucket = _bucket_summary("week", week[0], week[1])
         levels["week_used_percentage"] = week[0]
         levels["week_reset"] = week[1]
+        parts.append(str(bucket["summary"]))
+    for label, found in week_models.items():
+        # Elide the reset in the summary when it matches the primary week's —
+        # the per-model buckets share the weekly window, and the Runner line
+        # this summary feeds should not repeat the same timestamp.
+        summary_reset = None if week and found[1] == week[1] else found[1]
+        bucket = _bucket_summary(f"{label} week", found[0], summary_reset)
+        levels.setdefault("week_models", {})[label] = {
+            "used_percentage": found[0],
+            "reset": found[1],
+        }
         parts.append(str(bucket["summary"]))
     if parts:
         levels["quota"] = {"summary": "; ".join(parts)}
@@ -309,10 +355,18 @@ def capture_usage_raw(
             time.sleep(min(0.05, boot_deadline - time.monotonic()))
         if time.monotonic() < deadline:
             os.write(master, b"/usage\r")
+        grace_deadline: float | None = None
         while time.monotonic() < deadline:
             _read_available(master, chunks, min(deadline, time.monotonic() + 0.1))
             if _quota_buckets_complete(parse_usage_text(b"".join(chunks))):
-                break
+                # session+week are in; linger briefly for trailing per-model
+                # week buckets that render after the all-models one.
+                if grace_deadline is None:
+                    grace_deadline = min(
+                        deadline, time.monotonic() + COMPLETE_GRACE_SECONDS
+                    )
+                elif time.monotonic() >= grace_deadline:
+                    break
         _terminate_process(proc)
     finally:
         try:
@@ -382,18 +436,34 @@ def _fresh(path: Path, max_age_seconds: float) -> bool:
         return False
 
 
+def _ttl_seconds(env: dict[str, str] | None = None) -> float:
+    raw = (env or os.environ).get(TTL_ENV_VAR)
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return DEFAULT_TTL_SECONDS
+
+
 def load_or_refresh_snapshot(
     outbox_dir: Path | None,
     *,
     cwd: Path | str | None = None,
-    max_age_seconds: float = DEFAULT_TTL_SECONDS,
+    max_age_seconds: float | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     model: str | None = None,
     env: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
-    """Read a fresh cached snapshot, or refresh it through the PTY probe."""
+    """Read a fresh cached snapshot, or refresh it through the PTY probe.
+
+    ``max_age_seconds`` defaults to :data:`DEFAULT_TTL_SECONDS`, overridable
+    via the :data:`TTL_ENV_VAR` environment variable.
+    """
     if outbox_dir is None:
         return None
+    if max_age_seconds is None:
+        max_age_seconds = _ttl_seconds(env)
     path = Path(outbox_dir) / SNAPSHOT_NAME
     if _fresh(path, max_age_seconds):
         return load_snapshot(outbox_dir)
