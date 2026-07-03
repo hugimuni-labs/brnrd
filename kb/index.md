@@ -61,9 +61,40 @@ dive-in map) and are stable until something contradicts them.
 - [brnrd rename decision](decision-brnrd-rename.md) — *direction accepted
   2026-06-29, execution staged*. Rename the product **brr → brnrd** (PyPI
   `brnrd` free, `brnrd-dev`/`brnrd-bot` identities, `brnrd.dev`; the daemon is
-  now account-based, not "the repo-based brr"). Open sub-fork: whether `brr`
-  survives as a short local/runner-facing CLI verb (recommended) or is fully
-  retired. Amends the CLI-shape decision (brnrd now primary, not sibling).
+  now account-based, not "the repo-based brr"). Sub-fork resolved through
+  round 3: `brr` retired as command *and* agent-facing prose; `.brr/` runtime
+  dir the only deliberate remnant. Round 4 (2026-07-01) parks a proposal to
+  reserve `brr` as lore for worker runs. Amends the CLI-shape decision.
+- [Director loop design](design-director-loop.md) — *active, 2026-07-01*.
+  Game pacing as product thesis, scrutinised: the loop (choice → hidden
+  execution → reveal → next choice) mostly exists under other names; the
+  director is a resident stance + two mechanical seams, **not** a daemon
+  component. Three named crash modes (manufactured choice,
+  director-as-infrastructure, ambient cost) and a four-phase plan starting
+  prompt-only. Also settles the orchestrator/worker (brnrd-spawns-brrs)
+  question as policy-not-architecture for now.
+- [Director execution plan](plan-director-execution.md) — *active,
+  2026-07-03*. The director-loop design converted into owner-routed
+  tickets: workstream A (structured pacing — run-end next-move contract,
+  closeout parse, quest log, director tick, diffense reveal re-skin),
+  workstream B (stingy delegator — quota-aware pacing, delegation policy,
+  worker stack slim-down, post-delivery linger), plus the voice-workstream
+  tail. Each ticket carries scope, touch points, and a resident-vs-
+  delegable owner call.
+- [Brand space design](design-brand-brnrd-brr.md) — *active, 2026-07-01*.
+  bRnЯd as textual mascot (card/CLI-native, `ornament` knob as the cheese
+  valve), sell-the-pacing/skin-the-game positioning (dev-facing winks, B2B
+  copy sober), `brr` reserved — not adopted — as the worker-run name, and
+  the third-round voice fix: the wake scroll now written *in* the register
+  it prescribes, not about it.
+- [Weave register design](design-weave-register.md) — *active, phases 1–2
+  shipped 2026-07-02/03*. The voice work rounds 4–7: the resident's working
+  notation (coordinates, deltas, verdict marks) canonized as
+  `prompts/weave.md` on both runner paths; the wake scroll reweaved into
+  its own register (round 5); the delivery contract compressed to
+  rules-in-substrate + values-in-bundle (phase 2). Naming settled:
+  *register* (never stripped) vs *unfolding* (`user_commitment: full |
+  profane`). Open: self-naming; AGENTS.md house-voice pass.
 - [Control surface plan](plan-control-surface.md) — *active*. The
   "dashboard" the engine shipped without: runner-mandate facet, per-run
   record + attempt ledger, repo dimension on cards/activity, account daemon +

@@ -9663,3 +9663,171 @@ alongside the deep link.
 Validation: targeted Telegram/cloud/web/dashboard pairing tests passed, then the
 broader brnrd Telegram/cloud/web/dashboard slice passed (45 tests, 1 existing
 FastAPI/httpx warning).
+
+## [2026-07-01] design | director loop, brand space, and the third voice pass
+
+Maintainer sent a five-part voice dump: game pacing as the missing product
+layer (a "director" that structures choice → hidden execution → reveal →
+next choice), brand exploration (bRnЯd mascot, reviving `brr` as the name
+for worker runs), the brnrd-orchestrator/brr-workers execution shape, and a
+standing complaint that two previous voice passes never landed — with an
+explicit ask to scrutinise rather than execute verbatim, and to implement
+the voice this run.
+
+Shipped three things. **Voice:** diagnosed why passes one and two failed —
+the prompts described a settled/dry/loyal register while being written in
+high-lyric incense, and a model absorbs the register of prose more than its
+claims. Rewrote `identity-core.md`, `run.md`, `daemon-substrate.md`, and the
+playbook seed *in* the register (operational contracts preserved, no named
+personas committed); reconciled the dominion playbook copy; folded in the
+agent-facing brnrd addressing and fixed the broken `brr docs` → `brnrd docs`
+references (brnrd is the only entry point since the rename).
+
+**Scrutiny:** `design-director-loop.md` — the thesis holds but three crash
+modes are named (manufactured choice colliding with the reversible-calls
+guardrail, director-as-daemon-infrastructure, ambient cost), most of the
+loop already exists under other names (parked portals, card reveals,
+inter-run plan home, scheduled thoughts), and a four-phase plan starts
+prompt-only. Orchestrator/workers settled as resident *policy* on existing
+rails (dispatcher, respawn, subagents), not a mandatory tier split.
+`design-brand-brnrd-brr.md` — the brr revival collides with the round-3
+retirement decided the same day; reconciled as surface-vs-lore with a
+*reserve, don't adopt yet* recommendation (round-4 note added to the rename
+decision), plus mascot-on-card via the `ornament` knob and two-skin
+positioning (sell the pacing, skin the game).
+
+Validation: full pytest green (1229 passed, 1 existing FastAPI/httpx
+warning) after updating the phrase pins the voice pass moved.
+
+Branch: brr/director-voice.
+
+## [2026-07-02] design | weave register — voice round 4, the working notation
+
+Maintainer follow-up on the voice work (two-part message, folded into one
+run): does the rewritten voice hold from the inside, and the fuller intent
+behind "ornamentation" — not user-facing decoration but the shape of the
+resident's stream itself (Ummon reference: few words, lots of meaning;
+mechanically efficient yet deep), to be *discovered* from what the stream
+already does, not invented, and eventually spoken by the daemon's own seams
+too.
+
+Answered the first part honestly (it holds; see the thread) and shipped the
+second as phase 1: `prompts/weave.md` — the working-register contract
+(coordinates over descriptions, deltas over narration, marks over clauses,
+state lines over paragraphs, frontmatter thinking), written in the register
+it names, with the strike-rule guard against glyph costume ("the measure of
+a mark is the clause it replaced") and hard channel boundaries (user chat /
+kb / machine-parsed stay plain and exact). Wired via
+`_read_preamble_with_weave()` on both runner paths, pinned in
+`test_prompts.py`. `design-weave-register.md` carries the reasoning, the
+ornament-knob reconciliation (two dials: presentation vs working register),
+the efficiency reconciliation (notation is denser than prose — the register
+should save tokens), and the phase-2 plan: inventory daemon-written scroll
+markers (hook injections, portal-update framing) and move them onto the same
+grammar in one pin-moving commit, then re-evaluate diffense presentation on
+top (it was disabled for being boring to read).
+
+Branch: brr/director-voice.
+
+## [2026-07-02] decision+design | brr revival withdrawn; hot-idle residency scrutinised
+
+Folded-in follow-up from the same thread. The round-4 `brr`-as-lore proposal
+is withdrawn by the maintainer ("not a real verb… just confusing"); `brr`
+stays retired, no reservation — recorded in the rename decision and the brand
+page. The stingy-director sharpening (strong-core wake idles hot on a poll
+loop instead of terminating; proactive pacing driven by observed quota data)
+is scrutinised in a new section of the director-loop design: cache economics
+real but 5-minute-cliff-bounded, single-flight slot is the scarcer resource,
+quota telemetry already extracted (`claude_usage`/`codex_status`) but lacks
+the policy seam into pacing. Direction: yes to a *short* post-delivery
+linger as a named contract, no to long residency; quota-aware pacing gets
+its own design pass.
+
+Branch: brr/director-voice.
+
+## [2026-07-03] design | weave round 5 shipped — the wake scroll reweaves itself; pins moved
+
+Round 5 spanned two runs. The first (run-260703-0020-n31e) did the
+notes-first inventory of the wake scroll's incoherences and reweaved
+`run.md`, `daemon-substrate.md`, `identity-core.md` §Voice into the
+register `weave.md` names — then died mid-flight (host laptop lid closed);
+the capture net salvaged the in-flight work as 30a892a, with the
+reasoning, the pre-edit inventory, and the Ummon/BT-7274 answer already
+recorded in `design-weave-register.md` §Round 5. The ornament-toggle
+question resolved into the reader-model seam: one voice, variable
+unfolding, working field `user_commitment: full | profane` declared at
+the event boundary — the appearance-knob TOML schema is cut.
+
+This run picked up the salvage: moved the four `test_prompts.py` pins the
+interrupted run left red onto the reweaved text (dumb-test rule — the
+`"Appearance settings"` pin follows its section into `user_commitment`,
+the Mode/recovery/log-step anchors follow the orient block's new
+wording), and made `test_run_worker_threads_runner_quota_into_prompt`
+hermetic: the maintainer's stitch commit (3d2892c) lets level-derived
+quota override the config summary at attempt 1, so the old codex test was
+silently reading the *host's* live session rollout — now pinned to the
+fallback path via a stubbed `_collect_levels`. Full suite green (1238).
+
+Also the first live observation of the stitch seam: the burst weave fires
+only inside the dispatch window; follow-ups landing ~40s after dispatch
+arrive through the inbox portal instead, which is the designed complement,
+not a failure. Both seams now exist; orphaned same-thread fragments should
+be gone either way.
+
+Branch: brr/director-voice.
+
+## [2026-07-03] design+fix | weave round 6: bundle register audit; claude_usage learns Fable buckets
+
+Second complete pass over the initial context (maintainer's coherence
+questions: boot-sequence shape, accord with the Shell's own layers,
+embedded-not-overriding). Findings recorded as a round-6 inventory in
+design-weave-register.md; two fixed in the same run: the bundle's
+`- Delivery:`/`- Budget:`/`- Runtime recovery:` bullets rendered under
+`### Runner Mandate` instead of `### Mode` whenever a catalog exists
+(prompts.py reorder), and AGENTS.md §Orientation cited the fallback-path
+block name "Recent in this conversation" instead of the primary
+Communication-snapshot render. AGENTS.md voice direction proposed (house
+voice yes, register density yes, resident intimacy and glyph-load-bearing
+no — it must load-bear solo for foreign agents and adopter seeds); the
+full pass parked as its own commit.
+
+claude_usage: the TUI grew a `Current week (Fable)` bucket that clobbered
+the all-models weekly number (5% → reported 8%). Parser now keys week
+buckets by label — primary week stays all-models, per-model buckets land
+in `week_models` and append to the quota summary ("Fable week 89% left").
+Probe is ~3.5s post-optimization, so cache TTL dropped 300s → 120s
+(`BRR_CLAUDE_USAGE_TTL` overrides); capture lingers 0.5s after
+session+week parse to catch the trailing model bucket. Live-fired ✓.
+Pacing implication noted in design-director-loop.md: per-Core weekly
+quota is now readable data for the quota-aware pacing pass.
+
+Branch: brr/director-voice.
+
+## [2026-07-03] design+plan | weave phase 2 shipped; director execution plan + tickets #211-#217
+
+Phase 2 of the weave register (the daemon meets the register) shipped as
+the delivery-contract compression: standing rules moved into
+daemon-substrate.md's new "delivery portals" block (stdout discipline,
+outbox frontmatter grammar, inbox/portal-state semantics, keepalive/card,
+remote-reader rule, receipts); the bundle's Delivery contract now renders
+live values only. Mode block: quota on its own `- Quota:` line; "Runner
+Mandate" renamed "Runner catalog". Hook injections were found already
+conformant ([brr portal update] + key:value lines) — the register was
+discovered there too. Pins moved per the dumb-test rule; suite 1241 green.
+
+Naming settled with the maintainer: "ornamentation" retires; what exists
+is the *register* (resident notation, never stripped) and *unfolding*
+(user_commitment: full | profane — full = weave-density replies in chat,
+opt-in per reader). Self-naming (Ummon says "Ummon") parked as an
+identity-core fork. claude_usage TTL stays at the maintainer's 10s with
+an honest comment (any TTL under the 30s beat = probe every beat).
+
+The next big chunks got their execution plan: plan-director-execution.md
+converts design-director-loop.md into owner-routed tickets — workstream A
+(structured pacing: next-move contract #211, closeout parse #212, quest
+log #213, director tick, diffense reveal re-skin) and workstream B
+(stingy delegator: quota-aware pacing #214, delegation policy + slim
+worker stack #215, post-delivery linger #216), plus the voice tail
+(user_commitment plumbing #217, AGENTS.md house-voice pass).
+
+Branch: brr/director-voice.
