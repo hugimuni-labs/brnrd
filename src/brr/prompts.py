@@ -813,15 +813,6 @@ def _build_run_context_bundle(
             "a manual reroute, so chunk work and commit early when the budget "
             "is tight."
         )
-    mandate_lines = _render_runner_catalog(runner_catalog)
-    if mandate_lines:
-        sections.append("")
-        sections.append("### Runner Mandate")
-        sections.append(
-            "Selectable local Shell+Core profiles from the same catalog brr "
-            "uses for cost-aware selection and respawn decisions:"
-        )
-        sections.extend(mandate_lines)
     sections.append(
         "- Delivery: situational outputs captured by brr "
         "(see Delivery contract below)"
@@ -839,6 +830,15 @@ def _build_run_context_bundle(
             f"- Runtime recovery: {context_path} "
             "(open only if a detail you need isn't in this bundle)"
         )
+    mandate_lines = _render_runner_catalog(runner_catalog)
+    if mandate_lines:
+        sections.append("")
+        sections.append("### Runner Mandate")
+        sections.append(
+            "Selectable local Shell+Core profiles from the same catalog brr "
+            "uses for cost-aware selection and respawn decisions:"
+        )
+        sections.extend(mandate_lines)
 
     sections.append("")
     sections.append("### Run")
