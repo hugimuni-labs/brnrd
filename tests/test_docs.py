@@ -74,10 +74,13 @@ def test_portals_manual_defines_next_move_contract():
 def test_portals_manual_defines_post_delivery_linger():
     # B5/#216: the linger is a named contract — outbox delivery first,
     # keepalive-held slot, TTL-aware exponential backoff, absolute yield
-    # on unrelated pending work, bounded horizon.
+    # on unrelated pending work, bounded horizon — plus the daemon-owned
+    # attending floor for post-return safety.
     text = docs.read_topic("portals")
     assert text is not None
     assert "post-delivery linger" in text
+    assert "delivered · attending" in text
+    assert "delivery.post_delivery_attend_seconds" in text
     assert "cap at ~240s" in text
     assert "yield immediately" in text
     assert "never starves the queue" in text
