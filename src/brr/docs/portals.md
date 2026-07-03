@@ -211,7 +211,7 @@ Two more run surfaces live outside the outbox:
 ## The robustness ladder
 
 Live state is **injected** (the medium, the budget, this run's paths and
-ids) — you can't miss it. The manual is **inspected** (`brr docs
+ids) — you can't miss it. The manual is **inspected** (`brnrd docs
 portals`) — one glance away, not memorized, not re-paid every wake. A
 failure the environment makes impossible (a lint, a test, a baked-in
 tool) is stronger still than either. When you move a recurring failure
@@ -219,7 +219,7 @@ all the way down that ladder, retire the pitfall that stood in for it.
 
 ## See also
 
-- `brr docs active-task` — the shorter orientation refresher.
-- `brr docs execution-map` — how an event flows through brr end to end.
-- `brr docs brr-internals` — the `.brr/` layout and internals.
+- `brnrd docs active-task` — the shorter orientation refresher.
+- `brnrd docs execution-map` — how an event flows through brr end to end.
+- `brnrd docs brr-internals` — the `.brr/` layout and internals.
 - AGENTS.md — the repo contract every wake rests on.

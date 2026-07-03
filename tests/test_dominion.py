@@ -162,7 +162,7 @@ def test_resolve_self_inject_includes_seeded_playbook(tmp_path):
     assert "self-inject: full playbook.md" in digest  # provenance marker
     # The rich seed (not the old stub) shipped and was injected in full.
     assert "memory palace" in digest  # society-of-mind framing
-    assert "workshop interpretation" in digest
+    assert "workshop reading" in digest
     assert "build it like it's yours" in digest
 
 

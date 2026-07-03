@@ -109,6 +109,102 @@ def test_unstattable_member_does_not_stall_burst(tmp_path):
     assert daemon._burst_settle_delay(evs, WINDOW, MAX_WAIT, now) == 0.0
 
 
+# ── Same-thread burst weaving ────────────────────────────────────────
+
+
+def _seed_threaded(tmp_path, eid: str, body: str, *, conv: str, age: float, now: float) -> dict:
+    path = tmp_path / ".brr" / "inbox" / f"{eid}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\nid: {eid}\nstatus: pending\nsource: telegram\n"
+        f"conversation_key: {conv}\n---\n{body}\n",
+        encoding="utf-8",
+    )
+    ev = {
+        "id": eid,
+        "status": "pending",
+        "body": body,
+        "source": "telegram",
+        "conversation_key": conv,
+        "_path": path,
+    }
+    os.utime(path, (now - age, now - age))
+    return ev
+
+
+def test_weave_burst_siblings_merges_same_thread_followups(tmp_path):
+    now = time.time()
+    conv = "telegram:chat:9"
+    lead = _seed_threaded(tmp_path, "evt-a", "first thought", conv=conv, age=2.0, now=now)
+    sib = _seed_threaded(
+        tmp_path,
+        "evt-b",
+        "address this as changes right away",
+        conv=conv,
+        age=0.5,
+        now=now,
+    )
+    inbox = tmp_path / ".brr" / "inbox"
+    woven, woven_ids = daemon._weave_burst_siblings_into_body(
+        inbox,
+        lead,
+        {},
+        correspondent_key="",
+        conversation_key=conv,
+    )
+    assert woven_ids == {"evt-b"}
+    assert "first thought" in woven
+    assert "address this as changes right away" in woven
+    assert "evt-b" in woven
+
+
+def test_weave_burst_siblings_skips_other_threads(tmp_path):
+    now = time.time()
+    lead = _seed_threaded(tmp_path, "evt-a", "thread one", conv="telegram:chat:1", age=1.0, now=now)
+    _seed_threaded(tmp_path, "evt-b", "thread two", conv="telegram:chat:2", age=0.5, now=now)
+    woven, woven_ids = daemon._weave_burst_siblings_into_body(
+        tmp_path / ".brr" / "inbox",
+        lead,
+        {},
+        correspondent_key="",
+        conversation_key="telegram:chat:1",
+    )
+    assert woven is None
+    assert woven_ids == set()
+
+
+def test_weave_burst_siblings_skips_stale_same_thread_messages(tmp_path):
+    now = time.time()
+    conv = "telegram:chat:9"
+    lead = _seed_threaded(tmp_path, "evt-a", "old lead", conv=conv, age=30.0, now=now)
+    _seed_threaded(tmp_path, "evt-b", "fresh follow-up", conv=conv, age=0.5, now=now)
+    woven, woven_ids = daemon._weave_burst_siblings_into_body(
+        tmp_path / ".brr" / "inbox",
+        lead,
+        {},
+        correspondent_key="",
+        conversation_key=conv,
+    )
+    assert woven is None
+    assert woven_ids == set()
+
+
+def test_weave_disabled_when_burst_window_zero(tmp_path):
+    now = time.time()
+    conv = "telegram:chat:9"
+    lead = _seed_threaded(tmp_path, "evt-a", "first", conv=conv, age=1.0, now=now)
+    _seed_threaded(tmp_path, "evt-b", "second", conv=conv, age=0.5, now=now)
+    woven, woven_ids = daemon._weave_burst_siblings_into_body(
+        tmp_path / ".brr" / "inbox",
+        lead,
+        {"dispatch.burst_window_seconds": 0},
+        correspondent_key="",
+        conversation_key=conv,
+    )
+    assert woven is None
+    assert woven_ids == set()
+
+
 # ── Loop wiring ──────────────────────────────────────────────────────
 
 
