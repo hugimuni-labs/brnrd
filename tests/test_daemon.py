@@ -220,6 +220,11 @@ def test_run_worker_threads_runner_quota_into_prompt(tmp_path, monkeypatch):
             else None
         ),
     )
+    # Pin the config-derived fallback path hermetically: without this the
+    # codex level collector reads the *host's* live session rollout and
+    # overrides the stubbed summary (level quota wins by design; see
+    # test_run_worker_threads_level_quota_into_prompt for that path).
+    monkeypatch.setattr(daemon, "_collect_levels", lambda *a, **kw: (None, False))
     captured: dict[str, object] = {}
 
     def _prompt(_task, _eid, _rp, _root, **kw):
