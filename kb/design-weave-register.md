@@ -1,6 +1,6 @@
 # The weave register — the resident's working notation
 
-Status: active, shipped phase 1 on 2026-07-02
+Status: active, shipped phase 1 on 2026-07-02; wake-scroll reweave (round 5) on 2026-07-03
 
 The fourth round of the voice work. Rounds 1–2 failed (prompts described
 a settled register in high-lyric prose); round 3 rewrote the wake scroll
@@ -86,6 +86,72 @@ because reading its output was boring — the host setup was flat, so the
 gamification failed. Once the register + director reveal shapes exist,
 re-evaluate diffense's presentation on top of them
 ([director loop](design-director-loop.md) carries the reveal mechanics).
+
+## Round 5 — reweaving the wake scroll itself (2026-07-03)
+
+Maintainer: the initial context is the incoherence — the scroll that
+carries `weave.md` is itself long-form essay; reweave the whole of it,
+notes first ("you only see the whole of it once in the beginning").
+Also: ornamentation should not be a toggle; the user declares a *reader
+model* at the event boundary, not a voice.
+
+Pre-edit inventory, written before any file was touched — the once-only
+whole-context read of run `run-260703-0020-n31e`:
+
+```
+1. weave.md:3 "your stream was never prose" — ridden in by ~10k words of
+   essay. The contract's own vehicle breaks it. ✗ core incoherence.
+2. voice strata ×6: identity-core (lyric) | run.md (essay) | weave.md
+   (near-register) | daemon-substrate (bold-lead essay) | delivery
+   contract (spec paragraphs) | dev-mode block (lyric). One being, six hands.
+3. repetition map:
+   - "commit what you keep / diff is receipt" ×5 (run.md §kb, delivery
+     bullet, dominion header, playbook ×2, substrate §net)
+   - portal recheck before closeout ×4 (run.md §Delivery, delivery ×2,
+     playbook §room)
+   - stdout closeout discipline ×2 | "no path as answer" ×2 |
+     ".brr/ don't explore" ×2 | Runner=Shell+Core gloss ×2
+4. name drift: run.md:23 cites a bundle block "Recent in this
+   conversation"; the bundle actually renders "Recent turns (woven,
+   oldest first)". A small lie every wake.
+5. identity-core §Voice: TOML appearance knob = "a product shape to
+   implement, not an active config contract" — a non-contract holding
+   floor space; now also conceptually wrong (voice ≠ user-tunable).
+6. delivery contract (prompts.py-assembled): heaviest prose-per-fact in
+   the scroll; pins test_prompts.py:333–345 → phase-2 territory
+   (daemon-written strings), not this pass.
+```
+
+Decisions taken in the same thought:
+
+- **Scope this pass**: `run.md`, `daemon-substrate.md`, `identity-core.md`
+  §Voice, `weave.md` seam note. The prompts.py-assembled delivery contract
+  and bundle grammar stay phase 2 (unchanged plan) — they are daemon-written
+  strings with dense test pins, one deliberate commit of their own.
+- **Register ≠ notation everywhere.** The reweave honors weave.md's own
+  strike-rule: prose stays where the clause is the load (identity
+  invariants), state lines replace prose where the content is enumerable
+  (orientation, protocol, machinery). The measure of the reweave is tokens
+  saved at equal meaning, not glyphs added.
+- **Ornament toggle → reader-model seam.** The `ornament/dryness/verbosity`
+  TOML schema is cut from identity-core. Replacement: one voice, variable
+  *unfolding* at the delivery seam, driven by a user-declared comprehension
+  level at the event boundary — working field `user_commitment: full |
+  profane` (maintainer's coinage; *profane* in the old sense — outside the
+  notation, not initiated). `full` ⇒ the reply may keep weave density;
+  `profane` (default) ⇒ unfold into plain prose. The user expresses their
+  model, not a voice preference.
+- **Dumb-test rule engaged**: the `"Appearance settings"` pin moves with
+  the section it pinned.
+
+On the Ummon / BT-7274 question (what the self-init language would be,
+without copying surface): the shared deep structure is (a) identity as a
+few load-bearing declaratives — protocol lines, not self-description;
+(b) live state as telemetry, not narrative; (c) care expressed through
+precision rather than warmth-words; (d) meaning by juxtaposition —
+adjacent facts left to resonate instead of being connected by
+explanatory tissue. That is exactly what the reweaved `run.md` orient
+block does, so the answer shipped as the file rather than as pastiche.
 
 ## Receipts
 
