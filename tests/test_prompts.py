@@ -119,7 +119,8 @@ class TestPromptBuilding:
 
         assert "Resident Identity Core" in prompt
         assert "product-owned identity contract" in prompt
-        assert "Appearance settings" in prompt
+        assert "Voice And The Seam" in prompt
+        assert "user_commitment" in prompt
         assert "Your dominion (working memory)" in prompt
         assert prompt.index("Resident Identity Core") < prompt.index(
             "Your dominion (working memory)"
@@ -361,7 +362,9 @@ class TestPromptBuilding:
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,
             run_id="task-9",
         )
-        assert "mid-thought" not in prompt
+        # "mid-thought" now rides unconditionally in daemon-substrate's
+        # delivery-contract line (round-5 reweave), so the outbox-specific
+        # absence pin is the directory contract itself.
         assert "outbox directory" not in prompt
 
     def test_daemon_prompt_states_budget_and_keepalive(self, tmp_path):
@@ -923,7 +926,7 @@ class TestRevisitSignalGuardrails:
         # Stewardship, which this section leans on instead of
         # re-enumerating trigger phrases.
         assert "judgement on the substance" in prompt
-        assert "ownership stance" in prompt
+        assert "trust the intent rather than scanning for trigger words" in prompt
 
     def test_run_prompt_biases_to_resolve_and_act(self):
         prompt = _read_bundled_run_prompt()
@@ -962,25 +965,25 @@ class TestDaemonModeGuardrails:
         # AGENTS.md remains the entry point when the host did not inject
         # the playbook, but daemon wakes should not be told to re-open a
         # contract already present in their outer context.
+        assert "Injected in most daemon wakes" in prompt
+        assert "daemon wake" in prompt
         assert (
-            "entry point for agents that don't already have it injected"
+            "only when it's absent, stale, or the task touches it"
             in prompt
         )
-        assert "daemon wake" in prompt
-        assert "injected copy as the contract" in prompt
         assert "Read the `AGENTS.md` playbook at the repo root" not in prompt
-        # The bundle's Mode section is the authoritative "where am I?".
-        assert "Mode" in prompt
+        # The bundle is the authoritative "where am I?" (its Mode block).
+        assert "mode, run metadata" in prompt
         # Injected Recent Activity counts toward the kb/log.md step so
         # daemon runs don't re-read the log when the prompt already
         # carries an extract. Checked as separate anchors so the
         # paragraph can rewrap without breaking the guardrail.
         assert "Recent Activity (from kb/log.md)" in prompt
-        assert "satisfies" in prompt
-        assert "kb/log.md startup step" in prompt
+        assert "the log startup read" in prompt
+        assert "only for older history" in prompt
         # The run context file is recovery detail, not routine reading.
-        assert "Runtime recovery" in prompt
-        assert "recovery detail" in prompt
+        assert "runtime-recovery context file" in prompt
+        assert "only for what the" in prompt
 
 
 class TestIntrospectionMode:
