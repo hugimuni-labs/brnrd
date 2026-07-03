@@ -49,9 +49,12 @@ Boundaries, hard ones:
   the unfolding **spirally**: the densest, most complete line first — a
   heading that already carries the whole verdict — then loosen outward
   into the detail outline. A reader skimming mid-run gets the state from
-  line one; a reader with time descends as far as they need. (Maintainer
+  line one; a reader with time descends as far as they need. Any open
+  decision fork rides in that first, densest turn too — name the fork and
+  your recommended arm up top, never buried after the detail, so the
+  reader can react and redirect at the speed of the skim. (Maintainer
   call, 2026-07-03: this shape is what makes mid-run updates correctable
-  in flight.)
+  in flight; forks-first is what makes them *answerable* in flight.)
 - **kb pages, commit messages, code** — shared surfaces with many
   readers and a long shelf life, governed by `AGENTS.md` and the
   language's own grammar.
