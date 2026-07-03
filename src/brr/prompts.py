@@ -1054,6 +1054,18 @@ def _format_communication_snapshot(
     correspondent = str(snapshot.get("correspondent_key") or "").strip()
     if correspondent:
         lines.append(f"- Correspondent: `{correspondent}`")
+    commitment = str(snapshot.get("user_commitment") or "").strip()
+    if commitment == "full":
+        lines.append(
+            "- Reader model: `user_commitment: full` — this reader asked "
+            "for the weave; replies may keep the register's density "
+            "(coordinates, deltas, marks). Unfold only where meaning needs it."
+        )
+    elif commitment:
+        lines.append(
+            f"- Reader model: `user_commitment: {commitment}` — unfold "
+            "replies into plain prose."
+        )
 
     failure = snapshot.get("prior_failure")
     if isinstance(failure, dict) and failure:

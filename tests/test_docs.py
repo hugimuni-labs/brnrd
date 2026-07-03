@@ -56,6 +56,34 @@ def test_portals_manual_links_back_to_delivery_contract():
     assert "delivery contract" in text
 
 
+def test_portals_manual_defines_next_move_contract():
+    # A1/#211: an addressed reply ends with the next move — four states,
+    # options only at genuine forks. The manual holds the full contract;
+    # the compact rule rides in daemon-substrate's delivery-portals block
+    # (pinned in test_prompts.py::test_daemon_prompt_carries_next_move_and_linger).
+    text = docs.read_topic("portals")
+    assert text is not None
+    assert "The next move" in text
+    for state in ("done —", "continuing —", "blocked —"):
+        assert state in text
+    assert "genuine fork" in text
+    assert "2–4 numbered options" in text
+    assert "Manufacturing options is the failure mode" in text
+
+
+def test_portals_manual_defines_post_delivery_linger():
+    # B5/#216: the linger is a named contract — outbox delivery first,
+    # keepalive-held slot, TTL-aware exponential backoff, absolute yield
+    # on unrelated pending work, bounded horizon.
+    text = docs.read_topic("portals")
+    assert text is not None
+    assert "post-delivery linger" in text
+    assert "cap at ~240s" in text
+    assert "yield immediately" in text
+    assert "never starves the queue" in text
+    assert "10–15 minutes past the last delivery" in text
+
+
 def test_read_topic_bundled_returns_content():
     text = docs.read_topic("execution-map")
     assert text is not None
