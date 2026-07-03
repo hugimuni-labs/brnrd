@@ -31,6 +31,7 @@ PHASES = (
     "running",
     "finalizing",
     "delivering",
+    "attending",
     "delivered",
     "failed",
     "conflict",
@@ -54,6 +55,7 @@ _PHASE_BY_PACKET: dict[str, str] = {
     "container_preserved": "finalizing",
     "push_started": "delivering",
     "push_done": "delivered",
+    "attending": "attending",
     "done": "delivered",
     "failed": "failed",
     "conflict": "conflict",
@@ -531,6 +533,9 @@ def _project(
                 )
             else:
                 view.detail = "push failed"
+        elif ptype == "attending":
+            view.detail = str(record.get("reason") or "attending").strip()
+            _open_phase(view, "attending", ts)
         elif ptype == "failed":
             view.state = "failed"
             stage = record.get("stage")
@@ -677,6 +682,7 @@ CARD_PACKETS = frozenset({
     # the live card with the new note (see ``_render_compact``).
     "card_composed",
     "finalizing",
+    "attending",
     "push_started",
     "push_done",
     "done",
@@ -958,6 +964,8 @@ def _phase_label(entry: PhaseEntry, multi_attempt: bool,
     """
     if entry.name == "running" and multi_attempt and entry.attempt:
         return f"running (attempt {entry.attempt})"
+    if entry.name == "attending":
+        return "delivered · attending"
     if entry.name == "failed" and view is not None and view.failure_kind:
         return {
             "timed_out": "timed out",

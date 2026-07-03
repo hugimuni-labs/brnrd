@@ -1498,6 +1498,87 @@ def test_result_satisfied_delivery_missing_artifact_fails():
     assert signal == ""
 
 
+def test_post_delivery_attend_skips_when_gate_not_configured(tmp_path, monkeypatch):
+    """The daemon dwell is a real gate behavior, not a unit-test tax.
+
+    A direct worker test has no configured Telegram gate, so even with the
+    default-positive seconds knob the helper returns before sleeping.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    inbox.mkdir(parents=True)
+    event = {"id": "evt-a", "source": "telegram", "status": "done"}
+    task = Run(
+        id="run-a",
+        event_id="evt-a",
+        body="answer",
+        source="telegram",
+        conversation_key="telegram:42:",
+    )
+    monkeypatch.setattr(
+        daemon.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("slept")),
+    )
+
+    result = daemon._post_delivery_attend(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
+        task,
+        event,
+        inbox,
+        {"delivery.post_delivery_attend_seconds": 30},
+        signal="current_reply",
+        attempt=1,
+    )
+
+    assert result == "skipped"
+
+
+def test_post_delivery_attend_emits_phase_and_yields_on_pending_event(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    protocol.create_event(
+        inbox,
+        "telegram",
+        "one more thing",
+        conversation_key="telegram:42:",
+    )
+    event = {"id": "evt-a", "source": "telegram", "status": "done"}
+    task = Run(
+        id="run-a",
+        event_id="evt-a",
+        body="answer",
+        source="telegram",
+        conversation_key="telegram:42:",
+    )
+    monkeypatch.setattr(daemon, "_gate_can_deliver", lambda _brr, _gate: True)
+    monkeypatch.setattr(
+        daemon.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("slept")),
+    )
+
+    result = daemon._post_delivery_attend(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", "evt-a"),
+        task,
+        event,
+        inbox,
+        {"delivery.post_delivery_attend_seconds": 30},
+        signal="current_reply",
+        attempt=1,
+    )
+
+    assert result == "pending"
+    records = [
+        r for r in daemon.conversations.read_records(brr_dir, "telegram:42:")
+        if r.get("kind") == "update"
+    ]
+    assert [r.get("type") for r in records] == ["attending"]
+    assert records[0]["reason"] == "watching for follow-up after delivery"
+
+
 def test_run_worker_writes_prompt_to_run_dir(tmp_path, monkeypatch):
     """The daemon persists the assembled prompt in .brr/runs/<run-id>/prompt.md.
 

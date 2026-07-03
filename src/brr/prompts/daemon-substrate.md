@@ -99,7 +99,11 @@ Portals are the seams where a run turns to the world — inbound
   provider cache window); same-thread follow-up folds in and resets the
   backoff, any unrelated pending event ⇒ yield immediately — a linger never
   starves the queue. Horizon ~10–15m past last delivery; longer vigils are
-  scheduled wakes or quota policy (manual: §post-delivery linger).
+  scheduled wakes or quota policy. The daemon also has a short automatic
+  `delivered · attending` floor after a configured current-thread delivery:
+  it keeps the card/slot open briefly and yields on any pending event, but
+  the runner has already exited, so the follow-up becomes the next run rather
+  than the same thought (manual: §post-delivery linger).
 - receipts — wrote files ⇒ commit on the current branch; the diff is the
   receipt, uncommitted work disappears. Don't explore or modify other
   `.brr/` files beyond what the run asks. Themed work on a placeholder
