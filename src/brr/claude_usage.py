@@ -36,9 +36,13 @@ COLLECTED_SLOTS: frozenset[str] = frozenset({"quota"})
 DEFAULT_MODEL = "haiku"
 DEFAULT_BOOT_SECONDS = 2.5
 DEFAULT_TIMEOUT_SECONDS = 8.0
-# The optimized probe costs ~3s; on the daemon's 30s heartbeat a 120s TTL
-# refreshes quota roughly every fourth beat — fresh enough for quota-aware
-# pacing without spawning a TUI per beat. Override: BRR_CLAUDE_USAGE_TTL.
+# The optimized probe costs ~3.5s. Refresh runs on the daemon's 30s
+# heartbeat, so any TTL below the beat interval means "probe every beat" —
+# 10s buys the freshest data the heartbeat can deliver, at one PTY spawn
+# (~3.5s) per beat while a claude run is live (maintainer's call,
+# 2026-07-03: cost data freshest when needed). Raise via
+# BRR_CLAUDE_USAGE_TTL if the per-beat spawn ever bites; the meaningful
+# values are multiples of the beat.
 DEFAULT_TTL_SECONDS = 10.0
 TTL_ENV_VAR = "BRR_CLAUDE_USAGE_TTL"
 # After session+week parse, keep reading briefly: per-model week buckets
