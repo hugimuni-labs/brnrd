@@ -742,6 +742,39 @@ class TestPromptBuilding:
         assert "prior ask" in prompt
         assert "prior answer" in prompt
 
+    def test_daemon_prompt_renders_reader_model_from_snapshot(self, tmp_path):
+        # #217 v1: `user_commitment` in the communication snapshot renders a
+        # Reader model line — `full` licenses weave-density replies; other
+        # values unfold to plain prose; absent means no line (profane is the
+        # default and needs no announcement).
+        prompts = tmp_path / ".brr" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "run.md").write_text("You are an agent.")
+
+        base = {
+            "current_thread": "telegram:77:",
+            "correspondent_key": "telegram:user-id:42",
+        }
+        full = build_daemon_prompt(
+            "hi", "evt-2", "/tmp/resp.md", tmp_path,
+            communication_snapshot={**base, "user_commitment": "full"},
+        )
+        assert "Reader model: `user_commitment: full`" in full
+        assert "weave" in full
+
+        profane = build_daemon_prompt(
+            "hi", "evt-2", "/tmp/resp.md", tmp_path,
+            communication_snapshot={**base, "user_commitment": "profane"},
+        )
+        assert "Reader model: `user_commitment: profane`" in profane
+        assert "plain prose" in profane
+
+        unset = build_daemon_prompt(
+            "hi", "evt-2", "/tmp/resp.md", tmp_path,
+            communication_snapshot=dict(base),
+        )
+        assert "Reader model" not in unset
+
     def test_daemon_prompt_renders_prior_failure_facet(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
@@ -886,6 +919,33 @@ class TestPromptBuilding:
             assert form in prompt
         assert "Standing rules" in prompt
         assert "brnrd docs portals" in prompt
+
+    def test_daemon_prompt_carries_next_move_and_linger(self, tmp_path):
+        # A1/#211 + B5/#216: the delivery-portals block carries the compact
+        # next-move rule (four closeout states, manufactured options named
+        # as the failure mode) and the post-delivery linger contract
+        # (backoff inside the provider cache window, absolute yield on
+        # unrelated pending work). Full contracts live in the portals
+        # manual (pinned in test_docs.py).
+        prompt = build_daemon_prompt(
+            "ship it",
+            "evt-1",
+            "/tmp/resp.md",
+            tmp_path,
+            outbox_path="/repo/.brr/outbox/evt-1",
+            run_id="task-9",
+        )
+        assert "next move" in prompt
+        for state in (
+            "done — receipt",
+            "continuing — what's next",
+            "blocked — what's needed",
+        ):
+            assert state in prompt
+        assert "manufactured options are the failure" in prompt
+        assert "linger" in prompt
+        assert "backoff 30s → cap 240s" in prompt
+        assert "yield immediately" in prompt
 
 
 # ── Phase 3 guardrails: revisit-signal handling ──────────────────────
