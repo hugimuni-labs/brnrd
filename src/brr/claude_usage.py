@@ -39,7 +39,7 @@ DEFAULT_TIMEOUT_SECONDS = 8.0
 # The optimized probe costs ~3s; on the daemon's 30s heartbeat a 120s TTL
 # refreshes quota roughly every fourth beat — fresh enough for quota-aware
 # pacing without spawning a TUI per beat. Override: BRR_CLAUDE_USAGE_TTL.
-DEFAULT_TTL_SECONDS = 120.0
+DEFAULT_TTL_SECONDS = 10.0
 TTL_ENV_VAR = "BRR_CLAUDE_USAGE_TTL"
 # After session+week parse, keep reading briefly: per-model week buckets
 # ("Current week (Fable)") render after the all-models bucket.
