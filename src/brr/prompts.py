@@ -750,7 +750,12 @@ def _render_runner_catalog(
             bits.append(f"quota={item['quota_source']}")
         if item.get("auth_variant"):
             bits.append(f"auth={item['auth_variant']}")
-        bits.append(f"availability={item.get('availability') or 'available'}")
+        # The catalog is pre-filtered to invokable profiles, so
+        # ``availability=available`` on every line was pure noise; surface
+        # the field only when it says something unusual.
+        availability = str(item.get("availability") or "available")
+        if availability != "available":
+            bits.append(f"availability={availability}")
         lines.append(f"- {prefix}{name}: " + ", ".join(str(bit) for bit in bits))
     return lines
 
