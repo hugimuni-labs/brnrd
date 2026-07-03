@@ -67,8 +67,11 @@ wait) and, when the runner supports live injection, weaves a compact
 rather than "remember to read `inbox.json`." That mechanism is the runner's
 native lifecycle hooks calling `brnrd hook <phase>`: Claude registers a per-run
 settings file (`PostToolBatch` / `Stop` / `SessionStart`), Codex takes the
-same hook config as runner argv, and a `Stop` block folds a still-pending
-follow-up into the same thought. Any runner can also pull state
+same hook config as runner argv, and a `Stop` block folds a follow-up that is
+already pending before runner exit into the same thought. A follow-up that
+arrives after the runner has returned cannot be folded by a hook; the
+daemon-owned attending floor below can keep the slot/card warm briefly, but
+that follow-up becomes the next run. Any runner can also pull state
 directly — read `portal-state.json` / `inbox.json`, or run `brr portal
 state` for the text view. (The earlier `brr portal wrap -- <command>`
 shell wrapper was retired when the boundary back channel landed — it
@@ -171,9 +174,20 @@ reject any habit that makes options the default shape of a reply.
 
 A follow-up often lands moments after your reply; spawning a cold run to
 read one more sentence wastes the warm context you're still holding.
-When the conversation is clearly live — the user is mid-thread, or your
-reply invites a short answer — you may **linger** instead of exiting.
-This is a named contract, not an improvised while-loop:
+There are two layers:
+
+- **Runner-owned linger** keeps the same thought alive. Use it when the
+  conversation is clearly live — the user is mid-thread, or your reply
+  invites a short answer — and you can afford the warm wait.
+- **Daemon-owned attending** is the automatic safety net after a configured
+  gate current-thread delivery. It emits an `attending` packet, renders the
+  nonterminal card phase as `delivered · attending`, holds the single-flight
+  slot briefly, and yields immediately when any pending event appears. It is
+  intentionally weaker than runner linger: the runner has exited, so the
+  follow-up becomes the next run rather than being answered inside the same
+  thought.
+
+Runner-owned linger is a named contract, not an improvised while-loop:
 
 1. **Deliver first.** Send the reply as a mid-thought outbox message —
    it is the satisfying signal, so the eventual final stdout can stay
@@ -220,6 +234,14 @@ This is a named contract, not an improvised while-loop:
    poll is cheap.
 6. **Exit quietly.** When the horizon passes with nothing new: clear or
    settle the card, leave stdout empty, end. The reply already went out.
+
+Daemon-owned attending is configured with
+`delivery.post_delivery_attend_seconds` (default 90s; `false` disables;
+`delivery.post_delivery_linger_seconds` is an alias for the older wording)
+and `delivery.post_delivery_attend_poll_seconds` (default 1s). It only
+applies after the successful `current_reply` path for a configured gate
+thread. Terminal `done` still renders the final `delivered` state after the
+attending floor ends or yields.
 
 ## The choreography — an average daemon run
 
