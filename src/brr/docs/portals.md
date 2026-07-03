@@ -144,6 +144,60 @@ Two more run surfaces live outside the outbox:
   how you defer, set reminders, decompose work across wakes, and keep
   your own clock.
 
+## The next move — how an addressed reply ends
+
+An addressed run's final reply — the stdout closeout, or the outbox
+message that closes the thread — ends with **the next move**: one line
+naming where the loop stands, so the human never has to infer it.
+
+- `done — <receipt>` — the ask is complete; name the receipt (commit,
+  PR, page, reply that holds).
+- `continuing — <what's next>` — the work carries on under its own steam
+  (a scheduled wake, the next chunk); name the next concrete move.
+- `blocked — <what's needed>` — you can't proceed; name the one
+  unblocking thing and who holds it.
+- A **genuine fork** — 2–4 numbered options, your recommendation, and a
+  one-line reason. A short reply ("2", "the second one") should be all
+  it takes to set the work moving.
+
+The most common value is *nothing to decide* — done or continuing.
+**Manufacturing options is the failure mode**: options appear only at
+genuine forks (product/values calls, costly or irreversible spends,
+intent the code can't resolve) — never to look thorough, and never to
+hand back a reversible call that was yours to take. A reviewer should
+reject any habit that makes options the default shape of a reply.
+
+## The post-delivery linger — catching the follow-up warm
+
+A follow-up often lands moments after your reply; spawning a cold run to
+read one more sentence wastes the warm context you're still holding.
+When the conversation is clearly live — the user is mid-thread, or your
+reply invites a short answer — you may **linger** instead of exiting.
+This is a named contract, not an improvised while-loop:
+
+1. **Deliver first.** Send the reply as a mid-thought outbox message —
+   it is the satisfying signal, so the eventual final stdout can stay
+   empty (an empty closeout after an outbox delivery is correct, not a
+   failure).
+2. **Hold the slot honestly.** Write `.keepalive` for the linger horizon
+   and set `.card` to say you're lingering (e.g. "lingering for
+   follow-ups; next check in ~2m").
+3. **Back off exponentially.** Start around 30s, double per quiet poll,
+   cap at ~240s — inside the ~5-minute provider cache window, so each
+   poll rides warm context instead of paying a cold re-read.
+4. **Poll, don't spin.** Each poll reads `portal-state.json`
+   (`change_token` says whether anything moved). A same-thread follow-up
+   ⇒ fold it in, reply, reset the backoff. **Any unrelated pending event
+   ⇒ yield immediately** — exit so the single-flight slot frees; a
+   linger never starves the queue.
+5. **Bound the horizon.** Default: 10–15 minutes past the last delivery;
+   extend only while the exchange is actually flowing. Multi-hour vigils
+   are scheduled wakes' territory, or quota-aware pacing policy (#214) —
+   a linger is hot idle and spends attention and quota even when each
+   poll is cheap.
+6. **Exit quietly.** When the horizon passes with nothing new: clear or
+   settle the card, leave stdout empty, end. The reply already went out.
+
 ## The choreography — an average daemon run
 
 1. **Receive.** A wake lands with a Run Context Bundle: the lead event, the
