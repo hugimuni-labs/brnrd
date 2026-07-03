@@ -88,6 +88,18 @@ Portals are the seams where a run turns to the world — inbound
   never host paths like `.brr/worktrees/<run-id>/kb/foo.md` — they don't
   exist on the user's machine and won't render. brr appends the
   forge-hosted branch URL to the card when one exists; don't fabricate one.
+- next move — an addressed reply ends with where the loop stands:
+  `done — receipt` | `continuing — what's next` | `blocked — what's needed`
+  | genuine fork: 2–4 numbered options + recommendation + one-line reason.
+  Done/continuing is the common case; manufactured options are the failure
+  mode — options only at genuine forks (manual: §The next move).
+- linger — conversation clearly live ⇒ deliver via outbox (that is the
+  satisfying signal; final stdout may then stay empty), write `.keepalive`,
+  poll `portal-state.json` with backoff 30s → cap 240s (inside the ~5m
+  provider cache window); same-thread follow-up folds in and resets the
+  backoff, any unrelated pending event ⇒ yield immediately — a linger never
+  starves the queue. Horizon ~10–15m past last delivery; longer vigils are
+  scheduled wakes or quota policy (manual: §post-delivery linger).
 - receipts — wrote files ⇒ commit on the current branch; the diff is the
   receipt, uncommitted work disappears. Don't explore or modify other
   `.brr/` files beyond what the run asks. Themed work on a placeholder
