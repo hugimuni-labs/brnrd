@@ -37,7 +37,7 @@ raw diff.
   send. The full publish procedure — the `brr review --pr-body --relay` /
   `--pr-title` invocations, what `--relay` does (gist + brnrd renderer,
   RAM-relay fallback), and the `gate: forge` frontmatter — lives at
-  `brr docs review-pack`. Summon it when you have a checked pack; it is
+  `brnrd docs review-pack`. Summon it when you have a checked pack; it is
   not re-narrated here every wake.
 
 If the change isn't review-worthy, skip the pack: an honest absence beats
