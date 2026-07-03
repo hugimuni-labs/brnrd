@@ -2450,7 +2450,7 @@ def _collect_levels(
       portal-state snapshot, they do not run the scrape themselves.
 
     When *refresh* is ``False`` only the on-disk cache is read — the
-    blocking ~18s PTY scrape is skipped entirely. The heartbeat path passes
+    blocking multi-second PTY scrape is skipped entirely. The heartbeat path passes
     ``refresh=True`` (the default) so the cache stays current on the 30s
     cadence; the event-driven flush path passes ``refresh=False`` so it
     never stalls a boundary reply waiting for a stale-cache refresh.
