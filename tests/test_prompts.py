@@ -316,12 +316,29 @@ class TestPromptBuilding:
         assert "### Runner catalog" in prompt
         assert (
             "- selected codex-mini: shell=codex, core=gpt-5.4-mini, "
-            "class=economy, cost_rank=20, quota=codex-local, "
-            "availability=available"
+            "class=economy, cost_rank=20, quota=codex-local"
         ) in prompt
         assert "claude-bare-api-only-sonnet" in prompt
         assert "auth=anthropic-api-key" in prompt
         assert "cmd=" not in prompt
+        # The catalog is pre-filtered to invokable profiles; a redundant
+        # ``availability=available`` on every line is exactly the bloat the
+        # renderer now suppresses. Only anomalies get the field.
+        assert "availability=available" not in prompt
+
+    def test_runner_catalog_renders_only_unusual_availability(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+            runner_catalog=[
+                {
+                    "name": "claude-bare-api-only",
+                    "shell": "claude",
+                    "availability": "missing-auth",
+                },
+            ],
+        )
+        assert "availability=missing-auth" in prompt
 
     def test_daemon_prompt_includes_outbox_contract_when_given(self, tmp_path):
         prompt = build_daemon_prompt(
