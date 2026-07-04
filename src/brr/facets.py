@@ -206,6 +206,7 @@ def build(
     runner_catalog: "list[dict[str, object]] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
+    pacing_status: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -237,6 +238,12 @@ def build(
     - ``relay_consent`` — spending plan details for brnrd relay fallback when
       local quota is exhausted: reason, model, provider, costs, cap, balance,
       and consent state (pending/approved/denied/capped).
+    - ``pacing_status`` — the quota-aware scheduler-pacing read (kb/design-
+      director-loop.md §B1): ``{"binding_remaining_pct": ..., "floor": None |
+      "low" | "critical"}``. Attached as ``quota.pacing`` when present, so a
+      mid-run boundary can see the same binding percent the scheduler used to
+      stretch/pause ``every:`` entries. Absent (no sub-key) when quota isn't
+      resolvable this heartbeat — never a fabricated number.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -258,6 +265,8 @@ def build(
     quota_facet = _level_record(
         FACETS_BY_KEY["quota"], quota, has_collector=True
     )
+    if pacing_status:
+        quota_facet["pacing"] = pacing_status
     spend_facet = _level_record(
         FACETS_BY_KEY["spend"], _level_summary("spend"),
         has_collector="spend" in wired_slots,
