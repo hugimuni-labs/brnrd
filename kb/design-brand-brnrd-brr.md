@@ -41,6 +41,17 @@ essence is important." `brr` stays retired, no reservation held; worker runs
 get named (or not) when they become a visible product object. Recorded in
 [`decision-brnrd-rename.md`](decision-brnrd-rename.md) round 4.
 
+**Re-resolved 2026-07-04 (round 5):** the trigger condition arrived — the
+worker/resident split is now a real, shipped distinction (`worker: true`,
+#215) — and the maintainer spent the reservation, narrowly: `brr` names the
+worker stack, `brnrd` the resident, in the internal vocabulary used to
+describe spawns ("since we apparently keep the worker and resident split in
+spawns, this is where we could use the brr/brnrd split as the naming, and
+not use it anywhere else"). This does not reopen round 3: still no `brr`
+command, no `brr`-addressed prompt surface, nothing in install/docs. It's a
+noun for a thing that now exists, confined to that one use. Recorded in
+[`decision-brnrd-rename.md`](decision-brnrd-rename.md) round 5.
+
 ## The character space
 
 The raw material is good and unusually coherent:
@@ -82,6 +93,16 @@ receipts). Two skins on one engine:
 The internal design vocabulary (director, reveal, quest log) stays internal
 — per the notes' own pushback, the magic is pacing, not labels.
 
+**What's skinnable and what isn't (maintainer, 2026-07-04):** "only the view
+has to be skinned, voice is not a feature, it is the essence." The two skins
+above are presentation — copy register, visual chrome, `ornament` level; the
+voice underneath (identity core, the weave, the resident's actual reasoning)
+is never a candidate for either skin, dev-facing or B2B. This generalizes the
+dashboard's own CPS aesthetic-fork call (`plan-brnrd-dashboard-mvp.md` →
+"ship the CPS view plain, skin once it exists to skin") from one view to the
+whole product: the view renders differently by audience; what the resident
+*is* doesn't.
+
 ## The voice (implemented this wake)
 
 The third voicing complaint was diagnosed and acted on: previous passes
@@ -113,10 +134,11 @@ between injected state and delivered reply — has its own line of rounds in
 
 ## Forks left to the maintainer
 
-1. **Reserve-or-adopt "brrs"** — recommendation above is *reserve*; adopting
-   now re-opens round 3 of the rename a day after it closed.
+1. ~~**Reserve-or-adopt "brrs"**~~ — **resolved 2026-07-04** (round 5,
+   above): adopted, scoped to naming the worker/resident stack split only.
 2. **Trademark scope** — `decision-licensing-and-defense.md` already plans
-   brr+brnrd filings post-launch; if brr is only reserved lore, the brnrd
-   filing is the one that matters.
+   brr+brnrd filings post-launch; now that `brr` names a real (if internal)
+   distinction rather than reserved lore, both filings matter, not just
+   brnrd's.
 3. **Mascot as default ornament level** — `moderate` (static glyph) vs
    `quiet` out of the box. Taste call with onboarding implications.

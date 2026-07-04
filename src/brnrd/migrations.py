@@ -25,6 +25,8 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_accounts(conn)
         if _table_exists(conn, "github_installed_repos"):
             _migrate_github_installed_repos(conn)
+        if _table_exists(conn, "repos"):
+            _migrate_repos(conn)
 
 
 def _table_exists(conn: Connection, table_name: str) -> bool:
@@ -79,6 +81,11 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_github_login ON accounts (github_login)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_email ON accounts (email)"))
 
+    # CPS (Current Planned State) — account-level plan/ledger mirror.
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cross_repo_plan_md TEXT DEFAULT ''"))
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS decision_ledger_md TEXT DEFAULT ''"))
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plans_updated_at TIMESTAMP"))
+
     _tighten_required_account_columns(conn)
 
 
@@ -87,6 +94,12 @@ def _migrate_github_installed_repos(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE github_installed_repos ADD COLUMN IF NOT EXISTS github_updated_at TIMESTAMP"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_github_installed_repos_pushed_at ON github_installed_repos (github_pushed_at)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_github_installed_repos_updated_at ON github_installed_repos (github_updated_at)"))
+
+
+def _migrate_repos(conn: Connection) -> None:
+    # CPS (Current Planned State) — repo-level plan mirror (CS5 active.md).
+    conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS plan_md TEXT DEFAULT ''"))
+    conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS plan_updated_at TIMESTAMP"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:

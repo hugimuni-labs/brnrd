@@ -465,6 +465,9 @@ env defaults does not migrate existing subscriptions.
    `subscription.tier`.
 4. [`decision-cli-shape.md`](decision-cli-shape.md) for the `brr brnrd`
    billing verbs.
+5. [`decision-hosted-execution-liability.md`](decision-hosted-execution-liability.md)
+   for the liability posture (accepted: ToS/beta disclaimer) that sits
+   underneath the hosted compute this page prices.
 
 ## Lineage
 

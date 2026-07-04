@@ -445,6 +445,38 @@ writes for a human). No new backend shape.
   `cost_rank`/`class` spectrum (`design-runner-cores.md`) *is* the resource
   economy — CPS renders spend against it, doesn't invent a second one.
 
+**Shipped 2026-07-04 ("let's implement the dashboard"):** the CPS view
+itself, mirroring the shipped Activity view's pattern (local daemon
+publishes a snapshot; hosted DB stores it; dashboard reads the DB
+directly — no browser access to the account dominion).
+
+- `Repo.plan_md` / `Repo.plan_updated_at` (repo-scoped CS5 active plan) and
+  `Account.cross_repo_plan_md` / `Account.decision_ledger_md` /
+  `Account.plans_updated_at` (account-wide CS5 cross-repo plan + CS7
+  ledger) — new columns, Postgres startup migration in `migrations.py`.
+- `PUT /v1/daemons/plans` (`schemas.PlansReport`/`PlansOut`) — daemon-facing,
+  same last-write-wins shape as `/v1/daemons/activity`.
+- `src/brr/gates/cloud.py`: `_plans_snapshot`/`_publish_plans`, called each
+  loop iteration alongside `_publish_activity`. Reads
+  `account.active_plan_path`, `cross_repo_plans_path`, `decisions_ledger_path`
+  via a read-only `resolve_context(create=False)`; returns `None` (skip,
+  don't publish) rather than raising when no account context resolves — a
+  plain repo-local `.brr/` with no account is a normal shape, not an error.
+- `GET /plans` (`src/brnrd_web/plans_dashboard.py` + `templates/plans.html`)
+  — renders the three fields plain (`<pre>`, no markdown-to-HTML pass; ship
+  plain, skin later per the aesthetic-fork resolution above), one panel per
+  populated field, empty state when nothing's mirrored yet. Nav link added
+  to `dashboard.html` and `activity.html`.
+- Tests: `tests/test_brnrd_plans.py` (endpoint + dashboard render + empty
+  state + login-required), `tests/test_cloud_gate.py::
+  test_loop_publishes_plans_snapshot` (local files on disk → published →
+  landed in the right DB rows, end to end).
+- Not done: CSV/markdown export, live polling (Activity's HTMX poll
+  pattern would fit if this gets busy), and no attempt to render the
+  archive convention (`plans/<repo>/archive/*.md`) — only `active.md` and
+  the ledger are mirrored; archived plans stay a local/git-blob-link
+  concern, not a dashboard one, unless that's asked for separately.
+
 ## Out of scope
 
 - **Connectors view** — no connectors exist; see
@@ -582,3 +614,9 @@ writes for a human). No new backend shape.
   repo-first decision (`repo_id`, not `project_id`); later cancel,
   reschedule, and approve-respawn mutations remain outside this MVP
   slice.
+- 2026-07-04 (CPS implementation). The Current Planned State view
+  shipped, mirroring the Activity slice's publish/store/render shape:
+  `PUT /v1/daemons/plans` + `Repo.plan_md` / `Account.cross_repo_plan_md`
+  / `Account.decision_ledger_md` + `GET /plans`. See "Gap: Current
+  Planned State view" above for the full shape and what's still out
+  (export, live polling, archived-plan rendering).
