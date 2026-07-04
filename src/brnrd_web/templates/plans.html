@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="ops-shell">
+  <aside class="ops-sidebar" aria-label="brnrd navigation">
+    <a class="brand-stack" href="/">
+      <span class="brand-sigil" aria-hidden="true">⌬</span>
+      <span><strong>BRNRD</strong><small>drain local · route wisely</small></span>
+    </a>
+    <nav class="ops-nav">
+      <a href="/">Dashboard</a>
+      <a href="/#repos">Repositories</a>
+      <a href="/activity">Runs</a>
+      <a href="/#schedule">Schedule</a>
+      <a href="/#quota">Clips & budget</a>
+      <a href="/#events">Events</a>
+      <a class="active" href="/plans">Plans</a>
+    </nav>
+    <div class="daemon-card">
+      <span class="eyebrow">Plans</span>
+      <strong>{{ repo_plans|length }} repo plan{{ "s" if repo_plans|length != 1 else "" }}</strong>
+      <small>last mirrored {{ plans_updated_label or "never" }}</small>
+    </div>
+    <div class="sidebar-user">
+      <span class="avatar-letter">{{ account.github_login[:1]|upper }}</span>
+      <span><small>signed in</small><strong>@{{ account.github_login }}</strong></span>
+    </div>
+  </aside>
+
+  <main class="ops-main">
+    <section class="ops-hero activity-hero">
+      <div>
+        <p class="eyebrow">Current Planned State</p>
+        <h1>Plans & decisions</h1>
+        <p class="lede">What the resident is doing now, and what it's decided and why — mirrored as-is from the account dominion. Plain for now; see kb/plan-brnrd-dashboard-mvp.md for the skin-later call.</p>
+      </div>
+      <div class="hero-compass" aria-hidden="true"><span>✣</span></div>
+    </section>
+
+    {% if not has_any_plan %}
+      <section class="ops-grid">
+        <article class="panel deck-panel span-12">
+          <div class="empty-state">
+            <strong>No plans mirrored yet.</strong>
+            <p>A connected daemon publishes its account dominion's active plan(s) and decision ledger here once it has one. Nothing to show until the resident writes <code>plans/&lt;repo&gt;/active.md</code>, <code>plans/_cross-repo/active.md</code>, or <code>ledger/decisions.md</code>.</p>
+          </div>
+        </article>
+      </section>
+    {% else %}
+      <section class="ops-grid">
+        {% if cross_repo_plan_md %}
+          <article class="panel deck-panel span-12">
+            <div class="section-heading">
+              <div><p class="eyebrow">Cross-repo</p><h2>Active plan</h2></div>
+            </div>
+            <pre class="plan-body">{{ cross_repo_plan_md }}</pre>
+          </article>
+        {% endif %}
+
+        {% for item in repo_plans %}
+          <article class="panel deck-panel span-12">
+            <div class="section-heading">
+              <div><p class="eyebrow">{{ item.repo.repo_full_name }}</p><h2>Active plan</h2></div>
+              <small>updated {{ item.updated_label }}</small>
+            </div>
+            <pre class="plan-body">{{ item.plan_md }}</pre>
+          </article>
+        {% endfor %}
+
+        {% if decision_ledger_md %}
+          <article class="panel deck-panel span-12">
+            <div class="section-heading">
+              <div><p class="eyebrow">Ledger</p><h2>Decisions</h2></div>
+            </div>
+            <pre class="plan-body">{{ decision_ledger_md }}</pre>
+          </article>
+        {% endif %}
+      </section>
+    {% endif %}
+  </main>
+</div>
+{% endblock %}

@@ -1,8 +1,10 @@
 # Decision: hosted-mode execution liability posture
 
-Status: proposed, not yet accepted on 2026-07-04 (needs maintainer sign-off
-— see Open questions below; this page unpacks the shape, it doesn't close
-the fork)
+Status: accepted on 2026-07-04 (telegram, "Yes let's add the tos") — posture
+**(1) ToS / beta disclaimer floor**, ships now. Posture (2) technical
+containment tracked as a parallel engineering track, scoped once #80's
+`docker.isolation=clone` lands (see "Recommendation" below, now executed
+rather than proposed).
 
 ## Why this needs its own page
 
@@ -52,28 +54,34 @@ posture for this; it is genuinely unscoped, not quietly decided.
    a disclaimer alone doesn't stop a compromised session from touching
    brnrd's own infra, only shifts who's liable after it does.
 
-## Open questions for the maintainer
+## Resolved 2026-07-04
 
-- Risk tolerance vs. certification/engineering cost — is (1) alone
-  acceptable for the initial hosted beta the "#53 wants first users in
-  weeks" push is aiming for, with (2) following once #80's
-  `docker.isolation=clone` actually lands?
+Maintainer picked (1) — ToS/beta disclaimer floor — as the immediate
+ship, unqualified ("Yes let's add the tos"). Not stated: whether (2)
+technical containment is *also* wanted now or genuinely deferred; read
+against the recommendation below (ship (1) now, track (2) once #80 lands)
+as the maintainer accepting the recommendation as a whole, not just its
+first clause — the two remaining open questions below are downstream
+execution detail, not further posture forks.
+
+## Open questions (execution detail, not posture)
+
+- Who drafts the ToS/disclaimer language — HugiMuni's counsel, or does this
+  wait on that relationship existing? Blocks actually shipping the text,
+  not the decision to ship it.
 - Does (2)'s hosted-default containment change the shared-UID assumptions
   in [`decision-account-centered-daemon.md`](decision-account-centered-daemon.md)
   enough to need its own design pass, or is it a config default flip on
-  top of #80's already-designed mechanism?
-- Who drafts the ToS/disclaimer language — HugiMuni's counsel, or does this
-  wait on that relationship existing?
+  top of #80's already-designed mechanism? Relevant once #80 lands, not
+  before.
 
-## Recommendation (not yet accepted)
+## Recommendation (accepted 2026-07-04)
 
 Ship (1) before any hosted user gets remote exec — it's cheap, it's a
 legal/product move not an engineering one, and it doesn't block the
 weeks-scale timeline. Track (2) as a parallel engineering track scoped
 once #80's `docker.isolation=clone` ships, defaulted on for hosted rather
-than built twice. Open a GH ticket once the maintainer picks a posture
-above; not opened yet because a ticket without a chosen posture just
-re-encodes this same open question in a worse format.
+than built twice.
 
 ## Read next
 

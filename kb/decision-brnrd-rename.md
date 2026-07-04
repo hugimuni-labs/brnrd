@@ -31,6 +31,22 @@ called doesn't matter, the essence is important"). `brr` stays retired; no
 reservation held. The round-3 retirement is the final word. See
 [`design-brand-brnrd-brr.md`](design-brand-brnrd-brr.md).
 
+**Round-5 — the reservation spent (2026-07-04):** the condition round 4 set
+for reviving `brr` — "when the director loop makes spawned work user-visible"
+— is now partly true: `worker: true` shipped 2026-07-04 (#215,
+`plan-director-execution.md` B4) as a real prompt-weight split between the
+resident stack and a slimmer worker stack for delegated/`respawn:` runs. The
+maintainer spent the reservation, narrowly: **`brr`/`brnrd` names that split
+specifically** — `brr` for the worker stack, `brnrd` for the resident — "and
+not use it anywhere else." Round 3's retirement still stands everywhere else:
+no `brr` command, no `brr`-addressed prompt layer, no CLI/install-doc
+surface. This is internal vocabulary for a now-real distinction, not a
+reopening of the command-surface question. ("brr can be viewed as brnrd
+mirrored in the middle" — the maintainer's own mnemonic for the pairing, not
+an etymology to build on.) See
+[`design-brand-brnrd-brr.md`](design-brand-brnrd-brr.md) fork #1, now
+resolved to *adopt, scoped*.
+
 Amends [`decision-cli-shape.md`](decision-cli-shape.md) (which had `brr` and
 `brnrd` as sibling binaries from one package, with `brr` primary). Rests on
 [`decision-account-centered-daemon.md`](decision-account-centered-daemon.md)

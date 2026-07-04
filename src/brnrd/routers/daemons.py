@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from .. import ids, inbox as inbox_service, schemas
 from ..auth import Principal, get_db, require_daemon
-from ..models import ActivityRecord, Daemon, Event
+from ..models import Account, ActivityRecord, Daemon, Event, Repo
 
 router = APIRouter(prefix="/v1/daemons", tags=["daemons"])
 
@@ -133,6 +133,35 @@ def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends
         daemon.last_seen_at = now
     db.commit()
     return schemas.ActivityList(activity=[_activity_out(row) for row in rows])
+
+
+@router.put("/plans", response_model=schemas.PlansOut)
+def put_plans(payload: schemas.PlansReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon's CPS snapshot: repo plan + account plan/ledger.
+
+    Mirrors the account dominion's CS5/CS7 files (plans/<repo>/active.md,
+    plans/_cross-repo/active.md, ledger/decisions.md) so the dashboard can
+    render Current Planned State without the browser touching the local
+    dominion repo directly. See kb/plan-brnrd-dashboard-mvp.md "Gap:
+    Current Planned State view".
+    """
+    now = datetime.now(timezone.utc)
+    repo = db.get(Repo, principal.repo_id) if principal.repo_id else None
+    if repo is not None:
+        repo.plan_md = payload.repo_plan_md
+        repo.plan_updated_at = now
+    account = db.get(Account, principal.account_id)
+    if account is not None:
+        account.cross_repo_plan_md = payload.cross_repo_plan_md
+        account.decision_ledger_md = payload.decision_ledger_md
+        account.plans_updated_at = now
+    db.commit()
+    return schemas.PlansOut(
+        repo_plan_md=repo.plan_md if repo is not None else "",
+        cross_repo_plan_md=account.cross_repo_plan_md if account is not None else "",
+        decision_ledger_md=account.decision_ledger_md if account is not None else "",
+        plans_updated_at=now,
+    )
 
 
 @router.get("/inbox", response_model=schemas.InboxResponse)
