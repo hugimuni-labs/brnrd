@@ -250,6 +250,37 @@ class TestPromptBuilding:
         assert "Review pack (diffense)" not in prompt
         assert "Review pack path" not in prompt
 
+    def test_daemon_prompt_worker_excludes_resident_stack(self, tmp_path):
+        # A pitfall would normally surface for a matching task — confirm
+        # the worker path skips the injected blocks entirely, not just the
+        # ones that happen to be empty in this fixture.
+        _seed_pitfalls(
+            tmp_path,
+            "## Blind retry\ntrigger: docker\n"
+            "Rebuild the image before you trust the cache.\n",
+        )
+        prompt = build_daemon_prompt(
+            "rebuild the docker image and ship", "evt-1", "/tmp/resp.md",
+            tmp_path,
+            run_id="task-9",
+            worker=True,
+        )
+        assert "Resident Identity Core" not in prompt
+        assert "Pitfalls that match this task" not in prompt
+        assert "Rebuild the image before you trust the cache." not in prompt
+        assert "bounded, single-purpose thought" in prompt
+        assert "next-move contract" in prompt
+        # Mechanics still ride — a worker wake is still under the daemon.
+        assert "single-flight" in prompt
+
+    def test_daemon_prompt_default_keeps_resident_stack(self, tmp_path):
+        prompt = build_daemon_prompt(
+            "ship it", "evt-1", "/tmp/resp.md", tmp_path,
+            run_id="task-9",
+        )
+        assert "Resident Identity Core" in prompt
+        assert "bounded, single-purpose thought" not in prompt
+
     def test_daemon_prompt_surfaces_runner_medium(self, tmp_path):
         prompt = build_daemon_prompt(
             "ship it", "evt-1", "/tmp/resp.md", tmp_path,

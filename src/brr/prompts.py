@@ -561,20 +561,34 @@ def _join_prompt_parts(
     *,
     task_text: str | None = None,
     diffense: bool = False,
+    inject_blocks: bool = True,
 ) -> str:
-    """Stitch preamble, optional recent-context block, and trailer."""
+    """Stitch preamble, optional recent-context block, and trailer.
+
+    ``inject_blocks=False`` skips the resident stack entirely — the base
+    injected blocks (identity core, dominion digest, inter-run plan, runner
+    policy, decision ledger, pitfalls, knowledge sources, kb health) and the
+    introspection dev-mode block. That's the B4 worker trim: a bounded
+    worker wake gets its task and files, not the standing resident context.
+    The ``diffense`` review-pack step is independent of that trim (a worker
+    wake asking for diffense is out of scope for now; whatever the caller
+    passes is honored as-is).
+    """
     parts = [preamble]
-    parts.extend(_build_injected_blocks(repo_root, task_text=task_text))
+    if inject_blocks:
+        parts.extend(_build_injected_blocks(repo_root, task_text=task_text))
     if diffense:
         pack_step = read_prompt("diffense.md", repo_root)
         if pack_step:
             parts.append(pack_step)
-    # Last framing before the task: invite the resident to look at the whole
-    # shape it has just read (opt-in dev mode). Placed here so it can refer to
-    # everything above and sit fresh against the task bundle.
-    introspection_block = _build_introspection_block(repo_root)
-    if introspection_block:
-        parts.append(introspection_block)
+    if inject_blocks:
+        # Last framing before the task: invite the resident to look at the
+        # whole shape it has just read (opt-in dev mode). Placed here so it
+        # can refer to everything above and sit fresh against the task
+        # bundle.
+        introspection_block = _build_introspection_block(repo_root)
+        if introspection_block:
+            parts.append(introspection_block)
     parts.append(trailer)
     return "\n\n".join(parts)
 
@@ -625,6 +639,23 @@ def _read_preamble_with_weave(repo_root: Path) -> str:
     return preamble
 
 
+def _build_worker_preamble(repo_root: Path) -> str:
+    """Read ``worker.md`` plus the working-register contract (``weave.md``).
+
+    The slim counterpart to :func:`_read_preamble_with_weave`: a worker wake
+    (B4, ``kb/design-director-loop.md`` §orchestrator/worker) gets the bounded
+    task preamble instead of the resident's ``run.md`` — no dominion write,
+    no kb governance, no "reconsider intent" stewardship framing, none of
+    which apply to a bounded handoff. ``weave.md`` still rides: it governs
+    *how* any wake writes to its working surfaces, resident or worker alike.
+    """
+    preamble = read_prompt("worker.md", repo_root)
+    weave = read_prompt("weave.md", repo_root)
+    if weave.strip():
+        preamble = f"{preamble.rstrip()}\n\n{weave.strip()}"
+    return preamble
+
+
 def build_run_prompt(task: str, repo_root: Path) -> str:
     """Build the prompt for ``brnrd run`` — run.md + weave + context + task."""
     preamble = _read_preamble_with_weave(repo_root)
@@ -661,6 +692,7 @@ def build_daemon_prompt(
     runner_quota: str | None = None,
     runner_catalog: list[dict[str, Any]] | None = None,
     diffense: bool = False,
+    worker: bool = False,
 ) -> str:
     """Build the prompt for daemon-originated runs.
 
@@ -673,8 +705,22 @@ def build_daemon_prompt(
     self-scheduled wakes, the outbox/keepalive contract) that the
     host-agnostic playbook deliberately leaves out. ``brnrd run`` skips it:
     a one-shot has no daemon to fire schedules or drain an outbox.
+
+    ``worker=True`` (B4, ``kb/design-director-loop.md`` §orchestrator/worker)
+    swaps in the slim worker stack: ``worker.md`` + ``weave.md`` instead of
+    the resident's ``run.md``, and the resident-only injected blocks
+    (identity core, dominion digest, inter-run plan, runner policy, decision
+    ledger, pitfalls, knowledge sources, kb health, introspection) are
+    skipped entirely — a worker wake still gets ``daemon-substrate.md`` (it
+    still runs under the daemon and needs the delivery/portal mechanics) and
+    the full Run Context Bundle (its actual task). Default ``False`` is
+    byte-identical to the prior behavior.
     """
-    preamble = _read_preamble_with_weave(repo_root)
+    preamble = (
+        _build_worker_preamble(repo_root)
+        if worker
+        else _read_preamble_with_weave(repo_root)
+    )
     substrate = read_prompt("daemon-substrate.md", repo_root)
     if substrate.strip():
         preamble = f"{preamble.rstrip()}\n\n{substrate.strip()}"
@@ -713,6 +759,7 @@ def build_daemon_prompt(
     pitfall_text = "\n".join(t for t in (task, event_body) if t)
     return _join_prompt_parts(
         preamble, repo_root, trailer, task_text=pitfall_text, diffense=diffense,
+        inject_blocks=not worker,
     )
 
 
