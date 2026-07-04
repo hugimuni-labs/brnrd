@@ -46,7 +46,7 @@ import signal
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import account
@@ -117,6 +117,13 @@ _FLUSH_POLL_INTERVAL = 1.0
 # yields the moment any pending event appears.
 _POST_DELIVERY_ATTEND_SECONDS_DEFAULT = 90.0
 _POST_DELIVERY_ATTEND_POLL_INTERVAL = 1.0
+# Quota-aware pacing floors (kb/design-director-loop.md §B1, decided
+# 2026-07-04): below the low floor, `every:` schedule entries stretch their
+# interval; below the critical floor, they stop firing this beat entirely.
+# `at:` entries and anything gate-addressed are never bent by this policy.
+_QUOTA_LOW_FLOOR_PCT_DEFAULT = 20.0
+_QUOTA_CRITICAL_FLOOR_PCT_DEFAULT = 8.0
+_QUOTA_STRETCH_FACTOR_DEFAULT = 3.0
 _LIVE_INBOX_NAME = "inbox.json"
 _LIVE_PORTAL_STATE_NAME = "portal-state.json"
 # Agent-owned card narration: the resident writes this control dotfile
@@ -1604,6 +1611,7 @@ def _run_worker(
         start_monotonic=run_started_monotonic,
         work_dir=run_root,
         quota_summary=quota_summary,
+        cfg=cfg,
     )
 
     attempt = 0
@@ -1699,6 +1707,7 @@ def _run_worker(
             start_monotonic=run_started_monotonic,
             work_dir=run_root,
             quota_summary=quota_summary,
+            cfg=cfg,
         )
 
         def _emit_heartbeat() -> None:
@@ -1732,6 +1741,7 @@ def _run_worker(
                 start_monotonic=run_started_monotonic,
                 work_dir=run_root,
                 quota_summary=quota_summary,
+                cfg=cfg,
             )
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
@@ -1781,6 +1791,7 @@ def _run_worker(
                 start_monotonic=run_started_monotonic,
                 work_dir=run_root,
                 quota_summary=quota_summary,
+                cfg=cfg,
                 refresh_levels=False,
             )
 
@@ -1838,6 +1849,7 @@ def _run_worker(
             start_monotonic=run_started_monotonic,
             work_dir=run_root,
             quota_summary=quota_summary,
+            cfg=cfg,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
@@ -2513,6 +2525,7 @@ def _resources_facet(
     runner_catalog: "list[dict[str, object]] | None" = None,
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
+    pacing_status: "dict[str, object] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -2534,6 +2547,7 @@ def _resources_facet(
         runner_catalog=runner_catalog,
         quality_escalation=quality_escalation,
         relay_consent=relay_consent,
+        pacing_status=pacing_status,
     )
 
 
@@ -2609,6 +2623,7 @@ def _write_live_portal_state(
     work_dir: Path | None = None,
     quota_summary: str | None = None,
     refresh_levels: bool = True,
+    cfg: dict | None = None,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -2638,6 +2653,7 @@ def _write_live_portal_state(
         run_levels, run_level_slots = _collect_levels(
             runner_name, outbox_dir, work_dir, refresh=refresh_levels
         )
+        pacing_status = _quota_pacing_status(cfg or {}, run_levels)
         payload: dict[str, object] = {
             "version": 1,
             "generated_at": time.strftime(
@@ -2705,6 +2721,7 @@ def _write_live_portal_state(
                 runner_catalog=runner_catalog,
                 quality_escalation=quality_escalation,
                 relay_consent=relay_consent,
+                pacing_status=pacing_status,
             ),
         }
         payload["change_token"] = _change_token(payload)
@@ -3222,9 +3239,52 @@ def _fire_due_schedules(
                 cfg.get("schedule_stale_grace_seconds", schedule_mod.DEFAULT_STALE_GRACE_S),
             )
         )
-        due, new_state = schedule_mod.due_entries(
-            entries, state, time.time(), stale_grace=grace,
+
+        # Quota-aware pacing (kb/design-director-loop.md §B1, decided
+        # 2026-07-04): bend ambient `every:` cadence by observed quota —
+        # never `at:` one-shots, those are deadlines. `schedule.due_entries`
+        # stays pure; the bending happens here, to the entry list passed in.
+        # There is no single "current run" outbox for an account-wide
+        # scheduler tick, so this reads whatever cache sits at *brr_dir*
+        # directly (shared, not per-run) for whichever runner is explicitly
+        # pinned in config (`shell=` or legacy `runner=`, excluding `auto` —
+        # `core=` names a model class, not a Shell, so it can't key the
+        # per-Shell level collector). An unresolved runner name or a cold
+        # cache just means no pacing signal this beat; the try/except this
+        # function already wraps everything in covers that, so no separate
+        # defensive layer is added here.
+        scheduled_entries = entries
+        dropped_ids: set[str] = set()
+        shell_pin = str(cfg.get("shell") or "").strip()
+        runner_cfg = str(cfg.get("runner") or "").strip()
+        runner_name = shell_pin or (
+            runner_cfg if runner_cfg and runner_cfg != "auto" else ""
         )
+        if runner_name:
+            sched_levels, _ = _collect_levels(runner_name, brr_dir, None, refresh=False)
+            binding_pct = runner_quota.binding_quota_remaining_pct(sched_levels)
+            if binding_pct is not None:
+                if binding_pct < _quota_critical_floor_pct(cfg):
+                    scheduled_entries = [e for e in entries if e.kind != "every"]
+                    dropped_ids = {e.id for e in entries if e.kind == "every"}
+                elif binding_pct < _quota_low_floor_pct(cfg):
+                    stretch = _quota_stretch_factor(cfg)
+                    scheduled_entries = [
+                        replace(e, interval=(e.interval or 0) * stretch)
+                        if e.kind == "every" else e
+                        for e in entries
+                    ]
+
+        due, new_state = schedule_mod.due_entries(
+            scheduled_entries, state, time.time(), stale_grace=grace,
+        )
+        # due_entries prunes new_state to the ids it was actually handed —
+        # carry forward the anchor/last-fired record for entries the
+        # critical-floor pause dropped this beat, so a recovering quota
+        # resumes cadence instead of re-anchoring from zero.
+        for did in dropped_ids:
+            if did in state and did not in new_state:
+                new_state[did] = state[did]
         for entry in due:
             body = entry.body or f"(self-scheduled thought: {entry.id})"
             # Thread the firing so a recurring entry's wakes share a
@@ -3595,6 +3655,50 @@ def _post_delivery_attend_poll_interval(cfg: dict) -> float:
         "delivery.post_delivery_attend_poll_seconds",
         default=_POST_DELIVERY_ATTEND_POLL_INTERVAL,
     )
+
+
+def _quota_low_floor_pct(cfg: dict) -> float:
+    """Below this remaining-percent, `every:` entries stretch their interval."""
+    return _seconds_config(
+        cfg, "pacing.quota_low_floor_pct", default=_QUOTA_LOW_FLOOR_PCT_DEFAULT,
+    )
+
+
+def _quota_critical_floor_pct(cfg: dict) -> float:
+    """Below this remaining-percent, `every:` entries don't fire this beat."""
+    return _seconds_config(
+        cfg, "pacing.quota_critical_floor_pct",
+        default=_QUOTA_CRITICAL_FLOOR_PCT_DEFAULT,
+    )
+
+
+def _quota_stretch_factor(cfg: dict) -> float:
+    """Multiplier applied to an `every:` entry's interval under the low floor."""
+    return _seconds_config(
+        cfg, "pacing.quota_stretch_factor", default=_QUOTA_STRETCH_FACTOR_DEFAULT,
+    )
+
+
+def _quota_pacing_status(
+    cfg: dict, levels: "dict[str, object] | None",
+) -> "dict[str, object] | None":
+    """Binding quota remaining-percent + which pacing floor (if any) is live.
+
+    Mirrors the check ``_fire_due_schedules`` uses to bend ``every:`` schedule
+    cadence (kb/design-director-loop.md §B1), surfaced here so a mid-run
+    boundary (``resources.quota.pacing``) sees the same number the scheduler
+    used. ``None`` when the binding percent can't be proven this heartbeat
+    (no collector, no numeric buckets) — never a fabricated read.
+    """
+    pct = runner_quota.binding_quota_remaining_pct(levels)
+    if pct is None:
+        return None
+    floor = None
+    if pct < _quota_critical_floor_pct(cfg):
+        floor = "critical"
+    elif pct < _quota_low_floor_pct(cfg):
+        floor = "low"
+    return {"binding_remaining_pct": pct, "floor": floor}
 
 
 def _should_post_delivery_attend(

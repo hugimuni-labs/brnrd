@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from brr import account, daemon, dominion, protocol, schedule
+from brr import account, claude_usage, daemon, dominion, protocol, schedule
 
 from _helpers import commit_files, init_git_repo
 
@@ -146,6 +146,75 @@ def test_fire_due_noop_when_nothing_due(tmp_path):
 
     daemon._fire_due_schedules(repo, brr_dir, inbox, {})
     assert protocol.list_pending(inbox) == []
+
+
+def _write_quota_cache(brr_dir, remaining_pct):
+    """Drop a levels cache at the shared runtime dir, as the scheduler-tick
+    quota read does (no per-run outbox exists for an account-wide tick)."""
+    claude_usage.write_snapshot(brr_dir, {
+        "source": "claude /usage PTY",
+        "quota": {
+            "summary": f"week {remaining_pct}% left",
+            "buckets": {"week": {"remaining_percentage": remaining_pct}},
+        },
+    })
+
+
+def test_fire_due_pauses_every_entries_under_critical_quota_floor(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+    _write_schedule(
+        path,
+        f"## Upkeep\nevery: 60s\nrun upkeep\n\n## Followup\nat: {past}\ncheck the CI run\n",
+    )
+    # Anchor the every: entry as already due under its stated interval.
+    schedule.save_state(brr_dir, {"upkeep": {"kind": "every", "last_fired": 0.0}})
+    # Below the default critical floor (8%) — `every:` entries must not fire.
+    _write_quota_cache(brr_dir, 5.0)
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude"})
+
+    fired = {e["schedule_id"] for e in protocol.list_pending(inbox)}
+    assert fired == {"followup"}  # every: paused; at: is a deadline, still fires
+
+
+def test_fire_due_stretches_every_interval_under_low_quota_floor(tmp_path):
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(path, "## Upkeep\nevery: 100s\nrun upkeep\n")
+    # 250s since last fire: due under the stated 100s interval, but not under
+    # the pacing-stretched interval (default stretch factor 3x -> 300s).
+    schedule.save_state(
+        brr_dir, {"upkeep": {"kind": "every", "last_fired": time.time() - 250}}
+    )
+    # Between the default critical (8%) and low (20%) floors.
+    _write_quota_cache(brr_dir, 15.0)
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {"shell": "claude"})
+
+    assert protocol.list_pending(inbox) == []
+
+
+def test_fire_due_ignores_quota_pacing_without_resolvable_runner(tmp_path):
+    """No `shell=`/`runner=` pin resolvable → pacing is skipped, not guessed;
+    entries fire exactly as they would with no quota awareness at all."""
+    repo = _repo(tmp_path)
+    brr_dir = repo / ".brr"
+    inbox = brr_dir / "inbox"
+    path = dominion.ensure_dominion(repo, push=False)
+    _write_schedule(path, "## Upkeep\nevery: 60s\nrun upkeep\n")
+    schedule.save_state(brr_dir, {"upkeep": {"kind": "every", "last_fired": 0.0}})
+    _write_quota_cache(brr_dir, 1.0)  # would be critical, if it were ever read
+
+    daemon._fire_due_schedules(repo, brr_dir, inbox, {})  # no shell/runner pin
+
+    fired = {e["schedule_id"] for e in protocol.list_pending(inbox)}
+    assert fired == {"upkeep"}
 
 
 def test_retire_internal_event_cleans_up_schedule_source(tmp_path):
