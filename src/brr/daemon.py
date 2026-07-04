@@ -1666,6 +1666,7 @@ def _run_worker(
             runner_quota=quota_summary,
             runner_catalog=runner_catalog,
             diffense=prompt_diffense,
+            worker=bool(task.meta.get("worker")),
         )
         if attempt == 1:
             # Persist the assembled prompt so "what did this wake see?" has
@@ -2801,11 +2802,13 @@ def _queue_respawn_request(
     if not new_body.strip():
         print("[brr] outbox: respawn request had no body; dropping")
         return False
+    worker = _truthy(fm.get("worker"))
     reserved = {
         "_path", "id", "body", "status", "created", "source",
         "origin_message_key", "respawn", "event", "gate",
         "runner", "proposed_runner", "shell", "core", "at", "defer_until",
         "carry_forward", "quality", "quality_escalation", "escalation",
+        "worker",
     }
     meta = {
         k: v for k, v in current.items()
@@ -2826,6 +2829,8 @@ def _queue_respawn_request(
     defer_until = _respawn_defer_until(fm)
     if defer_until:
         meta["defer_until"] = defer_until
+    if worker:
+        meta["worker"] = True
     reason = str(fm.get("reason") or "").strip()
     meta["respawned_from_event"] = event_id
     meta["respawned_by_run"] = task.id
