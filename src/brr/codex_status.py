@@ -137,9 +137,22 @@ def parse_token_count(payload: dict[str, Any]) -> dict[str, Any]:
         ]
         if parts:
             primary = rate.get("primary") if isinstance(rate.get("primary"), dict) else {}
+            secondary = rate.get("secondary") if isinstance(rate.get("secondary"), dict) else {}
+            primary_used = _num(primary.get("used_percent"))
+            secondary_used = _num(secondary.get("used_percent"))
             levels["quota"] = {
                 "summary": "; ".join(parts),
-                "primary_used_percent": _num(primary.get("used_percent")),
+                "primary_used_percent": primary_used,
+                # Weekly window's used_percent, previously discarded past the
+                # rendered summary string — quota pacing needs both windows'
+                # numbers, not just the 5h one (kb/design-director-loop.md §B1).
+                "secondary_used_percent": secondary_used,
+                "primary_remaining_percent": (
+                    100.0 - primary_used if primary_used is not None else None
+                ),
+                "secondary_remaining_percent": (
+                    100.0 - secondary_used if secondary_used is not None else None
+                ),
             }
         plan = rate.get("plan_type")
         if isinstance(plan, str) and plan.strip():
