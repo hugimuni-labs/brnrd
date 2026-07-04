@@ -274,6 +274,54 @@ def test_loop_publishes_local_activity_snapshot(tmp_path, monkeypatch):
     assert rows[f"respawn:{respawn.stem}"]["defer_until"].startswith("2999-01-01T01:00:00")
 
 
+def test_loop_publishes_plans_snapshot(tmp_path, monkeypatch):
+    """CS5/CS7 files in the account dominion mirror to the hosted CPS view."""
+    from brr import account
+    from brnrd.models import Account as AccountModel, Repo as RepoModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    # _connected_account_id reads the same cloud.json _save_state just wrote,
+    # so this resolves the same "connected" account home the daemon uses.
+    repo_root = brr_dir.parent
+    ctx = account.resolve_context(repo_root, create=True)
+    label = account.repo_label(repo_root)
+    plan_path = account.active_plan_path(ctx, label)
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text("ship the CPS view", encoding="utf-8")
+    cross_path = account.cross_repo_plans_path(ctx) / "active.md"
+    cross_path.parent.mkdir(parents=True, exist_ok=True)
+    cross_path.write_text("coordinate release", encoding="utf-8")
+    ledger_path = account.decisions_ledger_path(ctx)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text("adopted the ToS posture", encoding="utf-8")
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    with client.app.state.SessionLocal() as db:
+        repo_row = db.get(RepoModel, pid)
+        assert repo_row.plan_md == "ship the CPS view"
+        account_row = db.get(AccountModel, repo_row.account_id)
+        assert account_row.cross_repo_plan_md == "coordinate release"
+        assert account_row.decision_ledger_md == "adopted the ToS posture"
+
+
 def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"

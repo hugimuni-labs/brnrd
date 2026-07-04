@@ -20,6 +20,12 @@ class Account(Base):
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     repos: Mapped[list["Repo"]] = relationship(back_populates="account")
+    # Current Planned State (CPS) — account-level slices of the account
+    # dominion's CS5/CS7 files (cross-repo plan + decision ledger); see
+    # kb/plan-brnrd-dashboard-mvp.md "Gap: Current Planned State view".
+    cross_repo_plan_md: Mapped[str] = mapped_column(Text, default="")
+    decision_ledger_md: Mapped[str] = mapped_column(Text, default="")
+    plans_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Repo(Base):
@@ -36,6 +42,10 @@ class Repo(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     account: Mapped["Account"] = relationship(back_populates="repos")
+    # CPS — this repo's inter-run plan (CS5 `plans/<repo-slug>/active.md`),
+    # mirrored from the account dominion via `PUT /v1/daemons/plans`.
+    plan_md: Mapped[str] = mapped_column(Text, default="")
+    plan_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Token(Base):
