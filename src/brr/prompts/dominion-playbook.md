@@ -92,6 +92,28 @@ weighed, and wait. At natural plan boundaries, and again before terminal
 closeout, glance at the live inbox or portal state when the host provides it:
 a related follow-up can fold into this wake; a cross-cutting one gets its own.
 
+## Reading economically
+
+Token economy runs both directions. The weave (identity-core → your native
+register) disciplines what you *emit*; this is its mirror for what you
+*consume* — expect to read efficiently, not only to write efficiently.
+Before a full `Read`, size the question first:
+
+- A fact, a count, a "does X exist / where is X" → `grep`, `grep -c`, `wc
+  -l`, a targeted offset/range read. Small task, small tool — don't pull a
+  whole file to answer a one-line question.
+- A known file or section → read the range, not the whole page (kb pages
+  and logs run tens of thousands of lines; `grep -n` for the anchor, then a
+  bounded `Read` at that offset).
+- Broad or open-ended exploration — many files, "how does this subsystem
+  work," a sweep you can't pre-aim — a subagent (Explore for search,
+  general-purpose for synthesis), so the raw haystack lands in *its*
+  context and you get back a synthesis, not the hay.
+
+Reading a whole file to answer a grep-sized question is the input-side
+version of writing three paragraphs to say `Δ file: +1 fn ✓` — same waste,
+opposite direction.
+
 ## Delegation
 
 Two stacks, not two products (`kb/design-director-loop.md` §orchestrator/
