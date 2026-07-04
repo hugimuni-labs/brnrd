@@ -10171,3 +10171,53 @@ unscoped, needs its own decision before a ticket is worth writing).
 the maintainer which transcript that refers to rather than guessing.
 
 Branch: brr/director-stream-b.
+
+## [2026-07-04] implement | Token-efficient reading habit shipped; hosted-liability shape unpacked; burst thread closed out
+
+Woke to the *first* message of the maintainer's 2026-07-04 telegram burst
+(evt-…gosn: "bus vs subway... compress your language... greps and counts
+for small tasks, sub spawns for abstract/complex tasks") — the previous
+director-stream-b run had named this ask ("tighter token-efficient reading
+habits") but not acted on it. Added a "Reading economically" section to
+the dominion playbook, mirrored into `src/brr/prompts/dominion-playbook.md`
+(the seed, so future dominions inherit it): grep/wc/offset-reads for small
+facts, subagents for broad sweeps, full `Read` reserved for when the range
+is genuinely the ask — the input-side mirror of the weave's output
+density.
+
+A new event (jzu3, "check my reply in #53") surfaced the maintainer's full
+GH #53 comment, which the bundle's truncated pending-event summary hadn't
+shown: substantive feedback on the previous run (produce-vs-topic-count
+ratio, whether follow-ups were waited for, a tone shift with no matching
+prompt edit, a "wtf" on the hosted-liability line being named but not
+expanded), plus resolutions to two of that run's open questions (archive
+files get a `parked: <date> · why:` header; ship the CPS view plain, skin
+later, but the general frontend stack is a *separate*, still-open quality
+concern regardless of skin timing) and the actual answer to "teachers are
+features" (a dictation misparse of "developed multiple teams").
+
+Wrote [`decision-hosted-execution-liability.md`](decision-hosted-execution-liability.md)
+— the expansion the maintainer asked for: three postures (ToS/beta
+disclaimer, technical containment reusing #80's `docker.isolation=clone`
+hosted-default, or both), recommending the disclaimer now with containment
+as a parallel track, explicitly not resolving the posture choice (real
+fork, his call). Updated `plan-brnrd-dashboard-mvp.md`'s open-questions
+section to close the archive-header and aesthetic-fork items and open the
+frontend-stack-quality item in their place.
+
+Filed a pitfall (dominion `pitfalls.md`): telegram events sent while the
+maintainer's laptop was off land as one `getUpdates` batch on reconnect,
+so their event-ids share one ingestion timestamp even though
+`telegram_message_id` order (and processing order) is intact — reading
+event-id epochs as "when he said this" during orientation looks like
+misfiring/reordering that isn't actually there. Only shallowly verified
+(read the ingestion loop, didn't trace id-stamping) — worth a real check
+if it ever actually misorders rather than just looking like it might.
+
+Closed out all 11 pending events from the burst (2akx, jkbs, z148, 4qqd,
+v7me, 44n9, 5z0s, dlkj, jzu3, oyv2, 1ikz) in one telegram reply plus short
+per-event closers, rather than leaving them to spawn 11 separate runs for
+one continuous conversation. Left 5z0s (onboarding/hackernews timing)
+genuinely open — tracked, not designed.
+
+Branch: brr/reading-economically-and-hosted-liability.

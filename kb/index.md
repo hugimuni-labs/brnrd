@@ -696,6 +696,14 @@ dive-in map) and are stable until something contradicts them.
   cloud. The BYO posture doubles as a moat amplifier: a
   competing fork can't out-open us on credentials without
   giving up revenue their model can't afford.**
+- [Hosted-mode execution liability decision](decision-hosted-execution-liability.md)
+  — *proposed, not yet accepted, 2026-07-04*. Distinct from #80 (local Docker
+  trust model): the hosted case is brnrd's own infra running a subscriber's
+  yolo-exec agent session, so a compromise is brnrd's exposure, not just the
+  user's. Unpacks three postures — ToS/disclaimer floor, technical
+  containment reusing #80's `docker.isolation=clone`, or both — and
+  recommends shipping the disclaimer now with containment as a parallel
+  engineering track; the actual posture choice waits on the maintainer.
 - [Two-website decision](decision-websites.md) — *accepted
   2026-05-26*. Two distinct web properties at two distinct
   URLs: **brr.dev** (OSS landing — what brr is, docs,
