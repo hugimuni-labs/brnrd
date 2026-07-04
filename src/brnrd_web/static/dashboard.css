@@ -754,6 +754,22 @@ input[type="hidden"] {
   color: #91a3a5;
 }
 
+.plan-body {
+  margin: 12px 0 0;
+  padding: 14px 16px;
+  border: 1px solid rgba(129, 165, 166, 0.2);
+  border-radius: 6px;
+  background: #08181b;
+  color: #d7ded9;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
 .empty-state.tight {
   padding: 13px;
 }
