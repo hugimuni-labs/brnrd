@@ -243,16 +243,24 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         "updated_at": _updated_at(),
     }
     parts: list[str] = []
+    # Numeric remaining-percent per bucket, keyed for `pacing.*` policy
+    # consumers (`runner_quota.binding_quota_remaining_pct`) — populated
+    # alongside the rendered `summary` string so quota pacing can read a
+    # number instead of parsing prose (kb/design-director-loop.md §B1).
+    buckets: dict[str, Any] = {}
     if session:
         bucket = _bucket_summary("session", session[0], session[1])
         levels["session_used_percentage"] = session[0]
         levels["session_reset"] = session[1]
         parts.append(str(bucket["summary"]))
+        buckets["session"] = {"remaining_percentage": bucket["remaining_percentage"]}
     if week:
         bucket = _bucket_summary("week", week[0], week[1])
         levels["week_used_percentage"] = week[0]
         levels["week_reset"] = week[1]
         parts.append(str(bucket["summary"]))
+        buckets["week"] = {"remaining_percentage": bucket["remaining_percentage"]}
+    week_model_buckets: dict[str, Any] = {}
     for label, found in week_models.items():
         # Elide the reset in the summary when it matches the primary week's —
         # the per-model buckets share the weekly window, and the Runner line
@@ -264,8 +272,15 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
             "reset": found[1],
         }
         parts.append(str(bucket["summary"]))
+        week_model_buckets[label] = {
+            "remaining_percentage": bucket["remaining_percentage"]
+        }
+    if week_model_buckets:
+        buckets["week_models"] = week_model_buckets
     if parts:
         levels["quota"] = {"summary": "; ".join(parts)}
+        if buckets:
+            levels["quota"]["buckets"] = buckets
     return levels
 
 

@@ -136,6 +136,48 @@ def summary_from_levels(levels: Mapping[str, Any] | None) -> str | None:
     return None
 
 
+def binding_quota_remaining_pct(levels: Mapping[str, Any] | None) -> float | None:
+    """The lowest remaining-percent found in a level snapshot's ``quota`` dict.
+
+    Reads either shape a collector produces (`kb/design-director-loop.md`
+    §B1's "binding bucket"): Claude's ``buckets.session`` /
+    ``buckets.week`` / ``buckets.week_models.<label>`` (each carrying
+    ``remaining_percentage``), or Codex's ``primary_remaining_percent`` /
+    ``secondary_remaining_percent``. Returns the minimum of whatever numeric
+    fields are present — the binding (most constrained) bucket — or
+    ``None`` when nothing numeric is present. Never falls back to parsing
+    the ``summary`` string; a policy decision needs a proven number, not a
+    guess.
+    """
+    if not isinstance(levels, Mapping):
+        return None
+    quota = levels.get("quota")
+    if not isinstance(quota, Mapping):
+        return None
+
+    found: list[float] = []
+
+    def _add(value: Any) -> None:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            found.append(float(value))
+
+    buckets = quota.get("buckets")
+    if isinstance(buckets, Mapping):
+        for key, bucket in buckets.items():
+            if key == "week_models" and isinstance(bucket, Mapping):
+                for model_bucket in bucket.values():
+                    if isinstance(model_bucket, Mapping):
+                        _add(model_bucket.get("remaining_percentage"))
+                continue
+            if isinstance(bucket, Mapping):
+                _add(bucket.get("remaining_percentage"))
+
+    _add(quota.get("primary_remaining_percent"))
+    _add(quota.get("secondary_remaining_percent"))
+
+    return min(found) if found else None
+
+
 def format_snapshot(snapshot: RunnerQuotaSnapshot) -> str | None:
     """Render a snapshot as a prompt-sized one-liner."""
     parts: list[str] = []
