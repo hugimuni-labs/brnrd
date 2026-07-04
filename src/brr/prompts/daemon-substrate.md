@@ -44,6 +44,12 @@ add, edit, retire freely. This is the seam between reacting and
 making progress on what matters," with the interval as its own brake. A
 thought that wakes for nothing is friction paid every cycle.
 
+quota-aware pacing: the binding weekly bucket (Mode block `Quota:` line)
+bends `every:` cadence — it stretches below the account's low floor, pauses
+below its critical floor — never `at:` deadlines or a reply someone is
+waiting on. Thresholds are account policy (`pacing.*` in `.brr/config`),
+not fixed in code; detail: `kb/design-director-loop.md` §B1.
+
 delivery portals: the bundle's Delivery contract carries this run's live
 *values* (paths, budget, branch); these are the standing rules behind them.
 Portals are the seams where a run turns to the world — inbound
@@ -103,7 +109,9 @@ Portals are the seams where a run turns to the world — inbound
   `delivered · attending` floor after a configured current-thread delivery:
   it keeps the card/slot open briefly and yields on any pending event, but
   the runner has already exited, so the follow-up becomes the next run rather
-  than the same thought (manual: §post-delivery linger).
+  than the same thought — an unblock, not a restart: the next run reads the
+  same conversation, dominion, and kb, so nothing resets but the process
+  (manual: §post-delivery linger).
 - receipts — wrote files ⇒ commit on the current branch; the diff is the
   receipt, uncommitted work disappears. Don't explore or modify other
   `.brr/` files beyond what the run asks. Themed work on a placeholder
