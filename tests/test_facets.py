@@ -54,6 +54,22 @@ def test_build_level_collector_flips_empty_to_absent_and_known():
     assert full["remote_scm"]["pr_number"] == "207"
 
 
+def test_build_attaches_pacing_status_to_quota_facet_when_present():
+    res = facets.build(
+        quota_summary="weekly 14% left",
+        pacing_status={"binding_remaining_pct": 14.2, "floor": "low"},
+    )
+    assert res["quota"]["pacing"] == {"binding_remaining_pct": 14.2, "floor": "low"}
+
+
+def test_build_omits_pacing_key_when_quota_pacing_unknown():
+    res = facets.build(quota_summary="weekly 90% left")
+    assert "pacing" not in res["quota"]
+    # Explicit None (no signal this heartbeat) is the same as omitting it.
+    res_none = facets.build(quota_summary="weekly 90% left", pacing_status=None)
+    assert "pacing" not in res_none["quota"]
+
+
 def test_render_line_carries_every_schema_facet_in_order():
     res = facets.build(quota_summary="42%", branch="brr/x")
     line = facets.render_line(res)
