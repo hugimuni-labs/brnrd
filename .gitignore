@@ -17,6 +17,8 @@ out.html
 
 # Local scratch / contributor-specific
 .local/
+# Claude Code local session settings + isolated subagent worktrees
+.claude/
 
 # Environment / editor settings
 .env
