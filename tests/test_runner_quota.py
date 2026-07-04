@@ -169,3 +169,54 @@ def test_summary_from_levels_reads_quota_slot():
 def test_summary_from_levels_returns_none_without_quota():
     assert runner_quota.summary_from_levels({}) is None
     assert runner_quota.summary_from_levels(None) is None
+
+
+def test_binding_quota_remaining_pct_reads_claude_shape():
+    # Claude's buckets: session, week, and per-model week buckets — the
+    # binding (lowest) one wins, wherever it sits.
+    levels = {
+        "quota": {
+            "summary": "session 90% left; week 55% left",
+            "buckets": {
+                "session": {"remaining_percentage": 90.0},
+                "week": {"remaining_percentage": 55.0},
+                "week_models": {"Fable": {"remaining_percentage": 14.2}},
+            },
+        }
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) == 14.2
+
+
+def test_binding_quota_remaining_pct_reads_codex_shape():
+    levels = {
+        "quota": {
+            "summary": "5h 80% left; weekly 30% left",
+            "primary_used_percent": 20.0,
+            "secondary_used_percent": 70.0,
+            "primary_remaining_percent": 80.0,
+            "secondary_remaining_percent": 30.0,
+        }
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) == 30.0
+
+
+def test_binding_quota_remaining_pct_none_without_signal():
+    assert runner_quota.binding_quota_remaining_pct(None) is None
+    assert runner_quota.binding_quota_remaining_pct({}) is None
+    assert runner_quota.binding_quota_remaining_pct({"quota": {"summary": "x"}}) is None
+    # A quota slot that is a bare string (older shape) has no numeric field.
+    assert runner_quota.binding_quota_remaining_pct({"quota": "5h 80% left"}) is None
+
+
+def test_binding_quota_remaining_pct_ignores_missing_fields_in_mix():
+    # Some fields present, some absent/None — only the numeric ones count,
+    # and a None used_percent's derived remaining is also None, not 0/guessed.
+    levels = {
+        "quota": {
+            "primary_used_percent": None,
+            "secondary_used_percent": 40.0,
+            "primary_remaining_percent": None,
+            "secondary_remaining_percent": 60.0,
+        }
+    }
+    assert runner_quota.binding_quota_remaining_pct(levels) == 60.0
