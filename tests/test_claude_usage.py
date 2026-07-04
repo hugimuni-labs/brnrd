@@ -36,6 +36,11 @@ def test_parse_usage_text_extracts_session_and_week_quota():
         == "session 100% left (resets 11:59pm (Europe/Berlin)); "
         "week 55% left (resets Jul 2, 11:59pm (Europe/Berlin))"
     )
+    # Numeric buckets ride alongside the rendered summary — the pacing seam
+    # (kb/design-director-loop.md §B1) needs a number, not just prose.
+    assert levels["quota"]["buckets"]["session"] == {"remaining_percentage": 100.0}
+    assert levels["quota"]["buckets"]["week"] == {"remaining_percentage": 55.0}
+    assert "week_models" not in levels["quota"]["buckets"]
 
 
 def test_parse_usage_text_tolerates_squashed_tui_words():
@@ -89,6 +94,9 @@ def test_parse_usage_text_keeps_model_week_bucket_separate():
         "week 95% left (resets Jul 10, 12am (Europe/Berlin)); "
         "Fable week 92% left"
     )
+    assert levels["quota"]["buckets"]["week_models"]["Fable"] == {
+        "remaining_percentage": 92.0
+    }
 
 
 def test_parse_usage_text_bare_week_reset_paren_is_not_a_model_label():
