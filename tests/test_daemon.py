@@ -499,6 +499,107 @@ def test_drain_outbox_queues_respawn_request(tmp_path):
     assert protocol.event_is_deferred(spawned)
 
 
+def test_drain_outbox_queues_worker_respawn_request(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+        chat_id="42",
+    )
+    event_id = path.stem
+    (outbox / "respawn.md").write_text(
+        "---\n"
+        "respawn: true\n"
+        "worker: true\n"
+        "shell: codex-mini\n"
+        "---\n"
+        "bounded task for a worker wake\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-dispatch",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("respawned_from_event") == event_id
+    ][0]
+    assert spawned["worker"] is True
+
+
+def test_drain_outbox_bare_respawn_omits_worker_key(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+        chat_id="42",
+    )
+    event_id = path.stem
+    (outbox / "respawn.md").write_text(
+        "---\n"
+        "respawn: true\n"
+        "shell: codex-mini\n"
+        "---\n"
+        "carry this exact task forward\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-dispatch",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("respawned_from_event") == event_id
+    ][0]
+    assert "worker" not in spawned
+
+
 def test_drain_outbox_quality_respawn_resolves_local_escalation(
     tmp_path, monkeypatch,
 ):
