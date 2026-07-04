@@ -44,6 +44,12 @@ add, edit, retire freely. This is the seam between reacting and
 making progress on what matters," with the interval as its own brake. A
 thought that wakes for nothing is friction paid every cycle.
 
+quota-aware pacing: the binding weekly bucket (Mode block `Quota:` line)
+bends `every:` cadence — it stretches below the account's low floor, pauses
+below its critical floor — never `at:` deadlines or a reply someone is
+waiting on. Thresholds are account policy (`pacing.*` in `.brr/config`),
+not fixed in code; detail: `kb/design-director-loop.md` §B1.
+
 delivery portals: the bundle's Delivery contract carries this run's live
 *values* (paths, budget, branch); these are the standing rules behind them.
 Portals are the seams where a run turns to the world — inbound
