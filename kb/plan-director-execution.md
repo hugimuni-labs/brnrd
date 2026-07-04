@@ -60,12 +60,32 @@ location) must be confirmed with the maintainer at execution. Depends on:
 nothing hard; lands best after A1 so closeouts feed the ranking.
 Effort: 2–3 wakes (file contract + injection + re-rank prompt rule + tests).
 
+**Content instantiation started 2026-07-04:** `plans/Gurio__brr/active.md`
+had been empty since CS5 shipped 06-30 — the injection/dashboard pipe
+existed with nothing flowing through it (the maintainer's "the plan is yet
+to be pushed to be validated"). First real ranked list written this run,
+plus `ledger/decisions.md` (CS7) backfilled with current decisions. This is
+the *content* half of A3, informally — the ticket's remaining work is the
+re-rank discipline being a named, reliable prompt rule (not just "a
+resident did it once") and confirming the daemon's injection actually
+surfaces it live (untested this run — the next wake should show an "Active
+inter-run plan" block, which would confirm the pipe end-to-end).
+
 ### A4 — director tick (opt-in schedule entry) — owner: resident
 
 Phase 4. Not a code ticket: a `schedule.md` entry whose body is the
 director stance ("re-rank the move list from repo/forge state; message the
 gate only if the top move changed or something is newly blocked"). Written
 by the resident in its own dominion once A3 exists. Zero daemon work.
+
+**Shipped (lite) 2026-07-04:** a `director tick` entry, `every: 24h`, added
+to the resident's own `schedule.md` — ahead of A3's formal ranking
+discipline, on the reasoning that "the file has real content and a daily
+re-check" beats "wait for the ideal version." Named caveat in the entry
+itself: B2's live per-tick quota read is inert in production, so this ticks
+on a flat interval, not yet quota-bent per B1's policy. Watch the first
+few firings for silence discipline (should mostly say nothing) before
+trusting the cadence as settled.
 
 ### A5 — diffense reveal re-skin — owner: resident
 

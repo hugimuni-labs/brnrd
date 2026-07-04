@@ -66,9 +66,21 @@ execution detail, not further posture forks.
 
 ## Open questions (execution detail, not posture)
 
-- Who drafts the ToS/disclaimer language — HugiMuni's counsel, or does this
-  wait on that relationship existing? Blocks actually shipping the text,
-  not the decision to ship it.
+- **Who drafts the ToS/disclaimer language — resolved 2026-07-04.**
+  Maintainer confirmed HugiMuni is just him and his wife right now, no
+  standing counsel relationship, and legal budget is tight (~€1k,
+  pre-revenue) — asked directly whether a "measured path of least
+  liability now, real legal work once there are customers" is safe.
+  Recommendation given: yes, for a beta/pre-revenue stage. Use a
+  reputable SaaS ToS/beta-disclaimer template (a service like Termly, or
+  a fixed-fee marketplace lawyer pass, both comfortably inside €1k)
+  adapted for the French/EU consumer-protection floor named above (can't
+  be waived for individual consumers; a beta-tester/B2B framing narrows
+  who that floor even applies to) — not bespoke counsel yet. Revisit with
+  real legal spend once paying customers exist and the actual exposure
+  (real user data, real money) justifies the cost. This is advice, not a
+  legal opinion — HugiMuni should still have counsel eyeball the final
+  text before it ships, even a light pass.
 - Does (2)'s hosted-default containment change the shared-UID assumptions
   in [`decision-account-centered-daemon.md`](decision-account-centered-daemon.md)
   enough to need its own design pass, or is it a config default flip on
