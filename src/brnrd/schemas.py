@@ -159,6 +159,26 @@ class ActivityList(BaseModel):
     activity: list[ActivityRecordOut]
 
 
+class PlansReport(BaseModel):
+    """CPS (Current Planned State) snapshot a daemon pushes for its account.
+
+    ``repo_plan_md`` is this daemon's repo-scoped CS5 active plan;
+    ``cross_repo_plan_md`` and ``decision_ledger_md`` are account-wide
+    (CS5 cross-repo plan, CS7 decision ledger) and get overwritten by
+    whichever connected daemon reports last — same last-write-wins shape
+    as the activity snapshot, acceptable because these are single-writer
+    per account in practice (one resident's dominion).
+    """
+
+    repo_plan_md: str = ""
+    cross_repo_plan_md: str = ""
+    decision_ledger_md: str = ""
+
+
+class PlansOut(PlansReport):
+    plans_updated_at: datetime | None = None
+
+
 class PackRelayPost(BaseModel):
     pack: dict[str, Any]
     ttl_s: int | None = None

@@ -208,6 +208,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         _save_state(brr_dir, state)
     _deliver_responses(brr_dir, inbox_dir, responses_dir, state)
     _publish_activity(brr_dir, inbox_dir, state)
+    _publish_plans(brr_dir, state)
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:
@@ -392,6 +393,51 @@ def _publish_activity(brr_dir: Path, inbox_dir: Path, state: dict) -> None:
         )
     except Exception as e:
         print(f"[brr:cloud] activity publish failed: {e}")
+
+
+def _plans_snapshot(brr_dir: Path) -> dict[str, str] | None:
+    """Read CS5/CS7 plan + ledger files for CPS mirroring, if resolvable.
+
+    Returns ``None`` (not published) rather than raising when the account
+    dominion can't be resolved read-only — a plain repo-local `.brr/`
+    without an account context is a normal, supported shape, not an error.
+    """
+    from .. import account as account_mod
+
+    repo_root = brr_dir.parent
+    try:
+        ctx = account_mod.resolve_context(repo_root, create=False)
+        label = account_mod.repo_label(repo_root)
+        repo_plan = account_mod.active_plan_path(ctx, label)
+        cross_plan = account_mod.cross_repo_plans_path(ctx) / "active.md"
+        ledger = account_mod.decisions_ledger_path(ctx)
+        return {
+            "repo_plan_md": repo_plan.read_text() if repo_plan.exists() else "",
+            "cross_repo_plan_md": cross_plan.read_text() if cross_plan.exists() else "",
+            "decision_ledger_md": ledger.read_text() if ledger.exists() else "",
+        }
+    except Exception as e:
+        print(f"[brr:cloud] plans snapshot skipped: {e}")
+        return None
+
+
+def _publish_plans(brr_dir: Path, state: dict) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    snapshot = _plans_snapshot(brr_dir)
+    if snapshot is None:
+        return
+    try:
+        _request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/plans",
+            token=state["token"],
+            json=snapshot,
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] plans publish failed: {e}")
 
 
 class _CloudCardTransport:
