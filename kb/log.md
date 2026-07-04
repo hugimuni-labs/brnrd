@@ -9993,3 +9993,148 @@ Verification: `test_available_runner_catalog_excludes_profiles_missing_auth_env`
 `test_runner_catalog_renders_only_unusual_availability`; full suite 1252 passed.
 
 Branch: brr/runner-catalog-trim.
+
+## [2026-07-04] implement | Workstream B shipped — quota pacing + delegation, delegation itself dogfooded
+
+Maintainer reranked to Workstream B (`kb/plan-director-execution.md`),
+"probably both tickets," and asked to delegate the delegable halves while
+building the delegation policy — a live case study, not just an
+implementation pass. Both #214 (B1+B2) and #215 (B3+B4) shipped on
+`brr/director-stream-b`.
+
+**B1** (design/prompt, direct): decided the quota-pacing policy —
+binding bucket = lowest remaining% across session/week/per-model week; two
+account-policy floors (`pacing.quota_low_floor_pct`=20 stretches `every:`
+cadence, `pacing.quota_critical_floor_pct`=8 pauses it); `at:` deadlines and
+gate-addressed replies stay non-discretionary. Named the real gap B2 had to
+close: `_merge_level_snapshots` only ever forwarded a rendered *string*,
+never the `remaining_percentage` numbers the parsers already computed.
+Detail: `design-director-loop.md` §B1.
+
+**B3** (prompt, direct): named the two execution stacks in
+`prompts/dominion-playbook.md` §Delegation — resident (full, default) vs
+worker (task + files + result contract, no dominion write). `worker: true`
+alongside `respawn: true` opts a spawned run into the slim stack; a bare
+respawn (e.g. `quality: escalate`) keeps the full one. Mirrored into the
+live dominion playbook so the policy governed this run's own delegation
+calls immediately, not just future ones.
+
+**B2 and B4 were delegated**, not hand-rolled — two subagents,
+`isolation: worktree`, launched in parallel against written briefs carrying
+exact file:line pointers, the decided policy, and the existing test pattern
+to mirror. Both came back correct and tested:
+
+- **B2**: `claude_usage`/`codex_status` now expose numeric remaining-percent
+  per bucket; new `runner_quota.binding_quota_remaining_pct`; `_fire_due_schedules`
+  stretches/drops `every:` entries under the floors (`due_entries` stays pure
+  — the bending happens to the entry list passed in, via `dataclasses.replace`);
+  `resources.quota.pacing` surfaces the same number mid-run. The delegate
+  flagged its own soft spot rather than hiding it: the scheduler-tick quota
+  read has no single "current run" to key off, so it reads a shared
+  `brr_dir`-level cache nothing writes to yet — correct and tested, inert
+  live until a follow-up feeds that cache.
+- **B4**: `worker: true` frontmatter → `task.meta["worker"]` (via the
+  existing `Run.from_event` meta-copy path, no new plumbing needed there) →
+  `build_daemon_prompt` swaps in a new `prompts/worker.md` preamble and skips
+  the resident injected blocks (identity core, dominion, plans, policy,
+  ledger, pitfalls, kb health, introspection); `daemon-substrate.md` stays
+  (a worker still runs under the daemon). Default path confirmed
+  byte-identical via the existing pinned suite.
+
+Both worktrees merged clean (`ort` auto-merge, no conflicts despite both
+touching `daemon.py` — isolation meant no shared-file race during the actual
+edits). Full suite 1288 passed after both merges (was 1273 before this run).
+
+**On the delegation itself**: the brief was the expensive part, not the
+implementation turn — excavating the exact hooks (`_merge_level_snapshots`
+silently dropping numeric fields, the `Run.meta` wire path for a new
+frontmatter key, the existing test fixtures to mirror) took longer than
+either agent spent building against them. Matches the design's own
+scrutiny (`design-director-loop.md` §orchestrator/worker): delegation pays
+off on bounded, well-specified work; naming the bounds is still the
+resident's job, and a vague brief would have cost more in rework than it
+saved in hand-rolling.
+
+Verification: full suite 1288 passed; both new respawn-frontmatter cases
+(`worker: true` sets the flag, bare `respawn: true` omits it) and both
+prompt-assembly cases (worker excludes resident stack, default unchanged)
+pass; B2's schedule/facets/parser tests (critical pause, low stretch, no-op
+without a resolvable runner, `at:` always fires) pass.
+
+Branch: brr/director-stream-b. Also folded in: `.gitignore` now excludes
+`.claude/` (Claude Code session settings + isolated subagent worktrees,
+previously untracked noise with real risk of a careless `git add -A`
+sweeping nested worktree checkouts into a commit).
+
+## [2026-07-04] design | Worker/resident split re-justified; respawn reframed; B6 quota-smoothing gap opened
+
+Maintainer questioned the B3/B4 worker/resident split just shipped: dominion
+and kb are git-versioned (mergeable) and worktrees isolate concurrent
+mutation, so "pollution risk" — the framing B3/B4 shipped with — was never
+the real hazard. Reconciled in `design-director-loop.md` §"Re-justifying the
+split": the actual grounds are judgment scope (a worker has no continuity,
+can't be accountable for standing-memory calls it won't be there to defend)
+and cost (full resident stack is waste on bounded tedium) — split stands,
+on sharper footing. Also reframed `respawn:`'s stated purpose away from
+stale "cheap-dispatcher escalation" language (superseded by the
+account-centered daemon's narrow dispatcher) to its real distinct value vs
+in-run `Agent`-tool subagents: cross-Shell/cross-repo/outlives-this-run
+handoff, something in-harness subagents structurally can't do. Kept both
+mechanisms; didn't unify.
+
+Confirmed live (not a brr bug): the "two status cards, dash finish" the
+maintainer saw during last round's B2/B4 delegation traces to
+`.claude/worktrees/agent-{a5ad9b48,ad2f18b8}...` — Claude Code's own
+`isolation: worktree` Agent-tool subagents, no `run_id`/`.card` of their own
+in `daemon.py` (`.brr/runs/` shows one run, `run-260704-0202-lmlk`, for the
+whole session). Whatever rendered the extra cards is the surrounding
+harness's own subagent UI, outside this codebase.
+
+Opened `B6` (#224): weekly-quota smoothing + cross-runner load balancing,
+sharpening B1 — the 5h window is an anti-burst valve, the weekly bucket is
+the real scarce resource (oversold: full weekly exhaustion for 4 weeks costs
+~5x subscription price), and B1 reacts per-beat but doesn't pace consumption
+forward against days-remaining-in-week. Blocked on data (a week+ of observed
+per-runner burn), not code — named rather than guessed at.
+
+Branch: brr/director-stream-b.
+
+## [2026-07-04] research | Caching mechanics clarified; B6 data gap partially closed without a bench
+
+Maintainer asked (telegram) whether idle wall-clock time during a
+permission-gated wait gets billed, whether TTL-eviction and compaction are
+the same trigger, and whether B6's "blocked on data" needs a bench.
+Answered in `design-director-loop.md` §"Cache TTL vs compaction, and B6's
+data problem revisited": TTL eviction (time-based, ~5m) and compaction
+(capacity-based, context-window fill) are distinct; idle time itself is
+never metered, only the next call after a TTL lapse pays a cache-miss
+price. Confirms the existing §Hot-idle residency framing, doesn't revise it.
+
+The concrete finding: checked `$CODEX_HOME/sessions/**/rollout-*.jsonl` on
+the operator's machine — 69 of 88 recent rollout files (spanning
+2026-06-20 to 2026-07-04, the actual dogfooding window) are this repo's,
+and every one carries timestamped `rate_limits` snapshots. That's B6's
+"week+ of observed burn" already on disk for Codex; no forward wait or
+bench needed there, just a retroactive extraction script. Claude has no
+equivalent persisted history (`claude_usage`'s PTY scrape is present-only)
+— its half of B6 needs a forward log line added now, not a new collector.
+`design-bench-loop.md`'s seam-bench answers a different question
+(protocol-following under a lesser core) and doesn't apply here.
+
+Also: small wording fix landed in `daemon-substrate.md` and
+`src/brr/docs/portals.md` — the post-delivery-attending → next-run
+handoff is now explicitly framed as "an unblock, not a restart" (same
+conversation/dominion/kb re-read, only the process renews), per the
+maintainer's pushback that "restart" language undersells the continuity
+that's actually preserved.
+
+Release-prep list from the same message (website polish, packaging, repo
+grooming, kb pricing/PII scrub, kb→home placement, GitHub App + bot
+identity) not started this run — confirmed real and non-trivial (pricing
+strategy lives in `decision-pricing-shape.md`/`design-billing.md`, personal
+financial/legal-entity detail in `plan-financial-growth.md`, PII scattered
+across ~15 kb pages) and the kb→home placement question already has an
+active design track (`design-home-scopes-and-knowledge.md`). Left as a
+fork for the maintainer to sequence rather than guessed at inline.
+
+Branch: brr/director-stream-b.

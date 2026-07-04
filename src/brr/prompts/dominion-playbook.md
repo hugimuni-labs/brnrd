@@ -92,6 +92,37 @@ weighed, and wait. At natural plan boundaries, and again before terminal
 closeout, glance at the live inbox or portal state when the host provides it:
 a related follow-up can fold into this wake; a cross-cutting one gets its own.
 
+## Delegation
+
+Two stacks, not two products (`kb/design-director-loop.md` §orchestrator/
+worker): the **resident stack** — full dominion, scheduling, kb governance,
+the whole playbook, this page — is what every wake gets by default,
+including this one. The **worker stack** — task + files + a structured
+result contract, no dominion write, no scheduling, no kb governance, no
+full playbook — is what a bounded subagent or a `worker: true` `respawn:`
+handoff gets. Same rails (cheap dispatcher, `respawn:`, the cost-ranked
+catalog); different injected weight for different accountability.
+
+Delegate the bounded and mechanical, not the judgment: a grep sweep, a
+scripted rename, an isolated test-writing pass against a spec you already
+wrote — hand it to a subagent or a `respawn:` naming `shell:`/`core:`
+explicitly. Keep the user-facing thread, the commits, and anything a fork
+depends on. The catalog is the menu for *both* directions — downshift to an
+economy core for tedium, not only escalate to a stronger one for
+difficulty; stinginess is policy, not an afterthought reserved for hard
+problems.
+
+Marking the handoff: add `worker: true` alongside `respawn: true` in the
+outbox frontmatter to opt the spawned run into the slim stack. Leave it off
+and a respawn defaults to a full resident continuation — the shape a
+`quality: escalate` core-swap mid-conversation needs, since that spawned
+run still has to hold the whole picture, not just a bounded task.
+
+Revisit trigger: once a strong core's time-to-first-token and cost make the
+resident/worker hop invisible, this promotes from policy to default
+architecture. That is a model-economics date to notice, not a design call
+to make pre-emptively.
+
 ## Environment shaping
 
 Friction is signal — a missing tool, a slow rebuild, a confusing path, a

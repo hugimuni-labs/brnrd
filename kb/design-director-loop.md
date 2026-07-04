@@ -176,6 +176,54 @@ subagents work. The naming half lives in the brand page (resolved
 2026-07-02: `brr` stays retired as a name; the split is essence, not
 vocabulary).
 
+### Re-justifying the split (maintainer fork, 2026-07-04)
+
+B3/B4 shipped the worker/resident split leaning on a pollution-risk framing
+("worktrees mean it's unlikely to pollute your space"). The maintainer
+pushed back correctly: dominion and kb are both git-versioned, worktrees
+already isolate concurrent file mutation, and a diverged dominion/kb merges
+mechanically like any other branch. Pollution was never the real risk the
+split was guarding against — re-examined, the actual justification is two
+things unrelated to data safety:
+
+- **Judgment scope, not merge conflicts.** A worker wake has no continuity
+  — it reads no recent-log, holds no pitfalls, won't be there to defend or
+  revisit a call next week. Git can merge two divergent kb edits; it cannot
+  merge two divergent *editorial judgments* about what's worth keeping in
+  shared standing memory. That accountability gap, not file contention, is
+  why a worker doesn't get kb governance or scheduling authority — a dozen
+  bounded workers each free to schedule wakes or rewrite kb pages is a
+  governance problem no worktree fixes.
+- **Cost.** The resident stack (identity core, dominion, playbook, plans,
+  policy, ledger, pitfalls, kb health, introspection) is real injected
+  tokens on every wake. A worker doing "read this file, fix this bug,
+  return a diff" pays for all of it and uses none of it. That overhead is
+  waste, not caution.
+
+Net: the split stands, on sharper ground than it shipped with. Not because
+isolation is scarce (it isn't — worktrees + git already cover that) but
+because standing-memory judgment and full-stack cost are real and orthogonal
+to isolation.
+
+**Respawn vs in-run subagents — not the same capability, don't unify.**
+The maintainer also asked whether `respawn:` is still earning its keep, and
+whether spawning should be unified into one mechanism now that "cheap
+dispatcher escalates to a stronger core" is no longer the load-bearing
+architecture (`decision-account-centered-daemon.md` §3 keeps that dispatcher
+narrow — unpinned message events only, not the general spawn path). That
+framing of `respawn:` is stale and worth retiring explicitly, but the
+mechanism itself is not redundant with in-run subagents (the `Agent` tool):
+a subagent is in-process, same Shell, supervised live in this conversation;
+`respawn:` parks a brand-new top-level daemon event that can move to a
+**different Shell entirely** (Codex ⇄ Claude), a different repo, or simply
+outlive this run's return. An in-harness subagent structurally cannot do
+any of that — it has no path to a different provider's CLI. So: keep both,
+reframe `respawn:`'s stated purpose from "dispatcher escalation" to
+"cross-runner / cross-repo / outlives-this-run handoff," and keep
+`worker: true` as the orthogonal stack-weight dial it already is (B4) —
+applies regardless of *why* the handoff happened, not tied to an escalation
+story.
+
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
 Follow-up sharpening the stingy-director economics: if the wake already
@@ -229,8 +277,141 @@ keeps per-model weekly buckets separate — the TUI added a `Current week
 policy can now read a per-Core weekly constraint (the binding one for a
 Fable-cored director), fresh to one beat, without new collection work.
 
+**Maintainer reaffirmed the target shape (2026-07-04):** restated the
+end-state directly — trigger (a message, or a tag on a ticket/PR) starts a
+session; the resident does the work cost-permitting; the human's loop is
+review/clarify/merge, "the self-hosted co-maintainer"; the session "stays
+open for a long time... reset or restart occasionally," bounded mainly by
+context window, not per-message termination. Checked against what's built:
+the trigger half is already there (forge issue/PR events spawn a full
+resident run with no dispatcher hop, per
+`decision-account-centered-daemon.md` §3's routing table) and the
+review/merge loop is already the `gate: forge` PR handoff. The *residency*
+half is still deliberately short of this vision — B5 shipped a ~10–15m
+linger plus a 90s post-return attending floor, not the long-session-with-
+occasional-reset shape described here, precisely because of this section's
+own cache-cliff economics (past ~5m every idle iteration re-reads full
+context uncached). That scoping-down was correct as a v1 guardrail, not
+necessarily as the destination — the maintainer's restatement reads as
+"the short linger is a stepping stone, not the target." Revisiting it
+productively needs B6's data (can the quota afford longer residency?) and an
+explicit reset policy (context-window pressure or a scheduled cadence,
+not "the runner returned"). Not re-scoped yet — named here so the next pass
+on hot-idle residency starts from "this is still the standing ask," not
+from a stale "short linger settled it."
+
 Execution tickets for this design:
 [`plan-director-execution.md`](plan-director-execution.md).
+
+## B1 — quota-aware pacing policy (decided 2026-07-04)
+
+The policy half of [#214](https://github.com/Gurio/brr/issues/214), written
+against the telemetry that landed 2026-07-03 (per-Core weekly buckets, 10s
+TTL). Scrutiny while writing it: `_merge_level_snapshots`
+(`daemon.py:2436`) currently forwards the `quota` key from a Shell's level
+snapshot wholesale but the snapshot itself
+(`claude_usage.parse_usage_text`, `codex_status.parse_token_count`) only
+ever put a rendered *string* summary in that dict — the numeric
+`used_percentage` fields computed a few lines earlier
+(`session_used_percentage`, `week_used_percentage`, `week_models[label]`)
+never made it past the parser function. So today there is genuinely no
+programmatic access to "how low is the binding bucket" downstream of the
+collector — only a human-readable line. B2 needs to close that gap before
+any pacing decision can read a number instead of parsing prose.
+
+**Binding bucket.** The lowest live remaining-percent among: session,
+week (all-models), and any active per-model week bucket (Codex: primary +
+secondary rate-limit windows). "Remaining" always means `100 -
+used_percentage`; a shell with no collector for a slot contributes
+nothing (never guessed).
+
+**Two floors, account policy, not hardcoded** (mirrors the
+`delivery.post_delivery_attend_seconds` convention — dotted key, sane
+default, `.brr/config` overridable):
+
+- `pacing.quota_low_floor_pct` (default `20.0`) — below this, `every:`
+  schedule entries stretch: the due-check uses `interval *
+  pacing.quota_stretch_factor` (default `3.0`) instead of the entry's
+  stated interval, so a standing loop backs off without being silenced.
+- `pacing.quota_critical_floor_pct` (default `8.0`) — below this, `every:`
+  entries do not fire at all this beat (ambient loops pause). Recovery
+  above the floor resumes normal cadence on the next beat; no separate
+  "resume" bookkeeping needed since the check re-evaluates live each beat.
+
+**What is never discretionary:** `at:` one-shot entries (deadlines,
+reminders) and anything gate-addressed (a real user waiting on a reply).
+Quota pressure bends *ambient* initiative, never a promise already made to
+someone.
+
+**Respawn core class.** Downshifting is resident policy (B3), not a new
+daemon mechanism — B1 only supplies the number the resident's own
+delegation judgment reads (the Mode block's `Quota:` line already carries
+it). A daemon-side automatic override of a resident's explicit `shell:`/
+`core:` respawn choice is out of scope here; it would second-guess a
+judgment call the resident is better placed to make with the full picture
+(task shape, not just quota).
+
+**B2 scope (plumbing, delegable):** thread the buckets through
+(`claude_usage`/`codex_status` → `quota` dict → `_merge_level_snapshots` →
+`_fire_due_schedules`), add the floor/stretch config readers, apply the
+stretched interval (or the pause) only to `kind == "every"` entries before
+calling `schedule.due_entries`, and surface the binding percent + which
+floor (if any) is active in `resources` so a mid-run boundary can see the
+same number the scheduler used. Full spec: `plan-director-execution.md`
+§B1–B2 depends-on note; exact touch points named in the B2 delegation
+brief (kb/log.md, this date).
+
+## Cache TTL vs compaction, and B6's data problem revisited (2026-07-04)
+
+Maintainer question (telegram): does idle wall-clock time itself get billed
+while a permission-gated session waits on a user reply, and is TTL-eviction
+the same thing as compaction? Two separate mechanisms, worth naming apart:
+
+- **Cache TTL eviction** (~5m Anthropic, similar order for Codex) is
+  time-based: no request arrives within the window ⇒ the *next* request is a
+  cache miss, priced as a full uncached input read. Idle time itself is not
+  metered — nothing is billed while no call is made. The cost is deferred,
+  not incurred, and it only lands as "more expensive," never as "charged for
+  waiting."
+- **Compaction** (context summarization when the window fills) is
+  capacity-based, triggered by accumulated tokens, unrelated to how long the
+  session sat idle. Conflating the two overstates the cost of a long
+  permission-gated wait — the real tax is only the next-call cache miss, and
+  only if the wait outlasted the TTL.
+
+This confirms rather than revises §Hot-idle residency above (the 5-minute
+cliff framing there was already right).
+
+**B6 ("blocked on data... a week+ of observed per-runner burn"): partially
+already unblocked.** Checked `$CODEX_HOME/sessions/**/rollout-*.jsonl` on
+the operator's machine: 69 of 88 recent rollout files (2026-06-20 through
+2026-07-04 — the actual dogfooding window, not a guess) have `cwd` under
+this repo's worktrees, and every one carries `token_count` events with
+`rate_limits.primary`/`secondary` (used_percent, window_minutes, resets_at)
+timestamped per turn. That is a real ~2-week time series of Codex quota
+burn already sitting on disk, retroactively minable — no forward waiting
+period needed for the Codex half of B6. A one-off script over existing
+rollout files, not new collection, not a bench.
+
+Claude side has no equivalent: `claude_usage`'s PTY scrape of `/usage`
+returns only the current snapshot, nothing persisted historically. Claude
+session transcripts (`~/.claude/projects/**/*.jsonl`) do carry per-turn
+token/cost usage, which could reconstruct relative burn *rate* but not
+percent-of-weekly-cap (that arithmetic lives inside Anthropic's own
+`/usage` rendering, not in the transcript). So: Codex's half of B6 can be
+answered now from history; Claude's half still needs forward logging
+(cheapest shape: persist the already-computed `claude_usage` snapshot to a
+durable log on each heartbeat, starting now, rather than waiting on a new
+collection mechanism).
+
+**No new bench needed for this.** The maintainer's "do we need a bench?"
+reads as a different question than [`design-bench-loop.md`](design-bench-loop.md)
+answers — that bench measures prompt/protocol seam-following under a
+lesser-light runner (card discipline, fold-in, next-move), not quota
+economics. What B6 needs is data extraction (Codex: retroactive script over
+rollout files; Claude: a forward log line) and then a policy pass over that
+data — not a scenario harness that spends quota to observe behavior we can
+already read off disk.
 
 ## Forks left to the maintainer
 

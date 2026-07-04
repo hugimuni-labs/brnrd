@@ -38,6 +38,13 @@ def test_parse_token_count_quota_and_context():
     assert "7d 73% left" in levels["quota"]["summary"]
     assert "resets" in levels["quota"]["summary"]
     assert levels["plan_type"] == "plus"
+    # Both windows' used_percent survive numerically now, not just the 5h
+    # one — the weekly (secondary) window was previously discarded past the
+    # rendered summary string (kb/design-director-loop.md §B1).
+    assert levels["quota"]["primary_used_percent"] == 80.0
+    assert levels["quota"]["secondary_used_percent"] == 27.0
+    assert levels["quota"]["primary_remaining_percent"] == 20.0
+    assert levels["quota"]["secondary_remaining_percent"] == 73.0
     # context headroom estimated from last input_tokens / window.
     assert "context left (est)" in levels["context_window"]["summary"]
     assert 20 < levels["context_window"]["remaining_percentage"] < 30
@@ -47,6 +54,19 @@ def test_parse_token_count_quota_and_context():
 def test_parse_token_count_unrecognized_shape_is_empty():
     levels = codex_status.parse_token_count({"nope": True})
     assert "quota" not in levels and "context_window" not in levels
+
+
+def test_parse_token_count_missing_secondary_stays_none():
+    payload = {
+        "rate_limits": {
+            "primary": {"used_percent": 40.0, "window_minutes": 300},
+        },
+    }
+    levels = codex_status.parse_token_count(payload)
+    assert levels["quota"]["primary_used_percent"] == 40.0
+    assert levels["quota"]["primary_remaining_percent"] == 60.0
+    assert levels["quota"]["secondary_used_percent"] is None
+    assert levels["quota"]["secondary_remaining_percent"] is None
 
 
 def test_load_levels_reads_newest_rollout(tmp_path, monkeypatch):

@@ -77,7 +77,7 @@ Judgment-heavy presentation work; keep resident-side. Blocked by: A1, A2.
 
 ## Workstream B — the stingy, resource-aware director
 
-### B1 — quota-aware pacing policy (design + prompt) — owner: resident — [#214](https://github.com/Gurio/brr/issues/214)
+### B1 — quota-aware pacing policy (design + prompt) — owner: resident — [#214](https://github.com/Gurio/brr/issues/214) — *shipped 2026-07-04*
 
 The policy seam named in the design's telemetry note: per-Core quota
 (`claude_usage` week buckets incl. per-model "Fable week", `codex_status`
@@ -89,7 +89,13 @@ in [`design-director-loop.md`](design-director-loop.md) + prompt rules
 (daemon-substrate or portals doc) + the thresholds as account-policy
 values, not hardcoded. Resident-owned: it is spend judgment.
 
-### B2 — quota facts into the wake (plumbing) — owner: delegable — [#214](https://github.com/Gurio/brr/issues/214)
+Decided: binding bucket = lowest remaining% across session/week/per-model
+week; `pacing.quota_low_floor_pct` (20.0) stretches `every:` cadence,
+`pacing.quota_critical_floor_pct` (8.0) pauses it, `at:`/gate-addressed
+never discretionary. Respawn core-class downshift stayed resident policy
+(B3), not a new daemon override. Detail: `design-director-loop.md` §B1.
+
+### B2 — quota facts into the wake (plumbing) — owner: delegable — [#214](https://github.com/Gurio/brr/issues/214) — *shipped 2026-07-04*
 
 Whatever B1 decides to *say*, the daemon must *inject*: the Mode block's
 `- Quota:` line already carries session/week/Fable-week; extend portal-state
@@ -99,7 +105,20 @@ when the binding bucket is under B1's floor). Touch points: `daemon.py`
 scheduler path, `facets.py`, tests. Depends on: B1 thresholds.
 Effort: 1–2 wakes.
 
-### B3 — delegation as resident policy (prompt) — owner: resident — [#215](https://github.com/Gurio/brr/issues/215)
+Built by a delegated subagent (isolated worktree) against a written spec:
+`claude_usage`/`codex_status` now expose numeric `remaining_percentage`
+(previously computed then discarded before only a rendered string left the
+parser); `runner_quota.binding_quota_remaining_pct` picks the binding number;
+`_fire_due_schedules` stretches/drops `every:` entries under the floors
+(`at:` untouched); `resources.quota.pacing` surfaces the same number
+mid-run. Known gap the delegate flagged honestly rather than papering over:
+the scheduler-tick quota read has no single "current run" to key off, so it
+reads a shared `brr_dir`-level cache that nothing writes to yet in
+production — the plumbing is correct and tested, but inert live until a
+follow-up either writes that shared snapshot or points the scheduler at the
+most recently active run's outbox. Full suite 1288 passed after merge.
+
+### B3 — delegation as resident policy (prompt) — owner: resident — [#215](https://github.com/Gurio/brr/issues/215) — *shipped 2026-07-04*
 
 The orchestrator/worker question, resolved in the design as policy-not-
 architecture: the resident keeps user-interfacing, commits, and judgment;
@@ -110,7 +129,12 @@ section in the playbook/substrate naming when to spawn what, with the
 cost-ranked catalog as the menu. Revisit trigger for a real two-tier split
 stays model-economics-dated (see design).
 
-### B4 — worker stack slim-down — owner: delegable — [#215](https://github.com/Gurio/brr/issues/215)
+Named the two stacks in `src/brr/prompts/dominion-playbook.md` §Delegation:
+resident (full, default) vs worker (task + files + result contract). Marker:
+`worker: true` alongside `respawn: true`. Mirrored into the live dominion
+playbook so the policy governed this same run's own B2/B4 delegation calls.
+
+### B4 — worker stack slim-down — owner: delegable — [#215](https://github.com/Gurio/brr/issues/215) — *shipped 2026-07-04*
 
 When a wake is spawned as a *worker* (respawn handoff, subagent-style
 bounded task), it should get the slim stack: task + files + structured
@@ -119,6 +143,28 @@ full playbook. Today respawned runs get the full resident stack.
 Touch points: `prompts.py` (a worker preamble variant), respawn path in
 `daemon.py`, tests. Depends on: B3 naming the two stacks.
 Effort: 1–2 wakes. Cleanly spec-able.
+
+Built by a delegated subagent (isolated worktree) against a written spec:
+`worker: true` frontmatter → `task.meta["worker"]` → `build_daemon_prompt`
+swaps in a new `worker.md` preamble and skips the resident injected blocks
+(identity core, dominion, plans, policy, ledger, pitfalls, kb health,
+introspection); `daemon-substrate.md` stays (a worker still runs under the
+daemon and needs delivery mechanics). Default path confirmed byte-identical
+via the existing pinned test suite. 4 new tests, full suite green.
+
+**Delegation experience (the maintainer asked to "have a hang of it"):**
+both B2 and B4 were handed to subagents via `isolation: worktree`, running
+in parallel, with the brief carrying exact file:line pointers, the decided
+policy, and the existing test pattern to mirror — not just "implement the
+ticket." Both came back correct, tested, and honest about what they left
+soft (B2's cache-location gap, both flagging their reversible calls rather
+than guessing silently). Merges were clean (worktree isolation meant no
+shared-file races between the two despite both touching `daemon.py`).
+The real cost was the brief itself — the excavation to find exact hooks
+(`_merge_level_snapshots` dropping numeric fields, the `Run.meta` wire path
+for a new frontmatter key) took longer than either agent's implementation
+turn. That matches the design's own scrutiny: delegation pays off on
+bounded, well-specified work; the spec-writing is still the resident's job.
 
 ### B5 — post-delivery linger (named contract) — owner: delegable, resident reviews — [#216](https://github.com/Gurio/brr/issues/216) — *closed 2026-07-03*
 
@@ -162,6 +208,23 @@ before runner stop; the daemon owns card state after the runner exits.
 inside its horizon. The multi-hour vigil the maintainer floated (up to
 10–20h at 2–3m polls) stays deliberately outside v1: it needs compaction +
 B1's quota floors to be honest about spend; revisit under #214.
+
+### B6 — weekly-quota smoothing + cross-runner load balancing — owner: blocked on data — [#224](https://github.com/Gurio/brr/issues/224)
+
+Maintainer's sharpening (2026-07-04) of the quota picture behind B1: the 5h
+session window is an anti-burst valve providers impose because the *weekly*
+allocation is oversold (full exhaustion for 4 straight weeks costs ~5x
+subscription price) — the weekly bucket is the actual scarce resource, not
+the session one. B1's binding-bucket floors react correctly moment to
+moment but don't pace consumption *forward* against days-remaining-in-week,
+so a quiet Monday can still let a busy Friday run dry. Two asks, both real
+but blocked on data this wake doesn't have: (1) smooth ambient `every:`
+consumption against time-remaining-in-reset-window rather than only current
+remaining%; (2) with multiple subscriptions (Claude + Codex), weight
+delegated/background spawns toward whichever has more headroom, ratio
+TBD. Needs an observed week or two of per-runner daily burn before the
+smoothing curve and routing weight are more than a guess — not a code gap,
+a data gap. Detail: `design-director-loop.md` §B1 follow-up.
 
 ## Voice workstream — remaining tail (context, not new scope)
 
