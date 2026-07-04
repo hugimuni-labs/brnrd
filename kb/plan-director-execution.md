@@ -209,6 +209,23 @@ inside its horizon. The multi-hour vigil the maintainer floated (up to
 10–20h at 2–3m polls) stays deliberately outside v1: it needs compaction +
 B1's quota floors to be honest about spend; revisit under #214.
 
+### B6 — weekly-quota smoothing + cross-runner load balancing — owner: blocked on data — [#224](https://github.com/Gurio/brr/issues/224)
+
+Maintainer's sharpening (2026-07-04) of the quota picture behind B1: the 5h
+session window is an anti-burst valve providers impose because the *weekly*
+allocation is oversold (full exhaustion for 4 straight weeks costs ~5x
+subscription price) — the weekly bucket is the actual scarce resource, not
+the session one. B1's binding-bucket floors react correctly moment to
+moment but don't pace consumption *forward* against days-remaining-in-week,
+so a quiet Monday can still let a busy Friday run dry. Two asks, both real
+but blocked on data this wake doesn't have: (1) smooth ambient `every:`
+consumption against time-remaining-in-reset-window rather than only current
+remaining%; (2) with multiple subscriptions (Claude + Codex), weight
+delegated/background spawns toward whichever has more headroom, ratio
+TBD. Needs an observed week or two of per-runner daily burn before the
+smoothing curve and routing weight are more than a guess — not a code gap,
+a data gap. Detail: `design-director-loop.md` §B1 follow-up.
+
 ## Voice workstream — remaining tail (context, not new scope)
 
 - AGENTS.md house-voice pass — resident, own commit (round-6 direction:

@@ -10065,3 +10065,36 @@ Branch: brr/director-stream-b. Also folded in: `.gitignore` now excludes
 `.claude/` (Claude Code session settings + isolated subagent worktrees,
 previously untracked noise with real risk of a careless `git add -A`
 sweeping nested worktree checkouts into a commit).
+
+## [2026-07-04] design | Worker/resident split re-justified; respawn reframed; B6 quota-smoothing gap opened
+
+Maintainer questioned the B3/B4 worker/resident split just shipped: dominion
+and kb are git-versioned (mergeable) and worktrees isolate concurrent
+mutation, so "pollution risk" — the framing B3/B4 shipped with — was never
+the real hazard. Reconciled in `design-director-loop.md` §"Re-justifying the
+split": the actual grounds are judgment scope (a worker has no continuity,
+can't be accountable for standing-memory calls it won't be there to defend)
+and cost (full resident stack is waste on bounded tedium) — split stands,
+on sharper footing. Also reframed `respawn:`'s stated purpose away from
+stale "cheap-dispatcher escalation" language (superseded by the
+account-centered daemon's narrow dispatcher) to its real distinct value vs
+in-run `Agent`-tool subagents: cross-Shell/cross-repo/outlives-this-run
+handoff, something in-harness subagents structurally can't do. Kept both
+mechanisms; didn't unify.
+
+Confirmed live (not a brr bug): the "two status cards, dash finish" the
+maintainer saw during last round's B2/B4 delegation traces to
+`.claude/worktrees/agent-{a5ad9b48,ad2f18b8}...` — Claude Code's own
+`isolation: worktree` Agent-tool subagents, no `run_id`/`.card` of their own
+in `daemon.py` (`.brr/runs/` shows one run, `run-260704-0202-lmlk`, for the
+whole session). Whatever rendered the extra cards is the surrounding
+harness's own subagent UI, outside this codebase.
+
+Opened `B6` (#224): weekly-quota smoothing + cross-runner load balancing,
+sharpening B1 — the 5h window is an anti-burst valve, the weekly bucket is
+the real scarce resource (oversold: full weekly exhaustion for 4 weeks costs
+~5x subscription price), and B1 reacts per-beat but doesn't pace consumption
+forward against days-remaining-in-week. Blocked on data (a week+ of observed
+per-runner burn), not code — named rather than guessed at.
+
+Branch: brr/director-stream-b.

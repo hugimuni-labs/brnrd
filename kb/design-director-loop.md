@@ -176,6 +176,54 @@ subagents work. The naming half lives in the brand page (resolved
 2026-07-02: `brr` stays retired as a name; the split is essence, not
 vocabulary).
 
+### Re-justifying the split (maintainer fork, 2026-07-04)
+
+B3/B4 shipped the worker/resident split leaning on a pollution-risk framing
+("worktrees mean it's unlikely to pollute your space"). The maintainer
+pushed back correctly: dominion and kb are both git-versioned, worktrees
+already isolate concurrent file mutation, and a diverged dominion/kb merges
+mechanically like any other branch. Pollution was never the real risk the
+split was guarding against — re-examined, the actual justification is two
+things unrelated to data safety:
+
+- **Judgment scope, not merge conflicts.** A worker wake has no continuity
+  — it reads no recent-log, holds no pitfalls, won't be there to defend or
+  revisit a call next week. Git can merge two divergent kb edits; it cannot
+  merge two divergent *editorial judgments* about what's worth keeping in
+  shared standing memory. That accountability gap, not file contention, is
+  why a worker doesn't get kb governance or scheduling authority — a dozen
+  bounded workers each free to schedule wakes or rewrite kb pages is a
+  governance problem no worktree fixes.
+- **Cost.** The resident stack (identity core, dominion, playbook, plans,
+  policy, ledger, pitfalls, kb health, introspection) is real injected
+  tokens on every wake. A worker doing "read this file, fix this bug,
+  return a diff" pays for all of it and uses none of it. That overhead is
+  waste, not caution.
+
+Net: the split stands, on sharper ground than it shipped with. Not because
+isolation is scarce (it isn't — worktrees + git already cover that) but
+because standing-memory judgment and full-stack cost are real and orthogonal
+to isolation.
+
+**Respawn vs in-run subagents — not the same capability, don't unify.**
+The maintainer also asked whether `respawn:` is still earning its keep, and
+whether spawning should be unified into one mechanism now that "cheap
+dispatcher escalates to a stronger core" is no longer the load-bearing
+architecture (`decision-account-centered-daemon.md` §3 keeps that dispatcher
+narrow — unpinned message events only, not the general spawn path). That
+framing of `respawn:` is stale and worth retiring explicitly, but the
+mechanism itself is not redundant with in-run subagents (the `Agent` tool):
+a subagent is in-process, same Shell, supervised live in this conversation;
+`respawn:` parks a brand-new top-level daemon event that can move to a
+**different Shell entirely** (Codex ⇄ Claude), a different repo, or simply
+outlive this run's return. An in-harness subagent structurally cannot do
+any of that — it has no path to a different provider's CLI. So: keep both,
+reframe `respawn:`'s stated purpose from "dispatcher escalation" to
+"cross-runner / cross-repo / outlives-this-run handoff," and keep
+`worker: true` as the orthogonal stack-weight dial it already is (B4) —
+applies regardless of *why* the handoff happened, not tied to an escalation
+story.
+
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
 Follow-up sharpening the stingy-director economics: if the wake already
