@@ -57,6 +57,28 @@ def _stub_env_isolated(monkeypatch, tmp_path):
     return worktree_path, finalized
 
 
+def test_merge_level_snapshots_forwards_enriched_quota_subfields():
+    """Regression guard for #214/B2: `_merge_level_snapshots` forwards the
+    whole `quota` value it's handed — it must not strip the new numeric
+    `buckets` / `*_remaining_percent` sub-fields the collectors now attach,
+    since `binding_quota_remaining_pct` reads them downstream of the merge.
+    """
+    usage_levels = {
+        "source": "claude /usage PTY",
+        "quota": {
+            "summary": "week 15% left",
+            "buckets": {"week": {"remaining_percentage": 15.0}},
+        },
+    }
+    result_levels = {"source": "claude result json", "spend": {"summary": "$1.20"}}
+
+    merged = daemon._merge_level_snapshots(usage_levels, result_levels)
+
+    assert merged["quota"] == usage_levels["quota"]
+    assert merged["quota"]["buckets"]["week"]["remaining_percentage"] == 15.0
+    assert merged["spend"] == result_levels["spend"]
+
+
 def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-1")
