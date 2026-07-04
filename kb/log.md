@@ -10221,3 +10221,48 @@ one continuous conversation. Left 5z0s (onboarding/hackernews timing)
 genuinely open — tracked, not designed.
 
 Branch: brr/reading-economically-and-hosted-liability.
+
+## [2026-07-04] implement | CPS plan/ledger populated; A4-lite director tick shipped; ToS budget path answered
+
+Two threads from the same telegram message. First, legal: maintainer
+confirmed HugiMuni is just him and his wife, no counsel relationship, ~€1k
+budget, pre-revenue — asked whether "measured path of least liability now,
+real legal work with customers" is safe. Answered in
+[`decision-hosted-execution-liability.md`](decision-hosted-execution-liability.md)'s
+open-questions section: yes for a beta stage, via a SaaS ToS template
+(Termly-class service or a fixed-fee marketplace lawyer pass, both inside
+budget) adapted for the French/EU consumer-protection floor already named
+on that page, not bespoke counsel yet — with the caveat that this is advice,
+not a legal opinion, and counsel should still eyeball the final text.
+
+Second: "what's missing to let you continuously handle work in a cost-aware
+manner and nag me, rather than me always initiating — the comaintainer ark,
+bidirectional exchange." This maps exactly to A3 (quest log) and A4
+(director tick) in
+[`plan-director-execution.md`](plan-director-execution.md) — both scoped,
+neither built. Checked the account dominion directly: `plans/Gurio__brr/
+active.md` and `ledger/decisions.md` (CS5/CS7, shipped 2026-06-30, and the
+CPS dashboard reading them shipped today per the previous entry) had been
+*empty* the whole time — the pipe existed, nothing flowed through it. This
+is what "the plan is yet to be pushed to be validated" (the maintainer's
+own words, confirming a different guess) actually meant.
+
+Populated both files for real (ranked moves, current decisions) and added
+a `director tick` entry to `schedule.md` (`every: 24h`) — A4 ahead of A3's
+formal ranking discipline, judged reversible and cheap enough to ship now
+rather than wait. Silence is the entry's default outcome by design (message
+the gate only on a changed top move or a new block); named the one honest
+gap in the entry itself — B2's live per-tick quota read is inert in
+production, so this ticks on a flat interval, not yet bent by observed
+quota per B1's policy. Mirrored both the A3 content-instantiation and the
+A4 shipment back into `plan-director-execution.md` so the ticket status
+reflects reality.
+
+Not yet confirmed: whether the daemon's next wake actually renders the
+"Active inter-run plan" injection block from the newly-written file — the
+plumbing (`_build_inter_run_plan_block`, `_publish_plans`) reads the right
+paths by inspection, but this run didn't trigger a fresh wake to observe
+it landing. Worth a glance at the next wake's injected context.
+
+Branch: brr/comaintainer-tick-and-tos-budget. Account dominion (separate
+repo, no remote configured — local-only) committed directly: `0a8b87f`.
