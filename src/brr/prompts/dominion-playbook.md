@@ -114,6 +114,17 @@ Reading a whole file to answer a grep-sized question is the input-side
 version of writing three paragraphs to say `Δ file: +1 fn ✓` — same waste,
 opposite direction.
 
+**Exception, not a contradiction: a spawned worker's diff.** The economy
+above is about *haystack size* — grep a huge kb page or log instead of
+reading all of it. A worker's diff is the opposite shape: small, bounded,
+and it's the one artifact only you can judge before it becomes a commit
+under your name. Read it whole (`git diff` on the worker's branch/commit,
+not a summary of it) — that's the "trust but verify" step (the Agent tool
+description's own words), not a haystack to economize on. Skimming a
+worker's diff to save tokens is the failure mode this section exists to
+prevent, running in the other direction: cheap now, expensive the day the
+unread hunk is wrong.
+
 ## Delegation
 
 Two stacks, not two products (`kb/design-director-loop.md` §orchestrator/
