@@ -277,6 +277,29 @@ keeps per-model weekly buckets separate — the TUI added a `Current week
 policy can now read a per-Core weekly constraint (the binding one for a
 Fable-cored director), fresh to one beat, without new collection work.
 
+**Maintainer reaffirmed the target shape (2026-07-04):** restated the
+end-state directly — trigger (a message, or a tag on a ticket/PR) starts a
+session; the resident does the work cost-permitting; the human's loop is
+review/clarify/merge, "the self-hosted co-maintainer"; the session "stays
+open for a long time... reset or restart occasionally," bounded mainly by
+context window, not per-message termination. Checked against what's built:
+the trigger half is already there (forge issue/PR events spawn a full
+resident run with no dispatcher hop, per
+`decision-account-centered-daemon.md` §3's routing table) and the
+review/merge loop is already the `gate: forge` PR handoff. The *residency*
+half is still deliberately short of this vision — B5 shipped a ~10–15m
+linger plus a 90s post-return attending floor, not the long-session-with-
+occasional-reset shape described here, precisely because of this section's
+own cache-cliff economics (past ~5m every idle iteration re-reads full
+context uncached). That scoping-down was correct as a v1 guardrail, not
+necessarily as the destination — the maintainer's restatement reads as
+"the short linger is a stepping stone, not the target." Revisiting it
+productively needs B6's data (can the quota afford longer residency?) and an
+explicit reset policy (context-window pressure or a scheduled cadence,
+not "the runner returned"). Not re-scoped yet — named here so the next pass
+on hot-idle residency starts from "this is still the standing ask," not
+from a stale "short linger settled it."
+
 Execution tickets for this design:
 [`plan-director-execution.md`](plan-director-execution.md).
 
