@@ -185,7 +185,9 @@ There are two layers:
   slot briefly, and yields immediately when any pending event appears. It is
   intentionally weaker than runner linger: the runner has exited, so the
   follow-up becomes the next run rather than being answered inside the same
-  thought.
+  thought. That next run is an **unblock, not a restart** — it reads the same
+  conversation history, dominion, and kb the first run did; nothing resets,
+  only the process does.
 
 Runner-owned linger is a named contract, not an improvised while-loop:
 
