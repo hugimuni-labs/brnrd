@@ -420,27 +420,30 @@ the account dominion repo the same way CS2's `run_state_blob_url` already
 resolves a per-run doc, render as-is (they're already prose the resident
 writes for a human). No new backend shape.
 
-**Genuinely open, not yet designed:**
-- **Archival convention.** The maintainer's "occasionally create another file
-  which is parked... maybe a stripped-down view of its contents" has no
-  counterpart in CS5 today — `active.md` is retired by emptying/deleting it,
-  nothing archives it first. A `plans/<repo-slug>/archive/<date>-<slug>.md`
-  convention (resident-written, same as `active.md`) would close this without
-  new mechanism — the growth bound the maintainer wants ("has to have some
-  time to leave so we don't grow it indefinitely") is then a resident
-  discipline (archive + trim `active.md`), not a new store.
-- **The "vehicles" framing.** The maintainer's bus-vs-subway metaphor (cheap
-  breadth vs. costly precision) already exists as data: the runner catalog's
+**Resolved (maintainer, GH #53 comment, 2026-07-04T18:07:59Z):**
+- **Archival convention** — agreed, with one addition: an archived file opens
+  with a short header summarizing *what* was parked and *why*, so a later
+  lookup doesn't have to re-read the whole thing to know if it's relevant.
+  Convention is now: `plans/<repo-slug>/archive/<date>-<slug>.md`, first
+  block a `parked: <date> · why: <one line>` header, body unchanged from
+  what `active.md` held. Resident discipline (archive + trim `active.md`),
+  no new mechanism.
+- **Aesthetic fork** — resolved: ship the CPS view plain through Slice 1-3,
+  skin once it exists to skin ("Persona 5 thing can wait"). But the
+  maintainer separated this from a second, *not* aesthetic-specific ask:
+  take a close look at the current frontend stack's general quality —
+  his read is it's "quite stripped down and likely outdated right now,"
+  independent of whether it ever gets a Persona-5 skin. That's a distinct
+  open item, not closed by the skin-later call:
+  - **Frontend stack quality audit** — not yet done. Needs its own pass:
+    what's the current stack (templates/CSS/JS, HTMX version, build
+    tooling), what's dated, what a baseline "well-built" bar looks like
+    for a dashboard this size, independent of the game-skin question.
+    Candidate for its own plan page once Slice 1 lands (auditing a stack
+    that doesn't exist yet has nothing to look at).
+- **The "vehicles" framing** — confirmed already data: the runner catalog's
   `cost_rank`/`class` spectrum (`design-runner-cores.md`) *is* the resource
-  economy — CPS would be the place that renders spend against it, not invent
-  a second one.
-- **Aesthetic direction (Persona-5-adjacent, married to Zachtronics-style
-  resource management later; CLI-plain for now).** Ties to
-  `design-director-loop.md` (game pacing as product thesis, already active)
-  and the "would Theo/Fireship approve the UI" ask — a real fork, not
-  resolved here: skin now vs. ship the CPS view plain and skin once Slice
-  1-3 exist to skin. No maintainer decision requested yet; flagging so it
-  doesn't get designed twice.
+  economy — CPS renders spend against it, doesn't invent a second one.
 
 ## Out of scope
 
