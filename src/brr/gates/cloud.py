@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 import requests
 
-from .. import gitops, protocol, run_progress
+from .. import claude_usage, codex_status, gitops, protocol, run_progress, runner_quota
 from .. import dominion, schedule as schedule_mod
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -209,6 +209,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     _deliver_responses(brr_dir, inbox_dir, responses_dir, state)
     _publish_activity(brr_dir, inbox_dir, state)
     _publish_plans(brr_dir, state)
+    _publish_quota(brr_dir, state)
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:
@@ -438,6 +439,82 @@ def _publish_plans(brr_dir: Path, state: dict) -> None:
         )
     except Exception as e:
         print(f"[brr:cloud] plans publish failed: {e}")
+
+
+def _quota_window(label: str, percent: float | None, reset: str | None = None) -> dict[str, Any]:
+    return {"label": label, "used": None, "limit": None, "percent": percent, "reset": reset}
+
+
+def _codex_quota_shell() -> dict[str, Any] | None:
+    levels = codex_status.load_levels()
+    quota = levels.get("quota") if isinstance(levels, dict) else None
+    if not isinstance(quota, dict):
+        return None
+    primary = quota.get("primary_remaining_percent")
+    secondary = quota.get("secondary_remaining_percent")
+    if primary is None and secondary is None:
+        return None
+    return {
+        "shell": "codex",
+        "status": "known",
+        "windows": [
+            _quota_window("5h window", primary),
+            _quota_window("weekly", secondary),
+        ],
+    }
+
+
+def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
+    outbox_dir = runner_quota.latest_claude_usage_outbox_dir(brr_dir)
+    levels = claude_usage.load_snapshot(outbox_dir) if outbox_dir else None
+    quota = levels.get("quota") if isinstance(levels, dict) else None
+    buckets = quota.get("buckets") if isinstance(quota, dict) else None
+    if not isinstance(buckets, dict):
+        return None
+    session = buckets.get("session") if isinstance(buckets.get("session"), dict) else {}
+    week = buckets.get("week") if isinstance(buckets.get("week"), dict) else {}
+    session_pct = session.get("remaining_percentage")
+    week_pct = week.get("remaining_percentage")
+    if session_pct is None and week_pct is None:
+        return None
+    return {
+        "shell": "claude",
+        "status": "known",
+        "windows": [
+            _quota_window("5h window", session_pct, levels.get("session_reset")),
+            _quota_window("weekly", week_pct, levels.get("week_reset")),
+        ],
+    }
+
+
+def _quota_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
+    """This daemon's runner-quota snapshot: real per-shell 5h/weekly windows.
+
+    Mirrors the Activity/Plans publish shape (#237) — reads whatever local
+    evidence already exists (Codex's live rollout read, Claude's most
+    recently cached ``/usage`` scrape via
+    :func:`runner_quota.latest_claude_usage_outbox_dir`) rather than
+    spawning a fresh probe on this loop's ~25s cadence. A shell with no
+    evidence yet is omitted, not reported as a fake zero.
+    """
+    shells = [_claude_quota_shell(brr_dir), _codex_quota_shell()]
+    return [shell for shell in shells if shell is not None]
+
+
+def _publish_quota(brr_dir: Path, state: dict) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    try:
+        _request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/quota",
+            token=state["token"],
+            json={"shells": _quota_snapshot(brr_dir)},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] quota publish failed: {e}")
 
 
 class _CloudCardTransport:

@@ -75,6 +75,11 @@ class Daemon(Base):
     capabilities: Mapped[str] = mapped_column(Text, default="")
     online: Mapped[bool] = mapped_column(Boolean, default=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # Runner-quota snapshot (5h/weekly windows per local Shell), mirrored from
+    # this daemon's own `.brr/` cache via `PUT /v1/daemons/quota` — the
+    # dashboard-side half of #237; see kb/design-dashboard-live-surface.md.
+    quota_json: Mapped[str] = mapped_column(Text, default="[]")
+    quota_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ActivityRecord(Base):
