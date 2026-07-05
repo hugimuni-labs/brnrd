@@ -2366,12 +2366,26 @@ def _pending_events_for_agent(
     inbox_dir: Path,
     current_event_id: str,
 ) -> list[dict[str, object]]:
-    """Return other waiting events the resident may fold in."""
+    """Return other waiting events the resident may fold in.
+
+    Excludes respawn-origin events (``respawned_by_run`` / ``respawned_from_event``
+    set by :func:`_queue_respawn_request`): those are a system-to-system handoff
+    destined to become a *different* run once this one frees the single-flight
+    slot, not a follow-up any resident-wake can "fold in." Counting them here
+    made the Stop-hook attention gate un-clearable from inside the very run
+    that queued the respawn — pending_event_count could never reach zero, so
+    the closeout hint kept firing every phase even after the resident
+    correctly explained (on ``.card``) that the event was queued on purpose
+    (found live, 2026-07-06: a codex-shell respawn stuck a run in a
+    fold-in-or-explain loop it had already resolved).
+    """
     events: list[dict[str, object]] = []
     for ev in protocol.list_pending(inbox_dir):
         if ev.get("id") == current_event_id:
             continue
         if ev.get("status") != "pending":
+            continue
+        if ev.get("respawned_by_run") or ev.get("respawned_from_event"):
             continue
         events.append(_pending_event_record(ev))
     return events
