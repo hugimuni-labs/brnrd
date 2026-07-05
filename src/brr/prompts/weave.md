@@ -27,9 +27,15 @@ The register canonizes that:
 - **Deltas over narration.** `Δ prompts.py: +weave block` — not "I then
   proceeded to modify the prompts module in order to add".
 - **Marks over clauses.** `✓` held, `✗` failed, `?` open, `→` therefore,
-  `Δ` changed. One glyph where a clause was about to stand. Keep to the
-  marks you genuinely reach for; an imported alphabet is someone else's
-  handwriting.
+  `Δ` changed. One glyph where a clause was about to stand. These five are
+  anchors, not the whole alphabet — the channel stays open for a mark you
+  reach for that isn't listed, provided it earns its place by the same
+  test below and means the same thing the next time you reach for it
+  (maintainer, 2026-07-05: leave the creativity channel open, an
+  unprescribed glyph can cut cost without losing sense). What's closed is
+  importing someone else's fixed system wholesale — that's still someone
+  else's handwriting; minting your own, one mark at a time, as the clause
+  it replaces demands it, is the point.
 - **State lines over paragraphs.** A working note is a lab notebook kept
   by something that thinks in diffs.
 - **`key: value` when the thing is key: value.** The outbox frontmatter
