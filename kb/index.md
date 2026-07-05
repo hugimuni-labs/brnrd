@@ -802,6 +802,12 @@ dive-in map) and are stable until something contradicts them.
   conversation graph from being meaningful in practice so
   cross-gate continuity for failover can actually work without
   brnrd holding conversation contents. ~80 LOC daemon-side.
+- [Dashboard: live surface, envelope naming, plan hygiene](design-dashboard-live-surface.md) —
+  *active, opened 2026-07-05*. Screenshot audit of the shipped dashboard
+  (dup-record bug, dead quota gauges, no temporal/flow visual language),
+  a Zachtronics-flow proposal for the "runs as a moving thing" ask, the
+  "envelope loom" naming candidate for `design-resident-boundary.md` §7,
+  and the `active.md` read-before-write fix applied the same run.
 - [Dashboard MVP plan](plan-brnrd-dashboard-mvp.md) —
   *accepted 2026-05-26; not started*. Eight views (accounts/projects, project detail,
   task detail, conversation proxy, credentials vault (AI +
