@@ -391,6 +391,15 @@ but not zero-cost (touches `design-resident-boundary.md` throughout,
 open question — a real ping-pong fork, not a reversible-so-just-do-it
 call.
 
+**Resolved 2026-07-05, a later same-day run:** a parallel branch
+(`design-dashboard-live-surface.md`, opened independently the same day)
+reached a different candidate for the same fork — **`envelope loom`** — and
+the maintainer accepted it once both branches merged: "loom sounds good...
+the weave and the weaver, and the runners and even shells&cores fold in
+pretty naturally." `gauge`/`envelope gauge` above is superseded, not wrong
+at the time — it was this page's own candidate before the loom naming
+existed anywhere. `design-resident-boundary.md` §7 renamed accordingly.
+
 **5. Second-person address — re-affirmed, one gap named, not fixed.** The
 "you"-addressing question was answered once already (`design-brand-brnrd-
 brr.md` §The voice: repo-owned prompts speak the product's authored

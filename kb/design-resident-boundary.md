@@ -196,7 +196,18 @@ on a wake, is the Runner"). The user-facing knobs became `shell=`/`core=` (not
 implementation shape and [`plan-repo-gardening.md`](plan-repo-gardening.md) §3
 for the full vocabulary rationale.
 
-## 7. The boundary state card — level vs edge, and distance-from-envelope
+## 7. The envelope loom — level vs edge, and distance-from-envelope
+
+**Naming resolved 2026-07-05:** this concept was called "the boundary state
+card" throughout the section below (verbatim history preserved); the
+maintainer accepted **`envelope loom`** as the name that same day
+(`design-dashboard-live-surface.md` → "Resolved this run"), superseding an
+earlier parallel `gauge`/`envelope gauge` candidate from
+`design-weave-register.md` §Round 8. Distinct from the outbox `.card`
+control file / rendered chat progress note, which keeps its existing name —
+only this section's concept was renamed. Read "the card" below as "the
+envelope loom" throughout; left unedited below to keep the historical
+Q&A exchange verbatim.
 
 **Question (maintainer, evt-tw6t):** the inject rail shouldn't only report
 *warnings*. Quota *as you go* helps the resident plan ahead; knowing a coexisting
