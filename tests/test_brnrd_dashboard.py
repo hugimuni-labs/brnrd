@@ -76,6 +76,50 @@ def test_dashboard_disconnect_removes_repo():
         assert db.get(Repo, repo_id) is None
 
 
+def test_dashboard_renders_real_quota_and_flags_stale_reports():
+    """#237: the runner-quota card reads a daemon's real report instead of
+    the hardcoded UNKNOWN placeholder, and flags a report that's gone
+    quiet as stale rather than silently trusting old numbers."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd_web.activity_dashboard import _quota_views
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.get(Repo, pid)
+        daemon = Daemon(
+            id="dmn-quota-1",
+            repo_id=pid,
+            token_id="tok-quota-1",
+            daemon_name="laptop",
+            quota_json=json.dumps(
+                [{"shell": "claude", "status": "known", "windows": [{"label": "5h window", "used": None, "limit": None, "percent": 61.0}]}]
+            ),
+            quota_updated_at=datetime.now(timezone.utc),
+        )
+        db.add(daemon)
+        db.commit()
+
+        fresh = _quota_views(db, [repo], runner_stats=[])
+        assert fresh == [
+            {
+                "shell": "claude",
+                "status": "known",
+                "windows": [{"label": "5h window", "used": None, "limit": None, "percent": 61.0}],
+            }
+        ]
+
+        daemon.quota_updated_at = datetime.now(timezone.utc) - timedelta(seconds=999)
+        db.commit()
+        stale = _quota_views(db, [repo], runner_stats=[])
+        assert stale[0]["status"] == "stale"
+
+
 def test_dashboard_can_issue_telegram_pair_link():
     client = _client(telegram_bot_username="@brnrd_bot")
     token = _login(client, login="Gurio")
