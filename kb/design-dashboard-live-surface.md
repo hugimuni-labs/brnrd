@@ -278,6 +278,67 @@ the visual-polish layer.
 sketch above: this is the "what would it actually mean" answer the
 maintainer asked for, sized to inform a slice plan, not sized as one.
 
+## Same-thread follow-up (2026-07-05, run-260705-2039-m7yw): quota multi-axis, PR/issue extensibility, frontend replaced
+
+A message split by Telegram's length limit across two events
+(`evt-...-c2rb`/`evt-...-lff3`, re-sent whole as `evt-...-uxnb` "just in
+case") — the middle run (`run-260705-2037-b3y1`) got killed by a daemon
+restart mid-handling before it could act on the first half, so nothing
+here was previously captured. Three concrete additions to the proposal
+above, plus one approval:
+
+1. **Quota needs two axes shown together, not time alone.** The
+   window-track sketch above (§"A shape for the live-flow surface") only
+   scoped the *time* edge draining. The maintainer's ask is sharper: show
+   remaining-% and time-to-refill *together*, sorted, color-coded, per
+   window (5h pacing + weekly, per runner shell) — "the token consumption
+   is connected to the time and quota windows, but only for subscription
+   based cases; the later brnrd-tokens should have their own place (and
+   maybe the claude/codex/gemini tokens too, if the user has them)."
+   Concretely: the window-track component needs a second encoded
+   dimension (e.g. fill-color or a paired numeric readout) for %-remaining
+   alongside the position-based time-remaining, and a visual separation
+   between metered-subscription windows (Claude session/week, Codex 5h/
+   week, Fable week) and any future brnrd-token or raw-provider-token
+   ledger — those are a different resource class, not another row in the
+   same table. This is the dashboard-side half of #237 (quota-publish
+   plumbing) — #237's fix should carry both numbers, not just the single
+   `remaining_pct` the Activity view already has a precedent for.
+2. **Commits/PRs/issues are semi-hierarchical, and other ticket systems
+   are coming.** "commits belong to PRs, PRs and Issues are referenced...
+   make design extensible to support later ticket-systems integration
+   (linear, jira, etc.), thoroughly reserve a planned space/connector
+   shape... but not implement it." Reads as: the SpaceChem-molecule
+   mapping above (§Zachtronics-mechanics) should model a commit→PR→issue
+   *tree*, not three parallel flat streams, and the data shape backing it
+   should carry a `source_system` / connector field now (GitHub today)
+   even though only GitHub is wired up — so a Linear or Jira connector
+   later is a new adapter, not a schema migration. No implementation this
+   run; a reserved column/field is cheap, a real connector isn't scoped.
+3. **Frontend stack: replace it, approved, not just audit.** Resolves the
+   open item in `plan-brnrd-dashboard-mvp.md` ("frontend stack quality
+   audit — not yet done... candidate for its own plan page") one step
+   further than an audit: "current frontend stack is likely shit, it is a
+   good time to replace it with something modern, extensible, thoroughly
+   built, responsive, and little-code, easy-to-maintain." The maintainer
+   is explicit he can't specify the stack himself ("I don't know this
+   field well enough") and defers the actual pick to us, but sets one
+   concrete bar in its place: **"it should survive a fireship review (or
+   alike)"** — read as "don't ship something a tech-savvy, snarky
+   audience would roast as dated or amateur," the same register as item
+   4's "AI-savvy, frontend-focused tech folk" bar from the opening ask,
+   now with a sharper, checkable phrasing. Not scoped to a specific
+   framework choice in this page — that's real implementation work for
+   whichever slice actually rebuilds the frontend — but the constraint is
+   now explicit and load-bearing: modern, extensible, responsive,
+   low-code-to-maintain, and reviewer-proof, not merely "not the current
+   HTMX-era stack."
+4. **Approval, not just discussion.** "Otherwise really love your
+   proposal, lets implement it" — the live-flow surface + Zachtronics
+   mapping above moves from "proposal, not a build" to accepted direction;
+   still needs slice-sizing (per the existing ~1 week/view estimate) before
+   it's a build turn, but the maintainer-side fork is closed.
+
 ## Read next
 
 - [`design-resident-boundary.md`](design-resident-boundary.md) §7 — the
