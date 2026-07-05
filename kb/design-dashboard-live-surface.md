@@ -110,9 +110,8 @@ allowance/billing, a different concept than the resident's own
 distance-from-envelope read; renaming stays scoped to
 `design-resident-boundary.md` §7's "boundary state card."
 
-**Not renamed yet** — this is a proposal for the maintainer's pick, not a
-executed rename; `design-resident-boundary.md` §7 still says "boundary
-state card" pending the word.
+**Renamed 2026-07-05** — accepted, see "Resolved this run" below;
+`design-resident-boundary.md` §7 now reads "the envelope loom."
 
 ## A shape for the live-flow surface (proposal, not a build)
 
@@ -162,23 +161,122 @@ the shared through-line, dominion/plan is the working note" — this is
 that principle applied to the one file that had quietly stopped following
 it.
 
-## Open forks (maintainer's call)
+## Resolved this run (2026-07-05, same-thread follow-up)
 
-1. **Naming pick** — `envelope loom` (recommended) / `envelope manifold` /
-   `envelope trace`, or none of the above.
-2. **Priority** — does the live-flow dashboard work jump ahead of #227
-   (ToS draft, currently ranked #1) and the morning-briefing scoping, or
-   queue behind them? It's a multi-week body of work by the MVP plan's own
-   estimates, not a quick reskin.
-3. **How literal the Zachtronics metaphor goes** — window-tracks + task-
-   tokens (this page's sketch) is the conservative reading; a fuller
-   factory-floor visual (Persona-5-adjacent, explicitly *not* wanted yet
-   per the maintainer's own line) is the maximal one. Recommend starting
-   conservative and letting the aesthetic grow once the underlying live
-   data is real (echoes the CPS "ship plain, skin later" resolution
-   already accepted 2026-07-04).
-4. **Input capture** — explicitly flagged by the maintainer as wanted but
-   privacy-sensitive; not scoped here at all pending that call.
+1. **Naming — `envelope loom`, accepted.** "loom sounds good... it makes
+   sense also in terms the visible and living user surface... the weave
+   and the weaver, and the runners and even shells&cores fold in pretty
+   naturally." Supersedes `design-weave-register.md` §Round 8's parallel
+   `gauge`/`envelope gauge` recommendation (a different branch reached a
+   different candidate for the same fork before the two merged — see that
+   page's addendum). `design-resident-boundary.md` §7 renamed. The
+   maintainer separately noted "the portals a bit out, if you think of a
+   better name, but it is fine" re: `daemon-substrate.md`'s "delivery
+   portals" vocabulary — flagged, not acted on; explicitly not a request.
+2. **Priority — dashboard live-surface work now leads the ranking.**
+   "lets do the live flow dashboard first," direct instruction, resolves
+   the fork this section used to pose as open. `plans/Gurio__brr/
+   active.md` reordered accordingly. Not a claim that #227 (ToS) stops
+   mattering — hosted-execution liability exposure is real and dated
+   2026-07-04 — just that it no longer sits ahead of this work in
+   execution order; noted in the same plan update.
+3. **Persona-5-adjacent — correction, not a resolution.** This page
+   previously read the maintainer's line as "explicitly not wanted yet."
+   That was wrong: "not true - wanted, but agreeing to postpone if too
+   much effort / too hard to do right." The postponement is a cost/
+   difficulty call the maintainer is making, not a taste rejection —
+   worth keeping straight since the two produce different revisit
+   triggers (a cost call revisits when effort drops; a taste rejection
+   wouldn't revisit at all). See
+   [`design-brand-visual-language.md`](design-brand-visual-language.md)
+   for the fuller visual-identity material this connects to (boot-glitch
+   animation, HugiMuni/vegvisir/Huginn-Muninn, Loki/Severance reference
+   calibration) — new page, out of this one's scope.
+4. **Input capture** — still open, still explicitly flagged by the
+   maintainer as wanted but privacy-sensitive; not scoped here at all
+   pending that call. Untouched this run.
+
+## Zachtronics-mechanics deconstruction (asked for explicitly this run)
+
+The maintainer named the reference class (TIS-100, SpaceChem, Opus Magnum)
+but flagged he hasn't played them enough to map their mechanics onto our
+situation himself — "I am gonna rely on you deconstructing the Zach's
+games mechanics and their relevance to our situation, but only the lanes
+are too simple to fit I think." That's the actual ask: the single
+queued→running→done lane (already sketched above) is one axis; the
+maintainer's own metric list — commits/PRs/tickets interacted, messages
+processed, KBs touched, time elapsed, token consumption, CPS progress —
+needs more than one visual grammar, not a richer version of the same one.
+
+**What the three games actually share**, stripped of genre chrome: a
+constrained space, discrete *cycles* of time, small units moving through
+it under rules you can see, and — this part matters as much as the
+motion — **a post-run scorecard** that turns the run into a legible
+receipt (Opus Magnum's cost/cycles/area report, shown against a par line
+and a community histogram). The motion answers "what's happening now";
+the scorecard answers "how did that go." Our dashboard needs both, and
+today has neither in a temporal form.
+
+**Proposed mapping — different metrics get different mechanics, not one
+lane widened:**
+
+- **Commits / PRs / tickets → SpaceChem molecules.** Coarse-grained,
+  bonded units that move between discrete stages (queued → running →
+  reviewed → merged/closed) along the same lanes already sketched. Low
+  frequency, high visual weight — each one is worth noticing individually.
+  This *is* the existing "task tokens, not table rows" sketch; naming the
+  game it's actually borrowing from.
+- **Messages processed → TIS-100 values.** Fine-grained, high-frequency,
+  low individual weight — single values streaming node-to-node every
+  cycle. Rendered as a thin fast pulse along the *same* lane geometry as
+  the molecules above, not a separate widget: two particle scales sharing
+  one spatial system is exactly how TIS-100 and SpaceChem already differ
+  from each other while both being "Zachtronics." Gives the surface a
+  legible fast/slow rhythm instead of one undifferentiated stream of dots.
+- **KBs touched → a reactor-floor node map, not a flowing unit at all.**
+  The kb is a graph already (103 pages, cross-linked — see this bundle's
+  own kb-health graph stats). Render it as a node map; a touched page
+  lights up on read/write and decays over a few seconds, the way a
+  TIS-100 node highlights while its program executes or an Opus Magnum
+  glyph highlights while an arm is on it. This is presence, not flow — the
+  right mechanic for "what got read," which is a level, not a stream.
+- **Time elapsed → the window-track's moving edge.** Already scoped above
+  (window-track component) and already corrected by the maintainer
+  earlier this thread: the track *runs out*, it doesn't fill up, and
+  changes color by remaining level — that correction *is* a Zachtronics
+  reading already (a depleting resource bar, not a progress bar).
+- **Token consumption → the Opus Magnum solution report, per-run.** Not a
+  live tick — a receipt, shown once a run closes: tokens spent against
+  the run's own budget envelope as a par line (there's no community
+  histogram to compare against here, but "actual vs. the envelope you were
+  given" is the same shape of comparison, just with one bar instead of a
+  population). This is the closest fit for the already-shipped
+  `envelope loom` naming: the loom is the standing capsule; the solution
+  report is what it hands you when a run finishes weaving.
+- **CPS progress → an Opus Magnum chapter map, not a flat ranked list.**
+  The ranked-moves list in `active.md` already carries dependency
+  language ("blocks:", "depends on:") that a flat list renders as prose
+  but a puzzle-map renders as position: done / in-flight / blocked-on-X,
+  arranged by what unlocks what. Matches the CPS ask's own framing — "the
+  forks, the blocks, the decisions" — better than a ranked list does,
+  since blocks and forks are relationships, not just order.
+
+**Usability guard, per the maintainer's own ask** ("keep me in line
+centered on an average user usability/friendliness... some of my wants
+are brnrd-dogfooding specific"): most of the above is resident-facing
+detail (token consumption, the envelope loom itself, KB-node presence) —
+exactly the material `ornament`/detail-level gating already exists for
+(`design-brand-brnrd-brr.md`'s `quiet | moderate | rich` knob). An
+external user's first screen should default to the coarse layer (commit/
+PR/ticket flow, CPS map, plain quota bars) with the finer mechanics
+(message pulses, KB node map) as an opt-in "operator" density level, not
+the default — the same "ship plain, skin later" sequencing already
+accepted for CPS applies here at the mechanic-selection layer, not just
+the visual-polish layer.
+
+**Still a proposal, not a build** — same caveat as the window-track
+sketch above: this is the "what would it actually mean" answer the
+maintainer asked for, sized to inform a slice plan, not sized as one.
 
 ## Read next
 

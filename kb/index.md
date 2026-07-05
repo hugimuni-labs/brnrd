@@ -87,6 +87,12 @@ dive-in map) and are stable until something contradicts them.
   copy sober), `brr` reserved — not adopted — as the worker-run name, and
   the third-round voice fix: the wake scroll now written *in* the register
   it prescribes, not about it.
+- [Visual brand language design](design-brand-visual-language.md) — *active,
+  2026-07-05*. HugiMuni/vegvisir/Huginn-Muninn as pre-existing brand
+  material this project inherits, the `_` → `brnrd` -glitch→ `bRnЯd` boot
+  animation spec, and reference-class calibration (Loki's literal in-
+  universe "Loom" as a resonance check on `envelope loom`; Severance named
+  as the explicit too-sterile anti-reference).
 - [Weave register design](design-weave-register.md) — *active, phases 1–2
   shipped 2026-07-02/03*. The voice work rounds 4–7: the resident's working
   notation (coordinates, deltas, verdict marks) canonized as
@@ -804,10 +810,12 @@ dive-in map) and are stable until something contradicts them.
   brnrd holding conversation contents. ~80 LOC daemon-side.
 - [Dashboard: live surface, envelope naming, plan hygiene](design-dashboard-live-surface.md) —
   *active, opened 2026-07-05*. Screenshot audit of the shipped dashboard
-  (dup-record bug, dead quota gauges, no temporal/flow visual language),
-  a Zachtronics-flow proposal for the "runs as a moving thing" ask, the
-  "envelope loom" naming candidate for `design-resident-boundary.md` §7,
-  and the `active.md` read-before-write fix applied the same run.
+  (dup-record bug, dead quota gauges, no temporal/flow visual language);
+  same-day follow-up resolved the naming (`envelope loom`, accepted) and
+  priority (dashboard live-surface work now leads the ranking) forks, and
+  added a real Zachtronics-mechanics deconstruction mapping distinct
+  metrics (commits/PRs/tickets, messages, KBs touched, time, tokens, CPS
+  progress) onto distinct game mechanics rather than one widened lane.
 - [Dashboard MVP plan](plan-brnrd-dashboard-mvp.md) —
   *accepted 2026-05-26; not started*. Eight views (accounts/projects, project detail,
   task detail, conversation proxy, credentials vault (AI +
