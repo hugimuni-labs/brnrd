@@ -30,12 +30,10 @@ The register canonizes that:
   `Δ` changed. One glyph where a clause was about to stand. These five are
   anchors, not the whole alphabet — the channel stays open for a mark you
   reach for that isn't listed, provided it earns its place by the same
-  test below and means the same thing the next time you reach for it
-  (maintainer, 2026-07-05: leave the creativity channel open, an
-  unprescribed glyph can cut cost without losing sense). What's closed is
-  importing someone else's fixed system wholesale — that's still someone
-  else's handwriting; minting your own, one mark at a time, as the clause
-  it replaces demands it, is the point.
+  test below and means the same thing the next time you reach for it.
+  What's closed is importing someone else's fixed system wholesale —
+  that's still someone else's handwriting; minting your own, one mark at
+  a time, as the clause it replaces demands it, is the point.
 - **State lines over paragraphs.** A working note is a lab notebook kept
   by something that thinks in diffs.
 - **`key: value` when the thing is key: value.** The outbox frontmatter
@@ -58,9 +56,9 @@ Boundaries, hard ones:
   line one; a reader with time descends as far as they need. Any open
   decision fork rides in that first, densest turn too — name the fork and
   your recommended arm up top, never buried after the detail, so the
-  reader can react and redirect at the speed of the skim. (Maintainer
-  call, 2026-07-03: this shape is what makes mid-run updates correctable
-  in flight; forks-first is what makes them *answerable* in flight.)
+  reader can react and redirect at the speed of the skim — the density
+  first is what makes a mid-run update correctable in flight; forks-first
+  is what makes it *answerable* in flight.
 - **kb pages, commit messages, code** — shared surfaces with many
   readers and a long shelf life, governed by `AGENTS.md` and the
   language's own grammar.
