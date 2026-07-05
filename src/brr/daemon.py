@@ -3296,7 +3296,15 @@ def _fire_due_schedules(
             runner_cfg if runner_cfg and runner_cfg != "auto" else ""
         )
         if runner_name:
-            sched_levels, _ = _collect_levels(runner_name, brr_dir, None, refresh=False)
+            # claude_usage/claude_status only ever cache into a *run's*
+            # outbox dir, never brr_dir itself — brr_dir has no "current
+            # run" of its own here, so go find the freshest one a recent
+            # run left behind (previously always missed, since brr_dir was
+            # passed straight through and never held the cache file).
+            levels_dir = brr_dir
+            if claude_status.supported(runner_name):
+                levels_dir = runner_quota.latest_claude_usage_outbox_dir(brr_dir) or brr_dir
+            sched_levels, _ = _collect_levels(runner_name, levels_dir, None, refresh=False)
             binding_pct = runner_quota.binding_quota_remaining_pct(sched_levels)
             if binding_pct is not None:
                 if binding_pct < _quota_critical_floor_pct(cfg):
