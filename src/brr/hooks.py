@@ -142,7 +142,10 @@ def format_delta(
     point, 2026-06-23). Stop additionally surfaces the local SCM posture
     (unpushed commits / modified files) so a wake about to end sees its
     branch is not yet pushed. Mid-run (``post-tool``) it stays gated and
-    returns ``None`` when nothing shifted, so the channel injects no noise.
+    returns ``None`` when nothing shifted, so the channel injects no noise —
+    except card staleness (2026-07-05), which renders at every boundary: a
+    stale-or-blank ``.card`` is itself a mid-run failure, not one that can
+    wait for closeout.
     """
     if not payload:
         return None
@@ -160,6 +163,7 @@ def format_delta(
     )
     budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
     scm = payload.get("scm") if isinstance(payload.get("scm"), dict) else {}
+    card = payload.get("card") if isinstance(payload.get("card"), dict) else {}
     resources = (
         payload.get("resources")
         if isinstance(payload.get("resources"), dict) else {}
@@ -241,6 +245,23 @@ def format_delta(
                 f"{modified} modified file(s) on {branch} — commit and let "
                 "the branch publish before ending."
             )
+    # Card staleness (all phases): the note is the one live surface a
+    # watching user sees between replies, so its own silence needs the same
+    # "this is attention-worthy" framing pending events got 2026-07-05 — a
+    # maintainer-set bar (240s) rather than a bare data point. Renders at
+    # every boundary (unlike SCM's seed/stop-only gate) because the failure
+    # this guards — a long stretch with no card update — is exactly the
+    # mid-run gap that framing fix was built for; catching it only at
+    # closeout would be too late to matter.
+    card_stale = bool(card.get("stale"))
+    if card_stale:
+        age = card.get("age_seconds")
+        age_txt = f"{age}s" if age is not None else "a while"
+        lines.append(
+            f"- card: no change in {age_txt} — rewrite .card (even one "
+            "line) so the surface the user is watching isn't sitting blank "
+            "or stale."
+        )
     # Work-status posture (cost / quota / parallelism). Known fields carry
     # their value; not-yet-built ones read as named states with reasons so the
     # resident sees the slot honestly rather than a gap. It renders on seed /
@@ -257,7 +278,7 @@ def format_delta(
     # the affirmative signal, not noise.
     if (
         not seed and not stop and pending == 0 and pending_files == 0
-        and not acked and not rendered_resources
+        and not acked and not rendered_resources and not card_stale
     ):
         return None
     return "\n".join(lines)
