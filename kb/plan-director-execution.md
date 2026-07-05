@@ -94,6 +94,26 @@ just a shorter flat period until #224 lands. Watch the first few 5h
 firings for silence discipline (should mostly say nothing) before trusting
 the tighter cadence as settled.
 
+**"Didn't fire" false alarm, notify bar widened (2026-07-05):** the watch
+above ran its course fast — after two silent firings (02:48, 07:48 UTC,
+one of which merged PR #230) over a 10h8m stretch, the maintainer reported
+"it didn't fire." Full trace (`.brr/schedule/state.json`, the account
+dominion's git log, GH's `mergedAt` on #230, `brnrd up`'s uptime) confirms
+the scheduler itself has no bug: `schedule.due_entries` fired both ticks
+to the second on the anchored 5h cadence, and the daemon process never
+restarted across the window. The gap was the notify rule, not the clock —
+"only speak on a rank change or a new block" let a tick that shipped real,
+committed work (a PR merge) stay just as silent as a no-op tick, so 10+
+hours of correct operation was indistinguishable from the schedule never
+firing. Fixed in the entry itself (account dominion `schedule.md`, not
+this repo): the tick now also speaks — one line — when it took a
+committed action this beat, closing the ambiguity without turning A4 into
+a chatty heartbeat (pure re-derivation with nothing new still stays
+silent). Lesson for any future ambient `every:` entry: "silence is the
+default outcome" needs a floor of *some* signal distinguishing "ran, did
+nothing" from "ran, did something," or a fresh cadence reads as broken on
+first contact.
+
 ### A5 — diffense reveal re-skin — owner: resident
 
 The maintainer switched diffense off because reading it was boring — the

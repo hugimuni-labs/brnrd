@@ -10296,3 +10296,49 @@ its own delegable ticket (`plan-director-execution.md` §B1, "B2 scope").
 
 Branch: brr/director-tick-5h-cadence. Account dominion (separate repo, no
 remote configured — local-only) committed directly.
+
+## [2026-07-05] fix | Director tick "didn't fire" — false alarm, diagnosed and closed
+
+Maintainer reported (telegram, same thread) that the schedule "didn't
+fire," reading it as a likely daemon bug, and asked it be treated as the
+top priority of the run. Traced end-to-end before touching anything:
+`.brr/schedule/state.json` shows both 5h firings landing exactly 18000s
+apart (02:48:19 UTC, 07:48:19 UTC); the account dominion's git log has a
+real commit per firing, including firing #2 merging PR #230 (GH
+`mergedAt: 2026-07-05T07:49:12Z`); `brnrd up --dev-reload` (pid 734160)
+ran continuously across the whole window with no restart. No scheduler
+bug — `schedule.due_entries`/`_fire_due_schedules` behaved exactly as
+coded.
+
+The actual gap: the director-tick's notify rule ("speak only if the top
+move changed or something newly became blocked") kept *both* ticks
+silent, even though firing #2 shipped real, committed work. Ten hours of
+correct, quiet operation was indistinguishable from the schedule never
+firing — which is exactly the false alarm the maintainer hit, and exactly
+the risk the 2026-07-05 cadence-tightening entry had already named
+("watch the first few firings for silence discipline... before trusting")
+without anyone closing the loop back to the maintainer. Fixed the rule
+itself (account dominion `schedule.md`, not this repo): a tick now also
+sends one line when it took a committed action this beat, alongside the
+existing rank-change/newly-blocked triggers; pure re-derivation with
+nothing new still stays silent. Mirrored the finding into
+[`plan-director-execution.md`](plan-director-execution.md) §A4 and the
+account dominion's ledger, since the next resident to add an ambient
+`every:` entry will hit the same "silent ⇒ looks broken" trap otherwise.
+
+Also picked up two secondary items the maintainer named as next-best
+candidates while the scheduling trace was still running (per "if you feel
+like it, do them in the same run"): commented on
+[#212](https://github.com/Gurio/brr/issues/212) (A2) responding to the
+maintainer's own doubt that the daemon needs to parse `next:` at all —
+traced `conversations.py`'s existing recent-turns selection and found it
+already threads the resident's own prior numbered-options reply into the
+next wake's context for free, so a short "2" reply may not need any new
+parsing/store, only a native inline-keyboard UX would. Recommended
+shrinking the ticket rather than closing or implementing it outright —
+scope call, left for the maintainer. Did not touch B2 (#224) — real work,
+not asked for this run, still the right-sized next candidate per the
+active plan.
+
+Branch: brr/director-tick-false-alarm-notify-bar. Account dominion
+(separate repo, no remote — local-only) committed directly.
