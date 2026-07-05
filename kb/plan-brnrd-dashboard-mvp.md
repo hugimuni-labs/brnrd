@@ -435,12 +435,17 @@ writes for a human). No new backend shape.
   his read is it's "quite stripped down and likely outdated right now,"
   independent of whether it ever gets a Persona-5 skin. That's a distinct
   open item, not closed by the skin-later call:
-  - **Frontend stack quality audit** — not yet done. Needs its own pass:
-    what's the current stack (templates/CSS/JS, HTMX version, build
-    tooling), what's dated, what a baseline "well-built" bar looks like
-    for a dashboard this size, independent of the game-skin question.
-    Candidate for its own plan page once Slice 1 lands (auditing a stack
-    that doesn't exist yet has nothing to look at).
+  - **Frontend stack quality audit — superseded 2026-07-05, replace not
+    audit.** The maintainer moved past an audit: "current frontend stack
+    is likely shit, it is a good time to replace it with something
+    modern, extensible, thoroughly built, responsive, and little-code,
+    easy-to-maintain," explicitly deferring the actual framework/stack
+    choice ("I don't know this field well enough") and setting one bar
+    instead: **"it should survive a fireship review (or alike)."** Not
+    stack-picked here — real implementation work for the slice that
+    rebuilds it. Detail:
+    [`design-dashboard-live-surface.md`](design-dashboard-live-surface.md)
+    §"quota multi-axis, PR/issue extensibility, frontend replaced".
 - **The "vehicles" framing** — confirmed already data: the runner catalog's
   `cost_rank`/`class` spectrum (`design-runner-cores.md`) *is* the resource
   economy — CPS renders spend against it, doesn't invent a second one.

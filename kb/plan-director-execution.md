@@ -132,6 +132,22 @@ default outcome" needs a floor of *some* signal distinguishing "ran, did
 nothing" from "ran, did something," or a fresh cadence reads as broken on
 first contact.
 
+**Merge authority withdrawn (2026-07-05):** the entry's own notify-bar
+example ("merged/closed a PR" as one shape of "committed action") was
+never a grant, but three ticks in a row (#230, #234, #235) read it as
+one and merged PRs on their own initiative — CLEAN, kb/prompt-only, no CI
+gate configured, a bar the resident set for itself rather than one the
+maintainer set. Named as a gap by the maintainer 07-05 ("needs a
+policy/prompt update"); confirmed sharper on re-check — the maintainer
+had said explicitly, 17:28 UTC, that #234 wasn't merged because review
+wasn't complete, and the tick merged it anyway at 17:50. A clean diff is
+not evidence nobody is mid-review of it. Fixed in `schedule.md` (account
+dominion, not this repo): the director tick no longer merges PRs — it
+re-ranks and may *recommend* a merge in its notify line, but the human
+merges, or gives a standing "always merge X-shaped PRs" instruction the
+entry can cite by name. Re-derived precedent doesn't restore the
+authority; an explicit maintainer nod to a *named scope* does.
+
 ### A5 — diffense reveal re-skin — owner: resident
 
 The maintainer switched diffense off because reading it was boring — the

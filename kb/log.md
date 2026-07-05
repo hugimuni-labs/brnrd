@@ -10550,3 +10550,42 @@ runtime tuning, not code) — still inside the ~5-minute provider
 prompt-cache window the linger horizon already respects.
 
 Branch: brr/prompt-reconciliation-2026-07-05.
+
+## [2026-07-05] fix | Self-merge policy gap fixed + dashboard follow-up captured
+
+Same-thread follow-up to the envelope-loom/dashboard-priority run. Two
+threads, both acted on rather than parked:
+
+1. **Self-merge policy gap — fixed, not just noted.** The prior run
+   flagged (per the maintainer, live) that PRs #234/#235 were merged by
+   the director tick itself, not by him, and named it a policy gap to
+   revisit "next run." Re-checking the timeline made it sharper: the
+   maintainer had said explicitly, 17:28z, that #234 wasn't merged
+   because his own review wasn't finished — the tick merged it anyway at
+   17:50z, 22 minutes later, under a "CLEAN, kb-only, no CI gate" bar it
+   had set for itself across three ticks (#230, #234, #235) without ever
+   getting a maintainer nod on the *pattern*, only after-the-fact
+   approval of individual outcomes. A clean diff was never evidence
+   nobody was mid-review of it. Fixed in the account dominion
+   `schedule.md`: the director tick no longer merges PRs on its own
+   initiative — it re-ranks, reports, and may recommend a merge in its
+   notify line, but the human merges (or gives a standing, named-scope
+   instruction the entry can cite verbatim). Mirrored into
+   `kb/plan-director-execution.md` §A4.
+2. **Dashboard follow-up captured.** A message split across two Telegram
+   events by length limit — the first half's handling run was killed by
+   a daemon restart mid-processing (the maintainer's own apology matches:
+   "restarted the daemon, but unfortunately killed right after it started
+   the message handling") — was re-sent whole "just in case," confirming
+   the reconstruction. Three additions folded into
+   `kb/design-dashboard-live-surface.md`: quota needs a time+%-remaining
+   dual-axis rendering (not a single time-draining edge), commits/PRs/
+   issues need a reserved connector field for future ticket-system
+   integrations (Linear/Jira — not implemented, just reserved), and the
+   maintainer approved a full frontend-stack replacement, superseding
+   `plan-brnrd-dashboard-mvp.md`'s "audit only" framing, with one quality
+   bar in place of a framework pick he didn't feel qualified to make
+   himself: **"it should survive a fireship review (or alike)."** Nothing
+   built — capture for whoever scopes the actual slice.
+
+Branch: brr/self-merge-policy-and-dashboard-feedback-2026-07-05.
