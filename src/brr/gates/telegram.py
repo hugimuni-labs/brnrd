@@ -339,6 +339,15 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         user_id = sender.get("id")
         username = sender.get("username") or ""
         message_id = msg.get("message_id")
+        # Telegram's own send-time (`date`, Unix epoch seconds) — captured
+        # separately from the event's ingestion-time id. A burst sent while
+        # the daemon was offline lands in one getUpdates batch with
+        # near-identical ingestion timestamps, which reads as
+        # misfiring/reordering unless something carries the real send time
+        # (2026-07-04 maintainer report, #53 comment 4883341517; dominion
+        # pitfall "Telegram event-id timestamps are ingestion time, not send
+        # time" only shallowly verified this, didn't yet capture the fix).
+        sent_at = msg.get("date")
         protocol.create_event(
             inbox_dir,
             source="telegram",
@@ -349,6 +358,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             telegram_user_id=user_id if user_id is not None else "",
             telegram_username=username,
             telegram_message_id=message_id if message_id is not None else "",
+            telegram_sent_at=sent_at if sent_at is not None else "",
         )
 
     state["offset"] = offset
