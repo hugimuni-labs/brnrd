@@ -265,19 +265,70 @@ def _activity_stats(
     }
 
 
-def _quota_shell_placeholders(runner_stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    shells = [row["shell"] for row in runner_stats if row["shell"] != "unknown"]
-    return [
-        {
-            "shell": shell,
-            "status": "unknown",
-            "windows": [
-                {"label": "5h window", "used": None, "limit": None, "percent": None},
-                {"label": "weekly", "used": None, "limit": None, "percent": None},
-            ],
-        }
-        for shell in shells[:6]
-    ]
+_QUOTA_STALE_SECONDS = 300  # daemon publishes on its ~25-30s poll loop (#237)
+
+
+def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Real per-shell quota windows from the daemons' own reports (#237).
+
+    Reads the last ``PUT /v1/daemons/quota`` snapshot per connected daemon
+    (`src/brr/gates/cloud.py::_quota_snapshot` is the writer). A daemon that
+    hasn't reported inside ``_QUOTA_STALE_SECONDS`` still shows its last
+    numbers, but flagged ``stale`` rather than silently going quiet — the
+    honest fallback the ticket asked for. A shell with active runs
+    (``runner_stats``) but no quota report at all (older daemon build, or
+    cold cache) still renders as an explicit ``unknown`` placeholder card,
+    not omitted — "quota provider pending" beats a missing panel.
+    """
+    repo_ids = {repo.id for repo in repos}
+    real: dict[str, dict[str, Any]] = {}
+    if repo_ids:
+        now = datetime.now(timezone.utc)
+        daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+        for daemon in daemons:
+            reported_at = _dt(daemon.quota_updated_at)
+            if reported_at is None:
+                continue
+            try:
+                shells = json.loads(daemon.quota_json or "[]")
+            except ValueError:
+                shells = []
+            if not isinstance(shells, list):
+                continue
+            stale = (now - reported_at).total_seconds() > _QUOTA_STALE_SECONDS
+            for shell in shells:
+                if not isinstance(shell, dict):
+                    continue
+                name = str(shell.get("shell") or "").strip()
+                if not name:
+                    continue
+                existing = real.get(name)
+                if existing is not None and existing["_reported_at"] >= reported_at:
+                    continue
+                real[name] = {
+                    "shell": name,
+                    "status": "stale" if stale else str(shell.get("status") or "unknown"),
+                    "windows": shell.get("windows") or [],
+                    "_reported_at": reported_at,
+                }
+    out = list(real.values())
+    for row in out:
+        row.pop("_reported_at", None)
+    for row in runner_stats:
+        shell = row["shell"]
+        if shell == "unknown" or shell in real:
+            continue
+        out.append(
+            {
+                "shell": shell,
+                "status": "unknown",
+                "windows": [
+                    {"label": "5h window", "used": None, "limit": None, "percent": None},
+                    {"label": "weekly", "used": None, "limit": None, "percent": None},
+                ],
+            }
+        )
+    return sorted(out, key=lambda row: row["shell"])[:6]
 
 
 def _activity_dashboard_context(request: Request, db: Session, account: Account, *, notice: str | None = None, installation_id: str | None = None) -> dict[str, Any]:
@@ -319,7 +370,7 @@ def _activity_dashboard_context(request: Request, db: Session, account: Account,
         "scheduled_activity_views": scheduled_views,
         "recent_activity_views": recent_activity_views,
         "runner_stats": runner_stats,
-        "runner_quotas": _quota_shell_placeholders(runner_stats),
+        "runner_quotas": _quota_views(db, repos, runner_stats),
         "outbound_event_views": outbound_events,
         "dashboard_stats": _activity_stats(repo_views, activity_views, outbound_events, installed),
     }

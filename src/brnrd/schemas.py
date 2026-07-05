@@ -179,6 +179,39 @@ class PlansOut(PlansReport):
     plans_updated_at: datetime | None = None
 
 
+class QuotaWindowIn(BaseModel):
+    """One quota bucket (``5h window`` / ``weekly``) for a shell."""
+
+    label: str = Field(min_length=1, max_length=40)
+    used: float | None = None
+    limit: float | None = None
+    percent: float | None = None
+    reset: str | None = None
+
+
+class QuotaShellIn(BaseModel):
+    shell: str = Field(min_length=1, max_length=32)
+    status: str = Field(default="unknown", max_length=32)
+    windows: list[QuotaWindowIn] = Field(default_factory=list)
+
+
+class QuotaReport(BaseModel):
+    """Runner-quota snapshot a daemon pushes for itself (#237).
+
+    Replaces this daemon token's whole quota list, same last-write-wins
+    shape as the Activity/Plans mirrors (`ActivityReport`/`PlansReport`) —
+    see `src/brr/gates/cloud.py::_quota_snapshot` for the daemon-side
+    collector this feeds from.
+    """
+
+    shells: list[QuotaShellIn] = Field(default_factory=list)
+
+
+class QuotaOut(BaseModel):
+    shells: list[QuotaShellIn]
+    quota_updated_at: datetime | None = None
+
+
 class PackRelayPost(BaseModel):
     pack: dict[str, Any]
     ttl_s: int | None = None
