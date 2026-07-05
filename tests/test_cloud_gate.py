@@ -322,6 +322,63 @@ def test_loop_publishes_plans_snapshot(tmp_path, monkeypatch):
         assert account_row.decision_ledger_md == "adopted the ToS posture"
 
 
+def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
+    """#237: real per-shell quota windows replace the dashboard's UNKNOWN card."""
+    import json as json_mod
+
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    # Claude's usage scrape only ever caches into a *run's* outbox dir —
+    # exercise the "find the freshest one" path the same real collector uses.
+    run_outbox = brr_dir / "outbox" / "evt-quota-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 61.0}, "week": {"remaining_percentage": 48.0}}},
+                "session_reset": "resets 9:00PM",
+                "week_reset": "resets Jul 10",
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Codex has no on-disk fixture here; stub its live rollout read instead.
+    monkeypatch.setattr(
+        cloud.codex_status,
+        "load_levels",
+        lambda *a, **k: {"quota": {"primary_remaining_percent": 82.0, "secondary_remaining_percent": 70.0}},
+    )
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.quota_updated_at is not None
+        shells = {row["shell"]: row for row in json_mod.loads(daemon.quota_json)}
+    assert shells["claude"]["windows"][0]["percent"] == 61.0
+    assert shells["claude"]["windows"][1]["percent"] == 48.0
+    assert shells["codex"]["windows"][0]["percent"] == 82.0
+    assert shells["codex"]["windows"][1]["percent"] == 70.0
+
+
 def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
