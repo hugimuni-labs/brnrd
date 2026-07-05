@@ -118,6 +118,25 @@ def test_stop_injects_affirmative_zero_pending_signal(tmp_path):
     assert "0 pending event(s)" in ctx
 
 
+def test_post_tool_pending_events_are_framed_as_action_not_telemetry(tmp_path):
+    # 2026-07-05: a maintainer caught two same-thread follow-ups sitting
+    # unacknowledged on the outward-facing .card for 8 minutes despite the
+    # count appearing in every batch — the bare number reads as ambient
+    # telemetry, not something to act on. Non-zero pending now carries an
+    # explicit verb; the zero-pending line stays the plain affirmative.
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}])
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "Address each below" in ctx
+
+    _portal(tmp_path, token="t2", pending=0)
+    out2, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx2 = out2["hookSpecificOutput"]["additionalContext"]
+    assert "0 pending event(s)" in ctx2
+    assert "Address each below" not in ctx2
+
+
 def test_stop_surfaces_unpushed_and_modified_scm(tmp_path):
     _portal(
         tmp_path, token="t1", pending=0,
