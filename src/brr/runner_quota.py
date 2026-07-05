@@ -136,6 +136,37 @@ def summary_from_levels(levels: Mapping[str, Any] | None) -> str | None:
     return None
 
 
+def latest_claude_usage_outbox_dir(brr_dir: Path) -> Path | None:
+    """The most recently written Claude usage-levels snapshot's directory.
+
+    ``claude_usage``/``claude_status`` cache their PTY/result scrapes into a
+    *run's* outbox dir (``.brr/outbox/<event-id>/``), never into ``brr_dir``
+    itself — a shared-level reader that has no "current run" of its own (the
+    schedule-pacing read in ``daemon._fire_due_schedules``, the dashboard
+    quota publish in ``brr.gates.cloud``) has to go find the freshest one.
+    brr is single-flight per dominion, so "freshest mtime" is the same
+    heuristic :func:`codex_status._latest_rollout` uses for Codex. Returns
+    ``None`` when no run has ever cached one (cold daemon, or Codex-only).
+    """
+    from . import claude_usage
+
+    try:
+        candidates = (brr_dir / "outbox").glob(f"*/{claude_usage.SNAPSHOT_NAME}")
+    except OSError:
+        return None
+    best_path: Path | None = None
+    best_mtime = -1.0
+    for candidate in candidates:
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best_mtime = mtime
+            best_path = candidate.parent
+    return best_path
+
+
 def binding_quota_remaining_pct(levels: Mapping[str, Any] | None) -> float | None:
     """The lowest remaining-percent found in a level snapshot's ``quota`` dict.
 
