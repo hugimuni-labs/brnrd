@@ -8,7 +8,7 @@ from brr import hooks
 
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
-            resources=None, budget=None, outbound=None):
+            resources=None, budget=None, outbound=None, card=None):
     payload = {
         "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
         "attention": {
@@ -28,6 +28,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
         payload["scm"] = scm
     if resources is not None:
         payload["resources"] = resources
+    if card is not None:
+        payload["card"] = card
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -191,6 +193,31 @@ def test_scm_unknown_is_silent(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_post_tool_surfaces_stale_card(tmp_path):
+    # 2026-07-05: the card is the one live surface a watching user sees
+    # between replies; unlike SCM, a stale note is a mid-run failure, so it
+    # must render at post-tool, not just at closeout.
+    _portal(
+        tmp_path, token="t1", pending=0,
+        card={"active": True, "text": "old note", "age_seconds": 400,
+              "stale": True},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "no change in 400s" in ctx
+    assert "rewrite .card" in ctx
+
+
+def test_post_tool_silent_when_card_fresh(tmp_path):
+    _portal(
+        tmp_path, token="t1", pending=0,
+        card={"active": True, "text": "fresh note", "age_seconds": 5,
+              "stale": False},
+    )
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    assert "hookSpecificOutput" not in out
 
 
 def test_seed_surfaces_resources_with_known_quota_and_gaps(tmp_path):

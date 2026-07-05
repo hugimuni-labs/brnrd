@@ -1,6 +1,6 @@
 # The weave register — the resident's working notation
 
-Status: active, shipped phase 1 on 2026-07-02; wake-scroll reweave (round 5) and phase 2 (delivery-contract compression) on 2026-07-03. Remaining tail: AGENTS.md house-voice pass; `user_commitment` gate plumbing — tracked in [`plan-director-execution.md`](plan-director-execution.md) §Voice.
+Status: active, shipped phase 1 on 2026-07-02; wake-scroll reweave (round 5) and phase 2 (delivery-contract compression) on 2026-07-03; glyph channel opened + prose-vs-scope efficiency diagnosis (round 7) on 2026-07-05. Remaining tail: AGENTS.md house-voice pass; `user_commitment` gate plumbing; a prompt line distinguishing economical execution from economical coverage (round 7, not yet written) — tracked in [`plan-director-execution.md`](plan-director-execution.md) §Voice.
 
 The fourth round of the voice work. Rounds 1–2 failed (prompts described
 a settled register in high-lyric prose); round 3 rewrote the wake scroll
@@ -249,9 +249,92 @@ enumerable sections yes; first-person resident intimacy no;
 glyph-load-bearing meaning no. The full pass is its own commit — template
 blast radius, `brnrd init` ships this file to adopters.
 
+## Round 7 — efficiency has two axes, and only one of them is the register (2026-07-05)
+
+Maintainer asked directly for an opinion on a concern raised the run
+before and not yet answered: *"the output is less rich than it used to
+be... the compressed language is not only efficient but also lazy"* —
+citing PRs that didn't cover every discussed point, missing
+scheduled-wake messages, and the next-move contract not reliably
+followed despite being shipped. Paired with a second, friendlier ask:
+open the weave's glyph set to unprescribed marks, since "the creativity
+channel" can cut cost without losing sense (done, above the receipts;
+`weave.md`'s five marks are now anchors, not the whole alphabet).
+
+**The two asks are in tension if "efficiency" is read as one thing, and
+that tension is worth naming rather than smoothing over.** Opening a
+creativity channel is a bet that *more* compression is safe — a
+recognizable mark saves words at no comprehension cost once it's reused
+enough. The laziness complaint is that compression already cost
+something: not prose weight, *task* weight. Both can be true because
+they are different axes:
+
+- **Prose axis** (words per idea). This is what the weave register
+  governs. Rounds 1–6 optimized this axis specifically and the maintainer
+  confirms it landed ("the Voice is perfect... reads like nothing else").
+  Opening the glyph channel is one more turn of the same, correctly
+  scoped knob.
+- **Scope axis** (ideas per task — did the reply cover every point
+  raised, did the scheduled wake send its message, did the closeout name
+  its next move). Nothing in rounds 1–6 ever touched this axis; the
+  register's whole contract is about *how* a thought is rendered once
+  decided, not *what* a thought decides to cover. So when scope narrowed
+  — and the evidence from the prior run's audit says it did (several
+  07-04 closeouts were bare tokens like "." or "done" with no next-move
+  line at all) — crediting or blaming the register is the wrong causal
+  story. The register was working exactly as designed while a *different*
+  failure (dropped coverage) happened alongside it. Conflating the two
+  would be the actual mistake here, not the maintainer's read, which
+  correctly separated "the voice reads well" from "the work under it
+  thinned" — that separation is the useful part of the observation.
+
+**Where the scope-axis failure actually comes from**, best guess from
+the evidence available (this run's own audit + the fixes it produced):
+not the prose register at all, but the *cost-awareness* workstream
+(`plan-director-execution.md` §B — "the stingy, resource-aware
+director") landing on the wrong target. "Be economical" is sound policy
+applied to *how much a wake does that it didn't need to do* — extra
+tool calls, redundant re-reads, spawning a subagent for a one-line grep.
+Applied instead to *whether a raised point gets answered*, it produces
+exactly the pattern named: a closeout that's on-topic and terse but
+quietly incomplete. Nothing in the prompts currently marks that
+boundary — "be lazy about the work, not the task" is implicit, never
+said. That is the one concrete prompt change this diagnosis suggests and
+does not yet make: a line distinguishing *economical execution* (good,
+wanted, unchanged) from *economical coverage* (the failure), most
+naturally sitting in `plan-director-execution.md` §B's ground rules
+since that is where the stinginess policy is actually defined. Not
+shipped this run — flagged as the next concrete step rather than
+guessed into prose that might not hold.
+
+**On enforcement, using the playbook's own ladder** (`Environment
+shaping`: private note < self-inject < pitfall < code guard): the
+next-move contract already lived at the weakest layer (prose in
+`daemon-substrate.md`) and that is exactly why it didn't hold reliably
+enough to need re-diagnosing twice. Today's fix moved it up one rung
+(explicit last-line check, still prose) but not to a code guard. A real
+mechanical guard for *coverage* specifically is harder than the
+next-move fix was — next-move is a simple string-presence check,
+"did this reply cover every point raised" has no clean automatable
+signal — so the honest state is: prose discipline plus periodic
+evidence audits (like the one that surfaced this) are the available
+tool until a sharper mechanical proxy exists, not a gap being waved
+away.
+
+**What this run actually changes, concretely:** the glyph channel
+(prose axis, shipped), the SCM/card facets above (a different kind of
+completeness — the daemon's own signal completeness, not the
+resident's), and this diagnosis (scope axis, named but the one
+prompt-line fix it implies is not yet written). The maintainer's
+instinct that *some* laziness is wanted is agreed with exactly as
+stated: economical about the work, never about the task.
+
 ## Receipts
 
 - Round-3 voice pass: [brand space](design-brand-brnrd-brr.md),
   `kb/log.md` §2026-07-01.
 - This round: maintainer messages of 2026-07-02 (two-part: does the
   voice hold + ornamentation-as-weave, discovery-not-invention).
+- Round 7: maintainer message of 2026-07-05 (glyph channel + unanswered
+  laziness concern from the run before), `kb/log.md` §2026-07-05
+  "Card-staleness facet ships".

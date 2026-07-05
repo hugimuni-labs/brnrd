@@ -10441,3 +10441,57 @@ Full suite: 1296 passed.
 
 Same branch/PR as the response-leak and next-move fixes:
 brr/response-text-leak-and-next-move-discipline, PR #232.
+
+## [2026-07-05] feat | Card-staleness facet ships; SCM imperative confirmed already-shipped; glyph channel opened
+
+Maintainer follow-up to the pending-event framing fix, three parts, all
+resolved this run:
+
+1. **"Should SCM get the same imperative framing?"** — already there:
+   `hooks.py::format_delta`'s seed/stop SCM line already ends "commit and
+   let the branch publish before ending," gated on unpushed/modified so a
+   clean tree stays quiet. Kept as-is rather than adding an unconditional
+   durability reminder (maintainer's alternate phrasing) — an always-on
+   line would break the file's own "silence is default, action is signal"
+   design the SCM/pending-event lines both rely on.
+2. **Missing/stale `.card` note → new facet, real gap, not a no.** Unlike
+   SCM there was *no* signal at all for a card that goes silent mid-run —
+   exactly the failure class the maintainer caught live 8 minutes into
+   the previous run. Shipped: `daemon.py::_drain_agent_card` now stamps
+   `card_state["written_monotonic"]` on every write or withdrawal;
+   `_write_live_portal_state` computes `card.age_seconds` (falls back to
+   the run's own `start_monotonic` when never written) and `card.stale`
+   (> 240s, the maintainer's own estimate); `_change_token` excludes the
+   ticking `age_seconds` the same way it already excludes
+   `budget.elapsed_seconds`, so only the `stale` flip counts as
+   attention-worthy change. `hooks.py::format_delta` renders a "no change
+   in Ns — rewrite .card" line — at **every** phase, not just seed/stop,
+   since a mid-run silent card is exactly the failure this guards (SCM
+   stays boundary-only; card staleness is deliberately not). Live proof
+   the gap was real: a same-thread follow-up arrived naming the exact
+   scenario ("6 minutes in: no note on the status card") while this fix
+   was still being built. Tests: `test_hooks.py::test_post_tool_surfaces_stale_card`,
+   `test_post_tool_silent_when_card_fresh`,
+   `test_outbox.py::test_live_portal_state_flags_stale_card`. Full suite:
+   1299 passed.
+3. **Weave glyph creativity — channel opened.** `weave.md`'s five marks
+   (`✓ ✗ ? → Δ`) now read explicitly as anchors, not the closed alphabet:
+   a wake may mint an unlisted mark when it earns its place by the
+   existing strike-rule (the mark it replaces a clause) and stays stable
+   in meaning once reused. What stays closed is importing another
+   system's fixed glyph-set wholesale — that was always the actual
+   target of "an imported alphabet is someone else's handwriting," now
+   said without also gatekeeping self-minted marks.
+
+Also addressed, same message: the maintainer's still-open "stinginess/
+laziness" concern from the prior run (output completeness dropping —
+PRs not covering discussed points, missed scheduled-wake messages, the
+next-move gap that motivated the last fix) — diagnosed as a *different
+axis* from prose compression: the register only ever targeted words per
+idea, never ideas per task, so treating the observed scope-drops as a
+register problem would misdiagnose them. Full reasoning in
+`kb/design-weave-register.md` §Round 7 rather than duplicated here; the
+short version carried to the reply.
+
+`kb/design-weave-register.md` §Round 7 added. Branch:
+brr/card-staleness-and-glyph-channel.
