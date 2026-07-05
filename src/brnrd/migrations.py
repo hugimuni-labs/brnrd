@@ -27,6 +27,8 @@ def run_startup_migrations(engine: Engine) -> None:
             _migrate_github_installed_repos(conn)
         if _table_exists(conn, "repos"):
             _migrate_repos(conn)
+        if _table_exists(conn, "daemons"):
+            _migrate_daemons(conn)
 
 
 def _table_exists(conn: Connection, table_name: str) -> bool:
@@ -100,6 +102,12 @@ def _migrate_repos(conn: Connection) -> None:
     # CPS (Current Planned State) — repo-level plan mirror (CS5 active.md).
     conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS plan_md TEXT DEFAULT ''"))
     conn.execute(text("ALTER TABLE repos ADD COLUMN IF NOT EXISTS plan_updated_at TIMESTAMP"))
+
+
+def _migrate_daemons(conn: Connection) -> None:
+    # Runner-quota snapshot mirror (#237) — see models.Daemon.quota_json.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_json TEXT DEFAULT '[]'"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_updated_at TIMESTAMP"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:
