@@ -136,7 +136,18 @@ def parse_result(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def result_text(payload: dict[str, Any], fallback: str) -> str:
-    """Return the user-facing reply carried by Claude result JSON."""
+    """Return the user-facing reply carried by Claude result JSON.
+
+    ``fallback`` exists for the genuinely-not-JSON caller path; when we're
+    here at all, *payload* already parsed as the CLI's structured result
+    envelope, so ``fallback`` is normally the same raw JSON text that
+    envelope came from. Falling back to it when ``result``/``errors`` are
+    both empty would hand the caller the JSON blob back as if it were the
+    reply — observed for real on a run whose stream aborted mid-turn
+    (``terminal_reason: aborted_streaming``, ``result: ""``, no ``errors``),
+    which leaked the raw envelope into the conversation history as that
+    run's "response". Surface a diagnostic instead of the envelope.
+    """
     result = payload.get("result")
     if isinstance(result, str) and result.strip():
         return result.rstrip() + "\n"
@@ -145,6 +156,12 @@ def result_text(payload: dict[str, Any], fallback: str) -> str:
         parts = [str(item).strip() for item in errors if str(item).strip()]
         if parts:
             return "\n".join(parts) + "\n"
+    if isinstance(result, str):
+        # Valid JSON envelope, but neither a usable result nor errors — the
+        # raw envelope is never an appropriate reply.
+        reason = payload.get("terminal_reason") or payload.get("stop_reason")
+        detail = f": {reason}" if reason else ""
+        return f"(runner produced no reply text{detail})\n"
     return fallback
 
 

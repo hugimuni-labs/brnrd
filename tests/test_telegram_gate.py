@@ -30,6 +30,7 @@ def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
                         "chat": {"id": 111},
                         "from": {"id": 41, "first_name": "Ada", "username": "ada_l"},
                         "text": "first task",
+                        "date": 1751000000,
                     },
                 },
                 {
@@ -62,6 +63,13 @@ def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
     assert [event["telegram_message_id"] for event in events] == [501, 502]
     assert [event["telegram_user_id"] for event in events] == [41, 42]
     assert [event["telegram_username"] for event in events] == ["ada_l", "grace_h"]
+    # Telegram's own send-time is captured separately from the event's
+    # ingestion-time id, so a burst sent while offline (landing in one
+    # getUpdates batch with near-identical ingestion timestamps) can still
+    # be ordered by when it was actually sent. Missing ``date`` degrades to
+    # an empty string rather than an error.
+    assert events[0]["telegram_sent_at"] == 1751000000
+    assert events[1]["telegram_sent_at"] == ""
 
 
 def test_replies_are_sent_to_originating_chat(tmp_path, monkeypatch):
