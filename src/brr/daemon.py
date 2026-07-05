@@ -137,6 +137,12 @@ _CARD_CONTROL_NAME = ".card"
 # Same intent as ``_format_agent_note``'s render cap: keep a runaway
 # resident from flooding a thread. Excess bytes are truncated.
 _CARD_CONTROL_MAX_BYTES = 4096
+# Staleness bar for the ``.card`` narration: the maintainer's own estimate
+# (2026-07-05) for how long a blank-or-unchanged card can sit on the one
+# surface a watching user sees before it reads as neglect rather than quiet
+# work. Mirrors the pending-event framing fix the same day — an
+# attention-worthy silence needs to surface as a signal, not stay ambient.
+_CARD_STALE_SECONDS = 240
 _INTERNAL_EVENT_SOURCES = {"schedule"}
 _RUNNER_POLICY_PROPOSAL_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
 _RUNNER_POLICY_REPLY_RE = re.compile(
@@ -1522,7 +1528,7 @@ def _run_worker(
     # only asks; the daemon stays the sole drainer (see _drain_outbox / the
     # design doc).
     flush_path = outbox_dir / hooks_mod.FLUSH_SIGNAL_NAME
-    card_state: dict[str, str] = {}
+    card_state: dict[str, object] = {}
     run_started_monotonic = time.monotonic()
 
     def _runner_runtime(
@@ -2592,6 +2598,15 @@ def _change_token(payload: dict[str, object]) -> str:
             key: value for key, value in budget.items()
             if key != "elapsed_seconds"
         }
+    # ``card.age_seconds`` ticks every heartbeat like ``elapsed_seconds``
+    # does; only the ``stale`` flip (like ``long_running``) should count as
+    # attention-worthy change.
+    card = stable.get("card")
+    if isinstance(card, dict):
+        stable["card"] = {
+            key: value for key, value in card.items()
+            if key != "age_seconds"
+        }
     encoded = json.dumps(
         stable,
         sort_keys=True,
@@ -2617,7 +2632,7 @@ def _write_live_portal_state(
     budget_seconds: float | None = None,
     hard_cap_seconds: float | None = None,
     keepalive_path: Path | None = None,
-    card_state: dict[str, str] | None = None,
+    card_state: dict[str, object] | None = None,
     output_stats: dict[str, int] | None = None,
     start_monotonic: float | None = None,
     work_dir: Path | None = None,
@@ -2649,6 +2664,18 @@ def _write_live_portal_state(
         elapsed = (
             int(time.monotonic() - start_monotonic)
             if start_monotonic is not None else None
+        )
+        # Card age: seconds since the note last changed (write *or*
+        # withdrawal), falling back to the run's own start when the card
+        # has never been touched — a wake that never writes a note is, from
+        # the watching user's side, indistinguishable from one whose note
+        # went stale the moment it woke up.
+        card_written_monotonic = (
+            (card_state or {}).get("written_monotonic") or start_monotonic
+        )
+        card_age = (
+            time.monotonic() - card_written_monotonic
+            if isinstance(card_written_monotonic, (int, float)) else None
         )
         run_levels, run_level_slots = _collect_levels(
             runner_name, outbox_dir, work_dir, refresh=refresh_levels
@@ -2692,6 +2719,12 @@ def _write_live_portal_state(
             "card": {
                 "active": bool(card_text),
                 "text": card_text,
+                "age_seconds": (
+                    int(card_age) if card_age is not None else None
+                ),
+                "stale": bool(
+                    card_age is not None and card_age > _CARD_STALE_SECONDS
+                ),
             },
             "budget": {
                 "elapsed_seconds": elapsed,
@@ -3127,7 +3160,7 @@ def _drain_agent_card(
     task: Run,
     event_id: str,
     card_path: Path | None,
-    state: dict[str, str],
+    state: dict[str, object],
 ) -> bool:
     """Promote the agent-composed card narration into a ``card_composed`` packet.
 
@@ -3156,6 +3189,7 @@ def _drain_agent_card(
         if not has_last or state["last"] == "":
             return False
         state["last"] = ""
+        state["written_monotonic"] = time.monotonic()
         emit(
             "card_composed",
             run_id=task.id,
@@ -3177,6 +3211,7 @@ def _drain_agent_card(
     if has_last and state["last"] == body:
         return False
     state["last"] = body
+    state["written_monotonic"] = time.monotonic()
     emit(
         "card_composed",
         run_id=task.id,
