@@ -599,7 +599,10 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     assert payload["outbound"]["replies_other"] == 2
     assert payload["outbound"]["outbound_messages"] == 3
     assert payload["outbound"]["pending_outbox_files"] == ["draft.md"]
-    assert payload["card"] == {"active": True, "text": "working"}
+    assert payload["card"]["active"] is True
+    assert payload["card"]["text"] == "working"
+    assert payload["card"]["stale"] is False
+    assert isinstance(payload["card"]["age_seconds"], int)
     assert payload["resources"]["runner"]["quality_escalation"]["name"] == (
         "claude-opus"
     )
@@ -632,6 +635,58 @@ def test_live_portal_state_file_summarizes_run_attention(tmp_path):
     payload2 = json.loads(path.read_text(encoding="utf-8"))
     assert payload2["change_token"] == first_token
     assert payload2["budget"]["elapsed_seconds"] >= payload["budget"]["elapsed_seconds"]
+
+
+def test_live_portal_state_flags_stale_card(tmp_path):
+    # 2026-07-05: a card that hasn't changed in a while is itself a signal
+    # the resident should see — mirrors the pending-event framing fix from
+    # the same day. ``written_monotonic`` far enough in the past (or a card
+    # never written at all, falling back to ``start_monotonic``) crosses the
+    # maintainer's own 240s bar.
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    outbox = brr_dir / "outbox" / "evt-A"
+    outbox.mkdir(parents=True)
+    current_path = protocol.create_event(inbox, source="github", body="current")
+    current = protocol.list_pending(inbox)[0]
+    protocol.set_status(current, "processing")
+    task = Run(
+        id="run-1", event_id=current["id"], body="work", status="running",
+        env="host", meta={"branch_name": "brr/live-state"},
+    )
+
+    # Never written at all: age tracks the run's own elapsed time.
+    path = daemon._write_live_portal_state(
+        outbox, inbox, current["id"], task, phase="running",
+        card_state={}, start_monotonic=daemon.time.monotonic() - 300,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["card"]["stale"] is True
+    assert payload["card"]["age_seconds"] >= 240
+
+    # Written long ago, run itself younger than the card write.
+    path = daemon._write_live_portal_state(
+        outbox, inbox, current["id"], task, phase="running",
+        card_state={
+            "last": "old note",
+            "written_monotonic": daemon.time.monotonic() - 300,
+        },
+        start_monotonic=daemon.time.monotonic() - 1,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["card"]["stale"] is True
+
+    # Fresh write stays quiet.
+    path = daemon._write_live_portal_state(
+        outbox, inbox, current["id"], task, phase="running",
+        card_state={
+            "last": "fresh note",
+            "written_monotonic": daemon.time.monotonic(),
+        },
+        start_monotonic=daemon.time.monotonic() - 300,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["card"]["stale"] is False
 
 
 def test_interim_response_packet_updates_card(tmp_path):
