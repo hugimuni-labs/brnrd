@@ -220,3 +220,30 @@ def test_binding_quota_remaining_pct_ignores_missing_fields_in_mix():
         }
     }
     assert runner_quota.binding_quota_remaining_pct(levels) == 60.0
+
+
+def test_latest_claude_usage_outbox_dir_picks_freshest(tmp_path):
+    """claude_usage caches into a *run's* outbox dir, never brr_dir itself —
+    the shared-level readers (schedule pacing, dashboard quota publish) have
+    to find the freshest one a recent run left behind."""
+    import time
+
+    brr_dir = tmp_path / ".brr"
+    older = brr_dir / "outbox" / "evt-older"
+    newer = brr_dir / "outbox" / "evt-newer"
+    older.mkdir(parents=True)
+    newer.mkdir(parents=True)
+    (older / ".claude-usage-levels.json").write_text('{"quota": {"buckets": {"session": {"remaining_percentage": 10.0}}}}', encoding="utf-8")
+    time.sleep(0.01)
+    (newer / ".claude-usage-levels.json").write_text('{"quota": {"buckets": {"session": {"remaining_percentage": 90.0}}}}', encoding="utf-8")
+
+    result = runner_quota.latest_claude_usage_outbox_dir(brr_dir)
+
+    assert result == newer
+
+
+def test_latest_claude_usage_outbox_dir_none_when_no_snapshot_cached(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    (brr_dir / "outbox" / "evt-empty").mkdir(parents=True)
+    assert runner_quota.latest_claude_usage_outbox_dir(brr_dir) is None
+    assert runner_quota.latest_claude_usage_outbox_dir(tmp_path / "missing" / ".brr") is None
