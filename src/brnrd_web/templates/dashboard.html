@@ -171,7 +171,7 @@
                   <div class="quota-head"><strong>{{ quota.shell }}</strong><span>{{ quota.status }}</span></div>
                   {% for window in quota.windows %}
                     <div class="quota-window">
-                      <div><span>{{ window.label }}</span><small>{% if window.used is none %}unknown{% else %}{{ window.used }} / {{ window.limit }}{% endif %}</small></div>
+                      <div><span>{{ window.label }}</span><small>{% if window.percent is not none %}{{ "%.0f"|format(window.percent) }}% left{% if window.reset %} · {{ window.reset }}{% endif %}{% elif window.used is not none %}{{ window.used }} / {{ window.limit }}{% else %}unknown{% endif %}</small></div>
                       <div class="quota-bar"><span style="width: {{ window.percent or 0 }}%"></span></div>
                     </div>
                   {% endfor %}

@@ -149,9 +149,19 @@ def test_fire_due_noop_when_nothing_due(tmp_path):
 
 
 def _write_quota_cache(brr_dir, remaining_pct):
-    """Drop a levels cache at the shared runtime dir, as the scheduler-tick
-    quota read does (no per-run outbox exists for an account-wide tick)."""
-    claude_usage.write_snapshot(brr_dir, {
+    """Drop a levels cache where a recent run actually leaves one.
+
+    claude_usage only ever caches into a *run's own* outbox dir
+    (``.brr/outbox/<event-id>/``) — never ``brr_dir`` itself, since an
+    account-wide scheduler tick has no "current run" of its own. Before the
+    `runner_quota.latest_claude_usage_outbox_dir` fix, `_fire_due_schedules`
+    read `brr_dir` directly and could never see a real cache in production;
+    this fixture now writes to the same per-run location the fixed read
+    actually searches (`kb/plan-director-execution.md` §B2).
+    """
+    outbox_dir = brr_dir / "outbox" / "evt-quota-cache"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    claude_usage.write_snapshot(outbox_dir, {
         "source": "claude /usage PTY",
         "quota": {
             "summary": f"week {remaining_pct}% left",

@@ -164,6 +164,27 @@ def put_plans(payload: schemas.PlansReport, principal: Principal = Depends(requi
     )
 
 
+@router.put("/quota", response_model=schemas.QuotaOut)
+def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon's runner-quota snapshot (#237).
+
+    Mirrors the Activity/Plans publish shape: the daemon owns the read
+    (`src/brr/gates/cloud.py::_quota_snapshot`), this endpoint just stores
+    the latest report so `/dashboard` doesn't need to reach the daemon's
+    own `.brr/` cache directly.
+    """
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        raise HTTPException(status_code=404, detail="no daemon registered for this token")
+    now = datetime.now(timezone.utc)
+    daemon.quota_json = json.dumps([shell.model_dump() for shell in payload.shells], separators=(",", ":"))
+    daemon.quota_updated_at = now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    return schemas.QuotaOut(shells=payload.shells, quota_updated_at=now)
+
+
 @router.get("/inbox", response_model=schemas.InboxResponse)
 def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
     settings = request.app.state.settings
