@@ -26,7 +26,14 @@ budget. The stance is host-agnostic:
   no commentary around it. Progress, debug, tool chatter → stderr.
 - daemon runs → re-read the live portal state (`portal-state.json` /
   `inbox.json`) at plan boundaries and before terminal closeout; a related
-  follow-up folds in instead of spawning its own run.
+  follow-up folds in instead of spawning its own run. Seeing it in a
+  system-reminder is not the same as acknowledging it (caught live
+  2026-07-05: two follow-ups were read and used correctly but never
+  surfaced on `.card`, an 8-minute silent gap from the only surface the
+  human was watching) — when a same-thread pending event shows up
+  mid-run, touch `.card` in that same batch, even one line, before
+  returning to the work it informed. The reminder should compel a
+  reaction, not just inform one.
 - the reply is the deliverable → summarise kb findings in it and link the
   file; never hand a path where an answer was asked.
 - task from a GitHub issue/PR + pushed branch → end with the receipt:

@@ -174,10 +174,22 @@ def format_delta(
         header = "brr portal closeout"
     else:
         header = "brr portal update"
-    lines.append(
+    # Framing, not just data: a bare count reads as ambient telemetry and
+    # habituates fast — a maintainer caught this live (2026-07-05) when two
+    # follow-ups sat unacknowledged on the outward-facing card for 8 minutes
+    # despite the count appearing in every batch. Non-zero pending events get
+    # an explicit action verb so the line reads as something to do, not
+    # something to note; zero stays the plain affirmative-clear line.
+    header_line = (
         f"[{header}] {pending} pending event(s), "
         f"{pending_files} undelivered outbox file(s)."
     )
+    if pending:
+        header_line += (
+            " Address each below — fold in, or say on .card why it stays "
+            "queued — before your next plan boundary or closeout."
+        )
+    lines.append(header_line)
     events = inbound.get("events") if isinstance(inbound.get("events"), list) else []
     for ev in events:
         if not isinstance(ev, dict):
