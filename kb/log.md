@@ -10266,3 +10266,33 @@ it landing. Worth a glance at the next wake's injected context.
 
 Branch: brr/comaintainer-tick-and-tos-budget. Account dominion (separate
 repo, no remote configured — local-only) committed directly: `0a8b87f`.
+
+## [2026-07-05] implement | Director tick cadence tightened 24h → 5h; injection pipe confirmed live
+
+Follow-up to the previous entry, same telegram thread. Confirmation first:
+this run's own wake carried an "Active inter-run plan" block populated
+from `plans/Gurio__brr/active.md` — the open question from 2026-07-04
+("not yet confirmed: whether the daemon's next wake actually renders
+[it]") is answered yes, the pipe works end-to-end
+(`_build_inter_run_plan_block`/`_publish_plans` → wake injection).
+
+Maintainer then judged the 24h director-tick interval too infrequent and
+asked for "more often/flexible," floating "5h same as window?" — read as
+the provider's 5h anti-burst session window named in B6
+([`plan-director-execution.md`](plan-director-execution.md) §B6), a real
+anchor rather than a round-number guess. Changed the account dominion's
+`schedule.md` `director tick` entry to `every: 5h` and updated the prose
+(cadence rationale, "daily" → "5h" language) in that file, the ledger, the
+plan file, and this repo's `plan-director-execution.md` A4 section to
+match.
+
+Named the honest limit again, since it's easy to conflate "more frequent"
+with "flexible": B1's quota-aware stretch/pause floors are coded and
+tested but B2's live per-tick quota read is still inert in production (the
+scheduler reads a shared cache nothing writes yet). So this is a tighter
+*fixed* interval, not a quota-bent one — true flexibility still waits on
+#224. Didn't chase B2 in this run; it wasn't asked for, and it's sized as
+its own delegable ticket (`plan-director-execution.md` §B1, "B2 scope").
+
+Branch: brr/director-tick-5h-cadence. Account dominion (separate repo, no
+remote configured — local-only) committed directly.

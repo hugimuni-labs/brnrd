@@ -83,9 +83,16 @@ to the resident's own `schedule.md` — ahead of A3's formal ranking
 discipline, on the reasoning that "the file has real content and a daily
 re-check" beats "wait for the ideal version." Named caveat in the entry
 itself: B2's live per-tick quota read is inert in production, so this ticks
-on a flat interval, not yet quota-bent per B1's policy. Watch the first
-few firings for silence discipline (should mostly say nothing) before
-trusting the cadence as settled.
+on a flat interval, not yet quota-bent per B1's policy.
+
+**Cadence tightened 2026-07-05:** maintainer judged 24h too infrequent,
+asked for "more often/flexible," floating 5h — matching the provider's 5h
+anti-burst session window (§B6 below). Changed to `every: 5h`. The
+"flexible" half is still unmet: B2 remains inert, so this is a tighter
+fixed interval, not a quota-bent one — same open dependency as before,
+just a shorter flat period until #224 lands. Watch the first few 5h
+firings for silence discipline (should mostly say nothing) before trusting
+the tighter cadence as settled.
 
 ### A5 — diffense reveal re-skin — owner: resident
 
