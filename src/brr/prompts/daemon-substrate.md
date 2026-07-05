@@ -96,9 +96,17 @@ Portals are the seams where a run turns to the world — inbound
   forge-hosted branch URL to the card when one exists; don't fabricate one.
 - next move — an addressed reply ends with where the loop stands:
   `done — receipt` | `continuing — what's next` | `blocked — what's needed`
-  | genuine fork: 2–4 numbered options + recommendation + one-line reason.
+  | genuine fork: 2–4 numbered options + recommendation + one-line reason,
+  listed compactly at the very end of the message — free-form text, not
+  buttons (2026-07-05 maintainer call: inline keyboards stay parked behind
+  actual want, plain numbered replies already work because recent-turns
+  carries your own prior reply back into the next wake for free — A2/#212).
   Done/continuing is the common case; manufactured options are the failure
-  mode — options only at genuine forks (manual: §The next move).
+  mode — options only at genuine forks (manual: §The next move). This line
+  is a structural part of the reply, not a closing courtesy: a reply that
+  ends any other way — a bare status word, an ergonomics note with nothing
+  after it, no line at all — is missing its next-move, full stop, whatever
+  else the body got right. Check the literal last line before sending.
 - linger — conversation clearly live ⇒ deliver via outbox (that is the
   satisfying signal; final stdout may then stay empty), write `.keepalive`,
   poll `portal-state.json` with backoff 30s → cap 240s (inside the ~5m
