@@ -10495,3 +10495,58 @@ short version carried to the reply.
 
 `kb/design-weave-register.md` §Round 7 added. Branch:
 brr/card-staleness-and-glyph-channel.
+
+## [2026-07-05] fix | Boot-prompt reconciliation pass
+
+Maintainer asked for a full holistic re-read of everything injected at
+wake time, six threads in one message. Resolved to the depth each earned
+(full reasoning: `kb/design-weave-register.md` §Round 8):
+
+1. **Economical-execution-vs-coverage line — shipped.** The one concrete
+   follow-up named in §Round 7 but not yet written: added under
+   `plan-director-execution.md`'s Workstream B header, marking "be
+   economical" as binding execution (tool calls, re-reads, delegation)
+   and never coverage (whether a raised point gets answered).
+2. **Prompt accretion — trimmed.** Found exactly four inline
+   `(maintainer, DATE: ...)`-style citations across `weave.md`, `run.md`,
+   `daemon-substrate.md` (all from the last two days) restating what the
+   surrounding sentence already said. Cut the date/attribution framing,
+   kept the one genuinely instructive worked example (run.md's `.card`
+   near-miss). `identity-core.md` had none — the pattern is specific to
+   the fast-iterating operational prompts.
+3. **`introspection.md` ↔ `weave.md` — one missing cross-link, added.**
+   They govern different things (what to look at vs. what register to
+   say it in); introspection.md's mandated "ergonomics note" is
+   user-facing prose that unfolds per weave.md's boundary rule, and
+   nothing said so until now.
+4. **The "card" naming collision — named, not resolved.** Two unrelated
+   things share the name: the outbox `.card` progress-note file
+   (user-facing, already labeled "note:" in its rendering) and
+   `design-resident-boundary.md` §7's "boundary state card" (the injected
+   budget/resources capsule, resident-facing only). Recommended renaming
+   the latter (candidate: "gauge" / "envelope gauge") since it's two days
+   old and purely internal, and leaving the former alone since it's
+   already shared live vocabulary. Left as an open fork for the
+   maintainer — cosmetic but not zero-cost, and genuinely their call.
+5. **Second-person address — re-affirmed.** LLM instruction-following
+   really does track better on second-person imperative, so the
+   product-owned prompts' "you" stays deliberate. Real gap found: the
+   dominion playbook — the one place first-person was always licensed —
+   is still written in inherited "you," never actually exercised as "I"
+   by any resident wake. Named as a live experiment for a quieter wake,
+   not rewritten this run.
+6. **Storytelling in the internal weave — checked, holds.** Compression
+   into marks hasn't eaten narrative continuity; the register puts prose
+   *between* coordinates and deltas by design, and "why" (vs. "what")
+   already routes to kb/ledger prose, exempt from the register.
+
+Also, live and separately actionable: `daemon.py`'s automatic
+`delivered · attending` floor (#219, confirmed already shipped) defaults
+to a 90-second dwell, far short of the agent-driven linger's 10–15m
+horizon — not enough time for a human to read a dense reply and answer
+before a follow-up becomes a fresh cold wake. Bumped
+`delivery.post_delivery_attend_seconds` to 240 in `.brr/config` (local
+runtime tuning, not code) — still inside the ~5-minute provider
+prompt-cache window the linger horizon already respects.
+
+Branch: brr/prompt-reconciliation-2026-07-05.

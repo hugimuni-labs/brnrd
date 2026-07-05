@@ -142,6 +142,15 @@ Judgment-heavy presentation work; keep resident-side. Blocked by: A1, A2.
 
 ## Workstream B — the stingy, resource-aware director
 
+**Ground rule (added 2026-07-05, `design-weave-register.md` §Round 7):**
+"be economical" binds *execution* — extra tool calls, redundant re-reads,
+spawning a subagent for a one-line grep, generating unneeded work — never
+*coverage*. Whether a raised point gets answered, a scheduled message gets
+sent, a closeout names its next move: full stop, every time, regardless of
+how tersely the answer is then rendered. Economical execution is this
+workstream's whole mandate; economical coverage is not a thing, it is the
+failure mode B1/B3's stinginess policy must not be read as licensing.
+
 ### B1 — quota-aware pacing policy (design + prompt) — owner: resident — [#214](https://github.com/Gurio/brr/issues/214) — *shipped 2026-07-04*
 
 The policy seam named in the design's telemetry note: per-Core quota

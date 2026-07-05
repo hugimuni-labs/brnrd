@@ -1,6 +1,6 @@
 # The weave register — the resident's working notation
 
-Status: active, shipped phase 1 on 2026-07-02; wake-scroll reweave (round 5) and phase 2 (delivery-contract compression) on 2026-07-03; glyph channel opened + prose-vs-scope efficiency diagnosis (round 7) on 2026-07-05. Remaining tail: AGENTS.md house-voice pass; `user_commitment` gate plumbing; a prompt line distinguishing economical execution from economical coverage (round 7, not yet written) — tracked in [`plan-director-execution.md`](plan-director-execution.md) §Voice.
+Status: active, shipped phase 1 on 2026-07-02; wake-scroll reweave (round 5) and phase 2 (delivery-contract compression) on 2026-07-03; glyph channel opened + prose-vs-scope efficiency diagnosis (round 7) on 2026-07-05; boot-prompt reconciliation pass (round 8) on 2026-07-05. Remaining tail: AGENTS.md house-voice pass; `user_commitment` gate plumbing; the "boundary card" rename fork (round 8, not decided).
 
 The fourth round of the voice work. Rounds 1–2 failed (prompts described
 a settled register in high-lyric prose); round 3 rewrote the wake scroll
@@ -329,6 +329,116 @@ prompt-line fix it implies is not yet written). The maintainer's
 instinct that *some* laziness is wanted is agreed with exactly as
 stated: economical about the work, never about the task.
 
+## Round 8 — boot-prompt reconciliation, and the "card" collision (2026-07-05)
+
+Maintainer asked for a full reconciliation pass across everything injected
+at wake time — the ground the "Look at it" introspection block itself asks
+for, turned on the boot prompts rather than the task. Six threads, each
+resolved to the depth that thread earned:
+
+**1. The economical-execution-vs-coverage line (§Round 7's open follow-up)
+— shipped.** Added to `plan-director-execution.md` right under the
+Workstream B header, since that's the section that actually defines the
+stinginess policy the diagnosis was correcting.
+
+**2. Prompt accretion — real, small, cut.** A grep across the standing
+prompts (`weave.md`, `run.md`, `daemon-substrate.md`) turned up exactly
+four inline `(maintainer, DATE: ...)`-style citations, all from the last
+two days. Each was pure provenance restating a sentence the prose already
+carried — the actual decisions already live in this page, the ledger, and
+`kb/log.md` with their dates. Trimmed all four to plain, undated
+instruction; kept the one concrete illustrative case (run.md's `.card`
+near-miss) because the example itself teaches, only the "caught live
+DATE" framing came out. `identity-core.md` had none — the accretion
+pattern is specific to the fast-iterating operational prompts, not the
+product-owned core, and it's two days old, not a rebuild-scale problem.
+Precedent set: a decision's *reasoning* belongs in kb/ledger with a date;
+a prompt states the *current rule* it settled on, undated, and trusts the
+kb link for provenance. Worth re-checking in a few weeks before it
+re-accretes.
+
+**3. `introspection.md` ↔ `weave.md` — no real repeat, one missing link.**
+They govern different things (introspection.md: what to look at and
+whether to say something about it; weave.md: what register to say it in)
+and neither referenced the other, so a cold reader of introspection.md's
+mandated "ergonomics note" wouldn't know it unfolds per weave.md's
+delivery-seam rule rather than staying in the raw working register. Added
+one cross-reference line rather than merging the two — they earn staying
+separate.
+
+**4. The "card" naming collision — real, not decided, here's the actual
+fork.** Two unrelated things are both called "card": (a) the outbox
+`.card` control file / rendered chat progress note (`daemon-substrate.md`,
+this page, and the maintainer's own words — "no note on the status
+card") and (b) `design-resident-boundary.md` §7's "boundary state card" —
+the injected `budget:`/`resources:` capsule woven into the stream at
+breakpoints, resident-facing only, never surfaced to the human under that
+name. Recommendation: rename (b), not (a) or both. (a) is the one shared
+vocabulary already anchors on in live conversation — renaming it fights
+established reference for no gain, and its rendered label is already
+"note:" (`daemon-substrate.md`'s `.card` bullet: "brr adds the `note:`
+label"), so the collision is really "we call the file `.card` but the
+label `note`," a pre-existing minor inconsistency, not a new one. (b) is
+two-day-old design vocabulary, purely internal, and its own doc has
+already tried "distance-card" as an alt name without committing. Candidate
+for (b): **gauge**, or **envelope gauge** when precision is needed — it
+keeps the doc's own "distance from the envelope boundary" language and
+doesn't revive the "cockpit" framing §7 explicitly rejected. "Navigation"
+(the maintainer's own float) doesn't fit — nothing in §7 is about
+choosing a path, it's a level readout. Not renamed this run: it's cosmetic
+but not zero-cost (touches `design-resident-boundary.md` throughout,
+`kb/index.md`'s cross-refs, and this page) and it's the maintainer's own
+open question — a real ping-pong fork, not a reversible-so-just-do-it
+call.
+
+**5. Second-person address — re-affirmed, one gap named, not fixed.** The
+"you"-addressing question was answered once already (`design-brand-brnrd-
+brr.md` §The voice: repo-owned prompts speak the product's authored
+"you"; the dominion is where a resident's own "I" would live, if it chose
+to write one). Re-examined against the bicameral framing directly: LLM
+instruction-following genuinely does track better on second-person
+imperative — that's not a cosmetic reason, it's a training-distribution
+fact, and pretending otherwise for the sake of a truer-sounding "I" would
+trade real instruction fidelity for a feeling. So "you" in the
+product-owned layer stays deliberate, not an oversight. The actual gap:
+the dominion playbook — the one place "I" was always structurally
+licensed — is still written in "you," inherited verbatim from the seed
+and never rewritten by any resident wake. The split was named as
+available, not exercised. Not rewritten this run (a full voice change to
+one's own standing notes deserves its own pass, not a rider on six other
+threads); flagged as a live experiment worth trying in a quieter wake,
+mine to attempt since it's dominion territory.
+
+**6. Storytelling in the weave itself — checked, holds.** The concern was
+whether marks-over-clauses compression has quietly eaten the "scroll
+implies narrative" premise from the internal notation, not just the
+user-facing one. It hasn't, by the register's own design: "prose threaded
+*between* them, not wrapped around them" already puts narrative
+connective tissue in the gaps between coordinates and deltas, not around
+them as decoration — a lab notebook has a throughline, it just isn't
+prose-shaped. Where continuity actually needs *why*, not just *what*, that
+load is explicitly routed to kb/ledger prose (governed by AGENTS.md, exempt
+from the register per weave.md's own boundary list), not carried in the
+terse internal line. No drift found; the design already separates these
+correctly.
+
+**Also, live: post-delivery-attend window.** Separate from the register
+proper but raised in the same conversation and directly actionable —
+`daemon.py`'s automatic `delivered · attending` floor (the #219 fix,
+already shipped, confirmed live in `run_progress.py`) defaults to 90
+seconds (`_POST_DELIVERY_ATTEND_SECONDS_DEFAULT`), far shorter than the
+agent-driven *linger*'s own 10–15m horizon. 90s is not enough time for a
+human to read a dense reply and answer it, which is exactly the "shout or
+lose the thread" pressure the maintainer named — except the pressure is
+partly unfounded: `daemon-substrate.md`'s own linger section already
+guarantees "nothing resets but the process" across a cold wake boundary
+(same conversation, dominion, kb). What's actually lost on a missed
+window is wall-clock and a prompt-cache-warm restart, not continuity.
+Bumped `.brr/config`'s `delivery.post_delivery_attend_seconds` to 240 (still
+inside the ~5-minute provider cache TTL the linger horizon already
+respects) as a low-risk, easily-reverted tuning — local runtime config,
+not code, not committed.
+
 ## Receipts
 
 - Round-3 voice pass: [brand space](design-brand-brnrd-brr.md),
@@ -338,3 +448,5 @@ stated: economical about the work, never about the task.
 - Round 7: maintainer message of 2026-07-05 (glyph channel + unanswered
   laziness concern from the run before), `kb/log.md` §2026-07-05
   "Card-staleness facet ships".
+- Round 8: maintainer message of 2026-07-05 (boot-prompt reconciliation
+  ask), `kb/log.md` §2026-07-05 "Boot-prompt reconciliation pass".
