@@ -72,6 +72,83 @@ def test_loop_accepts_any_chat_and_records_message_chat(tmp_path, monkeypatch):
     assert events[1]["telegram_sent_at"] == ""
 
 
+def test_loop_tracks_last_chat_id_without_restricting_future_chats(
+    tmp_path, monkeypatch,
+):
+    # state["last_chat_id"] is a delivery *fallback*, not an inbound
+    # filter — a second, different chat in the same batch must still be
+    # accepted (regression guard alongside
+    # test_loop_accepts_any_chat_and_records_message_chat).
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret"})
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        return {
+            "result": [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 501,
+                        "chat": {"id": 111},
+                        "from": {"id": 41, "first_name": "Ada"},
+                        "text": "first task",
+                    },
+                },
+                {
+                    "update_id": 2,
+                    "message": {
+                        "message_id": 502,
+                        "chat": {"id": 222},
+                        "from": {"id": 42, "first_name": "Grace"},
+                        "text": "second task",
+                    },
+                },
+            ],
+        }
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    events = sorted(protocol.list_pending(inbox_dir), key=lambda event: event["body"])
+    assert [event["body"] for event in events] == ["first task", "second task"]
+    # Both chats still land as events (no new filtering)...
+    assert [event["telegram_chat_id"] for event in events] == [111, 222]
+    # ...but the last one seen is now the recorded delivery fallback.
+    assert telegram._load_state(brr_dir)["last_chat_id"] == 222
+
+
+def test_delivery_loop_falls_back_to_last_chat_id_for_chatless_event(
+    tmp_path, monkeypatch,
+):
+    # A schedule-originated event (e.g. a director tick) carries no
+    # telegram_chat_id of its own. Without a bound chat_id and without
+    # this fallback, _deliver_responses raises "missing chat id" on every
+    # delivery-loop tick forever (nothing marks a failed delivery done) —
+    # caught live 2026-07-06 via two director-tick responses stuck
+    # spamming the daemon log.
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret", "last_chat_id": 155783668})
+    protocol.create_event(inbox_dir, source="telegram", body="")
+    event = protocol.list_pending(inbox_dir)[0]
+    protocol.set_status(event, "done")
+    protocol.write_response(responses_dir, event["id"], "director tick report")
+    sent = []
+
+    def fake_send_with_overflow(
+        token, chat_id, topic_id, text, *, reply_to_message_id=None,
+    ):
+        sent.append((token, chat_id, topic_id, text, reply_to_message_id))
+
+    monkeypatch.setattr(telegram, "_send_with_overflow", fake_send_with_overflow)
+    telegram._delivery_loop_once(brr_dir, inbox_dir, responses_dir)
+
+    assert sent == [("secret", 155783668, None, "director tick report", None)]
+
+
 def test_replies_are_sent_to_originating_chat(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
