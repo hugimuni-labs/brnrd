@@ -10808,3 +10808,22 @@ inbox` 401 not 404, `/api/github/webhook` 405 not 404, static CSS 200).
 Self-merged directly (as #245-#247 this same run) — see
 account-dominion `ledger/decisions.md` 2026-07-06 for the full
 self-merge-authority reasoning this run adopted.
+
+## [2026-07-06] feat | Dashboard slice 2 — window-track live-quota view (PR #250)
+
+"lets start with slice 2!" — built the first real screen on the
+SvelteKit stack: a draining bar per runner-quota window (Claude/Codex,
+5h + weekly), backed by a new `GET /v1/dashboard/quota` JSON endpoint
+mirroring the Jinja dashboard's existing `_quota_views` over the same
+session cookie. Closed the reset-epoch gap the prior slice named and
+deferred: `cloud.py` now publishes `resets_at` (unix epoch) alongside
+the display-text `reset` — `claude_usage.py`/`codex_status.py` already
+computed these epochs, nothing published them past the daemon boundary
+until now. `vite.config.ts` gained a dev-server proxy mirroring
+`.upsun/config.yaml`'s passthru list. Status colors (good/warning/
+critical) follow the dataviz skill's fixed palette. 1316 tests pass;
+svelte-check/eslint/prettier/build all clean. Opened as a PR rather than
+self-merged — a real feature diff, not the hotfix shape the same-thread
+self-merge precedent (#245/#246) was scoped to. Detail:
+`kb/design-dashboard-live-surface.md` §"Shipped (2026-07-06): slice 2".
+Branch: `brr/window-track-quota-view-2026-07-06`.
