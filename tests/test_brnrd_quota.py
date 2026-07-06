@@ -70,8 +70,8 @@ _SHELLS_PAYLOAD = {
             "shell": "claude",
             "status": "known",
             "windows": [
-                {"label": "5h window", "used": None, "limit": None, "percent": 61.0, "reset": "resets 9:00PM"},
-                {"label": "weekly", "used": None, "limit": None, "percent": 48.0, "reset": None},
+                {"label": "5h window", "used": None, "limit": None, "percent": 61.0, "reset": "resets 9:00PM", "resets_at": 1783360000.0},
+                {"label": "weekly", "used": None, "limit": None, "percent": 48.0, "reset": None, "resets_at": None},
             ],
         }
     ]
@@ -90,6 +90,7 @@ def test_daemon_quota_snapshot_replaces_shells():
     body = posted.json()
     assert body["shells"][0]["shell"] == "claude"
     assert body["shells"][0]["windows"][0]["percent"] == 61.0
+    assert body["shells"][0]["windows"][0]["resets_at"] == 1783360000.0
     assert body["quota_updated_at"] is not None
 
     # Republishing overwrites rather than accumulating (last-write-wins,

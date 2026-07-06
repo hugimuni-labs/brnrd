@@ -356,6 +356,8 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
                 "quota": {"buckets": {"session": {"remaining_percentage": 61.0}, "week": {"remaining_percentage": 48.0}}},
                 "session_reset": "resets 9:00PM",
                 "week_reset": "resets Jul 10",
+                "session_resets_at": 1783360000.0,
+                "week_resets_at": 1783900000.0,
             }
         ),
         encoding="utf-8",
@@ -364,7 +366,14 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cloud.codex_status,
         "load_levels",
-        lambda *a, **k: {"quota": {"primary_remaining_percent": 82.0, "secondary_remaining_percent": 70.0}},
+        lambda *a, **k: {
+            "quota": {
+                "primary_remaining_percent": 82.0,
+                "secondary_remaining_percent": 70.0,
+                "primary_resets_at": 1783350000.0,
+                "secondary_resets_at": 1783890000.0,
+            }
+        },
     )
 
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
@@ -377,6 +386,12 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     assert shells["claude"]["windows"][1]["percent"] == 48.0
     assert shells["codex"]["windows"][0]["percent"] == 82.0
     assert shells["codex"]["windows"][1]["percent"] == 70.0
+    # Machine-parseable reset instants (2026-07-06) — the window-track
+    # visual's time-remaining axis needs an epoch, not just display text.
+    assert shells["claude"]["windows"][0]["resets_at"] == 1783360000.0
+    assert shells["claude"]["windows"][1]["resets_at"] == 1783900000.0
+    assert shells["codex"]["windows"][0]["resets_at"] == 1783350000.0
+    assert shells["codex"]["windows"][1]["resets_at"] == 1783890000.0
 
 
 def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
