@@ -45,6 +45,10 @@ def test_parse_token_count_quota_and_context():
     assert levels["quota"]["secondary_used_percent"] == 27.0
     assert levels["quota"]["primary_remaining_percent"] == 20.0
     assert levels["quota"]["secondary_remaining_percent"] == 73.0
+    # Raw reset epochs pass through alongside the formatted summary text —
+    # the dashboard's window-track visual needs a machine-parseable instant.
+    assert levels["quota"]["primary_resets_at"] == 1782572885.0
+    assert levels["quota"]["secondary_resets_at"] == 1783095178.0
     # context headroom estimated from last input_tokens / window.
     assert "context left (est)" in levels["context_window"]["summary"]
     assert 20 < levels["context_window"]["remaining_percentage"] < 30
@@ -67,6 +71,10 @@ def test_parse_token_count_missing_secondary_stays_none():
     assert levels["quota"]["primary_remaining_percent"] == 60.0
     assert levels["quota"]["secondary_used_percent"] is None
     assert levels["quota"]["secondary_remaining_percent"] is None
+    # No resets_at on either window in this payload — both stay None, not a
+    # fabricated guess.
+    assert levels["quota"]["primary_resets_at"] is None
+    assert levels["quota"]["secondary_resets_at"] is None
 
 
 def test_load_levels_reads_newest_rollout(tmp_path, monkeypatch):
