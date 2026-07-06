@@ -2952,6 +2952,97 @@ def _queue_respawn_request(
     return True
 
 
+def _queue_spawn_request(
+    emit: _WorkerEmit,
+    task: Run,
+    inbox_dir: Path | None,
+    event_id: str,
+    fm: dict,
+    body: str,
+) -> bool:
+    """Queue a concurrent worker-stack child (``spawn:``, slice 1).
+
+    Sibling to :func:`_queue_respawn_request`, with one structural
+    difference: a respawn only ever starts once *this* run ends (queued
+    into the ordinary inbox, dispatched by the next idle tick); a spawn is
+    picked up by the main loop's *second* dispatch slot immediately,
+    alongside this still-running thought (see the ``current_spawn`` cap-of-1
+    slot in the daemon loop). Always ``worker: true`` — never the
+    resident stack — a concurrent child does not get dominion write, kb
+    governance, or scheduling authority any more than a sequential
+    worker-stack respawn does (`kb/design-director-loop.md` §"Concurrent
+    sub-spawns": that's exactly why it doesn't reopen the dominion-
+    coherence problem single-flight exists to close).
+
+    A worker-stack run spawning *its own* child is refused — nesting was
+    never part of the slice-1 shape (cap=1, one level), and a worker has
+    no business creating further daemon-dispatched work anyway.
+    """
+    if bool(task.meta.get("worker")):
+        print(
+            "[brr] outbox: spawn request from a worker-stack run refused "
+            "(no nested spawns)"
+        )
+        return False
+    if inbox_dir is None:
+        print("[brr] outbox: spawn request had no inbox; dropping")
+        return False
+    proposed = str(fm.get("shell") or fm.get("runner") or "").strip()
+    core = str(fm.get("core") or "").strip()
+    if not proposed and not core:
+        print("[brr] outbox: spawn request had no shell/core; dropping")
+        return False
+    new_body = body.strip()
+    if not new_body:
+        print("[brr] outbox: spawn request had no body; dropping")
+        return False
+    source = str(fm.get("source") or "spawn")
+    meta: dict = {"worker": True}
+    if proposed:
+        meta["shell"] = proposed
+    if core:
+        meta["core"] = core
+    task_classification = str(fm.get("task_classification") or "").strip()
+    if task_classification:
+        meta["task_classification"] = task_classification
+    if task.meta.get("repo_label"):
+        meta["repo_label"] = task.meta["repo_label"]
+    reason = str(fm.get("reason") or "").strip()
+    # Reuses the exact meta keys _pending_events_for_agent already excludes
+    # on: a spawn dispatch is the same "system-to-system handoff, not a
+    # fold-in-able follow-up" shape a respawn is, just concurrent instead
+    # of sequential.
+    meta["respawned_from_event"] = event_id
+    meta["respawned_by_run"] = task.id
+    meta["spawn_immediate"] = True
+    meta["spawn_parent_run_id"] = task.id
+    meta["spawn_parent_conversation_key"] = task.conversation_key or ""
+    if reason:
+        meta["spawn_reason"] = reason
+    new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
+    print(f"[brr] outbox: queued concurrent spawn ({new_path.stem})")
+    if emit.conversation_key:
+        conversations.append_artifact(
+            emit.brr_dir, emit.conversation_key,
+            kind="spawn_request",
+            path=str(new_path),
+            run_id=task.id,
+            event_id=event_id,
+            label=f"spawn:{new_path.stem}",
+            body=reason or new_body,
+        )
+    emit(
+        "spawn_requested",
+        run_id=task.id,
+        event_id=event_id,
+        spawn_event_id=new_path.stem,
+        proposed_runner=proposed or None,
+        core=core or None,
+        reason=reason or None,
+    )
+    return True
+
+
 def _drain_outbox(
     emit: _WorkerEmit,
     task: Run,
@@ -3051,6 +3142,13 @@ def _drain_outbox(
                 promoted += 1
                 if stats is not None:
                     stats["respawn"] = stats.get("respawn", 0) + 1
+            fpath.unlink(missing_ok=True)
+            continue
+        if _truthy(fm.get("spawn")):
+            if _queue_spawn_request(emit, task, inbox_dir, event_id, fm, body):
+                promoted += 1
+                if stats is not None:
+                    stats["spawn"] = stats.get("spawn", 0) + 1
             fpath.unlink(missing_ok=True)
             continue
         gate = str(fm.get("gate") or "").strip()
@@ -3405,6 +3503,60 @@ def _retire_internal_event(event: dict, responses_dir: Path) -> bool:
         protocol.partials_dir(responses_dir, eid),
     )
     return True
+
+
+_SPAWN_NOTIFY_RESPONSE_MAX_CHARS = 2000
+
+
+def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
+    """Land a completion note in the spawning parent's own thread.
+
+    kb/design-director-loop.md §"Concurrent sub-spawns" item 4: a live
+    in-run notification, not the guessed-time review self-wake convention
+    — reuses the exact mechanism a mid-run user event already rides
+    (an ordinary pending inbox event sharing the parent's
+    ``conversation_key``), so a parent still running sees it on its next
+    ``inbox.json``/plan-boundary read via the existing
+    ``_pending_events_for_agent`` path. Unlike the spawn-dispatch event
+    itself, this one is *not* tagged with ``respawned_from_event``/
+    ``respawned_by_run`` — the parent should react to it, not skip it.
+
+    If the parent has already ended, this is simply the next ordinary
+    dispatchable event — the daemon picks it up ``in the normal course,
+    which is a reasonable stand-in for "someone should look at this."
+    Best-effort: a spawn without parent linkage (or no inbox) is silently
+    skipped rather than raising — a notification bug must never surface
+    as a worker-run failure.
+    """
+    if inbox_dir is None:
+        return
+    parent_run_id = task.meta.get("spawn_parent_run_id")
+    if not parent_run_id:
+        return
+    conv = str(task.meta.get("spawn_parent_conversation_key") or "").strip()
+    conv = conv or f"run:{parent_run_id}"
+    summary = f"concurrent spawn {task.id} finished: status={task.status}"
+    response_path = task.meta.get("response_path")
+    if response_path:
+        try:
+            text = Path(str(response_path)).read_text(encoding="utf-8").strip()
+        except OSError:
+            text = ""
+        if text:
+            if len(text) > _SPAWN_NOTIFY_RESPONSE_MAX_CHARS:
+                text = text[:_SPAWN_NOTIFY_RESPONSE_MAX_CHARS] + "\n…(truncated)"
+            summary = f"{summary}\n\n{text}"
+    try:
+        protocol.create_event(
+            inbox_dir,
+            "spawn_completed",
+            summary,
+            conversation_key=conv,
+            spawned_by_run=task.id,
+            spawn_parent_run_id=parent_run_id,
+        )
+    except OSError as exc:
+        print(f"[brr] spawn-completion notify failed for {task.id}: {exc}")
 
 
 def _capture_dominion(
@@ -4388,11 +4540,20 @@ def start(
     # gate liveness, and signals during a long thought. The runner's own
     # wall-clock timeout (runner.timeout_seconds) is the liveness
     # backstop that reclaims the slot if the CLI subprocess wedges.
+    # Second slot (kb/design-director-loop.md §"Concurrent sub-spawns",
+    # slice 1): `current` remains the one resident-stack thought
+    # single-flight protects (dominion write, kb governance, scheduling).
+    # `current_spawn` is a *worker-stack-only*, cap-of-1 concurrent child a
+    # running thought can dispatch via `spawn:` outbox frontmatter — it
+    # never touches the surface single-flight exists to protect, so it
+    # gets its own pool slot rather than waiting behind the resident's.
     pool = concurrent.futures.ThreadPoolExecutor(
-        max_workers=1,
+        max_workers=2,
         thread_name_prefix="brr-thought",
     )
     current: concurrent.futures.Future | None = None
+    current_spawn: concurrent.futures.Future | None = None
+    current_spawn_inbox_dir: Path | None = None
     reload_requested = False
 
     wake = protocol.inbox_wake()
@@ -4421,6 +4582,22 @@ def start(
                     print(f"[brr] thought crashed: {exc}")
                 current = None
 
+            # Reap the concurrent worker-stack child, if one is in flight,
+            # and notify its still-running parent thought (or leave a
+            # normal pending event behind if the parent already ended —
+            # the next dispatch tick picks it up like any other follow-up,
+            # standing in for the guessed-time review self-wake convention
+            # this replaces for the common case).
+            if current_spawn is not None and current_spawn.done():
+                try:
+                    spawn_task = current_spawn.result()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[brr] spawned child crashed: {exc}")
+                else:
+                    _notify_spawn_parent(current_spawn_inbox_dir, spawn_task)
+                current_spawn = None
+                current_spawn_inbox_dir = None
+
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
             if reload_requested and current is None:
@@ -4440,6 +4617,45 @@ def start(
                 account_context=account_context,
             )
 
+            # One scan feeds both dispatch decisions below — a spawn-
+            # marked event is never a resident-lead candidate and vice
+            # versa, so splitting one pass avoids a second full inbox scan
+            # (and a second round of ``list_pending`` I/O) every tick.
+            scanned: list[_DispatchTarget] | None = None
+            if not reload_requested and (current is None or current_spawn is None):
+                scanned = _dispatchable_targets(account_context, repo_root, cfg)
+
+            # Concurrent worker-stack child (slice 1): dispatched
+            # independently of the resident's own `current` slot — that's
+            # the entire point, a spawn runs *alongside* the still-live
+            # parent thought rather than after it ends. Capped at 1
+            # (`current_spawn is None`), scanned every tick regardless of
+            # whether the resident slot is busy. No burst-settling here —
+            # unlike a fresh external message, a `spawn:` request is
+            # already one deliberate, already-complete dispatch decision
+            # the parent made; nothing to debounce it against.
+            if current_spawn is None and not reload_requested:
+                spawn_candidates = [
+                    t for t in (scanned or []) if t.event.get("spawn_immediate")
+                ]
+                if spawn_candidates:
+                    target = spawn_candidates[0]
+                    event = target.event
+                    eid = event["id"]
+                    print(f"[brr] processing (concurrent spawn): {eid}")
+                    protocol.set_status(event, "processing")
+                    current_spawn = pool.submit(
+                        _run_worker_and_finalize,
+                        event,
+                        target.repo_root,
+                        target.responses_dir,
+                        cfg,
+                        max_retries,
+                        account_context=account_context,
+                        inbox_dir=target.inbox_dir,
+                    )
+                    current_spawn_inbox_dir = target.inbox_dir
+
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
             # picks them up at a plan boundary (multi-response), or the
@@ -4447,7 +4663,9 @@ def start(
             # slot can drain.
             burst_hold = 0.0
             if current is None and not reload_requested:
-                pending = _dispatchable_targets(account_context, repo_root, cfg)
+                pending = [
+                    t for t in (scanned or []) if not t.event.get("spawn_immediate")
+                ]
                 if pending:
                     pending = _handle_daemon_control_events(
                         pending,
@@ -4513,6 +4731,13 @@ def start(
         # Shutdown requested (signal): kill the in-flight runner so we
         # reclaim the slot promptly instead of waiting out its (long,
         # possibly extended) budget, then drain the thought.
+        #
+        # Known slice-1 gap: ``runner.kill_active`` tracks a single active
+        # subprocess module-globally, so a live concurrent spawn (if any)
+        # isn't killed here the way the resident's own ``current`` is —
+        # ``pool.shutdown(wait=True)`` still drains it, just without the
+        # prompt-reclaim this gives the resident slot. Not fixed in this
+        # slice; would need ``kill_active`` to become a small registry.
         if current is not None and not current.done():
             if runner.kill_active():
                 print("[brr] shutdown: terminated in-flight runner")
