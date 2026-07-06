@@ -771,14 +771,14 @@ class TestExtraRunnerArgs:
 
 
 class TestTimeoutConfig:
-    def test_runner_timeout_defaults_to_one_hour(self):
-        assert runner_timeout(None) == DEFAULT_RUNNER_TIMEOUT == 3600
+    def test_runner_timeout_defaults_to_two_hours(self):
+        assert runner_timeout(None) == DEFAULT_RUNNER_TIMEOUT == 7200
 
     def test_runner_timeout_reads_dotted_config_key(self):
         assert runner_timeout({"runner.timeout_seconds": 120}) == 120
 
     def test_runner_timeout_accepts_string_int(self):
-        assert runner_timeout({"runner.timeout_seconds": "7200"}) == 7200
+        assert runner_timeout({"runner.timeout_seconds": "10800"}) == 10800
 
     def test_runner_timeout_rejects_garbage(self):
         assert runner_timeout({"runner.timeout_seconds": "soon"}) == DEFAULT_RUNNER_TIMEOUT
