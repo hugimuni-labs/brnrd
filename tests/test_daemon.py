@@ -129,6 +129,41 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
+def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
+    tmp_path, monkeypatch,
+):
+    """A crash inside ``_run_worker`` must not orphan the event as "processing".
+
+    Found live 2026-07-06: an uncaught exception left ``task`` unset, so
+    nothing ever advanced the event's status past "processing" —
+    ``list_dispatchable`` treats "processing" as still-eligible (that's how
+    a daemon restart resumes a run in flight), so the very next main-loop
+    tick re-dispatched the *same* event, crashed again, and repeated with
+    no backoff: a live incident produced 26+ runs in ~50 minutes, one fresh
+    run-id per attempt, before manual intervention. The event must come out
+    of "processing" limbo (here: "error") so it stops being immediately
+    re-dispatchable, regardless of what actually crashed.
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-crash")
+    protocol.set_status(event, "processing")  # matches real dispatch (daemon.py:4437)
+    monkeypatch.setattr(
+        daemon,
+        "_run_worker",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        daemon._run_worker_and_finalize(
+            event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+        )
+
+    assert event["status"] == "error"
+    reread = protocol._read_event(tmp_path / ".brr" / "inbox" / "evt-crash.md")
+    assert reread["status"] == "error"
+    assert reread["status"] not in ("pending", "processing")
+
+
 def test_run_worker_does_not_infer_native_hooks_from_runner_name(
     tmp_path, monkeypatch
 ):
