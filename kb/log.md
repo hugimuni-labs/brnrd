@@ -10674,3 +10674,74 @@ in #242 works, this run's own process just couldn't benefit from it
 retroactively. Branches: brr/frontend-svelte-scaffold-2026-07-06 (#241),
 brr/fix-respawn-pending-attention-2026-07-06 (#242),
 brr/reset-epoch-plumbing-2026-07-06 (#243).
+
+## [2026-07-06] fix | Frontend moved into src/, global timeout raised, missing-chat-id root-caused (PR #244); #242 merged
+
+Five follow-ups on the same thread, folded into one run rather than five:
+
+- **#242 merged.** The maintainer had deliberately held it to raise a
+  broader point (below), not to block the fix itself — merged once that
+  point had a name and a direction.
+- **`frontend/` -> `src/frontend/`**, `.upsun/config.yaml`'s build hook
+  and static-mount path updated to match (`cd src/frontend && npm ci &&
+  npm run build`, served at `/app/`). Build+lint verified clean from the
+  new location before committing.
+- **`DEFAULT_RUNNER_TIMEOUT` 3600 -> 7200** (`src/brr/runner.py`) — the
+  global code default every install falls back to, not just this repo's
+  `.brr/config` override raised the prior run. 7200s is 2h, not 8h; the
+  daemon's hard cap (`max(budget*4, budget+3600)`) is what reaches 8h off
+  that 2h soft default, kept short of true-unlimited on purpose as the
+  daemon's only means of reclaiming a hung run.
+- **Root-caused the "missing chat id" delivery-error spam**, not just
+  silenced it. A schedule-originated event (a director tick, say) has no
+  `telegram_chat_id` of its own; `state["chat_id"]` (the delivery
+  fallback) was never populated without an explicit interactive `bind`
+  step nobody had run, so such an event's response failed "missing chat
+  id" on *every* delivery-loop tick, forever — nothing marks a failed
+  delivery done (`deliver_stream`'s per-event try/except just logs and
+  continues). Two director-tick reports were stuck this way
+  (`evt-...-hzyc`, `evt-...-zb04`; the maintainer had already quarantined
+  them out of `inbox/` as a stopgap, into a folder literally named
+  `conficting` — his own typo of "conflicting", distinct from his message
+  text's "confilcting", neither matching; harmless, noted only because it
+  cost a moment's confusion locating the right directory). Root fix:
+  `state["last_chat_id"]` now tracks the most recent inbound chat as a
+  fallback, kept distinct from `configured_chat_id` (the inbound *filter*,
+  deliberately left unset so any chat's messages become events —
+  `test_loop_accepts_any_chat_and_records_message_chat` guards this). The
+  two stuck events were stale (superseded by since-merged work) — deleted
+  rather than delivered late.
+- **The respawn-and-forget design question got a real answer, not a
+  build.** The maintainer's prompt: "when you spawn a lesser-light job
+  and have nothing to do you should block on it, verify the result, and
+  fold into your response." Checked rather than assumed: `_queue_respawn_
+  request` already carries forward `telegram_chat_id`/`telegram_topic_id`
+  onto the respawned event, so its own eventual reply *does* land in the
+  same thread as a follow-up message — that half already works. What
+  doesn't exist is review: nothing stops a `worker: true` respawn's raw,
+  unverified output from standing as the thread's last word, and true
+  synchronous blocking is structurally impossible (single-flight requires
+  the calling run to end before the new one can start — the exact
+  constraint #242 fixed around, not lifted). Documented as a convention in
+  `dominion-playbook.md` §Delegation (mirrored into the live dominion
+  copy): schedule a self-wake past the expected completion to review the
+  respawned diff and fold a verified reply in, rather than trust an unread
+  hunk. A `review: true` daemon flag that enforces this is named as the
+  next rung, not built pre-emptively — this is a genuine architecture
+  addition, not a five-minute fix, and the lighter convention hasn't been
+  given a chance to fail yet.
+- **Unwrapped a prior-run line, not re-decided it.** "The delegation half
+  of the fork wasn't separately re-confirmed" (`plans/Gurio__brr/
+  active.md`, 2026-07-06) meant: the maintainer's "Agreed on frontend
+  proposed stack" explicitly confirmed only the stack pick
+  (SvelteKit+Tailwind), one of two things the prior run's reply had put
+  forward; the codex-shell delegation test was carried forward as already
+  decided without a second explicit yes, on the reasoning that it was
+  already the recommended default and the maintainer's own suggestion one
+  message earlier — a judgment call flagged rather than hidden, not a
+  fork left open.
+
+1314 tests pass (2 new telegram-gate regression tests, 3 timeout-default
+assertions updated). Branch: brr/frontend-src-move-telegram-chatid-
+fix-2026-07-06 (#244). Detail: `kb/design-dashboard-live-surface.md`
+§Addendum (2026-07-06).
