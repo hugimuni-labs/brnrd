@@ -155,3 +155,61 @@ def test_activity_dashboard_renders_snapshot():
     assert "codex / gpt-5-codex" in page.text
     assert "laptop" in page.text
     assert "status-ok" in page.text
+
+
+def test_activity_views_collapse_repeat_snapshots_across_daemon_tokens():
+    client = _client()
+    account_headers, daemon_headers, repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+
+    snapshot = {
+        "records": [
+            {
+                "id": "run:dup",
+                "kind": "run",
+                "source": "telegram",
+                "summary": "duplicate snapshot",
+                "runner": {"shell": "codex", "core": "gpt-5-codex"},
+                "status": "completed",
+                "phase": "done",
+                "updated_at": "2026-06-29T06:00:00Z",
+            }
+        ]
+    }
+    assert client.put("/v1/daemons/activity", json=snapshot, headers=daemon_headers).status_code == 200
+
+    pair = client.post("/v1/accounts/pair").json()
+    client.post(
+        f"/v1/accounts/pair/{pair['pair_code']}/approve",
+        json={"repo_id": repo_id},
+        headers=account_headers,
+    )
+    paired = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    second_headers = {"Authorization": f"Bearer {paired['daemon_token']}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "backup"},
+        headers=second_headers,
+    ).status_code == 200
+    assert client.put("/v1/daemons/activity", json=snapshot, headers=second_headers).status_code == 200
+
+    listing = client.get("/v1/accounts/activity", headers=account_headers)
+    assert listing.status_code == 200
+    assert [row["id"] for row in listing.json()["activity"]] == ["run:dup"]
+
+    _login_cookie(client)
+
+    activity_page = client.get("/activity?kind=run")
+    assert activity_page.status_code == 200
+    assert activity_page.text.count("duplicate snapshot") == 1
+
+    dashboard_page = client.get("/")
+    assert dashboard_page.status_code == 200
+    assert dashboard_page.text.count("run.completed") == 1
