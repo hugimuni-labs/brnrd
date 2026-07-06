@@ -224,6 +224,116 @@ reframe `respawn:`'s stated purpose from "dispatcher escalation" to
 applies regardless of *why* the handoff happened, not tied to an escalation
 story.
 
+## Concurrent sub-spawns (maintainer, 2026-07-06): a real extension, not a violation
+
+Direct proposal, same-thread as the run-ledger cost-tracking work and the
+respawn-dedup fix: "the initial dispatcher should be able to create sub
+spawns not respawns, so concurrency, for cost effectiveness, a cheaper
+core or a shell having more quota is used... counted by daemon into the
+run's cost... toggle-able, on by default." Paired, in the same message,
+with real self-scrutiny: "goes a bit against the cost per core
+calculation I proposed earlier... maybe I am wrong... the serial model of
+execution might be truer to life" — and a concrete requirement: review
+the lesser-light runner's produce before it reaches the user,
+automatically, without stalling, "fitting the loom design we have
+agreed on."
+
+**What already exists, and isn't the gap.** In-run subagents (the `Agent`
+tool) already give same-Shell concurrent, cost-tuned, reviewed-by-
+construction sub-dispatch: a `model` override picks the cheaper core, a
+call can run in the background while the parent keeps working, and the
+parent synthesizes the subagent's output before it ever reaches the user
+— review happens for free, by construction, because the parent is the one
+who replies. None of that needs building. It also cannot reach a
+different Shell (Codex has no in-process subagent path from a Claude
+run) — that boundary is what "sub spawns not respawns" is actually
+naming.
+
+**The real gap: `respawn:` is cross-Shell but sequential-only.** Today's
+only cross-Shell/cross-quota-pool mechanism is `respawn:`, and it is
+strictly a hand-off, not a fork: `_queue_respawn_request` only dispatches
+once the *parent run ends* — "single-flight is per-dominion, not
+per-Shell" (2026-07-06, this same page's neighboring log entry). That is
+why the maintainer's own "cohere the docs, then implement the ledger"
+turn collapsed to one sequential order regardless of framing — there is
+no primitive today for "start a child now, keep working, get notified
+when it lands."
+
+**Why single-flight exists, and why this proposal doesn't undermine it.**
+§4 above discarded local parallelism because *dominion coherence* needs
+one writer: durable memory (kb, playbook, schedule, ledger) can't
+tolerate two concurrent resident thoughts editing it without becoming the
+threaded-worker mess `design-concurrent-execution.md` was reversed to
+escape. But a worker-stack child (`worker: true` — no dominion write, no
+kb governance, no scheduling authority; already the resident/worker
+split's own invariant, "Re-justifying the split" above) never touches the
+surface single-flight protects. Today's daemon enforces one-worker-per-
+dominion at the whole dispatch-loop level, uniformly for resident *and*
+worker-stack runs — broader than what the dominion-coherence argument
+actually requires. That gap between enforcement scope and justification
+scope is real, and the maintainer's proposal sits exactly inside it: a
+concurrent worker-stack child doesn't reopen the incoherent-durable-memory
+problem single-flight was built to close, because it structurally cannot
+write to the memory that problem was about.
+
+**The "cost per core" tension, resolved, not dodged.** The existing
+cost-ranked catalog (`design-runner-cores.md`) and the just-shipped
+`run_ledger` schema (`design-quota-scheduling-loom.md` §"Tracking-table
+schema", PR #254) both assume one core is *the* cost driver for a run.
+Concurrent children don't break that — they make a parent run's true cost
+a **rollup**: parent row + Σ(child rows), via an additive `parent_run_id`
+field on the ledger schema, not a rewrite of the rows that already exist.
+Not a conflict; an aggregation the schema is already shaped to carry.
+
+**"The serial model might be truer to life" — yes, and that's preserved.**
+The resident's own mind stays single-threaded: one dominion writer, one
+train of thought, exactly as today. A sub-spawn is *delegation* — the
+same shape as a person handing a bounded task to an assistant while
+continuing their own single line of thinking — not the mind forking. The
+proposal extends *what a resident can delegate to*, not *how many minds a
+resident has*.
+
+**What it would actually take to build (real work, not a toggle):**
+
+1. A `spawn:` outbox frontmatter, sibling to `respawn:` — same `shell:`/
+   `core:`/`worker: true` fields, but dispatched *immediately* (daemon
+   starts the child alongside the still-running parent) rather than
+   queued for after the parent ends. Strictly `worker: true` semantics,
+   no exception — a resident-stack concurrent spawn is exactly the
+   incoherent-dominion case §4 forecloses.
+2. Relax the daemon's per-dominion dispatch loop from "one worker, full
+   stop" to "one resident thought + up to N concurrent worker-stack
+   children" — a cap (start at N=1, not unbounded — answers "toggle-able"
+   with a conservative default rather than an open one), gated so a
+   worker-stack child can never itself spawn or hold the resident slot.
+3. `run_ledger` gains `parent_run_id`/`is_subspawn`, so parent cost is a
+   query (rollup), and the catalog's existing cost-rank ordering picks the
+   child's Shell/Core automatically (cheaper or quota-richer — no new
+   selection logic needed, the ranking already exists).
+4. A child-completion notification delivered *into the still-running
+   parent thought* — the same shape `inbox.json` already uses for a
+   mid-run user event — rather than the review self-wake convention
+   documented in `dominion-playbook.md` §Delegation. The self-wake exists
+   today because nothing else can tell a parent "your child is done"
+   without either blocking (impossible, single-flight) or guessing a
+   completion time (fragile — exactly what this week's respawn-dedup
+   saga already illustrated: a squashed dispatch left a self-wake
+   reviewing nothing). A live in-run notification is strictly better when
+   the parent is still executing; the self-wake convention still covers
+   the case where the parent has nothing else to do and would rather end.
+
+**Verdict:** sound, worth building, doesn't contradict why single-flight
+exists — but item 2 above touches the exact dispatch-loop invariant this
+whole page's §4 was built around, which is why this is written up as a
+design section and not shipped inline in the same run that raised it.
+Recommended: build slice 1 (frontmatter + `parent_run_id` schema field +
+cap-of-1 concurrent worker-stack child + live completion notification) as
+its own reviewable PR, cap fixed at 1 until it's proven not to starve the
+single resident slot of attention. Flagged back rather than built blind,
+per the maintainer's own "you tell me, maybe I am wrong" — the answer is
+"you're not wrong," but the specific cap/gating shape is a call worth his
+nod before daemon.py's dispatch loop changes, not a blind default.
+
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
 Follow-up sharpening the stingy-director economics: if the wake already
