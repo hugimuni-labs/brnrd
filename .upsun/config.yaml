@@ -31,20 +31,28 @@ applications:
       upstream:
         socket_family: tcp
       locations:
+        # The SvelteKit build (src/frontend, adapter-static) now serves
+        # "/" directly instead of previewing under "/app/" (maintainer
+        # call, 2026-07-06 — the earlier caution about clobbering the
+        # working login/repos/connect flows still applies, so every
+        # backend route the app actually serves is passthru'd below
+        # rather than silently dropped). Static assets first, FastAPI for
+        # anything the build doesn't own.
         "/":
-          passthru: true
-        # Preview mount for the new SvelteKit dashboard (src/frontend,
-        # adapter-static). Deliberately not mounted at "/" yet: the
-        # scaffold isn't wired to real data or the existing login/repos/
-        # connect flows brnrd_web still serves there (see
-        # kb/design-dashboard-live-surface.md) — swapping "/" now would
-        # replace a working dashboard with an empty placeholder page.
-        # Revisit once the frontend calls real JSON endpoints; no SPA
-        # deep-link fallback yet either, since there's only one route
-        # today (src/frontend/src/routes/+page.svelte).
-        "/app/":
           root: "src/frontend/build"
           index: ["index.html"]
+          scripts: false
+          rules:
+            # brnrd_web's remaining HTML routes (login/oauth, repo
+            # connect flows, the legacy activity/plans dashboards) plus
+            # every JSON/API/webhook surface (src/brnrd/routers/*) and
+            # the legacy dashboard's own static assets. Keep this list in
+            # sync with src/brnrd/app.py's include_router calls and
+            # src/brnrd_web/routes.py/activity_dashboard.py/
+            # plans_dashboard.py — anything added there needs a passthru
+            # rule here or the new frontend's static root will 404 it.
+            '^/(v1|api|r|login|auth|connect|repos|activity|plans|static)(/|$)':
+              passthru: true
 
     variables:
       env:
