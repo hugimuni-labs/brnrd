@@ -458,7 +458,16 @@ Stop-hook bug), `brr/reset-epoch-plumbing-2026-07-06` (#243, the plumbing
 itself, built directly).
 
 Next: review and merge #241/#242/#243, then slice 2 = the window-track
-view itself, built inside `frontend/` against real numbers.
+view itself, built inside `src/frontend/` against real numbers.
+
+**Addendum (2026-07-06):** `frontend/` moved to `src/frontend/` per a
+same-thread ask ("the frontend folder could be moved into src/"); the
+`.upsun/config.yaml` build hook and static-mount path were updated to
+match in the same pass (`cd src/frontend && npm ci && npm run build`,
+served at `/app/`). Build+lint verified clean from the new location
+before committing. The `frontend/` mentions above are left as written —
+historically accurate for what shipped at the time — this is the pointer
+for the rename.
 
 ## Read next
 
