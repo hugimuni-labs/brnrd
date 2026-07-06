@@ -1,5 +1,6 @@
 """Tests for the daemon worker after the triage stage was removed."""
 
+import json
 import os
 import subprocess
 import threading
@@ -129,6 +130,107 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
+def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-ledger")
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: "PROMPT",
+    )
+    monkeypatch.setattr(
+        envs,
+        "get_env",
+        lambda _name: StubWorktreeEnv(invoke_fn=succeed_invoke("ledger done\n")),
+    )
+    snapshots = iter([
+        {
+            "quota": {
+                "primary_used_percent": 10.0,
+                "secondary_used_percent": 20.0,
+            },
+        },
+        {
+            "quota": {
+                "primary_used_percent": 12.0,
+                "secondary_used_percent": 25.0,
+            },
+        },
+    ])
+    monkeypatch.setattr(
+        daemon.run_ledger,
+        "load_quota_levels",
+        lambda *args, **kwargs: next(snapshots),
+    )
+
+    task = daemon._run_worker_and_finalize(
+        event,
+        tmp_path,
+        tmp_path / ".brr" / "responses",
+        {"run_ledger.subscription_price.codex": 20},
+        0,
+    )
+
+    ledger = tmp_path / ".brr" / "run-ledger.jsonl"
+    rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == task.id
+    assert rows[0]["event_id"] == "evt-ledger"
+    assert rows[0]["weekly_pct_delta"] == 5.0
+    assert rows[0]["five_hour_pct_delta"] == 2.0
+    assert rows[0]["usd_subscription_attributed"] == 1.0
+    assert rows[0]["estimate_vs_actual"] == "actual"
+    assert not (tmp_path / ".brr" / "outbox" / "evt-ledger").exists()
+
+
+def test_run_worker_finalize_reads_task_classification_control(tmp_path, monkeypatch):
+    """A ``.task-classification`` control file tags the ledger row.
+
+    The resident-authored slug (kb/design-quota-scheduling-loom.md's "only
+    field that makes rollup-by-shape possible") must survive from the
+    control file the runner wrote mid-run into the actual ledger row, not
+    just be readable in isolation (see test_run_ledger.py's unit test for
+    the reader itself).
+    """
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-classified")
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *args, **kwargs: "PROMPT",
+    )
+    monkeypatch.setattr(
+        daemon.run_ledger, "load_quota_levels", lambda *a, **kw: None,
+    )
+
+    def _invoke(ctx, runner_name, invocation, _cfg, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        outbox = Path(ctx.outbox_env)
+        outbox.mkdir(parents=True, exist_ok=True)
+        (outbox / ".task-classification").write_text(
+            "dashboard-slice\n", encoding="utf-8",
+        )
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs, "get_env", lambda _name: StubWorktreeEnv(invoke_fn=_invoke),
+    )
+
+    task = daemon._run_worker_and_finalize(
+        event, tmp_path, tmp_path / ".brr" / "responses", {}, 0,
+    )
+
+    ledger = tmp_path / ".brr" / "run-ledger.jsonl"
+    rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["run_id"] == task.id
+    assert rows[0]["task_classification"] == "dashboard-slice"
 def test_run_worker_crash_retires_event_instead_of_infinite_retry_loop(
     tmp_path, monkeypatch,
 ):
@@ -554,6 +656,53 @@ def test_drain_outbox_queues_respawn_request(tmp_path):
     assert spawned["body"] == "carry this exact task forward"
     assert "origin_message_key" not in spawned
     assert protocol.event_is_deferred(spawned)
+
+
+def test_drain_outbox_respawn_carries_task_classification(tmp_path):
+    """``task_classification:`` frontmatter tags the ledger row for the child.
+
+    Explicit-only: the parent's own pending-event meta must not leak a stale
+    classification onto a child that didn't ask for one.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        task_classification="parent-classification-must-not-leak",
+    )
+    event_id = path.stem
+    (outbox / "respawn.md").write_text(
+        "---\n"
+        "respawn: true\n"
+        "shell: codex-mini\n"
+        "task_classification: dashboard-slice\n"
+        "---\n"
+        "carry forward\n",
+        encoding="utf-8",
+    )
+    task = Run(id="run-dispatch", event_id=event_id, body="original task", source="telegram")
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+    )
+
+    assert promoted == 1
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("respawned_from_event") == event_id
+    ][0]
+    assert spawned["task_classification"] == "dashboard-slice"
 
 
 def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
