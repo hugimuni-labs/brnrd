@@ -369,3 +369,13 @@ name would help.
   Stripe-from-day-one callout were locked.
 - 2026-06-12: compacted from accumulated proposal history into this
   state-first decision; prior detail remains in git history.
+- 2026-07-06: maintainer reopened pricing shape, asking whether a $60
+  one-time payment would yield more than a $10/month subscription over 6
+  months. Analyzed, not applied: cohort math in
+  [`design-quota-scheduling-loom.md`](design-quota-scheduling-loom.md)
+  §"Pricing tension raised, not resolved" shows one-time wins the raw
+  6-month cash race under every retention scenario modeled, but
+  recommends reading that as a case for a one-time credit-pack **add-on**
+  (using the existing non-expiring `purchased` bucket above) rather than
+  replacing the accepted $5/$7 subscription — flagged as a fork for the
+  maintainer, this page's numbers unchanged.

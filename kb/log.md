@@ -10839,3 +10839,53 @@ public API plus the rendered views. The quota pipeline already had real
 windows; the stale `UNKNOWN` / duplicate-render note in
 `kb/design-dashboard-live-surface.md` was rewritten to match current
 state.
+
+## [2026-07-06] research | Quota-scheduling loom, Hermes competitor, Norse/retro-engineering aesthetic — brainstorm synthesis
+
+A telegram brainstorm (main event + one folded-in follow-up) named the
+actual product mechanic behind the Zachtronics/dashboard work: providers
+meter usage in 5h+weekly windows as load-smoothing, not arbitrary
+throttling; brnrd should surface a per-item cost estimate (guessed from
+tracked historical span data — tokens, window-%, USD-from-subscription,
+USD-from-credits, actual and forward-guessed) so users can pace their own
+consumption, with the director tick as the continuous re-deriver and
+out-of-planning runs still landing on the same loom. Captured in a new
+page, `kb/design-quota-scheduling-loom.md` — it also names that this is
+the same tracking-table gap `plan-director-execution.md` §B6 is already
+blocked on ("a data gap, not a code gap"), so the two workstreams should
+share one schema rather than duplicate it.
+
+Same page works a reopened pricing question ($60 one-time vs. $10/month)
+with real 6-month cohort math: one-time wins the raw-cash race under
+every retention scenario modeled, but the honest read is "candidate
+add-on via the existing `purchased` credit bucket," not a case to unwind
+the accepted $5/$7 subscription (`decision-pricing-shape.md`, lineage
+addendum added, numbers unchanged) — flagged back as a fork rather than
+decided unilaterally.
+
+A named competitor, Hermes Agent (Nous Research, OSS, 175K GitHub stars
+in under 4 months), was checked rather than taken as color —
+`kb/research-competitor-hermes-agent.md` verifies what it actually is
+(standing self-improving skill-library agent, cron scheduling, broad
+chat-platform delivery) and names three real differentiators
+(repo-anchored continuity, quota-economics as product, duo-programming
+stance vs. autonomous-background-agent stance) rather than leaning on
+"wrapper," since Hermes's own docs already claim not-a-wrapper too.
+
+`kb/design-brand-visual-language.md` gained a direct answer to "cold or
+warm, nature, darkness, retro-engineering" — Norse myth holds hearth-
+warmth against outside cold rather than reading uniformly cold
+(Muspelheim's fire pole, painted not bare-grey runestones), nature reads
+structural not ornamental (Yggdrasil), darkness is undefused (Ragnarök is
+foretold, not resolved) — and runes are named as the literal retro-
+engineering bridge: a hand-carved, craft-gated information encoding,
+structurally the same relationship a programmer has with bytecode, which
+`weave.md`'s own mark channel already embodies without having named it.
+privy.io (asked about directly) turns out to be Stripe-owned embedded-
+wallet/auth infra with no near-term fit — filed for the far-out "resident
+holds its own spending identity" question the quota-scheduling page's
+endgame section names, not acted on now.
+
+No code changed this run — brainstorm/synthesis only, per the actual ask
+("I wanna brainstorm with you... help me capture the perfect shape").
+Branch: brr/quota-loom-hermes-aesthetic-brainstorm-2026-07-06.

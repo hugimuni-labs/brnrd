@@ -92,7 +92,15 @@ dive-in map) and are stable until something contradicts them.
   material this project inherits, the `_` → `brnrd` -glitch→ `bRnЯd` boot
   animation spec, and reference-class calibration (Loki's literal in-
   universe "Loom" as a resonance check on `envelope loom`; Severance named
-  as the explicit too-sterile anti-reference).
+  as the explicit too-sterile anti-reference). 2026-07-06 addendum:
+  Norse-myth warmth/fire/nature answered directly (hearth-against-cold,
+  Muspelheim's fire pole, Yggdrasil's structural-not-ornamental nature,
+  Ragnarök's undefused dread), runes named as the literal retro-
+  engineering bridge (a hand-carved, craft-gated information encoding —
+  the same relationship as source-to-bytecode, and already how
+  `weave.md`'s own mark channel behaves), and a privy.io check (Stripe-
+  owned embedded-wallet/auth infra; no near-term fit, filed for the
+  far-out "resident holds its own spending identity" question).
 - [Weave register design](design-weave-register.md) — *active, phases 1–2
   shipped 2026-07-02/03*. The voice work rounds 4–7: the resident's working
   notation (coordinates, deltas, verdict marks) canonized as
@@ -816,6 +824,21 @@ dive-in map) and are stable until something contradicts them.
   added a real Zachtronics-mechanics deconstruction mapping distinct
   metrics (commits/PRs/tickets, messages, KBs touched, time, tokens, CPS
   progress) onto distinct game mechanics rather than one widened lane.
+- [Quota-scheduling loom design](design-quota-scheduling-loom.md) —
+  *active, opened 2026-07-06*. The economic layer under the Zachtronics
+  motion: per-item cost estimates guessed from tracked historical span
+  data (tokens, 5h/weekly window %, USD-from-subscription, USD-from-
+  credits — actual and forward-guessed), user-owned pacing across quota
+  windows, out-of-planning runs still landing on the same loom, and the
+  data table this page needs is the same one
+  [`plan-director-execution.md`](plan-director-execution.md) §B6 is
+  already blocked on. Also works the $60-one-time-vs-$10/month pricing
+  question raised against the accepted
+  [`decision-pricing-shape.md`](decision-pricing-shape.md) with real
+  cohort math (one-time wins the 6-month raw-cash race under every
+  retention scenario modeled; recommendation leans toward an add-on
+  credit-pack, not a subscription replacement) — flagged back as a fork,
+  not applied.
 - [Dashboard MVP plan](plan-brnrd-dashboard-mvp.md) —
   *accepted 2026-05-26; not started*. Eight views (accounts/projects, project detail,
   task detail, conversation proxy, credentials vault (AI +
@@ -1055,6 +1078,15 @@ dive-in map) and are stable until something contradicts them.
   Keeps the capability-flag abstraction (`flush_at_boundary`,
   `inject_at_boundary`, `fold_at_result`, `stop_control`, proof string) as the
   standing way to describe runner mechanisms.
+- [Hermes Agent competitor research, 2026-07-06](research-competitor-hermes-agent.md) —
+  the maintainer named it directly while positioning brnrd; verified via
+  web search (Nous Research, OSS, 175K GitHub stars in under four months,
+  standing self-improving skill-library agent with cron scheduling and
+  broad chat-platform delivery — closer to brnrd's category than gh-aw
+  is). Names three actual differentiators (repo-anchored continuity,
+  quota-economics as product, duo-programming stance vs. autonomous-
+  background-agent stance) rather than leaning on "wrapper," since
+  Hermes's own positioning already claims not-a-wrapper too.
 - [Test suite grooming, 2026-05-16](research-test-suite-grooming-2026-05-16.md) —
   *shipped*. Map of bloat, cross-file helper duplication, and
   intent-quality gaps in `tests/`; the high-leverage moves

@@ -107,6 +107,118 @@ speced to pixel level; a direction correction for whoever does the first
 real visual pass, recorded at the moment it was given so it doesn't have
 to be re-elicited later.
 
+## Norse warmth vs. cold, nature, and retro-engineering (2026-07-06)
+
+Direct question from the maintainer, worth answering plainly rather than
+leaving as mood-board vibes: "when you think of norse myths, do you see
+cold, or warmth? maybe nature? maybe darkness? how does it connect with
+retro engineering? what visual code do we speak?"
+
+**Norse myth is not uniformly cold — that's a modern flattening of it.**
+The actual material holds warmth and cold in the same frame, deliberately:
+
+- **The hearth-hall against the outside dark.** Norse cosmology's default
+  state is a small, firelit, timber mead-hall ringed by an enormous cold
+  unknown (the sea, the ice, Jötunheim). The warmth isn't decorative — it's
+  *earned* against the cold outside it, which is exactly the register
+  layer 3 (§Three-layer visual register, above) is reaching for and not
+  yet finding: not ambient warmth, warmth-as-refuge. A glowing terminal in
+  a dark room is the same image with the furniture changed.
+- **Fire is load-bearing, not absent.** Muspelheim (the fire-realm) is one
+  of the two primordial poles the whole cosmology is built from (paired
+  with Niflheim, the ice-realm) — the myths open with fire and ice meeting
+  and *making* the world, not with cold alone. Runestones themselves were
+  often painted in ochre/red pigment, not left as bare grey stone — the
+  "ancient and cold" reading of Norse material is largely a modern
+  museum-lighting artifact, not the source culture's own palette.
+- **Nature is present but not gentle.** Yggdrasil (the world-tree,
+  literally holding the nine realms in its roots/branches) is the
+  organizing image of the whole cosmology — but it's gnawed by a serpent
+  at its root and grazed by deer, decaying and alive at once. If nature
+  shows up in the visual language, it should read as *structural* (a root
+  system, a tree diagram, the kb's own graph shape) rather than
+  ornamental foliage — and it should carry some wear, not be pristine.
+- **Darkness is real and not resolved.** Ragnarök is foretold, not
+  avoidable, and the myths don't pretend otherwise — this is the tonal
+  argument for "darker than Loki" (already captured above): Loki's TVA
+  plays its cosmic stakes for bureaucratic comedy; the actual Norse
+  material holds the dread without defusing it. Huginn/Muninn's own
+  master traded an eye for knowledge — the mythology's price for
+  competence is literally a wound, which is a sharper, weirder image for
+  "an agentic resident that knows things" than a clean sci-fi assistant
+  trope would give us.
+
+**Retro engineering is the actual bridge, and it's a closer fit than it
+first looks.** Runes are not just "old letters that look cool" — they
+were a real information-encoding technology: carved by hand into wood or
+stone, requiring a craft to cut correctly and a trained reader to decode,
+often deliberately obscured (bind-runes stacking several letters into one
+glyph, ambiguous or riddling inscriptions meant to be worked out rather
+than read at a glance). That is structurally the same relationship a
+programmer has with assembly or bytecode — a low-level, effortful,
+craft-gated encoding underneath the readable surface. **This is the
+literal retro-engineering connection**: a CRT terminal rendering runic
+glyphs isn't two unrelated aesthetics mashed together, it's one aesthetic
+(hand-carved, craft-gated, information-dense encoding) skinned twice, a
+thousand years apart. And it isn't a separate thread from the mascot
+already specced above (§3, the boot-glitch animation) — it's the *same*
+device: bind-runes routinely fuse several letterforms into one glyph
+along a shared stem or mirror axis, which is exactly what `bRnЯd`'s own
+`b`/`d` and `R`/`Я` mirror-letterform kaomoji already does. The maintainer
+asking to "fold [bRnЯd] into the aesthetic and visual identity stream"
+(2026-07-06 follow-up) is correct on the merits, not just as a filing
+instruction: the mascot's mirror-axis *is* a bind-rune, read forwards
+and backwards at once, and the boot animation (two halves converging on
+a center cursor) is a bind-rune being carved in real time. The `weave.md`
+register (coordinates, deltas, glyph marks in place of clauses) is
+*already* runic in this precise sense — dense marks that carry meaning a
+casual reader has to learn to parse, not
+decoration. Naming that connection explicitly is new; the practice
+already exists.
+
+**What this suggests for palette and texture**, as direction, not a spec
+(no asset built here, same caveat as the rest of this page): dim amber and
+warm ember tones for the "hearth" state (a healthy quota, a run in
+progress, things working) against cold blue-white and static/void black
+for the "outside the firelight" state (quota exhausted, a run stopped, an
+error) — the state-color mapping doing double duty as both a UI affordance
+(good/bad) and the actual mythological structure (fire-realm vs. ice-realm,
+inside the hall vs. outside it). Runic/bind-rune-style glyphs as a
+*display* treatment for the weave's own mark channel (✓ ✗ ? → Δ) is a
+concrete, buildable idea worth flagging to whoever designs the first
+screen — the marks already exist and already carry meaning; a bind-rune
+rendering would be pure skin, not new invention.
+
+## What is privy.io, and does it fit here? (asked same thread)
+
+Checked directly rather than guessed: [Privy](https://www.privy.io/) is an
+embedded-wallet and authentication SDK — email/phone/social-login/passkey
+onboarding plus non-custodial crypto wallets generated inside a Trusted
+Execution Environment (2-of-3 Shamir-split keys), aimed at Web3 apps that
+want users to never touch a seed phrase. It was **acquired by Stripe in
+June 2025**, and its stated use cases now explicitly include "AI and
+Onchain Agents" — agents holding their own wallet/identity, not just
+humans. ([privy.io](https://www.privy.io/),
+[privy.io/wallets](https://www.privy.io/wallets),
+[dextools.io Privy guide, 2026](https://www.dextools.io/tutorials/what-is-privy-embedded-wallet-auth-guide-2026))
+
+**Direct fit today: none.** brnrd's billing is Stripe-subscription-and-
+wallet-credits, already decided and shipped
+(`decision-pricing-shape.md`), with no crypto/stablecoin rail anywhere in
+that model — adopting Privy now would be solving a problem brnrd doesn't
+have (it doesn't do Web3 auth or want users managing wallets).
+
+**Where it's actually interesting**: Privy's "AI and Onchain Agents" use
+case is agents holding *their own* spending identity — a genuinely
+resonant idea for a future where a brnrd resident might need to transact
+autonomously (buying its own compute, paying a provider directly, the
+"own quotas and credits" endgame named in
+[`design-quota-scheduling-loom.md`](design-quota-scheduling-loom.md)).
+That's speculative and far out — not a near-term integration, and Stripe
+now owning Privy means the two aren't really separate ecosystem bets
+anymore anyway. Worth remembering the name exists for that future
+question, not worth spending effort on now.
+
 ## Relationship to already-decided naming
 
 `design-brand-brnrd-brr.md` already settled the *character* space (bRnЯd
@@ -147,6 +259,11 @@ reopen any of that. What it adds:
 - [`weave.md`](../src/brr/prompts/weave.md) (repo prompt, not kb) — the
   resident's own "loom" of working notation; the Loki resonance above is
   evidence this metaphor already does real work on both sides of the
-  product (resident-facing notation, user-facing UI naming).
+  product (resident-facing notation, user-facing UI naming); the runic
+  bind-mark reading above is the same evidence a second way.
+- [`design-quota-scheduling-loom.md`](design-quota-scheduling-loom.md) —
+  the economics this visual language has to render alongside the
+  Zachtronics motion (good/bad quota states, the hearth/cold-outside
+  color mapping proposed above).
 - #34 (open, unscoped) — "move to hugimuni github org"; this page is the
   visual-identity context that ticket didn't have when filed.
