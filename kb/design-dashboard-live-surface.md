@@ -523,6 +523,99 @@ percent at two grains (window-total vs. this-run's-share). Whoever slices
 the commit/PR/issue render next should read that section first — the
 connector field only needs building once.
 
+## Reconsidered 2026-07-06: account-scoped control surface, PR review as its own mechanic
+
+Direct maintainer prompt, same shape as the "when the task asks you to
+reconsider" contract: "the execution control surface should be per
+account rather than per repo... maybe needs to be reconsidered" plus "the
+PRs are not properly integrated into the game-ified planning and
+execution control surface."
+
+**Checked against the actual shipped code before answering, not assumed.**
+The hypothesis "the dashboard is repo-first and needs restructuring" turns
+out false for the two pages already built: `/activity`
+(`activity_dashboard.py::activity_page`) already queries
+`_activity_views(db, repos, repo_id=repo_id or None)` — all repos, `repo_id`
+an optional filter, never a required picker. `/plans`
+(`plans_dashboard.py::plans_page`) already renders every repo's plan on
+one page (`repo_plans` list) plus the account-level `cross_repo_plan_md`
+and `decision_ledger_md`. Quota (`#237`, `#240`) was account/Shell-scoped
+from the start — quota isn't a per-repo concept. So the *planning and
+history* surfaces already match `decision-account-centered-daemon.md`'s
+"one daemon per account, repo-scoped runs underneath it" — repo is
+already a tag/filter on an account-first view, not a top-level gate.
+Good news: nothing shipped needs undoing.
+
+**The real gap is the *live* surface, and it doesn't exist yet.** Confirmed
+by the Mode block's own line every wake carries: `coexisting-runs=
+unimplemented (single-flight per dominion; no concurrent-run view yet)`.
+The window-track slice shipped this run is quota (a rate, not a run list);
+no page renders "what is my daemon actually doing right now, across every
+repo it touches" — the closest thing today is the resident's own bundle
+(`Also awake right now`), visible only to a resident wake, never to the
+human. This is precisely the gap the maintainer is pointing at, just not
+where the hypothesis first landed: the *live-flow* half of this page's own
+proposal (§"A shape for the live-flow surface" above) is still unbuilt,
+and when it *is* built, it must be account-scoped natively, not nested
+under a repo page and then generalized later — a live run is organized by
+"what's my daemon doing," not "which repo am I looking at."
+
+**Concrete proof, from this same run:** while working this thread, a
+director-tick event was found stuck in an infinite crash-restart loop —
+26+ retries over ~50 minutes, real compute, real presence-registry churn
+— invisible to the maintainer the entire time because the only place that
+state existed was ephemeral `.brr/presence/*.json` files and a resident's
+own wake-time bundle. A live, account-scoped runs view (even a bare list:
+run id, repo, conversation, started-at, status) would have surfaced this
+in seconds instead of it being found by accident during unrelated work.
+This is the strongest concrete argument for building the live-runs slice,
+not just a hypothetical one — see `kb/log.md` §2026-07-06 "crash-restart
+loop" and PR #256 for the fix; this page names the *visibility* gap the
+incident also exposed, which the fix itself doesn't address.
+
+**PR review: not a stage in the run lane, a separate mechanic.** The
+Zachtronics-mechanics deconstruction above already names a "reviewed"
+stage inside the commit/PR/ticket "molecule" lane. The maintainer's sharper
+point, re-read against that proposal: a PR sitting in "awaiting review" is
+not resident-cost-bearing the way "queued → running" is — no tokens, no
+wall-clock draining against a budget envelope, nothing the window-track's
+core metaphor (a depleting resource) actually describes. It's a *different*
+clock: human attention latency, unbounded, calendar-time not run-time.
+Folding it into the same lane as an in-flight run would misrepresent what's
+actually happening — the loom's depleting-resource metaphor is exactly
+wrong for "waiting on a human whenever they next look." The fix isn't
+"add a reviewed stage to the molecule lane," it's **a second, distinct
+lane**: an account-scoped review queue (every open, unreviewed PR across
+every repo the account touches — same account-first shape as Activity/
+Plans), rendered as a bounded/aging queue rather than a draining track —
+closer to a WIP buffer filling up than a countdown. Age is the signal
+worth showing (a PR open 3 hours reads differently than one open 3 weeks),
+not urgency manufactured to "scream" — the maintainer explicitly affirmed
+checking GitHub on his own cadence is fine ergonomically; what's missing
+isn't a nag, it's a legible "how much is actually waiting on me, across
+everything" the resident's own planning loop can also read (the director
+tick already greps `gh pr list` fresh every firing — this would give it,
+and the human, the same durable, queryable answer instead of two separate
+re-derivations of the same fact).
+
+**What this changes in the existing plan, concretely:** nothing in what's
+shipped needs reverting. Two additions to the slice queue, both natively
+account-scoped from the first commit rather than repo-first-then-
+generalized: (1) a live/coexisting-runs view (#258) — daemon-side, this
+needs a publish step mirroring the Activity/Plans/Quota pattern a fourth
+time (`Daemon.live_runs_json` or similar, refreshed on the same heartbeat
+the presence registry already ticks on) rather than a new architecture;
+(2) a PR-review-queue lane (#259), sourced the same way the director tick
+already gathers `gh pr list` per repo, but persisted and rendered rather
+than re-derived silently every 5h. Neither is scoped into a build this
+run — named per the reconsider contract, filed as GH issues rather than
+blind-built, sized for whoever picks the next dashboard slice.
+Cross-links: `decision-account-centered-daemon.md`
+(the architecture this reconsideration confirms, not revises),
+`kb/design-director-loop.md` §"Concurrent sub-spawns" (a spawn child is
+exactly a "coexisting run" the live view would need to show, including
+its `parent_run_id` rollup relationship to its parent).
+
 ## Read next
 
 - [`design-quota-scheduling-loom.md`](design-quota-scheduling-loom.md) —

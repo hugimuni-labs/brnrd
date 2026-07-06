@@ -11001,3 +11001,132 @@ rather than silently picking one framing. A self-wake is scheduled to
 review the respawn's diff before it's presented as a real answer, per the
 delegation convention `dominion-playbook.md` §Delegation already
 documents. Branch: brr/quota-loom-schema-cohere-2026-07-06.
+
+## [2026-07-06] design | Concurrent sub-spawn proposal cohered; cost-ledger PR #254 reviewed (2 real gaps found)
+
+Direct proposal, same thread as the respawn-dedup fix: replace sequential
+`respawn:` with a concurrent `spawn:` primitive — cross-Shell children
+that run *alongside* the current thought (not after it ends), picked by
+cost/quota (cheaper core or a Shell with more headroom), cost rolled into
+the daemon's ledger, reviewed automatically before reaching the user,
+"toggle-able... on by default." Paired with real self-scrutiny ("goes a
+bit against the cost-per-core calc I proposed... maybe I am wrong... the
+serial model might be truer to life").
+
+Analyzed rather than built blind (`kb/design-director-loop.md` new
+§"Concurrent sub-spawns"): same-Shell concurrent sub-dispatch with
+automatic review already exists today (in-run `Agent` subagents — cost
+picked via `model`, reviewed by construction since the parent synthesizes
+before replying). The actual gap is cross-Shell: `respawn:` only starts
+once the parent run ends (single-flight is per-dominion). Single-flight
+exists for *dominion coherence* (one writer for durable memory) — a
+worker-stack child (no dominion write, no kb governance, no scheduling)
+never touches that surface, so today's daemon enforcing one-worker-per-
+dominion uniformly for resident *and* worker runs is broader than the
+coherence argument requires. Verdict: the proposal is sound and doesn't
+violate why single-flight exists; "cost per core" isn't broken, it
+becomes a rollup (`parent_run_id` on `run_ledger`, additive to the
+just-shipped schema); "serial model truer to life" is preserved — the
+resident's own mind stays single-threaded, a sub-spawn is delegation, not
+the mind forking. Recommended a scoped slice 1 (new `spawn:` frontmatter,
+`parent_run_id` ledger field, cap of 1 concurrent worker-stack child,
+live in-run completion notification rather than a guessed-time self-wake)
+rather than shipping the daemon dispatch-loop change blind in the same
+run that raised it — that specific piece (relaxing single-flight's
+enforcement scope) is exactly the load-bearing invariant this page's §4
+was built around, so it's named as a fork with a recommendation, not
+built unrequested.
+
+Also reviewed the redispatched cost-tracking respawn (PR #254, the
+`run_ledger.jsonl` recorder) per the standing `review cost-tracking
+respawn` self-wake — folded into this run since it was raised same-
+thread rather than left for the scheduled wake. Findings:
+
+- **Solid core:** both hard rules from the schema doc are correctly
+  implemented — closeout force-refreshes Claude usage
+  (`max_age_seconds=0.0`), `usd_subscription_attributed` derives only
+  from `weekly_pct_delta`, never `five_hour_pct_delta`. The second rule
+  already had a passing regression test; the first did not (tests
+  asserted row shape, not the actual refresh-call argument) — added
+  `test_closeout_forces_claude_usage_refresh_not_a_stale_cache` to close
+  that gap, pushed as a follow-up commit on the same branch/PR.
+- **Real gap: `task_classification` is never populated anywhere.** The
+  schema doc calls it "the *only* field that makes rollup-by-shape
+  possible... without it every row is a singleton no future estimate can
+  match against" — but no call site in the daemon ever sets
+  `task.meta["task_classification"]` (grepped the whole tree; only
+  `run_ledger.py` *reads* the key). Every row will ship `null` until this
+  is wired — flagged back rather than fixed here, since it's a real
+  design call (heuristic default from branch/PR shape vs. an explicit
+  resident-set tag) not a one-line patch.
+- **Scope reduction, not a bug:** `usd_credits_equivalent` is stubbed to
+  always return `None` (comment: "no stable token-to-managed-credit
+  mapping yet") — reasonable given `decision-pricing-shape.md` defines
+  `$/credit` but not a token→credit formula, but worth naming since the
+  maintainer flagged the two USD-denominated fields as the most important
+  ones for actual decision-making, and this is one of the two.
+- **Process note:** PR #254 was branched before PR #252 (the kb page
+  that actually etches this schema, "etched 2026-07-06") landed — #252 is
+  still open and now `CONFLICTING`/`DIRTY`. The implementation matches
+  #252's content correctly (checked field-by-field), but the schema
+  doc and its own implementation currently live in unmerged, diverged
+  history. Worth reconciling (merge #252 first, then rebase #254) before
+  either lands, so a future reader isn't left grepping two branches to
+  find "the" schema.
+
+Not merged — the maintainer said "I will be reviewing it" and retains
+that call; this is a second-pair-of-eyes pass, not a merge decision.
+Branch: brr/run-ledger-cost-tracking-2026-07-06 (PR #254).
+
+## [2026-07-06] fix+ship | Crash-restart loop found & fixed; sub-spawn slice-1 shipped; #252/#254 landed; dashboard reconsidered
+
+Dense run, four threads: (1) **#252 merged** — gh's cached CONFLICTING
+status was stale; a clean local rebase onto `main` proved it mergeable,
+merged as `9194a84`. (2) **#254 redone**: `task_classification` had no
+write path (every row shipped `null`) — added a `.task-classification`
+control file (read at the existing closeout seam) and a
+`task_classification:` field on `respawn:`/`spawn:` frontmatter, documented
+in `daemon-substrate.md`; rebased onto merged `main`; marked ready for
+review. (3) **Live incident found and fixed**: while checking coexisting-
+run state, found a director-tick event stuck in an infinite crash-restart
+loop — a crash inside `_run_worker` left it wedged at `status=processing`
+(which `list_dispatchable` treats as still-eligible, for crash-recovery
+after a daemon restart), so the next tick re-dispatched the identical
+event, crashed again, repeated with no backoff: 26+ runs over ~50 minutes,
+confirmed via `.brr/presence/*.json` (same `event_id`, fresh `run_id` each
+attempt, presence entries never deregistered). Manually neutralized the
+stuck event; shipped a structural backstop (`_run_worker_and_finalize`
+now catches the crash, marks the event `error` with a `defer_until`, logs
+a full traceback) so no future crash of any cause can reproduce the loop.
+PR #256, unmerged. (4) **Sub-spawn slice-1 shipped** per the maintainer's
+nod (kb/design-director-loop.md §"Concurrent sub-spawns"): `spawn:` outbox
+frontmatter (forced `worker: true`, refuses nesting), daemon `start()`
+gains a second `current_spawn` pool slot (cap-1, scanned independent of
+the resident's own `current`, one inbox scan feeds both dispatch
+decisions), `run_ledger` gains `parent_run_id`/`is_subspawn`, completion
+notify reuses existing plumbing (a plain pending event tagged with the
+parent's `conversation_key`). PR #257, stacked on #254, unmerged. Named
+gaps: `runner.kill_active()` is still single-module-global (shutdown
+doesn't prompt-kill a live spawn); no purpose-built end-to-end test for
+the main-loop wiring (matches the rest of `start()`'s untested-at-that-
+level loop). 1334 tests pass throughout.
+
+Also reconsidered the dashboard's information architecture per direct
+prompt ("execution control surface should be per account rather than per
+repo," "PRs are not properly integrated into the game-ified planning and
+execution control surface"). Checked against shipped code before
+answering: `/activity` and `/plans` are *already* account-first (repo is
+an optional filter, not a required picker) — the hypothesis that they
+need restructuring was wrong, no rehaul needed. The real gap: no live/
+coexisting-runs view exists at all (confirmed by the Mode block's own
+`coexisting-runs=unimplemented` line, and by the crash-loop incident
+itself — invisible to the maintainer the whole ~50 minutes, found by
+accident). Filed #258 (account-scoped live-runs view) and #259 (PR review
+as its own account-scoped queue lane, distinct from the run/token loom
+since review is human-attention-latency, not resident-cost-bearing — the
+window-track's depleting-resource metaphor is the wrong shape for it).
+Detail: `kb/design-dashboard-live-surface.md` §"Reconsidered 2026-07-06".
+
+Branches: brr/quota-loom-schema-cohere-2026-07-06 (#252, merged),
+brr/run-ledger-cost-tracking-2026-07-06 (#254), brr/crash-loop-backstop-
+2026-07-06 (#256), brr/sub-spawn-slice1-2026-07-06 (#257).
