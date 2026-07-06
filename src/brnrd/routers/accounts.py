@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import ids, schemas
+from ..activity_records import dedupe_activity_records
 from ..auth import Principal, get_db, require_account
 from ..models import ActivityRecord, Account, GitHubInstallation, GitHubInstalledRepo, Repo, Token
 from ..oauth import GitHubIdentity
@@ -152,6 +153,7 @@ def list_activity(repo_id: str | None = Query(default=None), principal: Principa
         .where(ActivityRecord.repo_id.in_(repo_ids))
         .order_by(ActivityRecord.updated_at.desc().nullslast(), ActivityRecord.reported_at.desc())
     ).scalars()
+    rows = dedupe_activity_records(rows)
     return schemas.ActivityList(activity=[activity_out(row) for row in rows])
 
 
