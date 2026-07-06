@@ -1,6 +1,7 @@
 """Claude interactive /usage quota collector."""
 
 import json
+from datetime import datetime, timezone
 
 from brr import claude_usage
 
@@ -41,6 +42,48 @@ def test_parse_usage_text_extracts_session_and_week_quota():
     assert levels["quota"]["buckets"]["session"] == {"remaining_percentage": 100.0}
     assert levels["quota"]["buckets"]["week"] == {"remaining_percentage": 55.0}
     assert "week_models" not in levels["quota"]["buckets"]
+    # Computed reset epochs ride alongside the scraped text, additively.
+    assert isinstance(levels["session_resets_at"], float)
+    assert isinstance(levels["week_resets_at"], float)
+
+
+def test_reset_epoch_dated_form_uses_named_year():
+    now = datetime(2026, 7, 5, 12, 0, tzinfo=timezone.utc)
+    epoch = claude_usage._reset_epoch("Jul 10, 12am (Europe/Berlin)", now=now)
+    expected = datetime(2026, 7, 10, 0, 0, tzinfo=claude_usage.ZoneInfo("Europe/Berlin"))
+    assert epoch == expected.timestamp()
+
+
+def test_reset_epoch_dated_form_rolls_year_forward_past_boundary():
+    # "now" is deep into a year; a dated reset that reads as far in the past
+    # relative to "now" must mean next year, not a stale date.
+    now = datetime(2026, 12, 30, 12, 0, tzinfo=timezone.utc)
+    epoch = claude_usage._reset_epoch("Jan 2, 6am (Europe/Berlin)", now=now)
+    expected = datetime(2027, 1, 2, 6, 0, tzinfo=claude_usage.ZoneInfo("Europe/Berlin"))
+    assert epoch == expected.timestamp()
+
+
+def test_reset_epoch_undated_form_already_passed_today_resolves_tomorrow():
+    zone = claude_usage.ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 7, 5, 8, 0, tzinfo=zone)  # 8am local
+    epoch = claude_usage._reset_epoch("4:50am (Europe/Berlin)", now=now)
+    expected = datetime(2026, 7, 6, 4, 50, tzinfo=zone)  # tomorrow
+    assert epoch == expected.timestamp()
+
+
+def test_reset_epoch_undated_form_still_upcoming_resolves_today():
+    zone = claude_usage.ZoneInfo("Europe/Berlin")
+    now = datetime(2026, 7, 5, 8, 0, tzinfo=zone)  # 8am local
+    epoch = claude_usage._reset_epoch("11:59pm (Europe/Berlin)", now=now)
+    expected = datetime(2026, 7, 5, 23, 59, tzinfo=zone)  # later today
+    assert epoch == expected.timestamp()
+
+
+def test_reset_epoch_unparseable_or_unknown_zone_is_none():
+    assert claude_usage._reset_epoch("not a reset string") is None
+    assert claude_usage._reset_epoch("") is None
+    assert claude_usage._reset_epoch(None) is None
+    assert claude_usage._reset_epoch("11:59pm (Not/AZone)") is None
 
 
 def test_parse_usage_text_tolerates_squashed_tui_words():
@@ -85,10 +128,10 @@ def test_parse_usage_text_keeps_model_week_bucket_separate():
     )
 
     assert levels["week_used_percentage"] == 5
-    assert levels["week_models"]["Fable"] == {
-        "used_percentage": 8,
-        "reset": "Jul 10, 12am (Europe/Berlin)",
-    }
+    fable = levels["week_models"]["Fable"]
+    assert fable["used_percentage"] == 8
+    assert fable["reset"] == "Jul 10, 12am (Europe/Berlin)"
+    assert isinstance(fable["resets_at"], float)
     assert levels["quota"]["summary"] == (
         "session 100% left (resets 4:50pm (Europe/Berlin)); "
         "week 95% left (resets Jul 10, 12am (Europe/Berlin)); "
