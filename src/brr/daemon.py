@@ -46,6 +46,7 @@ import signal
 import subprocess
 import threading
 import time
+import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -4032,17 +4033,54 @@ def _run_worker_and_finalize(
     it from worker threads would race on the watcher's internal
     snapshot.
     """
+    eid = event.get("id", "?")
+    failure_defer_seconds = float(
+        cfg.get("dispatch.failure_defer_seconds", _FAILURE_DEFER_SECONDS_DEFAULT)
+    )
     task = None
     try:
-        task = _run_worker(
-            event,
-            repo_root,
-            responses_dir,
-            cfg,
-            max_retries,
-            account_context=account_context,
-            inbox_dir=inbox_dir,
-        )
+        try:
+            task = _run_worker(
+                event,
+                repo_root,
+                responses_dir,
+                cfg,
+                max_retries,
+                account_context=account_context,
+                inbox_dir=inbox_dir,
+            )
+        except Exception:
+            # A crash here left ``task`` unset, so the event's own status
+            # never advances past "processing" — and list_dispatchable
+            # treats "processing" as still-eligible (crash-recovery after a
+            # daemon restart). With nothing marking this attempt done, the
+            # very next main-loop tick re-dispatches the identical event,
+            # crashes again, and repeats with no backoff: an infinite
+            # crash-restart loop, one fresh run-id every attempt. Found live
+            # 2026-07-06 — a director-tick event (schedule-sourced, "host"
+            # env, no per-run worktree isolation) looped 26+ times over
+            # ~50 minutes, each attempt leaking an underegistered presence
+            # entry, before being manually marked "error" mid-incident. The
+            # underlying crash cause wasn't recoverable from this pass (the
+            # daemon's own stdout isn't captured to a file — a real gap
+            # named back separately) but no future crash of *any* cause
+            # should be able to reproduce the loop, so this is a structural
+            # backstop, not a fix for one bug: always retire the event
+            # rather than leave it "processing" forever.
+            print(
+                f"[brr] run for {eid}: crashed before producing a Run:\n"
+                f"{traceback.format_exc()}"
+            )
+            _set_event_status_if_present(event, "error")
+            try:
+                protocol.update_event_meta(
+                    event,
+                    defer_until=_format_utc_after(failure_defer_seconds),
+                    defer_reason="worker_crash",
+                )
+            except OSError:
+                pass
+            raise
         if event.get("status") != "done":
             _set_event_status_if_present(event, task.status)
         if task.status == "error":
