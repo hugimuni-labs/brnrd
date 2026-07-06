@@ -469,6 +469,47 @@ before committing. The `frontend/` mentions above are left as written —
 historically accurate for what shipped at the time — this is the pointer
 for the rename.
 
+## Shipped (2026-07-06): slice 2 — the window-track view itself
+
+"lets start with slice 2!" — same-thread go-ahead. Built inside
+`src/frontend`, against real numbers, per the prior entry's own next-step:
+
+- `GET /v1/dashboard/quota` (`src/brnrd_web/activity_dashboard.py::
+  dashboard_quota_api`) — JSON twin of the Jinja dashboard's quota card,
+  same session-cookie auth, same `_quota_views` data. 401 (not a login
+  redirect) when unauthenticated, since this is fetched by JS.
+- Closed the reset-epoch gap the prior slice named and deferred:
+  `src/brr/gates/cloud.py`'s `_quota_window`/`_codex_quota_shell`/
+  `_claude_quota_shell` now carry `resets_at` (unix epoch) alongside the
+  existing display-text `reset` — `claude_usage.py`/`codex_status.py`
+  already computed these epochs (`session_resets_at`/`week_resets_at`,
+  `primary_resets_at`/`secondary_resets_at`) but nothing published them
+  past the daemon boundary. `QuotaWindowIn` (`src/brnrd/schemas.py`)
+  gained the matching field — without it pydantic's default
+  `extra="ignore"` would have silently dropped it from `model_dump()`.
+- `src/frontend/src/lib/{quota.ts,WindowTrack.svelte}` +
+  `src/routes/+page.svelte` — the first real screen. One draining bar per
+  window (dataviz skill's fixed status palette: good/warning/critical,
+  never a categorical hue, icon+label pairing so color never carries
+  meaning alone), a live countdown ticking off `resets_at` client-side
+  between polls (20s poll, 1s tick), a stale-report badge, and a 401 →
+  "log in" state rather than a blank screen. Polls the same
+  daemon-published data the Jinja dashboard still renders — the two
+  surfaces agree until the Jinja one is retired.
+- `vite.config.ts` gained a dev-server proxy (`/v1`, `/login`, etc. →
+  `localhost:8000` by default, `BRNRD_DEV_TARGET` override) mirroring
+  `.upsun/config.yaml`'s passthru list, so `npm run dev` has a working
+  local loop against a real `brnrd` backend — this didn't exist yet
+  since nothing had fetched cross-origin JSON from the scaffold before.
+
+1316 tests pass (backend); `svelte-check`/`eslint`/`prettier`/`vite build`
+clean (frontend). Not done, still real: the KB/message/CPS mechanics from
+the Zachtronics deconstruction above (only the time-window mechanic is
+built); the Jinja dashboard's own quota card is untouched (still renders
+the old way) — retiring it is a separate call once the SvelteKit surface
+covers enough of `dashboard.html` to replace it outright, not bundled
+into this slice. Branch: `brr/window-track-quota-view-2026-07-06`.
+
 ## Read next
 
 - [`design-resident-boundary.md`](design-resident-boundary.md) §7 — the
