@@ -153,6 +153,12 @@ def parse_token_count(payload: dict[str, Any]) -> dict[str, Any]:
                 "secondary_remaining_percent": (
                     100.0 - secondary_used if secondary_used is not None else None
                 ),
+                # Raw reset epochs, previously discarded past `_fmt_reset()`'s
+                # display string (2026-07-06) — the dashboard window-track
+                # visual's time-remaining axis needs a machine-parseable
+                # instant, not just "resets HH:MMZ" text.
+                "primary_resets_at": _num(primary.get("resets_at")),
+                "secondary_resets_at": _num(secondary.get("resets_at")),
             }
         plan = rate.get("plan_type")
         if isinstance(plan, str) and plan.strip():
