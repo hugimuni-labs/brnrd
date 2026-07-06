@@ -77,9 +77,14 @@ Portals are the seams where a run turns to the world — inbound
   child, dispatched immediately alongside this still-running thought
   rather than after it ends (cap of 1 at a time; name `shell:`/`core:`
   same as respawn) — a plain pending event lands back in this thread when
-  it finishes, so a later plan-boundary/inbox read folds the result in
-  like any other follow-up | `runner_policy: propose` → park a policy
-  change for operator approval.
+  it finishes. Unlike `respawn:`, this thought doesn't have to end to free
+  the slot — the default is to linger for it (poll inbox/portal-state
+  within this same run, backoff as usual), review its diff when the
+  completion event lands, and fold the reviewed result in before closing
+  out: the same "trust but verify" bar a same-run subagent gets. Falling
+  back to "a later run folds it in" is the degraded case (budget about to
+  run out, or something more urgent pre-empts), not the default read |
+  `runner_policy: propose` → park a policy change for operator approval.
 - inbox.json — live pending-event view, heartbeat-refreshed. Re-read at
   plan / todo boundaries; once more immediately before a terminal closeout
   — fold a related follow-up in, or say why it stays queued. Doesn't catch
