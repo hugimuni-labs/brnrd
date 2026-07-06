@@ -16,6 +16,8 @@ _ROW_FIELDS = {
     "source_system",
     "external_refs",
     "task_classification",
+    "parent_run_id",
+    "is_subspawn",
     "tokens_input",
     "tokens_output",
     "tokens_cache_read",
@@ -248,3 +250,30 @@ def test_read_task_classification_control_reads_first_line(tmp_path):
 def test_read_task_classification_control_missing_file_and_dir(tmp_path):
     assert run_ledger.read_task_classification_control(tmp_path / "no-outbox") is None
     assert run_ledger.read_task_classification_control(None) is None
+
+
+def test_subspawn_row_carries_parent_run_id(tmp_path, monkeypatch):
+    """A concurrent worker-stack child's row rolls up to its parent.
+
+    kb/design-director-loop.md §"Concurrent sub-spawns": a sub-spawn's true
+    cost is parent row + Σ(child rows), via this additive field — not a
+    rewrite of the parent's own row.
+    """
+    (tmp_path / ".brr").mkdir()
+    monkeypatch.setattr(run_ledger, "load_quota_levels", lambda *a, **kw: None)
+    child = _task("run-child")
+    child.meta["spawn_parent_run_id"] = "run-parent"
+    child.meta["spawn_immediate"] = True
+
+    row = run_ledger.build_closed_run_row(child, {})
+
+    assert row["parent_run_id"] == "run-parent"
+    assert row["is_subspawn"] is True
+
+
+def test_non_subspawn_row_has_no_parent(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_ledger, "load_quota_levels", lambda *a, **kw: None)
+    row = run_ledger.build_closed_run_row(_task("run-solo"), {})
+
+    assert row["parent_run_id"] is None
+    assert row["is_subspawn"] is False

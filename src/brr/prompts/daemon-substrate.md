@@ -73,7 +73,12 @@ Portals are the seams where a run turns to the world — inbound
   frontmatter, PR body as the message; diffense can supply title/body from
   a checked pack but does not own PR creation | `respawn: true` → park a
   handoff to another run; name `shell:` / `core:`, or `quality: escalate`
-  for the stronger local Core | `runner_policy: propose` → park a policy
+  for the stronger local Core | `spawn: true` → a *concurrent* worker-stack
+  child, dispatched immediately alongside this still-running thought
+  rather than after it ends (cap of 1 at a time; name `shell:`/`core:`
+  same as respawn) — a plain pending event lands back in this thread when
+  it finishes, so a later plan-boundary/inbox read folds the result in
+  like any other follow-up | `runner_policy: propose` → park a policy
   change for operator approval.
 - inbox.json — live pending-event view, heartbeat-refreshed. Re-read at
   plan / todo boundaries; once more immediately before a terminal closeout
