@@ -24,8 +24,10 @@ import struct
 import subprocess
 import termios
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 SNAPSHOT_NAME = ".claude-usage-levels.json"
 
@@ -104,6 +106,82 @@ def _clean_terminal_text(raw: bytes | str) -> str:
 
 def _line_key(line: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", line.lower())
+
+
+_MONTH_ABBR = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+# Two shapes seen live: undated session resets ("11:59pm (Europe/Berlin)")
+# and dated week resets ("Jul 10, 12am (Europe/Berlin)") — no year either way.
+_RESET_EPOCH_RE = re.compile(
+    r"^(?:(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2}),\s*)?"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)\s*"
+    r"\((?P<zone>[^)]+)\)$",
+    re.IGNORECASE,
+)
+
+
+def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> float | None:
+    """Best-effort UTC epoch for a TUI-scraped reset string, or ``None``.
+
+    Claude's ``/usage`` panel never gives a raw epoch the way Codex's
+    session rollout does (``codex_status._fmt_reset``) — only free text, in
+    two different shapes: the session (5h) reset carries no date
+    (``"11:59pm (Europe/Berlin)"``), the week reset carries month+day but no
+    year (``"Jul 10, 12am (Europe/Berlin)"``). This computes the next future
+    occurrence of that wall-clock time in that zone rather than parsing a
+    year that isn't there. Never raises — any parse or zone failure is
+    ``None``, not a guess.
+    """
+    if not reset_text:
+        return None
+    match = _RESET_EPOCH_RE.match(reset_text.strip())
+    if not match:
+        return None
+    try:
+        zone = ZoneInfo(match.group("zone").strip())
+    except Exception:
+        return None
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute") or 0)
+    if not (1 <= hour <= 12) or not (0 <= minute <= 59):
+        return None
+    if match.group("ampm").lower() == "am":
+        hour = 0 if hour == 12 else hour
+    else:
+        hour = 12 if hour == 12 else hour + 12
+
+    now = now if now is not None else datetime.now(timezone.utc)
+    now_local = now.astimezone(zone)
+
+    mon, day = match.group("mon"), match.group("day")
+    if mon:
+        month = _MONTH_ABBR.get(mon.strip().lower())
+        if month is None:
+            return None
+        try:
+            candidate = now_local.replace(
+                month=month, day=int(day), hour=hour, minute=minute,
+                second=0, microsecond=0,
+            )
+        except ValueError:
+            return None
+        # No year in the source text: a result more than 2 days in the past
+        # means the reset is actually next year (a week-boundary date named
+        # just after a year turnover).
+        if candidate < now_local - timedelta(days=2):
+            try:
+                candidate = candidate.replace(year=candidate.year + 1)
+            except ValueError:
+                return None
+    else:
+        candidate = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= now_local:
+            candidate = candidate + timedelta(days=1)
+
+    return candidate.astimezone(timezone.utc).timestamp()
 
 
 def _reset_text(line: str) -> str | None:
@@ -252,12 +330,16 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         bucket = _bucket_summary("session", session[0], session[1])
         levels["session_used_percentage"] = session[0]
         levels["session_reset"] = session[1]
+        # Computed, not scraped (2026-07-06) — see `_reset_epoch`'s docstring
+        # for why this can't be a passthrough the way Codex's is.
+        levels["session_resets_at"] = _reset_epoch(session[1])
         parts.append(str(bucket["summary"]))
         buckets["session"] = {"remaining_percentage": bucket["remaining_percentage"]}
     if week:
         bucket = _bucket_summary("week", week[0], week[1])
         levels["week_used_percentage"] = week[0]
         levels["week_reset"] = week[1]
+        levels["week_resets_at"] = _reset_epoch(week[1])
         parts.append(str(bucket["summary"]))
         buckets["week"] = {"remaining_percentage": bucket["remaining_percentage"]}
     week_model_buckets: dict[str, Any] = {}
@@ -270,6 +352,7 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         levels.setdefault("week_models", {})[label] = {
             "used_percentage": found[0],
             "reset": found[1],
+            "resets_at": _reset_epoch(found[1]),
         }
         parts.append(str(bucket["summary"]))
         week_model_buckets[label] = {
