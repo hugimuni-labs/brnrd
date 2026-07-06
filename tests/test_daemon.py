@@ -553,6 +553,77 @@ def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
     assert [ev["id"] for ev in events] == [real_followup.stem]
 
 
+def test_run_worker_does_not_dedupe_its_own_respawn(tmp_path, monkeypatch):
+    """A respawn event must never be flagged as a duplicate of its parent.
+
+    Found live (2026-07-06): ``_queue_respawn_request`` carries the
+    parent's ``telegram_chat_id``/``telegram_topic_id``/
+    ``telegram_message_id`` forward so the respawn's eventual reply lands
+    in the same chat thread — but those are exactly the fields
+    ``origin_message_key_for_event`` hashes into the exact-duplicate key.
+    The respawn event recomputed to the *same* key as the message that
+    triggered the run which queued it, so the moment it started, the
+    "arrived via two channels" check in ``_run_worker`` matched it
+    against its own parent and silently squashed it with "I already
+    received this source message on another configured channel" instead
+    of actually running.
+    """
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+
+    telegram_ids = dict(
+        telegram_chat_id=155783668,
+        telegram_topic_id="",
+        telegram_message_id=42,
+    )
+    parent_event = make_event(
+        tmp_path, eid="evt-parent", conversation_key="telegram:155783668:",
+        **telegram_ids,
+    )
+    # Seed the conversation log as if the parent event already ran —
+    # this is what records the origin_message_key a later duplicate
+    # check matches against.
+    from brr import conversations
+    conversations.append_event(brr_dir, "telegram:155783668:", parent_event)
+
+    respawn_event = make_event(
+        tmp_path, eid="evt-respawn", conversation_key="telegram:155783668:",
+        respawned_by_run="run-parent", respawned_from_event="evt-parent",
+        **telegram_ids,
+    )
+
+    worktree_path, _finalized = _stub_env_isolated(monkeypatch, tmp_path)
+    monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts,
+        "build_daemon_prompt",
+        lambda task, eid, rp, root, **kw: f"PROMPT {eid}",
+    )
+
+    base_env = envs.get_env("worktree")
+
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("real respawn answer\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="real respawn answer\n", stderr="", returncode=0,
+            trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(base_env.__class__, "invoke", fake_invoke, raising=False)
+
+    task = daemon._run_worker(respawn_event, tmp_path, responses, {}, 0)
+
+    assert task.status == "done"
+    assert "deduplicated_by_event_id" not in task.meta
+    response = (responses / "evt-respawn.md").read_text(encoding="utf-8")
+    assert response == "real respawn answer\n"
+
+
 def test_drain_outbox_queues_worker_respawn_request(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
