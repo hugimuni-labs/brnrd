@@ -187,6 +187,12 @@ class QuotaWindowIn(BaseModel):
     limit: float | None = None
     percent: float | None = None
     reset: str | None = None
+    # Machine-parseable reset instant (unix epoch seconds) alongside the
+    # display-text `reset` above — added for the window-track visual's
+    # time-remaining axis (2026-07-06, kb/design-dashboard-live-surface.md
+    # "Shipped" gap this closes). Without a declared field here, pydantic's
+    # default extra="ignore" would silently drop it from `model_dump()`.
+    resets_at: float | None = None
 
 
 class QuotaShellIn(BaseModel):

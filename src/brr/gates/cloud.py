@@ -441,8 +441,24 @@ def _publish_plans(brr_dir: Path, state: dict) -> None:
         print(f"[brr:cloud] plans publish failed: {e}")
 
 
-def _quota_window(label: str, percent: float | None, reset: str | None = None) -> dict[str, Any]:
-    return {"label": label, "used": None, "limit": None, "percent": percent, "reset": reset}
+def _quota_window(
+    label: str,
+    percent: float | None,
+    reset: str | None = None,
+    resets_at: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "label": label,
+        "used": None,
+        "limit": None,
+        "percent": percent,
+        "reset": reset,
+        # Machine-parseable reset instant (unix epoch seconds), alongside the
+        # display-text `reset` above — the window-track visual's time-
+        # remaining axis needs this, `reset` alone is prose (2026-07-06,
+        # kb/design-dashboard-live-surface.md "Shipped" gap this closes).
+        "resets_at": resets_at,
+    }
 
 
 def _codex_quota_shell() -> dict[str, Any] | None:
@@ -458,8 +474,8 @@ def _codex_quota_shell() -> dict[str, Any] | None:
         "shell": "codex",
         "status": "known",
         "windows": [
-            _quota_window("5h window", primary),
-            _quota_window("weekly", secondary),
+            _quota_window("5h window", primary, resets_at=quota.get("primary_resets_at")),
+            _quota_window("weekly", secondary, resets_at=quota.get("secondary_resets_at")),
         ],
     }
 
@@ -481,8 +497,12 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
         "shell": "claude",
         "status": "known",
         "windows": [
-            _quota_window("5h window", session_pct, levels.get("session_reset")),
-            _quota_window("weekly", week_pct, levels.get("week_reset")),
+            _quota_window(
+                "5h window", session_pct, levels.get("session_reset"), levels.get("session_resets_at")
+            ),
+            _quota_window(
+                "weekly", week_pct, levels.get("week_reset"), levels.get("week_resets_at")
+            ),
         ],
     }
 
