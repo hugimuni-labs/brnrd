@@ -59,7 +59,17 @@ applications:
         pip install --upgrade pip
         pip install ".[backend,postgres]"
         cd src/frontend
-        npm ci
+        # `npm ci` demands byte-exact lock/registry agreement; several
+        # frontend deps (rolldown/tailwindcss oxide) ship optional
+        # per-platform native/wasm binaries whose own nested ranges (e.g.
+        # @emnapi/core) get satisfied by whatever patch the registry has
+        # live that day, so a lock resolved on one npm/date can disagree
+        # with `ci`'s sync check on another even with unchanged
+        # package.json (hit live 2026-07-06: local npm resolved
+        # @emnapi/core@1.11.1, Upsun's npm ci wanted 1.11.2 — same lock,
+        # same registry, different day). `npm install` self-heals that
+        # drift instead of hard-failing the build over it.
+        npm install --no-audit --no-fund
         npm run build
         cd -
 
