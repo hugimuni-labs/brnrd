@@ -10889,3 +10889,67 @@ endgame section names, not acted on now.
 No code changed this run — brainstorm/synthesis only, per the actual ask
 ("I wanna brainstorm with you... help me capture the perfect shape").
 Branch: brr/quota-loom-hermes-aesthetic-brainstorm-2026-07-06.
+
+## [2026-07-06] fix | Respawn events falsely deduped against their own parent — root cause of "delegation is broken"
+
+Direct report: the user watched a codex-shell respawn (dispatched last
+run to implement the `run_ledger` cost-tracking recorder) come back as
+"done", then garbled progress-card fragments, then "I already received
+this source message on another configured channel. No second run was
+started." Read as "delegation seems broken" and asked to fix it in both
+the daemon (harness) and the prompts (orientation).
+
+Root-caused, not guessed: `run-260706-1819-lvxa` (the respawn's own run
+record) shows `deduplicated_by_event_id: evt-...-tkis` — its own parent
+event, the message that had queued it. `_queue_respawn_request`
+(`daemon.py`) carries the parent's `telegram_chat_id`/
+`telegram_topic_id`/`telegram_message_id` forward onto the new event so
+its eventual reply lands in the same chat thread — correct for routing,
+but `origin_message_key_for_event` (`conversations.py`) recomputes its
+exact-duplicate key from those same three fields. A respawn therefore
+always hashes to the *identical* key as the message that spawned it, so
+the moment `_run_worker` picked it up, the "arrived via two channels"
+check (meant to catch a real webhook redelivering the same message)
+matched it against its own parent and silently squashed it — near-
+instantly, never actually invoking codex. The garbled card text the user
+saw is very likely a rendering/copy artifact of the rapid-fire phase
+transitions this produced, not a separate bug; not chased further since
+the substantive failure (no second run) is fully explained without it.
+
+Fixed in `_run_worker`: events carrying `respawned_from_event` /
+`respawned_by_run` (the two fields `_queue_respawn_request` sets,
+already used the same way by #242's `_pending_events_for_agent` fix) now
+skip the origin-message duplicate check entirely — a daemon-dispatched
+respawn is never a genuinely re-delivered external message, so it must
+never be flagged against the run that queued it. Regression test added
+(`test_run_worker_does_not_dedupe_its_own_respawn`, `tests/test_daemon.
+py`) using the real production field names (the existing respawn tests
+only used a synthetic `chat_id`/literal `origin_message_key` shortcut
+that never exercised the actual telegram field names, which is how this
+shipped unnoticed) — confirmed it reproduces the exact bug when the fix
+is reverted (`deduplicated_origin_message_key` collision), and passes
+with it applied. Full suite green (1318 passed).
+
+Re-dispatched the squashed cost-tracking respawn now that the fix is
+live; the `review cost-tracking respawn` self-wake in `schedule.md`
+covers reviewing whatever it actually produces this time.
+
+On the "prompts (for orientation)" half of the ask: the architecture
+question — should the resident block/wait on a `respawn:` synchronously —
+was already settled in `dominion-playbook.md` §Delegation as
+structurally impossible under single-flight (the dispatching run has to
+end before the respawn can start), and the review-before-fold-in
+convention it documents was already correctly in place here (the
+scheduled self-wake existed) — it just had nothing real to review
+because the dedup bug ate the run before it started. No prompt change
+made; the gap was the harness bug, not the orientation. Named, not
+built: the playbook's own next-rung idea (a `review: true` daemon flag
+that suppresses a worker respawn's direct delivery until the resident
+reviews it) would have caught this same failure mode a different way,
+but building it collides with the just-shipped `last_chat_id` delivery-
+guarantee fallback (PR #244) that exists specifically to make sure a
+response always reaches *somewhere* — suppressing delivery on purpose
+needs to be reconciled with that guarantee deliberately, not bolted on
+under this run's time budget. Flagged back rather than rushed.
+
+Branch: brr/respawn-dedup-fix-2026-07-06.
