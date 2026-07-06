@@ -108,6 +108,54 @@ def _model_context_remaining(model_usage: Any) -> float | None:
     return lowest_remaining
 
 
+def _model_usage_tokens(model_usage: Any) -> dict[str, Any] | None:
+    if not isinstance(model_usage, dict):
+        return None
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    found = False
+    highest_used: float | None = None
+    for usage in model_usage.values():
+        if not isinstance(usage, dict):
+            continue
+        fields = {
+            "input_tokens": _camel_or_snake(usage, "inputTokens", "input_tokens"),
+            "output_tokens": _camel_or_snake(usage, "outputTokens", "output_tokens"),
+            "cache_read_input_tokens": _camel_or_snake(
+                usage, "cacheReadInputTokens", "cache_read_input_tokens"
+            ),
+            "cache_creation_input_tokens": _camel_or_snake(
+                usage, "cacheCreationInputTokens", "cache_creation_input_tokens"
+            ),
+        }
+        for key, raw in fields.items():
+            value = _num(raw)
+            if value is None:
+                continue
+            totals[key] += int(value)
+            found = True
+        window = _num(_camel_or_snake(usage, "contextWindow", "context_window"))
+        if window and window > 0:
+            used_parts = [
+                fields["input_tokens"],
+                fields["cache_read_input_tokens"],
+                fields["cache_creation_input_tokens"],
+            ]
+            used = sum(v for v in (_num(part) for part in used_parts) if v is not None)
+            used_pct = max(0.0, min(100.0, 100.0 * used / window))
+            if highest_used is None or used_pct > highest_used:
+                highest_used = used_pct
+    if not found:
+        return None
+    if highest_used is not None:
+        totals["context_window_used_percent"] = round(highest_used, 6)
+    return totals
+
+
 def parse_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize Claude ``--output-format json`` into a levels snapshot."""
     payload = payload if isinstance(payload, dict) else {}
@@ -131,6 +179,9 @@ def parse_result(payload: dict[str, Any]) -> dict[str, Any]:
             "summary": f"{_fmt_pct(remaining)}% context left (est)",
             "remaining_percentage": remaining,
         }
+    tokens = _model_usage_tokens(payload.get("modelUsage"))
+    if tokens:
+        levels["tokens"] = tokens
 
     return levels
 
