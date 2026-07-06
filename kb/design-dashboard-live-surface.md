@@ -507,8 +507,27 @@ the old way) — retiring it is a separate call once the SvelteKit surface
 covers enough of `dashboard.html` to replace it outright, not bundled
 into this slice. Branch: `brr/window-track-quota-view-2026-07-06`.
 
+## Cohered with the quota-scheduling loom (2026-07-06)
+
+[`design-quota-scheduling-loom.md`](design-quota-scheduling-loom.md)
+§"Cohering with the dashboard's rendering vocabulary" names three places
+where that page's cost/tracking design and this page's Zachtronics
+rendering mapping are one data model, not two adjacent ones: the commit/
+PR/issue semi-hierarchy (§Zachtronics-mechanics above, "commits belong to
+PRs...") *is* that page's `run_ledger.source_system`/`external_refs`
+connector field, not a separate render-only shape; the Opus Magnum
+"solution report" mapping above is a view over that page's per-run row,
+not a separate artifact; and the window-track's live time-axis and that
+page's per-run `weekly_pct_delta`/`five_hour_pct_delta` are the same
+percent at two grains (window-total vs. this-run's-share). Whoever slices
+the commit/PR/issue render next should read that section first — the
+connector field only needs building once.
+
 ## Read next
 
+- [`design-quota-scheduling-loom.md`](design-quota-scheduling-loom.md) —
+  the cost/tracking-table design this page's rendering vocabulary now
+  explicitly shares a data model with (see above).
 - [`design-resident-boundary.md`](design-resident-boundary.md) §7 — the
   boundary-state-card concept this naming fork is about.
 - [`plan-brnrd-dashboard-mvp.md`](plan-brnrd-dashboard-mvp.md) — the

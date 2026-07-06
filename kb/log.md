@@ -10953,3 +10953,51 @@ needs to be reconciled with that guarantee deliberately, not bolted on
 under this run's time budget. Flagged back rather than rushed.
 
 Branch: brr/respawn-dedup-fix-2026-07-06.
+## [2026-07-06] design | Quota-loom + dashboard cohered, tracking-table schema etched
+
+Same-thread follow-up after PR #251 merged ("wow, speechless... lets keep
+on!"). Read `design-quota-scheduling-loom.md` and
+`design-dashboard-live-surface.md` side by side per direct instruction and
+found they were one data model observed from two entry points, not two
+adjacent designs — cohered rather than left parallel. Three concrete
+seams tied together: the commit/PR/issue semi-hierarchy the dashboard page
+already named ("commits belong to PRs...") is now the loom page's
+`run_ledger.source_system`/`external_refs` connector field, not a
+separate render-only shape; the Opus Magnum "solution report" mapping is
+named as a view over one `run_ledger` row, not a separate artifact; the
+window-track's live percent and the loom's per-run `weekly_pct_delta`/
+`five_hour_pct_delta` are the same number at two grains (window-total vs.
+this-run's-share). Cross-linked both pages.
+
+Etched the tracking-table schema the loom page previously called
+"candidate shape, not a schema yet": one row per closed run
+(`run_ledger`, not a raw per-token span log — the resident's actual need
+is a rollup-by-task-classification query, which a span log doesn't give
+for free), columns for tokens/context/wall-clock/window-deltas/`$`-
+equivalent/task_classification/external_refs, storage staged local-first
+(`.brr/run-ledger.jsonl`, mirroring `_persist_run_state_doc`'s existing
+per-run-state-doc pattern) before a server mirror (same shape already
+shipped 3x: Activity/Plans/Quota). Two maintainer technical notes folded
+in as hard rules rather than caveats: Claude's usage number is a TUI
+scrape that must be forced-refreshed at run close-out (hooked at
+`_run_worker_and_finalize`'s existing `publish()` call,
+`src/brr/daemon.py:4032`), and only the weekly-window percent gets a USD
+derivation — the 5h window is pacing-only, never backfilled to a dollar
+figure. A reopened pricing idea (early-supporter leaderboard,
+$60+/$100+ tier) captured as a small addendum, explicitly not designed
+— the maintainer's own framing ("might just sound good but puff") is the
+right commitment level.
+
+Design phase deliberately sequenced *before* dispatching the actual
+implementation as a `respawn: true`/`worker: true` handoff to a codex
+Shell (the maintainer's own ask, and a second real test of worker-stack
+delegation after the reset-epoch respawn on 2026-07-06) — single-flight
+means the codex run cannot literally execute concurrently with more
+resident planning in this same thought regardless of dispatch order, so
+"cohere, then schema, then implement" and "implement now, plan while it
+runs" resolve to the identical execution order once the daemon's
+single-flight constraint is accounted for; named back to the maintainer
+rather than silently picking one framing. A self-wake is scheduled to
+review the respawn's diff before it's presented as a real answer, per the
+delegation convention `dominion-playbook.md` §Delegation already
+documents. Branch: brr/quota-loom-schema-cohere-2026-07-06.

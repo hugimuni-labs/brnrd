@@ -98,16 +98,135 @@ tracking table, not a narrower one — building the log twice (once for
 smoothing, once for cost display) would be the redundancy this repo's
 kb-health preflight already warns about in other pages.
 
-Candidate shape (not a schema yet — sizing input for whoever slices this):
-a per-run record already mostly exists in spirit (`.brr/runs/<id>/`,
-daemon activity publish) but nothing currently persists a *closed* run's
-{tokens, window-%-deltas, wall-clock, $-equivalent} tuple keyed by a task
-classification the resident could later match a new task against for
-estimation. The `envelope loom`'s "solution report" framing
-(`design-dashboard-live-surface.md` §Zachtronics-mechanics, "token
-consumption → the Opus Magnum solution report, per-run") is the rendering
-answer; this page names what has to be *written down* for that report to
-ever contain a real par line instead of just "here's what this run used."
+## Tracking-table schema (etched 2026-07-06)
+
+Etched in response to a direct ask ("could we make your life easier
+somehow" — spend-per-core is real but disstructured data to guesstimate
+from) plus two load-bearing technical notes from the same message, both
+folded in below rather than left as caveats:
+
+1. **Claude's usage number is a TUI scrape (`claude_usage.py`), not a free
+   read** — it has to be *synced by the daemon at the moment a run closes
+   out*, not lazily at next-wake. A closed run's cost calculation is the
+   trigger, not a side effect of some other wake happening to need quota.
+2. **Weekly-window percent maps cleanly to subscription dollars; the 5h
+   window does not, and shouldn't be forced to.** The 5h window resets
+   every five hours regardless of spend — it's a *pacing/rate-limit*
+   signal (this page's own opening reframe: anti-burst, not a cost meter).
+   Only the weekly bucket has a defined `$ = (subscription_price / 100) ×
+   pct_delta` relationship. A schema that tries to derive a 5h-window
+   dollar figure would be manufacturing precision that isn't there —
+   exactly the "estimates are guesses, brnrd says so" disclaimer already
+   accepted above, now made concrete as a rule: **5h fields are
+   pacing-only and carry no USD derivation; only weekly fields do.**
+
+**One row per closed run** (`run_ledger`, name provisional) is the unit —
+not a raw per-token-event span log. The resident's own estimation need is
+"what did a task shaped like this one cost last time," which is a rollup
+question; a finer-grained event stream is real future instrumentation
+(useful for audit/debugging a specific run) but out of scope for what
+unblocks estimation, B6, and the cost-display ask all three name. Columns:
+
+| Field | Source | Notes |
+|---|---|---|
+| `run_id`, `event_id` | `Run.id`/`Run.event_id` (`src/brr/run.py`) | join key back to `.brr/runs/<id>/` |
+| `started_at`, `ended_at`, `wall_clock_seconds` | daemon-tracked | already implicit in run lifecycle, not currently persisted past the run's own dir |
+| `runner_shell`, `runner_core` | `task.meta["runner_name"]` / runner catalog | which quota bucket this run drew from — `quota=claude-local` / `codex-local` per the catalog |
+| `repo_label`, `source_system`, `external_refs[]` | `task.meta["repo_label"]`, commit/PR/issue numbers touched | the connector field `design-dashboard-live-surface.md`'s commit/PR/issue ask needs — see below |
+| `task_classification` | resident-assigned free-text/slug at dispatch or close-out (e.g. `dashboard-slice`, `kb-brainstorm`, `bugfix`) | the *only* field that makes rollup-by-shape possible; without it every row is a singleton no future estimate can match against |
+| `tokens_input`, `tokens_output`, `tokens_cache_read`, `tokens_cache_creation` | Claude: `claude_status.py` result JSON (`modelUsage`); Codex: rollout `token_count` events | raw, per-provider, already computed once per run today and currently thrown away after the wake ends |
+| `context_window_used` | `claude_status.py` (`modelUsage[model].contextWindow`) / Codex `model_context_window` | |
+| `weekly_pct_delta` | before/after diff, see below | the one field with a clean $ mapping |
+| `five_hour_pct_delta` | before/after diff | pacing-only, **no USD field derived from this** |
+| `usd_subscription_attributed` | `(subscription_price_for_shell / 100) × weekly_pct_delta` | null when `weekly_pct_delta` is null (e.g. mid-window scrape failure) — never backfilled from the 5h number |
+| `usd_credits_equivalent` | tokens × the existing `$0.01/credit` managed-compute rate (`decision-pricing-shape.md`) | this is *not* what the run actually cost (BYO runs cost the user's own subscription) — it's "what this would have cost as managed compute," the number the credit-pack pricing question needs |
+| `estimate_vs_actual` | `actual` for a closed row; `forward_guess` for a queued-but-not-run item | so the same table (not a parallel one) can hold both a historical actual and a live estimate render can diff against |
+
+**Before/after diff mechanic** (answers technical note 1 directly): the
+daemon already reads a quota snapshot for B1/B2 pacing before dispatching
+work. Add a forced-refresh read (`claude_usage.load_or_refresh_snapshot`,
+already exists, currently only called opportunistically) at the moment
+`_run_worker_and_finalize` calls `publish(repo_root, task)`
+(`src/brr/daemon.py:4032`) — the existing close-out hook, not a new
+lifecycle phase — and diff its weekly/5h percentages against whatever the
+daemon read most recently before this run started. The delta *is*
+`weekly_pct_delta`/`five_hour_pct_delta`. Codex needs no scrape at all —
+`codex_status.load_levels()` already reads live, so before/after is two
+cheap reads instead of a scrape twice.
+
+**Storage, sequenced not to overbuild in one pass:** start local
+(`.brr/run-ledger.jsonl`, append-only, written at the same close-out point
+above) — cheap, no server round-trip, already how the daemon's own
+per-run state doc (`_persist_run_state_doc`) works. Mirroring it to the
+account backend is the exact same shape already shipped three times
+(`ActivityRecord`, `Repo.plan_md`, `Daemon.quota_json`/`_publish_quota` in
+`src/brr/gates/cloud.py:524`) — worth doing once the local shape is
+proven, not in the first cut, so the schema doesn't get bent to fit a
+migration before anyone has queried a single real row.
+
+**What "make your life easier" actually buys**, concretely: today the
+resident reads scattered per-run text (a Claude result JSON here, a Codex
+rollout there) and guesses. With `task_classification` populated even
+loosely, a resident mid-plan can `grep`/query `run-ledger.jsonl` for prior
+rows sharing a classification and read off an actual `usd_credits_equivalent`
+range instead of eyeballing token counts — the rollup-by-classification
+query is future work (a small CLI/kb helper), but the schema has to carry
+the join key *now* or that query is a migration later instead of a filter.
+
+## Cohering with the dashboard's rendering vocabulary
+
+This page and [`design-dashboard-live-surface.md`](design-dashboard-live-surface.md)
+were written from two different entry points — "how do we let users pace
+their own quota" here, "what does the live dashboard actually look like"
+there — but they resolve to **one data model observed from two angles**,
+not two designs that happen to be adjacent. Read side by side, three
+places where a decision in one *is* a decision in the other:
+
+- **The commit/PR/issue semi-hierarchy is this page's `source_system`/
+  `external_refs` field, not a separate rendering-only concern.** The
+  dashboard page's same-thread follow-up names it directly: "commits
+  belong to PRs, PRs and Issues are referenced... make design extensible
+  to support later ticket-systems integration (linear, jira, etc.)... but
+  not implement it." That's a schema requirement on *this* page's
+  `run_ledger` table (a run's `external_refs` need parent/child shape —
+  a commit's PR, a PR's issue — plus a `source_system` connector field
+  reserved now, GitHub-only wired), not an independent dashboard-only
+  data shape. One connector field, two consumers: the cost rollup groups
+  by it, the SpaceChem-molecule render walks it as a tree.
+- **The Opus Magnum "solution report" *is* this table's per-run row,
+  rendered.** `design-dashboard-live-surface.md`'s Zachtronics mapping
+  names "token consumption → the Opus Magnum solution report, per-run" as
+  the rendering answer without yet naming what gets written down for that
+  report to hold real numbers. This page's `run_ledger` row is exactly
+  that write-down — the report is a view over one row (or a `forward_guess`
+  row, for a still-queued item), not a separate artifact to generate.
+- **The window-track's time axis and this page's `five_hour_pct_delta`/
+  `weekly_pct_delta` are the same numbers at two grains.** The window-track
+  (already shipped, slice 2) shows the *whole window's* live percent; this
+  table's per-run delta is what would let a future view show which run
+  *consumed* how much of that draining bar — the difference between "the
+  gauge is at 40%" and "this run cost 6 points of that 40%." Not scoped to
+  build here; naming it so slice 3 (whatever renders the CPS/run flow
+  atop the window-track) doesn't have to re-derive the join.
+
+Net: whoever slices the tracking-table implementation and whoever slices
+the commit/PR/issue render should read *this* section before either
+starts, since building the connector field twice — once "for cost," once
+"for the loom view" — is the redundancy both pages already separately warn
+about.
+
+### Addendum: early-supporter leaderboard, named not designed
+
+Raised in the same message as a candidate shape for the credit-pack add-on
+above (§Pricing tension): a $60+/$100+ one-time tier with an optional,
+redactable-nickname leaderboard of contributed amounts. The maintainer's
+own framing — "it could be that's the idea only sounds good but puffs
+tho" — is the right level of commitment for now: captured because it's a
+real, cheap-to-remember idea that belongs next to the credit-pack
+discussion it modifies, not designed or scoped. If the credit-pack add-on
+above (§Pricing tension) ever gets built, this is the natural place to
+revisit whether a leaderboard earns its keep or is decoration on a feature
+that works fine without it.
 
 ## Out-of-planning runs still land on the loom
 
