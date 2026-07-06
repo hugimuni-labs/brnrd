@@ -1211,8 +1211,27 @@ def _run_worker(
     conv_key = conversations.conversation_key_for_event(event) or ""
     correspondent_key = conversations.correspondent_key_for_event(event) or ""
     origin_message_key = conversations.origin_message_key_for_event(event) or ""
-    duplicate_event = conversations.find_event_by_origin_message(
-        brr_dir, origin_message_key, exclude_event_id=eid,
+    # A respawn-origin event carries its parent's telegram_chat_id /
+    # telegram_message_id / telegram_topic_id forward so its eventual
+    # reply lands in the same thread (see _queue_respawn_request). That
+    # means it recomputes to the *same* origin_message_key as the
+    # message that triggered the run which queued it. The exact-duplicate
+    # check below exists to catch a genuinely re-delivered external
+    # message (the same webhook payload landing on two configured
+    # channels) — a daemon-dispatched respawn is never that, so it must
+    # never be flagged against its own parent. Found live (2026-07-06):
+    # a codex-shell respawn was silently squashed with "I already
+    # received this source message on another configured channel" the
+    # moment it started, because it looked like a duplicate of the
+    # message that had queued it hours earlier.
+    is_respawn_origin = bool(
+        event.get("respawned_from_event") or event.get("respawned_by_run")
+    )
+    duplicate_event = (
+        None if is_respawn_origin else
+        conversations.find_event_by_origin_message(
+            brr_dir, origin_message_key, exclude_event_id=eid,
+        )
     )
     emit = _WorkerEmit(brr_dir, conv_key, eid)
 
