@@ -52,6 +52,9 @@ def test_parse_token_count_quota_and_context():
     # context headroom estimated from last input_tokens / window.
     assert "context left (est)" in levels["context_window"]["summary"]
     assert 20 < levels["context_window"]["remaining_percentage"] < 30
+    assert levels["tokens"]["input_tokens"] == 198358
+    assert levels["tokens"]["output_tokens"] == 1492
+    assert 76 < levels["tokens"]["context_window_used_percent"] < 77
     assert levels["source"] == "codex session rollout"
 
 
