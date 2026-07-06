@@ -151,6 +151,31 @@ and a respawn defaults to a full resident continuation — the shape a
 `quality: escalate` core-swap mid-conversation needs, since that spawned
 run still has to hold the whole picture, not just a bounded task.
 
+Following through: a `respawn:` handoff is dispatch, not an outcome — the
+current run ends to free the single-flight slot before the new one can
+start (the constraint #242 worked around by excluding the respawn's own
+event from this run's pending count, not by making anything wait), so
+nothing here blocks synchronously and nothing here *can*, short of
+breaking single-flight. But "dispatched" isn't "done." A respawned event
+inherits the origin's chat/thread metadata, so its eventual reply lands in
+the same conversation as a second message for free — verified live,
+`_queue_respawn_request` carries forward everything but a small reserved
+set, `telegram_chat_id`/`telegram_topic_id` included. What that does *not*
+give you is review: nothing stops a `worker: true` handoff's raw,
+unverified output from standing as the last word in the thread. If this
+run has nothing else queued once a respawn is parked, schedule a
+self-wake (`schedule.md`, an `at:` entry timed just past the expected
+completion, same `conversation_key` as the origin thread) whose job is to
+read the respawned run's diff, hold it to the same "trust but verify" bar
+a same-run subagent gets above, and fold a reviewed reply into the thread
+— rather than trusting an unread hunk because it happened to arrive
+looking like an answer. This is a prompt-level convention today, not a
+daemon primitive: if self-wakes prove easy to forget or skip, the next
+rung is a `review: true` respawn flag that suppresses the worker's direct
+delivery and instead files a review-needed follow-up event back to the
+resident thread — real new daemon surface, deliberately not built
+pre-emptively.
+
 Revisit trigger: once a strong core's time-to-first-token and cost make the
 resident/worker hop invisible, this promotes from policy to default
 architecture. That is a model-economics date to notice, not a design call
