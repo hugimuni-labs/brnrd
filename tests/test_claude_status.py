@@ -38,6 +38,11 @@ def test_parse_result_spend_and_context_but_no_quota():
     assert "$0.0228" in levels["spend"]["summary"]
     assert "context left (est)" in levels["context_window"]["summary"]
     assert 90 < levels["context_window"]["remaining_percentage"] < 100
+    assert levels["tokens"]["input_tokens"] == 515
+    assert levels["tokens"]["output_tokens"] == 95
+    assert levels["tokens"]["cache_read_input_tokens"] == 0
+    assert levels["tokens"]["cache_creation_input_tokens"] == 10892
+    assert 5 < levels["tokens"]["context_window_used_percent"] < 6
     assert "quota" not in levels
 
 

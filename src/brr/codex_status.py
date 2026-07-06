@@ -169,6 +169,11 @@ def parse_token_count(payload: dict[str, Any]) -> dict[str, Any]:
         window = _num(info.get("model_context_window"))
         last = info.get("last_token_usage")
         used = _num(last.get("input_tokens")) if isinstance(last, dict) else None
+        total = _num(last.get("total_tokens")) if isinstance(last, dict) else None
+        output = (
+            max(0.0, total - used)
+            if total is not None and used is not None else None
+        )
         # ``input_tokens`` of the last request ≈ current context occupancy (the
         # full context is re-sent each turn). ``total_token_usage`` is cumulative
         # across the whole session and routinely exceeds the window, so it is the
@@ -180,6 +185,17 @@ def parse_token_count(payload: dict[str, Any]) -> dict[str, Any]:
                 "summary": f"{_fmt_pct(remaining)}% context left (est)",
                 "remaining_percentage": remaining,
             }
+        token_fields: dict[str, Any] = {}
+        if used is not None:
+            token_fields["input_tokens"] = int(used)
+        if output is not None:
+            token_fields["output_tokens"] = int(output)
+        if window and window > 0 and used is not None:
+            token_fields["context_window_used_percent"] = round(
+                max(0.0, min(100.0, 100.0 * used / window)), 6
+            )
+        if token_fields:
+            levels["tokens"] = token_fields
 
     return levels
 
