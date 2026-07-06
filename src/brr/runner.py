@@ -93,7 +93,7 @@ def kill_active() -> bool:
     return True
 
 
-DEFAULT_RUNNER_TIMEOUT = 3600
+DEFAULT_RUNNER_TIMEOUT = 7200
 
 
 def runner_timeout(cfg: dict[str, Any] | None) -> int:
@@ -102,8 +102,12 @@ def runner_timeout(cfg: dict[str, Any] | None) -> int:
     Reads ``runner.timeout_seconds`` (or legacy ``runner_timeout_seconds``)
     from *cfg*; falls back to :data:`DEFAULT_RUNNER_TIMEOUT`. xhigh-reasoning
     models like gpt-5.5 routinely need 10+ minutes on a complex task, and the
-    old 600s default was killing live work mid-run; 3600s is a soft ceiling
-    rather than a target.
+    old 600s default was killing live work mid-run; a 1h follow-up default
+    still cut long implementation/research sessions short without a human
+    knowing to extend `.keepalive`, so this is now a 2h soft ceiling rather
+    than a target (2026-07-06; the daemon's hard cap auto-scales off this —
+    `max(budget*4, budget+3600)` — so 7200s here still yields an 8h backstop
+    for runaway-process reclamation).
     """
     if not cfg:
         return DEFAULT_RUNNER_TIMEOUT
