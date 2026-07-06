@@ -334,6 +334,39 @@ per the maintainer's own "you tell me, maybe I am wrong" — the answer is
 "you're not wrong," but the specific cap/gating shape is a call worth his
 nod before daemon.py's dispatch loop changes, not a blind default.
 
+**Slice 1 shipped 2026-07-06** (nod given same thread as the proposal
+above; PR: `brr/sub-spawn-slice1-2026-07-06`, unmerged pending review).
+`spawn:` outbox frontmatter (sibling to `respawn:`, forced `worker: true`,
+refuses nesting from a worker-stack caller) queues an event tagged
+`spawn_immediate`; the daemon's `start()` loop now runs a `pool =
+ThreadPoolExecutor(max_workers=2)` with a second `current_spawn` slot
+scanned every tick independent of the resident's own `current` — capped
+at 1 by the `current_spawn is None` gate, exactly as recommended, not
+relaxed further. One inbox scan per tick still feeds both dispatch
+decisions (spawn-marked vs. resident-lead events partition the same
+scan) rather than doubling `list_pending` I/O. `run_ledger` gained
+`parent_run_id`/`is_subspawn` (additive, per the "cost per core becomes a
+rollup" resolution above). Completion notify reuses existing plumbing
+exactly as item 4 envisioned: a plain pending inbox event tagged with the
+parent's own `conversation_key`, picked up on the parent's next
+`inbox.json` read if still running, or dispatched as the next ordinary
+run if the parent already ended (a live improvement on the guessed-time
+review self-wake for this one case, not a replacement for it generally).
+
+Two gaps named rather than solved in this slice, both lower-stakes than
+the dispatch-loop change itself: (1) `runner.kill_active()` tracks a
+single module-global active subprocess, so daemon shutdown doesn't
+prompt-reclaim a live spawn's process the way it does the resident's own
+— `pool.shutdown(wait=True)` still drains it, just without the same kill
+signal; (2) the main-loop dispatch wiring itself (the two-slot scan/cap
+logic) has no automated end-to-end test — consistent with the rest of
+`start()`'s loop, which wasn't unit-tested at that level before this
+slice either (one pre-existing test, `test_start_preserves_error_event_
+status`, exercises the loop directly and stayed green). The queueing
+(`_queue_spawn_request`) and notify (`_notify_spawn_parent`) halves are
+unit-tested; the loop-level wiring is code review + that one pre-existing
+regression test, not a purpose-built integration test.
+
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
 Follow-up sharpening the stingy-director economics: if the wake already
