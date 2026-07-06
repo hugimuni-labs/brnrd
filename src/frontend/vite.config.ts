@@ -17,6 +17,11 @@ export default defineConfig({
 			// API + session-cookie auth boundary; this build's output is mounted as
 			// static assets behind it, not served by its own Node process. See
 			// frontend/README.md for the integration plan.
+			//
+			// Mounted at domain root ("/", see .upsun/config.yaml) — briefly
+			// previewed under "/app/" first (2026-07-06), which needed an
+			// explicit `paths.base` override since every emitted asset URL
+			// is absolute; root needs no override (default base is '').
 			adapter: adapter({
 				pages: 'build',
 				assets: 'build',
