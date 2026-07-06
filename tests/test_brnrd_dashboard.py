@@ -120,6 +120,66 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
         assert stale[0]["status"] == "stale"
 
 
+def test_dashboard_quota_api_requires_login():
+    """The SvelteKit frontend (`src/frontend`) fetches this JSON endpoint
+    client-side; a 401 is the right shape for an unauthenticated fetch(),
+    not a login-page redirect."""
+    client = _client()
+    r = client.get("/v1/dashboard/quota")
+    assert r.status_code == 401
+
+
+def test_dashboard_quota_api_returns_real_windows():
+    """JSON twin of `test_dashboard_renders_real_quota_and_flags_stale_reports`
+    for slice 2's window-track view — same `_quota_views` data, fetched over
+    `/v1/dashboard/quota` instead of rendered into `dashboard.html`."""
+    import json
+    from datetime import datetime, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = Daemon(
+            id="dmn-quota-api-1",
+            repo_id=pid,
+            token_id="tok-quota-api-1",
+            daemon_name="laptop",
+            quota_json=json.dumps(
+                [
+                    {
+                        "shell": "claude",
+                        "status": "known",
+                        "windows": [
+                            {
+                                "label": "5h window",
+                                "used": None,
+                                "limit": None,
+                                "percent": 61.0,
+                                "reset": "resets 9:00PM",
+                                "resets_at": 1783360000.0,
+                            }
+                        ],
+                    }
+                ]
+            ),
+            quota_updated_at=datetime.now(timezone.utc),
+        )
+        db.add(daemon)
+        db.commit()
+
+    r = client.get("/v1/dashboard/quota")
+    assert r.status_code == 200
+    body = r.json()
+    assert "generated_at" in body
+    windows = body["runner_quotas"][0]["windows"]
+    assert windows[0]["percent"] == 61.0
+    assert windows[0]["resets_at"] == 1783360000.0
+
+
 def test_dashboard_can_issue_telegram_pair_link():
     client = _client(telegram_bot_username="@brnrd_bot")
     token = _login(client, login="Gurio")
