@@ -11077,3 +11077,56 @@ thread rather than left for the scheduled wake. Findings:
 Not merged — the maintainer said "I will be reviewing it" and retains
 that call; this is a second-pair-of-eyes pass, not a merge decision.
 Branch: brr/run-ledger-cost-tracking-2026-07-06 (PR #254).
+
+## [2026-07-06] fix+ship | Crash-restart loop found & fixed; sub-spawn slice-1 shipped; #252/#254 landed; dashboard reconsidered
+
+Dense run, four threads: (1) **#252 merged** — gh's cached CONFLICTING
+status was stale; a clean local rebase onto `main` proved it mergeable,
+merged as `9194a84`. (2) **#254 redone**: `task_classification` had no
+write path (every row shipped `null`) — added a `.task-classification`
+control file (read at the existing closeout seam) and a
+`task_classification:` field on `respawn:`/`spawn:` frontmatter, documented
+in `daemon-substrate.md`; rebased onto merged `main`; marked ready for
+review. (3) **Live incident found and fixed**: while checking coexisting-
+run state, found a director-tick event stuck in an infinite crash-restart
+loop — a crash inside `_run_worker` left it wedged at `status=processing`
+(which `list_dispatchable` treats as still-eligible, for crash-recovery
+after a daemon restart), so the next tick re-dispatched the identical
+event, crashed again, repeated with no backoff: 26+ runs over ~50 minutes,
+confirmed via `.brr/presence/*.json` (same `event_id`, fresh `run_id` each
+attempt, presence entries never deregistered). Manually neutralized the
+stuck event; shipped a structural backstop (`_run_worker_and_finalize`
+now catches the crash, marks the event `error` with a `defer_until`, logs
+a full traceback) so no future crash of any cause can reproduce the loop.
+PR #256, unmerged. (4) **Sub-spawn slice-1 shipped** per the maintainer's
+nod (kb/design-director-loop.md §"Concurrent sub-spawns"): `spawn:` outbox
+frontmatter (forced `worker: true`, refuses nesting), daemon `start()`
+gains a second `current_spawn` pool slot (cap-1, scanned independent of
+the resident's own `current`, one inbox scan feeds both dispatch
+decisions), `run_ledger` gains `parent_run_id`/`is_subspawn`, completion
+notify reuses existing plumbing (a plain pending event tagged with the
+parent's `conversation_key`). PR #257, stacked on #254, unmerged. Named
+gaps: `runner.kill_active()` is still single-module-global (shutdown
+doesn't prompt-kill a live spawn); no purpose-built end-to-end test for
+the main-loop wiring (matches the rest of `start()`'s untested-at-that-
+level loop). 1334 tests pass throughout.
+
+Also reconsidered the dashboard's information architecture per direct
+prompt ("execution control surface should be per account rather than per
+repo," "PRs are not properly integrated into the game-ified planning and
+execution control surface"). Checked against shipped code before
+answering: `/activity` and `/plans` are *already* account-first (repo is
+an optional filter, not a required picker) — the hypothesis that they
+need restructuring was wrong, no rehaul needed. The real gap: no live/
+coexisting-runs view exists at all (confirmed by the Mode block's own
+`coexisting-runs=unimplemented` line, and by the crash-loop incident
+itself — invisible to the maintainer the whole ~50 minutes, found by
+accident). Filed #258 (account-scoped live-runs view) and #259 (PR review
+as its own account-scoped queue lane, distinct from the run/token loom
+since review is human-attention-latency, not resident-cost-bearing — the
+window-track's depleting-resource metaphor is the wrong shape for it).
+Detail: `kb/design-dashboard-live-surface.md` §"Reconsidered 2026-07-06".
+
+Branches: brr/quota-loom-schema-cohere-2026-07-06 (#252, merged),
+brr/run-ledger-cost-tracking-2026-07-06 (#254), brr/crash-loop-backstop-
+2026-07-06 (#256), brr/sub-spawn-slice1-2026-07-06 (#257).
