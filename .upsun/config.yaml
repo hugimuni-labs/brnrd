@@ -10,6 +10,14 @@ applications:
 
     type: "python:3.12"
 
+    # Node/npm are only needed to build the SvelteKit static frontend
+    # (src/frontend) during the build hook below; the running app stays
+    # pure Python/uvicorn. This is the standard Platform.sh/Upsun trick
+    # for pulling in a second language toolchain for a build-only step.
+    dependencies:
+      nodejs:
+        npm: "*"
+
     # Expose the PostgreSQL service to the app. Upsun publishes its
     # credentials as POSTGRESQL_* env vars (consumed in .environment).
     relationships:
@@ -25,6 +33,18 @@ applications:
       locations:
         "/":
           passthru: true
+        # Preview mount for the new SvelteKit dashboard (src/frontend,
+        # adapter-static). Deliberately not mounted at "/" yet: the
+        # scaffold isn't wired to real data or the existing login/repos/
+        # connect flows brnrd_web still serves there (see
+        # kb/design-dashboard-live-surface.md) — swapping "/" now would
+        # replace a working dashboard with an empty placeholder page.
+        # Revisit once the frontend calls real JSON endpoints; no SPA
+        # deep-link fallback yet either, since there's only one route
+        # today (src/frontend/src/routes/+page.svelte).
+        "/app/":
+          root: "src/frontend/build"
+          index: ["index.html"]
 
     variables:
       env:
@@ -38,6 +58,10 @@ applications:
         set -eux
         pip install --upgrade pip
         pip install ".[backend,postgres]"
+        cd src/frontend
+        npm ci
+        npm run build
+        cd -
 
     # No mounts: all state lives in PostgreSQL; nothing writes to disk.
 
