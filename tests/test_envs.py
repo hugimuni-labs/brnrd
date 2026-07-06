@@ -488,8 +488,11 @@ def test_docker_invoke_attaches_stdin_devnull(tmp_path, monkeypatch):
 
 
 def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
-    """The default runner timeout is 3600s — the historic 600s default
-    was killing live work mid-run for xhigh-reasoning models."""
+    """The default runner timeout is 7200s — the historic 600s default
+    was killing live work mid-run for xhigh-reasoning models, and the
+    1h follow-up default (3600s) still cut long implementation/research
+    sessions short without a human knowing to extend ``.keepalive``
+    (2026-07-06)."""
     _isolate_docker_creds(monkeypatch, tmp_path)
     _stub_worktree(monkeypatch, tmp_path)
     monkeypatch.setattr(envs.shutil, "which", lambda _name: "/usr/bin/docker")
@@ -520,7 +523,7 @@ def test_docker_invoke_uses_default_timeout(tmp_path, monkeypatch):
         {"docker.image": "img:latest", "runner_cmd": ["mock", "{prompt}"]},
     )
 
-    assert captured["timeout"] == DEFAULT_RUNNER_TIMEOUT == 3600
+    assert captured["timeout"] == DEFAULT_RUNNER_TIMEOUT == 7200
 
 
 def test_docker_invoke_honours_configured_timeout(tmp_path, monkeypatch):
