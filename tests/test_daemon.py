@@ -976,6 +976,154 @@ def test_drain_outbox_quality_respawn_resolves_local_escalation(
     assert spawned["respawn_reason"] == "needs a stronger core"
 
 
+def test_drain_outbox_queues_spawn_request(tmp_path):
+    """``spawn:`` frontmatter queues a cap-1 concurrent worker-stack child.
+
+    kb/design-director-loop.md §"Concurrent sub-spawns", slice 1: unlike
+    ``respawn:`` (queued for after this run ends), a spawn is meant for the
+    daemon's second dispatch slot — this test only covers the *queueing*
+    shape (worker forced, parent linkage, exclusion-reuse); the main-loop
+    concurrent-dispatch wiring itself has no automated end-to-end test
+    (consistent with the rest of ``start()``'s dispatch loop, which isn't
+    unit-tested at that level either).
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "original task",
+        status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\n"
+        "spawn: true\n"
+        "shell: codex-mini\n"
+        "task_classification: reset-epoch-plumbing\n"
+        "reason: cheaper core has quota headroom\n"
+        "---\n"
+        "bounded task for a concurrent worker child\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-parent",
+        event_id=event_id,
+        body="original task",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"spawn": 1}
+    spawned = [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("spawn_parent_run_id") == "run-parent"
+    ][0]
+    assert spawned["worker"] is True
+    assert spawned["spawn_immediate"] is True
+    assert spawned["shell"] == "codex-mini"
+    assert spawned["task_classification"] == "reset-epoch-plumbing"
+    assert spawned["repo_label"] == "Gurio/brr"
+    # Reuses the respawn-origin exclusion so the parent's own attention
+    # gate doesn't nag it about a dispatch it just made on purpose.
+    assert spawned["respawned_from_event"] == event_id
+    assert spawned["respawned_by_run"] == "run-parent"
+
+
+def test_drain_outbox_spawn_refuses_nested_from_worker_run(tmp_path):
+    """A worker-stack run must not itself spawn a further child (no nesting)."""
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    path = protocol.create_event(inbox, "telegram", "original task", status="processing")
+    event_id = path.stem
+    (outbox / "spawn.md").write_text(
+        "---\nspawn: true\nshell: codex-mini\n---\nnested child\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-worker-child", event_id=event_id, body="original task",
+        source="telegram", meta={"worker": True},
+    )
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, None, event_id),
+        task, responses, event_id, outbox, inbox,
+    )
+
+    assert promoted == 0
+    assert [
+        ev for ev in protocol.list_pending(inbox)
+        if ev.get("spawn_parent_run_id")
+    ] == []
+
+
+def test_notify_spawn_parent_lands_pending_event_for_still_running_parent(
+    tmp_path,
+):
+    """Completion notify is a normal pending event the parent can fold in.
+
+    Distinct from the spawn-dispatch event itself: this one is *not*
+    tagged respawned_from_event/respawned_by_run, so _pending_events_for_agent
+    surfaces it as real attention-owed follow-up.
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    response_path = tmp_path / "response.md"
+    response_path.write_text("child's answer\n", encoding="utf-8")
+    task = Run(
+        id="run-child",
+        event_id="evt-child",
+        body="",
+        source="telegram",
+        status="done",
+        meta={
+            "spawn_parent_run_id": "run-parent",
+            "spawn_parent_conversation_key": "telegram:42:",
+            "response_path": str(response_path),
+        },
+    )
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    pending = protocol.list_pending(inbox)
+    assert len(pending) == 1
+    note = pending[0]
+    assert note["conversation_key"] == "telegram:42:"
+    assert note["spawned_by_run"] == "run-child"
+    assert "respawned_from_event" not in note
+    assert "child's answer" in note["body"]
+    # Not excluded from the parent's own attention gate.
+    assert daemon._pending_events_for_agent(inbox, "some-other-event")
+
+
+def test_notify_spawn_parent_noop_without_parent_linkage(tmp_path):
+    inbox = tmp_path / ".brr" / "inbox"
+    task = Run(id="run-solo", event_id="evt-solo", body="", source="telegram")
+
+    daemon._notify_spawn_parent(inbox, task)
+
+    assert protocol.list_pending(inbox) == []
+
+
 def _account_context_for_policy(tmp_path):
     home = tmp_path / "account-home"
     return daemon.account.AccountContext(
