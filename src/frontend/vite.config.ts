@@ -30,5 +30,18 @@ export default defineConfig({
 				strict: true
 			})
 		})
-	]
+	],
+	server: {
+		// Dev-only: `npm run dev` serves this app on its own port, so JSON
+		// fetches to the FastAPI backend (`/v1/dashboard/quota` etc.) need a
+		// proxy to a locally-running `brnrd` instance. Mirrors the same
+		// route list `.upsun/config.yaml`'s production passthru rule
+		// covers — keep the two in sync.
+		proxy: {
+			'^/(v1|api|r|login|auth|connect|repos|activity|plans|static)(/|$)': {
+				target: process.env.BRNRD_DEV_TARGET ?? 'http://localhost:8000',
+				changeOrigin: true
+			}
+		}
+	}
 });

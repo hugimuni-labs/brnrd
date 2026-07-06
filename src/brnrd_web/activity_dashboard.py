@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -374,6 +374,31 @@ def _activity_dashboard_context(request: Request, db: Session, account: Account,
         "outbound_event_views": outbound_events,
         "dashboard_stats": _activity_stats(repo_views, activity_views, outbound_events, installed),
     }
+
+
+@router.get("/v1/dashboard/quota")
+def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """JSON twin of ``runner_quotas`` for the SvelteKit frontend (slice 2:
+    window-track view, `src/frontend`). Same session cookie as the Jinja
+    dashboard — no separate auth layer, per `src/frontend/README.md`'s
+    "fetch the same JSON endpoints client-side" plan. Returns 401 rather
+    than a login redirect: this is fetched by JS, not navigated to.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    activity_views = _activity_views(db, repos)
+    runner_stats = _runner_stats(activity_views)
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "runner_quotas": _quota_views(db, repos, runner_stats),
+        }
+    )
 
 
 @router.get("/", response_class=HTMLResponse)
