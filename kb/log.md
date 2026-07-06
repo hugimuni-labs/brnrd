@@ -10772,3 +10772,39 @@ self-merge/AFK-visibility tension (named as a real open fork, not
 resolved — maintainer steered "focus on user-facing surface first,
 before release"). Full reasoning: account-dominion `ledger/decisions.md`
 2026-07-06 entries, `plans/Gurio__brr/active.md` addendum.
+
+## [2026-07-06] fix | Frontend mounted at "/" — blank-page bug + preview-mount removal (PR #248)
+
+Two more issues in the same live thread, both maintainer-caught in real
+time against the deployed site:
+
+1. `/app/` returned 200 but rendered blank. Root cause: SvelteKit's
+   default `paths.base` is `''`, so the build's asset URLs were
+   absolute from domain root (`/_app/...`) while actually mounted under
+   `/app/` — every asset 404/502'd. Confirmed via curl against the live
+   deploy, not assumed from a passing local build (the earlier `npm run
+   build`/`lint` checks were real but insufficient — they don't catch a
+   base-path mismatch that only bites once mounted under a subpath).
+2. Maintainer call, same thread: drop the `/app/` preview mount, replace
+   "/" directly — "we can safely replace root at this point."
+
+Implemented as one PR (#248): `.upsun/config.yaml`'s `"/"` location now
+serves `src/frontend/build` directly, with explicit `rules:` passthru
+for every real backend route so the swap doesn't silently break the
+existing app — enumerated from `src/brnrd/app.py`'s `include_router`
+calls (`/v1/*` accounts/daemons/webhooks/pairing, `/api/github/*`) plus
+`src/brnrd_web`'s remaining HTML routes (`/login`, `/auth/*`,
+`/connect/*`, `/repos`, `/activity`, `/plans`, `/static/brnrd_web`) and
+render's `/r`. `vite.config.ts`'s base reverts to the correct default
+now that the app is back at domain root.
+
+Verified live, not just build-clean: root serves the SPA (200, real
+asset loads 200), and every enumerated backend route still reaches
+FastAPI correctly (`/login` 200, `/activity`/`/plans`/`/connect`/
+`/auth/github/start` 303 redirects — auth-gated, not 404 — `/v1/daemons/
+inbox` 401 not 404, `/api/github/webhook` 405 not 404, static CSS 200).
+`/app/` itself now 404s as expected (mount removed).
+
+Self-merged directly (as #245-#247 this same run) — see
+account-dominion `ledger/decisions.md` 2026-07-06 for the full
+self-merge-authority reasoning this run adopted.
