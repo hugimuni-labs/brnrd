@@ -296,12 +296,16 @@ def _delivery_loop_once(
 ) -> None:
     state = _load_state(brr_dir)
     token = state["token"]
+    # An explicit `bind` sets state["chat_id"]; absent that, fall back to
+    # the most recently seen inbound chat (state["last_chat_id"], updated
+    # in _loop_once) so a self-originated event (schedule/director-tick —
+    # no telegram_chat_id of its own) still has somewhere to deliver.
     _deliver_responses(
         brr_dir,
         inbox_dir,
         responses_dir,
         token,
-        state.get("chat_id"),
+        state.get("chat_id", state.get("last_chat_id")),
         state.get("topic_id"),
     )
 
@@ -327,6 +331,20 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             continue
         if configured_chat_id is not None and chat_id != configured_chat_id:
             continue
+        # Track the most recently seen chat as a delivery fallback —
+        # distinct from ``configured_chat_id`` (the inbound *filter*,
+        # deliberately left unset so any chat's messages become events;
+        # see test_loop_accepts_any_chat_and_records_message_chat). A
+        # schedule-originated event (a director tick, say) carries no
+        # telegram_chat_id of its own, so its response has nowhere to go
+        # without a default — and without an explicit `bind` ever having
+        # been run, state had no default at all: `_deliver_responses`
+        # raised "missing chat id" on every delivery-loop tick, forever,
+        # since nothing marks a failed delivery done (see
+        # deliver_stream's per-event try/except). Caught live 2026-07-06
+        # via two director-tick responses stuck spamming the daemon log
+        # (evt-...-hzyc, evt-...-zb04).
+        state["last_chat_id"] = chat_id
         topic_id = msg.get("message_thread_id")
         if configured_topic_id and topic_id != configured_topic_id:
             continue
