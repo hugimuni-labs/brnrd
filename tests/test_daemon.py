@@ -521,6 +521,38 @@ def test_drain_outbox_queues_respawn_request(tmp_path):
     assert protocol.event_is_deferred(spawned)
 
 
+def test_pending_events_for_agent_excludes_own_respawn(tmp_path):
+    """A respawn this run just queued must not show up as attention-owed.
+
+    Found live (2026-07-06): a run that queued a codex-shell respawn for a
+    bounded worker task kept re-triggering the Stop-hook fold-in-or-explain
+    gate every phase after, because the queued event was indistinguishable
+    from an unaddressed user message in ``_pending_events_for_agent`` —
+    ``pending_event_count`` could never reach zero from inside the very run
+    that created it, since dispatching it as a new run requires this run to
+    end first. Respawn-origin events are a system-to-system handoff, not a
+    follow-up any resident-wake can fold in, so they're excluded here.
+    """
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    current = protocol.create_event(
+        inbox, "telegram", "current task", status="processing",
+    )
+    current_id = current.stem
+    real_followup = protocol.create_event(
+        inbox, "telegram", "a genuine user follow-up",
+    )
+    protocol.create_event(
+        inbox, "telegram", "queued worker task",
+        respawned_by_run="run-current", respawned_from_event=current_id,
+        shell="codex",
+    )
+
+    events = daemon._pending_events_for_agent(inbox, current_id)
+
+    assert [ev["id"] for ev in events] == [real_followup.stem]
+
+
 def test_drain_outbox_queues_worker_respawn_request(tmp_path):
     brr_dir = tmp_path / ".brr"
     inbox = brr_dir / "inbox"
