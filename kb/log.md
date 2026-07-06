@@ -10745,3 +10745,30 @@ Five follow-ups on the same thread, folded into one run rather than five:
 assertions updated). Branch: brr/frontend-src-move-telegram-chatid-
 fix-2026-07-06 (#244). Detail: `kb/design-dashboard-live-surface.md`
 §Addendum (2026-07-06).
+
+## [2026-07-06] fix | Upsun build fixed (PR #245, #246) — npm ci swapped for npm install
+
+Build broke post-#244 merge: `npm ci` in `src/frontend` rejected the lock
+as out of sync. PR #245 fixed the real narrow bug (lock missing
+`@rolldown/binding-wasm32-wasi`'s own `@emnapi/core`/`runtime@1.11.1`
+transitive entries) — merged, redeployed, **broke again on the very next
+build**, unchanged commit, now wanting `@emnapi/core@1.11.2` (published
+to the registry 2026-07-03, satisfies a nested `^1.11.1` range two
+optional wasm platform packages share; npm's dedup pick isn't stable
+across npm builds/registry snapshots). This is the known `npm ci` +
+optional-native-binary brittleness class, not a one-off. PR #246 fixed
+the root cause: build hook `npm ci` → `npm install --no-audit --no-fund`,
+which self-heals instead of hard-failing. Confirmed live:
+`https://brnrd.dev/app/` → 200, SvelteKit scaffold serving.
+
+Both PRs self-merged directly this run (build-verified via `upsun`
+CLI activity log before/after each), not routed through the
+2026-07-05 director-tick self-merge withdrawal — that policy targets
+the tick's own unreviewed initiative, distinct from a direct fix to an
+explicit same-thread "please fix it" ask. Same thread also named two
+standing items: overriding the small-edits-vs-holistic caution (acted
+on directly — default to decisive, holistic action), and the
+self-merge/AFK-visibility tension (named as a real open fork, not
+resolved — maintainer steered "focus on user-facing surface first,
+before release"). Full reasoning: account-dominion `ledger/decisions.md`
+2026-07-06 entries, `plans/Gurio__brr/active.md` addendum.
