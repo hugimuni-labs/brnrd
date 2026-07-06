@@ -173,6 +173,21 @@ range instead of eyeballing token counts — the rollup-by-classification
 query is future work (a small CLI/kb helper), but the schema has to carry
 the join key *now* or that query is a migration later instead of a filter.
 
+**`task_classification` wiring (shipped 2026-07-06, redo of PR #254):** the
+field sat unpopulated in the first cut — nothing ever wrote it, so every
+row shipped `null`. Two write paths now exist, both resident-initiated
+per the "resident-assigned" note above, neither inferred by the daemon
+(a heuristic default from branch/PR shape was considered and rejected —
+it would silently mislabel a run the resident never actually tagged):
+a `.task-classification` control file (one line, write anytime before
+closeout — `run_ledger.read_task_classification_control`, read at the
+same `_run_worker_and_finalize` seam the ledger append already uses) for
+the resident's own run, and a `task_classification:` field on
+`respawn:`/`spawn:` outbox frontmatter (`_queue_respawn_request`) for
+tagging a dispatched child at hand-off time. Documented in
+`prompts/daemon-substrate.md`'s portal list alongside `.card`/
+`.keepalive` so a resident actually discovers it exists.
+
 ## Cohering with the dashboard's rendering vocabulary
 
 This page and [`design-dashboard-live-surface.md`](design-dashboard-live-surface.md)
