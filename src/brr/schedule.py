@@ -14,7 +14,10 @@ Two trigger forms cover the ground without cron's 5-field grammar:
   second machine / after reinstall.
 - ``every: <duration>`` — recurring at a fixed interval (``30m``, ``1h``,
   ``24h``, ``1h30m``); anchored on first sight (adding it does not fire
-  instantly), then fired each interval.
+  instantly), then fired each interval. Optionally paired with
+  ``reset_on: spawn`` so a concurrent ``spawn:`` dispatch elsewhere in the
+  daemon pushes this entry's cooldown out from the dispatch time, instead
+  of firing redundantly moments after related work already happened.
 
 Split of concerns mirrors the memory layers: the **specs** are owned and
 durable (dominion, committed); the **firing-state** (last-fired
@@ -30,6 +33,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,9 +41,12 @@ from pathlib import Path
 SCHEDULE_FILE = "schedule.md"  # in the dominion
 STATE_DIRNAME = "schedule"  # under the .brr runtime dir
 STATE_FILE = "state.json"
+SIGNAL_FILE = "signals.json"  # also under STATE_DIRNAME
 DEFAULT_STALE_GRACE_S = 7 * 24 * 3600  # an `at:` older than this won't surprise-fire
 
-_FIELD_RE = re.compile(r"^\s*(at|every|conversation_key)\s*:\s*(.+?)\s*$", re.IGNORECASE)
+_FIELD_RE = re.compile(
+    r"^\s*(at|every|conversation_key|reset_on)\s*:\s*(.+?)\s*$", re.IGNORECASE
+)
 _DURATION_TOKEN_RE = re.compile(r"(\d+)\s*([smhd])", re.IGNORECASE)
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -60,6 +67,10 @@ class ScheduleEntry:
     # share a readable history; set explicitly to thread into an existing
     # gate conversation (e.g. ``telegram:12345:``).
     conversation_key: str | None = None
+    # Optional named signal (e.g. ``spawn``) that resets this entry's
+    # cooldown as if it had just fired, without actually firing it. Only
+    # meaningful for ``every`` entries — see ``apply_reset_signals``.
+    reset_on: str | None = None
 
 
 # ── Parsing ──────────────────────────────────────────────────────────
@@ -112,6 +123,7 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
         return None
     body = "\n".join(body_lines).strip()
     conv = (fields.get("conversation_key") or "").strip() or None
+    reset_on = (fields.get("reset_on") or "").strip() or None
     # `every` wins if both are present (one trigger per entry is the convention).
     if "every" in fields:
         interval = parse_duration(fields["every"])
@@ -119,7 +131,7 @@ def _build_entry(title: str, fields: dict[str, str], body_lines: list[str]) -> S
             return None
         return ScheduleEntry(
             eid, "every", body, interval=interval,
-            raw_when=fields["every"], conversation_key=conv,
+            raw_when=fields["every"], conversation_key=conv, reset_on=reset_on,
         )
     if "at" in fields:
         at = parse_iso(fields["at"])
@@ -136,10 +148,14 @@ def parse_schedule(dominion_dir: Path) -> list[ScheduleEntry]:
 
     Format: a ``## `` heading per entry (its id is the slugified heading),
     an ``at:`` or ``every:`` line, an optional ``conversation_key:`` line
-    (threads the firings; defaults to ``schedule:<id>`` at fire time), then
-    optional body prose (the thought to run). Text before the first heading
-    is a comment/header and ignored. An entry with no/invalid trigger is
-    dropped.
+    (threads the firings; defaults to ``schedule:<id>`` at fire time), an
+    optional ``reset_on:`` line for ``every`` entries (a named signal —
+    currently only ``spawn`` — that pushes this entry's cooldown out as if
+    it had just fired, so it doesn't redundantly fire right after other,
+    more specific work already covered similar ground; see
+    ``apply_reset_signals``), then optional body prose (the thought to
+    run). Text before the first heading is a comment/header and ignored.
+    An entry with no/invalid trigger is dropped.
     """
     path = dominion_dir / SCHEDULE_FILE
     try:
@@ -211,6 +227,99 @@ def save_state(brr_dir: Path, state: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def _signal_path(brr_dir: Path) -> Path:
+    return brr_dir / STATE_DIRNAME / SIGNAL_FILE
+
+
+def load_signals(brr_dir: Path) -> dict[str, float]:
+    """Load the named-signal timestamp map (signal name → epoch seconds).
+
+    ``{}`` on absence/parse error — a missing/corrupt signal file just
+    means no reset applies this tick, never a crash.
+    """
+    try:
+        raw = json.loads(_signal_path(brr_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, float] = {}
+    for key, value in raw.items():
+        try:
+            out[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def record_signal(brr_dir: Path, name: str, now: float | None = None) -> None:
+    """Best-effort: record that named signal *name* just happened at *now*.
+
+    Called from wherever the daemon dispatches the thing a schedule entry
+    might want to react to (currently: a concurrent ``spawn:`` dispatch —
+    see ``daemon._queue_spawn_request``). Read back by ``apply_reset_signals``
+    on the next scheduling tick. Swallows I/O errors: a missed signal just
+    means one entry doesn't get its cooldown reset this time, never a
+    daemon-loop failure.
+    """
+    ts = now if now is not None else time.time()
+    try:
+        signals = load_signals(brr_dir)
+        signals[name] = ts
+        path = _signal_path(brr_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        try:
+            os.write(fd, json.dumps(signals, indent=2).encode("utf-8"))
+            os.close(fd)
+            os.rename(tmp, path)
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except OSError:
+        pass
+
+
+def apply_reset_signals(
+    entries: list[ScheduleEntry],
+    state: dict,
+    signals: dict[str, float],
+    now: float,
+) -> dict:
+    """Push a matching ``reset_on`` entry's cooldown out to a recent signal.
+
+    Pure (no I/O): for each ``every`` entry naming a ``reset_on`` signal
+    that fired more recently than the entry's own ``last_fired``, record
+    the signal's timestamp as the new ``last_fired`` — exactly as if the
+    entry had itself fired then, without actually emitting an event for
+    it. Never moves ``last_fired`` backwards, and never touches an entry
+    with no ``reset_on`` or a signal that hasn't happened. Feed the result
+    into ``due_entries`` so the interval math sees the reset.
+    """
+    if not signals:
+        return state
+    new_state = dict(state)
+    for e in entries:
+        if e.kind != "every" or not e.reset_on:
+            continue
+        signal_ts = signals.get(e.reset_on)
+        if signal_ts is None or signal_ts > now:
+            continue
+        rec = new_state.get(e.id)
+        last = rec.get("last_fired") if isinstance(rec, dict) else None
+        if last is not None and last >= signal_ts:
+            continue
+        new_state[e.id] = {"kind": "every", "last_fired": signal_ts}
+    return new_state
 
 
 # ── Due computation (pure) ───────────────────────────────────────────
