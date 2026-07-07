@@ -148,6 +148,23 @@ merges, or gives a standing "always merge X-shaped PRs" instruction the
 entry can cite by name. Re-derived precedent doesn't restore the
 authority; an explicit maintainer nod to a *named scope* does.
 
+**Stop-hook "no outbound signal" nudge fights the notify-bar policy
+(confirmed live twice: 2026-07-07 18:25z tick, 2026-07-08 23:25z tick).**
+A pure-re-derivation tick that correctly stays silent per the notify bar
+above still produces zero outbox messages — and the daemon's Stop hook
+re-fires "no outbound messages sent yet — confirm this run left the
+signal it owed" on every close attempt regardless, because it can't tell
+"silent by policy" from "forgot to reply." Both times the tick eventually
+sent one throwaway telegram line just to satisfy the hook and stop the
+retry loop, at real (if small) quota cost — exactly the friction the
+policy was designed to avoid paying. Not fixed: the gate would need to
+recognize a schedule-sourced run's own closeout stdout (the response
+capture path) as a satisfying signal in its own right when the run's task
+body itself defines a silence-is-valid outcome, rather than requiring an
+outbox/gate message unconditionally. Flagging for whoever next touches
+`hooks.py`'s Stop-phase check rather than guessing at the fix under a
+director tick's own budget.
+
 ### A5 — diffense reveal re-skin — owner: resident
 
 The maintainer switched diffense off because reading it was boring — the
