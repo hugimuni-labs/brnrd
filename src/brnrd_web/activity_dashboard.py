@@ -270,6 +270,19 @@ def _activity_stats(
 _QUOTA_STALE_SECONDS = 300  # daemon publishes on its ~25-30s poll loop (#237)
 
 
+def _parse_scrape_updated_at(value: Any) -> datetime | None:
+    """Parse a collector's own ``updated_at`` (``claude_usage``/``codex_status``
+    shape: ``%Y-%m-%dT%H:%M:%SZ``), or ``None`` for anything else — never
+    raises, since this is best-effort staleness math, not a validated field.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
 def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Real per-shell quota windows from the daemons' own reports (#237).
 
@@ -281,6 +294,18 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
     (``runner_stats``) but no quota report at all (older daemon build, or
     cold cache) still renders as an explicit ``unknown`` placeholder card,
     not omitted — "quota provider pending" beats a missing panel.
+
+    Staleness is measured against the *scrape's own* ``updated_at`` when the
+    shell payload carries one, not the daemon's publish timestamp. Claude's
+    quota shell is a cached interactive ``/usage`` PTY scrape that only
+    refreshes while a Claude run is actively heartbeating — with no run
+    active, the daemon still PUTs this endpoint every poll tick with numbers
+    that haven't actually changed in hours, so gating staleness on
+    ``quota_updated_at`` alone never fires (that timestamp is always fresh)
+    and the dashboard shows old numbers as if they were live — the reported
+    "lying Claude usage panel" bug (2026-07-07). Falls back to the daemon's
+    publish time for shells that carry no per-scrape timestamp (older daemon
+    builds; Codex's live rollout read, which has no comparable idle-gap).
     """
     repo_ids = {repo.id for repo in repos}
     real: dict[str, dict[str, Any]] = {}
@@ -297,7 +322,6 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                 shells = []
             if not isinstance(shells, list):
                 continue
-            stale = (now - reported_at).total_seconds() > _QUOTA_STALE_SECONDS
             for shell in shells:
                 if not isinstance(shell, dict):
                     continue
@@ -307,10 +331,13 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                 existing = real.get(name)
                 if existing is not None and existing["_reported_at"] >= reported_at:
                     continue
+                scrape_at = _parse_scrape_updated_at(shell.get("updated_at")) or reported_at
+                stale = (now - scrape_at).total_seconds() > _QUOTA_STALE_SECONDS
                 real[name] = {
                     "shell": name,
                     "status": "stale" if stale else str(shell.get("status") or "unknown"),
                     "windows": shell.get("windows") or [],
+                    "credits": shell.get("credits"),
                     "_reported_at": reported_at,
                 }
     out = list(real.values())

@@ -167,6 +167,35 @@ def latest_claude_usage_outbox_dir(brr_dir: Path) -> Path | None:
     return best_path
 
 
+def latest_claude_spend_outbox_dir(brr_dir: Path) -> Path | None:
+    """The most recently written Claude result-JSON spend snapshot's directory.
+
+    Same freshest-mtime heuristic as :func:`latest_claude_usage_outbox_dir`,
+    over :mod:`brr.claude_status`'s per-run ``.claude-result-levels.json``
+    instead of the interactive ``/usage`` scrape — the two are written by
+    different collectors (a run's own headless result JSON vs. the PTY
+    probe) and are not always the same outbox dir, so this is a distinct
+    glob rather than reusing the quota helper's answer.
+    """
+    from . import claude_status
+
+    try:
+        candidates = (brr_dir / "outbox").glob(f"*/{claude_status.SNAPSHOT_NAME}")
+    except OSError:
+        return None
+    best_path: Path | None = None
+    best_mtime = -1.0
+    for candidate in candidates:
+        try:
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best_mtime = mtime
+            best_path = candidate.parent
+    return best_path
+
+
 def binding_quota_remaining_pct(levels: Mapping[str, Any] | None) -> float | None:
     """The lowest remaining-percent found in a level snapshot's ``quota`` dict.
 

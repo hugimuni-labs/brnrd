@@ -2377,6 +2377,23 @@ def test_resources_facet_remote_scm_known_when_pr_recorded():
     assert facet["remote_scm"]["note"] is None
 
 
+def test_read_pr_control_accepts_bare_number_hash_and_url(tmp_path):
+    """The `.pr` control file (2026-07-07 fix for 'remote_scm=absent even
+    after the resident created a PR itself mid-run'): the resident can write
+    whatever `gh pr create` handed it, not a specific format."""
+    for text in ("274", "#274", "https://github.com/Gurio/brr/pull/274\n"):
+        pr_path = tmp_path / ".pr"
+        pr_path.write_text(text, encoding="utf-8")
+        assert daemon._read_pr_control(pr_path) == "274"
+
+
+def test_read_pr_control_missing_or_empty_file_is_none(tmp_path):
+    assert daemon._read_pr_control(tmp_path / ".pr") is None
+    empty = tmp_path / ".pr"
+    empty.write_text("   ", encoding="utf-8")
+    assert daemon._read_pr_control(empty) is None
+
+
 def test_resources_facet_threads_runner_catalog():
     facet = daemon._resources_facet(
         None,
