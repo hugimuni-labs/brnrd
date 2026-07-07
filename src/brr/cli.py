@@ -26,6 +26,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("instruction", help="what to do")
     p.set_defaults(func=cmd_run)
 
+    p = sub.add_parser(
+        "worktree-hygiene",
+        help="dry-run report for local worktree/branch hygiene",
+    )
+    p.set_defaults(func=cmd_worktree_hygiene)
+
     p = sub.add_parser("review", help="work with diffense review packs")
     p.add_argument("pack", help="path to a review pack JSON file")
     p.add_argument("--check", action="store_true",
@@ -309,6 +315,14 @@ def cmd_run(args):
 
     from . import runner
     runner.run_task(args.instruction)
+
+
+def cmd_worktree_hygiene(args):
+    del args
+
+    from . import worktree
+
+    return worktree.main_worktree_hygiene()
 
 
 def cmd_agent_inject(args):
