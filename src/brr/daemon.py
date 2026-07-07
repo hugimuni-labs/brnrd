@@ -4762,8 +4762,13 @@ def start(
             # marked event is never a resident-lead candidate and vice
             # versa, so splitting one pass avoids a second full inbox scan
             # (and a second round of ``list_pending`` I/O) every tick.
+            # Scanning is gated on an open slot existing at all, not on
+            # ``reload_requested`` — a pending package-file reload no
+            # longer holds the spawn slot shut (see below); it still holds
+            # the *resident* slot shut, so a scan purely for a fresh
+            # resident dispatch would be wasted while reload is pending.
             scanned: list[_DispatchTarget] | None = None
-            if not reload_requested and (current is None or current_spawn is None):
+            if current_spawn is None or (current is None and not reload_requested):
                 scanned = _dispatchable_targets(account_context, repo_root, cfg)
 
             # Concurrent worker-stack child (slice 1): dispatched
@@ -4775,7 +4780,38 @@ def start(
             # unlike a fresh external message, a `spawn:` request is
             # already one deliberate, already-complete dispatch decision
             # the parent made; nothing to debounce it against.
-            if current_spawn is None and not reload_requested:
+            #
+            # Deliberately NOT gated on ``reload_requested`` (kb/plan-
+            # spawn-gap-closure.md "Gap 2", resolved 2026-07-08). A spawn
+            # is a separate subprocess (a `claude`/`codex` CLI child); it
+            # does its own work by reading the checkout fresh off disk,
+            # never by calling back into this process's in-memory daemon
+            # module. So the staleness risk re-exec-gating exists to guard
+            # against never reaches the child's own work at all — only the
+            # few lines of daemon orchestration code that submit/reap/
+            # notify it (the subprocess call below, and
+            # ``_notify_spawn_parent`` / ``_notify_spawn_parent_of_crash``
+            # on reap) could run stale. The vision this closes against
+            # (2026-07-08, same-thread): "the daemon should do [the]
+            # little possible work there, we just need to make sure the
+            # runs don't step on each other's toes" — and toe-stepping is
+            # what `environment: worktree` (unconditionally forced onto
+            # every spawned event, Gap 1, shipped 2026-07-08) actually
+            # guards, not process-image freshness. Holding the spawn slot
+            # shut for an unrelated package edit crippled the primitive
+            # for close to "most substantive resident turns" on this
+            # repo's own dev-reload daemon (design-director-loop.md
+            # "Finding 2/3") for a staleness risk that's narrow (only the
+            # rare edit that changes spawn-dispatch logic itself) and
+            # already bounded by the standing review-before-close contract
+            # and the crash-notify path (PR #266) — a bad dispatch
+            # surfaces at review, it doesn't silently corrupt anything.
+            # Re-exec itself is still safe: ``pool.shutdown(wait=True)``
+            # below blocks on any in-flight ``current_spawn`` future
+            # exactly as it does on ``current``, so a reload never kills a
+            # spawn mid-flight, only defers replacing the process image
+            # until it's done.
+            if current_spawn is None:
                 spawn_candidates = [
                     t for t in (scanned or []) if t.event.get("spawn_immediate")
                 ]
@@ -4801,8 +4837,11 @@ def start(
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
             # picks them up at a plan boundary (multi-response), or the
-            # next spawn handles them. Reload also holds dispatch so the
-            # slot can drain.
+            # next spawn handles them. Reload holds *this* (resident)
+            # dispatch so the slot can drain and re-exec can proceed — a
+            # fresh resident thought must not start on soon-to-be-stale
+            # code. The concurrent-spawn slot above is no longer gated the
+            # same way; see its own comment.
             burst_hold = 0.0
             if current is None and not reload_requested:
                 pending = [
