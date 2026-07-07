@@ -1,5 +1,8 @@
 # Plan: closing the remaining `spawn:` gaps (2026-07-08)
 
+Status: shipped on 2026-07-08 — both named gaps closed, see "What shipped
+this run vs. what's parked" below.
+
 Written on direct instruction: "name and plan the gap extensively first,
 because otherwise you may drift from the original vision as you implement
 it" — a same-thread follow-up to the 2026-07-07 exchange where the
@@ -113,7 +116,7 @@ change — additive, scoped to env selection only, which is why this one
 didn't need to be parked as a fork (see the "clear and reversible" test
 below).
 
-### Gap 2 — `reload_requested` gates spawn dispatch together with re-exec (still open — genuine fork, not decided here)
+### Gap 2 — `reload_requested` gates spawn dispatch together with re-exec (resolved 2026-07-08, see addendum below)
 
 `DevReloadWatcher.changed()` (`src/brr/dev_reload.py:46`) snapshots every
 watched `.py`/`.md` file under `src/brr/` and flips a single
@@ -161,24 +164,72 @@ from a decision, not a re-diagnosis:
   is invisible there) and lean on the review-self-wake fallback for the
   rare in-repo case.
 
-Recommendation, not a decision: **B1**, scoped to the narrow overlap
-check above rather than an unconditional split — it fixes the common
-case (most package edits) while keeping the one case where staleness is
-actually dangerous (editing the dispatch/reload logic itself) exactly as
-protected as it is today. But this changes a live invariant in the
-dispatch loop that single-flight itself depends on
-(`design-director-loop.md` slice 1 was explicitly "flagged back rather
-than built blind" for the same reason) — it gets your nod before it gets
-a diff, same bar.
+Recommendation as first written: **B1**, scoped to the narrow overlap
+check above rather than an unconditional split. Superseded same-day —
+see the addendum immediately below.
+
+## Addendum (2026-07-08) — decided: unconditional decoupling, not B1
+
+The maintainer read this page's own framing back and pushed past it: the
+`reload_requested`-vs-spawn coupling wasn't born from a deliberate
+staleness-safety design at all — `git log -S` on the gating line traces
+it to `_queue_spawn_request`'s original commit (28f78e6, #257/#260)
+simply reusing the resident dispatch loop's existing `not
+reload_requested` guard verbatim, not a considered choice for the spawn
+slot specifically. And explicitly, in his own words: *"whatever a run
+spawns it should wait on, to own and complete the work, but it should
+not be crippled, or blocked by a daemon. the daemon should do [the]
+little possible work there, we just need to make sure the runs don't
+step on each other's toes (worktrees or docker doesn't matter so much I
+think)"* — delegated as a call to make, not a fork to park.
+
+That reframes B1 vs. B2 as answering the wrong question. Both treat
+*some* daemon-side gating on spawn dispatch as the default, arguing only
+over how much. The vision inverts the default: the daemon's job is
+collision-prevention (worktrees/docker), already delivered structurally
+by Gap 1's `environment: worktree` force — not code-freshness babysitting
+for a primitive whose actual work happens in a separate subprocess that
+reads the checkout fresh off disk, never through this process's
+in-memory modules. B1's own narrow-overlap carve-out (only block when
+the changed file touches spawn-dispatch logic itself) adds a second
+gating flag and a file-overlap check to defend against a risk that's
+already bounded twice over: the standing review-before-close contract
+(a bad dispatch surfaces at review, not silently) and the crash-notify
+path (PR #266). That's daemon complexity spent on a risk the vision says
+isn't the daemon's to manage in the first place.
+
+**Decided, not parked: unconditional decoupling.** `current_spawn`
+dispatch (`src/brr/daemon.py` ~4814, plus the scan gate feeding it
+~4771) no longer reads `reload_requested` at all. The resident slot
+(`current`, ~4843) and re-exec itself (~4744) are untouched — a fresh
+*resident* thought still waits for reload the same as before, since that
+one *is* about to run inside this same process's soon-to-be-replaced
+image. Re-exec's own safety is unchanged: `pool.shutdown(wait=True)`
+blocks on any in-flight `current_spawn` future exactly as it does on
+`current`, so a reload still never kills a spawn mid-flight — it only
+defers replacing the process image until the spawn (and the resident
+thought) are both done. Regression-tested end to end:
+`tests/test_daemon.py::test_dev_reload_does_not_stall_concurrent_spawn_dispatch`
+drives the real loop (`daemon.start`) through a resident thought that
+holds the slot busy while `reload_requested` flips true, confirms the
+spawn still dispatches and completes before the resident thought winds
+down, and confirms it fails against the pre-fix gating (verified live by
+reverting just the code change and re-running the new test — it fails
+with the spawn never dispatching, exactly the stall this closes). Full
+suite green (1387).
 
 ## What shipped this run vs. what's parked
 
 Per `run.md`'s Reconsider guidance ("clear and reversible ⇒ make the call
 in this same thought... a genuine fork ⇒ name it, wait for the nod"):
-Gap 1 is a scoped, additive, already-recommended fix with no design
-ambiguity left in it — shipped. Gap 2 changes a core dispatch-loop
-invariant with two real candidate shapes and a value trade-off between
-them — named here with a recommendation, not decided.
+Gap 1 shipped 2026-07-08 (prior run) as a scoped, additive fix with no
+design ambiguity left in it. Gap 2 was initially parked as a genuine
+fork (two real candidate shapes, a live dispatch-loop invariant) — then
+explicitly un-parked by the maintainer handing the call over directly
+("I would actually rely on you to make the right balanced design call"),
+which moves it from "wait for the nod" to "make the call, stay visible
+about it" for this same run: decided and shipped as the addendum above,
+not left open a second time.
 
 ## Non-goals (explicit, so a later pass doesn't invent scope)
 

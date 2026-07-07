@@ -616,6 +616,35 @@ explanation for why an already-settled design point needed re-surfacing by the
 maintainer instead of being remembered. Both fixes landed the same run;
 neither alone was the whole story.
 
+**Addendum 2026-07-08 — the `reload_requested`-vs-spawn-gate question
+(Finding 2/3, ~line 445 above) decided, not left open a third time.**
+This section's own verdict ("value-laden enough to name back rather than
+decide unilaterally") held through the 2026-07-08 Gap-1 closure run,
+which fixed the worktree-isolation collision but explicitly parked this
+gate coupling as a fork again. Same-thread follow-up asked directly for
+the "reload_requested silently stalls spawn dispatch until next wake"
+gap to be rethought and delegated the actual call: *"whatever a run
+spawns it should wait on, to own and complete the work, but it should
+not be crippled, or blocked by a daemon. the daemon should do [the]
+little possible work there, we just need to make sure the runs don't
+step on each other's toes."* Decided: unconditional decoupling — the
+concurrent-spawn slot no longer reads `reload_requested` at all; the
+resident slot and re-exec itself still do, since a fresh resident thought
+genuinely runs inside the soon-to-be-replaced process image and a spawn's
+real work (a separate `claude`/`codex` subprocess) never does. This
+supersedes the two-shapes framing above (B1's narrower flag-split vs. B2's
+status-quo) with a third option neither named: remove the coupling
+entirely, since Gap 1's `environment: worktree` force already delivers
+the actual toe-stepping protection the vision asked for, and the standing
+review-before-close contract plus the crash-notify path (PR #266) already
+bound the narrow staleness risk B1 was designed to catch. Full reasoning,
+the decoupling's own reasoning about why B1's "considered narrow
+carve-out" framing was itself answering the wrong question, and the
+regression test that fails against the pre-fix gating and passes against
+the fix: `kb/plan-spawn-gap-closure.md` §"Addendum (2026-07-08) — decided:
+unconditional decoupling, not B1". Not re-duplicated here — this entry is
+the pointer, that page is the receipt.
+
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
 Follow-up sharpening the stingy-director economics: if the wake already

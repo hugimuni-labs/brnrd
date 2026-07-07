@@ -11625,3 +11625,53 @@ cost) — recommended but not decided, per Reconsider's "clear/reversible
 since it touches a live dispatch-loop invariant single-flight itself
 depends on. Detail: `kb/plan-spawn-gap-closure.md`. Branch:
 brr/spawn-worktree-isolation-2026-07-08.
+
+## [2026-07-08] fix | Gap 2 decided: spawn dispatch decoupled from reload_requested
+
+Same-thread follow-up to the entry above, minutes later: "was done
+because rouge director ticks were occasionally getting in the way of an
+active or just finished run. agreed needs to be rethought... My vision:
+whatever a run spawns it should wait on, to own and complete the work,
+but it should not be crippled, or blocked by a daemon. the daemon should
+do [the] little possible work there, we just need to make sure the runs
+don't step on each other's toes" — explicit delegation of the actual
+design call, not another park-and-wait.
+
+Checked before deciding: `git log -S` on the gating line traces it to
+`_queue_spawn_request`'s original commit (28f78e6, #257/#260) reusing the
+resident dispatch loop's existing `not reload_requested` guard verbatim —
+never a deliberate staleness-safety design for the spawn slot
+specifically, which reframes B1-vs-B2 (the prior entry's two parked
+shapes) as both defending a risk the vision says isn't the daemon's job
+to manage at all: a spawn's real work is a separate `claude`/`codex`
+subprocess reading the checkout fresh off disk, never this process's
+in-memory modules — so the staleness risk re-exec-gating exists to guard
+against never actually reaches the child's own work, only the handful of
+orchestration lines that submit/reap/notify it, a risk already bounded
+twice over by the standing review-before-close contract and the
+crash-notify path (PR #266).
+
+Decided and shipped: `current_spawn` dispatch and its scan gate
+(`src/brr/daemon.py` ~4771/4814) no longer read `reload_requested` at
+all. The resident slot (~4843) and re-exec itself (~4744) are unchanged
+— a fresh resident thought still waits, since it's about to run inside
+this same soon-to-be-replaced process image. Re-exec's own safety holds:
+`pool.shutdown(wait=True)` still blocks on any in-flight `current_spawn`
+future exactly as it does on `current`, so a reload never kills a spawn
+mid-flight, only defers the process-image swap until it's done.
+
+Regression-tested end to end, not just unit-level:
+`tests/test_daemon.py::test_dev_reload_does_not_stall_concurrent_spawn_dispatch`
+drives the real `daemon.start()` loop through a resident thought that
+holds the slot busy while `reload_requested` flips true mid-run, confirms
+a `spawn:` event still dispatches and completes before the resident
+thought winds down, and — checked live by reverting only the code change
+and re-running — fails against the pre-fix gating with the spawn never
+dispatching, the exact stall this closes. Full suite green (1387).
+
+`kb/plan-spawn-gap-closure.md` and `kb/design-director-loop.md` both
+updated in place (addendum, not a rewrite of the prior open-fork
+framing) rather than treated as settled history to leave stale. Detail:
+`kb/plan-spawn-gap-closure.md` §"Addendum (2026-07-08) — decided:
+unconditional decoupling, not B1". Branch:
+brr/spawn-reload-decouple-2026-07-08.
