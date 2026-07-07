@@ -87,9 +87,17 @@ Portals are the seams where a run turns to the world — inbound
   `runner_policy: propose` → park a policy change for operator approval.
 - inbox.json — live pending-event view, heartbeat-refreshed. Re-read at
   plan / todo boundaries; once more immediately before a terminal closeout
-  — fold a related follow-up in, or say why it stays queued. Doesn't catch
-  messages that arrive after the runner has already returned. Daemon-owned;
-  don't edit.
+  — fold a related follow-up in, or say why it stays queued. "Fold in"
+  means the `event: <id>` outbox mechanism above, one file per event —
+  narrating the answer only in the current thread's own reply does not
+  clear `pending_event_count` (`daemon.py::_drain_outbox` only marks a
+  *different* event `done` when a file's frontmatter names it
+  cross-thread; same-thread mentions never touch it). Confirmed live
+  2026-07-08: a run answered two same-thread follow-ups in its narrative
+  and on `.card` across a dozen Stop-hook cycles before the count actually
+  cleared once routed `event:` files were written. Doesn't catch messages
+  that arrive after the runner has already returned. Daemon-owned; don't
+  edit.
 - portal-state.json (env `BRR_PORTAL_STATE`) — pending events,
   delivery/card posture, budget/keepalive state, `change_token` = "did
   attention-relevant state move since my last read". Daemon-owned;
