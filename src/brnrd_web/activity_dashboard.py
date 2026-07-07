@@ -333,6 +333,64 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
     return sorted(out, key=lambda row: row["shell"])[:6]
 
 
+_LIVE_RUNS_STALE_SECONDS = 300  # matches presence.py's own DEFAULT_STALE_AFTER_S
+
+
+def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
+    """Account-scoped live/coexisting-runs view (#258).
+
+    Reads the last ``PUT /v1/daemons/live-runs`` snapshot per connected
+    daemon (`src/brr/gates/cloud.py::_live_runs_snapshot` is the writer,
+    sourced from the local presence registry). Several ``Daemon`` rows can
+    belong to the same physical daemon process (one row per repo it's
+    registered under, `Daemon.repo_id`) and would each report the same
+    underlying presence entries — deduped by ``id`` here, freshest report
+    wins, the same "one daemon, several repo registrations" shape
+    `_quota_views` above already merges by shell name.
+    """
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return {"runs": [], "stale": False, "generated_at": None}
+    now = datetime.now(timezone.utc)
+    runs: dict[str, dict[str, Any]] = {}
+    newest_reported_at: datetime | None = None
+    daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+    for daemon in daemons:
+        reported_at = _dt(daemon.live_runs_updated_at)
+        if reported_at is None:
+            continue
+        if newest_reported_at is None or reported_at > newest_reported_at:
+            newest_reported_at = reported_at
+        try:
+            entries = json.loads(daemon.live_runs_json or "[]")
+        except ValueError:
+            entries = []
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            run_key = str(entry.get("id") or entry.get("run_id") or "")
+            if not run_key:
+                continue
+            existing = runs.get(run_key)
+            if existing is not None and existing["_reported_at"] >= reported_at:
+                continue
+            row = dict(entry)
+            row["_reported_at"] = reported_at
+            runs[run_key] = row
+    out = list(runs.values())
+    for row in out:
+        row.pop("_reported_at", None)
+    out.sort(key=lambda row: row.get("started_at") or "")
+    stale = bool(newest_reported_at) and (now - newest_reported_at).total_seconds() > _LIVE_RUNS_STALE_SECONDS
+    return {
+        "runs": out,
+        "stale": stale,
+        "generated_at": newest_reported_at.isoformat() if newest_reported_at else None,
+    }
+
+
 def _activity_dashboard_context(request: Request, db: Session, account: Account, *, notice: str | None = None, installation_id: str | None = None) -> dict[str, Any]:
     settings = request.app.state.settings
     repos = _repos(db, account.id)
@@ -399,6 +457,30 @@ def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSON
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "runner_quotas": _quota_views(db, repos, runner_stats),
+        }
+    )
+
+
+@router.get("/v1/dashboard/live-runs")
+def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Account-scoped live/coexisting-runs view (#258) for the SvelteKit
+    frontend. Same session-cookie auth as ``dashboard_quota_api`` — 401,
+    not a login redirect, since this is fetched by JS.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    view = _live_runs_views(db, repos)
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "runs": view["runs"],
+            "stale": view["stale"],
+            "reported_at": view["generated_at"],
         }
     )
 

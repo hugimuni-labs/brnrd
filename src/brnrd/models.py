@@ -80,6 +80,11 @@ class Daemon(Base):
     # dashboard-side half of #237; see kb/design-dashboard-live-surface.md.
     quota_json: Mapped[str] = mapped_column(Text, default="[]")
     quota_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Live/coexisting-runs snapshot (#258), mirrored from the local presence
+    # registry via `PUT /v1/daemons/live-runs` — see
+    # kb/design-dashboard-live-surface.md §"Reconsidered 2026-07-06".
+    live_runs_json: Mapped[str] = mapped_column(Text, default="[]")
+    live_runs_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ActivityRecord(Base):
