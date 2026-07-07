@@ -15,10 +15,24 @@ export interface QuotaWindow {
 	resets_at?: number | null;
 }
 
+export interface QuotaCredits {
+	/** Real USD, not a projection — the Shell's own result-JSON cost figure.
+	 *  Only meaningfully nonzero once a subscription window is exhausted and
+	 *  the account falls through to metered credits (confirmed live
+	 *  2026-07-07: a run kept working straight through an exhausted 5h
+	 *  window, billed ~$1). */
+	total_cost_usd: number | null;
+	summary: string | null;
+	updated_at: string | null;
+}
+
 export interface QuotaShell {
 	shell: string;
 	status: 'known' | 'stale' | 'unknown' | string;
 	windows: QuotaWindow[];
+	/** Present only for shells with a proven per-run spend figure (Claude
+	 *  today; absent, not null, on shells/builds with no such collector). */
+	credits?: QuotaCredits | null;
 }
 
 export interface QuotaResponse {

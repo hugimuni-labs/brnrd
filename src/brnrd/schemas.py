@@ -195,10 +195,32 @@ class QuotaWindowIn(BaseModel):
     resets_at: float | None = None
 
 
+class QuotaCreditsIn(BaseModel):
+    """Real per-run USD spend proven by a Shell's own result JSON (not a projection).
+
+    Populated once a Shell's headless run reports ``total_cost_usd`` — see
+    ``src/brr/gates/cloud.py::_claude_credits_block`` for the collector and
+    why this stopped being a $0 accounting curiosity once a subscription
+    window is exhausted and the account falls through to metered credits.
+    """
+
+    total_cost_usd: float | None = None
+    summary: str | None = None
+    updated_at: str | None = None
+
+
 class QuotaShellIn(BaseModel):
     shell: str = Field(min_length=1, max_length=32)
     status: str = Field(default="unknown", max_length=32)
     windows: list[QuotaWindowIn] = Field(default_factory=list)
+    # The underlying scrape's own capture time (ISO-8601), distinct from
+    # when the daemon last PUT this payload — a cached Claude ``/usage``
+    # scrape only refreshes while a run is active, so it can be hours older
+    # than the publish itself. Without this, staleness can only be measured
+    # against the daemon's publish cadence, which is always "fresh" — the
+    # reported "lying Claude usage panel" bug, 2026-07-07.
+    updated_at: str | None = None
+    credits: QuotaCreditsIn | None = None
 
 
 class QuotaReport(BaseModel):
