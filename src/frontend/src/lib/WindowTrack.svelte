@@ -8,13 +8,27 @@
 
 	let { shell, now }: Props = $props();
 
-	// Status palette (fixed, never themed — dataviz skill's palette.md).
-	// Distinct from any categorical hue on purpose: a status color must
-	// never be mistaken for a series identity.
+	// Status palette — brnrd's own fixed scale (2026-07-08 pass), not the
+	// dataviz skill's generic reference defaults these three hexes used to
+	// be lifted verbatim from (#0ca30c/#fab219/#d03b3b — stock traffic-
+	// light, never actually reskinned). Still a small fixed scale with
+	// reserved meaning per the skill's own rule ("status never follows the
+	// theme"), still always icon+label, never color alone — but the *hues*
+	// now read as this dashboard's hearth/frost/ember register instead of
+	// generic RAG. ample = hearth-lit amber (full warmth); low = frost
+	// creeping in (cooling, leaving the firelight) — a dimmer/desaturated
+	// blue than the `sky-300` "stale report" badge below, so the two don't
+	// collide as one hue meaning two things in the same card; critical =
+	// dying ember, the closest a legible-on-dark-void hue can get to
+	// "darkness" while still clearing 3:1 against the track/panel/body
+	// surfaces (validated: dataviz's scripts/validate_palette.js contrast()
+	// — a true near-black would drop the affordance icon+label is supposed
+	// to back up, not replace). Contrast checked against #0c0906 (body),
+	// ~#171009 (panel), #1c1917 (stone-900 track): all ≥ 3.7:1.
 	const LEVEL_COLOR: Record<string, string> = {
-		ample: '#0ca30c',
-		low: '#fab219',
-		critical: '#d03b3b',
+		ample: '#e8b34a',
+		low: '#7aa9c2',
+		critical: '#c0523f',
 		unknown: '#57534e' // stone-600 — recedes, not a fourth status hue
 	};
 
@@ -47,7 +61,7 @@
 						<!-- status never carries meaning by color alone: icon + label -->
 						<span
 							class="inline-block h-2 w-2 rounded-full"
-							style={`background-color: ${LEVEL_COLOR[level]}`}
+							style={`background-color: ${LEVEL_COLOR[level]}; box-shadow: 0 0 4px 1px ${LEVEL_COLOR[level]}90`}
 							aria-hidden="true"
 						></span>
 						<span style={`color: ${LEVEL_COLOR[level]}`}>
@@ -67,7 +81,7 @@
 				>
 					<div
 						class="h-full transition-[width] duration-500 ease-out"
-						style={`width: ${window.percent ?? 0}%; background-color: ${LEVEL_COLOR[level]}`}
+						style={`width: ${window.percent ?? 0}%; background-color: ${LEVEL_COLOR[level]}; box-shadow: 0 0 6px 0 ${LEVEL_COLOR[level]}b0, inset 0 0 3px 0 rgba(255,255,255,0.25)`}
 					></div>
 				</div>
 				{#if remaining || window.reset}
