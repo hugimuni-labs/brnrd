@@ -176,18 +176,19 @@ casual reader has to learn to parse, not
 decoration. Naming that connection explicitly is new; the practice
 already exists.
 
-**What this suggests for palette and texture**, as direction, not a spec
-(no asset built here, same caveat as the rest of this page): dim amber and
-warm ember tones for the "hearth" state (a healthy quota, a run in
-progress, things working) against cold blue-white and static/void black
-for the "outside the firelight" state (quota exhausted, a run stopped, an
-error) — the state-color mapping doing double duty as both a UI affordance
-(good/bad) and the actual mythological structure (fire-realm vs. ice-realm,
-inside the hall vs. outside it). Runic/bind-rune-style glyphs as a
-*display* treatment for the weave's own mark channel (✓ ✗ ? → Δ) is a
-concrete, buildable idea worth flagging to whoever designs the first
-screen — the marks already exist and already carry meaning; a bind-rune
-rendering would be pure skin, not new invention.
+**Palette and texture, now partially shipped (2026-07-07):** the first
+dashboard pass uses a warm void body canvas (`#0c0906`) with parchment text
+(`#f3e8d8`), amber primary/heading labels for the "inside the hall" read,
+stone chrome/meta/tracks instead of blue-slate, and sky as the cold
+signifier for stale reports and links. That makes the old proposal concrete:
+hearth/ember is the working state; frost/sky is outside the firelight
+(stale, unauthenticated, inactive). The fixed traffic-light status colors
+remain unthemed so semantic state doesn't double as brand hue.
+
+Still only proposed: runic/bind-rune-style glyphs as a *display* treatment
+for the weave's own mark channel (✓ ✗ ? → Δ). The marks already exist and
+already carry meaning; a bind-rune rendering would be skin over a real
+semantic channel, not new invention.
 
 ### Reference check: psyche.network (2026-07-07)
 
@@ -217,11 +218,12 @@ substance and the colors and the composition, almost everything, should
 be loom-focused." Read as tightening, not contradicting, the line above:
 don't treat psyche as a design partner to reconcile with, treat it as
 proof a card-grid-with-status-badges *shape* reads as live-and-legible,
-full stop. Slice 2 shipped this run kept the existing dashboard slate
-palette (not psyche's, not yet the hearth/ember one either — see below);
-a real "loom-focused" composition pass — hearth/ember substance, not just
-avoiding mint-green — is still the open next step, named again in
-`plan-loom-realtime-build.md` §Slice 2, not started.
+full stop. Slice 2 kept the existing dashboard slate palette deliberately
+to avoid a partial recolor; slice 3 then shipped the hearth/frost chrome
+across all live lanes in one pass (`WindowTrack`, `LiveRuns`,
+`PRReviewQueue`, and `RunLedgerReceipt`). That does not make psyche the
+palette source — it closes the open "loom-focused composition" step this
+page already named.
 
 ## What is privy.io, and does it fit here? (asked same thread)
 

@@ -2,7 +2,9 @@
 
 Status: active — opened 2026-07-07 (run-260707-1728-czlk); slices 0/1
 shipped that run, slice 2 (+ a root-canvas bug found while building it)
-shipped 2026-07-07 (run-260707-1849-hnj8) — see §Slice 1.5 and §Slice 2.
+shipped 2026-07-07 (run-260707-1849-hnj8), slice 3 and the amber/ice
+chrome pass shipped 2026-07-07 (run-260707-1930-7074) — see §Slice 1.5,
+§Slice 2, and §Slice 3.
 Direct response to
 "you should realistically deeply expand the path to an actual loom
 implementation... what is the minimal but true and evolvable shape we *can*
@@ -19,9 +21,9 @@ Both design pages already diagnose "we have real data, no realtime feel."
 This page checked exactly where that breaks, because "realtime" is not one
 gap, it's two, and they need different fixes:
 
-1. **Backend publish cadence is bounded by an unrelated long-poll.**
-   `gates/cloud.py::_loop_once` publishes all five dashboard snapshots
-   (activity, plans, quota, live-runs, PR-review-queue) once per iteration,
+1. **Backend publish cadence was bounded by an unrelated long-poll.**
+   `gates/cloud.py::_loop_once` publishes the dashboard snapshots
+   (activity, plans, quota, live-runs, PR-review-queue, run-ledger) once per iteration,
    and the iteration itself is paced by the *inbox* long-poll's `wait=25`
    (`_POLL_WAIT_S = 25`, `gates/cloud.py:20`) — a constant chosen for chat
    responsiveness, never for dashboard freshness. Every published snapshot
@@ -49,10 +51,9 @@ Six mechanics were named in `design-dashboard-live-surface.md`
 - **Zero new backend data needed** (all sourced from already-shipped
   publishers): the window-track's draining edge (quota, shipped), the
   live-runs lane (queued→running→done, shipped), the PR-review-queue lane
-  (shipped), and the token-consumption "solution report" (`run_ledger.jsonl`
-  rows already written per closed run, just never read back — named as the
-  loom's own "next real slice" in `design-quota-scheduling-loom.md`
-  §Status check).
+  (shipped), and the token-consumption "solution report" (shipped in slice
+  3: `run_ledger.jsonl` rows were already written per closed run; the slice
+  added the server mirror, dashboard feed, and receipt card).
 - **New backend collection required**: the KB node-map (needs read/write
   eventing on kb access — doesn't exist), the TIS-100 message-value pulse
   (needs a per-message event stream — doesn't exist), the CPS chapter-map
@@ -70,12 +71,14 @@ data.
 
 `gates/cloud.py` gets a second daemon thread (`_dashboard_publish_loop`,
 started from `run_loop` alongside the existing inbox loop) publishing the
-same five snapshots (`_publish_activity`/`_plans`/`_quota`/`_live_runs`/
-`_pr_review_queue`) every `_DASHBOARD_PUBLISH_INTERVAL_S` (3s), independent
+same snapshots (`_publish_activity`/`_plans`/`_quota`/`_live_runs`/
+`_pr_review_queue`/`_run_ledger`) every `_DASHBOARD_PUBLISH_INTERVAL_S` (3s), independent
 of `_loop_once`'s 25s inbox long-poll. `_loop_once` keeps its own publish
 calls too — harmless, idempotent overwrites, not worth touching the tested
-main path for. No schema change, no new endpoint. Regression tests:
-`test_dashboard_publish_tick_publishes_all_five_snapshots`,
+main path for. Slice 0 itself had no schema change or new endpoint; slice
+3 later joined the same publish cadence with the run-ledger snapshot.
+Regression tests:
+`test_dashboard_publish_tick_publishes_all_six_snapshots`,
 `test_dashboard_publish_tick_noop_without_configured_state`,
 `test_run_loop_starts_dashboard_publish_thread`. Full suite green (1366
 passed).
@@ -146,12 +149,12 @@ Kept the palette question exactly as scoped in the design page and
 reinforced live by the maintainer same-thread: psyche.network is a
 container/element reference (card + progress-bar + status-badge shape)
 only — substance, color, and composition stay this project's own
-hearth/frost direction, not psyche's mint-green. No recolor attempted
-this run beyond the slate palette already shared with the other three
-lanes — the hearth/ember palette in `design-brand-visual-language.md` is
-still a proposal, not an asset, and deserves its own considered pass
-rather than a rushed partial recolor bolted onto this slice. Named as the
-natural next visual-language step, not started.
+hearth/frost direction, not psyche's mint-green. Slice 2 deliberately
+held the shared slate chrome rather than doing a partial recolor; slice 3
+then applied the amber/ice pass across all live lanes at once (warm void
+canvas, amber primary labels, stone chrome/meta, sky as stale/link/cold
+signifier) so the dashboard reads as one theme instead of a lane-by-lane
+patchwork.
 
 Build/lint/`svelte-check` clean (0 errors/warnings); no backend touched,
 no backend tests re-run.
@@ -161,35 +164,43 @@ as scoped: two files' worth of backend loop change, three components'
 worth of frontend interval/transition change, zero new schema, zero new
 endpoint, fully reversible.
 
-### Slice 3 — the receipt: per-run solution-report card — owner: unclaimed — [#271](https://github.com/Gurio/brr/issues/271) — *next up*
+### Slice 3 — the receipt: per-run solution-report card — owner: resident — [#271](https://github.com/Gurio/brr/issues/271) — *shipped 2026-07-07, run-260707-1930-7074*
 
-The loom page's own diagnosis: `run_ledger.jsonl` has real rows (wall-clock,
-tokens, weekly/5h deltas) and nothing reads them back. Smallest useful
-reader: a `GET /v1/dashboard/run-ledger?limit=N` endpoint (tail of the
-JSONL, same account-scoped/dedup shape as the other four publishers) plus a
-small card that appears when a live run transitions to done — tokens spent
-against the run's own budget envelope, the Opus Magnum framing already
-named. First slice with a genuinely new (if small) backend surface; ranked
-last because it's the first one that isn't purely a rendering change.
-Timing note (2026-07-07, same-thread): the original "may slip past the
-week" framing was the maintainer's own direct read as too pessimistic,
-given slices 0-2 landed inside two runs, not the original day-by-day
-estimate — loosened here to "next up" rather than restated with a new
-guess at a day number; the honest signal is velocity-so-far, not a
-re-padded date.
+Shipped the first backend-expanding loom slice. `Daemon.run_ledger_json`/
+`run_ledger_updated_at` (+ migration) mirror the existing live-runs/
+PR-review-queue publish pattern; `RunLedgerRowIn` keeps every field from
+`src/brr/run_ledger.py::_ROW_FIELDS` nullable because ledger evidence is
+honestly partial; `PUT /v1/daemons/run-ledger` stores the latest report.
+The dashboard reads it with `GET /v1/dashboard/run-ledger?limit=N` (default
+10, cap 50), dedupes by `run_id` across daemon repo registrations, keeps
+the freshest report, and sorts newest `ended_at` first. `cloud.py` tails
+the last 20 physical ledger lines, skips malformed JSON rows, and publishes
+the snapshot from both dashboard publish call sites.
 
-### Explicitly not this week — narrower than it reads, worth re-checking before slice 3
+Frontend: `runLedger.ts` + `RunLedgerReceipt.svelte`, wired under the PR
+review queue. Cards render the run label (`task_classification` or
+`repo_label`), wall-clock, token in/out, weekly/5h deltas, and subscription
+USD attribution; nulls render as `—`, matching the ledger's "unavailable →
+null, not failure" invariant. The existing keyed enter/exit/flip motion is
+enough for the "receipt just printed" behavior: a row only exists after a
+run closes and appends to the ledger.
+
+Same pass shipped the amber/ice chrome requested with #271: warm void body
+canvas, parchment text, amber primary/heading labels, stone cards/meta/
+tracks, and sky for stale badges + links. The fixed status constants stay
+unthemed.
+
+### Explicitly not this week — narrower than it reads, worth re-checking after slice 3
 
 KB node-map, message-value pulse, CPS chapter-map — named in full above.
 Each needs a new backend collector this plan deliberately doesn't start,
-since none of slices 0-3 depend on them and building a collector before its
+since none of slices 0-3 depended on them and building a collector before its
 consumer is exactly the "accreted, not structured" pattern this page exists
-to stop. Revisit once slices 0-2 are live and the "does this actually read
+to stop. Revisit now that slices 0-3 are live and the "does this actually read
 as a loom" question has a real screen to answer it against, not a diagram
-— that condition is now true (slice 2 is live, this page's own §Slice 2 has
-the first real screenshot-verified read). Not reopened this run for lack of
-budget, not lack of standing: whoever picks up slice 3 should re-read this
-section's premise before deferring the other three again by default.
+— that condition is now stronger than it was after slice 2 alone. Not
+reopened this run because #271 + palette was the direct maintainer ask, not
+because the other mechanics have fallen out of scope.
 
 ## Read next
 
