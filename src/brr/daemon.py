@@ -3043,6 +3043,20 @@ def _queue_spawn_request(
         return False
     source = str(fm.get("source") or "spawn")
     meta: dict = {"worker": True}
+    # A spawn is the one primitive that deliberately runs concurrently
+    # with its still-running parent in the *same* daemon process — every
+    # other dispatch path (respawn:, a fresh event) only ever starts once
+    # whatever came before it has ended, so sharing the repo's own
+    # `environment=host` working directory has never been a collision
+    # risk for them. For a spawn it is: confirmed live 2026-07-07
+    # (run-260707-1321-auhp, kb/design-director-loop.md §"Concurrent
+    # sub-spawns" addendum) a spawned child's `git checkout -b` executed
+    # in the same cwd as the parent's own mid-edit shell, flipping the
+    # parent's branch out from under it. Force worktree isolation
+    # unconditionally, regardless of the repo's own env policy — an
+    # event's own `environment` key outranks the repo config default
+    # (`run.py::_event_environment_policy`).
+    meta["environment"] = "worktree"
     if proposed:
         meta["shell"] = proposed
     if core:
