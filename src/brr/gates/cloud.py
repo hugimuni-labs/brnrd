@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -22,6 +23,13 @@ _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
 _RESPONSE_LIMITS = {"telegram": 3900}
 _SESSION = requests.Session()
+# Dashboard snapshots (activity/plans/quota/live-runs/PR-review-queue) used
+# to publish once per `_loop_once` iteration, which is paced by the inbox
+# long-poll above (`_POLL_WAIT_S = 25`) — a constant chosen for chat
+# responsiveness, never for dashboard freshness. That coupling capped every
+# dashboard snapshot at ~25s stale by construction. Publishing runs on its
+# own short cadence instead — see kb/plan-loom-realtime-build.md slice 0.
+_DASHBOARD_PUBLISH_INTERVAL_S = 3
 
 
 class BrnrdAuthError(RuntimeError):
@@ -151,6 +159,12 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         return
     except Exception as e:
         print(f"[brr:cloud] register failed: {e}")
+    threading.Thread(
+        target=_dashboard_publish_loop,
+        args=(brr_dir, inbox_dir),
+        daemon=True,
+        name="cloud-dashboard-publish",
+    ).start()
     backoff = 1
     while True:
         try:
@@ -163,6 +177,42 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             print(f"[brr:cloud] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
+
+
+def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
+    """One publish pass — see ``_dashboard_publish_loop`` for why it exists.
+
+    Split out from the loop so a test can drive a single tick without
+    threading or monkeypatching ``time.sleep`` on a ``while True``.
+    """
+    state = _load_state(brr_dir)
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    _publish_activity(brr_dir, inbox_dir, state)
+    _publish_plans(brr_dir, state)
+    _publish_quota(brr_dir, state)
+    _publish_live_runs(brr_dir, state)
+    _publish_pr_review_queue(brr_dir, state)
+
+
+def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
+    """Publish the five dashboard snapshots on their own short cadence.
+
+    Runs alongside ``run_loop``'s main iteration (which still publishes once
+    per inbox long-poll return too — harmless, idempotent overwrites, not
+    worth special-casing out of the tested main path). This loop is what
+    actually delivers on "a live dashboard": `_loop_once`'s cadence is
+    capped at ``_POLL_WAIT_S`` (25s, chosen for chat responsiveness) whether
+    or not any inbox event ever arrives, so relying on it alone means every
+    dashboard snapshot is at best 25s stale. See
+    kb/plan-loom-realtime-build.md slice 0.
+    """
+    while True:
+        try:
+            _dashboard_publish_tick(brr_dir, inbox_dir)
+        except Exception as e:
+            print(f"[brr:cloud] dashboard publish loop error: {e}")
+        time.sleep(_DASHBOARD_PUBLISH_INTERVAL_S)
 
 
 def _register(brr_dir: Path, state: dict) -> None:

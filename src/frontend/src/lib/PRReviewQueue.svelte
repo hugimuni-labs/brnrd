@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { fade, fly } from 'svelte/transition';
+	import { flip } from 'svelte/animate';
 	import { ageSinceCreated, type PRReviewItem } from './prReviewQueue';
 
 	interface Props {
@@ -29,7 +31,12 @@
 			{#each prs as pr (`${pr.repo_label}#${pr.number}`)}
 				{@const statusColor = stale ? STALE_COLOR : pr.draft ? DRAFT_COLOR : READY_COLOR}
 				{@const statusLabel = pr.draft ? 'draft' : 'review'}
-				<li class="rounded bg-slate-800/60 px-2 py-1.5 text-xs">
+				<li
+					class="rounded bg-slate-800/60 px-2 py-1.5 text-xs"
+					in:fly={{ y: -8, duration: 220 }}
+					out:fade={{ duration: 150 }}
+					animate:flip={{ duration: 220 }}
+				>
 					<div class="flex items-center justify-between gap-3">
 						<span class="flex min-w-0 items-center gap-1.5 text-slate-300">
 							<span
