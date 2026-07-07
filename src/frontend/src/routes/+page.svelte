@@ -15,7 +15,14 @@
 	// live-quota view. Polls the same daemon-published data the Jinja
 	// dashboard's quota card reads (`GET /v1/dashboard/quota`), so the two
 	// surfaces agree until the Jinja one is retired.
-	const POLL_MS = 20_000;
+	//
+	// Slice 0/1 (kb/plan-loom-realtime-build.md): 20s read like a page that
+	// refreshes, not a surface you can watch tick — and the daemon-side
+	// snapshots are now published on their own ~3s cadence (gates/cloud.py
+	// `_dashboard_publish_loop`), so a 20s client poll was throwing away
+	// freshness the backend already provides. Tightened to the "2 second
+	// delay is acceptable" bar named directly.
+	const POLL_MS = 2_000;
 	const TICK_MS = 1_000;
 
 	let shells = $state<QuotaShell[] | null>(null);

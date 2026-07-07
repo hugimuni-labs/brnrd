@@ -522,6 +522,89 @@ def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
     ]
 
 
+def test_dashboard_publish_tick_publishes_all_five_snapshots(tmp_path, monkeypatch):
+    """kb/plan-loom-realtime-build.md slice 0: dashboard snapshots must not
+    wait on the inbox long-poll (`_POLL_WAIT_S = 25`) to publish — a single
+    ``_dashboard_publish_tick`` call (what the background loop calls every
+    ``_DASHBOARD_PUBLISH_INTERVAL_S``) has to move all five, the same set
+    ``_loop_once`` publishes, without needing an inbox event at all."""
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud, "_pr_review_repo_labels", lambda _brr_dir: [])
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    listing = client.get("/v1/accounts/activity", headers=acc)
+    assert listing.status_code == 200
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.quota_updated_at is not None
+        assert daemon.live_runs_updated_at is not None
+        assert daemon.pr_review_queue_updated_at is not None
+
+
+def test_dashboard_publish_tick_noop_without_configured_state(tmp_path):
+    """No token/URL yet (not paired) → skip quietly, don't raise — this runs
+    unattended on a background thread with no caller to surface an error to."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    cloud._save_state(brr_dir, {})
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)  # must not raise
+
+
+def test_run_loop_starts_dashboard_publish_thread(tmp_path, monkeypatch):
+    """The fast publish loop has to actually be wired into `run_loop`, not
+    just exist as a dead function — assert the thread it spawns runs
+    `_dashboard_publish_loop` with this run's `brr_dir`/`inbox_dir`."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    cloud._save_state(brr_dir, {"brnrd_url": "http://brnrd", "token": "t", "repo_id": 1})
+
+    started: list[tuple] = []
+
+    class _StubThread:
+        def __init__(self, *, target, args, daemon, name):
+            started.append((target, args, daemon, name))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(cloud.threading, "Thread", _StubThread)
+    monkeypatch.setattr(cloud, "_register", lambda *_a, **_k: None)
+
+    def stop_after_one(*_a, **_k):
+        raise cloud.BrnrdAuthError("stop the loop for the test")
+
+    monkeypatch.setattr(cloud, "_loop_once", stop_after_one)
+
+    cloud.run_loop(brr_dir, inbox_dir, responses_dir)
+
+    assert len(started) == 1
+    target, args, daemon, name = started[0]
+    assert target is cloud._dashboard_publish_loop
+    assert args == (brr_dir, inbox_dir)
+    assert daemon is True
+    assert name == "cloud-dashboard-publish"
+
+
 def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
