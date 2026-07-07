@@ -8,7 +8,8 @@ from brr import hooks
 
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
-            resources=None, budget=None, outbound=None, card=None):
+            resources=None, budget=None, outbound=None, card=None,
+            task_classification=None):
     payload = {
         "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
         "attention": {
@@ -30,6 +31,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
         payload["resources"] = resources
     if card is not None:
         payload["card"] = card
+    if task_classification is not None:
+        payload["task_classification"] = task_classification
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -193,6 +196,47 @@ def test_scm_unknown_is_silent(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_stop_nudges_unwritten_task_classification(tmp_path):
+    # 2026-07-08: a card-staleness-style forcing function, requested directly
+    # after a run caught itself nearly closing out without writing this
+    # control file — the miss is silent otherwise (no error, a `run_ledger`
+    # row's task_classification just stays null forever).
+    _portal(tmp_path, token="t1", pending=0,
+            task_classification={"written": False})
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ".task-classification" in ctx
+    assert "not written yet" in ctx
+
+
+def test_stop_silent_when_task_classification_written(tmp_path):
+    _portal(tmp_path, token="t1", pending=0,
+            task_classification={"written": True})
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ".task-classification" not in ctx
+
+
+def test_post_tool_never_renders_task_classification_nudge(tmp_path):
+    # Unlike the card, an unwritten control file mid-run is not itself a
+    # problem — it legitimately gets written anytime before closeout — so
+    # this stays a stop-only boundary signal, same shape as SCM.
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
+            task_classification={"written": False})
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ".task-classification" not in ctx
+
+
+def test_seed_never_renders_task_classification_nudge(tmp_path):
+    _portal(tmp_path, token="t1", pending=0,
+            task_classification={"written": False})
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ".task-classification" not in ctx
 
 
 def test_post_tool_surfaces_stale_card(tmp_path):
