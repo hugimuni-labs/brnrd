@@ -111,14 +111,18 @@
 </script>
 
 <div class="mx-auto max-w-2xl p-6">
-	<h1 class="text-2xl font-semibold text-amber-100">brnrd dashboard — next</h1>
+	<p class="eyebrow">brnrd · resident dashboard</p>
+	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
+		brnrd dashboard — next
+	</h1>
 	<p class="mt-2 text-sm text-stone-400">
 		Live per-shell quota windows — the first real screen on the new stack. See
 		<code>kb/design-dashboard-live-surface.md</code> in the main repo for the fuller live-flow plan this
 		is slice 2 of.
 	</p>
 
-	<div class="mt-6 space-y-3">
+	<p class="eyebrow mt-6">§1 · window track</p>
+	<div class="mt-2 space-y-3">
 		{#if unauthenticated}
 			<p class="text-sm text-stone-400">
 				Sign in to see live quota windows — <a
@@ -145,7 +149,8 @@
 		{/if}
 	</div>
 
-	<h2 class="mt-8 text-lg font-semibold text-amber-100">live runs</h2>
+	<p class="eyebrow mt-8">§2 · live runs</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">live runs</h2>
 	<p class="mt-1 text-sm text-stone-400">
 		What the daemon is doing right now, across every repo it touches — slice 3, the account-scoped
 		view <code>coexisting-runs=unimplemented</code> named as a gap.
@@ -160,7 +165,8 @@
 		{/if}
 	</div>
 
-	<h2 class="mt-8 text-lg font-semibold text-amber-100">PR review queue</h2>
+	<p class="eyebrow mt-8">§3 · pr review queue</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">PR review queue</h2>
 	<div class="mt-3">
 		{#if prReviewQueueError}
 			<p class="text-sm text-red-400">{prReviewQueueError}</p>
@@ -171,7 +177,8 @@
 		{/if}
 	</div>
 
-	<h2 class="mt-8 text-lg font-semibold text-amber-100">run receipts</h2>
+	<p class="eyebrow mt-8">§4 · run receipts</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">run receipts</h2>
 	<div class="mt-3">
 		{#if runLedgerError}
 			<p class="text-sm text-red-400">{runLedgerError}</p>
