@@ -447,6 +447,61 @@ def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     }
 
 
+_RUN_LEDGER_STALE_SECONDS = 300  # daemon publishes on the same fast dashboard loop (#271)
+
+
+def _run_ledger_views(db: Session, repos: list[Repo], limit: int) -> dict[str, Any]:
+    """Account-scoped closed-run receipt feed (#271).
+
+    Reads the last ``PUT /v1/daemons/run-ledger`` snapshot per connected
+    daemon (`src/brr/gates/cloud.py::_run_ledger_snapshot` is the writer).
+    Several ``Daemon`` rows can report the same physical ledger; dedupe by
+    ``run_id`` and keep the freshest daemon report. This is a receipt feed,
+    so newest ``ended_at`` sorts first.
+    """
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return {"rows": [], "stale": False, "generated_at": None}
+    now = datetime.now(timezone.utc)
+    rows: dict[str, dict[str, Any]] = {}
+    newest_reported_at: datetime | None = None
+    daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+    for daemon in daemons:
+        reported_at = _dt(daemon.run_ledger_updated_at)
+        if reported_at is None:
+            continue
+        if newest_reported_at is None or reported_at > newest_reported_at:
+            newest_reported_at = reported_at
+        try:
+            entries = json.loads(daemon.run_ledger_json or "[]")
+        except ValueError:
+            entries = []
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            run_key = str(entry.get("run_id") or "")
+            if not run_key:
+                continue
+            existing = rows.get(run_key)
+            if existing is not None and existing["_reported_at"] >= reported_at:
+                continue
+            row = dict(entry)
+            row["_reported_at"] = reported_at
+            rows[run_key] = row
+    out = list(rows.values())
+    for row in out:
+        row.pop("_reported_at", None)
+    out.sort(key=lambda row: row.get("ended_at") or "", reverse=True)
+    stale = bool(newest_reported_at) and (now - newest_reported_at).total_seconds() > _RUN_LEDGER_STALE_SECONDS
+    return {
+        "rows": out[:limit],
+        "stale": stale,
+        "generated_at": newest_reported_at.isoformat() if newest_reported_at else None,
+    }
+
+
 def _activity_dashboard_context(request: Request, db: Session, account: Account, *, notice: str | None = None, installation_id: str | None = None) -> dict[str, Any]:
     settings = request.app.state.settings
     repos = _repos(db, account.id)
@@ -558,6 +613,28 @@ def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "prs": view["prs"],
+            "stale": view["stale"],
+            "reported_at": view["generated_at"],
+        }
+    )
+
+
+@router.get("/v1/dashboard/run-ledger")
+def dashboard_run_ledger_api(request: Request, limit: int = 10, db: Session = Depends(get_db)) -> JSONResponse:
+    """Account-scoped closed-run receipt feed (#271) for the SvelteKit frontend."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    capped = max(1, min(limit, 50))
+    view = _run_ledger_views(db, repos, capped)
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "rows": view["rows"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
         }
