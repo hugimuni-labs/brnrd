@@ -245,6 +245,25 @@ def format_delta(
                 f"{modified} modified file(s) on {branch} — commit and let "
                 "the branch publish before ending."
             )
+    # Task-classification presence (stop only): unlike the card, there is
+    # nothing wrong with it being unwritten mid-run — the file legitimately
+    # gets written anytime before closeout — so this renders only at the
+    # boundary where "still missing" actually means something. A
+    # card-staleness-style forcing function requested directly
+    # (2026-07-07/08) after a run caught itself nearly shipping without it:
+    # the miss is silent otherwise — no error, just a `run_ledger` row whose
+    # `task_classification` stays null forever, the one field the whole
+    # cost-rollup workstream joins on.
+    task_cls = (
+        payload.get("task_classification")
+        if isinstance(payload.get("task_classification"), dict) else {}
+    )
+    if stop and not task_cls.get("written"):
+        lines.append(
+            "- .task-classification: not written yet — a short slug (e.g. "
+            "`bugfix`, `kb-brainstorm`) before this ends, or this run's "
+            "run_ledger row has a null task_classification forever."
+        )
     # Card staleness (all phases): the note is the one live surface a
     # watching user sees between replies, so its own silence needs the same
     # "this is attention-worthy" framing pending events got 2026-07-05 — a
