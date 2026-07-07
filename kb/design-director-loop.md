@@ -412,6 +412,53 @@ correctly start a concurrent worker-stack child) is still open, queued for
 whenever a wake follows a `main`-advancing merge by more than "the same
 run."
 
+**Addendum 2026-07-07 — the gap is broader than "spawn's own code
+landed this run."** A second retry, same daemon restarted fresh (so
+Finding 2's own scenario didn't apply — `_queue_spawn_request` was
+already live in the running process's memory), still stalled: a
+`spawn:` event was created correctly (confirmed: `evt-...-lr16` appeared
+in `.brr/inbox/`, status `pending`, all frontmatter parsed right), but
+sat undispatched for the rest of the run. Root cause is one level
+deeper and more general than Finding 2's: `DevReloadWatcher.changed()`
+(`src/brr/dev_reload.py`) snapshots the mtime/size of every `.py`/`.md`
+file under `src/brr/` on every loop tick, and the main dispatch loop
+gates *both* the resident slot and the concurrent-spawn slot on
+`not reload_requested` (`src/brr/daemon.py` ~line 4625/4637) — deliberately,
+so a live reload never races a running thought. But `reload_requested`
+flips true the instant any watched file's mtime changes, independent of
+whether the edit is committed, staged, or even correctness-relevant to
+`spawn:` itself. This run edited `src/brr/runner.py` (an unrelated fix,
+the argv/E2BIG crash) *before* dispatching the spawn — that edit alone
+was enough to latch `reload_requested`, which then blocked the spawn
+for the rest of the run, since reload itself requires `current is None`
+(this same thought to end) and dispatch requires `not reload_requested`.
+
+Net: on this repo's `--dev-reload` daemon, **any resident thought that
+both edits brr's own package files *and* wants to use `spawn:` in the
+same thought will have the spawn stall** — not just the thought that
+lands `spawn:`'s own code, any thought that touches any watched file at
+all, which for a project whose job is improving itself is close to "most
+substantive resident turns." Confirmed by direct inspection, not
+inferred: `_take_snapshot()` has no filter beyond suffix/name, and both
+gates above read the same shared `reload_requested` local.
+
+Not fixed this run — a real design question, not a bug to blind-patch:
+decoupling the spawn-dispatch gate from `reload_requested` is plausible
+(a spawn is a separate subprocess; it doesn't share the resident
+process's image the way re-exec does, so running it against
+momentarily-stale in-memory daemon code carries little of the risk that
+motivates deferring *re-exec*) — except when the very edit that tripped
+the watcher *is* a change to spawn-dispatch logic itself, in which case
+dispatching under the stale code could silently reproduce whatever bug
+prompted the edit. That trade-off (availability vs. staleness risk) is
+value-laden enough to name back rather than decide unilaterally. Left
+open: whether to split "gates re-exec" from "gates the spawn slot" into
+two independent flags, or accept that this repo's own dogfooding of
+`spawn:` is structurally rare (any resident code-editing turn kills it
+for that turn) and lean on the review-self-wake fallback instead. The
+actual spawn-dispatch test is *still* open after two attempts across two
+different structural causes.
+
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
 Follow-up sharpening the stingy-director economics: if the wake already
