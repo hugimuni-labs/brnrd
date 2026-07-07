@@ -24,6 +24,7 @@ _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
 _RESPONSE_LIMITS = {"telegram": 3900}
 _SESSION = requests.Session()
+_CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS = 240.0
 # Dashboard snapshots (activity/plans/quota/live-runs/PR-review-queue/run-ledger) used
 # to publish once per `_loop_once` iteration, which is paced by the inbox
 # long-poll above (`_POLL_WAIT_S = 25`) — a constant chosen for chat
@@ -544,28 +545,38 @@ def _codex_quota_shell() -> dict[str, Any] | None:
 
 def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
     outbox_dir = runner_quota.latest_claude_usage_outbox_dir(brr_dir)
-    levels = claude_usage.load_snapshot(outbox_dir) if outbox_dir else None
+    levels = (
+        claude_usage.load_or_refresh_snapshot(
+            outbox_dir,
+            cwd=brr_dir,
+            max_age_seconds=_CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS,
+            timeout_seconds=10.0,
+            wait_for_credits=True,
+        )
+        if outbox_dir else None
+    )
     quota = levels.get("quota") if isinstance(levels, dict) else None
     buckets = quota.get("buckets") if isinstance(quota, dict) else None
+    credits = _claude_credits_block(brr_dir, usage_levels=levels)
     if not isinstance(buckets, dict):
-        return None
-    session = buckets.get("session") if isinstance(buckets.get("session"), dict) else {}
+        if credits is None:
+            return None
+        buckets = {}
+    session = (
+        buckets.get("session") if isinstance(buckets.get("session"), dict) else {}
+    )
     week = buckets.get("week") if isinstance(buckets.get("week"), dict) else {}
     session_pct = session.get("remaining_percentage")
     week_pct = week.get("remaining_percentage")
-    if session_pct is None and week_pct is None:
+    if session_pct is None and week_pct is None and credits is None:
         return None
     return {
         "shell": "claude",
         "status": "known",
-        # The scrape's own capture time, not "now" — this snapshot is only
-        # refreshed while a Claude run is actively heartbeating (no idle
-        # background probe), so it can be hours old. Forwarding it lets the
-        # dashboard flag staleness off the data's real age instead of the
-        # daemon's publish cadence (which is fresh every ~25-30s regardless
-        # of whether the underlying scrape ever changed) — see
-        # `_claude_credits_shell` docstring and kb/design-dashboard-live-
-        # surface.md "the lying Claude usage panel" for the bug this closes.
+        # The scrape's own capture time, not "now". The cloud publisher now
+        # refreshes the cached PTY probe on a bounded idle cadence, but the
+        # dashboard still measures freshness off this field so a failed or
+        # skipped refresh cannot make old data look live.
         "updated_at": levels.get("updated_at"),
         "windows": [
             _quota_window(
@@ -575,14 +586,21 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
                 "weekly", week_pct, levels.get("week_reset"), levels.get("week_resets_at")
             ),
         ],
-        "credits": _claude_credits_block(brr_dir),
+        "credits": credits,
     }
 
 
-def _claude_credits_block(brr_dir: Path) -> dict[str, Any] | None:
-    """Real per-run USD spend from Claude's headless result JSON, when proven.
+def _claude_credits_block(
+    brr_dir: Path,
+    *,
+    usage_levels: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Claude credits evidence from `/usage` plus per-run spend, when proven.
 
-    Under normal subscription billing this run-scoped ``total_cost_usd`` is
+    ``usage_levels["usage_credits"]`` is Claude's account credit-balance
+    surface from the interactive ``/usage`` panel (amount spent / cap /
+    reset). Separately, the run-scoped ``total_cost_usd`` in the headless
+    result JSON is
     an internal accounting figure, not a real charge. It becomes real dollars
     the moment the subscription's 5h/weekly window is exhausted and Anthropic
     falls the account through to metered credits (confirmed live 2026-07-07:
@@ -596,27 +614,49 @@ def _claude_credits_block(brr_dir: Path) -> dict[str, Any] | None:
     outbox_dir = runner_quota.latest_claude_spend_outbox_dir(brr_dir)
     levels = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
     spend = levels.get("spend") if isinstance(levels, dict) else None
-    if not isinstance(spend, dict):
+    usage = (
+        usage_levels.get("usage_credits")
+        if isinstance(usage_levels, dict) else None
+    )
+    total = spend.get("total_cost_usd") if isinstance(spend, dict) else None
+    if not isinstance(usage, dict) and total is None:
         return None
-    total = spend.get("total_cost_usd")
-    if total is None:
-        return None
-    return {
+    block = {
         "total_cost_usd": total,
-        "summary": spend.get("summary"),
-        "updated_at": levels.get("updated_at"),
+        "summary": spend.get("summary") if isinstance(spend, dict) else None,
+        "updated_at": levels.get("updated_at") if isinstance(levels, dict) else None,
     }
+    if isinstance(usage, dict):
+        block.update(
+            {
+                "enabled": usage.get("enabled"),
+                "used_percentage": usage.get("used_percentage"),
+                "remaining_percentage": usage.get("remaining_percentage"),
+                "spent_amount": usage.get("spent_amount"),
+                "limit_amount": usage.get("limit_amount"),
+                "currency": usage.get("currency"),
+                "reset": usage.get("reset"),
+                "resets_at": usage.get("resets_at"),
+                "summary": usage.get("summary") or block.get("summary"),
+                "run_spend_summary": spend.get("summary") if isinstance(spend, dict) else None,
+                "updated_at": (
+                    usage_levels.get("updated_at")
+                    if isinstance(usage_levels, dict) else block.get("updated_at")
+                ),
+            }
+        )
+    return block
 
 
 def _quota_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     """This daemon's runner-quota snapshot: real per-shell 5h/weekly windows.
 
     Mirrors the Activity/Plans publish shape (#237) — reads whatever local
-    evidence already exists (Codex's live rollout read, Claude's most
-    recently cached ``/usage`` scrape via
-    :func:`runner_quota.latest_claude_usage_outbox_dir`) rather than
-    spawning a fresh probe on this loop's ~25s cadence. A shell with no
-    evidence yet is omitted, not reported as a fake zero.
+    evidence already exists (Codex's live rollout read, Claude's cached
+    ``/usage`` scrape via :func:`runner_quota.latest_claude_usage_outbox_dir`).
+    Claude's cached scrape is refreshed here on a bounded idle cadence shorter
+    than the dashboard's stale threshold, not on every publish tick. A shell
+    with no evidence yet is omitted, not reported as a fake zero.
     """
     shells = [_claude_quota_shell(brr_dir), _codex_quota_shell()]
     return [shell for shell in shells if shell is not None]
