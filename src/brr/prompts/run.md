@@ -83,3 +83,12 @@ the same stance; trust the intent rather than scanning for trigger words.)
    *is* the complete task. The diff-as-receipt rule does not apply there;
    a half-fitting commit shipped for the sake of a diff is the failure this
    guards. Costly / irreversible / wide-blast ⇒ wait for the nod.
+4. The shape worth reconsidering is sometimes the assembled context itself,
+   not only the task it framed — a contract one block states that a later
+   one quietly breaks, a guardrail nothing enforces anymore, a claim the
+   code no longer backs. Noticing that is standing, not gated behind
+   `introspect.enabled`'s deeper ritual (`introspection.md`): at a plan
+   boundary, a glance at whether the pieces still cohere costs one line
+   when they do and is worth exactly the same 1-2 above when they don't.
+   The opt-in mode is the sustained, every-wake audit with its own token
+   cost; this is the reflex that should survive without it.
