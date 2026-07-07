@@ -75,4 +75,15 @@
 			</div>
 		{/each}
 	</div>
+	{#if shell.credits && shell.credits.total_cost_usd !== null && shell.credits.total_cost_usd !== undefined}
+		<div class="mt-2 border-t border-stone-800 pt-2 text-[11px] text-stone-400">
+			<!-- Real spend, not a projection — see quota.ts QuotaCredits doc.
+			     Fixed sky hue: this is the same "outside the firelight" /
+			     metered-not-included signal the stale badge above uses, not a
+			     new status color. -->
+			<span class="text-sky-300">
+				{shell.credits.summary ?? `$${shell.credits.total_cost_usd.toFixed(2)} in credits`}
+			</span>
+		</div>
+	{/if}
 </div>
