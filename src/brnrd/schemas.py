@@ -277,6 +277,50 @@ class PRReviewQueueOut(BaseModel):
     pr_review_queue_updated_at: datetime | None = None
 
 
+class RunLedgerRowIn(BaseModel):
+    """One closed-run receipt row from ``src/brr/run_ledger.py`` (#271).
+
+    This is a mirrored receipt, not a validation surface: the local ledger is
+    best-effort and may leave any field null when the runner or quota source
+    cannot prove it.
+    """
+
+    run_id: str | None = None
+    event_id: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    wall_clock_seconds: float | None = None
+    runner_shell: str | None = None
+    runner_core: str | None = None
+    repo_label: str | None = None
+    source_system: str | None = None
+    external_refs: list[Any] | None = None
+    task_classification: str | None = None
+    parent_run_id: str | None = None
+    is_subspawn: bool | None = None
+    tokens_input: int | None = None
+    tokens_output: int | None = None
+    tokens_cache_read: int | None = None
+    tokens_cache_creation: int | None = None
+    context_window_used: float | None = None
+    weekly_pct_delta: float | None = None
+    five_hour_pct_delta: float | None = None
+    usd_subscription_attributed: float | None = None
+    usd_credits_equivalent: float | None = None
+    estimate_vs_actual: str | None = None
+
+
+class RunLedgerReport(BaseModel):
+    """Closed-run receipt rows a daemon pushes for itself (#271)."""
+
+    rows: list[RunLedgerRowIn] = Field(default_factory=list)
+
+
+class RunLedgerOut(BaseModel):
+    rows: list[RunLedgerRowIn]
+    run_ledger_updated_at: datetime | None = None
+
+
 class PackRelayPost(BaseModel):
     pack: dict[str, Any]
     ttl_s: int | None = None

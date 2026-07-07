@@ -26,11 +26,11 @@
 	};
 </script>
 
-<div class="rounded-md border border-slate-800 bg-slate-900/60 p-3">
+<div class="rounded-md border border-stone-800 bg-stone-900/60 p-3">
 	<div class="mb-2 flex items-center justify-between text-sm">
-		<span class="font-medium text-slate-200">{shell.shell}</span>
+		<span class="font-medium text-amber-200">{shell.shell}</span>
 		{#if shell.status === 'stale'}
-			<span class="rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-300">stale report</span>
+			<span class="rounded bg-sky-900/40 px-1.5 py-0.5 text-xs text-sky-300">stale report</span>
 		{/if}
 	</div>
 	<div class="space-y-2">
@@ -38,7 +38,7 @@
 			{@const level = quotaLevel(window.percent)}
 			{@const remaining = timeUntil(window.resets_at, now)}
 			<div>
-				<div class="mb-1 flex items-baseline justify-between text-xs text-slate-400">
+				<div class="mb-1 flex items-baseline justify-between text-xs text-stone-400">
 					<span>{window.label}</span>
 					<span class="flex items-center gap-1.5">
 						<!-- status never carries meaning by color alone: icon + label -->
@@ -58,7 +58,7 @@
 				     2026-07-05): the colored bar is *remaining*, and it recedes
 				     toward empty as the window is consumed, not the reverse. -->
 				<div
-					class="h-2 w-full overflow-hidden rounded-full bg-slate-800"
+					class="h-2 w-full overflow-hidden rounded-full bg-stone-800"
 					role="img"
 					aria-label={`${window.label}: ${window.percent ?? 'unknown'} percent remaining`}
 				>
@@ -68,7 +68,7 @@
 					></div>
 				</div>
 				{#if remaining || window.reset}
-					<div class="mt-1 text-right text-[11px] text-slate-500">
+					<div class="mt-1 text-right text-[11px] text-stone-500">
 						{remaining ? `resets in ${remaining}` : window.reset}
 					</div>
 				{/if}

@@ -225,6 +225,21 @@ def put_pr_review_queue(payload: schemas.PRReviewQueueReport, principal: Princip
     return schemas.PRReviewQueueOut(prs=payload.prs, pr_review_queue_updated_at=now)
 
 
+@router.put("/run-ledger", response_model=schemas.RunLedgerOut)
+def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon's closed-run receipt snapshot (#271)."""
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        raise HTTPException(status_code=404, detail="no daemon registered for this token")
+    now = datetime.now(timezone.utc)
+    daemon.run_ledger_json = json.dumps([row.model_dump() for row in payload.rows], separators=(",", ":"))
+    daemon.run_ledger_updated_at = now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    return schemas.RunLedgerOut(rows=payload.rows, run_ledger_updated_at=now)
+
+
 @router.get("/inbox", response_model=schemas.InboxResponse)
 def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
     settings = request.app.state.settings

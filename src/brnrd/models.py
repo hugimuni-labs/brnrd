@@ -90,6 +90,10 @@ class Daemon(Base):
     # the meaningful clock for this lane.
     pr_review_queue_json: Mapped[str] = mapped_column(Text, default="[]")
     pr_review_queue_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Closed-run cost ledger snapshot (#271), mirrored from local
+    # `.brr/run-ledger.jsonl` rows via `PUT /v1/daemons/run-ledger`.
+    run_ledger_json: Mapped[str] = mapped_column(Text, default="[]")
+    run_ledger_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ActivityRecord(Base):
