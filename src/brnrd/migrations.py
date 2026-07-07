@@ -114,6 +114,9 @@ def _migrate_daemons(conn: Connection) -> None:
     # PR-review queue snapshot mirror (#259) — see models.Daemon.pr_review_queue_json.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS pr_review_queue_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS pr_review_queue_updated_at TIMESTAMP"))
+    # Closed-run cost ledger snapshot mirror (#271) — see models.Daemon.run_ledger_json.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS run_ledger_json TEXT DEFAULT '[]'"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS run_ledger_updated_at TIMESTAMP"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:
