@@ -110,7 +110,10 @@ Portals are the seams where a run turns to the world — inbound
   unwritten one isn't a shrug, it's a row no future estimate can ever
   match against. Control file, never delivered. `spawn:`/`respawn:`
   frontmatter also accepts `task_classification:` to tag a dispatched
-  child at hand-off time.
+  child at hand-off time. The Stop hook nudges (not blocks) when it's
+  still missing at the closeout boundary — the one forcing function this
+  file gets, mirroring `.card` staleness; see it as a last catch, not
+  permission to leave writing it until then.
 - .pr — this run created a PR itself (not a GitHub-sourced task that already
   carried one in its metadata)? Write the number (bare, `#`-prefixed, or the
   full PR URL — any of those parse) so `remote_scm` stops reading `absent`

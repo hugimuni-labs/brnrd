@@ -11675,3 +11675,40 @@ framing) rather than treated as settled history to leave stale. Detail:
 `kb/plan-spawn-gap-closure.md` §"Addendum (2026-07-08) — decided:
 unconditional decoupling, not B1". Branch:
 brr/spawn-reload-decouple-2026-07-08.
+
+## [2026-07-08] feat | .task-classification closeout nudge, card-staleness shape
+
+Direct same-thread ask ("lets add the .task-classification thing then"),
+responding to a self-diagnosis two turns earlier: a run nearly shipped
+without writing `.task-classification` — the ledger's only
+rollup-by-`task_classification` join key — caught only because a
+question forced a self-check. `kb/design-quota-scheduling-loom.md`'s own
+status check already showed the cost: 4/12 live `run-ledger.jsonl` rows
+carried it, the rest `null` forever.
+
+Shipped, mirroring the 2026-07-05 card-staleness mechanism's shape (not
+its always-on cadence — this one only means something at the boundary
+where "still missing" is actually true): `daemon.py::_write_live_portal_state`
+now reads `.task-classification` via the existing
+`run_ledger.read_task_classification_control` helper into a new
+`task_classification: {written: bool}` portal-state facet;
+`hooks.py::format_delta` renders a one-line nudge — `.task-classification:
+not written yet — ...` — only on the `stop` phase, when unwritten. Mid-run
+and seed stay silent on purpose: the file is legitimately written anytime
+up to closeout, so a mid-run or seed-time nudge would just be noise about
+a file that hasn't come due yet.
+
+Deliberately a nudge, not a block: the Stop hook's existing
+pending-event control blocks because a pending event is *always* wrong to
+ignore; an unwritten `.task-classification` mid-wrap-up is not wrong yet
+by the time the first Stop attempt fires, so blocking on it would trip
+healthy runs, not just the miss this guards against.
+
+`prompts/daemon-substrate.md`'s `.task-classification` bullet gets one
+added sentence naming the nudge exists (so a resident discovers it from
+the wake-time doc, not just by tripping it); `design-quota-scheduling-loom.md`
+gets a dated addendum on the same bullet that named the 4/12 gap. Tests:
+`test_hooks.py` (stop nudges when unwritten, silent when written, silent
+on post-tool/seed) and `test_outbox.py` (portal-state facet reads the
+control file). Full suite green (1392). Branch:
+brr/task-classification-closeout-nudge-2026-07-08.
