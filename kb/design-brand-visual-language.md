@@ -182,8 +182,44 @@ dashboard pass uses a warm void body canvas (`#0c0906`) with parchment text
 stone chrome/meta/tracks instead of blue-slate, and sky as the cold
 signifier for stale reports and links. That makes the old proposal concrete:
 hearth/ember is the working state; frost/sky is outside the firelight
-(stale, unauthenticated, inactive). The fixed traffic-light status colors
-remain unthemed so semantic state doesn't double as brand hue.
+(stale, unauthenticated, inactive).
+
+**Status palette reconsidered, 2026-07-08** (direct maintainer ask, same
+message that asked for more CRT glow): the line above — "fixed traffic-
+light status colors remain unthemed" — is superseded for `WindowTrack`'s
+quota-level scale specifically. On inspection those three hexes
+(`#0ca30c`/`#fab219`/`#d03b3b`) were never a deliberate brand call; they're
+the dataviz skill's own generic reference-palette status defaults
+(`palette.md`), never actually reskinned when everything else got the
+2026-07-07/08 pass — closer to an oversight than a held position. The
+skill's real rule (`references/color-formula.md` §"Status is fixed") is
+narrower than "never touch the hue": status stays a small fixed scale,
+distinct from *categorical/series* slots, always icon+label — it doesn't
+forbid a design system giving its status scale its own brand-appropriate
+hues, it just can't borrow the theme's identity-carrying colors wholesale.
+Reskinned to `ample = #e8b34a` (hearth amber), `low = #7aa9c2` (frost,
+cooling — deliberately dimmer/less saturated than the `sky-300` "stale
+report" badge in the same card, so "resource low" and "report stale" read
+as related-but-distinct, not one recolored hue meaning two things), and
+`critical = #c0523f` (dying ember) — "darkness" itself isn't reachable as
+a legible foreground color on this dark-void surface (a true near-black
+fails the skill's own ≥3:1 contrast floor), so critical reads as the
+warmth *going* rather than *gone*; the void does the rest of that work as
+background. All three checked against body/panel/track surfaces via
+`scripts/validate_palette.js`'s `contrast()`, ≥3.7:1 throughout. `low`/
+`stalling` 2-state badges in `LiveRuns.svelte`/`PRReviewQueue.svelte`
+still carry the old unreskinned `#0ca30c`/`#fab219` pair — named, not
+fixed this pass (out of the scope actually asked: "the quota percentage
+bars" by name).
+
+Also nudged up one notch, same message: the scanline/hearth-glow texture
+(`body::before`), a soft phosphor `box-shadow` bloom on `.panel`'s
+bracket chrome, a resting glow on `.boot-glitch` (previously only lit
+during the flicker animation), and a matching glow on the quota bar
+fill/dot themselves — literal CRT phosphor on the gauge, tying both asks
+together in the one element they overlap on. Still meant to recede per
+this page's own "held lightly, without cheese" register, not a filter
+demo.
 
 Still only proposed: runic/bind-rune-style glyphs as a *display* treatment
 for the weave's own mark channel (✓ ✗ ? → Δ). The marks already exist and
