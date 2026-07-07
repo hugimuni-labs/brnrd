@@ -4132,6 +4132,26 @@ def _deduplicated_event_body() -> str:
     )
 
 
+def _crash_requires_notice(event: dict) -> bool:
+    """True when a *hard failure* on this event should still surface.
+
+    ``_event_requires_thread_delivery`` says "schedule" is internal — right
+    for the success path, where a director tick that re-derived nothing new
+    is correctly silent (the notify-bar logic, untouched by this). But a
+    crash is never "did its job quietly": found live 2026-07-07
+    (run-260707-1154-kem3, the 11:54 director tick) — killed mid-run
+    (returncode 143, empty stdout/stderr), yet ``_event_requires_thread_delivery``
+    made ``_write_terminal_failure_response`` return before writing anything,
+    so the crash left zero trace anywhere the maintainer could see it.
+    Silence-because-crashed and silence-because-nothing-changed rendered
+    identically — indistinguishable from the one surface (chat) the
+    maintainer actually watches. The gate can already route a schedule
+    event's response via ``last_chat_id`` (PR #244), so this only needed
+    the early-return relaxed for the failure path specifically.
+    """
+    return str(event.get("source") or "") == "schedule"
+
+
 def _write_terminal_failure_response(
     emit: _WorkerEmit,
     task: Run,
@@ -4148,7 +4168,7 @@ def _write_terminal_failure_response(
     The run record still stays ``error``; only the inbox event moves to
     ``done`` so the gate has a message to deliver and a cleanup signal.
     """
-    if not _event_requires_thread_delivery(event):
+    if not _event_requires_thread_delivery(event) and not _crash_requires_notice(event):
         return False
     if _response_has_body(response_path):
         return False

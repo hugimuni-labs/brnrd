@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { fade, fly } from 'svelte/transition';
+	import { flip } from 'svelte/animate';
 	import { ageSince, type LiveRun } from './liveRuns';
 
 	interface Props {
@@ -34,6 +36,9 @@
 					: run.repo_label || 'unknown repo'}
 				<li
 					class="flex items-center justify-between gap-3 rounded bg-slate-800/60 px-2 py-1.5 text-xs"
+					in:fly={{ y: -8, duration: 220 }}
+					out:fade={{ duration: 150 }}
+					animate:flip={{ duration: 220 }}
 				>
 					<span class="flex min-w-0 items-center gap-1.5 text-slate-300">
 						<span
