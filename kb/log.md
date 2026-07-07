@@ -11763,3 +11763,27 @@ shapes (no backend running locally) and screenshotted desktop, mobile, and
 a mid-boot-glitch frame — confirmed the brackets, eyebrow labels, and
 glitch sequence all render as designed at both widths before committing.
 Branch: brr/dashboard-visual-language-2026-07-08.
+
+## [2026-07-08] pitfall | "fold a follow-up in" means the `event:` outbox file, not just narrating it
+
+Same run, at closeout. Two same-thread telegram notes arrived mid-run and
+were genuinely acted on (shaped the visual pass's scope, authorized the
+self-merge) — answered in the delivered stdout reply and referenced on
+`.card` repeatedly. The Stop hook kept re-firing "2 pending event(s)"
+unchanged across roughly a dozen attempts anyway. Root cause, checked
+against the code rather than guessed: `daemon.py::_drain_outbox` only
+calls `_set_event_status_if_present(target_event, "done")` when an
+outbox file's `event: <id>` frontmatter names a target *different* from
+the run's own triggering event — a plain current-thread reply (no
+`event:` frontmatter) never touches another pending event's status,
+however clearly it answers it in prose. `daemon-substrate.md` already
+documented the `event: <id>` mechanism correctly (line ~69), but the
+separate `inbox.json` bullet's "fold a related follow-up in" read as a
+second, narrative-only path — it wasn't, and nothing cross-linked the
+two. Fixed by writing two `event:`-routed outbox files
+(`002-fold-csfa.md`, `003-fold-1s2v.md`); `pending_event_count` dropped
+to 0 within one heartbeat. `daemon-substrate.md`'s `inbox.json` bullet
+now says explicitly that "fold in" means the `event:` file, with the
+live confirmation dated. No code change — the daemon's behavior is
+correct and arguably obvious in hindsight; the gap was a prompt reading
+one resident (this run) got wrong, worth guarding for the next one.
