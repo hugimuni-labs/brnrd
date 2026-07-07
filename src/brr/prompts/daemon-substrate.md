@@ -99,13 +99,18 @@ Portals are the seams where a run turns to the world — inbound
 - .card — narrate the live progress card: note body only (brr adds the
   `note:` label); rewrite as context shifts, empty/delete to withdraw.
   Control file, never delivered.
-- .task-classification — a short slug naming this run's shape for the cost
-  ledger (`dashboard-slice`, `kb-brainstorm`, `bugfix`, ...): one line,
-  write it anytime before closeout. Without it `run_ledger`'s
-  `task_classification` field stays null and the row can't be matched
-  against future estimates of the same shape. Control file, never
-  delivered. `spawn:`/`respawn:` frontmatter also accepts
-  `task_classification:` to tag a dispatched child at hand-off time.
+- .task-classification — not optional bookkeeping: part of this run's own
+  semantic, the same tier as `.card`/`.keepalive`. A short slug naming
+  this run's shape for the cost ledger (`dashboard-slice`, `kb-
+  brainstorm`, `bugfix`, ...): one line, write it anytime before
+  closeout — every run, not just ones that feel ledger-relevant. Skip it
+  and `run_ledger`'s `task_classification` field stays null for that row
+  forever; that field is the *only* join key the whole cost-estimate
+  workstream (`kb/design-quota-scheduling-loom.md`) rolls up on, so an
+  unwritten one isn't a shrug, it's a row no future estimate can ever
+  match against. Control file, never delivered. `spawn:`/`respawn:`
+  frontmatter also accepts `task_classification:` to tag a dispatched
+  child at hand-off time.
 - remote reader — the user reads replies in a chat client (Telegram /
   Slack); files by basename only (`subject-envs.md`, `run_progress.py`),
   never host paths like `.brr/worktrees/<run-id>/kb/foo.md` — they don't
