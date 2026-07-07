@@ -3024,6 +3024,11 @@ def _queue_spawn_request(
         meta["spawn_reason"] = reason
     new_path = protocol.create_event(inbox_dir, source, new_body, **meta)
     print(f"[brr] outbox: queued concurrent spawn ({new_path.stem})")
+    # A schedule entry can opt in (`reset_on: spawn`) to treat this dispatch
+    # as if it had just fired itself, rather than firing redundantly right
+    # after related event-driven work already happened — see
+    # schedule.apply_reset_signals, read back on the next scheduling tick.
+    schedule_mod.record_signal(emit.brr_dir, "spawn")
     if emit.conversation_key:
         conversations.append_artifact(
             emit.brr_dir, emit.conversation_key,
@@ -3406,7 +3411,10 @@ def _fire_due_schedules(
                 break
         if dom is None or not entries:
             return
-        state = schedule_mod.load_state(brr_dir)
+        now = time.time()
+        loaded_state = schedule_mod.load_state(brr_dir)
+        signals = schedule_mod.load_signals(brr_dir)
+        state = schedule_mod.apply_reset_signals(entries, loaded_state, signals, now)
         grace = float(
             cfg.get(
                 "schedule.stale_grace_seconds",
@@ -3458,7 +3466,7 @@ def _fire_due_schedules(
                     ]
 
         due, new_state = schedule_mod.due_entries(
-            scheduled_entries, state, time.time(), stale_grace=grace,
+            scheduled_entries, state, now, stale_grace=grace,
         )
         # due_entries prunes new_state to the ids it was actually handed —
         # carry forward the anchor/last-fired record for entries the
@@ -3483,7 +3491,7 @@ def _fire_due_schedules(
                 ),
             )
             print(f"[brr] schedule: fired {entry.id}")
-        if new_state != state:
+        if new_state != loaded_state:
             schedule_mod.save_state(brr_dir, new_state)
     except Exception as exc:  # noqa: BLE001 - scheduling must never wedge the loop
         print(f"[brr] schedule: skipped tick ({exc})")
@@ -3560,6 +3568,51 @@ def _notify_spawn_parent(inbox_dir: Path | None, task: Run) -> None:
         )
     except OSError as exc:
         print(f"[brr] spawn-completion notify failed for {task.id}: {exc}")
+
+
+def _notify_spawn_parent_of_crash(
+    inbox_dir: Path | None, event: dict, error: BaseException,
+) -> None:
+    """Land a failure note for a concurrent spawn that crashed before finishing.
+
+    Bug found live 2026-07-07 (issue: a spawned run's completion silently
+    never reached its parent thread): the main loop's reap step called
+    ``_notify_spawn_parent`` only in the success branch — when the worker
+    future raised instead of returning a ``Run`` (a runner-launch failure,
+    an unhandled exception mid-thought), the parent got no signal at all,
+    silently contradicting design-director-loop.md's "Concurrent
+    sub-spawns" promise that *completion* — not just success — lands back
+    as a pending event. The only reason this hasn't landed as a genuinely
+    lost result before is the dispatching run defensively writing its own
+    guessed-time review self-wake as insurance; that's the degraded
+    fallback, not something a crash should have to rely on every time.
+
+    Built from the raw inbox *event* dict rather than a ``Run``/task
+    object, since a worker that crashed before returning one never
+    produces the richer object ``_notify_spawn_parent`` reads from.
+    Best-effort, mirroring that function's own failure posture.
+    """
+    if inbox_dir is None:
+        return
+    parent_run_id = event.get("spawn_parent_run_id")
+    if not parent_run_id:
+        return
+    conv = str(event.get("spawn_parent_conversation_key") or "").strip()
+    conv = conv or f"run:{parent_run_id}"
+    spawn_event_id = str(event.get("id") or "?")
+    summary = f"concurrent spawn {spawn_event_id} crashed before finishing: {error}"
+    try:
+        protocol.create_event(
+            inbox_dir,
+            "spawn_completed",
+            summary,
+            conversation_key=conv,
+            spawned_by_event=spawn_event_id,
+            spawn_parent_run_id=parent_run_id,
+            spawn_failed=True,
+        )
+    except OSError as exc:
+        print(f"[brr] spawn-crash notify failed for {spawn_event_id}: {exc}")
 
 
 def _capture_dominion(
@@ -4557,6 +4610,10 @@ def start(
     current: concurrent.futures.Future | None = None
     current_spawn: concurrent.futures.Future | None = None
     current_spawn_inbox_dir: Path | None = None
+    # Captured at submission time so a crashed spawn (which never returns a
+    # Run/task object) can still be notified back to its parent — see
+    # _notify_spawn_parent_of_crash.
+    current_spawn_event: dict | None = None
     reload_requested = False
 
     wake = protocol.inbox_wake()
@@ -4596,10 +4653,15 @@ def start(
                     spawn_task = current_spawn.result()
                 except Exception as exc:  # noqa: BLE001
                     print(f"[brr] spawned child crashed: {exc}")
+                    if current_spawn_event is not None:
+                        _notify_spawn_parent_of_crash(
+                            current_spawn_inbox_dir, current_spawn_event, exc,
+                        )
                 else:
                     _notify_spawn_parent(current_spawn_inbox_dir, spawn_task)
                 current_spawn = None
                 current_spawn_inbox_dir = None
+                current_spawn_event = None
 
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
@@ -4658,6 +4720,7 @@ def start(
                         inbox_dir=target.inbox_dir,
                     )
                     current_spawn_inbox_dir = target.inbox_dir
+                    current_spawn_event = event
 
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
