@@ -121,6 +121,16 @@ _RESET_EPOCH_RE = re.compile(
     r"\((?P<zone>[^)]+)\)$",
     re.IGNORECASE,
 )
+_DATE_ONLY_RESET_RE = re.compile(
+    r"^(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s*\((?P<zone>[^)]+)\)$",
+    re.IGNORECASE,
+)
+_CREDIT_SPEND_RE = re.compile(
+    r"(?P<spent>[$\u20ac\u00a3]?\s*\d+(?:[.,]\d+)?)\s*/\s*"
+    r"(?P<limit>[$\u20ac\u00a3]?\s*\d+(?:[.,]\d+)?)\s*spent",
+    re.IGNORECASE,
+)
+_AMOUNT_RE = re.compile(r"(?P<currency>[$\u20ac\u00a3])?\s*(?P<amount>\d+(?:[.,]\d+)?)")
 
 
 def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> float | None:
@@ -137,25 +147,31 @@ def _reset_epoch(reset_text: str | None, *, now: datetime | None = None) -> floa
     """
     if not reset_text:
         return None
-    match = _RESET_EPOCH_RE.match(reset_text.strip())
-    if not match:
+    text = reset_text.strip()
+    now = now if now is not None else datetime.now(timezone.utc)
+    match = _RESET_EPOCH_RE.match(text)
+    date_only_match = None if match else _DATE_ONLY_RESET_RE.match(text)
+    if not match and not date_only_match:
         return None
+    zone_name = (match or date_only_match).group("zone").strip()
     try:
-        zone = ZoneInfo(match.group("zone").strip())
+        zone = ZoneInfo(zone_name)
     except Exception:
         return None
-    hour = int(match.group("hour"))
-    minute = int(match.group("minute") or 0)
-    if not (1 <= hour <= 12) or not (0 <= minute <= 59):
-        return None
-    if match.group("ampm").lower() == "am":
-        hour = 0 if hour == 12 else hour
-    else:
-        hour = 12 if hour == 12 else hour + 12
-
-    now = now if now is not None else datetime.now(timezone.utc)
     now_local = now.astimezone(zone)
+    hour = 0
+    minute = 0
+    if match:
+        hour = int(match.group("hour"))
+        minute = int(match.group("minute") or 0)
+        if not (1 <= hour <= 12) or not (0 <= minute <= 59):
+            return None
+        if match.group("ampm").lower() == "am":
+            hour = 0 if hour == 12 else hour
+        else:
+            hour = 12 if hour == 12 else hour + 12
 
+    match = match or date_only_match
     mon, day = match.group("mon"), match.group("day")
     if mon:
         month = _MONTH_ABBR.get(mon.strip().lower())
@@ -212,12 +228,109 @@ def _parse_bucket_line(line: str) -> tuple[float, str | None] | None:
     return used, reset
 
 
+def _quota_header_key(key: str) -> bool:
+    return "currentsession" in key or "currentweek" in key
+
+
+def _parse_amount(raw: str | None) -> tuple[float | None, str | None]:
+    if not raw:
+        return None, None
+    match = _AMOUNT_RE.search(raw)
+    if not match:
+        return None, None
+    try:
+        amount = float(match.group("amount").replace(",", "."))
+    except ValueError:
+        return None, match.group("currency")
+    return amount, match.group("currency")
+
+
+def _fmt_money(amount: float, currency: str | None) -> str:
+    return f"{currency or '$'}{amount:.2f}"
+
+
+def _parse_credit_spend_line(line: str) -> tuple[float | None, float | None, str | None, str | None] | None:
+    match = _CREDIT_SPEND_RE.search(line)
+    if not match:
+        return None
+    spent, spent_currency = _parse_amount(match.group("spent"))
+    limit, limit_currency = _parse_amount(match.group("limit"))
+    reset = None
+    reset_match = re.search(r"resets\s*(.+)$", line, flags=re.IGNORECASE)
+    if reset_match and reset_match.group(1).strip():
+        reset = reset_match.group(1).strip()
+    return spent, limit, spent_currency or limit_currency, reset
+
+
+def _usage_credits_summary(
+    used: float | None,
+    spent: float | None,
+    limit: float | None,
+    currency: str | None,
+    reset: str | None,
+) -> str:
+    parts: list[str] = []
+    if used is not None:
+        parts.append(f"{_fmt_pct(max(0.0, 100.0 - used))}% left")
+    if spent is not None and limit is not None:
+        parts.append(f"{_fmt_money(spent, currency)} / {_fmt_money(limit, currency)} spent")
+    elif spent is not None:
+        parts.append(f"{_fmt_money(spent, currency)} spent")
+    if reset:
+        parts.append(f"resets {reset}")
+    return "usage credits " + ("; ".join(parts) if parts else "available")
+
+
+def _scan_usage_credits(lines: list[str], start: int) -> dict[str, Any] | None:
+    used: float | None = None
+    spent: float | None = None
+    limit: float | None = None
+    currency: str | None = None
+    reset: str | None = None
+    for offset, line in enumerate(lines[start:start + 8]):
+        key = _line_key(line)
+        if offset > 0 and (
+            _quota_header_key(key)
+            or key == "usagecredits"
+            or key.startswith("last24h")
+            or key.startswith("skills")
+        ):
+            break
+        if "usagecreditsareoff" in key:
+            return {
+                "enabled": False,
+                "summary": "usage credits off",
+            }
+        if used is None:
+            match = _USED_RE.search(line)
+            if match:
+                used = _num(match.group(1))
+        parsed_spend = _parse_credit_spend_line(line)
+        if parsed_spend:
+            spent, limit, parsed_currency, reset = parsed_spend
+            currency = parsed_currency or currency
+    if used is None and spent is None and limit is None and reset is None:
+        return None
+    remaining = max(0.0, 100.0 - used) if used is not None else None
+    return {
+        "enabled": True,
+        "used_percentage": used,
+        "remaining_percentage": remaining,
+        "spent_amount": spent,
+        "limit_amount": limit,
+        "currency": currency,
+        "reset": reset,
+        "resets_at": _reset_epoch(reset),
+        "summary": _usage_credits_summary(used, spent, limit, currency, reset),
+    }
+
+
 def _scan_bucket(lines: list[str], start: int) -> tuple[float, str | None] | None:
     used: float | None = None
     reset: str | None = None
     for line in lines[start + 1:start + 9]:
         key = _line_key(line)
-        if key.startswith("currentsession") or key.startswith("currentweek"):
+        if _quota_header_key(key) or key == "usagecredits":
             break
         if used is None:
             match = _USED_RE.search(line)
@@ -266,7 +379,7 @@ def _prefer_bucket(
     return current
 
 
-_WEEK_LABEL_RE = re.compile(r"\s*current\s*week\s*\(([^)]*)\)", re.IGNORECASE)
+_WEEK_LABEL_RE = re.compile(r"current\s*week\s*\(([^)]*)\)", re.IGNORECASE)
 
 
 def _week_model_label(line: str) -> str | None:
@@ -278,7 +391,7 @@ def _week_model_label(line: str) -> str | None:
     after "Current week" counts; a reset timezone paren later in a compact
     one-line bucket must not be mistaken for a model label.
     """
-    match = _WEEK_LABEL_RE.match(line)
+    match = _WEEK_LABEL_RE.search(line)
     if not match:
         return None
     content = match.group(1).strip()
@@ -298,14 +411,19 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
     session: tuple[float, str | None] | None = None
     week: tuple[float, str | None] | None = None
     week_models: dict[str, tuple[float, str | None]] = {}
+    usage_credits: dict[str, Any] | None = None
 
     for idx, line in enumerate(lines):
         key = _line_key(line)
-        if key.startswith("currentsession"):
+        if "usagecredits" in key:
+            found_credits = _scan_usage_credits(lines, idx)
+            if found_credits:
+                usage_credits = found_credits
+        elif "currentsession" in key:
             found = _scan_bucket(lines, idx) or _parse_bucket_line(line)
             if found:
                 session = _prefer_bucket(session, found)
-        elif key.startswith("currentweek"):
+        elif "currentweek" in key:
             found = _scan_bucket(lines, idx) or _parse_bucket_line(line)
             if found:
                 label = _week_model_label(line)
@@ -364,6 +482,8 @@ def parse_usage_text(raw: bytes | str) -> dict[str, Any]:
         levels["quota"] = {"summary": "; ".join(parts)}
         if buckets:
             levels["quota"]["buckets"] = buckets
+    if usage_credits:
+        levels["usage_credits"] = usage_credits
     return levels
 
 
@@ -384,8 +504,16 @@ def _usage_command(
     return ["claude", "--ax-screen-reader", "--model", chosen, "--safe-mode"]
 
 
-def _quota_buckets_complete(levels: dict[str, Any]) -> bool:
-    return "session_used_percentage" in levels and "week_used_percentage" in levels
+def _quota_buckets_complete(
+    levels: dict[str, Any],
+    *,
+    wait_for_credits: bool = False,
+) -> bool:
+    if "session_used_percentage" not in levels or "week_used_percentage" not in levels:
+        return False
+    if wait_for_credits:
+        return "usage_credits" in levels
+    return True
 
 
 def _read_available(master_fd: int, chunks: list[bytes], deadline: float) -> None:
@@ -421,6 +549,7 @@ def capture_usage_raw(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     model: str | None = None,
     env: dict[str, str] | None = None,
+    wait_for_credits: bool = False,
 ) -> bytes:
     """Drive ``claude`` interactively, type ``/usage``, and return raw TUI bytes.
 
@@ -460,7 +589,10 @@ def capture_usage_raw(
         grace_deadline: float | None = None
         while time.monotonic() < deadline:
             _read_available(master, chunks, min(deadline, time.monotonic() + 0.1))
-            if _quota_buckets_complete(parse_usage_text(b"".join(chunks))):
+            if _quota_buckets_complete(
+                parse_usage_text(b"".join(chunks)),
+                wait_for_credits=wait_for_credits,
+            ):
                 # session+week are in; linger briefly for trailing per-model
                 # week buckets that render after the all-models one.
                 if grace_deadline is None:
@@ -484,6 +616,7 @@ def capture_levels(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     model: str | None = None,
     env: dict[str, str] | None = None,
+    wait_for_credits: bool = False,
 ) -> dict[str, Any]:
     """Return a best-effort Claude usage levels snapshot, never raising."""
     try:
@@ -493,6 +626,7 @@ def capture_levels(
                 timeout_seconds=timeout_seconds,
                 model=model,
                 env=env,
+                wait_for_credits=wait_for_credits,
             )
         )
         if "quota" not in levels:
@@ -556,6 +690,7 @@ def load_or_refresh_snapshot(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     model: str | None = None,
     env: dict[str, str] | None = None,
+    wait_for_credits: bool = False,
 ) -> dict[str, Any] | None:
     """Read a fresh cached snapshot, or refresh it through the PTY probe.
 
@@ -574,6 +709,7 @@ def load_or_refresh_snapshot(
         timeout_seconds=timeout_seconds,
         model=model,
         env=env,
+        wait_for_credits=wait_for_credits,
     )
     write_snapshot(outbox_dir, levels)
     return levels

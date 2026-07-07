@@ -283,6 +283,27 @@ def _parse_scrape_updated_at(value: Any) -> datetime | None:
         return None
 
 
+def _stale_quota_windows(windows: Any) -> list[dict[str, Any]]:
+    """Keep stale quota rows visible without rendering old percentages as truth."""
+    if not isinstance(windows, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        out.append(
+            {
+                **window,
+                "used": None,
+                "limit": None,
+                "percent": None,
+                "reset": None,
+                "resets_at": None,
+            }
+        )
+    return out
+
+
 def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Real per-shell quota windows from the daemons' own reports (#237).
 
@@ -336,7 +357,10 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                 real[name] = {
                     "shell": name,
                     "status": "stale" if stale else str(shell.get("status") or "unknown"),
-                    "windows": shell.get("windows") or [],
+                    "windows": (
+                        _stale_quota_windows(shell.get("windows"))
+                        if stale else shell.get("windows") or []
+                    ),
                     "credits": shell.get("credits"),
                     "_reported_at": reported_at,
                 }
