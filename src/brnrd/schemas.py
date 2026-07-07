@@ -218,6 +218,36 @@ class QuotaOut(BaseModel):
     quota_updated_at: datetime | None = None
 
 
+class LiveRunIn(BaseModel):
+    """One entry from the local presence registry (``src/brr/presence.py``)
+    — a thought currently awake on this daemon, or an ad-hoc session
+    alongside it (#258)."""
+
+    id: str = Field(min_length=1, max_length=64)
+    kind: str = Field(default="", max_length=32)
+    stream: str = Field(default="", max_length=256)
+    run_id: str = Field(default="", max_length=64)
+    repo_label: str = Field(default="", max_length=256)
+    started_at: str | None = None
+    last_seen: str | None = None
+
+
+class LiveRunsReport(BaseModel):
+    """Live/coexisting-runs snapshot a daemon pushes for itself (#258).
+
+    Same last-write-wins shape as Activity/Plans/Quota — see
+    `src/brr/gates/cloud.py::_live_runs_snapshot` for the daemon-side
+    collector this feeds from.
+    """
+
+    runs: list[LiveRunIn] = Field(default_factory=list)
+
+
+class LiveRunsOut(BaseModel):
+    runs: list[LiveRunIn]
+    live_runs_updated_at: datetime | None = None
+
+
 class PackRelayPost(BaseModel):
     pack: dict[str, Any]
     ttl_s: int | None = None
