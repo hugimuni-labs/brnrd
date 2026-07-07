@@ -104,6 +104,41 @@ def test_daemon_quota_snapshot_replaces_shells():
     assert replaced.json()["shells"][0]["windows"] == []
 
 
+def test_daemon_quota_round_trips_updated_at_and_credits():
+    """2026-07-07: `updated_at` (the scrape's own age, for real staleness
+    detection) and `credits` (real per-run USD once metered overage kicks
+    in) are declared schema fields, not free-form extras `extra="ignore"`
+    would silently drop."""
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+
+    payload = {
+        "shells": [
+            {
+                "shell": "claude",
+                "status": "known",
+                "updated_at": "2026-07-07T20:17:03Z",
+                "windows": [
+                    {"label": "5h window", "used": None, "limit": None, "percent": 1.0},
+                ],
+                "credits": {
+                    "total_cost_usd": 1.15,
+                    "summary": "$1.15 this session (estimated)",
+                    "updated_at": "2026-07-07T20:20:00Z",
+                },
+            }
+        ]
+    }
+    posted = client.put("/v1/daemons/quota", json=payload, headers=daemon_headers)
+    assert posted.status_code == 200, posted.text
+    shell = posted.json()["shells"][0]
+    assert shell["updated_at"] == "2026-07-07T20:17:03Z"
+    assert shell["credits"]["total_cost_usd"] == 1.15
+
+
 def test_daemon_quota_requires_registration():
     client = _client()
     _, daemon_headers, _repo_id = _repo_and_daemon(client)
