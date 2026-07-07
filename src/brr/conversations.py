@@ -763,13 +763,19 @@ def _select_snapshot_turns(
 ) -> list[dict[str, Any]]:
     """Select dialogue turns for the wake snapshot.
 
-    Recency is the main signal, but unanswered user events get a strong
-    boost so an older pending ask is less likely to disappear behind a
-    more recent answered exchange. The selected rows are returned in
-    chronological order so the prompt still reads like a chat.
+    Recency is the main signal, but unanswered user events get a boost so
+    an older pending ask is less likely to disappear behind a more recent
+    answered exchange. The boost is capped at half the budget: on a busy
+    thread, a handful of stray old unanswered events (an image-only
+    message, a reply folded into a sibling event's answer, ...) must never
+    be able to outrank *every* recent turn and blank out what just
+    happened — recency always keeps at least half the slots. The selected
+    rows are returned in chronological order so the prompt still reads
+    like a chat.
     """
     dialogue = [r for r in records if _is_dialogue_record(r)]
-    if limit <= 0 or len(dialogue) <= limit:
+    total = len(dialogue)
+    if limit <= 0 or total <= limit:
         return dialogue
 
     answered_event_ids = {
@@ -781,21 +787,31 @@ def _select_snapshot_turns(
             and r.get("event_id")
         )
     }
-    total = len(dialogue)
-    scored: list[tuple[int, int, dict[str, Any]]] = []
-    for index, record in enumerate(dialogue):
-        score = index
-        if (
+
+    def _is_unanswered(index: int) -> bool:
+        record = dialogue[index]
+        return bool(
             record.get("kind") == "event"
             and record.get("event_id")
             and str(record.get("event_id")) not in answered_event_ids
-        ):
-            score += total
-        scored.append((score, index, record))
+        )
 
-    picked = sorted(scored, key=lambda item: (item[0], item[1]))[-limit:]
-    picked.sort(key=lambda item: item[1])
-    return [record for _score, _index, record in picked]
+    unanswered_count = sum(1 for i in range(total) if _is_unanswered(i))
+    unanswered_budget = min(limit // 2, unanswered_count)
+    recency_budget = limit - unanswered_budget
+
+    picked_indices = set(range(total - recency_budget, total))
+    remaining = limit - len(picked_indices)
+    if remaining:
+        for index in range(total - 1, -1, -1):
+            if remaining <= 0:
+                break
+            if index in picked_indices or not _is_unanswered(index):
+                continue
+            picked_indices.add(index)
+            remaining -= 1
+
+    return [dialogue[i] for i in sorted(picked_indices)]
 
 
 def build_communication_snapshot(
