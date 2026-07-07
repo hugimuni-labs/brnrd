@@ -85,6 +85,11 @@ class Daemon(Base):
     # kb/design-dashboard-live-surface.md §"Reconsidered 2026-07-06".
     live_runs_json: Mapped[str] = mapped_column(Text, default="[]")
     live_runs_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # PR-review queue snapshot (#259), mirrored from `gh pr list` via
+    # `PUT /v1/daemons/pr-review-queue`. Calendar age, not runner quota, is
+    # the meaningful clock for this lane.
+    pr_review_queue_json: Mapped[str] = mapped_column(Text, default="[]")
+    pr_review_queue_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ActivityRecord(Base):

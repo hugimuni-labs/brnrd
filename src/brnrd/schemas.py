@@ -249,6 +249,34 @@ class LiveRunsOut(BaseModel):
     live_runs_updated_at: datetime | None = None
 
 
+class PRReviewItemIn(BaseModel):
+    """One open PR from the daemon's account-scoped review queue (#259)."""
+
+    number: int = Field(ge=1)
+    title: str = Field(default="", max_length=500)
+    url: str = Field(default="", max_length=2048)
+    repo_label: str = Field(default="", max_length=256)
+    created_at: str | None = None
+    draft: bool = False
+    author: str = Field(default="", max_length=255)
+
+
+class PRReviewQueueReport(BaseModel):
+    """Open-PR review queue a daemon pushes for itself (#259).
+
+    Same last-write-wins mirror as Activity/Plans/Quota/Live-runs — see
+    `src/brr/gates/cloud.py::_pr_review_snapshot` for the daemon-side
+    collector this feeds from.
+    """
+
+    prs: list[PRReviewItemIn] = Field(default_factory=list)
+
+
+class PRReviewQueueOut(BaseModel):
+    prs: list[PRReviewItemIn]
+    pr_review_queue_updated_at: datetime | None = None
+
+
 class PackRelayPost(BaseModel):
     pack: dict[str, Any]
     ttl_s: int | None = None
