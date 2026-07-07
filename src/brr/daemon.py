@@ -1331,9 +1331,12 @@ def _run_worker(
     # _run_worker_and_finalize's finally; the heartbeat closure refreshes it.
     presence_id: str | None = None
     try:
+        live_run_label = " ".join(
+            str(event.get("summary") or task.body or "").split()
+        )[:120]
         presence_id = presence.register(
             brr_dir, kind="daemon", stream=conv_key, run_id=task.id,
-            repo_label=repo_label,
+            repo_label=repo_label, label=live_run_label,
         )["id"]
         task.meta["presence_id"] = presence_id
     except OSError:
