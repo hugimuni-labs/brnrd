@@ -124,6 +124,16 @@ Portals are the seams where a run turns to the world — inbound
   ends any other way — a bare status word, an ergonomics note with nothing
   after it, no line at all — is missing its next-move, full stop, whatever
   else the body got right. Check the literal last line before sending.
+  Sharp case, caught live twice in one day (2026-07-07, run-260707-0911-rdw4
+  and run-260707-0959-mnrr): substance already shipped via outbox interim(s)
+  ⇒ the terminal stdout is *either* genuinely empty (the clean path below —
+  `deliver_stream` skips a closeout entirely when there's nothing to send)
+  *or* a real one-line receipt ending in the next-move shape above. A bare
+  `done`/`done.` is neither — it's non-empty, so it still ships as one more
+  delivered message, but carries none of the substance, and since it lands
+  chronologically last it reads as the reply from a user glancing at the
+  thread. Splitting the difference this way is worse than either clean
+  option; don't.
 - linger — conversation clearly live ⇒ deliver via outbox (that is the
   satisfying signal; final stdout may then stay empty), write `.keepalive`,
   poll `portal-state.json` with backoff 30s → cap 240s (inside the ~5m
