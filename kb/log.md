@@ -11712,3 +11712,54 @@ gets a dated addendum on the same bullet that named the 4/12 gap. Tests:
 on post-tool/seed) and `test_outbox.py` (portal-state facet reads the
 control file). Full suite green (1392). Branch:
 brr/task-classification-closeout-nudge-2026-07-08.
+
+## [2026-07-08] design | dashboard visual-language pass — bracket panels, boot glitch, scanline
+
+Direct ask: "now let's do the UI heavy lifting," pointed at the recent kb
+(`design-brand-visual-language.md`) and the screenshot folder. Orientation
+found the mechanics work (loom slices 0-3, amber/ice color pass) already
+shipped and honest, but every panel was still a plain Tailwind
+`rounded-md border` box — no chrome distinct from any other admin
+dashboard, confirmed against 2026-07-05/07 screenshots. The visual-
+language page's own three-layer register (glitchy terminal + Zachtronics
+schematic + Nordic-tech, "held lightly, without cheese") was named in
+detail but never built against the live surface; a `screenshots/physche-
+network.png` reference (nous psyche, unrelated project) served as a
+calibration point for the *structural* idea — bordered instrument panels,
+monospace data typography — not a palette to copy (our amber/ice pick
+already stands).
+
+Shipped, not just planned, per an explicit same-thread "take your time,
+better the whole thing than a small piece" steer:
+
+- **Bracket-cornered `.panel` chrome** (`layout.css`): sharp-rectangle
+  panels with four corner ticks drawn as eight background gradients (two
+  lines per corner) — a schematic-panel read instead of a rounded admin
+  card. A flatter `.subpanel` (hairline border, no brackets) for rows
+  nested inside a panel, so bracket chrome marks section boundaries
+  without nesting noise on every list item.
+- **The boot glitch, built for the first time**: the sequence named in
+  `design-brand-visual-language.md` §3 (`_` → `b_d` → `br_rd` → `brnrd`
+  -glitch→ `bRnЯd`) as a real, checkable spec — implemented in
+  `+layout.svelte` as a frame sequence with a chromatic-flicker resolve on
+  the final frame, ~1s total, skipped entirely (not just shortened) under
+  `prefers-reduced-motion` since the letters-converging motion is the
+  content, not decoration on top of it.
+- **A near-invisible scanline field** (`body::before`, ~1% alpha
+  repeating gradient + a soft amber radial) — the CRT layer held lightly,
+  meant to read as a property of the glass, not a texture anyone
+  consciously notices.
+- **Monospace data typography** applied consistently across
+  `WindowTrack`/`LiveRuns`/`PRReviewQueue`/`RunLedgerReceipt`: shell
+  names, window labels, timestamps, and the run-receipt stat grid all
+  moved to `font-mono` with uppercase tracking-wide labels; an `.eyebrow`
+  class (`// section name`, schematic-annotation register) added ahead of
+  each `<h2>`.
+
+Verified before shipping, not just build-clean: `npm run build`/`lint`/
+`check` all clean; a fresh local Playwright install (browsers weren't
+cached) drove `vite preview` with routed JSON mocks matching the real API
+shapes (no backend running locally) and screenshotted desktop, mobile, and
+a mid-boot-glitch frame — confirmed the brackets, eyebrow labels, and
+glitch sequence all render as designed at both widths before committing.
+Branch: brr/dashboard-visual-language-2026-07-08.
