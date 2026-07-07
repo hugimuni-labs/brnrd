@@ -731,6 +731,33 @@ after creating a PR; the daemon reads it each heartbeat
 `remote_scm` network-free per its own design (`brr.facets` docstring).
 Documented in `src/brr/prompts/daemon-substrate.md`.
 
+## Shipped (2026-07-08): the visual-language pass — bracket panels, boot glitch
+
+The loom slices and the amber/ice color pass gave every view real data and
+a coherent palette, but the chrome itself was still a plain Tailwind
+`rounded-md border` box everywhere — confirmed against the 2026-07-05/07
+screenshot folder, not assumed. This pass builds the load-bearing pieces
+of `design-brand-visual-language.md`'s three-layer register that were
+named but never implemented: a bracket-cornered `.panel`/`.subpanel`
+chrome system (`layout.css`), the boot-glitch sequence
+(`_`→`b_d`→`br_rd`→`brnrd`→`bRnЯd`) that page's §3 already spelled out as
+a checkable spec, a near-invisible scanline field, and monospace/
+uppercase-tracking data typography applied consistently across
+`WindowTrack`/`LiveRuns`/`PRReviewQueue`/`RunLedgerReceipt`. Full detail
+and verification method: `kb/log.md` §2026-07-08 "dashboard visual-
+language pass". Branch: brr/dashboard-visual-language-2026-07-08.
+
+Not done, named for next: the "sci-fi-cybernetic-weaver-spirit-altar"
+Nordic layer stays untouched by this pass on purpose — bracket panels and
+a boot glitch are structural/terminal-register chrome, not the genuinely
+unsolved "how does a dashboard represent dialogue with an agentic
+resident" question that page's own reasoning flags as the hard, creative
+part. Also open: this pass didn't touch the frontend's `README.md`/font
+loading (still system fonts, no brand typeface decision made), and the
+scanline/glitch treatment hasn't been checked against a screen-reader or
+low-vision pass beyond the `prefers-reduced-motion` guard on the glitch
+itself.
+
 ## Read next
 
 - [`plan-loom-realtime-build.md`](plan-loom-realtime-build.md) — the

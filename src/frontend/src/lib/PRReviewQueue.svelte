@@ -17,11 +17,15 @@
 	const STALE_COLOR = '#57534e';
 </script>
 
-<div class="rounded-md border border-stone-800 bg-stone-900/60 p-3">
-	<div class="mb-2 flex items-center justify-between text-sm">
-		<span class="font-medium text-amber-200">PR review queue</span>
+<div class="panel p-4">
+	<div class="mb-3 flex items-center justify-between text-sm">
+		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">PR review queue</span
+		>
 		{#if stale}
-			<span class="rounded bg-sky-900/40 px-1.5 py-0.5 text-xs text-sky-300">stale report</span>
+			<span
+				class="border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-sky-300 uppercase"
+				>stale report</span
+			>
 		{/if}
 	</div>
 	{#if prs.length === 0}
@@ -32,7 +36,7 @@
 				{@const statusColor = stale ? STALE_COLOR : pr.draft ? DRAFT_COLOR : READY_COLOR}
 				{@const statusLabel = pr.draft ? 'draft' : 'review'}
 				<li
-					class="rounded bg-stone-800/60 px-2 py-1.5 text-xs"
+					class="subpanel px-2.5 py-2 text-xs"
 					in:fly={{ y: -8, duration: 220 }}
 					out:fade={{ duration: 150 }}
 					animate:flip={{ duration: 220 }}
@@ -59,8 +63,10 @@
 								</span>
 							</span>
 						</span>
-						<span class="flex shrink-0 items-center gap-2">
-							<span style={`color: ${statusColor}`}>{statusLabel}</span>
+						<span class="flex shrink-0 items-center gap-2 font-mono">
+							<span class="uppercase tracking-wide" style={`color: ${statusColor}`}
+								>{statusLabel}</span
+							>
 							<span class="text-stone-500">{ageSinceCreated(pr.created_at, now) ?? ''}</span>
 						</span>
 					</div>
