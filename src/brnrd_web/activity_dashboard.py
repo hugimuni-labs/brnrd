@@ -391,6 +391,62 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     }
 
 
+_PR_REVIEW_QUEUE_STALE_SECONDS = 300  # daemon publishes on its ~25-30s poll loop (#259)
+
+
+def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
+    """Account-scoped open-PR review queue (#259).
+
+    Reads the last ``PUT /v1/daemons/pr-review-queue`` snapshot per connected
+    daemon (`src/brr/gates/cloud.py::_pr_review_snapshot` is the writer).
+    Several ``Daemon`` rows can report the same underlying account queue; dedupe
+    by ``repo_label`` + PR number and keep the freshest daemon report.
+    """
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return {"prs": [], "stale": False, "generated_at": None}
+    now = datetime.now(timezone.utc)
+    prs: dict[str, dict[str, Any]] = {}
+    newest_reported_at: datetime | None = None
+    daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+    for daemon in daemons:
+        reported_at = _dt(daemon.pr_review_queue_updated_at)
+        if reported_at is None:
+            continue
+        if newest_reported_at is None or reported_at > newest_reported_at:
+            newest_reported_at = reported_at
+        try:
+            entries = json.loads(daemon.pr_review_queue_json or "[]")
+        except ValueError:
+            entries = []
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            repo_label = str(entry.get("repo_label") or "")
+            number = entry.get("number")
+            if not (repo_label and number):
+                continue
+            pr_key = f"{repo_label.casefold()}#{number}"
+            existing = prs.get(pr_key)
+            if existing is not None and existing["_reported_at"] >= reported_at:
+                continue
+            row = dict(entry)
+            row["_reported_at"] = reported_at
+            prs[pr_key] = row
+    out = list(prs.values())
+    for row in out:
+        row.pop("_reported_at", None)
+    out.sort(key=lambda row: row.get("created_at") or "")
+    stale = bool(newest_reported_at) and (now - newest_reported_at).total_seconds() > _PR_REVIEW_QUEUE_STALE_SECONDS
+    return {
+        "prs": out,
+        "stale": stale,
+        "generated_at": newest_reported_at.isoformat() if newest_reported_at else None,
+    }
+
+
 def _activity_dashboard_context(request: Request, db: Session, account: Account, *, notice: str | None = None, installation_id: str | None = None) -> dict[str, Any]:
     settings = request.app.state.settings
     repos = _repos(db, account.id)
@@ -479,6 +535,29 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "runs": view["runs"],
+            "stale": view["stale"],
+            "reported_at": view["generated_at"],
+        }
+    )
+
+
+@router.get("/v1/dashboard/pr-review-queue")
+def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Account-scoped open-PR review queue (#259) for the SvelteKit frontend.
+    Same session-cookie auth as the other dashboard JSON endpoints.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    view = _pr_review_queue_views(db, repos)
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "prs": view["prs"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
         }

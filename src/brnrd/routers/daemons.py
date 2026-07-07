@@ -205,6 +205,26 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     return schemas.LiveRunsOut(runs=payload.runs, live_runs_updated_at=now)
 
 
+@router.put("/pr-review-queue", response_model=schemas.PRReviewQueueOut)
+def put_pr_review_queue(payload: schemas.PRReviewQueueReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon's open-PR review queue snapshot (#259).
+
+    Same last-write-wins shape as `put_live_runs`: the daemon owns the
+    `gh pr list` read, this endpoint stores the latest account-scoped queue
+    for the dashboard.
+    """
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        raise HTTPException(status_code=404, detail="no daemon registered for this token")
+    now = datetime.now(timezone.utc)
+    daemon.pr_review_queue_json = json.dumps([pr.model_dump() for pr in payload.prs], separators=(",", ":"))
+    daemon.pr_review_queue_updated_at = now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    return schemas.PRReviewQueueOut(prs=payload.prs, pr_review_queue_updated_at=now)
+
+
 @router.get("/inbox", response_model=schemas.InboxResponse)
 def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
     settings = request.app.state.settings
