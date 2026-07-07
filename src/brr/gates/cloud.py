@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime, timezone
 import json
 import subprocess
@@ -12,7 +13,7 @@ from typing import Any, Callable
 
 import requests
 
-from .. import claude_usage, codex_status, gitops, presence, protocol, run_progress, runner_quota
+from .. import claude_usage, codex_status, gitops, presence, protocol, run_ledger, run_progress, runner_quota
 from .. import dominion, schedule as schedule_mod
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -23,7 +24,7 @@ _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
 _RESPONSE_LIMITS = {"telegram": 3900}
 _SESSION = requests.Session()
-# Dashboard snapshots (activity/plans/quota/live-runs/PR-review-queue) used
+# Dashboard snapshots (activity/plans/quota/live-runs/PR-review-queue/run-ledger) used
 # to publish once per `_loop_once` iteration, which is paced by the inbox
 # long-poll above (`_POLL_WAIT_S = 25`) — a constant chosen for chat
 # responsiveness, never for dashboard freshness. That coupling capped every
@@ -193,10 +194,11 @@ def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
     _publish_quota(brr_dir, state)
     _publish_live_runs(brr_dir, state)
     _publish_pr_review_queue(brr_dir, state)
+    _publish_run_ledger(brr_dir, state)
 
 
 def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
-    """Publish the five dashboard snapshots on their own short cadence.
+    """Publish the dashboard snapshots on their own short cadence.
 
     Runs alongside ``run_loop``'s main iteration (which still publishes once
     per inbox long-poll return too — harmless, idempotent overwrites, not
@@ -264,6 +266,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     _publish_quota(brr_dir, state)
     _publish_live_runs(brr_dir, state)
     _publish_pr_review_queue(brr_dir, state)
+    _publish_run_ledger(brr_dir, state)
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:
@@ -759,6 +762,47 @@ def _publish_pr_review_queue(brr_dir: Path, state: dict) -> None:
         )
     except Exception as e:
         print(f"[brr:cloud] pr-review-queue publish failed: {e}")
+
+
+def _run_ledger_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
+    """This daemon's recent closed-run receipt rows (#271).
+
+    Reads the local-first ``.brr/run-ledger.jsonl`` written at run closeout.
+    Missing files and malformed lines are not publish failures: the ledger
+    invariant is "unavailable evidence becomes absent/null, not a closeout or
+    dashboard failure."
+    """
+    path = run_ledger.ledger_path(brr_dir.parent)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            lines = deque(handle, maxlen=20)
+    except FileNotFoundError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _publish_run_ledger(brr_dir: Path, state: dict) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    try:
+        _request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/run-ledger",
+            token=state["token"],
+            json={"rows": _run_ledger_snapshot(brr_dir)},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] run-ledger publish failed: {e}")
 
 
 class _CloudCardTransport:

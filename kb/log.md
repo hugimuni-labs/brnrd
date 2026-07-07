@@ -11465,3 +11465,28 @@ Detail: `kb/plan-loom-realtime-build.md` §Slice 1.5/§Slice 2,
 `kb/design-brand-visual-language.md` §"Reference check: psyche.network".
 Branch: brr/loom-slice2-live-runs-cards-2026-07-07 (merged, PR #273,
 `e11bafb`).
+
+## [2026-07-07] implement | Loom slice 3 run-ledger receipts + amber/ice dashboard chrome
+
+Continuation of the #271 handoff after the prior run hit session quota
+mid-orientation. Shipped the closed-run receipt lane by mirroring the
+existing live-runs/PR-review-queue publish shape: `Daemon.run_ledger_json`/
+`run_ledger_updated_at` (+ migration), nullable `RunLedgerRowIn` schema
+matching `src/brr/run_ledger.py::_ROW_FIELDS`, `PUT
+/v1/daemons/run-ledger`, dashboard-side dedupe by `run_id` with newest
+`ended_at` first, and `cloud.py` publishing the tail of
+`.brr/run-ledger.jsonl` while skipping malformed lines.
+
+Frontend added `runLedger.ts` and `RunLedgerReceipt.svelte` under the PR
+review queue, rendering wall-clock, token in/out, weekly/5h deltas, and
+subscription USD attribution with `—` for nulls. Same pass applied the
+maintainer-requested amber/ice palette across all live lanes: warm void
+canvas, parchment body text, amber primary labels, stone chrome/meta, and
+sky for stale/link/cold affordances. The fixed status palettes stayed
+unthemed.
+
+Docs updated: `kb/plan-loom-realtime-build.md` marks slice 3 shipped and
+`kb/design-brand-visual-language.md` moves the hearth/frost palette from
+proposal to shipped dashboard chrome.
+
+Branch: brr/loom-run-ledger-palette-2026-07-07.
