@@ -2809,6 +2809,19 @@ def _write_live_portal_state(
                 "keepalive": _keepalive_state(keepalive_path),
             },
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
+            # Task-classification presence: the ledger's only rollup-by-shape
+            # join key (``run_ledger.py`` §``task_classification``), and one a
+            # resident can go a whole run without writing since nothing
+            # breaks when it's missing — the row's field just stays null
+            # forever. A card-staleness-style forcing function, named
+            # directly after a live near-miss (2026-07-07,
+            # run-260707-2243-nf13's own predecessor caught it only because
+            # the maintainer's question forced a self-check).
+            "task_classification": {
+                "written": bool(
+                    run_ledger.read_task_classification_control(outbox_dir)
+                ),
+            },
             "resources": _resources_facet(
                 quota_summary,
                 # Per-Shell level source (see _collect_levels): Codex reads its

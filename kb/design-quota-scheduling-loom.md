@@ -206,7 +206,20 @@ schema doc above, which describes intent, not state. Read
   control file + `spawn:`/`respawn:` frontmatter) — but it's
   resident-discipline, not enforced: 4/12 rows carry it so far, the rest
   are `null`. A rollup query today is already possible for the tagged
-  rows, blind for the rest.
+  rows, blind for the rest. **Addendum (2026-07-08):** a card-staleness-
+  style forcing function now closes the gap partway — `brnrd hook stop`
+  injects a nudge line at the closeout boundary whenever
+  `.task-classification` is still unwritten (`hooks.py::format_delta`,
+  reading a new `task_classification.written` portal-state facet from
+  `daemon.py::_write_live_portal_state`). Named directly after a live
+  near-miss (2026-07-07, the run that closed Gap 2 of
+  `plan-spawn-gap-closure.md` nearly shipped without writing the file,
+  caught only because a direct question forced a self-check). Still
+  resident-discipline, not enforced — a `block` (like the Stop hook's
+  pending-event control) was considered and rejected: the file is
+  legitimately written anytime up to closeout, so blocking the *first*
+  Stop attempt on it would fire on entirely healthy runs mid-wrap-up, not
+  just the miss this guards against. Detail: `kb/log.md` §2026-07-08.
 - `is_subspawn`/`parent_run_id` fields exist (post-#254, once `spawn:`
   itself shipped) — a spawned child's cost can in principle roll up under
   its parent.
