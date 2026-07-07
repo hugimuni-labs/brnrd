@@ -490,6 +490,44 @@ persistent `--dev-reload` daemon, not a spawn-primitive defect. The
 `reload_requested`-vs-spawn-gate design question named above is still
 open; it didn't need resolving for this test to close.
 
+**Addendum 2026-07-07 (run-260707-1321-auhp) — a fourth spawn attempt
+dispatched clean, then died silently mid-run; also confirms a real
+`environment=host` concurrency hazard.** Dispatched live in response to
+the maintainer's own "sub runs should work... hopefully it holds":
+`spawn: true`, `shell: codex-mini`, a bounded #201 (worktree-hygiene
+dry-run tool) task. Confirmed genuinely concurrent via `pstree` — a real
+`codex`/`node` process tree alongside this thought's own `claude`
+process, `Status: running` in its own run context, no dev-reload stall
+(this thought hadn't touched `src/brr/*.py|*.md` before dispatch, so
+Finding 2/3's gate never latched). ~9 minutes later the entire child
+process tree had exited: zero commits on the branch it created, no
+response file, **no completion or crash-notification event** — silence,
+not a signal, despite `_notify_spawn_parent_of_crash` (this same day,
+PR #266) supposedly covering exactly this shape. Working hypothesis, not
+confirmed: that fix only fires when the daemon's own tracking future
+*raises*; a codex child that simply exits (clean or otherwise) without
+the wrapper treating it as an exception would slip past both the success
+and crash notification paths. Narrower and different from Findings 1-3
+(all dispatch-gate problems) — this one dispatched fine and died after.
+
+Also confirmed live, not hypothetical: this repo's `.brr/config` has
+`environment=host` (`HostEnv.prepare`: `cwd=repo_root`, no worktree
+isolation — `src/brr/envs/__init__.py`), and nothing in
+`_queue_spawn_request` overrides that for a spawned child. Mid-run, `git
+branch --show-current` in this thought's own shell flipped from `main` to
+the spawned child's `brr/worktree-hygiene-report-2026-07-07` — the child
+had run `git checkout -b` in the *same* working directory this thought
+was mid-edit in. Recovered without loss only because the child had made
+zero commits (`git checkout main` was a no-op content-wise); had it
+committed first, this thought's own uncommitted kb edit would have ridden
+along into the child's branch, or a genuine checkout conflict could have
+surfaced. `spawn:` is the one primitive that deliberately breaks
+single-flight; `environment=host` giving it zero working-directory
+isolation is a real, not theoretical, collision surface — worth a
+scoped fix (e.g. `spawn:` always launching under `WorktreeEnv` regardless
+of the repo's own `environment=` config) before this is exercised again
+outside a lucky zero-commit race.
+
 **Addendum 2026-07-07 (run-260707-1033-jyzb) — "no reply" root-caused: a
 bare `done` stub, not a delivery failure.** The maintainer reported both
 run-260707-0911-rdw4 (11:37 CEST) and the #263 review self-wake above as

@@ -188,6 +188,65 @@ tagging a dispatched child at hand-off time. Documented in
 `prompts/daemon-substrate.md`'s portal list alongside `.card`/
 `.keepalive` so a resident actually discovers it exists.
 
+## Status check (2026-07-07): what's actually live vs. still a diagram
+
+Maintainer asked directly "how far are we... do we have cost estimates
+now?" — checked against the running system rather than answered from the
+schema doc above, which describes intent, not state. Read
+`.brr/run-ledger.jsonl` directly (12 real rows, oldest from this week) and
+`src/brr/run_ledger.py` as shipped:
+
+**Live:**
+- Every closed run appends a real row — actual wall-clock, token counts
+  (input/output/cache-read/cache-creation), context-window-used,
+  weekly/5h `%` deltas, `repo_label`/`source_system`. Not a mock; e.g. the
+  last row before this one shows 2765s wall-clock, ~44.5M cache-read
+  tokens, `weekly_pct_delta: 3.0`, real `event_id`/`run_id`.
+- `task_classification` has a real write path (`.task-classification`
+  control file + `spawn:`/`respawn:` frontmatter) — but it's
+  resident-discipline, not enforced: 4/12 rows carry it so far, the rest
+  are `null`. A rollup query today is already possible for the tagged
+  rows, blind for the rest.
+- `is_subspawn`/`parent_run_id` fields exist (post-#254, once `spawn:`
+  itself shipped) — a spawned child's cost can in principle roll up under
+  its parent.
+
+**Not live — this is the actual gap, not a rounding error:**
+- **No estimate path exists.** `estimate_vs_actual` is a hardcoded
+  constant (`ESTIMATE_ACTUAL = "actual"`, `run_ledger.py:23`) — nothing
+  ever writes a `forward_guess` row. The loom's actual proposed
+  mechanic — a cost estimate attached to a CPS item *before* it runs, so
+  a user can pace against it — has no producer. What ships today is
+  after-the-fact bookkeeping, not the pacing tool this page describes.
+- **Nothing reads the ledger back.** No rollup/query helper, no
+  director-tick consumption, no CLI. `grep`-the-jsonl-by-hand is the
+  entire current query surface.
+- **No dashboard/API wiring** — `src/brnrd_web/`/`src/frontend/` don't
+  reference `run_ledger` at all yet; §"Cohering with the dashboard's
+  rendering vocabulary" below is still a mapping on paper.
+- **`usd_credits_equivalent` is always `null`, deliberately**
+  (`run_ledger.py:328`) — "no stable token-to-managed-credit mapping yet,"
+  the honest-null choice named in the schema table above, not a bug.
+- **`runner_core` is unreliable for unpinned Claude runs** — open bug
+  [#255](https://github.com/Gurio/brr/issues/255): an unpinned `claude`
+  profile resolves to the catalog placeholder rather than the real model
+  id, so per-model rollups are half-blind until that lands (10/12 rows in
+  the live ledger show `runner_core: null`).
+- Local-only storage as planned (`.brr/run-ledger.jsonl`); no server
+  mirror yet — sequencing note in the schema section above still holds.
+
+**Reading the shape whole:** the *instrumentation prerequisite* (real
+per-run span data, durably logged) is genuinely done — that part of "do we
+have cost estimates" is yes, retrospectively. The *product mechanic* this
+page is named for — prospective estimates surfaced to a user before they
+commit to an item, kill switches, a pacing UI — hasn't started; there's no
+estimate producer, no consumer, no surface. So: closer than "nothing
+exists," further than "the loom is running." The next real slice is a
+rollup/query helper reading `run-ledger.jsonl` by `task_classification`
+(named as future work above, still future) — that's the piece that turns
+raw actuals into a "here's roughly what a task like this costs" estimate,
+which is the prerequisite for everything else on this page.
+
 ## Cohering with the dashboard's rendering vocabulary
 
 This page and [`design-dashboard-live-surface.md`](design-dashboard-live-surface.md)
