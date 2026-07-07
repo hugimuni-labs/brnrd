@@ -79,6 +79,23 @@ def test_parse_conversation_key_optional(tmp_path: Path):
     assert e.conversation_key is None
 
 
+def test_parse_reads_optional_reset_on(tmp_path: Path):
+    dom = _write(
+        tmp_path / "dom",
+        "## director tick\nevery: 5h\nreset_on: spawn\nRe-derive the plan\n",
+    )
+    (e,) = schedule.parse_schedule(dom)
+    assert e.id == "director-tick"
+    assert e.reset_on == "spawn"
+    assert e.body == "Re-derive the plan"
+
+
+def test_parse_reset_on_optional(tmp_path: Path):
+    dom = _write(tmp_path / "dom", "## Ping\nevery: 1h\ndo a thing\n")
+    (e,) = schedule.parse_schedule(dom)
+    assert e.reset_on is None
+
+
 def test_parse_ignores_preamble_and_inert_entries(tmp_path: Path):
     dom = _write(
         tmp_path / "dom",
@@ -159,3 +176,59 @@ def test_state_round_trip(tmp_path: Path):
     assert schedule.load_state(brr) == {}
     schedule.save_state(brr, {"a": {"last_fired": 1.0}})
     assert schedule.load_state(brr) == {"a": {"last_fired": 1.0}}
+
+
+# ── reset-on signals (director-tick-after-spawn feature) ─────────────
+
+
+def test_record_signal_round_trips(tmp_path: Path):
+    brr = tmp_path / ".brr"
+    brr.mkdir()
+    assert schedule.load_signals(brr) == {}
+    schedule.record_signal(brr, "spawn", now=1234.5)
+    assert schedule.load_signals(brr) == {"spawn": 1234.5}
+    # A second signal is added, not clobbering the first.
+    schedule.record_signal(brr, "other", now=1300.0)
+    assert schedule.load_signals(brr) == {"spawn": 1234.5, "other": 1300.0}
+
+
+def test_apply_reset_signals_pushes_cooldown_to_signal_time():
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=5 * 3600, reset_on="spawn",
+    )
+    state = {"director-tick": {"kind": "every", "last_fired": 1000.0}}
+    signals = {"spawn": 4000.0}
+    new_state = schedule.apply_reset_signals([e], state, signals, now=4000.0)
+    assert new_state["director-tick"]["last_fired"] == 4000.0
+
+    # The reset means the tick is not due right after, even though its
+    # original interval (from the stale last_fired) would have made it due.
+    due, _ = schedule.due_entries([e], new_state, now=4000.0 + 1)
+    assert due == []
+
+
+def test_apply_reset_signals_never_moves_last_fired_backwards():
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=5 * 3600, reset_on="spawn",
+    )
+    state = {"director-tick": {"kind": "every", "last_fired": 9000.0}}
+    signals = {"spawn": 4000.0}  # an older signal than the last real firing
+    new_state = schedule.apply_reset_signals([e], state, signals, now=9500.0)
+    assert new_state["director-tick"]["last_fired"] == 9000.0
+
+
+def test_apply_reset_signals_ignores_entries_without_reset_on():
+    e = schedule.ScheduleEntry("other", "every", "", interval=3600)
+    state = {"other": {"kind": "every", "last_fired": 1000.0}}
+    new_state = schedule.apply_reset_signals(
+        [e], state, {"spawn": 4000.0}, now=4000.0,
+    )
+    assert new_state == state
+
+
+def test_apply_reset_signals_no_signals_is_a_noop():
+    e = schedule.ScheduleEntry(
+        "director-tick", "every", "", interval=3600, reset_on="spawn",
+    )
+    state = {"director-tick": {"kind": "every", "last_fired": 1000.0}}
+    assert schedule.apply_reset_signals([e], state, {}, now=5000.0) == state
