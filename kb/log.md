@@ -11589,3 +11589,39 @@ the right move but never built. `design-context-introspection.md` gained a
 matching addendum; account-dominion `ledger/decisions.md` has the mirrored
 entry. 1386 tests pass (no behavior changed, prompt text only). Branch:
 brr/introspection-standing-invariant-2026-07-07.
+
+## [2026-07-08] fix | spawn: working-directory isolation gap named, planned, and closed
+
+Same-thread follow-up to #277: "name and plan the gap extensively first,
+because otherwise you may drift from the original vision as you implement
+it," referring back to the 2026-07-07 exchange where the maintainer
+corrected a too-forgiving read of `spawn:` ("owning, not necessarily
+waiting") and asked directly what's still missing for spawning to behave
+as agreed. Wrote `kb/plan-spawn-gap-closure.md` first, restating the
+agreed vision from the actual conversation text (not paraphrased) and
+naming both remaining gaps with file:line coordinates before touching
+code.
+
+Gap 1 (working-directory isolation) was clear and reversible, so fixed in
+the same pass: `_queue_spawn_request` (`src/brr/daemon.py:3000`) now sets
+`meta["environment"] = "worktree"` unconditionally on every queued spawn
+event, forcing an isolated cwd regardless of the repo's own
+`environment=host` config — closing the live collision confirmed
+2026-07-07 (run-260707-1321-auhp) where a spawned child's `git checkout
+-b` executed in the same working directory as its still-running parent's
+own shell. Leans on `run.py::_event_environment_policy`'s existing
+precedence (an event's own `environment` key already outranks the repo
+config default; `test_event_environment_overrides_config` already covers
+that mechanism generically) — additive, no dispatch-loop change.
+`tests/test_daemon.py::test_drain_outbox_queues_spawn_child` now pins
+`environment: worktree` on the queued event. Full suite green (1386).
+
+Gap 2 (`reload_requested` gating spawn dispatch together with re-exec,
+`src/brr/daemon.py` `start()` ~4730/4752/4764,
+`src/brr/dev_reload.py:46`) is a genuine fork between two named shapes
+(split the flag narrowly vs. accept the coupling as a known dogfooding
+cost) — recommended but not decided, per Reconsider's "clear/reversible
+⇒ act, genuine fork ⇒ name and wait" split. Left for the maintainer's nod
+since it touches a live dispatch-loop invariant single-flight itself
+depends on. Detail: `kb/plan-spawn-gap-closure.md`. Branch:
+brr/spawn-worktree-isolation-2026-07-08.
