@@ -12,6 +12,7 @@ a background thread.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shlex
 import shutil
@@ -690,6 +691,67 @@ def _build_cmd(
     return [runner_name, *extra, prompt]
 
 
+# A single argv string longer than this trips Linux's ``MAX_ARG_STRLEN`` --
+# a *per-argument* cap of 128 KiB fixed since kernel 2.6.23, independent of
+# (and much smaller than) the overall ``ARG_MAX`` (~2 MiB) that ``getconf
+# ARG_MAX`` reports. Observed in production 2026-07-07: a director-tick
+# wake's assembled prompt reached 176 KB (the growing self-inject playbook +
+# kb recent-activity + decision ledger), and ``execve`` rejected it outright
+# with ``OSError: [Errno 7] Argument list too long`` before brr ever started
+# the subprocess -- the whole thought was lost, not just slowed down. This
+# threshold sits comfortably under the 131072-byte kernel cap so growth
+# between checks doesn't re-trip it.
+_MAX_PROMPT_ARG_BYTES = 100_000
+
+
+def _spill_oversized_argv(cmd: list[str], repo_root: Path | None) -> list[str]:
+    """Replace any argv element too large for ``execve`` with a file pointer.
+
+    Every Tier-0 runner (claude, codex, gemini) is a coding agent with
+    baseline file-read capability, so trading one oversized argv string for
+    a short pointer plus one Read call costs a turn, not a redesign -- and
+    it needs no CLI-specific stdin behaviour (codex documents reading a
+    piped prompt from stdin; claude does not, and ``stdin=subprocess.DEVNULL``
+    is otherwise load-bearing to keep codex's own stdin-read path from
+    hanging on an open-but-silent fd -- see
+    ``test_invoke_runner_passes_configured_timeout_to_communicate``).
+    Spilling to disk sidesteps both: the file is on disk before the
+    subprocess ever starts, this function never touches ``stdin``.
+    """
+    adjusted: list[str] = []
+    for part in cmd:
+        byte_len = len(part.encode("utf-8"))
+        if byte_len <= _MAX_PROMPT_ARG_BYTES:
+            adjusted.append(part)
+            continue
+        path = _spill_prompt_to_file(part, repo_root)
+        adjusted.append(_prompt_pointer_text(path, byte_len))
+    return adjusted
+
+
+def _spill_prompt_to_file(text: str, repo_root: Path | None) -> Path:
+    """Persist oversized argv text to disk under the shared ``.brr`` dir."""
+    from . import gitops
+
+    root = repo_root or Path.cwd()
+    overflow_dir = gitops.shared_brr_dir(root) / "prompt-overflow"
+    overflow_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+    path = overflow_dir / f"{int(time.time())}-{digest}.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _prompt_pointer_text(path: Path, byte_len: int) -> str:
+    return (
+        f"Your full task prompt is {byte_len} bytes -- too large to pass as a "
+        "command-line argument (Linux caps a single argv string at 128 KiB). "
+        "It has been written to disk instead. Before doing anything else, "
+        "read the complete prompt from this exact path and follow it exactly "
+        f"as if it had been given to you directly:\n{path}"
+    )
+
+
 def _write_response_file(response_path: str, stdout: str) -> None:
     """Persist the runner's stdout as the captured response file.
 
@@ -813,6 +875,7 @@ def invoke_runner(
         invocation.repo_root,
         extra_args=invocation.extra_runner_args,
     )
+    cmd = _spill_oversized_argv(cmd, invocation.repo_root)
     timeout = invocation.timeout_seconds or runner_timeout(cfg)
     # Always start from a cleaned base env so a parent agent session's
     # safe-mode / identity vars never leak into the runner (and silently
