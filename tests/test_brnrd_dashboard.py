@@ -111,6 +111,7 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
                 "shell": "claude",
                 "status": "known",
                 "windows": [{"label": "5h window", "used": None, "limit": None, "percent": 61.0}],
+                "credits": None,
             }
         ]
 
@@ -118,6 +119,57 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
         db.commit()
         stale = _quota_views(db, [repo], runner_stats=[])
         assert stale[0]["status"] == "stale"
+
+
+def test_dashboard_quota_staleness_measures_scrape_age_not_publish_cadence():
+    """The 'lying Claude usage panel' bug (2026-07-07): a daemon that keeps
+    publishing every ~25-30s makes `quota_updated_at` (the publish time)
+    always fresh, even when the underlying Claude `/usage` scrape a shell
+    carries has gone stale for hours because no Claude run has been active
+    to refresh it. Staleness must be measured against the shell's own
+    `updated_at`, not the publish timestamp."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd_web.activity_dashboard import _quota_views
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.get(Repo, pid)
+        stale_scrape_at = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        daemon = Daemon(
+            id="dmn-quota-2",
+            repo_id=pid,
+            token_id="tok-quota-2",
+            daemon_name="laptop",
+            quota_json=json.dumps(
+                [
+                    {
+                        "shell": "claude",
+                        "status": "known",
+                        "updated_at": stale_scrape_at,
+                        "windows": [
+                            {"label": "5h window", "used": None, "limit": None, "percent": 61.0}
+                        ],
+                    }
+                ]
+            ),
+            # The daemon just published this instant — the bug this guards
+            # is exactly that a fresh publish timestamp used to be treated
+            # as proof the *data* was fresh too.
+            quota_updated_at=datetime.now(timezone.utc),
+        )
+        db.add(daemon)
+        db.commit()
+
+        views = _quota_views(db, [repo], runner_stats=[])
+        assert views[0]["status"] == "stale"
 
 
 def test_dashboard_quota_api_requires_login():

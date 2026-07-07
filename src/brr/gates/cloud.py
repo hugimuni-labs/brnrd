@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import requests
 
-from .. import claude_usage, codex_status, gitops, presence, protocol, run_ledger, run_progress, runner_quota
+from .. import claude_status, claude_usage, codex_status, gitops, presence, protocol, run_ledger, run_progress, runner_quota
 from .. import dominion, schedule as schedule_mod
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -530,6 +530,11 @@ def _codex_quota_shell() -> dict[str, Any] | None:
     return {
         "shell": "codex",
         "status": "known",
+        # Codex's rollout read is live every loop tick (no idle-window gap
+        # the way Claude's cached PTY scrape has), but the scrape still
+        # carries its own timestamp — forward it so the dashboard measures
+        # staleness off the same clock for both shells.
+        "updated_at": levels.get("updated_at"),
         "windows": [
             _quota_window("5h window", primary, resets_at=quota.get("primary_resets_at")),
             _quota_window("weekly", secondary, resets_at=quota.get("secondary_resets_at")),
@@ -553,6 +558,15 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
     return {
         "shell": "claude",
         "status": "known",
+        # The scrape's own capture time, not "now" — this snapshot is only
+        # refreshed while a Claude run is actively heartbeating (no idle
+        # background probe), so it can be hours old. Forwarding it lets the
+        # dashboard flag staleness off the data's real age instead of the
+        # daemon's publish cadence (which is fresh every ~25-30s regardless
+        # of whether the underlying scrape ever changed) — see
+        # `_claude_credits_shell` docstring and kb/design-dashboard-live-
+        # surface.md "the lying Claude usage panel" for the bug this closes.
+        "updated_at": levels.get("updated_at"),
         "windows": [
             _quota_window(
                 "5h window", session_pct, levels.get("session_reset"), levels.get("session_resets_at")
@@ -561,6 +575,36 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
                 "weekly", week_pct, levels.get("week_reset"), levels.get("week_resets_at")
             ),
         ],
+        "credits": _claude_credits_block(brr_dir),
+    }
+
+
+def _claude_credits_block(brr_dir: Path) -> dict[str, Any] | None:
+    """Real per-run USD spend from Claude's headless result JSON, when proven.
+
+    Under normal subscription billing this run-scoped ``total_cost_usd`` is
+    an internal accounting figure, not a real charge. It becomes real dollars
+    the moment the subscription's 5h/weekly window is exhausted and Anthropic
+    falls the account through to metered credits (confirmed live 2026-07-07:
+    a maintainer-observed run kept working straight through an exhausted 5h
+    window, billed ~$1 in credits) — so this is not a projection, it is the
+    same terminal-JSON field :mod:`brr.claude_status` already collects for
+    the boot-prompt ``spend`` facet, just never published to the dashboard
+    before now. ``None`` when no run has ever produced one (cold cache, or a
+    Codex-only daemon).
+    """
+    outbox_dir = runner_quota.latest_claude_spend_outbox_dir(brr_dir)
+    levels = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
+    spend = levels.get("spend") if isinstance(levels, dict) else None
+    if not isinstance(spend, dict):
+        return None
+    total = spend.get("total_cost_usd")
+    if total is None:
+        return None
+    return {
+        "total_cost_usd": total,
+        "summary": spend.get("summary"),
+        "updated_at": levels.get("updated_at"),
     }
 
 
