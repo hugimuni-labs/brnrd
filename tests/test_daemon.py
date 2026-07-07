@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from brr import daemon, envs, presence, protocol
+from brr import schedule as schedule_mod
 from brr.run import Run
 from brr.runner import RunnerResult
 
@@ -1047,6 +1048,10 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
     # gate doesn't nag it about a dispatch it just made on purpose.
     assert spawned["respawned_from_event"] == event_id
     assert spawned["respawned_by_run"] == "run-parent"
+    # A `reset_on: spawn` schedule entry (e.g. the director tick) reads
+    # this signal back on its next tick to push its own cooldown out,
+    # rather than firing redundantly right after this concurrent dispatch.
+    assert schedule_mod.load_signals(brr_dir).get("spawn") is not None
 
 
 def test_drain_outbox_spawn_refuses_nested_from_worker_run(tmp_path):
@@ -1122,6 +1127,49 @@ def test_notify_spawn_parent_noop_without_parent_linkage(tmp_path):
     task = Run(id="run-solo", event_id="evt-solo", body="", source="telegram")
 
     daemon._notify_spawn_parent(inbox, task)
+
+    assert protocol.list_pending(inbox) == []
+
+
+def test_notify_spawn_parent_of_crash_lands_pending_event(tmp_path):
+    """A spawn that crashes before returning a Run must still notify its
+    parent — not just a clean finish.
+
+    Bug found live 2026-07-07: the main loop's reap step only called
+    ``_notify_spawn_parent`` in the success branch of
+    ``current_spawn.result()``; a worker future that raised (a runner
+    launch failure, an unhandled exception) left the parent with no signal
+    the spawn ever existed, contradicting the "completion always lands
+    back" design. This exercises the crash-path notifier built straight
+    from the raw inbox event dict (a crashed worker never produces the
+    richer ``Run`` object the clean-finish path reads from).
+    """
+    inbox = tmp_path / ".brr" / "inbox"
+    event = {
+        "id": "evt-child",
+        "spawn_parent_run_id": "run-parent",
+        "spawn_parent_conversation_key": "telegram:42:",
+    }
+
+    daemon._notify_spawn_parent_of_crash(inbox, event, RuntimeError("boom"))
+
+    pending = protocol.list_pending(inbox)
+    assert len(pending) == 1
+    note = pending[0]
+    assert note["conversation_key"] == "telegram:42:"
+    assert note["spawn_parent_run_id"] == "run-parent"
+    assert note["spawn_failed"] is True
+    assert "evt-child" in note["body"]
+    assert "boom" in note["body"]
+    # Not excluded from the parent's own attention gate, same as a clean finish.
+    assert daemon._pending_events_for_agent(inbox, "some-other-event")
+
+
+def test_notify_spawn_parent_of_crash_noop_without_parent_linkage(tmp_path):
+    inbox = tmp_path / ".brr" / "inbox"
+    event = {"id": "evt-solo"}
+
+    daemon._notify_spawn_parent_of_crash(inbox, event, RuntimeError("boom"))
 
     assert protocol.list_pending(inbox) == []
 
