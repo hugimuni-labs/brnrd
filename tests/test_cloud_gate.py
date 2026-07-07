@@ -425,7 +425,8 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
 
     presence.register(
         brr_dir, kind="daemon", stream="telegram:155783668:",
-        run_id="run-live-test", repo_label="Gurio/brr", pid=os.getpid(),
+        label="Add live run labels", run_id="run-live-test",
+        repo_label="Gurio/brr", pid=os.getpid(),
     )
 
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
@@ -436,6 +437,7 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
         runs = json_mod.loads(daemon.live_runs_json)
     assert len(runs) == 1
     assert runs[0]["run_id"] == "run-live-test"
+    assert runs[0]["label"] == "Add live run labels"
     assert runs[0]["repo_label"] == "Gurio/brr"
     assert runs[0]["kind"] == "daemon"
 

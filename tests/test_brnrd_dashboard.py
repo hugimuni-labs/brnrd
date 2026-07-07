@@ -205,7 +205,7 @@ def test_dashboard_live_runs_api_dedupes_across_repo_registrations():
     pid_b = _create_repo(client, token, repo="Gurio/other")
 
     now = datetime.now(timezone.utc)
-    run_row = [{"id": "pres-1", "kind": "daemon", "stream": "telegram:x:", "run_id": "run-a", "repo_label": "Gurio/brr", "started_at": "2026-07-06T23:00:00Z", "last_seen": "2026-07-06T23:05:00Z"}]
+    run_row = [{"id": "pres-1", "kind": "daemon", "stream": "telegram:x:", "label": "Add live run labels", "run_id": "run-a", "repo_label": "Gurio/brr", "started_at": "2026-07-06T23:00:00Z", "last_seen": "2026-07-06T23:05:00Z"}]
     with client.app.state.SessionLocal() as db:
         older = Daemon(
             id="dmn-live-a", repo_id=pid_a, token_id="tok-live-a", daemon_name="laptop",
@@ -222,6 +222,7 @@ def test_dashboard_live_runs_api_dedupes_across_repo_registrations():
         view = _live_runs_views(db, repos)
     assert len(view["runs"]) == 1
     assert view["runs"][0]["run_id"] == "run-a"
+    assert view["runs"][0]["label"] == "Add live run labels"
     assert view["stale"] is False
 
 
@@ -239,7 +240,7 @@ def test_dashboard_live_runs_api_returns_runs():
         daemon = Daemon(
             id="dmn-live-c", repo_id=pid, token_id="tok-live-c", daemon_name="laptop",
             live_runs_json=json.dumps(
-                [{"id": "pres-2", "kind": "daemon", "stream": "telegram:x:", "run_id": "run-b", "repo_label": "Gurio/brr", "started_at": "2026-07-06T23:00:00Z", "last_seen": "2026-07-06T23:05:00Z"}]
+                [{"id": "pres-2", "kind": "daemon", "stream": "telegram:x:", "label": "Ship dashboard slice", "run_id": "run-b", "repo_label": "Gurio/brr", "started_at": "2026-07-06T23:00:00Z", "last_seen": "2026-07-06T23:05:00Z"}]
             ),
             live_runs_updated_at=datetime.now(timezone.utc),
         )
@@ -250,6 +251,7 @@ def test_dashboard_live_runs_api_returns_runs():
     assert r.status_code == 200
     body = r.json()
     assert body["runs"][0]["run_id"] == "run-b"
+    assert body["runs"][0]["label"] == "Ship dashboard slice"
     assert body["stale"] is False
 
 
