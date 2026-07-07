@@ -576,6 +576,90 @@ class TestCommandBuilding:
         assert cmd == ["mock", "--flag", "do work"]
 
 
+class TestOversizedPromptSpill:
+    """A single argv string over Linux's 128 KiB MAX_ARG_STRLEN crashes
+    ``execve`` with ``OSError: [Errno 7] Argument list too long`` before brr
+    ever starts the subprocess -- observed in production 2026-07-07 when a
+    director-tick wake's assembled prompt reached 176 KB. ``invoke_runner``
+    must spill any oversized argv element to disk and pass a short pointer
+    instead, never touch ``stdin`` (that fd is deliberately muted -- see
+    ``test_invoke_runner_passes_configured_timeout_to_communicate``), and
+    leave small prompts byte-for-byte unchanged on the command line.
+    """
+
+    def test_small_prompt_passed_through_unchanged(self, tmp_path, monkeypatch):
+        captured = {}
+
+        class _FakeProc:
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                return ("ok\n", "")
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _FakeProc()
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        (tmp_path / ".brr").mkdir()
+        invocation = RunnerInvocation(
+            kind="executor",
+            label="small",
+            prompt="fix it",
+            cwd=tmp_path,
+            repo_root=tmp_path,
+        )
+
+        result = invoke_runner("mock", invocation)
+
+        assert result.ok
+        assert captured["cmd"][-1] == "fix it"
+        assert not (tmp_path / ".brr" / "prompt-overflow").exists()
+
+    def test_oversized_prompt_spilled_to_file_and_pointer_passed(
+        self, tmp_path, monkeypatch,
+    ):
+        captured = {}
+
+        class _FakeProc:
+            returncode = 0
+
+            def communicate(self, timeout=None):
+                return ("ok\n", "")
+
+        def _fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["stdin"] = kwargs.get("stdin")
+            return _FakeProc()
+
+        monkeypatch.setattr(runner_mod.subprocess, "Popen", _fake_popen)
+        (tmp_path / ".brr").mkdir()
+        huge_prompt = "x" * 150_000
+        invocation = RunnerInvocation(
+            kind="executor",
+            label="huge",
+            prompt=huge_prompt,
+            cwd=tmp_path,
+            repo_root=tmp_path,
+        )
+
+        result = invoke_runner("mock", invocation)
+
+        assert result.ok
+        # stdin stays muted -- the fix must never rely on piping the prompt.
+        assert captured["stdin"] == subprocess.DEVNULL
+        pointer = captured["cmd"][-1]
+        assert huge_prompt not in pointer
+        assert len(pointer.encode("utf-8")) < 1_000
+        assert "150000 bytes" in pointer
+
+        overflow_dir = tmp_path / ".brr" / "prompt-overflow"
+        spilled = list(overflow_dir.glob("*.md"))
+        assert len(spilled) == 1
+        assert spilled[0].read_text(encoding="utf-8") == huge_prompt
+        assert str(spilled[0]) in pointer
+
+
 class TestInvocationTracing:
     def test_invoke_runner_writes_stdout_to_response_path(self, tmp_path):
         repo_root = tmp_path
