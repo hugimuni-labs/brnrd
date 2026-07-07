@@ -1,20 +1,15 @@
 @import 'tailwindcss';
 
-/* Root canvas — every component in this app (WindowTrack/LiveRuns/
-   PRReviewQueue/the quota cards) is built against slate-900/text-slate-100,
-   i.e. it assumes a dark page. Nothing ever set that at the document level
-   (found live 2026-07-07 by screenshotting https://brnrd.dev/: near-white
-   page, near-invisible pale-gray-on-white text, translucent cards that
-   read as blank). `color-scheme: dark` also fixes native form controls
-   (the login link's browser chrome) matching the same canvas. */
+/* Root canvas — 2026-07-07 amber/ice pass: warm void + parchment text,
+   with component chrome in stone and stale/link affordances in sky. */
 html {
 	color-scheme: dark;
 }
 
 body {
 	min-height: 100%;
-	background-color: #020617; /* slate-950 */
-	color: #f1f5f9; /* slate-100 */
+	background-color: #0c0906;
+	color: #f3e8d8;
 }
 
 /* Loom slice 2 (kb/plan-loom-realtime-build.md): the live-runs lane's
