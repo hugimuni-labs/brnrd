@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 import requests
 
-from .. import claude_usage, codex_status, gitops, protocol, run_progress, runner_quota
+from .. import claude_usage, codex_status, gitops, presence, protocol, run_progress, runner_quota
 from .. import dominion, schedule as schedule_mod
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -210,6 +210,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     _publish_activity(brr_dir, inbox_dir, state)
     _publish_plans(brr_dir, state)
     _publish_quota(brr_dir, state)
+    _publish_live_runs(brr_dir, state)
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:
@@ -535,6 +536,50 @@ def _publish_quota(brr_dir: Path, state: dict) -> None:
         )
     except Exception as e:
         print(f"[brr:cloud] quota publish failed: {e}")
+
+
+def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
+    """This daemon's live/coexisting-runs snapshot (#258).
+
+    Reads the local presence registry (``src/brr/presence.py``) — every
+    daemon-dispatched thought (and any ad-hoc session) already registers
+    and heartbeats there, so this is a publish step over data that already
+    exists, the same shape as Activity/Plans/Quota (#237). No new
+    collection mechanism, just the account-scoped visibility those three
+    don't give: "what is my daemon doing right now, across every repo it
+    touches" (`kb/design-dashboard-live-surface.md` §"Reconsidered
+    2026-07-06").
+    """
+    out: list[dict[str, Any]] = []
+    for entry in presence.list_active(brr_dir):
+        out.append(
+            {
+                "id": str(entry.get("id") or ""),
+                "kind": str(entry.get("kind") or ""),
+                "stream": str(entry.get("stream") or ""),
+                "run_id": str(entry.get("run_id") or ""),
+                "repo_label": str(entry.get("repo_label") or ""),
+                "started_at": _iso_from_epoch(entry.get("started_at")),
+                "last_seen": _iso_from_epoch(entry.get("last_seen")),
+            }
+        )
+    return out
+
+
+def _publish_live_runs(brr_dir: Path, state: dict) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    try:
+        _request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/live-runs",
+            token=state["token"],
+            json={"runs": _live_runs_snapshot(brr_dir)},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] live-runs publish failed: {e}")
 
 
 class _CloudCardTransport:

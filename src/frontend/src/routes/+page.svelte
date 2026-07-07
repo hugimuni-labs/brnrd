@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import WindowTrack from '$lib/WindowTrack.svelte';
+	import LiveRuns from '$lib/LiveRuns.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
+	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -15,6 +17,10 @@
 	let error = $state<string | null>(null);
 	let unauthenticated = $state(false);
 	let now = $state(Date.now());
+
+	let liveRuns = $state<LiveRun[] | null>(null);
+	let liveRunsStale = $state(false);
+	let liveRunsError = $state<string | null>(null);
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
@@ -31,6 +37,18 @@
 				unauthenticated = true;
 			} else {
 				error = e instanceof Error ? e.message : 'quota fetch failed';
+			}
+		}
+		try {
+			const live = await fetchLiveRuns();
+			liveRuns = live.runs;
+			liveRunsStale = live.stale;
+			liveRunsError = null;
+		} catch (e) {
+			// A 401 here is redundant with the quota fetch's own unauthenticated
+			// state (same session cookie) — only surface a *different* failure.
+			if (!(e instanceof LiveRunsAuthError)) {
+				liveRunsError = e instanceof Error ? e.message : 'live-runs fetch failed';
 			}
 		}
 	}
@@ -81,6 +99,21 @@
 					daemon report as of {new Date(generatedAt).toLocaleTimeString()}
 				</p>
 			{/if}
+		{/if}
+	</div>
+
+	<h2 class="mt-8 text-lg font-semibold text-slate-100">live runs</h2>
+	<p class="mt-1 text-sm text-slate-400">
+		What the daemon is doing right now, across every repo it touches — slice 3, the account-scoped
+		view <code>coexisting-runs=unimplemented</code> named as a gap.
+	</p>
+	<div class="mt-3">
+		{#if liveRunsError}
+			<p class="text-sm text-red-400">{liveRunsError}</p>
+		{:else if liveRuns === null}
+			<p class="text-sm text-slate-500">Loading…</p>
+		{:else}
+			<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
 		{/if}
 	</div>
 </div>
