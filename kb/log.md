@@ -11412,3 +11412,56 @@ captured in that page's new "Reference check: psyche.network" section.
 Detail: `kb/plan-loom-realtime-build.md`, `kb/design-brand-visual-language.md`
 §"Reference check: psyche.network". Branch: not yet opened as of this
 entry — see `plans/Gurio__brr/active.md`.
+
+## [2026-07-07] fix | Dark-canvas root bug found + fixed; loom slice 2 shipped (#270, PR #273)
+
+Same-thread follow-up to the earlier "loom realtime slices 0/1" run:
+asked to check screenshots of the live dashboard to see "how wrong it is
+on how many various levels." No telegram-photo ingestion exists anywhere
+in `src/brr` (checked directly — no `photo`/`file_id`/download code
+path), so the maintainer's own screenshots weren't reachable this run.
+Screenshotted `https://brnrd.dev/` directly instead (Playwright, installed
+fresh this run) and found a real, foundational bug: every dashboard
+component (`WindowTrack`/`LiveRuns`/`PRReviewQueue`) is built against
+`bg-slate-900`/`text-slate-100` — i.e. assumes a dark page — but nothing
+in `src/frontend` ever sets a page-level background (`grep` for
+`bg-slate-950`/`min-h-screen` across the whole frontend source: zero
+hits). Net effect in production: a near-white page, near-invisible pale
+text, translucent cards reading as blank — almost certainly the bulk of
+"how wrong it looks." Fixed in `layout.css` (`html { color-scheme: dark }`
++ explicit `body` background/text color).
+
+Shipped slice 2 of `kb/plan-loom-realtime-build.md` (#270) on the
+corrected canvas: `LiveRuns.svelte` re-rendered as a card grid instead of
+a plain list. Checked the issue's own "queued/running/done positions"
+wording against the real data before building it blind:
+`presence.list_active` only ever holds active entries (registered on
+start, deregistered on finish), so neither "queued" nor "done" is
+representable without a new backend collector — deliberately not added,
+named as a gap instead of silently reinterpreted or silently expanded
+past the plan's zero-new-backend-data scope. What shipped: a real second
+state derived from data already shipped in slices 0/1 (`last_seen`
+freshness) — `running` vs. `stalling` — plus an indeterminate scanning
+activity bar (no known run duration to bind a real percent to, so motion
+without a fabricated fill). Same three-tier status palette as
+`WindowTrack`, not a new one. Verified visually with mocked API responses
+at desktop and mobile viewports before/after the layout.css fix, not just
+build-clean.
+
+Also sharpened the psyche.network reference (`design-brand-visual-
+language.md`) per direct same-thread follow-up: it's a container/element
+reference only ("very superficial"), not a palette match at all —
+substance, color, and composition should stay this project's own
+hearth/frost direction, not started as an actual recolor this run and
+named as the next open visual-language step.
+
+Build/lint/`svelte-check` clean, no backend touched. Not verified against
+the live deployed site post-merge: the `upsun` CLI session had expired
+mid-run and couldn't be re-authenticated headlessly (SSO login), unlike
+the prior two production-verification passes in this codebase's history
+— named rather than silently skipped.
+
+Detail: `kb/plan-loom-realtime-build.md` §Slice 1.5/§Slice 2,
+`kb/design-brand-visual-language.md` §"Reference check: psyche.network".
+Branch: brr/loom-slice2-live-runs-cards-2026-07-07 (merged, PR #273,
+`e11bafb`).
