@@ -119,6 +119,7 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
         db.commit()
         stale = _quota_views(db, [repo], runner_stats=[])
         assert stale[0]["status"] == "stale"
+        assert stale[0]["windows"][0]["percent"] is None
 
 
 def test_dashboard_quota_staleness_measures_scrape_age_not_publish_cadence():
@@ -170,6 +171,7 @@ def test_dashboard_quota_staleness_measures_scrape_age_not_publish_cadence():
 
         views = _quota_views(db, [repo], runner_stats=[])
         assert views[0]["status"] == "stale"
+        assert views[0]["windows"][0]["percent"] is None
 
 
 def test_dashboard_quota_api_requires_login():

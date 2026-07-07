@@ -196,17 +196,27 @@ class QuotaWindowIn(BaseModel):
 
 
 class QuotaCreditsIn(BaseModel):
-    """Real per-run USD spend proven by a Shell's own result JSON (not a projection).
+    """Shell credit evidence: account credit balance plus proven per-run spend.
 
-    Populated once a Shell's headless run reports ``total_cost_usd`` — see
-    ``src/brr/gates/cloud.py::_claude_credits_block`` for the collector and
-    why this stopped being a $0 accounting curiosity once a subscription
-    window is exhausted and the account falls through to metered credits.
+    Claude's interactive ``/usage`` panel can expose usage credits (amount
+    spent / cap / reset). Claude's headless result JSON separately reports
+    ``total_cost_usd`` for a completed run; that becomes a real charge once a
+    subscription window is exhausted and the account falls through to metered
+    credits. See ``src/brr/gates/cloud.py::_claude_credits_block``.
     """
 
     total_cost_usd: float | None = None
     summary: str | None = None
     updated_at: str | None = None
+    enabled: bool | None = None
+    used_percentage: float | None = None
+    remaining_percentage: float | None = None
+    spent_amount: float | None = None
+    limit_amount: float | None = None
+    currency: str | None = None
+    reset: str | None = None
+    resets_at: float | None = None
+    run_spend_summary: str | None = None
 
 
 class QuotaShellIn(BaseModel):

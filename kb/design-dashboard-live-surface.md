@@ -702,12 +702,23 @@ not a new status color. No credits collector exists for Codex (no
 comparable metered-overage behavior observed there yet), so its shell
 simply never carries the key — absent, not a fake zero.
 
-**Not built:** no idle-time background refresh of the Claude `/usage`
-scrape — the underlying data can still go stale for hours between runs,
-the dashboard now just says so honestly instead of miscasting the daemon's
-publish cadence as data freshness. If that gap matters enough to close,
-the fix is a periodic scheduled probe independent of an active run, not
-part of this pass.
+**Follow-up, same date: idle refresh + account credits.** The stale badge
+alone was still too weak: a stale Claude row could visually paint old 5h /
+weekly percentages as if they were current. The dashboard publisher now
+refreshes the cached Claude `/usage` PTY scrape on a bounded idle cadence
+(`cloud.py::_CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS`, 240s) shorter than the
+web stale threshold, while the run-heartbeat collector stays on the faster
+quota-only path. If a refresh still fails or goes stale, `_quota_views`
+keeps the shell row visible but clears numeric window values so the bars
+render as `unknown`, not false headroom. The same pass fixed the parser
+edge seen live where Claude's screen-reader output glued `Esc to cancel`
+to `Current session`, and added a slow-path `wait_for_credits` capture so
+Claude's `Usage credits` section (`spent / cap / reset`) reaches the same
+`credits` block. A live probe on 2026-07-07 read Claude credits as 79%
+left, EUR 8.69 / EUR 40.00 spent, reset Aug 1 (Europe/Berlin). Codex's
+current rollout payload has a `rate_limits.credits` slot, but it was
+`null` on this account/session; the dashboard does not display a fabricated
+zero until Codex supplies a non-null balance.
 
 Also fixed in the same run (a same-thread follow-up, not part of the
 credits ask but landed on the same branch/PR): `remote_scm` stayed

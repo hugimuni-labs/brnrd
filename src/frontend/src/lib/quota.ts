@@ -24,6 +24,15 @@ export interface QuotaCredits {
 	total_cost_usd: number | null;
 	summary: string | null;
 	updated_at: string | null;
+	enabled?: boolean | null;
+	used_percentage?: number | null;
+	remaining_percentage?: number | null;
+	spent_amount?: number | null;
+	limit_amount?: number | null;
+	currency?: string | null;
+	reset?: string | null;
+	resets_at?: number | null;
+	run_spend_summary?: string | null;
 }
 
 export interface QuotaShell {

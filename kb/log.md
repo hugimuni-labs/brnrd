@@ -11526,3 +11526,27 @@ line screenshot-verified with a mocked dashboard API.
 Detail: `kb/design-dashboard-live-surface.md` §"Shipped (2026-07-07): the
 'lying Claude usage panel' + credits exposure". Branch:
 brr/claude-credits-and-usage-panel-2026-07-07.
+
+## [2026-07-07] fix | Claude quota idle refresh + usage-credit balance
+
+Follow-up after PR #275 merged: the Claude panel was correct while a
+Claude run was active, then visually lied again once idle because the
+daemon still only scavenged the latest run cache. The previous fix made
+staleness measurable; this one closes the idle gap by having the cloud
+publisher refresh the cached Claude `/usage` scrape every 240s (shorter
+than the dashboard's stale threshold) while keeping run-heartbeat probes on
+the fast quota-only path.
+
+Also fixed two parser/display edges found by a live probe: Claude's
+screen-reader output can glue `Esc to cancel` to `Current session`, hiding
+the 5h bucket, and its slower `Usage credits` section was ignored. The
+collector now parses the credits balance (`spent / cap / reset`) and the
+dashboard shows a credits summary even without a per-run `total_cost_usd`.
+Stale quota rows keep their badge but clear numeric bar values so old
+percentages render as `unknown`, not current headroom. Codex's current
+rollout payload carries `rate_limits.credits: null`; recorded as present
+but unavailable, not displayed as a fake zero.
+
+Verification: related Python tests (61) pass; frontend lint/check/build
+clean; live Claude probe read current quota and usage credits. Branch:
+brr/claude-quota-idle-freshness-2026-07-07.
