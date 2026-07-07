@@ -18,12 +18,14 @@ def test_register_then_list(tmp_path):
         brr,
         kind="daemon",
         stream="telegram:1:",
+        label="Investigate live-runs labels",
         run_id="t1",
         repo_label="Gurio/brr",
     )
     assert entry["id"]
     assert entry["kind"] == "daemon"
     assert entry["stream"] == "telegram:1:"
+    assert entry["label"] == "Investigate live-runs labels"
     assert entry["run_id"] == "t1"
     assert entry["repo_label"] == "Gurio/brr"
     assert entry["pid"] > 0

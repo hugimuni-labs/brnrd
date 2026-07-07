@@ -452,7 +452,9 @@ def test_run_worker_marks_error_on_env_setup_failure(tmp_path, monkeypatch):
 
 def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
-    event = make_event(tmp_path, eid="evt-p1")
+    event = make_event(
+        tmp_path, eid="evt-p1", summary="Add labels to live runs",
+    )
     _stub_env_isolated(monkeypatch, tmp_path)
     monkeypatch.setattr(daemon.runner, "resolve_runner", lambda _root: "codex")
     monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
@@ -471,7 +473,7 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
         # Mid-run: this thought is recorded as present on its stream, so a
         # concurrent session would see it and could avoid colliding.
         active = presence.list_active(brr_dir)
-        seen["during"] = [(e["kind"], e["run_id"]) for e in active]
+        seen["during"] = [(e["kind"], e["run_id"], e["label"]) for e in active]
         Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
         Path(invocation.response_path).write_text("ok\n", encoding="utf-8")
         return RunnerResult(
@@ -485,7 +487,7 @@ def test_presence_registered_during_run_and_cleared_after(tmp_path, monkeypatch)
         event, tmp_path, brr_dir / "responses", {}, 0,
     )
 
-    assert seen["during"] == [("daemon", task.id)]
+    assert seen["during"] == [("daemon", task.id, "Add labels to live runs")]
     # The thought is no longer awake → its presence entry is gone.
     assert presence.list_active(brr_dir) == []
 
