@@ -11550,3 +11550,42 @@ but unavailable, not displayed as a fake zero.
 Verification: related Python tests (61) pass; frontend lint/check/build
 clean; live Claude probe read current quota and usage credits. Branch:
 brr/claude-quota-idle-freshness-2026-07-07.
+
+## [2026-07-07] prompt | Reconsider's scope widened to context, not just task
+
+A same-thread proposal (from a run that crashed 1 attempt in, 49,491 tokens
+spent, before acting) argued that root-cause-first, dig-instead-of-assume
+behavior shows up reliably only when something explicit invites it — and
+since the standing prompts are soft/optional by design, a trimmed form of
+the opt-in `introspect.enabled` block (`introspection.md`, "Look at it")
+should be promoted into the standing playbook. Asked to sit with the whole
+assembled boot context directly and re-derive the verdict rather than trust
+the interrupted run's framing secondhand.
+
+Two checks changed the answer's shape. First, the premise that this is "a
+toggle, not standing content" doesn't hold for this repo: `.brr/config`'s
+`introspect.enabled` has read `True` continuously since the mode shipped
+2026-06-09 (no toggle-off entry anywhere in this log) — a month of the full
+invitation riding every wake, over the same stretch the maintainer
+separately flagged as feeling *less* proactive, not more. That's evidence
+against the literal causal claim, not for it: if explicit textual invitation
+reliably produced the behavior, a month of continuous invitation should have
+produced it continuously too. Second, `run.md` § "When the task asks you to
+reconsider" is already a standing, ungated "push back on the shape, judge
+the substance" invitation — it was never dev-mode-gated. Its real gap was
+scope, not existence: it triggers off the *task*'s shape, not the *context*
+that framed it.
+
+Given both, promoting `introspection.md` wholesale into standing prompts
+would have re-paid the "constant tax on every wake, every brr repo" cost
+`design-context-introspection.md` §"Why default-off" already reasoned
+against, on weak evidence that the tax reliably buys the behavior, while
+duplicating a mechanism that already exists aimed at the wrong scope.
+Shipped instead: one clause on `run.md`'s existing Reconsider list (item 4),
+widening it from "the task's shape" to "the task's shape *or* the assembled
+context that framed it" — the "salience-gated nudge, not an always-injected
+block" shape that page's own "Why default-off" section had already named as
+the right move but never built. `design-context-introspection.md` gained a
+matching addendum; account-dominion `ledger/decisions.md` has the mirrored
+entry. 1386 tests pass (no behavior changed, prompt text only). Branch:
+brr/introspection-standing-invariant-2026-07-07.

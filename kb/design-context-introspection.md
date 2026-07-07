@@ -91,6 +91,55 @@ Two gaps existed between `brr agent inject` and what a real wake received:
    survives success.  The path is pre-announced in `context.md`'s Runtime
    Files section.
 
+## Addendum (2026-07-07): a trimmed standing form, not a promoted block
+
+A same-thread proposal argued the block's own value (dig instead of assume,
+push back instead of comply) shows up "reliably only when something explicit
+invites it," since the standing prompts (`daemon-substrate.md`/
+`dominion-playbook.md`) are deliberately soft ("optional, not receipts
+theater," "ask when genuinely unclear") — and floated promoting a trimmed
+version of this block into the standing playbook. That run was interrupted
+before acting; this one re-derived the question from the actual repo state
+rather than trusting the earlier run's framing secondhand.
+
+Two checks changed the shape of the answer:
+
+1. **The premise "a toggle, not standing content" doesn't hold for this repo.**
+   `.brr/config`'s `introspect.enabled` has read `True` continuously since this
+   mode shipped 2026-06-09 (`kb/log.md` has no entry toggling it off) — a
+   month of every wake on `Gurio/brr` carrying the full invitation, not an
+   occasional dev-mode flourish. The maintainer's own same-week complaint
+   (`plans/.../active.md` "Efficiency/decisiveness read") is that proactive,
+   root-cause-first execution had gotten *worse* over the last few days — i.e.
+   over a stretch where the explicit invitation was already on the whole time.
+   That's evidence against the causal claim, not for it: if the text alone
+   reliably produced the behavior, a month of it running unbroken should have
+   produced it unbroken too.
+2. **`run.md` already carries a standing, ungated invitation to reconsider —
+   scoped to the task, not the context.** § "When the task asks you to
+   reconsider" is exactly the "push back on the shape, don't just comply"
+   stance the proposal wanted made standing; it was never dev-mode-gated. Its
+   narrow gap was scope, not existence: it reads as triggered by the *task*
+   ("some tasks are not 'implement this'"), not by the *assembled context*
+   that framed it.
+
+Given both, promoting `introspection.md` wholesale into the standing prompts
+would have (a) reintroduced the exact "constant tax on every wake, every brr
+repo" cost this page's own "Why default-off" section reasoned against, on
+weak evidence that the tax reliably buys the behavior, and (b) duplicated
+machinery `run.md` already has, just aimed at the wrong scope.
+
+Shipped instead, the smaller thing this page's own "Why default-off" section
+already named as the right shape ("a salience-gated nudge... not an
+always-injected block") but never built: one clause added to `run.md`'s
+existing Reconsider list, widening it from "the task's shape" to "the task's
+shape *or* the context that framed it," at the same cost as the three items
+already there (a plan-boundary glance, one line when it coheres) — not a new
+block, not the ergonomics-note mandate, not the cockpit-candidate/pre-release
+framing, which stay real per-wake costs correctly left behind
+`introspect.enabled`. Detail: `kb/log.md` this date; `src/brr/prompts/run.md`
+§ "When the task asks you to reconsider", item 4.
+
 ## See also
 
 - [`design-environment-shaping.md`](design-environment-shaping.md) — the loop
