@@ -442,6 +442,86 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     assert runs[0]["kind"] == "daemon"
 
 
+def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
+    """#259: open PRs from `gh pr list` mirror into the account-scoped review
+    queue, the same publish shape as quota/live-runs."""
+    import json as json_mod
+    import subprocess
+
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud, "_pr_review_repo_labels", lambda _brr_dir: ["Gurio/demo"])
+
+    def fake_run(cmd, **kwargs):
+        assert cmd == [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--json",
+            "number,title,url,createdAt,isDraft,author,headRefName",
+            "--repo",
+            "Gurio/demo",
+        ]
+        assert kwargs["timeout"] == 10
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json_mod.dumps(
+                [
+                    {
+                        "number": 259,
+                        "title": "Dashboard: PR-review queue",
+                        "url": "https://github.com/Gurio/demo/pull/259",
+                        "createdAt": "2026-07-07T09:00:00Z",
+                        "isDraft": False,
+                        "author": {"login": "gurio"},
+                        "headRefName": "brr/pr-review-queue",
+                    }
+                ]
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(cloud.subprocess, "run", fake_run)
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.pr_review_queue_updated_at is not None
+        prs = json_mod.loads(daemon.pr_review_queue_json)
+    assert prs == [
+        {
+            "number": 259,
+            "title": "Dashboard: PR-review queue",
+            "url": "https://github.com/Gurio/demo/pull/259",
+            "repo_label": "Gurio/demo",
+            "created_at": "2026-07-07T09:00:00Z",
+            "draft": False,
+            "author": "gurio",
+        }
+    ]
+
+
 def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"

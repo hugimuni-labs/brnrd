@@ -598,18 +598,16 @@ tick already greps `gh pr list` fresh every firing — this would give it,
 and the human, the same durable, queryable answer instead of two separate
 re-derivations of the same fact).
 
-**What this changes in the existing plan, concretely:** nothing in what's
-shipped needs reverting. Two additions to the slice queue, both natively
-account-scoped from the first commit rather than repo-first-then-
+**What this changes in the existing plan, concretely:** both additions to
+the slice queue landed natively account-scoped, not repo-first-then-
 generalized: (1) a live/coexisting-runs view (#258) — daemon-side, this
-needs a publish step mirroring the Activity/Plans/Quota pattern a fourth
+needed a publish step mirroring the Activity/Plans/Quota pattern a fourth
 time (`Daemon.live_runs_json` or similar, refreshed on the same heartbeat
-the presence registry already ticks on) rather than a new architecture;
-(2) a PR-review-queue lane (#259), sourced the same way the director tick
-already gathers `gh pr list` per repo, but persisted and rendered rather
-than re-derived silently every 5h. Neither is scoped into a build this
-run — named per the reconsider contract, filed as GH issues rather than
-blind-built, sized for whoever picks the next dashboard slice.
+the presence registry already ticks on); (2) a PR-review-queue lane
+(#259), sourced the same way the director tick already gathers `gh pr
+list` per repo, but persisted and rendered rather than re-derived
+silently every 5h. Both are now shipped below; the architectural point
+that they should be first-class account views still stands.
 Cross-links: `decision-account-centered-daemon.md`
 (the architecture this reconsideration confirms, not revises),
 `kb/design-director-loop.md` §"Concurrent sub-spawns" (a spawn child is
@@ -645,8 +643,25 @@ Not done, named for whoever picks it up next: `parent_run_id`/
 `is_subspawn` enrichment (a spawn child showing its parent relationship)
 was scoped out of this slice — the presence registry entries don't carry
 that field today, only `run_ledger` rows do, and joining them was judged
-gold-plating for a first cut. #259 (PR-review-queue lane) is still
-unbuilt, next in the slice queue.
+gold-plating for a first cut.
+
+## Shipped (2026-07-07): #259, PR-review-queue lane
+
+Built as the second dashboard slice from the reconsidered live-surface
+plan. Mirrors the Activity/Plans/Quota/Live-runs publish shape: `src/brr/
+gates/cloud.py::_pr_review_snapshot` gathers open PRs with `gh pr list`
+per connected repo, `_publish_pr_review_queue` PUTs `PUT
+/v1/daemons/pr-review-queue` beside the other heartbeat publishers in
+`_loop_once`; `Daemon.pr_review_queue_json`/`pr_review_queue_updated_at`
+(+ migration); `activity_dashboard.py::_pr_review_queue_views` flattens/
+dedupes across every `Daemon` row an account owns (one per repo it's
+registered under — freshest report wins per `repo_label` + PR number);
+`GET /v1/dashboard/pr-review-queue` JSON endpoint. Frontend:
+`src/frontend/src/lib/{prReviewQueue.ts,PRReviewQueue.svelte}`, wired
+into `+page.svelte` below the live-runs slice, with age from
+`created_at`, stale after 300s, and a stable status palette that turns
+draft/open into a quick visual read. Backend tests and the frontend build
+stay green.
 
 ## Read next
 

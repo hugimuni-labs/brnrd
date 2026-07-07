@@ -2,8 +2,14 @@
 	import { onDestroy, onMount } from 'svelte';
 	import WindowTrack from '$lib/WindowTrack.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
+	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
+	import {
+		PRReviewQueueAuthError,
+		fetchPRReviewQueue,
+		type PRReviewItem
+	} from '$lib/prReviewQueue';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -21,6 +27,10 @@
 	let liveRuns = $state<LiveRun[] | null>(null);
 	let liveRunsStale = $state(false);
 	let liveRunsError = $state<string | null>(null);
+
+	let prReviewQueue = $state<PRReviewItem[] | null>(null);
+	let prReviewQueueStale = $state(false);
+	let prReviewQueueError = $state<string | null>(null);
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
@@ -49,6 +59,16 @@
 			// state (same session cookie) — only surface a *different* failure.
 			if (!(e instanceof LiveRunsAuthError)) {
 				liveRunsError = e instanceof Error ? e.message : 'live-runs fetch failed';
+			}
+		}
+		try {
+			const queue = await fetchPRReviewQueue();
+			prReviewQueue = queue.prs;
+			prReviewQueueStale = queue.stale;
+			prReviewQueueError = null;
+		} catch (e) {
+			if (!(e instanceof PRReviewQueueAuthError)) {
+				prReviewQueueError = e instanceof Error ? e.message : 'pr-review-queue fetch failed';
 			}
 		}
 	}
@@ -114,6 +134,17 @@
 			<p class="text-sm text-slate-500">Loading…</p>
 		{:else}
 			<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
+		{/if}
+	</div>
+
+	<h2 class="mt-8 text-lg font-semibold text-slate-100">PR review queue</h2>
+	<div class="mt-3">
+		{#if prReviewQueueError}
+			<p class="text-sm text-red-400">{prReviewQueueError}</p>
+		{:else if prReviewQueue === null}
+			<p class="text-sm text-slate-500">Loading…</p>
+		{:else}
+			<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
 		{/if}
 	</div>
 </div>

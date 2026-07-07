@@ -11252,3 +11252,19 @@ self-wake.
 
 Branch: main (prompt fix landed directly — text-only, reversible,
 matches the existing self-fix precedent for prompt/policy gaps).
+
+## [2026-07-07] implement | PR-review queue lane ships — account-scoped open PRs now render in the dashboard
+
+Closed the queued #259 slice end to end: `src/brr/gates/cloud.py`
+publishes `gh pr list` snapshots into `PUT /v1/daemons/pr-review-queue`,
+`Daemon.pr_review_queue_json`/`pr_review_queue_updated_at` store the
+latest account-scoped queue, `activity_dashboard.py` exposes
+`GET /v1/dashboard/pr-review-queue`, and the new Svelte slice renders the
+review queue alongside quota and live-runs. The view dedupes by
+`repo_label` + PR number across repo registrations, sorts by
+`created_at`, and flags stale snapshots after 300s.
+
+Validation: `pytest tests/test_brnrd_dashboard.py tests/test_cloud_gate.py`
+and `npm run build` both green.
+
+Branch: brr/pr-review-queue-2026-07-07.
