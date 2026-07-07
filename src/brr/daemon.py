@@ -135,6 +135,18 @@ _LIVE_PORTAL_STATE_NAME = "portal-state.json"
 # seam preserves (the daemon stays the renderer; brnrd still only edits
 # a card it does not author or store).
 _CARD_CONTROL_NAME = ".card"
+# Agent-declared PR handle: the resident writes the PR number (or a full
+# GitHub PR URL) here right after `gh pr create` succeeds mid-run. The
+# `remote_scm` facet is deliberately network-free (`brr.facets` docstring —
+# "derived from run metadata", never a live `gh pr view`), so before this
+# file existed a PR created by the resident itself (as opposed to one a
+# GitHub-sourced task already carried in `task.meta['github_pr_number']`)
+# was invisible to the live portal for the rest of that same run — reported
+# live, 2026-07-07 (a same-thread follow-up naming the exact gap from a
+# prior run's own ergonomics note). Same shape as `.card`/`.keepalive`: a
+# small control dotfile the daemon reads on the heartbeat cadence, never
+# delivered as a chat message.
+_PR_CONTROL_NAME = ".pr"
 # Soft cap on the agent narration the daemon will accept from ``.card``.
 # Same intent as ``_format_agent_note``'s render cap: keep a runaway
 # resident from flooding a thread. Excess bytes are truncated.
@@ -2619,6 +2631,27 @@ def _scm_facet(
     }
 
 
+_PR_CONTROL_RE = re.compile(r"(\d+)\s*$")
+
+
+def _read_pr_control(pr_path: Path) -> str | None:
+    """Best-effort PR number from the ``.pr`` control file, or ``None``.
+
+    Accepts a bare number (``274``), a ``#``-prefixed one, or a full PR URL
+    (``.../pull/274``) — whatever's quickest for the resident to write right
+    after ``gh pr create`` prints its result. Never raises; a malformed or
+    missing file just means ``remote_scm`` falls back to ``task.meta``.
+    """
+    try:
+        text = pr_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    match = _PR_CONTROL_RE.search(text)
+    return match.group(1) if match else None
+
+
 def _change_token(payload: dict[str, object]) -> str:
     stable = {
         key: value
@@ -2786,7 +2819,16 @@ def _write_live_portal_state(
                 levels=run_levels,
                 levels_collector=run_level_slots,
                 branch=task.meta.get("branch_name"),
-                pr_number=task.meta.get("github_pr_number"),
+                # A resident-declared `.pr` control file wins over task.meta:
+                # it's this run's own live evidence (written the moment `gh pr
+                # create` succeeds), whereas `github_pr_number` in task.meta
+                # only exists for tasks that originated *from* a GitHub
+                # issue/PR — a run that creates its own PR mid-thought had no
+                # way to update that field before this file existed.
+                pr_number=(
+                    _read_pr_control(outbox_dir / _PR_CONTROL_NAME)
+                    or task.meta.get("github_pr_number")
+                ),
                 runner_name=runner_name,
                 runner_meta=runner_meta,
                 runner_catalog=runner_catalog,

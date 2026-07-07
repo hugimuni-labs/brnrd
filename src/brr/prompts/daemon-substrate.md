@@ -111,6 +111,13 @@ Portals are the seams where a run turns to the world — inbound
   match against. Control file, never delivered. `spawn:`/`respawn:`
   frontmatter also accepts `task_classification:` to tag a dispatched
   child at hand-off time.
+- .pr — this run created a PR itself (not a GitHub-sourced task that already
+  carried one in its metadata)? Write the number (bare, `#`-prefixed, or the
+  full PR URL — any of those parse) so `remote_scm` stops reading `absent`
+  for the rest of this run. `remote_scm` is deliberately network-free
+  (derived from run metadata, never a live forge query), so without this
+  file a self-created PR is invisible to the live portal until a later
+  wake's task metadata happens to carry it. Control file, never delivered.
 - remote reader — the user reads replies in a chat client (Telegram /
   Slack); files by basename only (`subject-envs.md`, `run_progress.py`),
   never host paths like `.brr/worktrees/<run-id>/kb/foo.md` — they don't

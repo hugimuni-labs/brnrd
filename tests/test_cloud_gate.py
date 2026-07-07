@@ -396,6 +396,71 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     assert shells["codex"]["windows"][1]["resets_at"] == 1783890000.0
 
 
+def test_claude_quota_shell_carries_scrape_updated_at_and_credits(tmp_path):
+    """2026-07-07 fix ('the lying Claude usage panel'): the published shell
+    payload must forward the underlying scrape's own timestamp (so the
+    dashboard can flag staleness against real data age, not the daemon's
+    always-fresh publish cadence) and a real per-run USD figure when Claude's
+    result JSON proved one — the credits/metered-overage exposure the
+    maintainer asked for after confirming live that a run keeps working (and
+    billing) straight through an exhausted 5h window."""
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-credits-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 1.0}, "week": {"remaining_percentage": 9.0}}},
+                "session_reset": "resets 12:20am (Europe/Berlin)",
+                "week_reset": "resets Jul 10, 12am (Europe/Berlin)",
+                "updated_at": "2026-07-07T20:17:03Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_outbox / ".claude-result-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "spend": {"summary": "$1.15 this session (estimated)", "total_cost_usd": 1.15},
+                "updated_at": "2026-07-07T20:20:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+    assert shell is not None
+    assert shell["updated_at"] == "2026-07-07T20:17:03Z"
+    assert shell["credits"] == {
+        "total_cost_usd": 1.15,
+        "summary": "$1.15 this session (estimated)",
+        "updated_at": "2026-07-07T20:20:00Z",
+    }
+
+
+def test_claude_quota_shell_credits_absent_without_a_spend_snapshot(tmp_path):
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-no-spend-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 100.0}}},
+                "updated_at": "2026-07-07T20:17:03Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+    assert shell is not None
+    assert shell["credits"] is None
+
+
 def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     """#258: the local presence registry mirrors into the account-scoped
     live/coexisting-runs view, the same publish shape as quota (#237)."""
