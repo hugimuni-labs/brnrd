@@ -255,6 +255,109 @@ def test_dashboard_live_runs_api_returns_runs():
     assert body["stale"] is False
 
 
+def test_dashboard_pr_review_queue_api_requires_login():
+    """#259, same auth shape as quota/live-runs JSON endpoints."""
+    client = _client()
+    r = client.get("/v1/dashboard/pr-review-queue")
+    assert r.status_code == 401
+
+
+def test_dashboard_pr_review_queue_dedupes_across_repo_registrations():
+    """A single physical daemon can report the same account queue through
+    multiple repo registrations; freshest report wins by repo + PR number."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd_web.activity_dashboard import _pr_review_queue_views
+
+    client = _client()
+    token = _login(client)
+    pid_a = _create_repo(client, token, repo="Gurio/brr")
+    pid_b = _create_repo(client, token, repo="Gurio/other")
+
+    now = datetime.now(timezone.utc)
+    older_prs = [
+        {
+            "number": 259,
+            "title": "Old title",
+            "url": "https://github.com/Gurio/brr/pull/259",
+            "repo_label": "Gurio/brr",
+            "created_at": "2026-07-07T09:00:00Z",
+            "draft": False,
+            "author": "gurio",
+        }
+    ]
+    newer_prs = [{**older_prs[0], "title": "Fresh title"}]
+    with client.app.state.SessionLocal() as db:
+        older = Daemon(
+            id="dmn-pr-a", repo_id=pid_a, token_id="tok-pr-a", daemon_name="laptop",
+            pr_review_queue_json=json.dumps(older_prs), pr_review_queue_updated_at=now - timedelta(seconds=30),
+        )
+        newer = Daemon(
+            id="dmn-pr-b", repo_id=pid_b, token_id="tok-pr-b", daemon_name="laptop",
+            pr_review_queue_json=json.dumps(newer_prs), pr_review_queue_updated_at=now,
+        )
+        db.add_all([older, newer])
+        db.commit()
+
+        repos = [db.get(Repo, pid_a), db.get(Repo, pid_b)]
+        view = _pr_review_queue_views(db, repos)
+    assert len(view["prs"]) == 1
+    assert view["prs"][0]["title"] == "Fresh title"
+    assert view["prs"][0]["number"] == 259
+    assert view["stale"] is False
+
+
+def test_dashboard_pr_review_queue_api_returns_prs_oldest_first():
+    import json
+    from datetime import datetime, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = Daemon(
+            id="dmn-pr-c", repo_id=pid, token_id="tok-pr-c", daemon_name="laptop",
+            pr_review_queue_json=json.dumps(
+                [
+                    {
+                        "number": 260,
+                        "title": "Newer PR",
+                        "url": "https://github.com/Gurio/brr/pull/260",
+                        "repo_label": "Gurio/brr",
+                        "created_at": "2026-07-07T10:00:00Z",
+                        "draft": True,
+                        "author": "alice",
+                    },
+                    {
+                        "number": 259,
+                        "title": "Older PR",
+                        "url": "https://github.com/Gurio/brr/pull/259",
+                        "repo_label": "Gurio/brr",
+                        "created_at": "2026-07-07T09:00:00Z",
+                        "draft": False,
+                        "author": "gurio",
+                    },
+                ]
+            ),
+            pr_review_queue_updated_at=datetime.now(timezone.utc),
+        )
+        db.add(daemon)
+        db.commit()
+
+    r = client.get("/v1/dashboard/pr-review-queue")
+    assert r.status_code == 200
+    body = r.json()
+    assert [pr["number"] for pr in body["prs"]] == [259, 260]
+    assert body["prs"][0]["draft"] is False
+    assert body["prs"][1]["draft"] is True
+    assert body["stale"] is False
+
+
 def test_dashboard_can_issue_telegram_pair_link():
     client = _client(telegram_bot_username="@brnrd_bot")
     token = _login(client, login="Gurio")
