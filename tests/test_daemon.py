@@ -1437,6 +1437,50 @@ def test_run_worker_writes_terminal_failure_response_after_empty_stdout(
     assert "runner produced no reply after 1 attempt(s)" in response
 
 
+def test_write_terminal_failure_response_notices_schedule_crash(tmp_path):
+    """A crashed ``schedule``-source run (director tick) must not vanish.
+
+    ``_event_requires_thread_delivery`` correctly treats "schedule" as
+    internal for the *success* path — a tick that re-derived nothing new
+    is supposed to stay quiet (the notify-bar logic). But that same
+    internal-source check used to gate the *failure* path too, so a
+    crashed tick (found live 2026-07-07, run-260707-1154-kem3: killed
+    mid-run, returncode 143, empty stdout/stderr) left no response file
+    and nothing for the gate to deliver — silence-because-crashed and
+    silence-because-nothing-changed were indistinguishable from the one
+    surface (chat) the maintainer watches. This asserts the crash path now
+    writes and delivers a note even though the event source is internal.
+    """
+    write_repo_scaffold(tmp_path)
+    responses_dir = tmp_path / ".brr" / "responses"
+    event = make_event(
+        tmp_path, eid="evt-tick-crash", source="schedule", body="director tick",
+    )
+    task = Run(
+        id="run-tick-crash",
+        event_id="evt-tick-crash",
+        body="director tick",
+        source="schedule",
+        conversation_key="schedule:director-tick",
+    )
+    response_path = tmp_path / ".brr" / "responses" / "evt-tick-crash.md"
+
+    wrote = daemon._write_terminal_failure_response(
+        daemon._WorkerEmit(tmp_path / ".brr", "schedule:director-tick", "evt-tick-crash"),
+        task,
+        event,
+        responses_dir,
+        response_path,
+        "runner killed after 1 attempt(s) with exit code 143",
+    )
+
+    assert wrote is True
+    assert event["status"] == "done"
+    response = protocol.read_response(responses_dir, "evt-tick-crash")
+    assert response is not None
+    assert "runner killed after 1 attempt(s) with exit code 143" in response
+
+
 def test_run_worker_calls_sync_before_resolving_branch_plan(
     tmp_path, monkeypatch,
 ):
