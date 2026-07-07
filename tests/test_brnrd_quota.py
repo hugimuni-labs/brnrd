@@ -126,8 +126,14 @@ def test_daemon_quota_round_trips_updated_at_and_credits():
                 ],
                 "credits": {
                     "total_cost_usd": 1.15,
-                    "summary": "$1.15 this session (estimated)",
+                    "summary": "usage credits 79% left; \u20ac8.69 / \u20ac40.00 spent; resets Aug 1 (Europe/Berlin)",
                     "updated_at": "2026-07-07T20:20:00Z",
+                    "enabled": True,
+                    "remaining_percentage": 79.0,
+                    "spent_amount": 8.69,
+                    "limit_amount": 40.0,
+                    "currency": "\u20ac",
+                    "reset": "Aug 1 (Europe/Berlin)",
                 },
             }
         ]
@@ -137,6 +143,9 @@ def test_daemon_quota_round_trips_updated_at_and_credits():
     shell = posted.json()["shells"][0]
     assert shell["updated_at"] == "2026-07-07T20:17:03Z"
     assert shell["credits"]["total_cost_usd"] == 1.15
+    assert shell["credits"]["remaining_percentage"] == 79.0
+    assert shell["credits"]["spent_amount"] == 8.69
+    assert shell["credits"]["currency"] == "\u20ac"
 
 
 def test_daemon_quota_requires_registration():

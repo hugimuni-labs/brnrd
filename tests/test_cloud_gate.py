@@ -440,6 +440,85 @@ def test_claude_quota_shell_carries_scrape_updated_at_and_credits(tmp_path):
     }
 
 
+def test_claude_quota_shell_refreshes_stale_idle_cache(tmp_path, monkeypatch):
+    """The dashboard publisher must not keep scavenging a stale run cache
+    forever once no Claude run is actively heartbeating."""
+    import json as json_mod
+    import os
+    import time
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-stale-run"
+    run_outbox.mkdir(parents=True)
+    usage_path = run_outbox / ".claude-usage-levels.json"
+    usage_path.write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 100.0}}},
+                "session_reset": "old",
+                "updated_at": "2026-07-07T06:54:17Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    old = time.time() - cloud._CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS - 30
+    os.utime(usage_path, (old, old))
+
+    monkeypatch.setattr(
+        cloud.claude_usage,
+        "capture_levels",
+        lambda *a, **k: {
+            "quota": {"buckets": {"session": {"remaining_percentage": 0.0}, "week": {"remaining_percentage": 9.0}}},
+            "session_reset": "12:20am (Europe/Berlin)",
+            "week_reset": "Jul 10, 12am (Europe/Berlin)",
+            "updated_at": "2026-07-07T20:58:59Z",
+        },
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+
+    assert shell is not None
+    assert shell["updated_at"] == "2026-07-07T20:58:59Z"
+    assert shell["windows"][0]["percent"] == 0.0
+    assert shell["windows"][1]["percent"] == 9.0
+
+
+def test_claude_quota_shell_publishes_usage_credit_balance(tmp_path):
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-credits-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 0.0}}},
+                "usage_credits": {
+                    "enabled": True,
+                    "used_percentage": 21.0,
+                    "remaining_percentage": 79.0,
+                    "spent_amount": 8.69,
+                    "limit_amount": 40.0,
+                    "currency": "\u20ac",
+                    "reset": "Aug 1 (Europe/Berlin)",
+                    "summary": "usage credits 79% left; \u20ac8.69 / \u20ac40.00 spent; resets Aug 1 (Europe/Berlin)",
+                },
+                "updated_at": "2026-07-07T20:58:59Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+
+    assert shell is not None
+    assert shell["credits"]["summary"].startswith("usage credits 79% left")
+    assert shell["credits"]["remaining_percentage"] == 79.0
+    assert shell["credits"]["spent_amount"] == 8.69
+    assert shell["credits"]["limit_amount"] == 40.0
+    assert shell["credits"]["currency"] == "\u20ac"
+
+
 def test_claude_quota_shell_credits_absent_without_a_spend_snapshot(tmp_path):
     import json as json_mod
 

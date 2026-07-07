@@ -63,6 +63,13 @@ def test_reset_epoch_dated_form_rolls_year_forward_past_boundary():
     assert epoch == expected.timestamp()
 
 
+def test_reset_epoch_date_only_form_defaults_to_midnight():
+    now = datetime(2026, 7, 7, 12, 0, tzinfo=timezone.utc)
+    epoch = claude_usage._reset_epoch("Aug 1 (Europe/Berlin)", now=now)
+    expected = datetime(2026, 8, 1, 0, 0, tzinfo=claude_usage.ZoneInfo("Europe/Berlin"))
+    assert epoch == expected.timestamp()
+
+
 def test_reset_epoch_undated_form_already_passed_today_resolves_tomorrow():
     zone = claude_usage.ZoneInfo("Europe/Berlin")
     now = datetime(2026, 7, 5, 8, 0, tzinfo=zone)  # 8am local
@@ -116,6 +123,33 @@ def test_parse_usage_text_handles_screen_reader_duplicate_percentages():
 
     assert levels["session_used_percentage"] == 7
     assert levels["week_used_percentage"] == 70
+
+
+def test_parse_usage_text_handles_glued_session_header_and_usage_credits():
+    levels = claude_usage.parse_usage_text(
+        "Esc to cancelCurrent session\n"
+        "100% 100% used\n"
+        "Resets 12:20am (Europe/Berlin)\n"
+        "Current week (all models)\n"
+        "91% 91% used\n"
+        "Resets Jul 10, 12am (Europe/Berlin)\n"
+        "Usage credits\n"
+        "22% 21% used\n"
+        "\u20ac8.69 / \u20ac40.00 spent · Resets Aug 1 (Europe/Berlin)\n"
+    )
+
+    assert levels["session_used_percentage"] == 100
+    assert levels["quota"]["buckets"]["session"] == {"remaining_percentage": 0.0}
+    assert levels["week_used_percentage"] == 91
+    assert levels["quota"]["buckets"]["week"] == {"remaining_percentage": 9.0}
+    assert levels["usage_credits"]["enabled"] is True
+    assert levels["usage_credits"]["used_percentage"] == 21
+    assert levels["usage_credits"]["remaining_percentage"] == 79
+    assert levels["usage_credits"]["spent_amount"] == 8.69
+    assert levels["usage_credits"]["limit_amount"] == 40.0
+    assert levels["usage_credits"]["currency"] == "\u20ac"
+    assert levels["usage_credits"]["reset"] == "Aug 1 (Europe/Berlin)"
+    assert "\u20ac8.69 / \u20ac40.00 spent" in levels["usage_credits"]["summary"]
 
 
 def test_parse_usage_text_keeps_model_week_bucket_separate():
