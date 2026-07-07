@@ -57,6 +57,17 @@ works. See `kb/design-runner-back-channel.md` for the full design.
 - **Tier 0 (required).** A process that, given the assembled prompt as its
   final argument, operates files in its working directory and exits with a
   status code. The irreducible floor — all real work happens here.
+  Safety net: Linux caps a single argv string at 128 KiB
+  (`MAX_ARG_STRLEN`) regardless of the larger overall `ARG_MAX` — a wake's
+  assembled prompt tripped this in production 2026-07-07 (176 KB, an
+  `OSError: [Errno 7] Argument list too long` that killed the thought
+  before it started). `invoke_runner` now spills any argv element over
+  ~100 KB to `.brr/prompt-overflow/<hash>.md` and passes a short
+  "read this file first" pointer instead — no stdin involved, so it can't
+  collide with codex's own documented (and load-bearing) stdin-prompt
+  path. A Tier-0 runner never sees this directly; it just occasionally
+  gets a pointer instead of the prompt inline, and reads it with the same
+  file tools it already has.
 - **Tier 1 (optional).** Prints a final reply on stdout (progress/debug on
   stderr). brr captures stdout as the plain current-thread reply. This is
   the `response_path` capture above.
