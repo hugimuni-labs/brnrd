@@ -1886,6 +1886,111 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     ]
 
 
+def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypatch):
+    """A `spawn:` child dispatches alongside a still-running resident
+    thought even after the dev-reload watcher has flagged a package
+    change — kb/plan-spawn-gap-closure.md "Gap 2", resolved 2026-07-08.
+    Only the resident slot (and re-exec itself) still wait on
+    ``reload_requested``; the concurrent-spawn slot no longer does, since
+    a spawn is a separate subprocess that never touches this process's
+    in-memory staleness the way a fresh resident dispatch or re-exec does.
+    """
+    write_repo_scaffold(tmp_path)
+    make_event(tmp_path, eid="evt-resident", body="edit brr itself")
+
+    order: list[str] = []
+    order_lock = threading.Lock()
+
+    def record(label: str) -> None:
+        with order_lock:
+            order.append(label)
+
+    resident_started = threading.Event()
+    release_resident = threading.Event()
+
+    class FakeWatcher:
+        def __init__(self):
+            self.calls = 0
+
+        def changed(self):
+            self.calls += 1
+            record(f"watch:{self.calls}")
+            # Flips true only once resident dispatch is confirmed
+            # underway, so reload_requested becomes true while `current`
+            # is still busy — the exact shape Gap 2 was about.
+            return resident_started.is_set()
+
+    watcher = FakeWatcher()
+
+    def _stop_after_reexec():
+        record("reexec")
+        raise StopIteration
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        eid = event.get("id")
+        if eid == "evt-resident":
+            record("resident-start")
+            resident_started.set()
+            release_resident.wait(timeout=5)
+            record("resident-done")
+            return Run(
+                id="task-resident", event_id=eid, body="edit brr itself",
+                status="done",
+            )
+        record("spawn-run")
+        return Run(
+            id="task-spawn", event_id=eid, body="spawned work",
+            status="done", meta={"worker": True},
+        )
+
+    monkeypatch.setattr(
+        daemon.reload_mod.DevReloadWatcher,
+        "for_repo",
+        classmethod(lambda cls, _repo_root: watcher),
+    )
+    monkeypatch.setattr(daemon.reload_mod, "reexec", _stop_after_reexec)
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: record("write-pid"))
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: record("clear-pid"))
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: record("push"))
+    monkeypatch.setattr(
+        daemon, "_notify_spawn_parent", lambda *_a, **_k: record("notify"),
+    )
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    def _inject_spawn_once_resident_running() -> None:
+        resident_started.wait(timeout=5)
+        protocol.create_event(
+            tmp_path / ".brr" / "inbox", "spawn", "spawned work",
+            spawn_immediate=True, worker=True, environment="worktree",
+        )
+        # Give the loop a couple of ticks to observe reload_requested
+        # flip true and still dispatch the spawn before unblocking the
+        # resident thought.
+        time.sleep(0.15)
+        release_resident.set()
+
+    injector = threading.Thread(target=_inject_spawn_once_resident_running)
+    injector.start()
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path, dev_reload=True)
+    injector.join(timeout=5)
+
+    assert "resident-start" in order
+    assert "spawn-run" in order
+    # The spawn dispatched (and ran) *before* the resident thought wound
+    # down, and reexec waited for both — proof reload_requested still
+    # holds the resident slot but no longer holds the concurrent-spawn
+    # slot.
+    assert order.index("spawn-run") < order.index("resident-done")
+    assert order.index("resident-done") < order.index("reexec")
+
+
 def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
     """The publish kernel reads ``publish_branch`` + ``expected_remote_oid``
     directly from ``task.meta`` (no extra threading from the worker)."""
