@@ -8,6 +8,7 @@ export interface LiveRun {
 	id: string;
 	kind: string;
 	stream: string;
+	label: string;
 	run_id: string;
 	repo_label: string;
 	started_at: string | null;

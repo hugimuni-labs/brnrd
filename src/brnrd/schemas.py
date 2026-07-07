@@ -226,6 +226,7 @@ class LiveRunIn(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     kind: str = Field(default="", max_length=32)
     stream: str = Field(default="", max_length=256)
+    label: str = Field(default="", max_length=256)
     run_id: str = Field(default="", max_length=64)
     repo_label: str = Field(default="", max_length=256)
     started_at: str | None = None

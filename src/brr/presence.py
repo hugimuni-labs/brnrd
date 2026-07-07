@@ -80,6 +80,7 @@ def register(
     *,
     kind: str,
     stream: str | None = None,
+    label: str | None = None,
     run_id: str | None = None,
     repo_label: str | None = None,
     entry_id: str | None = None,
@@ -90,7 +91,8 @@ def register(
 
     *kind* is the participant class (``daemon``, ``session``, …), *stream*
     the work it's on (a conversation key or label) so others can tell
-    whether they'd collide. The returned ``id`` is the handle for
+    whether they'd collide. *label* is the short human-facing description
+    shown in dashboards. The returned ``id`` is the handle for
     :func:`heartbeat` and :func:`deregister`.
     """
     pdir = _presence_dir(brr_dir)
@@ -101,6 +103,7 @@ def register(
         "id": eid,
         "kind": kind,
         "stream": stream or "",
+        "label": label or "",
         "run_id": run_id or "",
         "repo_label": repo_label or "",
         "pid": int(pid if pid is not None else os.getpid()),
