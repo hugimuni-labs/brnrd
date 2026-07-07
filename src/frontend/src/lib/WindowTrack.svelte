@@ -26,20 +26,23 @@
 	};
 </script>
 
-<div class="rounded-md border border-stone-800 bg-stone-900/60 p-3">
-	<div class="mb-2 flex items-center justify-between text-sm">
-		<span class="font-medium text-amber-200">{shell.shell}</span>
+<div class="panel p-4">
+	<div class="mb-3 flex items-center justify-between text-sm">
+		<span class="font-mono font-medium tracking-wide text-amber-200 uppercase">{shell.shell}</span>
 		{#if shell.status === 'stale'}
-			<span class="rounded bg-sky-900/40 px-1.5 py-0.5 text-xs text-sky-300">stale report</span>
+			<span
+				class="border border-sky-900/60 bg-sky-950/40 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-sky-300 uppercase"
+				>stale report</span
+			>
 		{/if}
 	</div>
-	<div class="space-y-2">
+	<div class="space-y-3">
 		{#each shell.windows as window (window.label)}
 			{@const level = quotaLevel(window.percent)}
 			{@const remaining = timeUntil(window.resets_at, now)}
 			<div>
-				<div class="mb-1 flex items-baseline justify-between text-xs text-stone-400">
-					<span>{window.label}</span>
+				<div class="mb-1 flex items-baseline justify-between font-mono text-xs text-stone-400">
+					<span class="tracking-wide uppercase">{window.label}</span>
 					<span class="flex items-center gap-1.5">
 						<!-- status never carries meaning by color alone: icon + label -->
 						<span
@@ -58,17 +61,17 @@
 				     2026-07-05): the colored bar is *remaining*, and it recedes
 				     toward empty as the window is consumed, not the reverse. -->
 				<div
-					class="h-2 w-full overflow-hidden rounded-full bg-stone-800"
+					class="h-2 w-full overflow-hidden border border-stone-800/80 bg-stone-900"
 					role="img"
 					aria-label={`${window.label}: ${window.percent ?? 'unknown'} percent remaining`}
 				>
 					<div
-						class="h-full rounded-full transition-[width] duration-500 ease-out"
+						class="h-full transition-[width] duration-500 ease-out"
 						style={`width: ${window.percent ?? 0}%; background-color: ${LEVEL_COLOR[level]}`}
 					></div>
 				</div>
 				{#if remaining || window.reset}
-					<div class="mt-1 text-right text-[11px] text-stone-500">
+					<div class="mt-1 text-right font-mono text-[11px] text-stone-500">
 						{remaining ? `resets in ${remaining}` : window.reset}
 					</div>
 				{/if}
@@ -76,7 +79,7 @@
 		{/each}
 	</div>
 	{#if shell.credits && (shell.credits.summary || (shell.credits.total_cost_usd !== null && shell.credits.total_cost_usd !== undefined))}
-		<div class="mt-2 border-t border-stone-800 pt-2 text-[11px] text-stone-400">
+		<div class="mt-3 border-t border-stone-800/80 pt-2 font-mono text-[11px] text-stone-400">
 			<!-- Real spend, not a projection — see quota.ts QuotaCredits doc.
 			     Fixed sky hue: this is the same "outside the firelight" /
 			     metered-not-included signal the stale badge above uses, not a

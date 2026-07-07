@@ -1,7 +1,16 @@
 @import 'tailwindcss';
 
 /* Root canvas — 2026-07-07 amber/ice pass: warm void + parchment text,
-   with component chrome in stone and stale/link affordances in sky. */
+   with component chrome in stone and stale/link affordances in sky.
+   2026-07-08 visual-language pass (kb/design-brand-visual-language.md):
+   the amber/ice *colors* were already right, but every panel was a plain
+   Tailwind `rounded-md border` box — no chrome distinct from any other
+   admin dashboard. This pass adds the load-bearing bits of the brand's
+   own three-layer register (glitchy terminal + Zachtronics schematic +
+   Nordic-tech, "held lightly, without cheese") that were named but never
+   built: bracket-cornered panels reading as instrument chrome rather than
+   cards, a near-invisible scanline field, and the boot-glitch sequence
+   the naming itself already spelled out (§ below). */
 html {
 	color-scheme: dark;
 }
@@ -10,6 +19,139 @@ body {
 	min-height: 100%;
 	background-color: #0c0906;
 	color: #f3e8d8;
+	position: relative;
+}
+
+/* A held-lightly CRT tell: two overlapping hairline gradients, ~1% alpha,
+   fixed to the viewport so it reads as a property of the glass rather
+   than the page. Not a texture anyone should consciously notice. */
+body::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	z-index: 50;
+	background-image:
+		repeating-linear-gradient(rgba(243, 232, 216, 0.012) 0 1px, transparent 1px 3px),
+		radial-gradient(ellipse at 50% 0%, rgba(217, 164, 65, 0.05), transparent 60%);
+}
+
+/* Bracket-cornered instrument panel — the load-bearing chrome swap.
+   Four corner ticks drawn as eight background gradients (two lines per
+   corner) rather than four pseudo-elements, since ::before/::after only
+   buys two. Sharp rectangle underneath, not rounded: a schematic panel,
+   not a card. */
+.panel {
+	--corner: 11px;
+	--corner-w: 1.5px;
+	--corner-color: rgba(217, 164, 65, 0.55);
+	position: relative;
+	border: 1px solid rgba(120, 95, 55, 0.28);
+	background-color: rgba(21, 16, 10, 0.6);
+	background-image:
+		linear-gradient(to right, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+		linear-gradient(to bottom, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+		linear-gradient(to left, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+		linear-gradient(to bottom, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+		linear-gradient(to right, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+		linear-gradient(to top, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+		linear-gradient(to left, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
+		linear-gradient(to top, var(--corner-color) var(--corner-w), transparent var(--corner-w));
+	background-repeat: no-repeat;
+	background-size:
+		var(--corner) var(--corner),
+		var(--corner) var(--corner),
+		var(--corner) var(--corner),
+		var(--corner) var(--corner),
+		var(--corner) var(--corner),
+		var(--corner) var(--corner),
+		var(--corner) var(--corner),
+		var(--corner) var(--corner);
+	background-position:
+		top left,
+		top left,
+		top right,
+		top right,
+		bottom left,
+		bottom left,
+		bottom right,
+		bottom right;
+}
+
+/* Sub-panels (a row inside a panel — a run card, a receipt row): sharp
+   corners and a hairline border, no brackets of their own. Brackets mark
+   a section boundary; nesting them on every row reads as noise, not
+   hierarchy. */
+.subpanel {
+	border: 1px solid rgba(120, 95, 55, 0.22);
+	background-color: rgba(41, 32, 20, 0.4);
+}
+
+/* An eyebrow label ahead of a section heading — the "//" reads as a
+   schematic annotation, consistent with the mark-channel instinct
+   (weave.md) applied to a visual surface instead of prose. */
+.eyebrow {
+	font-family: var(
+		--font-mono,
+		ui-monospace,
+		'SF Mono',
+		'Cascadia Code',
+		Menlo,
+		Consolas,
+		monospace
+	);
+	font-size: 0.6875rem;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: #8a7a5c;
+}
+
+.eyebrow::before {
+	content: '// ';
+	color: #5c4f3a;
+}
+
+/* Boot glitch (kb/design-brand-visual-language.md §3): `_` -> `b_d` ->
+   `br_rd` -> `brnrd` -glitch-> `bRnЯd`, letters revealed symmetrically
+   from the outside in around the underscore cursor as mirror axis, then
+   a chromatic-flicker resolve. Implemented in +layout.svelte as a frame
+   sequence; this is the flicker's visual treatment. */
+.boot-glitch {
+	font-family: var(
+		--font-mono,
+		ui-monospace,
+		'SF Mono',
+		'Cascadia Code',
+		Menlo,
+		Consolas,
+		monospace
+	);
+	font-size: clamp(2.5rem, 10vw, 5rem);
+	letter-spacing: 0.08em;
+	color: #f3e8d8;
+}
+
+.boot-glitch.is-flicker {
+	animation: boot-flicker 220ms steps(2, jump-none) 2;
+}
+
+@keyframes boot-flicker {
+	0% {
+		text-shadow:
+			2px 0 #6fd3ff,
+			-2px 0 #ff6a6a;
+		transform: translateX(0);
+	}
+	50% {
+		text-shadow:
+			-2px 0 #6fd3ff,
+			2px 0 #ff6a6a;
+		transform: translateX(1px);
+	}
+	100% {
+		text-shadow: none;
+		transform: translateX(0);
+	}
 }
 
 /* Loom slice 2 (kb/plan-loom-realtime-build.md): the live-runs lane's
