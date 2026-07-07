@@ -1041,6 +1041,13 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
     ][0]
     assert spawned["worker"] is True
     assert spawned["spawn_immediate"] is True
+    # Forced regardless of the repo's own `environment=` config — a
+    # spawn shares the daemon process with its still-running parent, so
+    # it is the one dispatch path that needs its own isolated cwd even
+    # when the repo otherwise runs `environment=host` (see the
+    # 2026-07-07 run-260707-1321-auhp collision in
+    # kb/design-director-loop.md).
+    assert spawned["environment"] == "worktree"
     assert spawned["shell"] == "codex-mini"
     assert spawned["task_classification"] == "reset-epoch-plumbing"
     assert spawned["repo_label"] == "Gurio/brr"
