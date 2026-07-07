@@ -3,6 +3,7 @@
 	import WindowTrack from '$lib/WindowTrack.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
+	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
 	import {
@@ -10,6 +11,7 @@
 		fetchPRReviewQueue,
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
+	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -38,6 +40,10 @@
 	let prReviewQueue = $state<PRReviewItem[] | null>(null);
 	let prReviewQueueStale = $state(false);
 	let prReviewQueueError = $state<string | null>(null);
+
+	let runLedgerRows = $state<RunLedgerRow[] | null>(null);
+	let runLedgerStale = $state(false);
+	let runLedgerError = $state<string | null>(null);
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
@@ -78,6 +84,16 @@
 				prReviewQueueError = e instanceof Error ? e.message : 'pr-review-queue fetch failed';
 			}
 		}
+		try {
+			const receipts = await fetchRunLedger();
+			runLedgerRows = receipts.rows;
+			runLedgerStale = receipts.stale;
+			runLedgerError = null;
+		} catch (e) {
+			if (!(e instanceof RunLedgerAuthError)) {
+				runLedgerError = e instanceof Error ? e.message : 'run-ledger fetch failed';
+			}
+		}
 	}
 
 	onMount(() => {
@@ -95,8 +111,8 @@
 </script>
 
 <div class="mx-auto max-w-2xl p-6">
-	<h1 class="text-2xl font-semibold text-slate-100">brnrd dashboard — next</h1>
-	<p class="mt-2 text-sm text-slate-400">
+	<h1 class="text-2xl font-semibold text-amber-100">brnrd dashboard — next</h1>
+	<p class="mt-2 text-sm text-stone-400">
 		Live per-shell quota windows — the first real screen on the new stack. See
 		<code>kb/design-dashboard-live-surface.md</code> in the main repo for the fuller live-flow plan this
 		is slice 2 of.
@@ -104,9 +120,9 @@
 
 	<div class="mt-6 space-y-3">
 		{#if unauthenticated}
-			<p class="text-sm text-slate-400">
+			<p class="text-sm text-stone-400">
 				Sign in to see live quota windows — <a
-					class="text-blue-400 underline"
+					class="text-sky-400 underline"
 					href="/login?next=/"
 					rel="external">log in</a
 				>.
@@ -114,23 +130,23 @@
 		{:else if error}
 			<p class="text-sm text-red-400">{error}</p>
 		{:else if shells === null}
-			<p class="text-sm text-slate-500">Loading…</p>
+			<p class="text-sm text-stone-500">Loading…</p>
 		{:else if shells.length === 0}
-			<p class="text-sm text-slate-500">No connected daemon has reported quota yet.</p>
+			<p class="text-sm text-stone-500">No connected daemon has reported quota yet.</p>
 		{:else}
 			{#each shells as shell (shell.shell)}
 				<WindowTrack {shell} {now} />
 			{/each}
 			{#if generatedAt}
-				<p class="text-right text-[11px] text-slate-600">
+				<p class="text-right text-[11px] text-stone-600">
 					daemon report as of {new Date(generatedAt).toLocaleTimeString()}
 				</p>
 			{/if}
 		{/if}
 	</div>
 
-	<h2 class="mt-8 text-lg font-semibold text-slate-100">live runs</h2>
-	<p class="mt-1 text-sm text-slate-400">
+	<h2 class="mt-8 text-lg font-semibold text-amber-100">live runs</h2>
+	<p class="mt-1 text-sm text-stone-400">
 		What the daemon is doing right now, across every repo it touches — slice 3, the account-scoped
 		view <code>coexisting-runs=unimplemented</code> named as a gap.
 	</p>
@@ -138,20 +154,31 @@
 		{#if liveRunsError}
 			<p class="text-sm text-red-400">{liveRunsError}</p>
 		{:else if liveRuns === null}
-			<p class="text-sm text-slate-500">Loading…</p>
+			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
 			<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
 		{/if}
 	</div>
 
-	<h2 class="mt-8 text-lg font-semibold text-slate-100">PR review queue</h2>
+	<h2 class="mt-8 text-lg font-semibold text-amber-100">PR review queue</h2>
 	<div class="mt-3">
 		{#if prReviewQueueError}
 			<p class="text-sm text-red-400">{prReviewQueueError}</p>
 		{:else if prReviewQueue === null}
-			<p class="text-sm text-slate-500">Loading…</p>
+			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
 			<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
+		{/if}
+	</div>
+
+	<h2 class="mt-8 text-lg font-semibold text-amber-100">run receipts</h2>
+	<div class="mt-3">
+		{#if runLedgerError}
+			<p class="text-sm text-red-400">{runLedgerError}</p>
+		{:else if runLedgerRows === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<RunLedgerReceipt rows={runLedgerRows} stale={runLedgerStale} />
 		{/if}
 	</div>
 </div>

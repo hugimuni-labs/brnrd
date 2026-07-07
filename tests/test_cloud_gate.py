@@ -522,11 +522,88 @@ def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
     ]
 
 
-def test_dashboard_publish_tick_publishes_all_five_snapshots(tmp_path, monkeypatch):
+def test_run_ledger_snapshot_tails_recent_rows_and_skips_malformed(tmp_path):
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    ledger = brr_dir / "run-ledger.jsonl"
+    rows = [{"run_id": f"run-{i}", "ended_at": f"2026-07-07T19:{i:02d}:00Z"} for i in range(25)]
+    ledger.write_text(
+        "\n".join(json_mod.dumps(row) for row in rows[:10])
+        + "\nnot json\n"
+        + "\n".join(json_mod.dumps(row) for row in rows[10:])
+        + "\n",
+        encoding="utf-8",
+    )
+
+    snapshot = cloud._run_ledger_snapshot(brr_dir)
+
+    assert len(snapshot) == 19
+    assert snapshot[0]["run_id"] == "run-6"
+    assert snapshot[-1]["run_id"] == "run-24"
+
+
+def test_run_ledger_snapshot_missing_file_is_empty(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+
+    assert cloud._run_ledger_snapshot(brr_dir) == []
+
+
+def test_loop_publishes_run_ledger_snapshot(tmp_path, monkeypatch):
+    import json as json_mod
+
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    (brr_dir / "run-ledger.jsonl").write_text(
+        json_mod.dumps(
+            {
+                "run_id": "run-ledger-cloud",
+                "ended_at": "2026-07-07T19:30:00Z",
+                "task_classification": "dashboard-slice",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud, "_pr_review_repo_labels", lambda _brr_dir: [])
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.run_ledger_updated_at is not None
+        rows = json_mod.loads(daemon.run_ledger_json)
+    assert rows[0]["run_id"] == "run-ledger-cloud"
+    assert rows[0]["ended_at"] == "2026-07-07T19:30:00Z"
+    assert rows[0]["task_classification"] == "dashboard-slice"
+    assert rows[0]["tokens_input"] is None
+
+
+def test_dashboard_publish_tick_publishes_all_six_snapshots(tmp_path, monkeypatch):
     """kb/plan-loom-realtime-build.md slice 0: dashboard snapshots must not
     wait on the inbox long-poll (`_POLL_WAIT_S = 25`) to publish — a single
     ``_dashboard_publish_tick`` call (what the background loop calls every
-    ``_DASHBOARD_PUBLISH_INTERVAL_S``) has to move all five, the same set
+    ``_DASHBOARD_PUBLISH_INTERVAL_S``) has to move all six, the same set
     ``_loop_once`` publishes, without needing an inbox event at all."""
     from brnrd.models import Daemon as DaemonModel
 
@@ -557,6 +634,7 @@ def test_dashboard_publish_tick_publishes_all_five_snapshots(tmp_path, monkeypat
         assert daemon.quota_updated_at is not None
         assert daemon.live_runs_updated_at is not None
         assert daemon.pr_review_queue_updated_at is not None
+        assert daemon.run_ledger_updated_at is not None
 
 
 def test_dashboard_publish_tick_noop_without_configured_state(tmp_path):

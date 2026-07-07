@@ -52,15 +52,15 @@
 	}
 </script>
 
-<div class="rounded-md border border-slate-800 bg-slate-900/60 p-3">
+<div class="rounded-md border border-stone-800 bg-stone-900/60 p-3">
 	<div class="mb-2 flex items-center justify-between text-sm">
-		<span class="font-medium text-slate-200">live runs</span>
+		<span class="font-medium text-amber-200">live runs</span>
 		{#if stale}
-			<span class="rounded bg-amber-900/40 px-1.5 py-0.5 text-xs text-amber-300">stale report</span>
+			<span class="rounded bg-sky-900/40 px-1.5 py-0.5 text-xs text-sky-300">stale report</span>
 		{/if}
 	</div>
 	{#if runs.length === 0}
-		<p class="text-sm text-slate-500">Nothing awake right now.</p>
+		<p class="text-sm text-stone-500">Nothing awake right now.</p>
 	{:else}
 		<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
 			{#each runs as run (run.id)}
@@ -71,7 +71,7 @@
 				{@const lvl = level(run.last_seen)}
 				{@const color = LEVEL_COLOR[lvl]}
 				<div
-					class="rounded-lg border border-slate-800 bg-slate-800/60 p-2.5 text-xs"
+					class="rounded-lg border border-stone-800 bg-stone-800/60 p-2.5 text-xs"
 					in:fly={{ y: -8, duration: 220 }}
 					out:fade={{ duration: 150 }}
 					animate:flip={{ duration: 220 }}
@@ -87,16 +87,16 @@
 								{LEVEL_LABEL[lvl]}
 							</span>
 						</span>
-						<span class="shrink-0 text-slate-500">{ageSince(run.started_at, now) ?? ''}</span>
+						<span class="shrink-0 text-stone-500">{ageSince(run.started_at, now) ?? ''}</span>
 					</div>
-					<p class="mt-1.5 truncate font-medium text-slate-200">{primary}</p>
-					<p class="truncate text-slate-500">{secondary}</p>
+					<p class="mt-1.5 truncate font-medium text-amber-100">{primary}</p>
+					<p class="truncate text-stone-500">{secondary}</p>
 					<!-- No known total duration to bind a real percent to, so a
 					     running card gets an indeterminate scanning bar (the
 					     Zachtronics "in motion" tell) instead of a fabricated fill;
 					     a stalling/unknown card freezes it rather than claim activity
 					     the freshness data can no longer back up. -->
-					<div class="mt-2 h-1 overflow-hidden rounded-full bg-slate-900" aria-hidden="true">
+					<div class="mt-2 h-1 overflow-hidden rounded-full bg-stone-900" aria-hidden="true">
 						<div
 							class={`h-full w-1/3 rounded-full ${lvl === 'running' ? 'animate-[loom-scan_1.4s_ease-in-out_infinite]' : ''}`}
 							style={`background-color: ${color}; opacity: ${lvl === 'running' ? 1 : 0.5}`}
