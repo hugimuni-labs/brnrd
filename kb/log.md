@@ -11246,9 +11246,12 @@ root-caused".
 
 Also dispatched a fresh `spawn:` (codex) on #259 (PR-review-queue
 dashboard lane) as the fourth dogfood data point and real dashboard
-work in the same motion — lingering in this run to review + merge
-inline per the wait-and-review contract rather than parking a
-self-wake.
+work in the same motion, *claiming* it would linger in this run to
+review + merge inline. Correction, same day (see the 2026-07-07 "recent-
+turns crowding" and "sub-spawn crash notification" entries below): it
+did not — ended ~4 minutes later without polling, leaving a self-wake to
+catch the review instead. Left uncorrected here initially; fixing now
+rather than letting a false "handled" statement sit in durable memory.
 
 Branch: main (prompt fix landed directly — text-only, reversible,
 matches the existing self-fix precedent for prompt/policy gaps).
@@ -11268,3 +11271,74 @@ Validation: `pytest tests/test_brnrd_dashboard.py tests/test_cloud_gate.py`
 and `npm run build` both green.
 
 Branch: brr/pr-review-queue-2026-07-07.
+
+## [2026-07-07] fix | recent-turns crowding bug — the wake prompt could show zero real recent dialogue
+
+Root-caused the maintainer's live report ("you don't see the topics we
+recently agreed on... read our previous discussion, there is some stuff
+missing"). Verified first, not assumed: diffed the maintainer's own
+pasted transcript (`.tmp/07-07-2026-telegram-interaction.md`, 13 user
+messages + 20 agent replies from that morning) against the per-thread
+grouped-history JSONL — every message was present, verbatim, timestamps
+matching exactly. So the *storage* was never the problem; the *curated
+inline snippet* was.
+
+`conversations.py::_select_snapshot_turns`'s "unanswered events get a
+boost so an old pending ask doesn't disappear" scoring was unbounded:
+`score += total` for any unanswered event unconditionally outranked
+every answered turn regardless of recency. On `telegram:155783668:`, 20
+such stale events (oldest from 2026-05-17 — mostly attachment-only
+messages or replies folded into a sibling event's answer rather than
+their own `event_id`) filled every one of the 8 "recent turns" slots in
+the wake prompt, crowding out an entire day of fully-answered
+conversation — including every agent reply ever, since a reply is never
+itself an "unanswered event". Explains a real, previously-unexplained
+pattern: a run mid-conversation initially misstating an already-settled
+design point, then self-correcting only after being told to reread the
+docs directly — its inline wake context simply didn't carry the recent
+exchange that had settled it.
+
+Fixed by capping the unanswered-event boost at half the turn budget:
+recency always keeps at least half the slots; the remainder still
+backfills the most recent stale unanswered asks (preserves the original
+intent, just bounds it). Generic to `build_communication_snapshot`, so
+covers every gate/thread type, not just telegram. Regression test
+reproduces the exact crowding scenario (verified it fails pre-fix,
+passes post-fix); existing boost test unchanged. Full suite: 1347
+passed.
+
+Branch: brr/history-crowding-fix-2026-07-07 (PR #265, merged).
+
+## [2026-07-07] fix | a crashed concurrent spawn never notified its parent
+
+Second half of the same day's "sub-spawns should be fixed" report.
+`_notify_spawn_parent` (design-director-loop.md §"Concurrent sub-spawns"
+item 4) is supposed to land an ordinary pending event in the dispatching
+parent's conversation on spawn completion — success *or* failure, per
+the design's own wording ("a child-completion notification"). The main
+loop's reap step only ever called it in the success branch of
+`current_spawn.result()`; a worker future that raised (crash, kill,
+runner-launch failure) hit the `except`, which only printed to the
+daemon console. Root cause of why `run-260707-1053-sx2c` (#259's spawn)
+needed a manually-authored review self-wake as a safety net instead of
+the normal completion signal — it never reached a clean finish (context
+still `status: running`, no response file; consistent with the
+maintainer's own "I killed all the active runners" a few messages
+later), so nothing ever told its parent.
+
+Fixed via `_notify_spawn_parent_of_crash`, built from the raw inbox
+event dict rather than a `Run` object (a crashed worker never produces
+one), wired into the same reap branch. Also added, same run, a
+maintainer follow-up ask: `reset_on: spawn` schedule field so an
+`every:` entry (e.g. the director tick) can opt in to having its
+cooldown pushed out by a concurrent spawn dispatch elsewhere, instead of
+firing redundantly right after — implemented as a generic named-signal
+side channel (`schedule.record_signal`/`load_signals`/
+`apply_reset_signals`), not hardcoded to any specific entry's id, since
+`schedule.md` is user-authored. Full suite: 1355 passed.
+
+Detail: `kb/design-director-loop.md` §"Correction... that claim was
+false" / §"the deeper bug: a crashed spawn never notified its parent".
+
+Branch: brr/spawn-crash-notify-and-tick-cooldown-2026-07-07 (PR #266,
+merged).

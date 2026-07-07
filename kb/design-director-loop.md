@@ -526,10 +526,57 @@ Also acted on directly, same run: the maintainer's "own the sub runs,
 proper workers interface" ask (asked because this exact silence read as
 the mechanism failing) — dispatched another `spawn:` (codex, #259
 PR-review-queue dashboard lane, mirroring the Activity/Plans/Quota/Live-
-runs publish shape a fifth time) as both a fourth dogfood data point and
-real dashboard-priority work, with the resident lingering in-run to
-review and fold in per the wait-and-review contract rather than parking a
-self-wake — the convention exercised, not just re-stated.
+runs publish shape a fifth time), *claiming* the resident would linger
+in-run to review and fold in per the wait-and-review contract.
+
+**Correction (2026-07-07, run-260707-1158-alaq) — that claim was false,
+caught the same day.** jyzb did not linger: it ended ~4 minutes after
+dispatching, terminal stdout a bare `-`, having never polled
+`inbox.json`/`portal-state.json` for the spawn's completion at all — the
+exact "linger claimed, not exercised" gap the review self-wake it left
+behind (`schedule.md`, since retired) named as its own reason for
+existing. Leaving the incorrect "convention exercised, not just
+re-stated" sentence uncorrected above would have been the same failure
+this whole addendum chain is about: a false "this works now" statement
+sitting in durable memory for a later wake to trust without re-checking.
+See the addendum immediately below for the resolution and the deeper
+bug it led to.
+
+**Addendum 2026-07-07 (run-260707-1158-alaq) — the deeper bug: a crashed
+spawn never notified its parent at all.** Reviewed #259 as the review
+self-wake asked: diff read directly, backend suite (1346) and frontend
+build/lint/check all independently green, matched the brief, merged as
+PR #264. But *why* did jyzb's dispatched spawn (`run-260707-1053-sx2c`)
+need a manually-authored self-wake as a safety net in the first place,
+given `_notify_spawn_parent` is supposed to land an ordinary pending
+event in the parent's conversation regardless of whether the parent is
+still running? Traced it: `sx2c` never reached a clean finish (context.md
+still says `status: running`; no response file, no outbox — consistent
+with the maintainer's own "I killed all the active runners" a few
+messages later). Reading `start()`'s reap loop
+(`src/brr/daemon.py` ~4602) found the actual gap: `_notify_spawn_parent`
+was only called in the *success* branch of `current_spawn.result()` — a
+worker future that raises (crash, kill, launch failure) hit the `except`
+branch, which only `print()`s to the daemon console. No event, no
+signal, nothing lands in the parent's thread. The design's own promise
+("Concurrent sub-spawns" item 4 above: "a child-completion notification
+delivered into the still-running parent thought") says *completion*, and
+a crash is a form of completion; the code only handled the happy path.
+Fixed in `_notify_spawn_parent_of_crash` (PR #266), built from the raw
+inbox event dict rather than a `Run` object (a crashed worker never
+produces one) — wired into the same reap branch. This is the one
+"spawn: doesn't behave as agreed" gap this day's reports actually
+resolve to: not a design/prompt drift, a real one-branch code bug, now
+closed and regression-tested
+(`test_notify_spawn_parent_of_crash_lands_pending_event`).
+
+Same run also closed the companion "why didn't you remember this" thread
+(`kb/log.md` §2026-07-07 "recent-turns crowding bug") — the wake-prompt's
+inline "recent turns" snippet was, separately, capable of showing *zero*
+real recent dialogue on a busy thread, which is the more likely
+explanation for why an already-settled design point needed re-surfacing by the
+maintainer instead of being remembered. Both fixes landed the same run;
+neither alone was the whole story.
 
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
