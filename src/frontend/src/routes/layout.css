@@ -22,9 +22,13 @@ body {
 	position: relative;
 }
 
-/* A held-lightly CRT tell: two overlapping hairline gradients, ~1% alpha,
-   fixed to the viewport so it reads as a property of the glass rather
-   than the page. Not a texture anyone should consciously notice. */
+/* A held-lightly CRT tell: two overlapping hairline gradients, fixed to
+   the viewport so it reads as a property of the glass rather than the
+   page. 2026-07-08: nudged up one notch on direct maintainer ask ("a bit
+   more crt glow") — scanlines from ~1% to ~1.8% alpha, the top hearth-glow
+   radial from 5% to 8%, plus a second, wider bloom so the warmth reads past
+   just the header. Still meant to recede, not announce itself; a texture,
+   not a filter demo. */
 body::before {
 	content: '';
 	position: fixed;
@@ -32,8 +36,9 @@ body::before {
 	pointer-events: none;
 	z-index: 50;
 	background-image:
-		repeating-linear-gradient(rgba(243, 232, 216, 0.012) 0 1px, transparent 1px 3px),
-		radial-gradient(ellipse at 50% 0%, rgba(217, 164, 65, 0.05), transparent 60%);
+		repeating-linear-gradient(rgba(243, 232, 216, 0.018) 0 1px, transparent 1px 3px),
+		radial-gradient(ellipse at 50% 0%, rgba(217, 164, 65, 0.08), transparent 60%),
+		radial-gradient(ellipse at 50% 100%, rgba(217, 164, 65, 0.035), transparent 65%);
 }
 
 /* Bracket-cornered instrument panel — the load-bearing chrome swap.
@@ -48,6 +53,12 @@ body::before {
 	position: relative;
 	border: 1px solid rgba(120, 95, 55, 0.28);
 	background-color: rgba(21, 16, 10, 0.6);
+	/* Phosphor bloom on the instrument-panel chrome (2026-07-08, "more crt
+	   glow"): a soft amber halo instead of a hard-edged rectangle, plus a
+	   faint inner lift so the panel reads lit-from-within, not printed on. */
+	box-shadow:
+		0 0 14px 0 rgba(217, 164, 65, 0.05),
+		inset 0 0 24px 0 rgba(217, 164, 65, 0.025);
 	background-image:
 		linear-gradient(to right, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
 		linear-gradient(to bottom, var(--corner-color) var(--corner-w), transparent var(--corner-w)),
@@ -129,6 +140,11 @@ body::before {
 	font-size: clamp(2.5rem, 10vw, 5rem);
 	letter-spacing: 0.08em;
 	color: #f3e8d8;
+	/* Resting phosphor glow (2026-07-08, "more crt glow") — the flicker
+	   keyframe below already carries a chromatic shadow *during* the
+	   boot sequence; this is the same tell held quietly once it settles,
+	   so the mascot doesn't go flat the instant the animation ends. */
+	text-shadow: 0 0 18px rgba(217, 164, 65, 0.35);
 }
 
 .boot-glitch.is-flicker {
