@@ -41,6 +41,7 @@ dev = ["pytest>=7.0", "brr[backend]"]
 
 [project.scripts]
 brnrd = "brr.cli:main"
+worktree-hygiene-report = "brr.worktree:main_worktree_hygiene"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
