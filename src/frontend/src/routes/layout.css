@@ -1,1 +1,35 @@
 @import 'tailwindcss';
+
+/* Root canvas — every component in this app (WindowTrack/LiveRuns/
+   PRReviewQueue/the quota cards) is built against slate-900/text-slate-100,
+   i.e. it assumes a dark page. Nothing ever set that at the document level
+   (found live 2026-07-07 by screenshotting https://brnrd.dev/: near-white
+   page, near-invisible pale-gray-on-white text, translucent cards that
+   read as blank). `color-scheme: dark` also fixes native form controls
+   (the login link's browser chrome) matching the same canvas. */
+html {
+	color-scheme: dark;
+}
+
+body {
+	min-height: 100%;
+	background-color: #020617; /* slate-950 */
+	color: #f1f5f9; /* slate-100 */
+}
+
+/* Loom slice 2 (kb/plan-loom-realtime-build.md): the live-runs lane's
+   per-card activity bar. There's no real completion percent to bind to
+   (a run has no known total duration), so a fresh/running card gets an
+   indeterminate scanning bar — the Zachtronics tell for "in motion,
+   duration unknown" (TIS-100's busy blink, not a bounded fill). A
+   stalling/stale card freezes it (see LiveRuns.svelte) rather than
+   implying activity the data can no longer back up. Global keyframe:
+   Tailwind v4's arbitrary `animate-[…]` values reference this by name. */
+@keyframes loom-scan {
+	0% {
+		transform: translateX(-100%);
+	}
+	100% {
+		transform: translateX(340%);
+	}
+}
