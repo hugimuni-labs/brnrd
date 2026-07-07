@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -211,6 +213,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     _publish_plans(brr_dir, state)
     _publish_quota(brr_dir, state)
     _publish_live_runs(brr_dir, state)
+    _publish_pr_review_queue(brr_dir, state)
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:
@@ -581,6 +584,131 @@ def _publish_live_runs(brr_dir: Path, state: dict) -> None:
         )
     except Exception as e:
         print(f"[brr:cloud] live-runs publish failed: {e}")
+
+
+def _github_repo_label(label: str, repo_root: Path) -> str | None:
+    try:
+        remote = gitops.default_remote(repo_root)
+        if remote:
+            url = gitops.remote_url(repo_root, remote)
+            if url:
+                parsed = parse_origin_url(url)
+                if parsed:
+                    return parsed
+    except Exception:
+        pass
+    text = str(label or "").strip()
+    if text.count("/") == 1 and all(part.strip() for part in text.split("/", 1)):
+        return text
+    return None
+
+
+def _pr_review_repo_labels(brr_dir: Path) -> list[str]:
+    from .. import account as account_mod
+
+    repo_root = brr_dir.parent
+    try:
+        ctx = account_mod.resolve_context(repo_root, create=False)
+        repos = ctx.repos
+    except Exception:
+        repos = {account_mod.repo_label(repo_root): account_mod.AccountRepo(label=account_mod.repo_label(repo_root), root=repo_root)}
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for label, repo in sorted(repos.items()):
+        repo_label = _github_repo_label(label, repo.root)
+        if repo_label is None:
+            continue
+        key = repo_label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(repo_label)
+    return out
+
+
+def _pr_review_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
+    """This daemon's account-scoped open-PR review queue (#259).
+
+    Mirrors the Activity/Plans/Quota/Live-runs publish shape: collect local
+    daemon evidence with the same ``gh`` dependency the director tick already
+    uses, then let brnrd store the latest snapshot. The dashboard derives age
+    from ``created_at``; this layer deliberately does not manufacture urgency.
+    """
+    prs: list[dict[str, Any]] = []
+    for repo_label in _pr_review_repo_labels(brr_dir):
+        cmd = [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--json",
+            "number,title,url,createdAt,isDraft,author,headRefName",
+            "--repo",
+            repo_label,
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=brr_dir.parent,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("gh not found; install/authenticate GitHub CLI to publish PR review queue") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"gh pr list timed out for {repo_label}") from exc
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise RuntimeError(f"gh pr list failed for {repo_label}: {detail}")
+        try:
+            rows = json.loads(result.stdout or "[]")
+        except ValueError as exc:
+            raise RuntimeError(f"gh pr list returned invalid JSON for {repo_label}") from exc
+        if not isinstance(rows, list):
+            raise RuntimeError(f"gh pr list returned non-list JSON for {repo_label}")
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            author = row.get("author")
+            author_login = str(author.get("login") or "") if isinstance(author, dict) else str(author or "")
+            number = row.get("number")
+            try:
+                number_int = int(number)
+            except (TypeError, ValueError):
+                continue
+            prs.append(
+                {
+                    "number": number_int,
+                    "title": str(row.get("title") or ""),
+                    "url": str(row.get("url") or ""),
+                    "repo_label": repo_label,
+                    "created_at": str(row.get("createdAt") or ""),
+                    "draft": bool(row.get("isDraft")),
+                    "author": author_login,
+                }
+            )
+    return prs
+
+
+def _publish_pr_review_queue(brr_dir: Path, state: dict) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    try:
+        _request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/pr-review-queue",
+            token=state["token"],
+            json={"prs": _pr_review_snapshot(brr_dir)},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] pr-review-queue publish failed: {e}")
 
 
 class _CloudCardTransport:
