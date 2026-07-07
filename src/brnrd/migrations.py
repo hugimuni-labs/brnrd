@@ -108,6 +108,9 @@ def _migrate_daemons(conn: Connection) -> None:
     # Runner-quota snapshot mirror (#237) — see models.Daemon.quota_json.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS quota_updated_at TIMESTAMP"))
+    # Live/coexisting-runs snapshot mirror (#258) — see models.Daemon.live_runs_json.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS live_runs_json TEXT DEFAULT '[]'"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS live_runs_updated_at TIMESTAMP"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:
