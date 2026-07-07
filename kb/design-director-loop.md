@@ -641,9 +641,9 @@ bound the narrow staleness risk B1 was designed to catch. Full reasoning,
 the decoupling's own reasoning about why B1's "considered narrow
 carve-out" framing was itself answering the wrong question, and the
 regression test that fails against the pre-fix gating and passes against
-the fix: `kb/plan-spawn-gap-closure.md` §"Addendum (2026-07-08) — decided:
-unconditional decoupling, not B1". Not re-duplicated here — this entry is
-the pointer, that page is the receipt.
+the fix: [`plan-spawn-gap-closure.md`](plan-spawn-gap-closure.md)
+§"Addendum (2026-07-08) — decided: unconditional decoupling, not B1". Not
+re-duplicated here — this entry is the pointer, that page is the receipt.
 
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
