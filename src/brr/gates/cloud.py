@@ -557,6 +557,7 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "id": str(entry.get("id") or ""),
                 "kind": str(entry.get("kind") or ""),
                 "stream": str(entry.get("stream") or ""),
+                "label": str(entry.get("label") or ""),
                 "run_id": str(entry.get("run_id") or ""),
                 "repo_label": str(entry.get("repo_label") or ""),
                 "started_at": _iso_from_epoch(entry.get("started_at")),

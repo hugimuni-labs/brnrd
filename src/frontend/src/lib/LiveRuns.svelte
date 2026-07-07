@@ -28,17 +28,25 @@
 	{:else}
 		<ul class="space-y-2">
 			{#each runs as run (run.id)}
-				<li class="flex items-center justify-between rounded bg-slate-800/60 px-2 py-1.5 text-xs">
-					<span class="flex items-center gap-1.5 text-slate-300">
+				{@const primary = run.label || run.kind || 'run'}
+				{@const secondary = run.label
+					? `${run.repo_label || 'unknown repo'} · ${run.kind || 'run'}`
+					: run.repo_label || 'unknown repo'}
+				<li
+					class="flex items-center justify-between gap-3 rounded bg-slate-800/60 px-2 py-1.5 text-xs"
+				>
+					<span class="flex min-w-0 items-center gap-1.5 text-slate-300">
 						<span
-							class="inline-block h-2 w-2 rounded-full"
+							class="inline-block h-2 w-2 shrink-0 rounded-full"
 							style={`background-color: ${DOT_COLOR}`}
 							aria-hidden="true"
 						></span>
-						<span class="font-medium">{run.repo_label || 'unknown repo'}</span>
-						<span class="text-slate-500">· {run.kind || 'run'}</span>
+						<span class="min-w-0">
+							<span class="block truncate font-medium">{primary}</span>
+							<span class="block truncate text-slate-500">{secondary}</span>
+						</span>
 					</span>
-					<span class="text-slate-500">{ageSince(run.started_at, now) ?? ''}</span>
+					<span class="shrink-0 text-slate-500">{ageSince(run.started_at, now) ?? ''}</span>
 				</li>
 			{/each}
 		</ul>
