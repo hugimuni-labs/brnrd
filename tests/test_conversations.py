@@ -409,6 +409,56 @@ def test_build_communication_snapshot_boosts_unanswered_turns(tmp_path):
     ]
 
 
+def test_build_communication_snapshot_unanswered_flood_does_not_blank_recency(
+    tmp_path,
+):
+    """A pile of stale unanswered events must not crowd out *all* of recency.
+
+    Live bug (2026-07-07): a busy thread with a run of old unanswered events
+    (attachment-only messages, replies folded into a sibling event's answer,
+    ...) caused every woven "recent turns" slot to be spent on those stale
+    events, even though the last several exchanges were fully answered and
+    far more recent — the resident opened a wake unable to see anything
+    that had "just happened". The boost for unanswered asks must stay
+    capped so recency always keeps at least half the budget.
+    """
+    key = "telegram:10:"
+    for i in range(10):
+        conversations.append_event(
+            tmp_path,
+            key,
+            {"id": f"evt-stale-{i}", "source": "telegram", "body": f"stale-{i}"},
+        )
+    for i in range(2):
+        conversations.append_event(
+            tmp_path,
+            key,
+            {"id": f"evt-recent-{i}", "source": "telegram", "body": f"recent-q-{i}"},
+        )
+        conversations.append_artifact(
+            tmp_path,
+            key,
+            kind="response",
+            path=f"/tmp/evt-recent-{i}.md",
+            event_id=f"evt-recent-{i}",
+            body=f"recent-a-{i}",
+        )
+
+    snapshot = conversations.build_communication_snapshot(
+        tmp_path, key, recent_limit=8,
+    )
+
+    bodies = [r.get("body") for r in snapshot["recent_turns"]]
+    assert len(bodies) == 8
+    # The most recent, fully-answered exchange must survive — not just the
+    # oldest stale unanswered pile.
+    assert "recent-q-1" in bodies
+    assert "recent-a-1" in bodies
+    # Recency keeps at least half the budget regardless of how many stale
+    # unanswered events exist.
+    assert sum(1 for b in bodies if b.startswith("stale-")) <= 4
+
+
 def test_build_communication_snapshot_surfaces_prior_run_failure(tmp_path):
     key = "telegram:10:"
     # A prior run on the thread that died operationally (credit-low).
