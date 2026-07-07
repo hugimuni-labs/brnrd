@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -392,6 +394,50 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     assert shells["claude"]["windows"][1]["resets_at"] == 1783900000.0
     assert shells["codex"]["windows"][0]["resets_at"] == 1783350000.0
     assert shells["codex"]["windows"][1]["resets_at"] == 1783890000.0
+
+
+def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
+    """#258: the local presence registry mirrors into the account-scoped
+    live/coexisting-runs view, the same publish shape as quota (#237)."""
+    import json as json_mod
+
+    from brnrd.models import Daemon as DaemonModel
+
+    from brr import presence
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:155783668:",
+        run_id="run-live-test", repo_label="Gurio/brr", pid=os.getpid(),
+    )
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.live_runs_updated_at is not None
+        runs = json_mod.loads(daemon.live_runs_json)
+    assert len(runs) == 1
+    assert runs[0]["run_id"] == "run-live-test"
+    assert runs[0]["repo_label"] == "Gurio/brr"
+    assert runs[0]["kind"] == "daemon"
 
 
 def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):

@@ -180,6 +180,79 @@ def test_dashboard_quota_api_returns_real_windows():
     assert windows[0]["resets_at"] == 1783360000.0
 
 
+def test_dashboard_live_runs_api_requires_login():
+    """#258, same auth shape as the quota JSON endpoint: fetched by JS, a
+    401 not a login-page redirect."""
+    client = _client()
+    r = client.get("/v1/dashboard/live-runs")
+    assert r.status_code == 401
+
+
+def test_dashboard_live_runs_api_dedupes_across_repo_registrations():
+    """A single physical daemon registers one `Daemon` row per repo it's
+    connected to (`Daemon.repo_id`), and each row would publish the same
+    underlying presence entries — the account view must dedupe by run
+    identity, freshest report wins, not show the same live run twice."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd_web.activity_dashboard import _live_runs_views
+
+    client = _client()
+    token = _login(client)
+    pid_a = _create_repo(client, token, repo="Gurio/brr")
+    pid_b = _create_repo(client, token, repo="Gurio/other")
+
+    now = datetime.now(timezone.utc)
+    run_row = [{"id": "pres-1", "kind": "daemon", "stream": "telegram:x:", "run_id": "run-a", "repo_label": "Gurio/brr", "started_at": "2026-07-06T23:00:00Z", "last_seen": "2026-07-06T23:05:00Z"}]
+    with client.app.state.SessionLocal() as db:
+        older = Daemon(
+            id="dmn-live-a", repo_id=pid_a, token_id="tok-live-a", daemon_name="laptop",
+            live_runs_json=json.dumps(run_row), live_runs_updated_at=now - timedelta(seconds=30),
+        )
+        newer = Daemon(
+            id="dmn-live-b", repo_id=pid_b, token_id="tok-live-b", daemon_name="laptop",
+            live_runs_json=json.dumps(run_row), live_runs_updated_at=now,
+        )
+        db.add_all([older, newer])
+        db.commit()
+
+        repos = [db.get(Repo, pid_a), db.get(Repo, pid_b)]
+        view = _live_runs_views(db, repos)
+    assert len(view["runs"]) == 1
+    assert view["runs"][0]["run_id"] == "run-a"
+    assert view["stale"] is False
+
+
+def test_dashboard_live_runs_api_returns_runs():
+    import json
+    from datetime import datetime, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = Daemon(
+            id="dmn-live-c", repo_id=pid, token_id="tok-live-c", daemon_name="laptop",
+            live_runs_json=json.dumps(
+                [{"id": "pres-2", "kind": "daemon", "stream": "telegram:x:", "run_id": "run-b", "repo_label": "Gurio/brr", "started_at": "2026-07-06T23:00:00Z", "last_seen": "2026-07-06T23:05:00Z"}]
+            ),
+            live_runs_updated_at=datetime.now(timezone.utc),
+        )
+        db.add(daemon)
+        db.commit()
+
+    r = client.get("/v1/dashboard/live-runs")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["runs"][0]["run_id"] == "run-b"
+    assert body["stale"] is False
+
+
 def test_dashboard_can_issue_telegram_pair_link():
     client = _client(telegram_bot_username="@brnrd_bot")
     token = _login(client, login="Gurio")

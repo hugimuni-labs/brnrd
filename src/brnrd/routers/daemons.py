@@ -185,6 +185,26 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
     return schemas.QuotaOut(shells=payload.shells, quota_updated_at=now)
 
 
+@router.put("/live-runs", response_model=schemas.LiveRunsOut)
+def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon's live/coexisting-runs snapshot (#258).
+
+    Same last-write-wins shape as `put_quota` above: the daemon owns the
+    read (`src/brr/gates/cloud.py::_live_runs_snapshot`, sourced from the
+    local presence registry), this endpoint just stores the latest report.
+    """
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        raise HTTPException(status_code=404, detail="no daemon registered for this token")
+    now = datetime.now(timezone.utc)
+    daemon.live_runs_json = json.dumps([run.model_dump() for run in payload.runs], separators=(",", ":"))
+    daemon.live_runs_updated_at = now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    return schemas.LiveRunsOut(runs=payload.runs, live_runs_updated_at=now)
+
+
 @router.get("/inbox", response_model=schemas.InboxResponse)
 def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
     settings = request.app.state.settings
