@@ -493,6 +493,61 @@ directly per the maintainer's own "feel free to self merge and evaluate
 after a redeploy" — verify-then-merge, not a clean-diff-shaped guess (same
 bar as the 2026-07-06 Upsun self-merges).
 
+### Frost brightened; "accretion disk in negative" floated as a new edge idea (2026-07-08 evening)
+
+Same-thread follow-up, after the ash reads confirmed good live: two asks,
+different weight.
+
+**Shipped**: `STATUS_WARN` lightened `#7aa9c2` → `#a8cbdb` ("the frost color
+could be a bit more white, crisp"). Hue held near-identical (200.8° →
+198.8°) — the thing keeping frost from reading as the same hue as
+`WindowTrack`'s own "stale report" `sky-300` badge in the same card was
+already desaturation, not hue, so a lightness-only move doesn't reopen that
+collision; sat actually moved further from sky-300's 95% (37% → 42%, still
+nowhere close). Contrast 11.57/10.97/10.19 vs body/panel/track, well clear
+of floor. PR #287 (same PR fixed a live-caught `LiveRuns` bug: the
+stalling-state activity bar froze at a static partial-width segment, which
+read as a stuck percent-done fill rather than "no longer moving" — widened
+the frozen state to full-track/low-opacity instead, a flatlined signal
+having no fill amount to misread). Merged, redeployed, confirmed live via
+authenticated screenshot — though no shell was in `low` state at
+verification time, so the frost hex itself is code-confirmed and
+contrast-computed, not yet eyeballed live; flag if it needs another notch
+once a window actually shows it.
+
+**Not shipped, named as a real fork**: "a sharp negative space feel...
+accretion disk in negative... dark filling, white contrast on the edge" —
+offered by the maintainer with an explicit "I don't know what I'm talking
+about in terms of frontend machinery, so maybe that's not doable easily,
+let's chat then." Worth being precise about what this is and isn't before
+building anything:
+
+- It rhymes with, but isn't, the §"Darkness dial" fork closed above
+  (structural crisp-cold-edges vs. soft-warm-blur, rejected in favor of
+  "keep the warmth and blur"). That fork was about the *whole* chrome
+  register. This is a specific optical motif — a dark fill with light
+  concentrated sharply at the boundary, the visual grammar of an eclipse
+  silhouette or an event-horizon rim — which reads as compatible with, not
+  a repeal of, "keep the warmth and blur" if it's scoped to specific
+  elements rather than swapped in wholesale. The `.panel` bracket-corner
+  chrome already does a soft version of "dark fill, light at the edge"
+  (`layout.css`'s corner gradients + phosphor bloom); the open question is
+  whether *sharp* is additive there or a different surface entirely (the
+  void/critical status treatment? a new hero visual for Layer 3, the still-
+  unsolved "how does a dashboard represent dialogue with an agentic
+  resident" problem below?).
+- Technically cheap either way once scoped: a hard-edged radial-gradient or
+  `mask`/`clip-path` ring, a `box-shadow` inset+outset pair with no blur
+  radius, or an SVG rim — all straightforward CSS/SVG, no new frontend
+  machinery needed. The maintainer's own uncertainty ("maybe not doable
+  easily") doesn't hold; the actual open question is *where* this motif
+  belongs, not *whether* it's buildable.
+- Deliberately not prototyped blind this run — "let's chat" is a real
+  instruction, and the last two rounds of shipping a plausible reading of a
+  color/texture ask before confirming direction (the darkness-dial misread,
+  the ember hex) both cost a redo. Waiting for the maintainer to say which
+  surface they're picturing costs one turn; guessing wrong costs a build.
+
 ## Punch list: what's still open on the visuals (2026-07-08 check-in)
 
 Asked directly: "what we still gotta address at the visuals." In order
