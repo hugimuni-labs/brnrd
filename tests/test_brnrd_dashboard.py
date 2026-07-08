@@ -412,6 +412,62 @@ def test_dashboard_pr_review_queue_api_returns_prs_oldest_first():
     assert body["stale"] is False
 
 
+def test_dashboard_config_requests_api_requires_login():
+    """Loom envelope Phase 2 dashboard surface, same auth shape as the
+    other JSON dashboard endpoints."""
+    client = _client()
+    r = client.get("/v1/dashboard/config-requests")
+    assert r.status_code == 401
+
+
+def test_dashboard_config_requests_api_returns_pending_oldest_first():
+    """Reads the `config_change_requests` table directly (no daemon
+    publish/mirror step, unlike live-runs/PR-queue/run-ledger) — only
+    pending rows for the account's own repos, oldest first, with an
+    approve_url built from the request's own id."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import ConfigChangeRequest
+
+    client = _client(public_base_url="https://brnrd.example")
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    now = datetime.now(timezone.utc)
+    with client.app.state.SessionLocal() as db:
+        account_id = db.get(Repo, pid).account_id
+        newer = ConfigChangeRequest(
+            id="ccr-newer", account_id=account_id, repo_id=pid,
+            proposal_id="prop-newer", config_key="spawn.max_concurrent",
+            current_value="4", requested_value="8", reason="burst of ranked work",
+            status=ConfigChangeRequest.STATUS_PENDING,
+            created_at=now, expires_at=now + timedelta(days=7),
+        )
+        older = ConfigChangeRequest(
+            id="ccr-older", account_id=account_id, repo_id=pid,
+            proposal_id="prop-older", config_key="spawn.max_concurrent",
+            current_value="2", requested_value="4", reason="",
+            status=ConfigChangeRequest.STATUS_PENDING,
+            created_at=now - timedelta(hours=1), expires_at=now + timedelta(days=6),
+        )
+        decided = ConfigChangeRequest(
+            id="ccr-decided", account_id=account_id, repo_id=pid,
+            proposal_id="prop-decided", config_key="spawn.max_concurrent",
+            current_value="4", requested_value="6", reason="",
+            status=ConfigChangeRequest.STATUS_APPROVED,
+            created_at=now - timedelta(hours=2), expires_at=now + timedelta(days=5),
+        )
+        db.add_all([newer, older, decided])
+        db.commit()
+
+    r = client.get("/v1/dashboard/config-requests")
+    assert r.status_code == 200
+    body = r.json()
+    assert [row["id"] for row in body["requests"]] == ["ccr-older", "ccr-newer"]
+    assert body["requests"][0]["config_key"] == "spawn.max_concurrent"
+    assert body["requests"][0]["approve_url"] == "https://brnrd.example/config-approve/ccr-older"
+
+
 def test_dashboard_can_issue_telegram_pair_link():
     client = _client(telegram_bot_username="@brnrd_bot")
     token = _login(client, login="Gurio")
