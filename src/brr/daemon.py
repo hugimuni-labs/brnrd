@@ -164,6 +164,25 @@ _RUNNER_POLICY_REPLY_RE = re.compile(
     r"(?:runner[-_ ]?policy|policy)\s+([A-Za-z0-9_.-]{1,96})\b",
     re.IGNORECASE,
 )
+# Loom envelope Phase 2 (kb/design-multi-workstream-concurrency.md §"Named
+# forks — round 2"): unlike runner-policy above, this reply never comes
+# from a chat-typed approval — it's synthesized by
+# ``brnrd.routers.config_approval.decide_core`` once the account owner
+# clicks approve/reject on the brnrd.dev confirm URL, and arrives over the
+# same cloud events long-poll any other message does
+# (``_dispatchable_targets`` below).
+_CONFIG_CHANGE_PROPOSAL_ID_RE = _RUNNER_POLICY_PROPOSAL_ID_RE
+_CONFIG_CHANGE_REPLY_RE = re.compile(
+    r"^\s*(approve|approved|yes|reject|rejected|deny|denied|no)\s+"
+    r"config[-_ ]?change\s+([A-Za-z0-9_.-]{1,96})\b",
+    re.IGNORECASE,
+)
+# Sub-decision 1: start narrow. Keep in lockstep with
+# ``src/brnrd/routers/config_approval.py::ALLOWED_CONFIG_KEYS`` — the two
+# packages ship separately (local daemon vs. hosted server) so this can't
+# be a shared import; a mismatch just means one side rejects a proposal
+# the other would have allowed, never an unapproved config write.
+_CONFIG_CHANGE_ALLOWED_KEYS = {"spawn.max_concurrent"}
 
 
 @dataclass(frozen=True)
@@ -1000,6 +1019,287 @@ def _handle_runner_policy_control_event(
     return True
 
 
+# ── Loom envelope Phase 2 — config-change proposals ────────────────────
+#
+# A resident can ask for more of an allowlisted, user-tunable ceiling
+# (today: only ``spawn.max_concurrent``) than ``.brr/config`` currently
+# grants. Unlike CS6's runner-policy proposals above, this one is never
+# applied on a chat-typed reply: the daemon mints a brnrd.dev approve/
+# confirm URL (``gates/cloud.propose_config_change``) and only applies the
+# change once that decision rides back over the account's existing
+# ``/v1/daemons/inbox`` long-poll as an ``approve config-change <id>`` /
+# ``reject config-change <id>`` event — the exact reply-body convention
+# ``_config_change_reply`` below parses, deliberately mirroring
+# ``_runner_policy_reply``'s shape so the dispatch machinery downstream
+# stays uniform. kb/design-multi-workstream-concurrency.md §"Named forks —
+# round 2".
+
+
+def _config_change_requested(fm: dict) -> str | None:
+    key = str(fm.get("config_change") or "").strip()
+    return key or None
+
+
+def _config_change_proposal_id(task: Run, event_id: str, key: str) -> str:
+    stamp = time.strftime("%y%m%d-%H%M%S", time.gmtime())
+    digest = hashlib.sha1(
+        f"{task.id}\0{event_id}\0{time.time()}\0{key}".encode("utf-8")
+    ).hexdigest()[:8]
+    return f"cfgchg-{stamp}-{digest}"
+
+
+def _read_config_change_proposal(
+    ctx: account.AccountContext,
+    proposal_id: str,
+) -> dict[str, object] | None:
+    if not _CONFIG_CHANGE_PROPOSAL_ID_RE.match(proposal_id):
+        return None
+    path = account.config_change_proposals_path(ctx) / f"{proposal_id}.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    meta = protocol.parse_frontmatter(text)
+    if str(meta.get("id") or "") != proposal_id:
+        return None
+    meta["body"] = protocol.frontmatter_body(text).strip()
+    meta["_path"] = path
+    return meta
+
+
+def _commit_account_config_update(
+    ctx: account.AccountContext,
+    *,
+    proposal_id: str,
+    action: str,
+) -> bool:
+    if not gitops.worktree_dirty(ctx.dominion_repo):
+        return False
+    committed = gitops.commit_all(
+        ctx.dominion_repo,
+        f"config-change: {action} proposal {proposal_id}",
+    )
+    if not committed:
+        return False
+    try:
+        remote = gitops.default_remote(ctx.dominion_repo)
+        branch = gitops.current_branch(ctx.dominion_repo)
+        if remote and branch and branch != "HEAD":
+            gitops.push_branch(ctx.dominion_repo, remote, branch)
+    except Exception:  # noqa: BLE001 - durability push is best-effort
+        pass
+    return True
+
+
+def _queue_config_change_proposal(
+    emit: _WorkerEmit,
+    task: Run,
+    repo_root: Path,
+    responses_dir: Path,
+    event_id: str,
+    fm: dict,
+    body: str,
+    *,
+    account_context: account.AccountContext | None,
+) -> bool:
+    key = _config_change_requested(fm)
+    if not key:
+        return False
+    raw_value = fm.get("value")
+    if raw_value is None or str(raw_value).strip() == "":
+        message = f"Config-change proposal for `{key}` had no `value:` frontmatter; dropping."
+        protocol.write_partial(responses_dir, event_id, message)
+        return True
+    requested_value = str(raw_value).strip()
+
+    if account_context is None or not account_context.enabled:
+        print("[brr] outbox: config-change proposal had no account context; dropping")
+        message = (
+            f"Config-change proposal for `{key}` needs an account context "
+            "(cross-repo dominion) to park and escalate; this repo doesn't "
+            "have one, so I left `.brr/config` untouched."
+        )
+        protocol.write_partial(responses_dir, event_id, message)
+        return True
+
+    if key not in _CONFIG_CHANGE_ALLOWED_KEYS:
+        message = (
+            f"`{key}` isn't on the agent-proposable config allowlist today "
+            f"({sorted(_CONFIG_CHANGE_ALLOWED_KEYS)}). No change requested."
+        )
+        protocol.write_partial(responses_dir, event_id, message)
+        return True
+
+    current_cfg = conf.load_config(repo_root)
+    current_value = current_cfg.get(key)
+    proposal_id = _config_change_proposal_id(task, event_id, key)
+    proposal_path = account.config_change_proposals_path(account_context) / f"{proposal_id}.md"
+    repo_label = str(
+        fm.get("repo") or fm.get("repo_label") or task.meta.get("repo_label") or account_context.default_repo.label
+    ).strip()
+    meta = {
+        "id": proposal_id,
+        "status": "pending",
+        "config_key": key,
+        "current_value": "" if current_value is None else str(current_value),
+        "requested_value": requested_value,
+        "repo_label": repo_label,
+        "created": _utc_now(),
+        "created_by_run": task.id,
+        "created_from_event": event_id,
+        "conversation_key": task.conversation_key or emit.conversation_key,
+    }
+    _write_text_atomic(proposal_path, _frontmatter_doc(meta, body.strip()))
+    _commit_account_config_update(account_context, proposal_id=proposal_id, action="park")
+
+    # Gates normally talk to the daemon exclusively through the filesystem
+    # (gates/README.md) — this is the one deliberate exception. Minting the
+    # approve URL is a rare, resident-initiated action (not a dispatch-loop
+    # tick), so a single short-timeout call here (see
+    # ``_CONFIG_CHANGE_MINT_TIMEOUT_S``) buys one message with a working
+    # link instead of a two-phase park/mint/notify dance whose async half
+    # would leave a minting failure invisible until something polled for
+    # it. Deferred import matches the existing `from .gates import cloud`
+    # pattern in cli.py.
+    from .gates import cloud
+    minted = cloud.propose_config_change(
+        emit.brr_dir,
+        proposal_id=proposal_id,
+        config_key=key,
+        current_value=current_value,
+        requested_value=requested_value,
+        reason=body.strip(),
+    )
+    if minted and minted.get("approve_url"):
+        message = (
+            f"Config-change proposal `{proposal_id}` parked: `{key}` "
+            f"`{current_value}` → `{requested_value}`.\n\n"
+            f"Approve or reject at: {minted['approve_url']}\n\n"
+            "No change applies until the account owner decides there."
+        )
+    else:
+        message = (
+            f"Config-change proposal `{proposal_id}` parked locally (`{key}` "
+            f"`{current_value}` → `{requested_value}`), but this repo isn't "
+            "cloud-connected, so there's no approve link to send. Run "
+            "`brnrd connect` first, or apply the change by hand in "
+            "`.brr/config`."
+        )
+    ppath = protocol.write_partial(responses_dir, event_id, message)
+    if emit.conversation_key:
+        conversations.append_artifact(
+            emit.brr_dir,
+            emit.conversation_key,
+            kind="config_change_proposal",
+            path=str(ppath),
+            run_id=task.id,
+            event_id=event_id,
+            label=f"config-change:{proposal_id}",
+            body=message,
+        )
+    emit(
+        "config_change_proposed",
+        run_id=task.id,
+        event_id=event_id,
+        proposal_id=proposal_id,
+        config_key=key,
+        current_value=current_value,
+        requested_value=requested_value,
+        approve_url=(minted or {}).get("approve_url"),
+    )
+    return True
+
+
+def _config_change_reply(body: str) -> tuple[str, str] | None:
+    match = _CONFIG_CHANGE_REPLY_RE.match(body)
+    if not match:
+        return None
+    verb = match.group(1).lower()
+    action = "approve" if verb in {"approve", "approved", "yes"} else "reject"
+    return action, match.group(2)
+
+
+def _handle_config_change_control_event(
+    target: _DispatchTarget,
+    account_context: account.AccountContext,
+) -> bool:
+    parsed = _config_change_reply(str(target.event.get("body") or ""))
+    if parsed is None:
+        return False
+    action, proposal_id = parsed
+    proposal = _read_config_change_proposal(account_context, proposal_id)
+    if proposal is None:
+        _write_control_response(
+            target,
+            f"I couldn't find config-change proposal `{proposal_id}`. No config changed.",
+        )
+        return True
+
+    status = str(proposal.get("status") or "").strip()
+    if status != "pending":
+        _write_control_response(
+            target,
+            f"Config-change proposal `{proposal_id}` is already `{status or 'closed'}`. "
+            "No config changed.",
+        )
+        return True
+
+    if not isinstance(proposal.get("_path"), Path):
+        _write_control_response(
+            target,
+            f"Config-change proposal `{proposal_id}` could not be read. No config changed.",
+        )
+        return True
+
+    if action == "reject":
+        protocol.update_event_meta(
+            proposal,
+            status="rejected",
+            decided=_utc_now(),
+            decided_by_event=target.event["id"],
+        )
+        _commit_account_config_update(account_context, proposal_id=proposal_id, action="reject")
+        _write_control_response(
+            target,
+            f"Rejected config-change proposal `{proposal_id}`. No config changed.",
+        )
+        return True
+
+    key = str(proposal.get("config_key") or "").strip()
+    requested_value = str(proposal.get("requested_value") or "").strip()
+    if not key or key not in _CONFIG_CHANGE_ALLOWED_KEYS or not requested_value:
+        protocol.update_event_meta(
+            proposal,
+            status="invalid",
+            decided=_utc_now(),
+            decided_by_event=target.event["id"],
+        )
+        _commit_account_config_update(account_context, proposal_id=proposal_id, action="invalidate")
+        _write_control_response(
+            target,
+            f"Config-change proposal `{proposal_id}` was no longer valid to apply "
+            f"(`{key}` off the current allowlist, or missing a value). No config changed.",
+        )
+        return True
+
+    cfg = conf.load_config(target.repo_root)
+    cfg[key] = conf._parse_value(requested_value)
+    conf.write_config(target.repo_root, cfg)
+    protocol.update_event_meta(
+        proposal,
+        status="applied",
+        decided=_utc_now(),
+        decided_by_event=target.event["id"],
+        applied_value=requested_value,
+    )
+    _commit_account_config_update(account_context, proposal_id=proposal_id, action="apply")
+    _write_control_response(
+        target,
+        f"Applied config-change proposal `{proposal_id}`: `{key}` is now `{requested_value}`.",
+    )
+    return True
+
+
 def _handle_daemon_control_events(
     targets: list[_DispatchTarget],
     account_context: account.AccountContext,
@@ -1007,6 +1307,8 @@ def _handle_daemon_control_events(
     remaining: list[_DispatchTarget] = []
     for target in targets:
         if _handle_runner_policy_control_event(target, account_context):
+            continue
+        if _handle_config_change_control_event(target, account_context):
             continue
         remaining.append(target)
     return remaining
@@ -3249,6 +3551,23 @@ def _drain_outbox(
                 if stats is not None:
                     stats["current"] = stats.get("current", 0) + 1
                     stats["runner_policy"] = stats.get("runner_policy", 0) + 1
+            fpath.unlink(missing_ok=True)
+            continue
+        if _config_change_requested(fm):
+            if _queue_config_change_proposal(
+                emit,
+                task,
+                repo_root,
+                responses_dir,
+                event_id,
+                fm,
+                body,
+                account_context=account_context,
+            ):
+                promoted += 1
+                if stats is not None:
+                    stats["current"] = stats.get("current", 0) + 1
+                    stats["config_change"] = stats.get("config_change", 0) + 1
             fpath.unlink(missing_ok=True)
             continue
         if _truthy(fm.get("respawn")):
