@@ -154,9 +154,7 @@
 		brnrd dashboard — next
 	</h1>
 	<p class="mt-2 text-sm text-stone-400">
-		Live per-shell quota windows — the first real screen on the new stack. See
-		<code>kb/design-dashboard-live-surface.md</code> in the main repo for the fuller live-flow plan this
-		is slice 2 of.
+		Live per-shell quota windows, updated as your daemons report in.
 	</p>
 
 	<p class="eyebrow mt-6">§1 · window track</p>
@@ -192,9 +190,9 @@
 		pending settings requests
 	</h2>
 	<p class="mt-1 text-sm text-stone-400">
-		Loom envelope Phase 2: an agent asking for more of a user-tunable ceiling than it currently has
-		(e.g. <code>spawn.max_concurrent</code>) parks the request here rather than applying it or
-		accepting a chat-typed approval — decide from the linked page.
+		When an agent wants to raise a limit you've set (like <code>spawn.max_concurrent</code>) past
+		what it's currently allowed, it parks the request here instead of applying it — review and
+		decide from the linked page.
 	</p>
 	<div class="mt-3">
 		{#if configRequestsError}
@@ -209,8 +207,7 @@
 	<p class="eyebrow mt-8">§2 · live runs</p>
 	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">live runs</h2>
 	<p class="mt-1 text-sm text-stone-400">
-		What the daemon is doing right now, across every repo it touches — slice 3, the account-scoped
-		view backing the resident's own <code>coexisting_runs</code> facet.
+		What the daemon is doing right now, across every repo it touches.
 	</p>
 	<div class="mt-3">
 		{#if liveRunsError}
@@ -225,10 +222,8 @@
 	<p class="eyebrow mt-8">§2b · limits</p>
 	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">limits</h2>
 	<p class="mt-1 text-sm text-stone-400">
-		Loom envelope Phase 1: today's real user-tunable ceilings as a pressure meter — not what's
-		happening (that's live runs above), what you've allowed. See
-		<code>kb/design-multi-workstream-concurrency.md</code> §"Loom envelope" for the fuller idea (Phase
-		2, the "scream" when an agent wants past a ceiling, is a later slice).
+		Today's user-tunable ceilings, as a pressure meter — not what's happening (that's live runs
+		above), what you've allowed.
 	</p>
 	<div class="mt-3">
 		{#if liveRunsError}
