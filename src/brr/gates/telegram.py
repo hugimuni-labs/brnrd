@@ -13,6 +13,7 @@ incoming messages and stored on each event.
 
 from __future__ import annotations
 
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -155,6 +156,81 @@ def _send_with_overflow(
         token, chat_id, body, topic_id,
         reply_to_message_id=reply_to_message_id,
     )
+
+
+# ── Image attachments ────────────────────────────────────────────────
+# Telegram photos/documents become local files a downloaded event
+# references, the same shape GitHub's inline image links resolve to (see
+# ``gates/github/attachments.py`` and ``protocol.create_event``'s
+# ``attachment_files``) — one convention, both gates.
+
+_FILE_API = "https://api.telegram.org/file/bot{token}/{file_path}"
+# Telegram's own bot-API file-download cap; enforced here too so a
+# pathological response can't be streamed indefinitely into a tmp file.
+_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+
+def _pick_image_file_id(msg: dict) -> tuple[str, str] | None:
+    """Return ``(file_id, suggested_filename)`` for an image in *msg*.
+
+    A ``photo`` arrives as an ascending-resolution ``PhotoSize`` array
+    with no filename of its own (Telegram always transcodes photos to
+    JPEG), so the largest size is taken and named generically. A
+    ``document`` (drag-and-drop, or "compress: off" in the client) keeps
+    its original filename and MIME type — only image documents qualify.
+    Anything else (voice, video, sticker, a non-image document) returns
+    ``None``: this is image support, not a general attachment pipeline.
+    """
+    photo = msg.get("photo")
+    if isinstance(photo, list) and photo:
+        largest = photo[-1]
+        file_id = largest.get("file_id") if isinstance(largest, dict) else None
+        if file_id:
+            return str(file_id), "photo.jpg"
+    document = msg.get("document")
+    if isinstance(document, dict):
+        mime = str(document.get("mime_type") or "")
+        if mime.startswith("image/"):
+            file_id = document.get("file_id")
+            if file_id:
+                return str(file_id), str(document.get("file_name") or "image")
+    return None
+
+
+def _download_telegram_file(token: str, file_id: str, dest: Path) -> bool:
+    """Download a Telegram file by id into *dest*. Returns success.
+
+    Two calls: ``getFile`` resolves the id to a server-side path, then a
+    plain GET against Telegram's separate file-serving host (not
+    ``_api_call`` — that endpoint returns raw bytes, not a JSON
+    envelope). Best-effort throughout: any failure (expired file,
+    network hiccup, oversized response) returns ``False`` rather than
+    raising, so a flaky download degrades to "message arrived with no
+    attachment" instead of dropping the whole inbound message.
+    """
+    try:
+        info = _api_call(token, "getFile", {"file_id": file_id})
+    except RuntimeError:
+        return False
+    file_path = (info.get("result") or {}).get("file_path")
+    if not file_path:
+        return False
+    url = _FILE_API.format(token=token, file_path=file_path)
+    try:
+        with _SESSION_LOCK:
+            response = _SESSION.get(url, timeout=90, stream=True)
+        if not 200 <= response.status_code < 300:
+            return False
+        size = 0
+        with open(dest, "wb") as fh:
+            for chunk in response.iter_content(65536):
+                size += len(chunk)
+                if size > _MAX_ATTACHMENT_BYTES:
+                    return False
+                fh.write(chunk)
+    except requests.RequestException:
+        return False
+    return True
 
 
 # ── State ────────────────────────────────────────────────────────────
@@ -348,8 +424,13 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         topic_id = msg.get("message_thread_id")
         if configured_topic_id and topic_id != configured_topic_id:
             continue
-        text = msg.get("text", "").strip()
-        if not text:
+        # A caption rides on a photo/document message where ``text``
+        # never appears; either one is the event body. An image with no
+        # caption at all still becomes an event (empty body, the image
+        # carries the content) — only a message with neither is skipped.
+        text = str(msg.get("text") or msg.get("caption") or "").strip()
+        image = _pick_image_file_id(msg)
+        if not text and not image:
             continue
 
         sender = msg.get("from") or {}
@@ -366,10 +447,21 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         # pitfall "Telegram event-id timestamps are ingestion time, not send
         # time" only shallowly verified this, didn't yet capture the fix).
         sent_at = msg.get("date")
+
+        attachment_files: list[Path] = []
+        image_tmpdir: tempfile.TemporaryDirectory | None = None
+        if image is not None:
+            file_id, suggested_name = image
+            image_tmpdir = tempfile.TemporaryDirectory()
+            dest = Path(image_tmpdir.name) / suggested_name
+            if _download_telegram_file(token, file_id, dest):
+                attachment_files.append(dest)
+
         protocol.create_event(
             inbox_dir,
             source="telegram",
             body=text,
+            attachment_files=attachment_files or None,
             telegram_chat_id=chat_id,
             telegram_topic_id=topic_id or "",
             telegram_user=user,
@@ -378,6 +470,8 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             telegram_message_id=message_id if message_id is not None else "",
             telegram_sent_at=sent_at if sent_at is not None else "",
         )
+        if image_tmpdir is not None:
+            image_tmpdir.cleanup()
 
     state["offset"] = offset
     _save_state(brr_dir, state)
