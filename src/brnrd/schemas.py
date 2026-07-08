@@ -78,6 +78,28 @@ class PairStatus(BaseModel):
     telegram_pair: TelegramPairStarted | None = None
 
 
+class ConfigChangeRequestCreate(BaseModel):
+    """Daemon-initiated loom-envelope Phase 2 proposal (`POST /v1/daemons/config-requests`).
+
+    ``proposal_id`` is the daemon's own local proposal filename stem — the
+    join key `decide_core` writes back into the account dispatch channel so
+    the daemon's existing approve/reject reply convention (CS6's
+    runner-policy pattern) resolves it without a new lookup mechanism.
+    """
+
+    proposal_id: str = Field(min_length=1, max_length=96)
+    config_key: str = Field(min_length=1, max_length=128)
+    current_value: str = ""
+    requested_value: str = Field(min_length=1, max_length=256)
+    reason: str = ""
+
+
+class ConfigChangeRequestOut(BaseModel):
+    request_id: str
+    status: str
+    approve_url: str | None = None
+
+
 class DaemonRegister(BaseModel):
     daemon_name: str = Field(min_length=1, max_length=128)
     capabilities: dict[str, Any] = Field(default_factory=dict)
