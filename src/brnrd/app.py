@@ -12,7 +12,7 @@ from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
-from .routers import accounts, daemons, dev, github_app, pairing, render, webhooks
+from .routers import accounts, config_approval, daemons, dev, github_app, pairing, render, webhooks
 
 
 _INDEX_HTML = """<!doctype html>
@@ -93,6 +93,7 @@ def create_app(
 
     app.include_router(accounts.router)
     app.include_router(pairing.router)
+    app.include_router(config_approval.router)
     app.include_router(daemons.router)
     app.include_router(render.router)
     app.include_router(webhooks.router)
