@@ -32,3 +32,8 @@ build/
 
 # MacOS
 .DS_Store
+
+# Secrets / local credentials — e.g. .tmp/brnrd-session.cookie, the raw
+# live brnrd.dev session cookie for option 1 of
+# kb/design-agent-visual-inspection.md. Never committed, never logged.
+*.cookie
