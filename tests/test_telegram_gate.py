@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from brr import protocol
@@ -117,6 +119,159 @@ def test_loop_tracks_last_chat_id_without_restricting_future_chats(
     assert [event["telegram_chat_id"] for event in events] == [111, 222]
     # ...but the last one seen is now the recorded delivery fallback.
     assert telegram._load_state(brr_dir)["last_chat_id"] == 222
+
+
+def test_loop_downloads_photo_and_records_attachment(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret"})
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        if method == "getUpdates":
+            return {
+                "result": [
+                    {
+                        "update_id": 1,
+                        "message": {
+                            "message_id": 501,
+                            "chat": {"id": 111},
+                            "from": {"id": 41, "first_name": "Ada"},
+                            "caption": "check this out",
+                            "photo": [
+                                {"file_id": "small", "width": 90, "height": 90},
+                                {"file_id": "big", "width": 900, "height": 900},
+                            ],
+                        },
+                    },
+                ],
+            }
+        assert method == "getFile"
+        assert params == {"file_id": "big"}
+        return {"result": {"file_path": "photos/file_1.jpg"}}
+
+    class FakeResponse:
+        status_code = 200
+
+        def iter_content(self, chunk_size):
+            yield b"fake-jpeg-bytes"
+
+    def fake_get(url, timeout=None, stream=None):
+        assert url == "https://api.telegram.org/file/botsecret/photos/file_1.jpg"
+        return FakeResponse()
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    monkeypatch.setattr(telegram._SESSION, "get", fake_get)
+
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    events = protocol.list_pending(inbox_dir)
+    assert len(events) == 1
+    event = events[0]
+    assert event["body"] == "check this out"
+    assert event["attachments"] == "photo.jpg"
+    paths = protocol.event_attachment_paths(event)
+    assert len(paths) == 1
+    assert paths[0].read_bytes() == b"fake-jpeg-bytes"
+
+
+def test_loop_accepts_photo_with_no_caption(tmp_path, monkeypatch):
+    # A bare photo (no text, no caption) used to be silently dropped —
+    # `if not text: continue` never checked for an image at all.
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret"})
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        if method == "getUpdates":
+            return {
+                "result": [
+                    {
+                        "update_id": 1,
+                        "message": {
+                            "message_id": 501,
+                            "chat": {"id": 111},
+                            "from": {"id": 41, "first_name": "Ada"},
+                            "photo": [{"file_id": "only", "width": 400, "height": 400}],
+                        },
+                    },
+                ],
+            }
+        return {"result": {"file_path": "photos/file_2.jpg"}}
+
+    class FakeResponse:
+        status_code = 200
+
+        def iter_content(self, chunk_size):
+            yield b"bytes"
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    monkeypatch.setattr(
+        telegram._SESSION, "get", lambda url, timeout=None, stream=None: FakeResponse(),
+    )
+
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    events = protocol.list_pending(inbox_dir)
+    assert len(events) == 1
+    assert events[0]["body"] == ""
+    assert events[0]["attachments"] == "photo.jpg"
+
+
+def test_loop_skips_message_with_no_text_and_no_image(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    telegram._save_state(brr_dir, {"token": "secret"})
+
+    def fake_api_call(token, method, params=None, *, poll=False):
+        return {
+            "result": [
+                {
+                    "update_id": 1,
+                    "message": {
+                        "message_id": 501,
+                        "chat": {"id": 111},
+                        "from": {"id": 41, "first_name": "Ada"},
+                        "sticker": {"file_id": "sticker-1"},
+                    },
+                },
+            ],
+        }
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+    telegram._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    assert protocol.list_pending(inbox_dir) == []
+
+
+def test_download_telegram_file_returns_false_on_missing_file_path(monkeypatch):
+    monkeypatch.setattr(
+        telegram, "_api_call", lambda token, method, params=None, poll=False: {"result": {}},
+    )
+    ok = telegram._download_telegram_file(
+        "secret", "some-id", Path("/tmp/does-not-matter"),
+    )
+    assert ok is False
+
+
+def test_pick_image_file_id_prefers_photo_over_document():
+    msg = {
+        "photo": [{"file_id": "p1"}],
+        "document": {"file_id": "d1", "mime_type": "image/png"},
+    }
+    assert telegram._pick_image_file_id(msg) == ("p1", "photo.jpg")
+
+
+def test_pick_image_file_id_accepts_image_document():
+    msg = {"document": {"file_id": "d1", "mime_type": "image/png", "file_name": "shot.png"}}
+    assert telegram._pick_image_file_id(msg) == ("d1", "shot.png")
+
+
+def test_pick_image_file_id_rejects_non_image_document():
+    msg = {"document": {"file_id": "d1", "mime_type": "application/pdf"}}
+    assert telegram._pick_image_file_id(msg) is None
 
 
 def test_delivery_loop_falls_back_to_last_chat_id_for_chatless_event(
