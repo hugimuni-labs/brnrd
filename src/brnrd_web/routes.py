@@ -342,6 +342,23 @@ def login_form(request: Request, next: str = "/"):
     return _render(request, "login.html", {"body_class": "auth-page", "title": "Sign in to brnrd", "signin_url": signin, "oauth_ready": _github_oauth_ready(request)})
 
 
+@router.get("/logout")
+def logout(request: Request):
+    """Clear the session cookie and send the browser back to `/login`.
+
+    Named directly as a real gap (2026-07-08): there was no way to end a
+    browser session short of clearing cookies by hand. GET, not POST — this
+    is a plain link (the dashboard's own "sign out" affordance), not a form;
+    revoking the underlying `Token` row isn't attempted here (the cookie
+    stops being sent, which is what actually ends the browser session), the
+    same "delete the cookie, not the token" shape `_clear_oauth_cookies`
+    already uses for the oauth-flow cookies above.
+    """
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(request.app.state.settings.session_cookie, samesite="lax", secure=_cookie_secure(request))
+    return resp
+
+
 @router.get("/terms", response_class=HTMLResponse)
 def terms_page(request: Request):
     return _render(
