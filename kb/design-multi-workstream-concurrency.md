@@ -3,15 +3,17 @@
 Status: active on 2026-07-08 (maintainer ask, evt-twkg + evt-l6a7/evt-bo51
 same-thread follow-ups; forks answered same day, evt-dzgu; round 2 answered
 the same night, evt-mr8v; loom envelope Phase 2 shipped later that night,
-run-260708-1920-obup). Slice 1 shipped (spawn pool + `LiveRuns` join,
-"Slice 1 — shipped" below). Round 2 (§"Named forks — round 2") mostly
-*corrected* rather than opened new design: the cross-repo "workbench" fork
-turned out to be already-decided, already-shipped code, not a new idea to
-weigh — see that section before re-deriving it again. The loom envelope's
-Phase 2 approval-URL sub-design was the one genuinely new thread this round
-added, and it's now shipped backend code — see "Loom envelope Phase 2 —
-shipped" below; Phase 1 (the limits panel) and a dashboard surface for a
-pending Phase 2 request are still open.
+run-260708-1920-obup; Phase 1 shipped run-260708-2052-poak). Slice 1
+shipped (spawn pool + `LiveRuns` join, "Slice 1 — shipped" below). Round 2
+(§"Named forks — round 2") mostly *corrected* rather than opened new
+design: the cross-repo "workbench" fork turned out to be already-decided,
+already-shipped code, not a new idea to weigh — see that section before
+re-deriving it again. The loom envelope's Phase 2 approval-URL sub-design
+shipped backend code first (see "Loom envelope Phase 2 — shipped" below),
+Phase 2's dashboard surface next, and now Phase 1 (the limits panel) too —
+see "Loom envelope Phase 1 — shipped" below. Phase 2's own "scream" record
+(when a spawn candidate wanted past the pool ceiling) is the one piece of
+this design still unbuilt.
 
 ## The ask, corrected before anything else
 
@@ -692,3 +694,24 @@ ledger this would eventually auto-tune from, and B1's quota-pacing floors
 boundary.md` §1 (the facet schema `coexisting_runs` belongs to),
 `design-brand-visual-language.md` (the status-palette vocabulary the loom
 envelope phase 1 would reuse).
+
+## Loom envelope Phase 1 — shipped (2026-07-08 night, run-260708-2052-poak)
+
+Built the phasing this page already recommended, not a redesign: a small
+"limits" panel (`Limits.svelte`, `+page.svelte` §2b) showing
+`spawn.max_concurrent` as a pressure meter — `n/max` spawn slots in use,
+reusing `statusPalette.ts`'s exact dot/bar vocabulary and `quotaLevel`'s
+draining-bar convention (headroom, not usage, is what fills the bar, same
+direction a quota window drains). No new backend collection: the *active*
+count is a client-side derive over the already-published `is_subspawn`
+entries in `/v1/dashboard/live-runs`; the *max* is the one number that
+publish didn't carry yet, piggybacked onto the same tick
+(`Daemon.spawn_max_concurrent`, `cloud.py::_spawn_pool_width` reusing
+`daemon._max_concurrent_spawns`'s own clamped parsing via a deferred
+import rather than duplicating it). Structural, not user-set, limits
+(`current`'s cap of 1) stay out of this panel per the pushback above.
+Build+lint clean, 1426 backend tests green (+7: publish round-trip,
+dashboard API field, `_live_runs_views` freshest-wins). Not built: Phase
+2's "scream" record (`kb/design-multi-workstream-concurrency.md` above)
+is unchanged — a spawn candidate over the pool width still just waits
+quietly, this panel only makes that quiet wait visible as a filling bar.

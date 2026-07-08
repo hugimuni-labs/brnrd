@@ -12228,3 +12228,35 @@ Full detail: `kb/design-multi-workstream-concurrency.md` (new sections:
 "Loom envelope Phase 2 — dashboard surface shipped", "Concurrent-spawn
 duplicate-dispatch bug"). Branches: `brr/spawn-dedup-fix-and-obup-
 closeout-diagnosis` (#294), `brr/loom-envelope-phase2-frontend` (#297).
+
+## [2026-07-08] feature | Director tick given real spawn-dispatch authority; loom envelope Phase 1 shipped
+
+Direct answer to the fork named at the end of the previous run ("it could
+now `spawn:` its own top-ranked item each tick, pool+dedup both work
+now"): "I think it sounds good." Granted in the account dominion's
+`schedule.md`, scoped narrowly rather than opened wide — eligible only
+when the top-ranked `active.md` entry is itself already bounded/mechanical
+(the same delegation bar B2/B4 used), at most one dispatch per tick, a
+forge check for already-in-flight duplicate work before dispatching (the
+tick-level echo of #294's dedup lesson), lingers-and-reviews the child's
+diff in the same tick's thought per the standing `spawn:` convention.
+Merge authority stays withdrawn, unchanged. Mirrored into
+`kb/plan-director-execution.md` §A4.
+
+Exercised live the same run, not left untested: dispatched `spawn:` on
+#255 (a maintainer-flagged, fully-scoped placeholder-runner-core fix) —
+both the first real use of the new authority and the maintainer's own
+requested re-test of the #294 dedup fix.
+
+Also shipped: loom envelope Phase 1 (`kb/design-multi-workstream-
+concurrency.md` §"Loom envelope"), the small "limits" panel this page
+already recommended — `spawn.max_concurrent` as a pressure meter, reusing
+`statusPalette.ts`'s dot/bar vocabulary. `Daemon.spawn_max_concurrent`
+piggybacks on the existing live-runs publish tick (no new endpoint); the
+active count is a client-side derive over already-published
+`is_subspawn` entries. Build+lint clean, 1426 backend tests green.
+
+Detail: `kb/plan-director-execution.md` §A4, `kb/design-multi-workstream-
+concurrency.md` §"Loom envelope Phase 1 — shipped", `ledger/decisions.md`
+(account dominion). Branch:
+`brr/tick-spawn-authority-and-loom-envelope-phase1-2026-07-08`.

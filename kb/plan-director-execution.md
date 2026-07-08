@@ -148,6 +148,30 @@ merges, or gives a standing "always merge X-shaped PRs" instruction the
 entry can cite by name. Re-derived precedent doesn't restore the
 authority; an explicit maintainer nod to a *named scope* does.
 
+**Dispatch authority granted (2026-07-08):** the merge-authority withdrawal
+above left the tick's whole action surface at re-derive + write plan/ledger
++ notify — no shipped work of its own since 07-05. Named as a genuine fork
+the same night `spawn.max_concurrent` reached 4 and the #294 dedup bug was
+fixed: it could legitimately `spawn:` its own top-ranked item each tick
+instead of only reporting, same trust-boundary shape as the self-merge
+question — flagged back, not built. Answered directly, same day: "I think
+it sounds good." Unlike the merge grant, this one is real, not a misread
+example — but scoped just as narrowly in `schedule.md` (account dominion):
+eligible only when the top-ranked `active.md` entry is itself already
+bounded/mechanical (the same "cleanly spec-able" bar B2/B4 above were
+delegated under, not a design question or anything Reconsider would call
+costly/irreversible/value-laden); at most one dispatch per tick regardless
+of pool width; a forge check for already-in-flight work on the same item
+before dispatching (the tick-level echo of #294's lesson, since that fix
+guards concurrent duplicates within one batch, not staleness across a 5h
+gap); lingers for and reviews the child's diff in the same tick's thought
+per the playbook's `spawn:` convention, self-wake review only as the
+degraded fallback. Merging stays withdrawn, unchanged — a dispatched build
+still only gets *recommended* for merge in the notify line, same as
+before. First live exercise: same run, dispatched `spawn:` on #255 (a
+maintainer-approved, fully-scoped placeholder-model-id fix) as the
+concrete first case, not a hypothetical policy.
+
 **Stop-hook "no outbound signal" nudge fights the notify-bar policy
 (confirmed live twice: 2026-07-07 18:25z tick, 2026-07-08 23:25z tick).**
 A pure-re-derivation tick that correctly stays silent per the notify bar
