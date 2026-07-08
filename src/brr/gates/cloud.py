@@ -101,6 +101,66 @@ def relay_pack(brr_dir: Path, pack: dict, *, ttl_s: int | None = None) -> str | 
     return url if isinstance(url, str) and url else None
 
 
+_CONFIG_CHANGE_MINT_TIMEOUT_S = 10.0
+
+
+def propose_config_change(
+    brr_dir: Path,
+    *,
+    proposal_id: str,
+    config_key: str,
+    current_value: Any,
+    requested_value: Any,
+    reason: str = "",
+    timeout: float = _CONFIG_CHANGE_MINT_TIMEOUT_S,
+) -> dict[str, Any] | None:
+    """Mint a brnrd.dev approve/confirm URL for a proposed config-key change.
+
+    Loom envelope Phase 2 (kb/design-multi-workstream-concurrency.md
+    §"Named forks — round 2"): when a resident wants more of an
+    allowlisted, user-tunable ceiling than ``.brr/config`` currently
+    grants, the change is never applied unilaterally, and never on a
+    chat-typed approval — it rides the same device-flow shape as
+    ``routers/pairing.py``'s daemon pairing, gated behind the account
+    owner's login (``src/brnrd/routers/config_approval.py``). Returns
+    ``None`` (never raises) when this daemon isn't cloud-connected, since a
+    repo with no brnrd.dev account has no approver to escalate to — the
+    caller falls back to a locally-parked-only proposal in that case.
+
+    Called synchronously from ``daemon.py``'s outbox drain (a deliberate,
+    narrow exception to gates normally talking to the daemon only through
+    the filesystem — see ``gates/README.md``): this is a rare,
+    resident-initiated action, not a routine dispatch-loop tick, so the
+    shorter-than-default ``timeout`` bounds how long a slow/unreachable
+    server can stall that drain rather than avoiding the call entirely; a
+    fully async two-phase mint (park now, mint on a later tick) was
+    considered and set aside because it would leave a proposal's approve
+    link — and any minting failure — invisible to the user until a
+    separate poll noticed it.
+    """
+    state = _load_state(brr_dir)
+    if not (state.get("token") and state.get("brnrd_url")):
+        return None
+    try:
+        return _request(
+            state["brnrd_url"],
+            "POST",
+            "/v1/daemons/config-requests",
+            token=state["token"],
+            json={
+                "proposal_id": proposal_id,
+                "config_key": config_key,
+                "current_value": "" if current_value is None else str(current_value),
+                "requested_value": str(requested_value),
+                "reason": reason,
+            },
+            timeout=timeout,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] config-change proposal mint failed: {e}")
+        return None
+
+
 def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
     pair = _request(brnrd_url, "POST", "/v1/accounts/pair")
     out(f"[brr] Approve this daemon at: {pair['pair_url']}")
