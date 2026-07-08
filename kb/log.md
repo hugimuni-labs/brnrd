@@ -12289,3 +12289,67 @@ direct-fix precedents, not the director-tick unreviewed-initiative pattern
 the no-self-merge policy targets). PR #301. Verified live via Playwright
 after the Upsun redeploy landed (see the login skin's own PR discussion
 for the pixel check).
+
+## [2026-07-08] fix | Login/ToS "still green" root-caused to dead cache-busting, not the #301 fix itself; #271 already shipped; #268's remaining half closed
+
+Direct follow-up, same night: "the login page (as well as tos) have green
+color, which I think is off brand" — after PR #301 had already fixed
+`app.css` hours earlier. Traced live rather than re-fixing blind:
+`base.html`'s `<link ... ?v={{ asset_version }}>` had never had
+`asset_version` populated anywhere in the codebase, so every deploy served
+the byte-identical `app.css?v=` URL. Confirmed via curl against production:
+`cf-cache-status: HIT`, `cache-control: max-age=14400`, and the response
+body was still the pre-#301 mint-green palette — Cloudflare had simply
+never been given a reason to treat the post-fix deploy's asset as a
+different object. Fixed at the root: `routes.py::_compute_asset_version`
+hashes `app.css`+`dashboard.css` at import time and `_render` threads it
+into every template, so a real content change always mints a new cache
+key. Regression test added
+(`test_static_asset_urls_carry_a_real_cache_busting_version`). Verified
+live post-deploy: `app.css?v=c745bb3c17ba` now serves the amber palette.
+
+Same-thread, folded into the same PR (#303): "this part should probably
+not be on the page, wdyt?" — quoting the live dashboard's own "pending
+settings requests" copy, which named the internal codename "Loom envelope
+Phase 2" verbatim. Swept the rest of `+page.svelte` for the same pattern
+and found two more spots doing it worse — the limits-panel blurb linking
+`kb/design-multi-workstream-concurrency.md` by file path, and the page's
+own header blurb linking `kb/design-dashboard-live-surface.md` the same
+way. All three rewritten to plain product copy; no internal codenames or
+kb paths left on the live user-facing surface.
+
+Two more same-thread asks resolved without new code:
+- **"the limits block shows 0/4 spawn slots used" while a run is in
+  progress** — checked live via the authenticated `/v1/dashboard/live-runs`
+  API: the one live run was this resident thread itself (`is_subspawn:
+  false`), so 0/4 is correct per the panel's own definition (concurrent
+  `spawn:` children only, never the resident). Not a bug.
+- **"do we need #268? Let's do if yes"** — #268's first finding (working-
+  directory isolation) was already closed by #278; dispatched a `spawn:`
+  (claude/sonnet, doubling as the maintainer's own ask to exercise
+  multi-spawn dispatch) at the second, still-open finding ("a spawn that
+  exits cleanly with zero commits produces no completion notification").
+  It traced the seam by hand (`_EVENT_META_FIELDS` doesn't block either
+  spawn-parent-linkage key; both notify functions already have what they
+  need) and found the real gap was missing end-to-end test coverage, not
+  a code defect — every existing test exercised only half the seam
+  (notifier-in-isolation, or real dispatch with the notifier mocked away).
+  PR #304 (test-only, 2 new tests) closes that; reviewed the diff and
+  reran the full suite on its branch myself before merging (1429, then
+  1430 passed on `main` after both PRs landed). One real gap named and
+  left open on the issue: a daemon restart between a spawn's dispatch and
+  reap loses `active_spawns`' in-memory bookkeeping — structural, rare,
+  not cheap to close, scoped as future work rather than forced into this
+  run.
+- **"let's do #271"** — already shipped (PR #274, 2026-07-07-ish): `GET
+  /v1/dashboard/run-ledger` + `RunLedgerReceipt.svelte` were both live.
+  Verified via an authenticated curl (real rows, `task_classification`
+  populated) rather than re-building; closed the GitHub issue with the
+  receipt instead.
+
+First live exercise of `spawn:` dispatched *from the resident thread
+itself* rather than the director tick — same primitive, same review-
+before-close discipline held.
+
+Detail: PRs #303, #304. Branch: `brr/asset-cachebust-and-dashboard-copy-
+2026-07-08`, `brr/spawn-clean-finish-notify-268`.
