@@ -2,7 +2,7 @@
 
 import subprocess
 
-from brr import knowledge
+from brr import account, knowledge
 from brr.prompts import _build_knowledge_sources_block
 
 from _helpers import init_git_repo
@@ -78,3 +78,67 @@ def test_checkout_is_gitignored_from_project_status(tmp_path):
         text=True,
     ).stdout.strip()
     assert ".brnrd-kb/" in (repo / exclude).read_text(encoding="utf-8")
+
+
+def _account_cfg(repo, home, **extra):
+    cfg = {
+        "repo.label": "Gurio/brr",
+        "home.kind": "account",
+        "home.path": str(home),
+        "account.id": "acct-1",
+    }
+    cfg.update(extra)
+    return cfg
+
+
+def test_account_home_splits_knowledge_by_repo_and_cross_repo(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = tmp_path / "home"
+    cfg = _account_cfg(repo, home)
+
+    ctx = account.resolve_context(repo, cfg)
+    repo_knowledge = account.repo_knowledge_path(ctx, "Gurio/brr")
+    cross_repo_knowledge = account.account_knowledge_path(ctx)
+    repo_knowledge.mkdir(parents=True)
+    cross_repo_knowledge.mkdir(parents=True)
+    (repo_knowledge / "index.md").write_text("repo-scoped note", encoding="utf-8")
+    (cross_repo_knowledge / "index.md").write_text("account-wide note", encoding="utf-8")
+
+    found = knowledge.sources(repo, cfg)
+    names = [s.name for s in found]
+
+    assert names[:2] == ["home knowledge (repo)", "home knowledge (account)"]
+    block = knowledge.render_injection(repo, cfg)
+    # Repo-scoped knowledge is the most relevant to this wake — it leads.
+    assert block.index("repo-scoped note") < block.index("account-wide note")
+
+
+def test_account_only_mode_keeps_one_flat_bucket(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = tmp_path / "home"
+    cfg = _account_cfg(repo, home, **{"knowledge.split": "account-only"})
+
+    ctx = account.resolve_context(repo, cfg)
+    flat = account.knowledge_path(ctx)
+    flat.mkdir(parents=True)
+    (flat / "index.md").write_text("one shared bucket", encoding="utf-8")
+
+    found = knowledge.sources(repo, cfg)
+
+    assert [s.name for s in found[:1]] == ["home knowledge"]
+    assert found[0].root == flat
+
+
+def test_project_home_never_splits(tmp_path):
+    """A project home has exactly one repo — nothing to split against."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = tmp_path / "home"
+    (home / "knowledge").mkdir(parents=True)
+    (home / "knowledge" / "index.md").write_text("project note", encoding="utf-8")
+
+    found = knowledge.sources(repo, {"home.path": str(home)})
+
+    assert [s.name for s in found[:1]] == ["home knowledge"]
