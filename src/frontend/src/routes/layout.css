@@ -28,7 +28,23 @@ body {
    more crt glow") — scanlines from ~1% to ~1.8% alpha, the top hearth-glow
    radial from 5% to 8%, plus a second, wider bloom so the warmth reads past
    just the header. Still meant to recede, not announce itself; a texture,
-   not a filter demo. */
+   not a filter demo.
+
+   2026-07-08 evening, second pass: the maintainer asked for the "accretion
+   disk in negative" motif (a dark fill with light concentrated sharply at
+   the boundary) scoped 1 + a bit more — the void/critical status accent
+   (see `statusPalette.ts`) plus "a small similar themed void/glowing-white-
+   light-though-dark edge around the rendered screen... retro-terminal-
+   summoned-from-the-void", explicitly *not* the `.panel` bracket-chrome
+   (kept amber — "gives it the right loki-vs-severance feel") and not a full
+   Layer-3 hero visual yet. The `box-shadow` pair below is that edge: a
+   hairline frost-white rim right at the viewport boundary (the "little
+   glowing white light"), closing inward to a soft void vignette (the "dark
+   edge") — same grammar as the critical-status dot/bar (dark core, bright
+   rim), stretched around the whole screen instead of a status glyph. Kept
+   deliberately subtle ("cozy, but focused"): this reads as a screen
+   materializing at its own edge, not a frame competing with the amber
+   panel chrome or the hearth-glow bloom above. */
 body::before {
 	content: '';
 	position: fixed;
@@ -39,6 +55,9 @@ body::before {
 		repeating-linear-gradient(rgba(243, 232, 216, 0.018) 0 1px, transparent 1px 3px),
 		radial-gradient(ellipse at 50% 0%, rgba(217, 164, 65, 0.08), transparent 60%),
 		radial-gradient(ellipse at 50% 100%, rgba(217, 164, 65, 0.035), transparent 65%);
+	box-shadow:
+		inset 0 0 0 1px rgba(198, 224, 235, 0.12),
+		inset 0 0 60px 8px rgba(4, 3, 2, 0.5);
 }
 
 /* Bracket-cornered instrument panel — the load-bearing chrome swap.
