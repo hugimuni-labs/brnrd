@@ -2,6 +2,7 @@
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
 	import { ageSince, type LiveRun } from './liveRuns';
+	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN } from './statusPalette';
 
 	interface Props {
 		runs: LiveRun[];
@@ -23,13 +24,17 @@
 	// zero new backend data. What the data *does* carry that the old plain
 	// list never used: `last_seen`, freshness of the last heartbeat — a
 	// real second state (running vs. stalling-toward-prune), not a
-	// fabricated one. Same three-tier palette as WindowTrack (dataviz
-	// skill's palette.md): a status color never doubles as a series
-	// identity.
+	// fabricated one. Same palette module as WindowTrack (`statusPalette.ts`)
+	// — an import, not a retyped hex, so the two can't drift the way this
+	// file and WindowTrack's did before 2026-07-08 (this file's old
+	// `#0ca30c`/`#fab219` sat under a comment claiming that parity while
+	// WindowTrack had already moved to hearth/frost/ember): running = good
+	// (amber), stalling = warn (frost), unknown recedes. A status color
+	// never doubles as a series identity.
 	const LEVEL_COLOR: Record<'running' | 'stalling' | 'unknown', string> = {
-		running: '#0ca30c',
-		stalling: '#fab219',
-		unknown: '#57534e'
+		running: STATUS_GOOD,
+		stalling: STATUS_WARN,
+		unknown: STATUS_UNKNOWN
 	};
 	const LEVEL_LABEL: Record<'running' | 'stalling' | 'unknown', string> = {
 		running: 'running',
