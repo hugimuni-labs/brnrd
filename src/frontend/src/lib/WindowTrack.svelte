@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { quotaLevel, timeUntil, type QuotaShell } from './quota';
+	import { STATUS_GOOD, STATUS_WARN, STATUS_CRITICAL, STATUS_UNKNOWN } from './statusPalette';
 
 	interface Props {
 		shell: QuotaShell;
@@ -8,28 +9,19 @@
 
 	let { shell, now }: Props = $props();
 
-	// Status palette — brnrd's own fixed scale (2026-07-08 pass), not the
-	// dataviz skill's generic reference defaults these three hexes used to
-	// be lifted verbatim from (#0ca30c/#fab219/#d03b3b — stock traffic-
-	// light, never actually reskinned). Still a small fixed scale with
-	// reserved meaning per the skill's own rule ("status never follows the
-	// theme"), still always icon+label, never color alone — but the *hues*
-	// now read as this dashboard's hearth/frost/ember register instead of
-	// generic RAG. ample = hearth-lit amber (full warmth); low = frost
-	// creeping in (cooling, leaving the firelight) — a dimmer/desaturated
-	// blue than the `sky-300` "stale report" badge below, so the two don't
-	// collide as one hue meaning two things in the same card; critical =
-	// dying ember, the closest a legible-on-dark-void hue can get to
-	// "darkness" while still clearing 3:1 against the track/panel/body
-	// surfaces (validated: dataviz's scripts/validate_palette.js contrast()
-	// — a true near-black would drop the affordance icon+label is supposed
-	// to back up, not replace). Contrast checked against #0c0906 (body),
-	// ~#171009 (panel), #1c1917 (stone-900 track): all ≥ 3.7:1.
+	// Palette lives in `statusPalette.ts` (single source, shared with
+	// LiveRuns/PRReviewQueue). ample = hearth-lit amber (full warmth); low =
+	// frost creeping in (cooling, leaving the firelight) — a dimmer/
+	// desaturated blue than the `sky-300` "stale report" badge below, so the
+	// two don't collide as one hue meaning two things in the same card;
+	// critical = dying ember, the closest a legible-on-dark-void hue can get
+	// to "darkness" while still clearing 3:1 (still always icon+label, never
+	// color alone).
 	const LEVEL_COLOR: Record<string, string> = {
-		ample: '#e8b34a',
-		low: '#7aa9c2',
-		critical: '#c0523f',
-		unknown: '#57534e' // stone-600 — recedes, not a fourth status hue
+		ample: STATUS_GOOD,
+		low: STATUS_WARN,
+		critical: STATUS_CRITICAL,
+		unknown: STATUS_UNKNOWN
 	};
 
 	const LEVEL_TEXT: Record<string, string> = {
