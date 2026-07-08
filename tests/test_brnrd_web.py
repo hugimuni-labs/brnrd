@@ -105,6 +105,20 @@ def test_login_page_uses_github_only(client):
     assert "password" not in r.text.lower()
 
 
+def test_static_asset_urls_carry_a_real_cache_busting_version(client):
+    """Live-caught 2026-07-08: base.html's `?v={{ asset_version }}` was never
+    wired to a value, so every deploy served the identical `app.css?v=` URL —
+    Cloudflare kept serving pre-fix (green) CSS bytes under that stable cache
+    key for its full max-age after the brand-palette fix (PR #301) had
+    already shipped and deployed. A non-empty version tied to file content
+    means a real static-asset change always mints a new URL."""
+    r = client.get("/login")
+    assert r.status_code == 200
+    assert "app.css?v=" in r.text
+    assert "app.css?v=\"" not in r.text
+    assert "dashboard.css?v=\"" not in r.text
+
+
 def test_logout_clears_session_cookie_and_redirects_to_login(client, monkeypatch):
     """Named directly as a real gap (2026-07-08): no way to end a browser
     session short of clearing cookies by hand."""

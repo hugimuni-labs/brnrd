@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,8 +43,34 @@ _DAEMON_ONLINE_AFTER = timedelta(minutes=2)
 _HOSTED_TERMS_VERSION = "2026-07-08"
 
 
+def _compute_asset_version() -> str:
+    """Content hash of the static assets base.html cache-busts with.
+
+    base.html has requested `?v={{ asset_version }}` since it was scaffolded,
+    but nothing ever populated the variable, so every deploy served the exact
+    same `app.css?v=` URL — a stable cache key an edge CDN (Cloudflare, here)
+    is free to hold onto for its full `max-age` regardless of what changed
+    server-side. Live-caught 2026-07-08: the login/terms brand-palette fix
+    (PR #301) had already merged and deployed, but `/login` kept rendering
+    the old mint-green accent because Cloudflare was still serving the
+    pre-fix `app.css` bytes under that same unversioned URL (`cf-cache-status:
+    HIT`, `cache-control: max-age=14400`). Hashing the served files at import
+    time means a real content change mints a new URL/cache key for free.
+    """
+    h = hashlib.sha256()
+    for name in sorted(("app.css", "dashboard.css")):
+        try:
+            h.update((Path(__file__).with_name("static") / name).read_bytes())
+        except OSError:
+            pass
+    return h.hexdigest()[:12]
+
+
+_ASSET_VERSION = _compute_asset_version()
+
+
 def _render(request: Request, template: str, context: dict | None = None, *, status_code: int = 200) -> HTMLResponse:
-    data = {"request": request}
+    data = {"request": request, "asset_version": _ASSET_VERSION}
     if context:
         data.update(context)
     return _TEMPLATES.TemplateResponse(request=request, name=template, context=data, status_code=status_code)
