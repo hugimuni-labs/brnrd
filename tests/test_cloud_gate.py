@@ -572,6 +572,16 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
         label="Add live run labels", run_id="run-live-test",
         repo_label="Gurio/brr", pid=os.getpid(),
     )
+    # A concurrent `spawn:` child (kb/design-multi-workstream-concurrency.md
+    # "Ranked moves" #1: parent_run_id/is_subspawn joined into the live
+    # view, not only the closed-run ledger) — a second, distinct pid so it
+    # doesn't collide with the resident entry above.
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:155783668:",
+        label="spawned work", run_id="run-live-spawn",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="spawn-entry",
+        parent_run_id="run-live-test", is_subspawn=True,
+    )
 
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
 
@@ -579,11 +589,17 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
         assert daemon.live_runs_updated_at is not None
         runs = json_mod.loads(daemon.live_runs_json)
-    assert len(runs) == 1
-    assert runs[0]["run_id"] == "run-live-test"
-    assert runs[0]["label"] == "Add live run labels"
-    assert runs[0]["repo_label"] == "Gurio/brr"
-    assert runs[0]["kind"] == "daemon"
+    assert len(runs) == 2
+    by_run_id = {row["run_id"]: row for row in runs}
+    resident = by_run_id["run-live-test"]
+    assert resident["label"] == "Add live run labels"
+    assert resident["repo_label"] == "Gurio/brr"
+    assert resident["kind"] == "daemon"
+    assert resident["is_subspawn"] is False
+    assert resident["parent_run_id"] is None
+    spawn = by_run_id["run-live-spawn"]
+    assert spawn["is_subspawn"] is True
+    assert spawn["parent_run_id"] == "run-live-test"
 
 
 def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
