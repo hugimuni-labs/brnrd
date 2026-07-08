@@ -1,7 +1,8 @@
 # Agent visual inspection of brnrd.dev (authenticated)
 
-Status: active, opened 2026-07-08 (run-260708-0941-hmik). A discussion
-turn — investigation and a named fork, not a build.
+Status: **shipped, option 1, 2026-07-08** (decided + verified live,
+run-260708-1021-i28y). Opened 2026-07-08 (run-260708-0941-hmik) as a
+discussion turn; the maintainer picked an arm the same day.
 
 ## The ask
 
@@ -108,6 +109,36 @@ often) — it's a bounded, already-half-designed feature. Option 3 is
 worth naming but not worth building until there's more than one human
 account in play (a real support/ops need), since it solves a
 multi-tenant problem this product doesn't have yet.
+
+## Decided + verified live (2026-07-08, run-260708-1021-i28y)
+
+Maintainer picked option 1 directly: "ok, I didn't merge the PR yet
+(situational information anyway)... I settled on option 1, yes. Made a
+file with the cookie: `.tmp/brnrd-session.cookie` hope it works, lemme
+know if you can see the browser page."
+
+Verified end to end, not just plausible:
+
+- `.tmp/brnrd-session.cookie` (untracked; `*.cookie` added to
+  `.gitignore` this same run so a future `git add -A` can't sweep it up)
+  holds the raw `brnrd_session` value.
+- Local Playwright (Chromium, already installed on this host from the
+  Slice 1.5 unauthenticated work): `context.addCookies([{name:
+  "brnrd_session", value: <read from the file>, domain: "brnrd.dev",
+  path: "/", httpOnly: true, secure: true, sameSite: "Lax"}])`, then
+  `page.goto("https://brnrd.dev/")`.
+- **HTTP 200**, and the rendered body is the real resident dashboard —
+  window-track quota bars, live runs (this very run's original-event
+  text visible in the LIVE RUNS card), PR review queue showing #284
+  itself, run receipts — not the logged-out landing page. Screenshot
+  taken locally (not committed; it's a live account view, same handling
+  as the cookie itself).
+- The cookie value itself was never printed, logged, or written
+  anywhere but the one untracked local file it already lived in.
+
+Net: option 1 works exactly as scoped in the fork above — zero code,
+the maintainer's live session, no separate blast radius. Nothing left
+to build for this to keep working; PR #284 carries this update.
 
 ## Read next
 
