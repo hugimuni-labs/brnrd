@@ -1,10 +1,14 @@
 # Design: multi-workstream concurrency — beyond single-flight
 
 Status: active on 2026-07-08 (maintainer ask, evt-twkg + evt-l6a7/evt-bo51
-same-thread follow-ups; forks answered same day, evt-dzgu). Slice 1 shipped
-(spawn pool + `LiveRuns` join, "Slice 1 — shipped" below); the "loom
-envelope" idea and cross-repo-native framing are new, still-open design
-threads this same answer opened, not shipped code.
+same-thread follow-ups; forks answered same day, evt-dzgu; round 2 answered
+the same night, evt-mr8v). Slice 1 shipped (spawn pool + `LiveRuns` join,
+"Slice 1 — shipped" below). Round 2 (§"Named forks — round 2") mostly
+*corrected* rather than opened new design: the cross-repo "workbench" fork
+turned out to be already-decided, already-shipped code, not a new idea to
+weigh — see that section before re-deriving it again. The loom envelope's
+Phase 2 approval-URL sub-design is the one genuinely new, still-open thread
+this round added, not shipped code.
 
 ## The ask, corrected before anything else
 
@@ -389,6 +393,125 @@ scan) toward **explicit, user-facing registry** — a UI affordance to add a
 project only makes sense under that model, not a background directory
 scan. Not scoped or built this run; flagging the connection so the next
 pass on either page doesn't re-derive it.
+
+## Named forks — round 2, answered 2026-07-08 night (evt-mr8v)
+
+The maintainer replied to both open items from the round above (loom
+envelope pushback, cross-repo posture) in the same message, and separately
+re-derived the account-workbench shape from scratch without having read
+`decision-account-centered-daemon.md` closely — worth recording precisely
+because the reconciliation went two different ways.
+
+**Fork 1 — loom envelope Phase 2, refined.** Maintainer: "the ones that
+have been dispatched outside of pool limit should be paused, not dropped,
+not screamed at user" — confirms the pushback above. **No code needed for
+that half; it was already true.** `daemon.py`'s spawn dispatch
+(`spawn_candidates = [...][:open_spawn_slots]`) already leaves any
+candidate beyond the open slots at `status: pending` in its inbox — never
+touched, never dropped — so it's picked up automatically once a slot frees
+next tick. "Paused, not dropped, not screamed" was already the mechanical
+behavior; Phase 2's real gap (named above) is only that this quiet wait
+produces no *record* a panel could render.
+
+Second half is new, not previously named: **when the agent itself wants
+more room than a configured ceiling allows, that should be a request the
+daemon lets it make, escalated to the user for approval via a brnrd.dev
+approve/confirm URL** — not silently applied, not just a chat-command
+approval. Concretely closer to buildable than it first looks: this repo
+already has the load-bearing precedent, `src/brnrd/routers/pairing.py`'s
+device-flow (`PairRequest`: a code, a hashed poll secret, `approve_core`
+gated behind `require_account`, `poll_pair` returning the outcome) — the
+same shape a "propose a config change → mint a link → account owner clicks
+approve while logged in → daemon observes the approval" flow needs. Also
+already half-built on the *local* side: CS6's runner-policy proposal
+machinery (`_queue_runner_policy_proposal` / `_handle_runner_policy_control_event`,
+`account.runner_policy_proposals_path`) already parks a proposal file,
+commits it, and applies it only after an explicit approval — today gated
+on a chat-typed `approve runner-policy <id>` reply, and today only for
+free-text policy bodies written into `policy.md`, not structured
+`.brr/config` key/value ceilings like `spawn.max_concurrent`.
+
+**Not built this run — three sub-decisions genuinely need a nod before
+this is wired, named so the next pass doesn't re-derive them:**
+
+1. **Scope of what's agent-proposable.** Start narrow — an allowlist
+   beginning with `spawn.max_concurrent` alone — or generalize immediately
+   to arbitrary `.brr/config` keys? An allowlist is the safer opening move;
+   a fully general "the agent can propose any config key" is a bigger
+   trust-boundary call than this fork asked to settle.
+2. **Where approval happens.** Reuse `pairing.py`'s pattern directly
+   (new `PairRequest`-shaped table + router in `src/brnrd`, gated behind
+   `require_account` so only the logged-in account owner's click counts)
+   rather than inventing new auth — recommended, not decided.
+3. **How the daemon learns the outcome.** `poll_pair` is a polling read;
+   a cleaner fit given this account daemon already has an account dispatch
+   inbox (`decision-account-centered-daemon.md` part 5's "daemon-owned
+   confirmation" step) is for the approve endpoint to write a
+   `config_approved`/`config_rejected` event straight into
+   `ctx.dispatch_inbox` — the daemon already scans that inbox every tick,
+   so no new polling loop, just a new event kind the CS6 apply path (or its
+   generalized successor) reacts to.
+
+Recommend as the next ranked move, not shipped speculatively this run: the
+DB schema + router + auth surface is real new attack surface (who can
+change a running daemon's operating ceilings), and the maintainer's own
+"or you can pick a better fitting design if you see one" reads as wanting
+the shape confirmed, not blind-built.
+
+**Fork 3 — cross-repo "workbench," corrected rather than designed fresh.**
+The maintainer's proposal (account-level home with all repos registered,
+symlinked/reachable, a registry, resident memory managed the same way per
+project, respawn as the "get me into the right repo" primitive, explicit
+call-out that self-hosted single-project must keep working with zero extra
+config) is not a new idea to weigh — **it is, near-verbatim, what
+`decision-account-centered-daemon.md` already decided on 2026-06-29 and
+what the code already ships.** Checked against the running code, not just
+the doc, this run:
+
+- The registry exists and is exactly a "which repos, where" map:
+  `account/repos.json` (`account.py::_load_registry`/`_write_registry`),
+  editable via `brr add <path>` (`cli.py::cmd_add` → `register_repo`).
+- The account home already organizes state **per repo inside one
+  workbench**, not a dominion fork per project: `repos/<label>/dominion`,
+  `plans/<label>/`, `runner-policy/<label>/policy.md` all live under one
+  `home_root`, keyed by repo label — this run's own dominion path
+  (`.../accounts/acc_.../home/repos/Gurio__brr/dominion`) is a live
+  instance of exactly that shape.
+- "Respawn gets you into any repo, like a game respawn" already works:
+  `RespawnRequest.repo` → `_queue_respawn_request` tags the new event with
+  `repo_label` → `_dispatchable_targets` scans every registered repo's
+  inbox every tick → `_repo_for_event` resolves the event to that repo's
+  worktree. Tested:
+  `test_account_dispatch_inbox_routes_message_event_to_registered_repo`,
+  `test_account_dispatch_keeps_forge_events_on_repo_local_route`.
+- The naming instinct ("brnrd-home folder rather than dominion, cuz it's
+  more invasive") was already the decided naming:
+  `decision-account-centered-daemon.md` names the account container
+  `brnrd-home` (working name) precisely *because* folding everything into
+  a literal `dominion` sibling read as too invasive, with `dominion/` kept
+  as the nested, repo-scoped, resident-owned subdirectory — the maintainer
+  re-derived the same conclusion independently this run.
+- Self-hosted single-project stays zero-config by construction, already:
+  `account.py::resolve_context`'s `kind` resolution defaults to
+  `"project"` (a per-repo home, the pre-account-daemon shape) unless an
+  `account.id` or a connected cloud account is present — a bare `brr up`
+  with a Telegram token on one repo never touches the account/registry
+  machinery at all.
+
+Corrected in `decision-account-centered-daemon.md` §"Open questions" this
+same run rather than re-answering the fork here — that page is the durable
+home for this decision; this page only needed to stop implicitly treating
+it as still-open. **The one genuine gap that survives the correction is
+unchanged from the round above: the "add project" UI** — today `brr add`
+is CLI-only, no dashboard action exists yet, named in "Add-project UI gap"
+below and now the natural next move for this thread (the hugimuni-website
+repo is a concrete near-term registrant with no UI path to register it).
+Literal symlinking (the maintainer's own phrasing) isn't needed on top of
+this: the registry already resolves a label to an absolute path, which is
+what a symlink would do less portably (breaks if the path moves, doesn't
+survive across machines) — worth naming as a pushback, not silently
+dropped: **recommend against literal symlinks**, keep the path-registry
+model, since it already does the job the symlink metaphor was reaching for.
 
 ## What this leaves untouched
 
