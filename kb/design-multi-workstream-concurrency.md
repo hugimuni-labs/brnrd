@@ -1,8 +1,10 @@
 # Design: multi-workstream concurrency — beyond single-flight
 
 Status: active on 2026-07-08 (maintainer ask, evt-twkg + evt-l6a7/evt-bo51
-same-thread follow-ups). Exploration + recommendation, not a build order —
-several sub-decisions below are named forks, not shipped.
+same-thread follow-ups; forks answered same day, evt-dzgu). Slice 1 shipped
+(spawn pool + `LiveRuns` join, "Slice 1 — shipped" below); the "loom
+envelope" idea and cross-repo-native framing are new, still-open design
+threads this same answer opened, not shipped code.
 
 ## The ask, corrected before anything else
 
@@ -30,13 +32,15 @@ feasibility study into an architecture-tradeoff one.
   `ThreadPoolExecutor(max_workers=2)`; the `current` slot is the one
   resident-stack (dominion-writing) thought at a time, gated on
   `current is None` (~4784).
-- **`spawn:`, cap 1.** `_queue_spawn_request` (~3013) forces `worker: true`
-  and `environment: worktree` unconditionally, dispatches immediately into
-  the pool's second slot, `current_spawn` (~4700, ~4827), capped at 1
-  concurrent child. Completion (success or crash, PR #266) lands as an
-  ordinary pending event tagged with the parent's `conversation_key` — the
-  parent reviews and folds it in on its own next boundary, never a second
-  concurrent dominion writer.
+- **`spawn:`, pool of `spawn.max_concurrent` (default 4, was cap 1).**
+  `_queue_spawn_request` (~3044) forces `worker: true` and `environment:
+  worktree` unconditionally; the daemon loop holds up to
+  `_max_concurrent_spawns(cfg)` in-flight children in `active_spawns`
+  (`daemon.py` ~4750, generalized from the old single `current_spawn`
+  future). Completion (success or crash, PR #266) lands as an ordinary
+  pending event tagged with the parent's `conversation_key` — the parent
+  reviews and folds it in on its own next boundary, never a second
+  concurrent dominion writer, regardless of how many children ran at once.
 - **`respawn:` stays sequential-only** — `_queue_respawn_request` (~2910)
   only creates a normal inbox event; it's picked up once the *current run
   ends*, by design (cross-Shell/cross-repo/outlives-this-run handoff, not a
@@ -51,26 +55,35 @@ feasibility study into an architecture-tradeoff one.
   query, not a rewrite. `task_classification` and `usd_credits_equivalent`
   are largely unpopulated in practice (`design-quota-scheduling-loom.md`'s
   2026-07-06 review) — real, but a data-completeness gap, not a schema gap.
-- **Dashboard already renders N peer rows.** `LiveRuns` (#258,
-  `design-dashboard-live-surface.md`) reads the presence registry
-  account-wide with no cap on row count — a resident `current` and a
-  `current_spawn` already show as two distinct rows today. Not done:
-  joining `parent_run_id`/`is_subspawn` into that view so a viewer sees the
-  parent/child relationship, not just a flat list (named at #258's own
-  ship, still open).
+- **Dashboard renders N peer rows, now with the parent/child join.**
+  `LiveRuns` (#258, `design-dashboard-live-surface.md`) reads the presence
+  registry account-wide with no cap on row count. `parent_run_id`/
+  `is_subspawn` — previously only on the closed-run ledger row — now ride
+  the *live* presence entry too (`presence.py::register`, new params),
+  through the cloud publish (`gates/cloud.py::_live_runs_snapshot`) and the
+  `LiveRunIn` schema (`brnrd/schemas.py`) into the frontend (`liveRuns.ts`,
+  `LiveRuns.svelte`'s "↳ spawn" tag). Flat card grid stays flat — see
+  "Slice 1 — shipped" below for why that's the deliberate shape, not a
+  half-finished tree view.
 - **Telegram topics are wired, but per-gate, not per-run.** `telegram.py`
   has full `topic_id`/`message_thread_id` plumbing (send, receive, restrict,
   card replies) for *one configured topic per gate*. Nothing allocates or
   routes a topic per concurrent workstream.
-- **Cross-repo concurrency is a separately deferred decision.**
-  `decision-account-centered-daemon.md` §"Open questions" explicitly parks
-  this: "v1 stays single-flight across all repos... a later decision." This
-  page's scope is same-repo fan-out; cross-repo is a distinct axis, noted
-  where it intersects.
+- **Cross-repo concurrency — no longer just "later."** As of this same
+  answer (2026-07-08 evening, evt-dzgu) the maintainer named a concrete
+  near-term case (a hugimuni-website repo joining the account soon) and
+  said the multi-repo shape should be "natively designed as a part of this
+  frame, always" — not bolted on after. `decision-account-centered-
+  daemon.md` §"Open questions" still parks the actual v1-single-flight-
+  across-repos *execution* call, but this page's design space (fan-out
+  width, quota-pool-aware placement, comms routing) should now be read as
+  repo-parameterized from the start, not same-repo-only with cross-repo as
+  an afterthought. See "Cross-repo, upgraded from deferred to
+  native-by-design" below.
 - **Docker clone-isolation (#80) is not built.** Worktree isolation (forced
   for every spawn since the 2026-07-08 gap closure) is the only isolation
   spawn actually gets today.
-- **Shipped this run:** the `coexisting_runs` facet (`facets.py`,
+- **Shipped 2026-07-08 (slice 0):** the `coexisting_runs` facet (`facets.py`,
   `kb/design-resident-boundary.md` §1) was pure schema with zero collector
   wired anywhere — `facets.build()` hardcoded it `unimplemented`
   regardless of input. Wired it to the same presence-registry query
@@ -83,6 +96,9 @@ feasibility study into an architecture-tradeoff one.
   `test_facets.py::test_build_coexisting_*`,
   `test_daemon.py::test_write_live_portal_state_coexisting_runs_reflects_presence`.
   Full suite green (1399).
+- **Shipped 2026-07-08 evening (slice 1):** see "Slice 1 — shipped" under
+  the Recommendation section below for the full receipt (spawn pool +
+  `LiveRuns` join).
 
 ## Why full flat concurrency isn't free — and why that doesn't block this
 
@@ -201,43 +217,188 @@ high-quota account, `max_concurrent_spawns` raised above 1:
 
 Phased, cheap-to-reversible-first:
 
-- **Slice 0 — shipped this run.** `coexisting_runs` facet live-wired to the
-  presence registry (see "Current state" above). Needed by every later
+- **Slice 0 — shipped 2026-07-08.** `coexisting_runs` facet live-wired to
+  the presence registry (see "Current state" above). Needed by every later
   slice regardless of shape; carried no fork.
-- **Slice 1.** Generalize `current_spawn` to a small pool,
-  `max_concurrent_spawns` config knob (default modest, e.g. 2, up from the
-  hardcoded 1; hard ceiling e.g. 4-6). Join `parent_run_id`/`is_subspawn`
-  into the `LiveRuns` dashboard view (the gap #258 itself named and left
-  open) so the flattened presentation is real, not just possible.
+- **Slice 1 — shipped 2026-07-08 evening (this answer, evt-dzgu).**
+  `current_spawn` generalized to a small pool: `_max_concurrent_spawns(cfg)`
+  reads `spawn.max_concurrent` from `.brr/config` (default **4** — the
+  maintainer's own number, "set the concurrency to 4 or something
+  already"), clamped to at least 1; `daemon.py`'s main loop tracks
+  `active_spawns: list[dict]` instead of one `current_spawn` future, reaps
+  and dispatches up to the configured width per tick
+  (`daemon.py` ~4028 `_max_concurrent_spawns`, ~4750 loop state, ~4888
+  dispatch). `parent_run_id`/`is_subspawn` now ride the *live* presence
+  entry, not just the closed-run ledger row: `presence.py::register` gained
+  both params, `gates/cloud.py::_live_runs_snapshot` publishes them,
+  `brnrd/schemas.py::LiveRunIn` accepts them, and `LiveRuns.svelte` renders
+  a small "↳ spawn" tag on a dispatched child's card (hover shows the
+  parent's own label when it's still live in the same snapshot) — the flat
+  peer-card grid stays flat, per the "flatten the view, not the
+  write-authority" recommendation above; this is the visual join, not a
+  tree widget. Tests: `test_daemon.py::test_max_concurrent_spawns_config_parsing`,
+  `test_daemon.py::test_concurrent_spawn_pool_respects_configured_width`,
+  `test_cloud_gate.py::test_loop_publishes_live_runs_snapshot` (extended for
+  the subspawn case). Frontend `svelte-check`/`eslint`/`prettier` clean.
+  Full backend suite green (1403).
 - **Slice 2.** Quota-pool-aware child placement — prefer the less-contended
-  pool when a spawn's Shell/Core isn't pinned.
-- **Slice 3 (needs a maintainer nod — real UX call).** Telegram
-  topic-per-workstream.
-- **Slice 4 (needs a maintainer nod — bigger, crosses a separately deferred
-  decision).** Cross-repo fan-out, revisiting
-  `decision-account-centered-daemon.md`'s parked call.
+  pool when a spawn's Shell/Core isn't pinned. Not started.
+- **Slice 3 — explicitly postponed 2026-07-08 evening.** Telegram
+  topic-per-workstream. See fork 2 answer below; the maintainer flagged a
+  related, larger want (richer resident-driven channel control — reactions,
+  topic-setting — that the daemon's current channel surface is "maybe a bit
+  too limiting" for) as a *later*, separate thread, not folded into this
+  page.
+- **Slice 4 — upgraded from "needs a nod" to native-by-design, 2026-07-08
+  evening.** Cross-repo fan-out. See "Cross-repo, upgraded from deferred to
+  native-by-design" below — the design axis is decided; the actual
+  multi-repo dispatch build is still a later, separate slice.
 
-## Named forks for the maintainer (not decided here)
+## Named forks — answered 2026-07-08 evening (evt-dzgu)
 
 1. **Default fan-out width, and how it should scale with subscription
-   tier.** A quantitative product call, and the data that would ground it
-   (the run-ledger's cost/classification fields) isn't populated yet —
-   recommend a manual toggle now, defer auto-tuning.
-2. **Comms UX for N concurrent workstreams** — per-workstream Telegram
-   topics/supergroup vs. the status-quo shared thread with stricter framing
-   vs. something else. Real permission and UX cost, not free to build
-   speculatively.
-3. **Whether cross-repo fan-out is in scope now**, given the dashboard's
-   push toward the zachtronics live control loom, or stays deferred per the
-   account-daemon decision until the same-repo slices above are proven.
+   tier.** Answered directly: **4**, shipped as slice 1's
+   `spawn.max_concurrent` default. But the maintainer's actual reply
+   redirected the question rather than just picking a number — read in
+   full under "Loom envelope" below, a materially bigger idea this page
+   hadn't named: making the *ceiling itself*, and what happens at it,
+   visible and felt, not just configurable.
+2. **Comms UX for N concurrent workstreams.** Answered: **postponed**, in
+   the maintainer's own words — "it should feel like chatting with a
+   coworker, but which is really an arcane circuit scroll spirit, so yeah
+   lets postpone the topics (for now)." Addendum worth keeping, not just
+   the postponement: the maintainer wants "the runner [to have] more
+   flexibility in how they communicate with a user, including reactions
+   and topic setting, for which daemon currently is maybe a bit too
+   limiting" — a broader channel-surface gap than per-workstream topics
+   alone, named for a later pass, not this one.
+3. **Whether cross-repo fan-out is in scope now.** Answered: **yes,
+   natively, always** — "the multi-repo case should be natively designed
+   as a part of this frame, always. I am soon gonna add the hugimuni
+   website to the list." Reverses this page's earlier lean ("likely moot
+   for your own example"). See "Cross-repo, upgraded from deferred to
+   native-by-design" below. A second, adjacent gap surfaced in the same
+   reply: "the new UI currently doesn't have a way [to] add projects" —
+   named in "Add-project UI gap" below, explicitly *not* asked to be part
+   of the loom.
+
+## Loom envelope — visualizing and enforcing user-set limits (new fork, not shipped)
+
+The maintainer's own framing, close to verbatim: the UI should give a
+clear visual signal of the limits the user has set for brnrd — "being at
+the limit visually shouts at you" — and a resident actually hitting one
+should "scream," because either the user asked for something beyond a
+limit they set themselves, or the agent tried to and that request should
+be held for the user's approval rather than silently refused or silently
+allowed. Explicitly invited pushback; "the loom should feel entertaining
+and functional."
+
+**Why this is the right next question, not scope creep.** Slice 1 just
+shipped the *first* real user-tunable ceiling in this whole area
+(`spawn.max_concurrent`) — before this, the only comparable knobs were the
+quota-pacing floors (`pacing.quota_low_floor_pct`/`quota_critical_floor_pct`,
+B1) and the runner timeout backstop, none of which the dashboard surfaces
+as a limit today. So the "loom envelope" isn't decorating one new number;
+it's the first design pass at a *pattern* this repo is going to need
+repeatedly as more tunables like it appear.
+
+**Pushback, as invited:**
+
+1. **Not every ceiling is the same kind of thing, and "scream" shouldn't
+   apply uniformly.** `spawn.max_concurrent` at capacity today just means
+   the 5th `spawn:` candidate waits quietly for a slot in the next tick or
+   two — that's the pool doing its job, not a violation, and treating a
+   routine queue wait as an alarm would train the user to ignore the
+   alarm. The genuinely scream-worthy case the maintainer actually
+   describes — "the agent tried to [exceed a self-set limit], then such
+   task is postponed until user approves" — **doesn't exist as a code path
+   yet.** A spawn candidate over the pool width isn't rejected-pending-
+   approval anywhere; it's simply not dispatched this tick, silently, with
+   no record that something *wanted* more room than was available. Before
+   this can visually "scream" convincingly, the daemon needs to actually
+   notice and record the "wanted more, didn't get it" moment — a small,
+   real backend gap this idea surfaces, not just a rendering task.
+2. **Some limits are structural, not user-set, and shouldn't share the
+   same visual language as tunable ones.** The single durable-memory
+   writer (`current`, cap of exactly 1, always) is not a dial the user
+   turns — showing it in the same "you're at your limit" register as
+   `spawn.max_concurrent` would misrepresent an architectural invariant as
+   a preference. The envelope should visualize *configured* ceilings
+   (spawn width, quota pacing floors, maybe a future budget cap), not
+   every fixed constant in the codebase.
+3. **This is closer to a new panel/mode than a retrofit of `LiveRuns` or
+   `WindowTrack`.** Both existing loom surfaces represent *live activity*
+   (a running thought, a quota window's spend). An envelope represents the
+   *boundary* activity presses against — genuinely a different axis, and
+   cramming it into an activity card (e.g. tinting `LiveRuns` red at 4/4)
+   would conflate "here's what's happening" with "here's what you've
+   allowed," the same kind of conflation the status-palette work upstream
+   was careful to avoid (a status color never doubling as a series
+   identity, `LiveRuns.svelte`'s own comment). Recommend a distinct
+   "limits" surface reusing the same dot/bar/palette vocabulary, not a
+   modification of the existing cards.
+
+**Recommended phasing, not built this run:**
+
+- **Phase 1 (cheap, mostly-shipped data).** A small panel listing today's
+  real user-tunable ceilings — `spawn.max_concurrent` and current
+  `active_spawns` count chief among them post-slice-1 — as a pressure
+  meter (n/max), reusing `statusPalette.ts`'s amber/frost/void exactly as
+  a bar fill, no new backend collection beyond what slice 1 already
+  publishes.
+- **Phase 2 (real backend work, the "scream" itself).** A rejection path:
+  when a `spawn:` candidate can't be dispatched because the pool is full,
+  record that fact (which event, which limit, when) instead of silently
+  leaving it queued, and surface it as the actual alert state — this is
+  the part that makes "the agent tried to and it got postponed until you
+  approve" true rather than aspirational. Needs its own design pass
+  (approval UX: a Telegram prompt? a dashboard action? auto-approve after
+  a timeout?) before it's buildable — not decided here.
+
+Not committing to a build order for either phase in this run; naming the
+idea precisely, the real gap it exposes, and the pushback was the ask.
+
+## Cross-repo, upgraded from deferred to native-by-design
+
+`decision-account-centered-daemon.md` §"Open questions" still parks the
+*execution* call ("v1 stays single-flight across all repos... a later
+decision") — that line isn't rewritten here, and no multi-repo dispatch
+code shipped this run. What changed is the *design posture* this page
+itself takes: every fan-out axis above (width, quota-pool placement, comms
+routing) should now be specified as repo-parameterized from the start,
+because a second repo (hugimuni website) is a named near-term reality, not
+a hypothetical. Concretely, for the next slice that touches fan-out
+mechanics: a spawn candidate's identity should carry which repo it targets
+as a first-class field (today implicit — everything assumes the daemon's
+own repo), and placement/width reasoning (slice 2) should be written
+against "repo × shell/core pool," not "shell/core pool" alone, even before
+actual cross-repo *dispatch* is decided. Cheap to do now while the pool
+generalization is fresh; expensive to retrofit once several slices assume
+single-repo implicitly.
+
+## Add-project UI gap (named, not this page's scope)
+
+The maintainer named a second, adjacent gap in the same reply: the new
+frontend has no way to add a project/repo to an account — today that's
+registry-side, off-UI. Explicitly *not* asked to be part of the loom
+envelope. Worth its own line because it's the concrete, present-tense
+blocker for the hugimuni-website case driving the cross-repo posture
+above, and it directly answers `decision-account-centered-daemon.md`
+§"Open questions" → "Repo discovery" (explicit registry vs. workspace
+scan) toward **explicit, user-facing registry** — a UI affordance to add a
+project only makes sense under that model, not a background directory
+scan. Not scoped or built this run; flagging the connection so the next
+pass on either page doesn't re-derive it.
 
 ## What this leaves untouched
 
-Cross-repo concurrency's v1 single-flight decision, docker clone-isolation
-(#80), and the run-ledger's unpopulated cost-rollup fields are all named
-above as real, pre-existing gaps this page doesn't resolve — each already
-has its own tracking (`decision-account-centered-daemon.md`,
-`kb/decision-hosted-execution-liability.md`, `design-quota-scheduling-loom.md`).
+Cross-repo concurrency's v1-single-flight-across-repos *execution* call
+(design posture upgraded above, build still open), docker clone-isolation
+(#80), the run-ledger's unpopulated cost-rollup fields, and both phases of
+the loom envelope are all named above as real, open gaps this page doesn't
+resolve — each already has its own tracking (`decision-account-centered-
+daemon.md`, `kb/decision-hosted-execution-liability.md`,
+`design-quota-scheduling-loom.md`).
 
 ## Cross-links
 
@@ -246,6 +407,10 @@ read before proposing anything execution-flat again), `design-director-loop.md`
 §"Concurrent sub-spawns" (the spawn: mechanism this extends),
 `design-dashboard-live-surface.md` §"Shipped (2026-07-07): #258" (the
 live-runs view this asks to enrich), `decision-account-centered-daemon.md`
-§"Open questions" (the cross-repo axis), `design-quota-scheduling-loom.md`
-(the ledger this would eventually auto-tune from), `design-resident-boundary.md`
-§1 (the facet schema `coexisting_runs` belongs to).
+§"Open questions" (the cross-repo axis and the "Repo discovery" question
+the add-project UI gap answers), `design-quota-scheduling-loom.md` (the
+ledger this would eventually auto-tune from, and B1's quota-pacing floors
+— the loom envelope's other candidate ceiling), `design-resident-
+boundary.md` §1 (the facet schema `coexisting_runs` belongs to),
+`design-brand-visual-language.md` (the status-palette vocabulary the loom
+envelope phase 1 would reuse).

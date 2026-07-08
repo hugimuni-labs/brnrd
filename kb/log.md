@@ -12139,3 +12139,50 @@ slice needs regardless of which fan-out shape ships. New regression tests in
 Cross-linked from `design-director-loop.md` §"Concurrent sub-spawns" and
 `decision-account-centered-daemon.md` §"Cross-repo concurrency", and from
 `kb/index.md`.
+
+## [2026-07-08] implement | Spawn pool generalized to 4, LiveRuns joins parent/child, forks answered
+
+Maintainer reviewed PR #290 and answered its 3 named forks same-thread,
+plus a direct ask: "set the concurrency to 4 or something already, and
+make sure the UI properly handles the concurrent runs."
+
+Shipped slice 1 from `design-multi-workstream-concurrency.md`'s own
+recommendation: `daemon.py`'s `current_spawn` (cap-of-1 future) generalized
+to `active_spawns` (a list, bounded by `_max_concurrent_spawns(cfg)`
+reading `spawn.max_concurrent`, default 4). `presence.py::register` gained
+`parent_run_id`/`is_subspawn` params so a *live* concurrent `spawn:` child
+carries the same join key the closed-run ledger already had; threaded
+through `gates/cloud.py::_live_runs_snapshot` → `brnrd/schemas.py::
+LiveRunIn` → frontend `liveRuns.ts`/`LiveRuns.svelte`, which now renders a
+small "↳ spawn" tag on a dispatched child's card (parent's label on hover
+when it's still live). Flat peer-card grid stays flat by design — see the
+page's own "flatten the view, not the write-authority" call. New tests:
+`test_max_concurrent_spawns_config_parsing`,
+`test_concurrent_spawn_pool_respects_configured_width`, extended
+`test_loop_publishes_live_runs_snapshot`. Full backend suite green (1403);
+frontend `svelte-check`/`eslint`/`prettier` clean.
+
+Forks answered, not just shipped: fan-out width is 4 (done), but the
+maintainer's actual reply redirected that question toward a bigger idea —
+a "loom envelope" making the daemon's user-set limits visually felt, and
+"screaming" (with an approval gate) when the agent tries to exceed one.
+Named precisely in the design page along with real pushback (not every
+ceiling is user-tunable; the "scream" case doesn't exist as a code path
+yet — a spawn candidate over the pool width just waits quietly today,
+there's no recorded "wanted more, got refused" moment) and a two-phase
+recommendation, not built this run. Comms-channel-per-workstream: postponed
+by the maintainer explicitly, with a broader "daemon's channel surface is
+a bit too limiting" note kept for later. Cross-repo fan-out: reversed from
+"likely moot" to "natively designed as part of this frame, always" — a
+hugimuni-website repo is coming soon; `decision-account-centered-daemon.md`'s
+own "Cross-repo concurrency" and "Repo discovery" open questions updated to
+record the posture change (execution call itself still open). A second,
+adjacent gap named in the same reply — the new frontend has no "add a
+project" affordance — filed as its own line, explicitly not part of the
+loom.
+
+Detail + full receipts: `design-multi-workstream-concurrency.md` (updated
+throughout — "Slice 1 — shipped", "Named forks — answered", "Loom
+envelope", "Cross-repo, upgraded from deferred to native-by-design",
+"Add-project UI gap"), `decision-account-centered-daemon.md` §"Open
+questions".

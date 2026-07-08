@@ -359,7 +359,19 @@ the load-bearing notes:
   *forbid* it, but v1 need not support it.
 - **Repo discovery.** Explicit registry (user adds repos) vs scanning a
   workspace dir. Lean explicit for predictability; decide on execution.
-- **Cross-repo concurrency.** v1 stays single-flight across all repos. Whether an
-  account daemon eventually runs repos concurrently ties to the #128 claim model
-  and `concurrent-worktrees` work — a later decision.
-  Same-repo fan-out (worker-stack `spawn:` children, cap raised past 1) is a separate, narrower axis that doesn't require deciding this one first — see [`design-multi-workstream-concurrency.md`](design-multi-workstream-concurrency.md) (2026-07-08), which names this cross-repo question as one of its own open forks rather than re-deciding it.
+  Leans further toward explicit as of 2026-07-08 evening: the maintainer
+  named the current frontend's missing "add a project" affordance directly
+  (a hugimuni-website repo is coming soon) — a UI action to register a repo
+  only makes sense under the explicit model, not a background scan. Not
+  built; see [`design-multi-workstream-concurrency.md`](design-multi-workstream-concurrency.md)
+  §"Add-project UI gap".
+- **Cross-repo concurrency.** v1 stays single-flight across all repos —
+  this execution call is unchanged. What moved (2026-07-08 evening): the
+  maintainer said the multi-repo shape should be "natively designed as a
+  part of this frame, always," not deferred as an afterthought — see
+  [`design-multi-workstream-concurrency.md`](design-multi-workstream-concurrency.md)
+  §"Cross-repo, upgraded from deferred to native-by-design". That page's
+  fan-out *design* (width, placement, comms routing) is now meant to be
+  repo-parameterized from the start; whether/when the account daemon
+  actually runs repos concurrently (ties to the #128 claim model and
+  `concurrent-worktrees` work) is still a later, separate decision.
