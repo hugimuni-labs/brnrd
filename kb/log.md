@@ -11955,3 +11955,37 @@ just noted.
 `kb/design-agent-visual-inspection.md` §"Decided + verified live" has
 the full method. Branch: `brr/agent-visual-inspection-auth-2026-07-08`
 (#284, still open — this run adds a commit to it, doesn't merge).
+
+## [2026-07-08] investigate | Visual-direction discussion: darkness dial (amber/frost/darkness), punch list given
+
+Direct ask, post-#284-merge: focus on "the norse-inspired, amber/frost/
+darkness" direction — with "darkness could be close to black but with
+sharp white outlines or text" floated as an open, undecided dial — then
+give an opinion on what's still outstanding on the visuals. No code
+change asked or shipped; a discussion/opinion turn.
+
+Checked live rather than recalled: authenticated Playwright screenshot of
+`brnrd.dev` (cookie handoff, `pitfalls.md`) plus a direct read of
+`layout.css`/`WindowTrack.svelte`/`LiveRuns.svelte`/`PRReviewQueue.svelte`.
+Found the shipped palette is warm-near-black (`#0c0906`) with cream text
+(`#f3e8d8`) and soft blurred amber bloom throughout — not black, not
+white, not sharp — and that "frost" only exists as one status accent, not
+a structural layer, so "amber/frost/darkness" as three peer registers
+isn't actually built yet. Also confirmed live a real, previously-named-
+but-unfixed gap: `LiveRuns`/`PRReviewQueue`'s running/stalling badges
+still render the pre-reskin stock traffic-light green/yellow, visibly
+inconsistent against the hearth/frost/ember system everywhere else on the
+same screen.
+
+Named the tension in the ask directly: soft blur + warm cream is a
+different texture job than crisp white edges on true black — recede-and-
+glow vs. cut-and-declare. Three concrete directions written up, with a
+lean toward "split structure (crisp frost-white edges) from warmth (amber
++ blur, reserved for alive/active state)" as the one that builds all
+three registers as peers and answers "sharp white outlines" literally.
+Not decided — a genuine aesthetic fork, named back with a recommendation.
+Detail + full punch list (layer-3 still unsolved, badge-reskin gap, no
+rune/bind-rune glyph asset yet, no brand typeface, no accessibility pass
+on the CRT texture): `kb/design-brand-visual-language.md` §"Darkness
+dial" + §"Punch list". Branch: `brr/visual-direction-discussion-2026-07-08`
+(kb-only, no code diff).

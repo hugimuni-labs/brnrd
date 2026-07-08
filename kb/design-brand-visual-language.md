@@ -321,6 +321,119 @@ reopen any of that. What it adds:
   maintainer has already said can wait (see next page's correction: wanted,
   postponable on effort grounds, not rejected on taste grounds).
 
+## Darkness dial: soft warm hearth vs. sharp cold-white edges (2026-07-08, discussion, not decided)
+
+Direct ask, named explicitly as open: "amber/frost/darkness (the darkness
+could be close to black but with sharp white outlines or text, I don't
+have a clear vision yet, so open for discussion)." Checked against what's
+actually live (code + a fresh authenticated Playwright screenshot of
+`brnrd.dev`, not assumed from memory) before answering, since the palette
+section above was written before the 2026-07-07/08 shipped pass and could
+have drifted:
+
+- **Void isn't black — it's warm near-black.** `layout.css` body is
+  `#0c0906` (a brown-black, hearth-adjacent), not a true `#000`/near-`#000`
+  neutral. Text is `#f3e8d8` (parchment/cream), not white. This is the
+  *warmth* half of the hearth-vs-cold-outside frame (§Norse warmth vs.
+  cold, above) — deliberately, not an oversight.
+- **Structure is soft, not sharp.** Panel chrome (`.panel`) uses a
+  low-alpha amber corner-bracket (`rgba(217,164,65,0.55)`) plus a blurred
+  `box-shadow` phosphor bloom (inner + outer glow) — the "more CRT glow"
+  ask from 2026-07-08 pushed this further toward soft, not less. Borders
+  are a dim, low-contrast warm brown hairline (`rgba(120,95,55,0.28)`).
+  Nothing in the current chrome is a crisp, high-contrast line.
+- **Frost is a status accent, not a structural layer.** `#7aa9c2` only
+  appears on `WindowTrack`'s `low` quota state. There's no cold/white
+  presence anywhere in borders, panel structure, or body text today — so
+  "amber/frost/darkness" as three peer registers isn't actually built yet;
+  what's built is amber-primary-with-two-narrow-accent-states.
+- **Live, confirmed gap while checking this** (screenshot, this run):
+  `LiveRuns.svelte`/`PRReviewQueue.svelte` still hardcode the pre-reskin
+  stock traffic-light `#0ca30c`/`#fab219` for their running/stalling
+  2-state badges — the live "RUNNING" dot on the dashboard right now
+  renders stock green, not any hearth/frost/ember hue. Already named as
+  scope-excluded in the §Status palette reconsidered entry above ("named,
+  not fixed this pass"), now visually confirmed rather than just
+  code-read.
+
+**The actual tension in the ask**: "near-black + sharp white outlines/
+text" is a different *texture* from what's shipped, not just a darker
+version of it. Soft blurred amber bloom + warm cream text is optimized
+for "glowing CRT phosphor in a firelit hall" — the hearth-warmth half of
+the Norse frame. Crisp white edges on a true near-black pulls toward a
+harder, more graphic register — closer to a rune cut into stone and lit
+by cold moonlight, or a woodcut/engraving: high-contrast line work, no
+blur. Both are legitimate Norse-adjacent readings (hearth-warmth vs.
+rune-in-the-dark), but stacking blur-heavy amber glow and crisp white
+hairlines in the same panel would fight itself — recede-and-glow vs.
+cut-and-declare are different jobs for an edge to do.
+
+Three concrete directions, not decided here — a genuine aesthetic call,
+named back rather than picked:
+
+1. **Deepen warmth, don't sharpen it.** Push the void darker
+   (`#0c0906` → something like `#070502`), keep parchment text and the
+   soft bloom as-is, let frost spread into more structural surface
+   (dividers, secondary borders) instead of staying status-only. Lowest
+   effort, most continuous with what's shipped and already
+   maintainer-approved (2026-07-07/08 passes).
+2. **Split "structure" from "warmth" as two different edge treatments**
+   (closest literal reading of "sharp white outlines"): keep amber +
+   blur reserved for *alive/warm* signal only — active runs, healthy
+   quota, headings, the boot-glitch mascot — and render *structural*
+   chrome (panel borders, brackets, dividers) as crisp, un-blurred
+   frost-white hairlines instead of dim amber-brown. Reads as three
+   legible registers at once (amber = alive, frost-white = structure,
+   near-black = void) rather than amber-primary-with-accents, and gives
+   the "rune carved in stone" reading a real foothold — a carved line is
+   sharp, the fire nearby is not. Medium effort: touches `.panel`/
+   `.subpanel`/`.eyebrow` border and shadow rules, not the color
+   variables wired through every component.
+3. **Push further cold/graphic** (full sharp-white-on-black, amber
+   demoted to a minor accent) — flagged as the direction most likely to
+   drift toward the already-named-and-rejected Severance "too sterile"
+   anti-reference if taken all the way; workable only if paired with
+   real texture (grain, scanline, glow) to keep it from reading clinical.
+
+Leaning recommendation: **(2)** — it's the only option that actually
+builds "amber/frost/darkness" as three peers instead of amber-plus-
+accents, it directly answers "sharp white outlines" literally rather than
+metaphorically, and it's small enough to prototype on one component
+(`WindowTrack`, already the most-iterated file) before committing across
+the whole chrome system. Not started; this section is the discussion,
+not a build.
+
+## Punch list: what's still open on the visuals (2026-07-08 check-in)
+
+Asked directly: "what we still gotta address at the visuals." In order
+of how load-bearing each gap is, checked against the live site and the
+kb record above, not just recalled:
+
+1. **The darkness-dial fork above** — genuinely undecided, blocks nothing
+   else, worth resolving before the next chrome pass so effort isn't
+   spent twice.
+2. **Layer 3 stays unsolved, and stays the real one.** Both this page and
+   `design-dashboard-live-surface.md` name it explicitly: bracket panels
+   and a boot glitch are terminal/structural chrome, not an answer to "how
+   does a dashboard represent dialogue with an agentic, not-fully-
+   programmed resident." No shipped screen attempts this yet.
+3. **Status-badge reskin gap, now visually confirmed** (see above) —
+   `LiveRuns`/`PRReviewQueue`'s running/stalling dots are the one visibly
+   inconsistent element on the live page today: stock traffic-light hues
+   next to an otherwise coherent hearth/frost/ember system. Small, scoped,
+   already named — just not done.
+4. **Runic/bind-rune glyph treatment for the weave's own mark channel**
+   (✓ ✗ ? → Δ) — still only proposed, never built, and still the most
+   direct place this project's own "retro-engineering = runes" thesis
+   (§Norse warmth, above) could show up as an actual asset rather than an
+   essay.
+5. **No brand typeface decision** — the whole dashboard still renders in
+   system fonts; the visual-language pass explicitly left this untouched.
+6. **No accessibility pass on the CRT texture** — scanlines/glitch/bloom
+   have a `prefers-reduced-motion` guard on the glitch animation, nothing
+   checked yet for screen-reader or low-vision contrast against the
+   low-alpha borders and glow-heavy chrome.
+
 ## Read next
 
 - [`design-brand-brnrd-brr.md`](design-brand-brnrd-brr.md) — character,
