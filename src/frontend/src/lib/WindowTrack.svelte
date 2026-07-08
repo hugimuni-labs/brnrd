@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { quotaLevel, timeUntil, type QuotaShell } from './quota';
-	import { STATUS_GOOD, STATUS_WARN, STATUS_CRITICAL, STATUS_UNKNOWN } from './statusPalette';
+	import {
+		STATUS_GOOD,
+		STATUS_WARN,
+		STATUS_CRITICAL,
+		STATUS_UNKNOWN,
+		statusDotStyle,
+		statusBarStyle
+	} from './statusPalette';
 
 	interface Props {
 		shell: QuotaShell;
@@ -56,7 +63,7 @@
 						<!-- status never carries meaning by color alone: icon + label -->
 						<span
 							class="inline-block h-2 w-2 rounded-full"
-							style={`background-color: ${LEVEL_COLOR[level]}; box-shadow: 0 0 4px 1px ${LEVEL_COLOR[level]}90`}
+							style={statusDotStyle(level, LEVEL_COLOR[level])}
 							aria-hidden="true"
 						></span>
 						<span style={`color: ${LEVEL_COLOR[level]}`}>
@@ -76,7 +83,7 @@
 				>
 					<div
 						class="h-full transition-[width] duration-500 ease-out"
-						style={`width: ${window.percent ?? 0}%; background-color: ${LEVEL_COLOR[level]}; box-shadow: 0 0 6px 0 ${LEVEL_COLOR[level]}b0, inset 0 0 3px 0 rgba(255,255,255,0.25)`}
+						style={`width: ${window.percent ?? 0}%; ${statusBarStyle(level, LEVEL_COLOR[level])}`}
 					></div>
 				</div>
 				{#if remaining || window.reset}
@@ -86,16 +93,74 @@
 				{/if}
 			</div>
 		{/each}
+		{#if shell.credits && shell.credits.enabled !== false && (shell.credits.summary || (shell.credits.remaining_percentage !== null && shell.credits.remaining_percentage !== undefined) || (shell.credits.total_cost_usd !== null && shell.credits.total_cost_usd !== undefined))}
+			{@const creditsPct = shell.credits.remaining_percentage ?? null}
+			{@const creditsLevel = quotaLevel(creditsPct)}
+			{@const creditsColor = LEVEL_COLOR[creditsLevel]}
+			{@const creditsRemaining = timeUntil(shell.credits.resets_at, now)}
+			<!-- Credits used to render as a small text note below the track,
+			     visually demoted relative to the windows above it even though
+			     it's the same shape of information (a headroom percent that
+			     drains toward a reset) — live-caught 2026-07-08 ("why have it
+			     like a note at all, rather than a properly placed indicator
+			     block within the window track"). Now a peer row: same
+			     label/dot/bar/reset structure as a real quota window, plus one
+			     extra spent/limit line the windows don't have. `credits.summary`
+			     still backstops shells that only ever proved a raw
+			     `total_cost_usd` (no structured percentage) — that case skips
+			     the bar (nothing to drain) but keeps the row shape. -->
+			<div>
+				<div class="mb-1 flex items-baseline justify-between font-mono text-xs text-stone-400">
+					<span class="tracking-wide uppercase">credits</span>
+					<span class="flex items-center gap-1.5">
+						<span
+							class="inline-block h-2 w-2 rounded-full"
+							style={statusDotStyle(creditsLevel, creditsColor)}
+							aria-hidden="true"
+						></span>
+						<span style={`color: ${creditsColor}`}>
+							{creditsPct === null
+								? (shell.credits.summary ??
+									(shell.credits.total_cost_usd !== null &&
+									shell.credits.total_cost_usd !== undefined
+										? `$${shell.credits.total_cost_usd.toFixed(2)} in credits`
+										: 'unknown'))
+								: `${Math.round(creditsPct)}% left (${LEVEL_TEXT[creditsLevel]})`}
+						</span>
+					</span>
+				</div>
+				{#if creditsPct !== null}
+					<div
+						class="h-2 w-full overflow-hidden border border-stone-800/80 bg-stone-900"
+						role="img"
+						aria-label={`credits: ${creditsPct} percent remaining`}
+					>
+						<div
+							class="h-full transition-[width] duration-500 ease-out"
+							style={`width: ${creditsPct}%; ${statusBarStyle(creditsLevel, creditsColor)}`}
+						></div>
+					</div>
+				{/if}
+				{#if (shell.credits.spent_amount !== null && shell.credits.spent_amount !== undefined && shell.credits.limit_amount !== null && shell.credits.limit_amount !== undefined) || creditsRemaining || shell.credits.reset}
+					<div
+						class="mt-1 flex items-baseline justify-between font-mono text-[11px] text-stone-500"
+					>
+						<span>
+							{#if shell.credits.spent_amount !== null && shell.credits.spent_amount !== undefined && shell.credits.limit_amount !== null && shell.credits.limit_amount !== undefined}
+								{shell.credits.currency ?? '$'}{shell.credits.spent_amount.toFixed(2)} / {shell
+									.credits.currency ?? '$'}{shell.credits.limit_amount.toFixed(2)} spent
+							{/if}
+						</span>
+						<span>
+							{#if creditsRemaining}
+								resets in {creditsRemaining}
+							{:else if shell.credits.reset}
+								{shell.credits.reset}
+							{/if}
+						</span>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
-	{#if shell.credits && (shell.credits.summary || (shell.credits.total_cost_usd !== null && shell.credits.total_cost_usd !== undefined))}
-		<div class="mt-3 border-t border-stone-800/80 pt-2 font-mono text-[11px] text-stone-400">
-			<!-- Real spend, not a projection — see quota.ts QuotaCredits doc.
-			     Fixed sky hue: this is the same "outside the firelight" /
-			     metered-not-included signal the stale badge above uses, not a
-			     new status color. -->
-			<span class="text-sky-300">
-				{shell.credits.summary ?? `$${shell.credits.total_cost_usd?.toFixed(2)} in credits`}
-			</span>
-		</div>
-	{/if}
 </div>
