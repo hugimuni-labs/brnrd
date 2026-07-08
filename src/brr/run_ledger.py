@@ -139,6 +139,17 @@ def build_closed_run_row(
             force_claude_refresh=True,
         )
 
+    # Prefer the model id(s) actually observed in this run's own result JSON
+    # (`modelUsage.keys()`) over the static runner-catalog placeholder
+    # ("default") an unpinned Claude profile resolves to at dispatch time —
+    # the real id is only knowable once the run has produced output (#255).
+    # Written back onto the task manifest too, so every later consumer of
+    # ``runner_core`` (the run-state doc, a future wake's Mode block) sees
+    # the same resolved value rather than diverging from the ledger row.
+    resolved_core = claude_status.resolved_model_id(after_levels)
+    if resolved_core:
+        task.meta["runner_core"] = resolved_core
+
     after_weekly, after_five_hour = quota_used_percentages(after_levels)
     before_weekly = _num(task.meta.get(_BEFORE_WEEKLY_KEY))
     before_five_hour = _num(task.meta.get(_BEFORE_FIVE_HOUR_KEY))
@@ -352,6 +363,7 @@ def _merge_levels(
             "context_window",
             "plan_type",
             "tokens",
+            "model_ids",
             "session_used_percentage",
             "week_used_percentage",
         ):
