@@ -36,6 +36,16 @@
 // (stone-900 track) via dataviz's scripts/validate_palette.js — all ≥
 // 3.7:1 (ash: 6.17 / 5.85 / 5.43; hue≈31°, sat≈14% — no red/orange cast).
 export const STATUS_GOOD = '#e8b34a';
-export const STATUS_WARN = '#7aa9c2';
+// WARN lightened 2026-07-08 evening, direct ask ("frost could be a bit more
+// white, crisp"): #7aa9c2 -> #a8cbdb, hue held near-identical (200.8° ->
+// 198.8°, still not sky-300's 199.4° collision partner) while OKLCH-ish
+// lightness moved 62% -> 76%, sat 37% -> 42% — cooler/brighter reads as
+// "crisp" without chasing sky-300's near-saturated 95%, which is the axis
+// that actually keeps the two from reading as one hue in WindowTrack's
+// same-card "stale report" badge (comment below on STATUS_WARN's old value
+// still applies: desaturation is the separator, not hue). Contrast still
+// comfortably clears floor: 11.57/10.97/10.19 vs body/panel/track (dataviz
+// validate_palette.js math, not eyeballed).
+export const STATUS_WARN = '#a8cbdb';
 export const STATUS_CRITICAL = '#9c8d7d'; // void ash — spent, desaturated warm-grey, not red
 export const STATUS_UNKNOWN = '#57534e'; // stone-600 — recedes, not a fourth status hue
