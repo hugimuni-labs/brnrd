@@ -582,9 +582,20 @@ Shipped, not just planned:
   This is the "screen materializing from the void" reading of the ask, not
   a new component.
 
-`npm run check`/`lint`/`build` all clean. Not yet live-eyeballed at time of
-writing (verification pending this same run's deploy) — flag if either
-treatment needs another notch once actually seen.
+`npm run check`/`lint`/`build` all clean. Merged (#289), deployed, verified
+live via authenticated Playwright against `brnrd.dev`: the critical-status
+void-disk dot is real and visible today — Codex's 5h window is genuinely at
+0% (exhausted), rendering the dark-core/bright-ash-rim dot rather than a
+flat fill (a live critical case, not a fabricated one). The bar's own
+disk-in-negative treatment couldn't be eyeballed on this same case — 0%
+width means there's no fill pixel to carry the rim at all, a real but
+inherent limit of a *width*-based bar at the zero bound, not a bug; worth a
+glance once a shell sits somewhere in 1–14% instead of exactly 0%. The
+screen edge rim doesn't read clearly to the eye at normal viewing scale
+(it's meant to, at "cozy, subtly"), so verified by pixel sampling instead
+of eyeballing: measured `#212221` at the true left viewport edge against a
+`#0c0906` body predicts almost exactly from `rgba(198, 224, 235, 0.12)`
+alpha-blended in — the rim is really there, just quiet by design.
 
 ### Credits line: intentional-but-unvalidated blue, and a structural fix (2026-07-08 evening)
 
@@ -620,6 +631,17 @@ extra spent/limit line (`€8.69 / €40.00 spent`, from `spent_amount`/
 the same `quotaLevel`/`statusDotStyle`/`statusBarStyle` machinery as every
 other window, so a credits balance that goes `critical` gets the same
 void-disk accent above — one indicator language, not two.
+
+Live-checked after deploy, honestly: `GET /v1/dashboard/quota` returned
+`"credits": null` for both `claude` and `codex` at verification time — the
+row's own visibility guard correctly hid it (matching the old note's
+behavior, which also required real data), so the *absence* is verified
+correct, but the row's actual rendered look with real numbers is still
+unseen live. `claude_usage.py`'s docstring already explains why: it's a
+cached interactive `/usage` PTY scrape that only refreshes while a Claude
+run is actively heartbeating that surface, and this run's own session
+apparently didn't populate it fresh. Flag for a look next time a shell's
+`credits` block is actually populated.
 
 ## Punch list: what's still open on the visuals (2026-07-08 check-in)
 
