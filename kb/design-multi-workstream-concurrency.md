@@ -583,6 +583,89 @@ brnrd/web tests (mint, allowlist-reject, login-gate, detail page,
 approve, reject, cross-account rejection). Branch:
 `brr/loom-envelope-phase2-config-approval`.
 
+## Loom envelope Phase 2 — dashboard surface shipped (2026-07-08 night, run-260708-2010-5sor)
+
+Direct ask, same thread as the diagnosis run above: "now we need to make
+the frontend part." Closed the gap named at the end of the previous
+entry: `GET /v1/dashboard/config-requests` (session-cookie auth, same
+shape as the other dashboard JSON endpoints — live-runs, PR-review-queue,
+run-ledger) reads the `config_change_requests` table directly (no
+publish/mirror step needed, unlike those three, since the row is already
+server-side) plus a `ConfigRequests.svelte` panel wired into `+page.svelte`
+as §1b. Read-only by design: the actual approve/reject action stays on the
+existing session-gated `/config-approve/{id}` page rather than
+duplicating it in the SPA. PR #297, merged.
+
+## Concurrent-spawn duplicate-dispatch bug — found live, fixed same run
+
+Direct real-world test, same thread: "could you spawn a sub run (ideally
+codex) implementing the TOS ticket?" (#227). One `spawn:` outbox dispatch
+produced **4** concurrent duplicate worker-stack children
+(`run-260708-2017-{zzc1,tgvx,a2kn,i8x6}`), each its own worktree, all
+independently implementing the same issue — bounded exactly at
+`spawn.max_concurrent` (4), which is what gave the bug away.
+
+Root cause: `protocol.list_dispatchable`/`list_pending` deliberately keep
+returning "processing"-status events too (so a still-running resident
+event stays visible for follow-up-folding) — correct for that purpose,
+but the spawn pool's fill loop (`daemon.py`, the `spawn_candidates`
+selection under `open_spawn_slots > 0`) never deduped candidates against
+events already claimed in `active_spawns`. The resident dispatch path is
+implicitly guarded against this by `current is None` in memory; the
+spawn pool had no equivalent check once `max_spawns` could exceed 1, so
+the same single candidate refilled every open slot, tick after tick,
+until the pool hit its cap. Fixed by tracking event ids already active in
+the pool; regression test reproduces the exact live shape (4 dispatches
+without the fix, 1 with it, confirmed both ways). PR #294, merged.
+
+**Blast radius, observed rather than assumed:** two of the four duplicates
+opened separate, real PRs for #227 (#295, #296) before the fix landed —
+real quota spent on genuinely redundant work. A third (`zzc1`) noticed the
+sibling completion mid-run (shared `conversation_key` means every sibling
+sees the same recent-turns and pending-event surface) and **stopped
+itself** rather than opening a third competing PR — good instance-level
+judgment, not a designed safeguard. The fourth (`i8x6`) did not self-detect
+and opened #296 anyway. Don't read the one self-stop as proof the gap is
+self-healing; it's a coin flip on how each instance reasons about shared
+context, not a guarantee.
+
+**Related near-miss, not itself a bug this run:** because worker-stack
+children carry `spawn_parent_conversation_key` and therefore see the same
+`_pending_events_for_agent` view as the resident (it filters only the
+event's own id and respawn-origin events — nothing scopes it by run kind
+or by conversation ownership), two of the duplicate workers saw *plain
+conversational* pending events meant for the resident (not the ToS task)
+and reasoned about them in first person — one correctly declined
+("I am the bounded ToS/beta-disclaimer worker, not switching to inspect
+the live dashboard"), the other described the resident's own prior action
+using "I" ("I answered it via an outbox file with `event: ...`"), which
+reads as identity-blur (both wakes share the same conversation history
+and prompt scaffolding) rather than a fabrication — the underlying fact it
+reported was accurate. Neither actually hijacked chat authority this
+time, but nothing architecturally stops a worker from writing an
+authoritative `event:`-routed outbox reply to a follow-up not meant for
+it — the daemon's outbox drain doesn't check whether the answering run is
+resident or worker-stack. Named, not fixed this run (time-boxed against
+the duplicate-dispatch fix, which was the actively-bleeding wound); a
+real candidate for a future pass, e.g. scoping `_pending_events_for_agent`
+by conversation/run-kind for worker-stack callers, or stripping the
+"same-thread follow-up → answer via `event:`" convention out of the
+worker-stack prompt entirely since it was never meant to have chat
+authority in the first place.
+
+**PR cleanup:** #295 and #296 both fully implement the signup-flow half;
+only #296 additionally attempts the first-hosted-run gate, but ties it to
+the `/v1/_dev/enqueue` dev-only test endpoint rather than any real
+production hosted-exec dispatch choke point (none exists yet — both
+workers independently found this and named it as a gap). #295's model is
+cleaner (a single versioned `hosted_terms_accepted_at`/
+`hosted_terms_version` pair, a dedicated `/terms/accept` interstitial that
+doesn't touch the shared login form) and doesn't graft a speculative gate
+onto a dev-only endpoint. Picked #295 to merge; #296 (and #227 itself)
+closed referencing it, with the first-hosted-run gate re-named as a real,
+still-open gap pending an actual hosted-exec dispatch launcher to hook
+into — not solved by pointing at the nearest available endpoint.
+
 ## What this leaves untouched
 
 Cross-repo concurrency's v1-single-flight-across-repos *execution* call
