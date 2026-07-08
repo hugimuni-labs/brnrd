@@ -2437,6 +2437,67 @@ def test_resources_facet_quota_known_when_summary_present():
     assert facet["coexisting_runs"]["required"] is False
 
 
+def test_resources_facet_coexisting_known_when_siblings_passed():
+    """Explicit passthrough: ``_resources_facet`` forwards ``coexisting`` to
+    ``facets.build`` unchanged (the wiring under test is the call site in
+    ``_write_live_portal_state`` below, not this thin wrapper)."""
+    facet = daemon._resources_facet(
+        "weekly 42%",
+        coexisting=[{"run_id": "run-b", "label": "other work"}],
+    )
+    assert facet["coexisting_runs"]["status"] == "known"
+    assert "other work" in facet["coexisting_runs"]["summary"]
+
+
+# ── _write_live_portal_state (coexisting_runs ← presence registry) ───────────
+
+
+def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
+    """``brr_dir`` wires a *live*, heartbeat-refreshed sibling-run read —
+    the same presence query already used for the wake-time-only
+    ``present_snapshot`` (``_run_worker``'s "Other thoughts awake right
+    now"), extended to the portal-state facet a running resident's hooks
+    surface after every tool call."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(id="run-self", event_id="evt-1", body="", source="telegram")
+
+    def _read_facet() -> dict:
+        payload = json.loads(
+            (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+        )
+        return payload["resources"]["coexisting_runs"]
+
+    # No brr_dir given → unchanged legacy behaviour.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    assert _read_facet()["status"] == "unimplemented"
+
+    # brr_dir given, nobody else present → affirmative-absent.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+    assert _read_facet()["status"] == "absent"
+
+    # A sibling registers itself (a concurrent spawn, an ad-hoc session) →
+    # known, self excluded by run_id.
+    presence.register(
+        brr_dir, kind="daemon", stream="other", run_id="run-sibling",
+        label="fix the frontend build",
+    )
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+    facet = _read_facet()
+    assert facet["status"] == "known"
+    assert "fix the frontend build" in facet["summary"]
+
+
 def test_resources_facet_level_collector_flips_empty_to_absent():
     # With a level collector wired (for example Claude result JSON), an empty spend /
     # context-window slot is affirmative-'absent', not unbuilt 'unimplemented'.

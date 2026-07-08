@@ -93,8 +93,11 @@ FACETS: tuple[FacetSpec, ...] = (
     ),
     FacetSpec(
         "coexisting_runs", "coexisting-runs", STATE, False,
-        "live sibling runs sharing this dominion; brr is single-flight per "
-        "dominion, so unimplemented until sibling-liveness tracking lands",
+        "live sibling runs sharing this dominion, read from the presence "
+        "registry (brr stays single-flight per dominion for durable-memory "
+        "writes, but a spawn: worker-stack child or an ad-hoc session can "
+        "coexist); unimplemented on call sites with no presence collector "
+        "wired",
     ),
     FacetSpec(
         "remote_scm", "remote-scm", STATE, True,
@@ -207,6 +210,7 @@ def build(
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
     pacing_status: "dict[str, object] | None" = None,
+    coexisting: "list[dict[str, object]] | None" = None,
 ) -> dict[str, object]:
     """Build the live ``resources`` facet dict from the collected inputs.
 
@@ -244,6 +248,17 @@ def build(
       mid-run boundary can see the same binding percent the scheduler used to
       stretch/pause ``every:`` entries. Absent (no sub-key) when quota isn't
       resolvable this heartbeat — never a fabricated number.
+    - ``coexisting`` — a live presence-registry snapshot (``presence.
+      list_active()``, this dominion, self excluded) as a list of entry
+      dicts (``run_id``/``stream``/``label``/``kind``), or ``None`` when the
+      call site has no presence collector wired. ``None`` renders
+      ``unimplemented`` (matches every prior wake's behaviour exactly);
+      an empty list renders ``absent`` ("ran, nothing there" — no sibling
+      running right now); a non-empty list renders ``known`` with a short
+      summary of who else is active. This is the one facet slice
+      ``kb/design-multi-workstream-concurrency.md`` names as ready-to-wire
+      infrastructure for any future concurrent-workstream slice, independent
+      of which fan-out shape ships.
     """
     levels = levels or {}
     if isinstance(levels_collector, bool):
@@ -277,11 +292,32 @@ def build(
     )
 
     spec_co = FACETS_BY_KEY["coexisting_runs"]
-    coexisting = {
-        "status": UNIMPLEMENTED, "kind": spec_co.kind,
-        "required": spec_co.required, "summary": None,
-        "note": "single-flight per dominion; no concurrent-run view yet",
-    }
+    if coexisting is None:
+        coexisting_facet: dict[str, object] = {
+            "status": UNIMPLEMENTED, "kind": spec_co.kind,
+            "required": spec_co.required, "summary": None,
+            "note": "no presence collector wired at this call site",
+        }
+    elif not coexisting:
+        coexisting_facet = {
+            "status": ABSENT, "kind": spec_co.kind,
+            "required": spec_co.required, "summary": None,
+            "note": "no sibling runs active right now",
+        }
+    else:
+        names = [
+            str(e.get("label") or e.get("stream") or e.get("run_id") or "?")
+            for e in coexisting[:3]
+        ]
+        n = len(coexisting)
+        plural = "s" if n != 1 else ""
+        coexisting_facet = {
+            "status": KNOWN, "kind": spec_co.kind,
+            "required": spec_co.required,
+            "summary": f"{n} sibling run{plural}: " + "; ".join(names),
+            "note": None,
+            "siblings": list(coexisting),
+        }
 
     pr = str(pr_number or "").strip()
     pr_recorded = bool(pr)
@@ -307,7 +343,7 @@ def build(
         "quota": quota_facet,
         "spend": spend_facet,
         "context_window": context_facet,
-        "coexisting_runs": coexisting,
+        "coexisting_runs": coexisting_facet,
         "remote_scm": remote_scm,
     }
 
