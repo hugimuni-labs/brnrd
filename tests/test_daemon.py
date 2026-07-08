@@ -1886,6 +1886,99 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
     ]
 
 
+def test_max_concurrent_spawns_config_parsing():
+    """``spawn.max_concurrent`` generalizes the old spawn cap-of-1 to a
+    small configurable pool (kb/design-multi-workstream-concurrency.md
+    'Ranked moves' #1; maintainer call 2026-07-08: 'set the concurrency to
+    4 or something already'). Default 4; clamped to at least 1 so a
+    misconfigured 0/negative value can't silently wedge every `spawn:`
+    request back into the sequential queue; a non-numeric value falls back
+    to the default rather than crashing the daemon loop.
+    """
+    assert daemon._max_concurrent_spawns({}) == 4
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": 2}) == 2
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": 0}) == 1
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": -3}) == 1
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": "bogus"}) == 4
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": True}) == 4
+
+
+def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
+    """Multiple `spawn:` events dispatch up to `spawn.max_concurrent` at
+    once — the old shape allowed exactly one concurrent spawn no matter how
+    many `spawn:` requests were pending; this exercises the generalized
+    pool (kb/design-multi-workstream-concurrency.md 'slice 1') with three
+    candidates against a configured width of 2, asserting the third waits
+    for a slot rather than either queuing sequentially (old behavior) or
+    all three running at once (an unbounded pool).
+    """
+    write_repo_scaffold(tmp_path)
+
+    lock = threading.Lock()
+    running_ids: set[str] = set()
+    started_two = threading.Event()
+    release = threading.Event()
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        eid = event["id"]
+        with lock:
+            running_ids.add(eid)
+            if len(running_ids) >= 2:
+                started_two.set()
+        release.wait(timeout=5)
+        with lock:
+            running_ids.discard(eid)
+        return Run(
+            id=f"task-{eid}", event_id=eid, body="spawned",
+            status="done", meta={"worker": True},
+        )
+
+    checked = threading.Event()
+
+    def fake_fire_due_schedules(*_a, **_k):
+        # Called every main-loop tick regardless of busy/idle state — the
+        # one hook available to observe pool state and stop the loop
+        # without racing the worker threads over StopIteration.
+        if started_two.is_set() and not checked.is_set():
+            checked.set()
+            time.sleep(0.05)
+            with lock:
+                snapshot = set(running_ids)
+            assert len(snapshot) == 2, (
+                f"expected exactly 2 concurrent at pool width 2, got {snapshot}"
+            )
+            release.set()
+            # Let the freed slots pick up the third candidate and finish
+            # before stopping the loop.
+            time.sleep(0.3)
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 2},
+    )
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    for i in range(3):
+        protocol.create_event(
+            tmp_path / ".brr" / "inbox", "spawn", f"spawned work {i}",
+            spawn_immediate=True, worker=True, environment="worktree",
+        )
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert checked.is_set()
+
+
 def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypatch):
     """A `spawn:` child dispatches alongside a still-running resident
     thought even after the dev-reload watcher has flagged a package
