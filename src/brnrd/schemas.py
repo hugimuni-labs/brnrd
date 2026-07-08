@@ -263,6 +263,12 @@ class LiveRunIn(BaseModel):
     repo_label: str = Field(default="", max_length=256)
     started_at: str | None = None
     last_seen: str | None = None
+    # Same join key as RunLedgerRowIn's fields below — a concurrent
+    # `spawn:` child now carries these while still live (presence.py),
+    # not only after it closes into the ledger
+    # (kb/design-multi-workstream-concurrency.md "Ranked moves" #1).
+    parent_run_id: str | None = Field(default=None, max_length=64)
+    is_subspawn: bool = False
 
 
 class LiveRunsReport(BaseModel):
