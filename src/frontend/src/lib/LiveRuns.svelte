@@ -55,6 +55,18 @@
 		if (Number.isNaN(seen)) return 'unknown';
 		return now - seen > STALL_AFTER_MS ? 'stalling' : 'running';
 	}
+
+	// Multi-workstream slice 1 (kb/design-multi-workstream-concurrency.md
+	// "Ranked moves" #1): `spawn:`'s pool grew past a cap of 1, so this grid
+	// can now hold several concurrent worker-stack children alongside the
+	// resident thought that dispatched them. "Flatten the view, not the
+	// write-authority" was the recommendation, not a full parent/child tree
+	// — every run still gets an equal peer card, in the same chronological
+	// order as before. The one addition is the "↳ spawn" tag below: a
+	// same-weight visual cue for "this card is a dispatched child", with the
+	// parent's own label (if it's still live in this same snapshot) on
+	// hover, so a page full of peer cards doesn't read as an unexplained
+	// jump from N-1 to N runs when a spawn lands.
 </script>
 
 <div class="panel p-4">
@@ -78,6 +90,9 @@
 					: run.repo_label || 'unknown repo'}
 				{@const lvl = level(run.last_seen)}
 				{@const color = LEVEL_COLOR[lvl]}
+				{@const parentLabel = run.parent_run_id
+					? runs.find((r) => r.run_id === run.parent_run_id)?.label
+					: null}
 				<div
 					class="subpanel p-2.5 text-xs"
 					in:fly={{ y: -8, duration: 220 }}
@@ -102,7 +117,15 @@
 							>{ageSince(run.started_at, now) ?? ''}</span
 						>
 					</div>
-					<p class="mt-1.5 truncate font-medium text-amber-100">{primary}</p>
+					<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
+						<span class="truncate font-medium text-amber-100">{primary}</span>
+						{#if run.is_subspawn}
+							<span
+								class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
+								title={parentLabel ? `spawned by ${parentLabel}` : 'spawned child'}>↳ spawn</span
+							>
+						{/if}
+					</p>
 					<p class="truncate text-stone-500">{secondary}</p>
 					<!-- No known total duration to bind a real percent to, so a
 					     running card gets an indeterminate scanning bar (the
