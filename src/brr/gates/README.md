@@ -23,6 +23,30 @@ created: <ISO timestamp>
 
 The daemon picks up `pending` events and hands them to the runner.
 
+An event may reference downloaded image attachments (a Telegram photo,
+an inline screenshot embedded in a GitHub issue/PR/comment body) via an
+optional `attachments:` field — a comma-joined list of bare filenames,
+resolved against a sibling directory `<inbox_dir>/<event_id>.attachments/`:
+
+```
+---
+id: evt-<timestamp>-<rand>
+source: telegram
+status: pending
+attachments: photo.jpg
+created: <ISO timestamp>
+---
+<caption, or empty>
+```
+
+See `protocol.create_event`'s `attachment_files` param (writes this
+shape) and `protocol.event_attachment_paths` (resolves it back to real
+paths) — both gates that support attachments (`telegram.py`,
+`gates/github/attachments.py`) converge on this one mechanism so the
+resident's `Read` tool opens an inbound image the same way regardless of
+which channel it arrived on. `protocol.cleanup` removes the directory
+alongside the event and response files.
+
 ### Output: `.brr/responses/`
 
 The daemon captures the runner's final stdout and writes a response file:
