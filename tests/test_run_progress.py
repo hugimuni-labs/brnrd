@@ -375,9 +375,12 @@ def test_projection_records_separate_running_entries_per_attempt(tmp_path):
 
 
 def test_render_text_compact_has_runner_env_branch_header(tmp_path):
-    """Compact card opens with a sticky ``runner · env · branch ← base``
-    header naming the three things that don't change once a run starts.
-    Run ID is dev-side noise in a chat reply and stays out."""
+    """Compact card opens with a sticky ``run-id · runner · env ·
+    branch ← base`` header. The run ID leads it (2026-07-08, direct ask):
+    a user following a fast-moving thread across several runs needs a
+    stable handle to point back at a specific one — the earlier "dev-side
+    noise, leave it out" call didn't weigh that against a chat reader
+    who has no other way to say "regarding run X"."""
     brr_dir = tmp_path / ".brr"
     key = "telegram:8:"
     _emit(brr_dir, key, "run_created", run_id="run-r", env="docker")
@@ -400,12 +403,12 @@ def test_render_text_compact_has_runner_env_branch_header(tmp_path):
     assert view is not None
     text = run_progress.render_text(view, compact=True)
     header = text.splitlines()[0]
-    assert header == "codex · docker · brr/run-r ← main"
-    # Phase log: no "phase:" labels (those belong to the verbose form),
-    # and the bare run ID never leaks in — run-r only appears as part
-    # of the branch name in the header.
+    assert header == "run-r · codex · docker · brr/run-r ← main"
+    # Phase log: no "phase:" labels (those belong to the verbose form).
     assert "phase:" not in text
-    assert text.count("run-r") == 1  # only inside the branch name
+    # run-r now appears twice: once as the leading run-id, once inside
+    # the branch name in the header.
+    assert text.count("run-r") == 2
     assert "running" in text
 
 
@@ -428,7 +431,10 @@ def test_render_text_compact_prefixes_repo_when_known(tmp_path):
     assert view is not None
     text = run_progress.render_text(view, compact=True)
 
-    assert text.splitlines()[0] == "Gurio/brr · codex · host · brr/run-repo"
+    assert (
+        text.splitlines()[0]
+        == "run-repo · Gurio/brr · codex · host · brr/run-repo"
+    )
 
 
 def test_push_done_carries_forge_view_url_into_view(tmp_path):
@@ -553,7 +559,7 @@ def test_render_text_compact_omits_arrow_without_target_branch(tmp_path):
     assert view.display_base is None
     text = run_progress.render_text(view, compact=True)
     header = text.splitlines()[0]
-    assert header == "codex · docker · brr/run-na"
+    assert header == "run-na · codex · docker · brr/run-na"
     assert "←" not in header
 
 
