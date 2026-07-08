@@ -357,21 +357,48 @@ the load-bearing notes:
   confirm on execution.
 - **Multi-account on one laptop.** Rare; defer. The account model should not
   *forbid* it, but v1 need not support it.
-- **Repo discovery.** Explicit registry (user adds repos) vs scanning a
-  workspace dir. Lean explicit for predictability; decide on execution.
-  Leans further toward explicit as of 2026-07-08 evening: the maintainer
-  named the current frontend's missing "add a project" affordance directly
-  (a hugimuni-website repo is coming soon) — a UI action to register a repo
-  only makes sense under the explicit model, not a background scan. Not
-  built; see [`design-multi-workstream-concurrency.md`](design-multi-workstream-concurrency.md)
-  §"Add-project UI gap".
-- **Cross-repo concurrency.** v1 stays single-flight across all repos —
-  this execution call is unchanged. What moved (2026-07-08 evening): the
-  maintainer said the multi-repo shape should be "natively designed as a
-  part of this frame, always," not deferred as an afterthought — see
+- **Repo discovery — settled by construction, correcting this page's own
+  stale framing (2026-07-08 night).** This was still listed as an open
+  "explicit vs scan" fork; it isn't one. `account.py`'s registry
+  (`account/repos.json`, `register_repo()`, `account.repo.<label>` config
+  keys) has no directory-scan code path at all — explicit registration is
+  the *only* mechanism that exists, and it already ships end-to-end: `brr
+  add <path>` (`cli.py::cmd_add`) calls `register_repo`, tested
+  (`test_account.py`), and the daemon's dispatch loop already scans every
+  registered repo's inbox and routes a message event to the right one by
+  label (`daemon.py::_dispatchable_targets` / `_repo_for_event`, tested
+  live: `test_account_dispatch_inbox_routes_message_event_to_registered_repo`,
+  `test_account_dispatch_keeps_forge_events_on_repo_local_route`). What's
+  actually still missing is narrower than "decide the model" — it's the
+  **UI surface** over an already-decided, already-built backend: a
+  dashboard affordance so a user doesn't need the CLI to add a repo. See
   [`design-multi-workstream-concurrency.md`](design-multi-workstream-concurrency.md)
-  §"Cross-repo, upgraded from deferred to native-by-design". That page's
-  fan-out *design* (width, placement, comms routing) is now meant to be
-  repo-parameterized from the start; whether/when the account daemon
-  actually runs repos concurrently (ties to the #128 claim model and
-  `concurrent-worktrees` work) is still a later, separate decision.
+  §"Add-project UI gap" (unchanged scope, now correctly framed as UI-only).
+  The account-level container is also already named and structured per the
+  maintainer's own later framing (2026-07-08 night, evt-mr8v): `home_root`
+  holds `repos/<label>/dominion` (resident memory), `plans/<label>/`,
+  `runner-policy/<label>/policy.md` — i.e. exactly the "workbench with
+  registry + repo-tagged state, not a fork of the dominion into every
+  project" shape, already called `brnrd-home` as the working name for the
+  container with `dominion/` nested per-repo inside it (see "Account-scoped
+  store" above, written 2026-06-29/2026-07-04) before the maintainer
+  re-derived the same shape independently this run.
+- **Cross-repo concurrency — the *concurrent* part is still open; the
+  *cross-repo dispatch* part already shipped (correction, 2026-07-08
+  night).** v1 stays single-flight in the sense that matters — one
+  resident-stack (dominion-writing) thread across the whole account, ever,
+  same invariant `design-multi-workstream-concurrency.md` grounds — that
+  execution call is unchanged. But **sequential respawn-into-another-repo,
+  the "game respawn" the maintainer asked for this run, already works**:
+  `RespawnRequest.repo` (`runner_select.py`) flows through
+  `_queue_respawn_request` into a new inbox event's `repo_label`, and the
+  main loop's `_dispatchable_targets` scans every registered repo's inbox
+  every tick and resolves each event to its target repo via
+  `_repo_for_event` — a respawn naming a different repo lands in that
+  repo's own worktree on its own next dispatch, no additional code needed.
+  What's still open is only true **parallel** execution across repos (two
+  repos' resident threads running at literally the same time) — ties to
+  the #128 claim model and `concurrent-worktrees` work, unchanged, later,
+  separate decision. The fan-out *design* posture (width, placement, comms
+  routing should be repo-parameterized) named 2026-07-08 evening still
+  applies to that separate, still-open axis.
