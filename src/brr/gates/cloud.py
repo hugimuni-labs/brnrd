@@ -776,6 +776,28 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _spawn_pool_width(brr_dir: Path) -> int:
+    """Configured ``spawn:`` pool width (``spawn.max_concurrent``), for the
+    loom-envelope Phase 1 limits panel (`kb/design-multi-workstream-
+    concurrency.md` §"Loom envelope").
+
+    Piggybacked on the live-runs publish tick rather than a new endpoint —
+    the *active* count is already derivable from ``is_subspawn`` entries in
+    ``_live_runs_snapshot`` above, this is the one number that publish
+    doesn't already carry. Reuses ``daemon._max_concurrent_spawns``'s own
+    clamped-default parsing via a deferred import rather than duplicating
+    it: ``daemon.py`` already does a deferred ``from .gates import cloud``
+    (see its own comment there), so importing the other direction here has
+    to stay deferred too, executed at runtime after both modules are
+    fully loaded, not at import time.
+    """
+    from .. import config as _config
+    from ..daemon import _max_concurrent_spawns
+
+    cfg = _config.load_config(brr_dir.parent)
+    return _max_concurrent_spawns(cfg)
+
+
 def _publish_live_runs(brr_dir: Path, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
@@ -785,7 +807,10 @@ def _publish_live_runs(brr_dir: Path, state: dict) -> None:
             "PUT",
             "/v1/daemons/live-runs",
             token=state["token"],
-            json={"runs": _live_runs_snapshot(brr_dir)},
+            json={
+                "runs": _live_runs_snapshot(brr_dir),
+                "spawn_max_concurrent": _spawn_pool_width(brr_dir),
+            },
             timeout=10,
         )
     except Exception as e:
