@@ -687,6 +687,7 @@ def build_daemon_prompt(
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
+    event_attachments: list[Path] | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
@@ -749,6 +750,7 @@ def build_daemon_prompt(
         pending_events=pending_events,
         present=present,
         event_body=event_body,
+        event_attachments=event_attachments,
         diffense=diffense,
     )
     trailer = bundle.rstrip()
@@ -833,6 +835,7 @@ def _build_run_context_bundle(
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None,
+    event_attachments: list[Path] | None = None,
     diffense: bool = False,
 ) -> str:
     """Assemble the human-readable Run Context Bundle for the daemon prompt.
@@ -1027,13 +1030,19 @@ def _build_run_context_bundle(
         sections.append("")
         sections.append(thread_record_block)
 
-    if event_body is not None:
-        body = event_body.strip()
+    body = event_body.strip() if event_body is not None else ""
+    if body or event_attachments:
+        sections.append("")
+        sections.append("### Original event body")
+        sections.append("")
         if body:
-            sections.append("")
-            sections.append("### Original event body")
-            sections.append("")
             sections.append(body)
+        if event_attachments:
+            sections.append("")
+            sections.append(
+                "Attachments (local image files — open them with Read):"
+            )
+            sections.extend(f"- {p}" for p in event_attachments)
 
     sections.append("")
     return "\n".join(sections) + "\n"

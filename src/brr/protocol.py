@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 import threading
 import time
@@ -216,12 +217,25 @@ def _generate_id() -> str:
 # ── Event files ──────────────────────────────────────────────────────
 
 
+def attachments_dir_for_event(inbox_dir: Path, event_id: str) -> Path:
+    """Local directory holding *event_id*'s downloaded image attachments.
+
+    Sibling to the event file itself (``<inbox_dir>/<event_id>.attachments/``
+    next to ``<inbox_dir>/<event_id>.md``) rather than nested under a
+    daemon-owned state dir — attachments live and die with the event that
+    named them, so ``cleanup()`` finds and removes them from the event
+    path alone with no extra bookkeeping.
+    """
+    return inbox_dir / f"{event_id}.attachments"
+
+
 def create_event(
     inbox_dir: Path,
     source: str,
     body: str,
     *,
     status: str = "pending",
+    attachment_files: list[Path] | None = None,
     **meta: object,
 ) -> Path:
     """Create a new event file in *inbox_dir*. Returns the file path.
@@ -232,9 +246,35 @@ def create_event(
     agent-initiated out-of-bound / scheduled delivery (the event is born
     ``done`` in one atomic write so the inbox poll can never grab it as
     pending and spawn a stray thought).
+
+    *attachment_files*, when given, are local files the calling gate has
+    already downloaded (Telegram's ``getFile``, GitHub's inline
+    ``user-attachments`` image links — see ``gates/telegram.py`` and
+    ``gates/github/attachments.py``). Each is moved (not copied — the
+    caller's temp file is consumed) into
+    ``attachments_dir_for_event(inbox_dir, event_id)`` and the event
+    records their bare filenames as a comma-joined ``attachments:``
+    frontmatter field, resolvable back to paths via
+    :func:`event_attachment_paths`. Both gates converge on this one
+    mechanism so an inbound screenshot reads the same way — a local file
+    the resident's ``Read`` tool can open directly — regardless of which
+    channel it arrived on.
     """
     inbox_dir.mkdir(parents=True, exist_ok=True)
     eid = _generate_id()
+    attachment_names: list[str] = []
+    if attachment_files:
+        adir = attachments_dir_for_event(inbox_dir, eid)
+        adir.mkdir(parents=True, exist_ok=True)
+        multiple = len(attachment_files) > 1
+        for i, src in enumerate(attachment_files):
+            src = Path(src)
+            # Index-prefix only when disambiguation is actually needed —
+            # one attachment keeps its own descriptive name.
+            name = f"{i:02d}-{src.name}" if multiple else src.name
+            dest = adir / name
+            shutil.move(str(src), str(dest))
+            attachment_names.append(name)
     lines = [
         "---",
         f"id: {eid}",
@@ -243,6 +283,8 @@ def create_event(
     ]
     for k, v in meta.items():
         lines.append(f"{k}: {v}")
+    if attachment_names:
+        lines.append(f"attachments: {','.join(attachment_names)}")
     lines.append(f"created: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}")
     lines.append("---")
     lines.append(body)
@@ -255,6 +297,27 @@ def create_event(
         # don't wake it. Harmless no-op outside the daemon process.
         _inbox_wake.set()
     return path
+
+
+def event_attachment_paths(event: dict[str, Any]) -> list[Path]:
+    """Resolve an event's ``attachments:`` field to local file paths.
+
+    Derives the attachments directory from the event's own ``_path``
+    (every event dict :func:`_read_event` produces carries one) rather
+    than taking a separate ``inbox_dir`` argument, so callers holding
+    just the event dict — ``prompts.py``, ``run_context.py`` — don't need
+    to thread the inbox path through to reach it. Filters out names no
+    longer on disk (a cleanup race, a hand-edited event file) instead of
+    handing back a dangling path for ``Read`` to fail on.
+    """
+    raw = event.get("attachments")
+    event_path = event.get("_path")
+    eid = event.get("id")
+    if not raw or not event_path or not eid:
+        return []
+    adir = attachments_dir_for_event(Path(event_path).parent, str(eid))
+    names = [n.strip() for n in str(raw).split(",") if n.strip()]
+    return [p for p in (adir / n for n in names) if p.is_file()]
 
 
 def _read_event(path: Path) -> dict[str, Any] | None:
@@ -541,7 +604,8 @@ def cleanup(
     response_path: Path | None = None,
     partials: Path | None = None,
 ) -> None:
-    """Delete event, optional terminal response, and the partials queue."""
+    """Delete event, optional terminal response, partials queue, and any
+    downloaded image attachments (see ``attachments_dir_for_event``)."""
     event_path.unlink(missing_ok=True)
     if response_path:
         response_path.unlink(missing_ok=True)
@@ -549,3 +613,11 @@ def cleanup(
         for p in partials.iterdir():
             p.unlink(missing_ok=True)
         partials.rmdir()
+    adir = attachments_dir_for_event(event_path.parent, event_path.stem)
+    if adir.exists():
+        for p in adir.iterdir():
+            p.unlink(missing_ok=True)
+        try:
+            adir.rmdir()
+        except OSError:
+            pass
