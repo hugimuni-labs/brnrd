@@ -2023,6 +2023,7 @@ def _run_worker(
             pending_events=pending_events_snapshot,
             present=present_snapshot,
             event_body=event_body_for_prompt,
+            event_attachments=protocol.event_attachment_paths(event),
             budget_seconds=budget_seconds,
             runner_medium=runner_name,
             runner_quota=quota_summary,
