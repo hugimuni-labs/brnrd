@@ -27,6 +27,11 @@ export interface LiveRunsResponse {
 	runs: LiveRun[];
 	stale: boolean;
 	reported_at: string | null;
+	// Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked
+	// on this same publish tick — loom-envelope Phase 1's one piece of data
+	// the slice-1 publish didn't already carry. `null` before any daemon
+	// has reported it (pre-upgrade daemon, or never published yet).
+	spawn_max_concurrent: number | null;
 }
 
 export class LiveRunsAuthError extends Error {}
