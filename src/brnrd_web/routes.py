@@ -39,6 +39,7 @@ router = APIRouter(tags=["web"])
 _TEMPLATES = Jinja2Templates(directory=Path(__file__).with_name("templates"))
 _GITHUB_AUTO_SYNC_AFTER = timedelta(minutes=15)
 _DAEMON_ONLINE_AFTER = timedelta(minutes=2)
+_HOSTED_TERMS_VERSION = "2026-07-08"
 
 
 def _render(request: Request, template: str, context: dict | None = None, *, status_code: int = 200) -> HTMLResponse:
@@ -52,6 +53,14 @@ def _safe_next(value: str) -> str:
     if not value or not value.startswith("/") or value.startswith("//"):
         return "/"
     return value
+
+
+def _terms_accept_url(next_url: str) -> str:
+    return f"/terms/accept?next={quote(_safe_next(next_url), safe='/')}"
+
+
+def _needs_hosted_terms(account: Account) -> bool:
+    return account.hosted_terms_accepted_at is None or account.hosted_terms_version != _HOSTED_TERMS_VERSION
 
 
 def _oauth_redirect_uri(request: Request) -> str:
@@ -333,6 +342,79 @@ def login_form(request: Request, next: str = "/"):
     return _render(request, "login.html", {"body_class": "auth-page", "title": "Sign in to brnrd", "signin_url": signin, "oauth_ready": _github_oauth_ready(request)})
 
 
+@router.get("/terms", response_class=HTMLResponse)
+def terms_page(request: Request):
+    return _render(
+        request,
+        "terms.html",
+        {
+            "body_class": "auth-page",
+            "title": "brnrd beta terms",
+            "accept_mode": False,
+            "terms_version": _HOSTED_TERMS_VERSION,
+        },
+    )
+
+
+@router.get("/terms/accept", response_class=HTMLResponse)
+def terms_accept_page(request: Request, next: str = "/", db: Session = Depends(get_db)):
+    safe_next = _safe_next(next)
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+    if not _needs_hosted_terms(account):
+        return RedirectResponse(url=safe_next, status_code=303)
+    return _render(
+        request,
+        "terms.html",
+        {
+            "body_class": "auth-page",
+            "title": "Accept brnrd beta terms",
+            "accept_mode": True,
+            "terms_version": _HOSTED_TERMS_VERSION,
+            "next": safe_next,
+            "error": None,
+        },
+    )
+
+
+@router.post("/terms/accept", response_class=HTMLResponse)
+def terms_accept_submit(
+    request: Request,
+    next: str = Form("/"),
+    accept_terms: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    safe_next = _safe_next(next)
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+    if accept_terms != "yes":
+        return _render(
+            request,
+            "terms.html",
+            {
+                "body_class": "auth-page",
+                "title": "Accept brnrd beta terms",
+                "accept_mode": True,
+                "terms_version": _HOSTED_TERMS_VERSION,
+                "next": safe_next,
+                "error": "You need to accept the beta hosted-execution terms before continuing.",
+            },
+            status_code=400,
+        )
+    account.hosted_terms_accepted_at = datetime.now(timezone.utc)
+    account.hosted_terms_version = _HOSTED_TERMS_VERSION
+    db.commit()
+    return RedirectResponse(url=safe_next, status_code=303)
+
+
 @router.get("/auth/github/start")
 def github_login_start(request: Request, next: str = "/"):
     if not _github_oauth_ready(request):
@@ -362,7 +444,8 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
         return _render(request, "message.html", {"title": "Login failed", "eyebrow": "GitHub provider", "heading": "GitHub login failed", "message": str(exc), "action_url": "/login", "action_label": "Try again", "severity": "error"}, status_code=502)
     account = account_for_github_identity(db, identity)
     raw = issue_session_token(db, account)
-    resp = RedirectResponse(url=next_url, status_code=303)
+    target_url = _terms_accept_url(next_url) if _needs_hosted_terms(account) else next_url
+    resp = RedirectResponse(url=target_url, status_code=303)
     resp.set_cookie(s.session_cookie, raw, httponly=True, samesite="lax", secure=_cookie_secure(request), max_age=int(SESSION_TTL.total_seconds()))
     _clear_oauth_cookies(resp, request)
     return resp
