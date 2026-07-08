@@ -137,7 +137,19 @@
 </script>
 
 <div class="mx-auto max-w-2xl p-6">
-	<p class="eyebrow">brnrd · resident dashboard</p>
+	<div class="flex items-start justify-between gap-4">
+		<p class="eyebrow">brnrd · resident dashboard</p>
+		<!-- Named directly as a real gap (2026-07-08): no way to end a
+		     session short of clearing cookies by hand. Small on purpose
+		     ("a small one somewhere") — a plain link, not a nav bar this
+		     single-page dashboard doesn't otherwise have. -->
+		<a
+			href="/logout"
+			rel="external"
+			class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+			>sign out</a
+		>
+	</div>
 	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
 		brnrd dashboard — next
 	</h1>
