@@ -19,6 +19,8 @@ class Account(Base):
     github_login: Mapped[str] = mapped_column(String(255), index=True)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    hosted_terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    hosted_terms_version: Mapped[str] = mapped_column(String(32), default="")
     repos: Mapped[list["Repo"]] = relationship(back_populates="account")
     # Current Planned State (CPS) — account-level slices of the account
     # dominion's CS5/CS7 files (cross-repo plan + decision ledger); see
