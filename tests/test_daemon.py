@@ -1181,6 +1181,192 @@ def test_notify_spawn_parent_of_crash_noop_without_parent_linkage(tmp_path):
     assert protocol.list_pending(inbox) == []
 
 
+def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
+    """A spawn that runs to a clean, zero-commit finish must still land a
+    completion notification in the parent's thread — issue #268's still-
+    open finding, quoted from its 2026-07-07 follow-up comment: "a spawn
+    that exits cleanly with zero commits produces no completion/crash
+    notification back to the parent, despite #266's crash-notify path."
+
+    Every existing test touching this exercises only one half of the
+    seam: ``test_notify_spawn_parent_lands_pending_event_for_still_running_
+    parent`` unit-tests ``_notify_spawn_parent`` against a hand-built
+    ``Run`` whose ``meta`` already contains ``spawn_parent_run_id`` —
+    never touching real event dispatch. ``test_concurrent_spawn_pool_
+    respects_configured_width`` and its siblings drive the real
+    ``start()`` loop's dispatch/reap wiring, but monkeypatch
+    ``_notify_spawn_parent`` away entirely and hand the fake worker a
+    ``Run`` with bare ``meta={"worker": True}`` — never exercising the
+    real ``spawn_parent_run_id``/``spawn_parent_conversation_key``
+    propagation ``Run.from_event`` performs from the actual dispatched
+    event. ``test_drain_outbox_queues_spawn_request``'s own docstring
+    names the gap directly: "the main-loop concurrent-dispatch wiring
+    itself has no automated end-to-end test."
+
+    This pins that missing seam: a real spawn event created via
+    ``_drain_outbox``/``_queue_spawn_request`` (so it carries the same
+    parent-linkage meta production dispatch writes), read back through
+    the real ``start()`` loop's dispatch scan, turned into a ``Run`` via
+    the real ``Run.from_event`` (only the runner subprocess itself is
+    faked — no branch, no commit, no response file: the exact "clean,
+    zero-commit finish" shape #268 names), reaped by the real main loop,
+    and handed to the real (unmocked) ``_notify_spawn_parent``. If parent
+    linkage ever failed to survive that round trip, this test would catch
+    it; as of this run it passes against the current code, meaning the
+    success-path notify wiring is already structurally sound for this
+    shape — the director's own read of the issue.
+    """
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    parent_outbox = brr_dir / "outbox" / "evt-parent"
+    parent_outbox.mkdir(parents=True)
+
+    parent_path = protocol.create_event(
+        inbox, "telegram", "parent task", status="processing",
+        conversation_key="telegram:99:",
+    )
+    parent_event_id = parent_path.stem
+    (parent_outbox / "spawn.md").write_text(
+        "---\nspawn: true\nshell: codex-mini\n---\nbounded concurrent task\n",
+        encoding="utf-8",
+    )
+    parent_task = Run(
+        id="run-parent-e2e", event_id=parent_event_id, body="parent task",
+        source="telegram", conversation_key="telegram:99:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:99:", parent_event_id),
+        parent_task, responses, parent_event_id, parent_outbox, inbox,
+    )
+    assert promoted == 1
+
+    cfg: dict = {}
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        # Real meta propagation via the real Run.from_event — this is the
+        # exact mechanism that must carry spawn_parent_run_id /
+        # spawn_parent_conversation_key from the dispatched event through
+        # to the Run the reap block hands to _notify_spawn_parent. Status
+        # "done", no branch/commit/response-file meta at all: the "clean,
+        # zero-commit finish" shape #268 names.
+        task = Run.from_event(event, cfg)
+        task.status = "done"
+        return task
+
+    ticks = {"n": 0}
+
+    def fake_fire_due_schedules(*_a, **_k):
+        ticks["n"] += 1
+        notes = [
+            e for e in protocol.list_pending(inbox) if e.get("spawned_by_run")
+        ]
+        if notes or ticks["n"] > 200:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    # Deliberately NOT monkeypatching _notify_spawn_parent — that is the
+    # function under test.
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert ticks["n"] <= 200, "spawn never reaped/notified within the tick budget"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawned_by_run")]
+    assert len(notes) == 1
+    note = notes[0]
+    assert note["conversation_key"] == "telegram:99:"
+    assert note["spawn_parent_run_id"] == "run-parent-e2e"
+    assert note.get("spawn_failed") is not True
+    assert "status=done" in note["body"]
+
+
+def test_crashed_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
+    """Symmetric to ``test_clean_finish_spawn_notifies_parent_end_to_end``,
+    for the crash half of the same reap block: a spawn whose worker raises
+    before producing a ``Run`` must still land a (failure) notification in
+    the parent's thread, via the real ``_queue_spawn_request`` → dispatch →
+    reap → ``_notify_spawn_parent_of_crash`` path — not a hand-built event
+    dict calling the notifier directly (``test_notify_spawn_parent_of_
+    crash_lands_pending_event`` already covers that half in isolation).
+    """
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    parent_outbox = brr_dir / "outbox" / "evt-parent"
+    parent_outbox.mkdir(parents=True)
+
+    parent_path = protocol.create_event(
+        inbox, "telegram", "parent task", status="processing",
+        conversation_key="telegram:77:",
+    )
+    parent_event_id = parent_path.stem
+    (parent_outbox / "spawn.md").write_text(
+        "---\nspawn: true\nshell: codex-mini\n---\nbounded concurrent task\n",
+        encoding="utf-8",
+    )
+    parent_task = Run(
+        id="run-parent-crash-e2e", event_id=parent_event_id, body="parent task",
+        source="telegram", conversation_key="telegram:77:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:77:", parent_event_id),
+        parent_task, responses, parent_event_id, parent_outbox, inbox,
+    )
+    assert promoted == 1
+
+    cfg: dict = {}
+
+    def fake_run_worker(_event, *_args, **_kwargs):
+        raise RuntimeError("boom: runner launch failed")
+
+    ticks = {"n": 0}
+
+    def fake_fire_due_schedules(*_a, **_k):
+        ticks["n"] += 1
+        notes = [
+            e for e in protocol.list_pending(inbox) if e.get("spawn_failed")
+        ]
+        if notes or ticks["n"] > 200:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    # Deliberately NOT monkeypatching _notify_spawn_parent_of_crash.
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert ticks["n"] <= 200, "crashed spawn never reaped/notified within the tick budget"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+    note = notes[0]
+    assert note["conversation_key"] == "telegram:77:"
+    assert note["spawn_parent_run_id"] == "run-parent-crash-e2e"
+    assert "boom" in note["body"]
+
+
 def _account_context_for_policy(tmp_path):
     home = tmp_path / "account-home"
     return daemon.account.AccountContext(
