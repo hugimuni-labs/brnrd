@@ -723,6 +723,31 @@ class TestPromptBuilding:
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
 
+    def test_daemon_prompt_lists_event_attachments_for_read(self, tmp_path):
+        image_path = tmp_path / "evt-1.attachments" / "photo.jpg"
+        prompt = build_daemon_prompt(
+            "look at this", "evt-1", "/tmp/resp.md", tmp_path,
+            event_body="look at this",
+            event_attachments=[image_path],
+        )
+        assert "Original event body" in prompt
+        assert "look at this" in prompt
+        assert "Attachments" in prompt
+        assert str(image_path) in prompt
+
+    def test_daemon_prompt_shows_attachments_section_with_empty_body(self, tmp_path):
+        # A bare photo with no caption: body is empty, but the image is
+        # still the whole point of the event — the section must still
+        # render so the attachment isn't silently invisible.
+        image_path = tmp_path / "evt-1.attachments" / "photo.jpg"
+        prompt = build_daemon_prompt(
+            "task", "evt-1", "/tmp/resp.md", tmp_path,
+            event_body="",
+            event_attachments=[image_path],
+        )
+        assert "Original event body" in prompt
+        assert str(image_path) in prompt
+
     def test_daemon_prompt_with_communication_snapshot(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"
         prompts.mkdir(parents=True)
