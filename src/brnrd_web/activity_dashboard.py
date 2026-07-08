@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from brnrd.activity_records import dedupe_activity_records
 from brnrd.auth import get_db
-from brnrd.models import Account, ActivityRecord, Daemon, Event, GitHubInstalledRepo, Repo
+from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
 
 from .routes import (
     _account_id,
@@ -553,6 +553,53 @@ def _run_ledger_views(db: Session, repos: list[Repo], limit: int) -> dict[str, A
     }
 
 
+def _config_change_requests_view(db: Session, repos: list[Repo], settings: Any) -> dict[str, Any]:
+    """Account-scoped pending config-change requests (loom-envelope Phase 2,
+    kb/design-multi-workstream-concurrency.md "Named forks - round 2").
+
+    Unlike the daemon-published snapshots above (live-runs, PR queue, run
+    ledger), ``ConfigChangeRequest`` rows are written directly by the
+    daemon's own ``POST /v1/daemons/config-requests`` call
+    (``src/brnrd/routers/config_approval.py``) — there is no publish/mirror
+    step and no staleness concept, this queries the table directly. Phase 2
+    shipped the device-flow (mint, approve page, outcome-over-inbox) with
+    no dashboard surface for a pending request at all; this is that surface
+    — read-only, linking to the existing session-gated ``/config-approve/{id}``
+    page for the actual decision rather than re-implementing the decide
+    action in the SPA.
+    """
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return {"requests": [], "generated_at": None}
+    repo_labels = {repo.id: repo.repo_full_name for repo in repos}
+    rows = db.execute(
+        select(ConfigChangeRequest)
+        .where(ConfigChangeRequest.repo_id.in_(repo_ids))
+        .where(ConfigChangeRequest.status == ConfigChangeRequest.STATUS_PENDING)
+        .order_by(ConfigChangeRequest.created_at)
+    ).scalars()
+    base_url = str(getattr(settings, "public_base_url", "") or "").rstrip("/")
+    out = []
+    for row in rows:
+        out.append(
+            {
+                "id": row.id,
+                "repo_label": repo_labels.get(row.repo_id, ""),
+                "config_key": row.config_key,
+                "current_value": row.current_value,
+                "requested_value": row.requested_value,
+                "reason": row.reason,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "approve_url": f"{base_url}/config-approve/{row.id}" if base_url else f"/config-approve/{row.id}",
+            }
+        )
+    return {
+        "requests": out,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def _activity_dashboard_context(request: Request, db: Session, account: Account, *, notice: str | None = None, installation_id: str | None = None) -> dict[str, Any]:
     settings = request.app.state.settings
     repos = _repos(db, account.id)
@@ -688,6 +735,30 @@ def dashboard_run_ledger_api(request: Request, limit: int = 10, db: Session = De
             "rows": view["rows"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+        }
+    )
+
+
+@router.get("/v1/dashboard/config-requests")
+def dashboard_config_requests_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Account-scoped pending config-change requests (loom-envelope Phase 2)
+    for the SvelteKit frontend. Same session-cookie auth as the other
+    dashboard JSON endpoints. Read-only: the actual approve/reject action
+    stays on the existing ``/config-approve/{id}`` page (``approve_url``
+    below), not duplicated here.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    view = _config_change_requests_view(db, repos, request.app.state.settings)
+    return JSONResponse(
+        {
+            "generated_at": view["generated_at"],
+            "requests": view["requests"],
         }
     )
 

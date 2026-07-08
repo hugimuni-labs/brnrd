@@ -4,6 +4,7 @@
 	import LiveRuns from '$lib/LiveRuns.svelte';
 	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
+	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
 	import {
@@ -12,6 +13,11 @@
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
+	import {
+		ConfigRequestsAuthError,
+		fetchConfigRequests,
+		type ConfigChangeRequestItem
+	} from '$lib/configRequests';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
@@ -44,6 +50,9 @@
 	let runLedgerRows = $state<RunLedgerRow[] | null>(null);
 	let runLedgerStale = $state(false);
 	let runLedgerError = $state<string | null>(null);
+
+	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
+	let configRequestsError = $state<string | null>(null);
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
@@ -92,6 +101,15 @@
 		} catch (e) {
 			if (!(e instanceof RunLedgerAuthError)) {
 				runLedgerError = e instanceof Error ? e.message : 'run-ledger fetch failed';
+			}
+		}
+		try {
+			const requests = await fetchConfigRequests();
+			configRequests = requests.requests;
+			configRequestsError = null;
+		} catch (e) {
+			if (!(e instanceof ConfigRequestsAuthError)) {
+				configRequestsError = e instanceof Error ? e.message : 'config-requests fetch failed';
 			}
 		}
 	}
@@ -146,6 +164,25 @@
 					daemon report as of {new Date(generatedAt).toLocaleTimeString()}
 				</p>
 			{/if}
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§1b · config-change requests</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">
+		pending settings requests
+	</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		Loom envelope Phase 2: an agent asking for more of a user-tunable ceiling than it currently has
+		(e.g. <code>spawn.max_concurrent</code>) parks the request here rather than applying it or
+		accepting a chat-typed approval — decide from the linked page.
+	</p>
+	<div class="mt-3">
+		{#if configRequestsError}
+			<p class="text-sm text-red-400">{configRequestsError}</p>
+		{:else if configRequests === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<ConfigRequests requests={configRequests} {now} />
 		{/if}
 	</div>
 
