@@ -108,6 +108,25 @@ def _model_context_remaining(model_usage: Any) -> float | None:
     return lowest_remaining
 
 
+def _model_usage_ids(model_usage: Any) -> list[str] | None:
+    """Return the real model id(s) keying this run's ``modelUsage``.
+
+    ``modelUsage`` is keyed by the actual resolved model id (e.g.
+    ``claude-opus-4-...``), not an opaque blob — the one place "which model
+    ran this" survives past the run. ``_model_usage_tokens`` already walks
+    ``.values()`` for token totals; this walks ``.keys()`` for the id(s),
+    sorted for a stable, deterministic row (#255).
+    """
+    if not isinstance(model_usage, dict):
+        return None
+    ids = sorted(
+        key
+        for key, usage in model_usage.items()
+        if isinstance(key, str) and key.strip() and isinstance(usage, dict)
+    )
+    return ids or None
+
+
 def _model_usage_tokens(model_usage: Any) -> dict[str, Any] | None:
     if not isinstance(model_usage, dict):
         return None
@@ -183,7 +202,32 @@ def parse_result(payload: dict[str, Any]) -> dict[str, Any]:
     if tokens:
         levels["tokens"] = tokens
 
+    model_ids = _model_usage_ids(payload.get("modelUsage"))
+    if model_ids:
+        levels["model_ids"] = model_ids
+
     return levels
+
+
+def resolved_model_id(levels: dict[str, Any] | None) -> str | None:
+    """Join the real model id(s) a levels snapshot's ``modelUsage`` observed.
+
+    Callers (``run_ledger.py``, the daemon's post-run manifest update) use
+    this to prefer the actually-resolved model over the static runner
+    catalog's ``"default"`` placeholder (#255) — but only once a run has
+    finished and produced result JSON; there is no way to know the real
+    model before the run starts, so the catalog placeholder is still the
+    correct value at dispatch time. Multiple ids happen when a run's own
+    subagents resolved to a different tier than the top-level turn; joined
+    with ``"+"`` rather than silently picking one and hiding the rest.
+    """
+    if not isinstance(levels, dict):
+        return None
+    ids = levels.get("model_ids")
+    if not isinstance(ids, list) or not ids:
+        return None
+    cleaned = [str(item).strip() for item in ids if str(item).strip()]
+    return "+".join(cleaned) if cleaned else None
 
 
 def result_text(payload: dict[str, Any], fallback: str) -> str:
