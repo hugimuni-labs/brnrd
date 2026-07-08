@@ -401,10 +401,11 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     """
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
-        return {"runs": [], "stale": False, "generated_at": None}
+        return {"runs": [], "stale": False, "generated_at": None, "spawn_max_concurrent": None}
     now = datetime.now(timezone.utc)
     runs: dict[str, dict[str, Any]] = {}
     newest_reported_at: datetime | None = None
+    spawn_max_concurrent: int | None = None
     daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
     for daemon in daemons:
         reported_at = _dt(daemon.live_runs_updated_at)
@@ -412,6 +413,11 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
             continue
         if newest_reported_at is None or reported_at > newest_reported_at:
             newest_reported_at = reported_at
+            # Same "freshest report wins" rule the entries dict below
+            # applies per-run-id — one daemon process may register under
+            # several repos, each a separate row; the most recently
+            # reported row's own config value is the one that's live.
+            spawn_max_concurrent = daemon.spawn_max_concurrent
         try:
             entries = json.loads(daemon.live_runs_json or "[]")
         except ValueError:
@@ -439,6 +445,7 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
         "runs": out,
         "stale": stale,
         "generated_at": newest_reported_at.isoformat() if newest_reported_at else None,
+        "spawn_max_concurrent": spawn_max_concurrent,
     }
 
 
@@ -690,6 +697,7 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
             "runs": view["runs"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+            "spawn_max_concurrent": view["spawn_max_concurrent"],
         }
     )
 
