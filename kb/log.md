@@ -12260,3 +12260,32 @@ Detail: `kb/plan-director-execution.md` §A4, `kb/design-multi-workstream-
 concurrency.md` §"Loom envelope Phase 1 — shipped", `ledger/decisions.md`
 (account dominion). Branch:
 `brr/tick-spawn-authority-and-loom-envelope-phase1-2026-07-08`.
+
+## [2026-07-08] fix | Login-page skin refresh + missing logout route/button
+
+Direct same-thread report: "the login page has the old skin we need to
+make it right," followed immediately by "we don't have a logout button."
+Both real: `app.css` (shared by every brnrd_web-rendered page — login,
+terms, connect, message, config-approve) still carried the mint-green/teal
+palette from before the amber/frost/void status language `statusPalette.ts`
+settled on for the SvelteKit dashboard (2026-07-08 earlier the same day).
+Swapped the `:root` token set to match, anchored on `statusPalette.ts`'s
+own validated colors (#0c0906 body / #171009 panel / #1c1917 track) rather
+than inventing a second palette — structure/layout unchanged, only color
+values moved.
+
+Logout: there was no route at all, session cookie or otherwise. Added
+`GET /logout` (clears the session cookie, redirects to `/login`) plus a
+small "sign out" link in the SvelteKit dashboard header — kept
+deliberately small ("a small one somewhere") since this single-page
+dashboard has no nav bar to anchor it to otherwise. `.upsun/config.yaml`'s
+passthru regex updated to include `logout` alongside the other brnrd_web
+routes.
+
+Build+lint clean, 1427 backend tests green (+1: logout clears the session
+cookie and redirects). Self-merged directly (build/test-verified response
+to an explicit same-thread "please fix it" ask, same shape as prior
+direct-fix precedents, not the director-tick unreviewed-initiative pattern
+the no-self-merge policy targets). PR #301. Verified live via Playwright
+after the Upsun redeploy landed (see the login skin's own PR discussion
+for the pixel check).
