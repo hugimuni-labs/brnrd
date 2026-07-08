@@ -1346,9 +1346,17 @@ def _run_worker(
         live_run_label = " ".join(
             str(event.get("summary") or task.body or "").split()
         )[:120]
+        # Same fields, same derivation as the closed-run ledger row
+        # (run_ledger.py::_ledger_row) — `spawn_immediate` is set only on a
+        # concurrent `spawn:` child's own event (_queue_spawn_request), so
+        # it (not the parent-id truthiness alone) is the ledger's own
+        # is_subspawn source of truth; mirrored here rather than
+        # re-derived differently.
         presence_id = presence.register(
             brr_dir, kind="daemon", stream=conv_key, run_id=task.id,
             repo_label=repo_label, label=live_run_label,
+            parent_run_id=task.meta.get("spawn_parent_run_id") or None,
+            is_subspawn=bool(task.meta.get("spawn_immediate")),
         )["id"]
         task.meta["presence_id"] = presence_id
     except OSError:
@@ -3055,8 +3063,8 @@ def _queue_spawn_request(
     difference: a respawn only ever starts once *this* run ends (queued
     into the ordinary inbox, dispatched by the next idle tick); a spawn is
     picked up by the main loop's *second* dispatch slot immediately,
-    alongside this still-running thought (see the ``current_spawn`` cap-of-1
-    slot in the daemon loop). Always ``worker: true`` — never the
+    alongside this still-running thought (see ``active_spawns`` and
+    ``_max_concurrent_spawns`` in the daemon loop). Always ``worker: true`` — never the
     resident stack — a concurrent child does not get dominion write, kb
     governance, or scheduling authority any more than a sequential
     worker-stack respawn does (`kb/design-director-loop.md` §"Concurrent
@@ -4022,6 +4030,30 @@ def _seconds_config(
     return default
 
 
+_MAX_CONCURRENT_SPAWNS_DEFAULT = 4
+
+
+def _max_concurrent_spawns(cfg: dict) -> int:
+    """Configured worker-stack ``spawn:`` pool width.
+
+    Slice 1 (kb/design-director-loop.md §"Concurrent sub-spawns") shipped
+    this hardcoded at a cap of 1. Generalized to a small configurable pool
+    per kb/design-multi-workstream-concurrency.md "Ranked moves" #1 and the
+    maintainer's 2026-07-08 call ("set the concurrency to 4 or something
+    already"). ``spawn.max_concurrent`` in ``.brr/config``; clamped to at
+    least 1 so a misconfigured 0/negative value can't silently wedge every
+    ``spawn:`` request back into the ordinary sequential queue.
+    """
+    raw = cfg.get("spawn.max_concurrent", _MAX_CONCURRENT_SPAWNS_DEFAULT)
+    if isinstance(raw, bool):
+        return _MAX_CONCURRENT_SPAWNS_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _MAX_CONCURRENT_SPAWNS_DEFAULT
+    return max(1, value)
+
+
 def _post_delivery_attend_seconds(cfg: dict) -> float:
     """Configured daemon-owned dwell after a current-thread delivery.
 
@@ -4716,24 +4748,26 @@ def start(
     # gate liveness, and signals during a long thought. The runner's own
     # wall-clock timeout (runner.timeout_seconds) is the liveness
     # backstop that reclaims the slot if the CLI subprocess wedges.
-    # Second slot (kb/design-director-loop.md §"Concurrent sub-spawns",
-    # slice 1): `current` remains the one resident-stack thought
+    # Second pool (kb/design-director-loop.md §"Concurrent sub-spawns";
+    # generalized past cap-of-1 in kb/design-multi-workstream-concurrency.md
+    # "slice 1"): `current` remains the one resident-stack thought
     # single-flight protects (dominion write, kb governance, scheduling).
-    # `current_spawn` is a *worker-stack-only*, cap-of-1 concurrent child a
-    # running thought can dispatch via `spawn:` outbox frontmatter — it
-    # never touches the surface single-flight exists to protect, so it
-    # gets its own pool slot rather than waiting behind the resident's.
+    # `active_spawns` holds up to `_max_concurrent_spawns(cfg)` *worker-
+    # stack-only* concurrent children a running thought can dispatch via
+    # `spawn:` outbox frontmatter — none of them touch the surface
+    # single-flight exists to protect, so they share a pool of their own
+    # rather than waiting behind the resident's slot.
+    max_spawns = _max_concurrent_spawns(cfg)
     pool = concurrent.futures.ThreadPoolExecutor(
-        max_workers=2,
+        max_workers=1 + max_spawns,
         thread_name_prefix="brr-thought",
     )
     current: concurrent.futures.Future | None = None
-    current_spawn: concurrent.futures.Future | None = None
-    current_spawn_inbox_dir: Path | None = None
-    # Captured at submission time so a crashed spawn (which never returns a
-    # Run/task object) can still be notified back to its parent — see
+    # Each entry: {"future", "inbox_dir", "event"}. `event` is captured at
+    # submission time so a crashed spawn (which never returns a Run/task
+    # object) can still be notified back to its parent — see
     # _notify_spawn_parent_of_crash.
-    current_spawn_event: dict | None = None
+    active_spawns: list[dict] = []
     reload_requested = False
 
     wake = protocol.inbox_wake()
@@ -4762,26 +4796,30 @@ def start(
                     print(f"[brr] thought crashed: {exc}")
                 current = None
 
-            # Reap the concurrent worker-stack child, if one is in flight,
-            # and notify its still-running parent thought (or leave a
+            # Reap any concurrent worker-stack children that have finished,
+            # and notify each one's still-running parent thought (or leave a
             # normal pending event behind if the parent already ended —
             # the next dispatch tick picks it up like any other follow-up,
             # standing in for the guessed-time review self-wake convention
             # this replaces for the common case).
-            if current_spawn is not None and current_spawn.done():
-                try:
-                    spawn_task = current_spawn.result()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[brr] spawned child crashed: {exc}")
-                    if current_spawn_event is not None:
-                        _notify_spawn_parent_of_crash(
-                            current_spawn_inbox_dir, current_spawn_event, exc,
-                        )
-                else:
-                    _notify_spawn_parent(current_spawn_inbox_dir, spawn_task)
-                current_spawn = None
-                current_spawn_inbox_dir = None
-                current_spawn_event = None
+            if active_spawns:
+                still_running = []
+                for spawn in active_spawns:
+                    future = spawn["future"]
+                    if not future.done():
+                        still_running.append(spawn)
+                        continue
+                    try:
+                        spawn_task = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[brr] spawned child crashed: {exc}")
+                        if spawn["event"] is not None:
+                            _notify_spawn_parent_of_crash(
+                                spawn["inbox_dir"], spawn["event"], exc,
+                            )
+                    else:
+                        _notify_spawn_parent(spawn["inbox_dir"], spawn_task)
+                active_spawns = still_running
 
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
@@ -4812,15 +4850,18 @@ def start(
             # the *resident* slot shut, so a scan purely for a fresh
             # resident dispatch would be wasted while reload is pending.
             scanned: list[_DispatchTarget] | None = None
-            if current_spawn is None or (current is None and not reload_requested):
+            if len(active_spawns) < max_spawns or (
+                current is None and not reload_requested
+            ):
                 scanned = _dispatchable_targets(account_context, repo_root, cfg)
 
-            # Concurrent worker-stack child (slice 1): dispatched
-            # independently of the resident's own `current` slot — that's
-            # the entire point, a spawn runs *alongside* the still-live
-            # parent thought rather than after it ends. Capped at 1
-            # (`current_spawn is None`), scanned every tick regardless of
-            # whether the resident slot is busy. No burst-settling here —
+            # Concurrent worker-stack children (slice 1, generalized past
+            # cap-of-1): dispatched independently of the resident's own
+            # `current` slot — that's the entire point, a spawn runs
+            # *alongside* the still-live parent thought rather than after it
+            # ends. Capped at `max_spawns` (`len(active_spawns) <
+            # max_spawns`), scanned every tick regardless of whether the
+            # resident slot is busy. No burst-settling here —
             # unlike a fresh external message, a `spawn:` request is
             # already one deliberate, already-complete dispatch decision
             # the parent made; nothing to debounce it against.
@@ -4851,21 +4892,21 @@ def start(
             # and the crash-notify path (PR #266) — a bad dispatch
             # surfaces at review, it doesn't silently corrupt anything.
             # Re-exec itself is still safe: ``pool.shutdown(wait=True)``
-            # below blocks on any in-flight ``current_spawn`` future
-            # exactly as it does on ``current``, so a reload never kills a
-            # spawn mid-flight, only defers replacing the process image
-            # until it's done.
-            if current_spawn is None:
+            # below blocks on any in-flight spawn future exactly as it does
+            # on ``current``, so a reload never kills a spawn mid-flight,
+            # only defers replacing the process image until every active
+            # spawn (and the resident thought) is done.
+            open_spawn_slots = max_spawns - len(active_spawns)
+            if open_spawn_slots > 0:
                 spawn_candidates = [
                     t for t in (scanned or []) if t.event.get("spawn_immediate")
-                ]
-                if spawn_candidates:
-                    target = spawn_candidates[0]
+                ][:open_spawn_slots]
+                for target in spawn_candidates:
                     event = target.event
                     eid = event["id"]
                     print(f"[brr] processing (concurrent spawn): {eid}")
                     protocol.set_status(event, "processing")
-                    current_spawn = pool.submit(
+                    future = pool.submit(
                         _run_worker_and_finalize,
                         event,
                         target.repo_root,
@@ -4875,8 +4916,13 @@ def start(
                         account_context=account_context,
                         inbox_dir=target.inbox_dir,
                     )
-                    current_spawn_inbox_dir = target.inbox_dir
-                    current_spawn_event = event
+                    active_spawns.append(
+                        {
+                            "future": future,
+                            "inbox_dir": target.inbox_dir,
+                            "event": event,
+                        }
+                    )
 
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
@@ -4957,11 +5003,13 @@ def start(
         # reclaim the slot promptly instead of waiting out its (long,
         # possibly extended) budget, then drain the thought.
         #
-        # Known slice-1 gap: ``runner.kill_active`` tracks a single active
-        # subprocess module-globally, so a live concurrent spawn (if any)
-        # isn't killed here the way the resident's own ``current`` is —
-        # ``pool.shutdown(wait=True)`` still drains it, just without the
-        # prompt-reclaim this gives the resident slot. Not fixed in this
+        # Known slice-1 gap, wider now that ``max_spawns`` can exceed 1:
+        # ``runner.kill_active`` tracks a single active subprocess
+        # module-globally, so live concurrent spawns aren't killed here the
+        # way the resident's own ``current`` is — ``pool.shutdown(wait=True)``
+        # still drains them, just without the prompt-reclaim this gives the
+        # resident slot, and a shutdown now waits out up to `max_spawns`
+        # in-flight children instead of at most one. Not fixed in this
         # slice; would need ``kill_active`` to become a small registry.
         if current is not None and not current.done():
             if runner.kill_active():
