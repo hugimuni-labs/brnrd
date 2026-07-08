@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main class="state-shell" aria-labelledby="config-approve-title">
+  <section class="panel connect-panel">
+    <p class="eyebrow">Config-change request</p>
+    <h1 id="config-approve-title">Approve config change</h1>
+    <p class="panel-copy">Your resident on <strong>{{ repo_full_name }}</strong> wants to change a limit you control.</p>
+
+    <dl class="detail-list">
+      <dt>Key</dt>
+      <dd><code>{{ config_key }}</code></dd>
+      <dt>Current</dt>
+      <dd><code>{{ current_value if current_value else "(unset)" }}</code></dd>
+      <dt>Requested</dt>
+      <dd><code>{{ requested_value }}</code></dd>
+      {% if reason %}
+      <dt>Reason</dt>
+      <dd>{{ reason }}</dd>
+      {% endif %}
+    </dl>
+
+    <form class="stack-form" method="post" action="/config-approve/{{ request_id }}">
+      <button class="button button-primary" type="submit" name="decision" value="approve">Approve</button>
+      <button class="button button-secondary" type="submit" name="decision" value="reject">Reject</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

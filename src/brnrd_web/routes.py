@@ -18,6 +18,7 @@ from brnrd.auth import get_db
 from brnrd.models import (
     Account,
     ChannelRoute,
+    ConfigChangeRequest,
     Daemon,
     Event,
     GitHubInstallation,
@@ -29,6 +30,7 @@ from brnrd.models import (
 )
 from brnrd.platforms import github_app as gh_app_client
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
+from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.github_app import sync_app_installations_for_account
 from brnrd.routers.pairing import approve_core, telegram_pair_core
 from brnrd.security import hash_token
@@ -394,3 +396,61 @@ def connect_submit(code: str, request: Request, repo_id: str = Form(...), db: Se
     if pair is not None:
         message += f" To use Telegram, bind the chat too: {pair.instructions}"
     return _render(request, "message.html", {"title": "Approved", "eyebrow": "Daemon approval", "heading": "Approved", "message": message, "action_url": pair.deep_link if pair else None, "action_label": "Open Telegram and press Start" if pair and pair.deep_link else None, "severity": "success"})
+
+
+def _config_change_request_view(db: Session, request_id: str) -> ConfigChangeRequest | None:
+    return db.get(ConfigChangeRequest, request_id)
+
+
+@router.get("/config-approve/{request_id}", response_class=HTMLResponse)
+def config_approve_page(request_id: str, request: Request, db: Session = Depends(get_db)):
+    """Loom-envelope Phase 2's approve/confirm URL — the daemon mints
+    ``request_id`` via ``POST /v1/daemons/config-requests`` (see
+    ``brnrd.routers.config_approval``) when a resident wants more of an
+    allowlisted ceiling than ``.brr/config`` currently grants."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url=f"/login?next=/config-approve/{request_id}", status_code=303)
+    row = _config_change_request_view(db, request_id)
+    if row is None or row.account_id != account_id:
+        return _render(request, "message.html", {"title": "Not found", "eyebrow": "Config-change request", "heading": "Request not found", "message": "This config-change link is unknown or belongs to a different account.", "severity": "error"}, status_code=404)
+    repo = db.get(Repo, row.repo_id)
+    if row.status != ConfigChangeRequest.STATUS_PENDING:
+        return _render(request, "message.html", {"title": "Already decided", "eyebrow": "Config-change request", "heading": f"Already {row.status}", "message": f"`{row.config_key}` on {repo.repo_full_name if repo else row.repo_id} was already {row.status}. No further action needed.", "severity": "neutral"})
+    return _render(
+        request,
+        "config_approve.html",
+        {
+            "title": "Approve config change",
+            "request_id": row.id,
+            "repo_full_name": repo.repo_full_name if repo else row.repo_id,
+            "config_key": row.config_key,
+            "current_value": row.current_value,
+            "requested_value": row.requested_value,
+            "reason": row.reason,
+        },
+    )
+
+
+@router.post("/config-approve/{request_id}", response_class=HTMLResponse)
+def config_approve_submit(request_id: str, request: Request, decision: str = Form(...), db: Session = Depends(get_db)):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url=f"/login?next=/config-approve/{request_id}", status_code=303)
+    approve = decision.strip().lower() == "approve"
+    try:
+        row = decide_config_change(db, account_id, request_id, approve=approve)
+    except HTTPException as exc:
+        return _render(request, "message.html", {"title": "Could not decide", "eyebrow": "Config-change request", "heading": "Could not record a decision", "message": str(exc.detail), "severity": "error"}, status_code=exc.status_code)
+    repo = db.get(Repo, row.repo_id)
+    repo_label = repo.repo_full_name if repo else row.repo_id
+    if row.status == ConfigChangeRequest.STATUS_EXPIRED:
+        message = f"This request to change `{row.config_key}` on {repo_label} expired before a decision was made. No change applied."
+        severity = "warning"
+    elif row.status == ConfigChangeRequest.STATUS_APPROVED:
+        message = f"Approved. Your daemon will set `{row.config_key}` to `{row.requested_value}` on {repo_label} the next time it checks in."
+        severity = "success"
+    else:
+        message = f"Rejected. `{row.config_key}` on {repo_label} stays at `{row.current_value}`."
+        severity = "neutral"
+    return _render(request, "message.html", {"title": "Config change", "eyebrow": "Config-change request", "heading": row.status.capitalize(), "message": message, "severity": severity})

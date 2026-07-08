@@ -208,3 +208,39 @@ class PairRequest(Base):
     minted_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class ConfigChangeRequest(Base):
+    """Loom-envelope Phase 2 — a daemon-proposed ``.brr/config`` key change,
+    parked until the account owner approves it from a browser.
+
+    Same device-flow shape as ``PairRequest`` above (mint -> approve-page
+    click while logged in -> outcome observed), but daemon-initiated rather
+    than account-initiated, and carrying a structured key/value instead of
+    a repo binding. See ``kb/design-multi-workstream-concurrency.md``
+    §"Named forks - round 2" for why this exists: the agent asking for more
+    of a user-tunable ceiling than it currently has must never apply the
+    change itself or accept a chat-typed approval - it has to ride the same
+    auth boundary as everything else that touches account state.
+    """
+
+    __tablename__ = "config_change_requests"
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_EXPIRED = "expired"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id"), index=True)
+    # The daemon's own local proposal id (``account.config_change_proposals_path``
+    # filename stem) - the join key between this server-side row and the
+    # local proposal file the daemon applies against on approval.
+    proposal_id: Mapped[str] = mapped_column(String(96), index=True)
+    config_key: Mapped[str] = mapped_column(String(128))
+    current_value: Mapped[str] = mapped_column(String(256), default="")
+    requested_value: Mapped[str] = mapped_column(String(256), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default=STATUS_PENDING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
