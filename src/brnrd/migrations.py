@@ -68,6 +68,8 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_id VARCHAR(32)"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS github_login VARCHAR(255)"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email VARCHAR(320)"))
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_terms_accepted_at TIMESTAMP"))
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hosted_terms_version VARCHAR(32) DEFAULT ''"))
     conn.execute(
         text(
             "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS "
