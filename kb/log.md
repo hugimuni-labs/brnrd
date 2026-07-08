@@ -12353,3 +12353,67 @@ before-close discipline held.
 
 Detail: PRs #303, #304. Branch: `brr/asset-cachebust-and-dashboard-copy-
 2026-07-08`, `brr/spawn-clean-finish-notify-268`.
+
+## [2026-07-09] implement | Event image attachments — telegram photos + github inline images
+
+Direct ask, with a proposed shape to confirm before building: "make you
+able to see pictures (from both telegram and GitHub gates)... an event
+file can have a directory with attached images... Agreed?" Checked
+against running code first rather than assumed: zero telegram-photo
+ingestion existed anywhere in `src/brr` (`_loop_once`'s `if not text:
+continue` ate every bare-photo message silently) — the exact gap named
+twice before and never built (`kb/plan-loom-realtime-build.md` §Slice
+1.5, this log's own 2026-07-07 entry). Confirmed the proposed shape and
+built it the same run: clear, reversible, and the maintainer's own
+"Agreed?" was an invitation to build on a nod, not a fork to park.
+
+Shipped: `protocol.create_event` gained `attachment_files` — moves
+already-downloaded local files into a sibling
+`<event_id>.attachments/` dir and records a comma-joined `attachments:`
+frontmatter field; `protocol.event_attachment_paths(event)` resolves it
+back to real paths (filtering dangling names), deriving the directory
+from the event's own `_path` rather than a separate `inbox_dir` arg.
+`gates/telegram.py` downloads the largest `PhotoSize` or an image-MIME
+`document` via Telegram's `getFile` + file-host GET, best-effort (any
+failure degrades to "no attachment," never drops the message).
+`gates/github/attachments.py` (new) extracts markdown/HTML image URLs
+from a body and downloads each through a new `client._download_url`
+(auth header stripped automatically by `requests` on GitHub's
+cross-host redirect to its signed asset host); all 7 of the gate's
+`protocol.create_event` call sites now funnel through one
+`_create_github_event` wrapper in `polling.py` instead of repeating the
+extract-download-attach dance seven times. Both prompt surfaces
+(`prompts.py`'s live Run Context Bundle, `run_context.py`'s persisted
+`context.md`) render an "Attachments (local image files — open them
+with Read)" bullet list under the event body, including when the body
+itself is empty (a bare photo with no caption) — the old `if body:`
+gate would have hidden the section entirely in that case.
+`protocol.cleanup` removes the attachments dir alongside the event/
+response/partials files it already deleted.
+
+Caught and fixed my own slip mid-build: the first `Edit` on
+`protocol.cleanup` matched a truncated `old_string` that didn't include
+the pre-existing `partials.rmdir()` line, leaving it dedented to
+unconditional (would have crashed any caller passing `partials=None`).
+Caught by the pre-existing regression test
+(`test_cleanup_removes_partials_dir`) going red before any human or
+review pass saw it — exactly the value of running the full suite before
+calling a change done, not after.
+
+Full suite green (1456 passed, +26 new tests across
+`test_protocol.py`, `test_telegram_gate.py`, `test_github_gate.py`,
+`test_prompts.py`, and a new `test_run_context.py`). `gates/README.md`'s
+file protocol spec documents the `attachments:` field shape.
+`kb/plan-loom-realtime-build.md` gained a closing addendum linking
+forward rather than leaving its old "no ingestion exists" note reading
+as current.
+
+Deliberately not built: non-image attachments (voice/video/generic
+documents — this was scoped as image support, named that way in the
+ask); a storage-retention ceiling across a long-lived inbox (bounded
+per-event today, not in aggregate); markdown reference-style links and
+CSS background-image embeds (rare enough that a miss falls back to the
+live `html_url` rather than a wrong answer).
+
+Detail: `kb/design-event-attachments.md`. Branch:
+`brr/event-image-attachments-2026-07-09`.

@@ -213,3 +213,15 @@ the six-mechanic reasoning and prior shipped slices this plan builds on.
 [`design-quota-scheduling-loom.md`](design-quota-scheduling-loom.md) — the
 `run_ledger` schema slice 3 reads from, and why token consumption never
 backfills to a dollar figure outside the weekly window.
+
+## Addendum (2026-07-09): the named screenshot gap is closed
+
+§Slice 1.5 above named a real gap while working around it: "no telegram-
+photo ingestion at all... no `photo`/`file_id`/download code path
+anywhere in `src/brr`," repeated once more in `kb/log.md`'s 2026-07-07
+entry for the same slice. Both gates now download image attachments into
+local files an event references — see
+[`design-event-attachments.md`](design-event-attachments.md) for the
+shipped shape. Not reopening this plan for it (this page is closed, not
+a place for new slices); linking forward instead of leaving the old "no
+ingestion exists" note reading as still-current.

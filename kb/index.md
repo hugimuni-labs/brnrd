@@ -217,6 +217,16 @@ dive-in map) and are stable until something contradicts them.
   idle-liveness timeout were scoped in and deliberately deferred (see the
   page). Companion to
   [`design-agent-dominion.md`](design-agent-dominion.md) §4.
+- [Event image attachments](design-event-attachments.md) — *shipped
+  2026-07-09*. Telegram photos/documents and GitHub inline
+  `user-attachments` image links both resolve to local files an event
+  references (`attachments:` frontmatter + a sibling
+  `<event_id>.attachments/` dir), surfaced in both prompt surfaces
+  (`prompts.py`'s live bundle, `run_context.py`'s persisted file) so the
+  resident's `Read` tool opens an inbound screenshot directly, regardless
+  of which gate it arrived on. Closes a gap named twice
+  (`kb/plan-loom-realtime-build.md` §Slice 1.5, `kb/log.md` 2026-07-07)
+  and never built until now.
 - [Self-scheduled thoughts](design-self-scheduled-thoughts.md) — *shipped
   2026-06-09 (slice 7)*. Makes the resident proactive: it owns a
   declarative schedule in its dominion (`schedule.md`: `at:` one-shot,

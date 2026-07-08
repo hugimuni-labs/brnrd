@@ -194,6 +194,92 @@ class TestEvents:
         assert [ev["body"] for ev in dispatchable] == ["expired", "invalid"]
 
 
+class TestAttachments:
+    """Image attachments — event files referencing local downloaded files.
+
+    The shape both gates converge on (Telegram photos/documents, GitHub
+    inline image links): ``create_event(attachment_files=[...])`` moves
+    the caller's already-downloaded files into
+    ``attachments_dir_for_event`` and records their names, and
+    ``event_attachment_paths`` resolves that field back to real paths.
+    """
+
+    def test_single_attachment_keeps_its_own_name(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        src_dir = tmp_path / "downloads"
+        src_dir.mkdir()
+        src = src_dir / "photo.jpg"
+        src.write_bytes(b"fake-jpeg-bytes")
+
+        protocol.create_event(
+            inbox, source="telegram", body="look at this",
+            attachment_files=[src],
+        )
+        ev = protocol.list_pending(inbox)[0]
+
+        assert ev["attachments"] == "photo.jpg"
+        paths = protocol.event_attachment_paths(ev)
+        assert len(paths) == 1
+        assert paths[0].read_bytes() == b"fake-jpeg-bytes"
+        # The source file was moved, not copied — the caller's temp file
+        # (or temp dir) is fully consumed.
+        assert not src.exists()
+
+    def test_multiple_attachments_get_index_prefixed(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        src_dir = tmp_path / "downloads"
+        src_dir.mkdir()
+        first = src_dir / "a.png"
+        second = src_dir / "b.png"
+        first.write_bytes(b"one")
+        second.write_bytes(b"two")
+
+        protocol.create_event(
+            inbox, source="github", body="two screenshots",
+            attachment_files=[first, second],
+        )
+        ev = protocol.list_pending(inbox)[0]
+
+        assert ev["attachments"] == "00-a.png,01-b.png"
+        paths = protocol.event_attachment_paths(ev)
+        assert [p.name for p in paths] == ["00-a.png", "01-b.png"]
+
+    def test_no_attachments_field_when_none_given(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        protocol.create_event(inbox, source="test", body="plain")
+        ev = protocol.list_pending(inbox)[0]
+
+        assert "attachments" not in ev
+        assert protocol.event_attachment_paths(ev) == []
+
+    def test_event_attachment_paths_drops_missing_files(self, tmp_path):
+        # A hand-edited event file, or an attachments dir already cleaned
+        # up, must degrade to an empty list rather than handing back a
+        # dangling path for Read to fail on.
+        inbox = tmp_path / "inbox"
+        path = protocol.create_event(inbox, source="test", body="x")
+        ev = protocol.list_pending(inbox)[0]
+        protocol.update_event_meta(ev, attachments="ghost.png")
+
+        assert protocol.event_attachment_paths(ev) == []
+
+    def test_cleanup_removes_attachments_dir(self, tmp_path):
+        inbox = tmp_path / "inbox"
+        responses = tmp_path / "responses"
+        src = tmp_path / "src.png"
+        src.write_bytes(b"data")
+        path = protocol.create_event(
+            inbox, source="test", body="x", attachment_files=[src],
+        )
+        eid = protocol.list_pending(inbox)[0]["id"]
+        adir = protocol.attachments_dir_for_event(inbox, eid)
+        assert adir.exists()
+
+        protocol.cleanup(path, protocol.response_path(responses, eid))
+
+        assert not adir.exists()
+
+
 class TestResponses:
     def test_write_and_read(self, tmp_path):
         responses = tmp_path / "responses"
