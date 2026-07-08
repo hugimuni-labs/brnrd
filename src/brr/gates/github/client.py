@@ -8,6 +8,7 @@ the transport isolated to one module is what makes that swap clean.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -129,6 +130,42 @@ def _github_error_message(response: requests.Response) -> str:
     if response.text:
         return response.text[:500]
     return response.reason or ""
+
+
+def _download_url(
+    token: str, url: str, dest: Path, *, timeout: float = _HTTP_TIMEOUT,
+) -> bool:
+    """GET an arbitrary URL and write its body to *dest*. Returns success.
+
+    For inline image attachments (``user-attachments/assets/...`` links
+    embedded in issue/PR/comment bodies) — these live outside the
+    ``_API_ROOT``-scoped REST surface ``_request`` targets, so they need
+    a plain GET rather than the JSON API helpers above. ``Authorization``
+    is only honoured by ``requests`` on the first hop: it's stripped
+    automatically on any cross-host redirect (github.com's attachment
+    URL typically 302s to a signed, time-limited S3 object), so this
+    never leaks the token to whatever host actually serves the bytes.
+    Any non-2xx or transport error returns ``False`` rather than raising —
+    a failed attachment download shouldn't drop the whole event.
+    """
+    try:
+        response = _SESSION.get(
+            url,
+            headers={"Authorization": f"Bearer {token}", "User-Agent": _USER_AGENT},
+            timeout=timeout,
+            stream=True,
+        )
+    except requests.RequestException:
+        return False
+    if not 200 <= response.status_code < 300:
+        return False
+    try:
+        with open(dest, "wb") as fh:
+            for chunk in response.iter_content(65536):
+                fh.write(chunk)
+    except OSError:
+        return False
+    return True
 
 
 def _api_get(
