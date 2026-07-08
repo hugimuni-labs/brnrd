@@ -101,6 +101,7 @@ def test_login_page_uses_github_only(client):
     assert "managed brr control plane" in r.text
     assert "preview-frame" in r.text
     assert "Sign in with GitHub" in r.text
+    assert "/terms" in r.text
     assert "password" not in r.text.lower()
 
 
@@ -126,12 +127,21 @@ def test_github_login_redirect_uses_state_and_pkce(client):
     assert query["code_challenge"][0]
 
 
-def test_github_callback_sets_session_cookie_without_seed_repo(
+def test_terms_page_serves_hosted_execution_disclaimer(client):
+    r = client.get("/terms")
+    assert r.status_code == 200
+    assert "brnrd hosted-execution beta disclaimer" in r.text
+    assert "HugiMuni SAS" in r.text
+    assert "yolo-exec" in r.text
+    assert "French law or European Union consumer" in r.text
+
+
+def test_github_callback_requires_terms_acceptance_without_seed_repo(
     client, monkeypatch
 ):
     _, callback, seen = _login_web(client, monkeypatch, next="/connect/BR-123")
     assert callback.status_code == 303
-    assert callback.headers["location"] == "/connect/BR-123"
+    assert callback.headers["location"] == "/terms/accept?next=/connect/BR-123"
     assert "brnrd_session" in callback.cookies or "brnrd_session" in client.cookies
     assert seen["code"] == "ok"
     assert seen["redirect_uri"] == "https://brnrd.example/auth/github/callback"
@@ -143,10 +153,45 @@ def test_github_callback_sets_session_cookie_without_seed_repo(
         ).scalar_one()
         assert account.github_login == _LOGIN
         assert account.email == _EMAIL
+        assert account.hosted_terms_accepted_at is None
+        assert account.hosted_terms_version == ""
         repos = db.execute(
             select(Repo).where(Repo.account_id == account.id)
         ).scalars().all()
         assert repos == []
+
+
+def test_terms_acceptance_requires_checkbox(client, monkeypatch):
+    _login_web(client, monkeypatch, next="/connect/BR-123")
+    r = client.post(
+        "/terms/accept",
+        data={"next": "/connect/BR-123"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
+    assert "need to accept" in r.text
+    with client.app.state.SessionLocal() as db:
+        account = db.execute(
+            select(Account).where(Account.github_id == _GITHUB_ID)
+        ).scalar_one()
+        assert account.hosted_terms_accepted_at is None
+
+
+def test_terms_acceptance_records_account_and_redirects(client, monkeypatch):
+    _login_web(client, monkeypatch, next="/connect/BR-123")
+    r = client.post(
+        "/terms/accept",
+        data={"next": "/connect/BR-123", "accept_terms": "yes"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/connect/BR-123"
+    with client.app.state.SessionLocal() as db:
+        account = db.execute(
+            select(Account).where(Account.github_id == _GITHUB_ID)
+        ).scalar_one()
+        assert account.hosted_terms_accepted_at is not None
+        assert account.hosted_terms_version == "2026-07-08"
 
 
 def test_github_login_is_not_the_identity_key(client):
