@@ -2,6 +2,7 @@
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
 	import { ageSinceCreated, type PRReviewItem } from './prReviewQueue';
+	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN } from './statusPalette';
 
 	interface Props {
 		prs: PRReviewItem[];
@@ -11,10 +12,11 @@
 
 	let { prs, stale, now }: Props = $props();
 
-	// Same fixed status palette as WindowTrack / LiveRuns.
-	const READY_COLOR = '#0ca30c';
-	const DRAFT_COLOR = '#fab219';
-	const STALE_COLOR = '#57534e';
+	// Same palette module as WindowTrack / LiveRuns (`statusPalette.ts`):
+	// ready = good (amber), draft = warn (frost), stale recedes.
+	const READY_COLOR = STATUS_GOOD;
+	const DRAFT_COLOR = STATUS_WARN;
+	const STALE_COLOR = STATUS_UNKNOWN;
 </script>
 
 <div class="panel p-4">
