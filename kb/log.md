@@ -11955,3 +11955,75 @@ just noted.
 `kb/design-agent-visual-inspection.md` §"Decided + verified live" has
 the full method. Branch: `brr/agent-visual-inspection-auth-2026-07-08`
 (#284, still open — this run adds a commit to it, doesn't merge).
+
+## [2026-07-08] investigate | Visual-direction discussion: darkness dial (amber/frost/darkness), punch list given
+
+Direct ask, post-#284-merge: focus on "the norse-inspired, amber/frost/
+darkness" direction — with "darkness could be close to black but with
+sharp white outlines or text" floated as an open, undecided dial — then
+give an opinion on what's still outstanding on the visuals. No code
+change asked or shipped; a discussion/opinion turn.
+
+Checked live rather than recalled: authenticated Playwright screenshot of
+`brnrd.dev` (cookie handoff, `pitfalls.md`) plus a direct read of
+`layout.css`/`WindowTrack.svelte`/`LiveRuns.svelte`/`PRReviewQueue.svelte`.
+Found the shipped palette is warm-near-black (`#0c0906`) with cream text
+(`#f3e8d8`) and soft blurred amber bloom throughout — not black, not
+white, not sharp — and that "frost" only exists as one status accent, not
+a structural layer, so "amber/frost/darkness" as three peer registers
+isn't actually built yet. Also confirmed live a real, previously-named-
+but-unfixed gap: `LiveRuns`/`PRReviewQueue`'s running/stalling badges
+still render the pre-reskin stock traffic-light green/yellow, visibly
+inconsistent against the hearth/frost/ember system everywhere else on the
+same screen.
+
+Named the tension in the ask directly: soft blur + warm cream is a
+different texture job than crisp white edges on true black — recede-and-
+glow vs. cut-and-declare. Three concrete directions written up, with a
+lean toward "split structure (crisp frost-white edges) from warmth (amber
++ blur, reserved for alive/active state)" as the one that builds all
+three registers as peers and answers "sharp white outlines" literally.
+Not decided — a genuine aesthetic fork, named back with a recommendation.
+Detail + full punch list (layer-3 still unsolved, badge-reskin gap, no
+rune/bind-rune glyph asset yet, no brand typeface, no accessibility pass
+on the CRT texture): `kb/design-brand-visual-language.md` §"Darkness
+dial" + §"Punch list". Branch: `brr/visual-direction-discussion-2026-07-08`
+(kb-only, no code diff).
+
+## [2026-07-08] fix | Darkness-dial fork resolved: it was color-language, not texture; status-badge drift closed
+
+Same-day follow-up to the discussion turn above. Maintainer: "I still
+want all the warmth and blur, what I don't want: any red/green color
+language... my comment about amber/frost/darkness was more about color
+coding the states: amber instead of green, frost/bluish instead of
+orange-warn... white/frost on edge/text for readability/contrast instead
+of red-alert. So no cold/graphic."
+
+The prior turn's three-option framing had misread the ask as a texture
+fork (soft-blur-warmth vs. crisp-cold-edges). It wasn't: "sharp white
+outlines" meant text/edge readability on a status that needs to read
+clearly, not a structural edge treatment competing with the amber glow.
+Read against the code: this maps almost exactly onto the three-tier scale
+`WindowTrack.svelte` already shipped 2026-07-08 (ample→amber `#e8b34a`,
+low→frost `#7aa9c2`, critical→ember `#c0523f`) — the maintainer
+independently re-derived the same system from the live screenshot, a real
+confirmation signal. So the prior recommendation (option 2, split
+structure from warmth) was superseded by the closer reading (option 1,
+deepen warmth, keep blur) — flagged as a misread rather than silently
+dropped.
+
+Shipped, not just re-diagnosed: extracted `src/frontend/src/lib/
+statusPalette.ts` as the single source for `STATUS_GOOD`/`STATUS_WARN`/
+`STATUS_CRITICAL`/`STATUS_UNKNOWN`, and wired `WindowTrack`/`LiveRuns`/
+`PRReviewQueue` to import it instead of retyping hexes. Worth naming
+precisely: `LiveRuns.svelte`/`PRReviewQueue.svelte` weren't merely
+un-reskinned (the previously-named gap) — their own comments *claimed*
+"same three-tier palette as WindowTrack" while still hardcoding the
+pre-reskin `#0ca30c`/`#fab219` stock hexes underneath, a false-parity
+comment. One shared module forecloses that class of drift structurally
+instead of relying on a future grep to catch it. `npm run check`/`lint`/
+`build` all clean.
+
+Detail: `kb/design-brand-visual-language.md` §"Darkness dial resolved".
+Branch: `brr/visual-direction-discussion-2026-07-08` (same branch/PR #285
+as the discussion turn — this run adds the resolving commit to it).
