@@ -103,6 +103,41 @@ def test_result_text_still_falls_back_for_non_envelope_json():
     assert claude_status.result_text(payload, '{"foo": "bar"}') == '{"foo": "bar"}'
 
 
+def test_parse_result_exposes_real_model_id_from_model_usage_keys():
+    """Regression #255: runner_core resolved to the placeholder "default" for
+    every unpinned Claude run because ``_model_usage_tokens`` iterated
+    ``modelUsage.values()`` for token totals and threw the keys away. The
+    real model id is the dict's key, not anything inside its value."""
+    levels = claude_status.parse_result(_RESULT)
+    assert levels["model_ids"] == ["claude-haiku-4-5-20251001"]
+    assert claude_status.resolved_model_id(levels) == "claude-haiku-4-5-20251001"
+
+
+def test_parse_result_joins_multiple_model_ids_sorted():
+    payload = {
+        "type": "result",
+        "result": "ok\n",
+        "modelUsage": {
+            "claude-opus-4-8": {"inputTokens": 10},
+            "claude-haiku-4-5-20251001": {"inputTokens": 5},
+        },
+    }
+    levels = claude_status.parse_result(payload)
+    assert levels["model_ids"] == ["claude-haiku-4-5-20251001", "claude-opus-4-8"]
+    assert (
+        claude_status.resolved_model_id(levels)
+        == "claude-haiku-4-5-20251001+claude-opus-4-8"
+    )
+
+
+def test_resolved_model_id_absent_when_model_usage_missing():
+    payload = {"type": "result", "result": "ok\n"}
+    levels = claude_status.parse_result(payload)
+    assert "model_ids" not in levels
+    assert claude_status.resolved_model_id(levels) is None
+    assert claude_status.resolved_model_id(None) is None
+
+
 def test_facets_claude_collector_marks_quota_absent_not_known():
     levels = claude_status.parse_result(_RESULT)
     res = facets.build(levels=levels, levels_collector=claude_status.COLLECTED_SLOTS)
