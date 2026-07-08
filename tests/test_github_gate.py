@@ -26,6 +26,7 @@ from brr import protocol
 from brr import run_progress
 from brr.gates import github
 from brr.gates.github import (
+    attachments,
     cache,
     client,
     constants,
@@ -386,6 +387,177 @@ def test_request_error_uses_github_json_message(monkeypatch):
     assert caught.value.status == 403
     assert caught.value.message == "API rate limit exceeded"
     assert caught.value.headers == {"x-ratelimit-remaining": "0"}
+
+
+# ── image attachments ────────────────────────────────────────────────
+# Inline screenshots in issue/PR/comment bodies resolve to local files
+# the same shape Telegram's photo/document ingestion produces — see
+# ``gates/github/attachments.py`` and ``protocol.create_event``'s
+# ``attachment_files``.
+
+
+class _FakeStreamResponse:
+    def __init__(self, status_code: int, chunks: list[bytes]):
+        self.status_code = status_code
+        self._chunks = chunks
+
+    def iter_content(self, chunk_size):
+        yield from self._chunks
+
+
+def test_download_url_writes_body_to_dest(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs["headers"]
+        return _FakeStreamResponse(200, [b"chunk-1", b"chunk-2"])
+
+    monkeypatch.setattr(client._SESSION, "get", fake_get)
+    dest = tmp_path / "image.png"
+
+    ok = client._download_url("secret", "https://github.com/user-attachments/x", dest)
+
+    assert ok is True
+    assert dest.read_bytes() == b"chunk-1chunk-2"
+    assert captured["url"] == "https://github.com/user-attachments/x"
+    assert captured["headers"]["Authorization"] == "Bearer secret"
+
+
+def test_download_url_returns_false_on_non_2xx(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        client._SESSION, "get", lambda url, **kwargs: _FakeStreamResponse(404, []),
+    )
+    assert client._download_url("secret", "https://x/y", tmp_path / "out") is False
+
+
+def test_download_url_returns_false_on_request_exception(tmp_path, monkeypatch):
+    import requests
+
+    def fake_get(url, **kwargs):
+        raise requests.RequestException("boom")
+
+    monkeypatch.setattr(client._SESSION, "get", fake_get)
+    assert client._download_url("secret", "https://x/y", tmp_path / "out") is False
+
+
+def test_extract_image_urls_finds_markdown_and_html():
+    body = (
+        "before\n"
+        '![a screenshot](https://github.com/user-attachments/assets/1 "title")\n'
+        'text <img src="https://example.com/pic.png"> more\n'
+    )
+    assert attachments.extract_image_urls(body) == [
+        "https://github.com/user-attachments/assets/1",
+        "https://example.com/pic.png",
+    ]
+
+
+def test_extract_image_urls_dedupes_and_caps(monkeypatch):
+    monkeypatch.setattr(attachments, "_MAX_ATTACHMENTS_PER_EVENT", 2)
+    body = "\n".join(f"![x](https://x/{i}.png)" for i in [1, 1, 2, 3])
+    assert attachments.extract_image_urls(body) == [
+        "https://x/1.png", "https://x/2.png",
+    ]
+
+
+def test_extract_image_urls_empty_body():
+    assert attachments.extract_image_urls("") == []
+    assert attachments.extract_image_urls("no images here") == []
+
+
+def test_download_images_skips_failed_downloads(tmp_path, monkeypatch):
+    def fake_download_url(token, url, dest):
+        if "bad" in url:
+            return False
+        dest.write_bytes(b"ok")
+        return True
+
+    monkeypatch.setattr(client, "_download_url", fake_download_url)
+
+    saved = attachments.download_images(
+        "secret", ["https://x/good.png", "https://x/bad.png"], workdir=tmp_path,
+    )
+
+    assert len(saved) == 1
+    assert saved[0].read_bytes() == b"ok"
+
+
+def test_label_trigger_downloads_inline_image_attachment(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"label": "brr"},
+    })
+
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
+        {
+            "number": 42,
+            "title": "broken layout",
+            "body": "look: ![screenshot](https://github.com/user-attachments/assets/abc)",
+            "user": {"login": "octocat"},
+            "html_url": "https://github.com/owner/name/issues/42",
+            "updated_at": "2026-05-15T10:00:00Z",
+        },
+    ] if path == "/repos/owner/name/issues" else [])
+
+    def fake_download_url(token, url, dest):
+        assert token == "secret"
+        assert url == "https://github.com/user-attachments/assets/abc"
+        dest.write_bytes(b"png-bytes")
+        return True
+
+    monkeypatch.setattr(client, "_download_url", fake_download_url)
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    events = protocol.list_pending(inbox)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["attachments"] == "image-00.png"
+    paths = protocol.event_attachment_paths(ev)
+    assert len(paths) == 1
+    assert paths[0].read_bytes() == b"png-bytes"
+
+
+def test_label_trigger_has_no_attachments_field_when_body_has_no_images(
+    tmp_path, monkeypatch,
+):
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    state._save_state(brr_dir, {
+        "token": "secret",
+        "bot_login": "brr-bot",
+        "repo": "owner/name",
+        "triggers": {"label": "brr"},
+    })
+    monkeypatch.setattr(client, "_api_get", lambda token, path, params=None, **kwargs: [
+        {
+            "number": 1,
+            "title": "plain",
+            "body": "no images here",
+            "user": {"login": "octocat"},
+            "html_url": "https://github.com/owner/name/issues/1",
+            "updated_at": "2026-05-15T10:00:00Z",
+        },
+    ] if path == "/repos/owner/name/issues" else [])
+
+    called = []
+    monkeypatch.setattr(
+        client, "_download_url",
+        lambda *a, **k: called.append(1) or True,
+    )
+
+    loop._loop_once(brr_dir, inbox, responses)
+
+    ev = protocol.list_pending(inbox)[0]
+    assert "attachments" not in ev
+    assert called == []
 
 
 # ── repo autodetect ────────────────────────────────────────────────

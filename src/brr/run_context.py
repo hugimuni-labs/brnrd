@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import forge_state
+from . import forge_state, protocol
 from .envs import RunContext
 from .run import Run, run_manifest_path
 
@@ -147,8 +147,14 @@ def render_context(
     body = (
         event_body if event_body is not None else event.get("body", "") or ""
     ).strip()
-    if body:
-        lines.extend(["", "## Original Event Body", "", body])
+    attachment_paths = protocol.event_attachment_paths(event)
+    if body or attachment_paths:
+        lines.extend(["", "## Original Event Body", ""])
+        if body:
+            lines.append(body)
+        if attachment_paths:
+            lines.extend(["", "Attachments (local image files — open them with Read):"])
+            lines.extend(f"- {p}" for p in attachment_paths)
 
     run_file = run_manifest_path(ctx.runtime_dir / "runs", task.id)
     prompt_file = ctx.runtime_dir / "runs" / task.id / "prompt.md"
