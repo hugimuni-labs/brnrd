@@ -384,9 +384,39 @@ def context_home_root(ctx: HomeContext) -> Path:
 
 
 def knowledge_path(ctx: HomeContext) -> Path:
-    """Return the home-level knowledge directory."""
+    """Return the home-level knowledge directory (single flat bucket).
+
+    This is the physical git repo root regardless of split mode — see
+    ``repo_knowledge_path`` / ``account_knowledge_path`` for the two
+    sub-scopes an account home can present separately.
+    """
 
     return context_home_root(ctx) / KNOWLEDGE_PATH
+
+
+def repo_knowledge_path(ctx: HomeContext, repo_label_value: str) -> Path:
+    """Return the repo-scoped knowledge directory inside home knowledge."""
+
+    return knowledge_path(ctx) / REPOS_PATH / slug_repo_label(repo_label_value)
+
+
+def account_knowledge_path(ctx: HomeContext) -> Path:
+    """Return the cross-repo (account-wide) knowledge directory."""
+
+    return knowledge_path(ctx) / CROSS_REPO_SLUG
+
+
+def knowledge_split_mode(cfg: dict[str, Any] | None) -> str:
+    """Return the configured knowledge split: ``per-repo`` or ``account-only``.
+
+    Only meaningful for account-kind homes — a project home has exactly one
+    repo, so there is nothing to split. ``knowledge.split=account-only`` in
+    ``.brr/config`` opts an account home back into one flat bucket.
+    """
+
+    cfg = cfg or {}
+    value = str(cfg.get("knowledge.split") or "per-repo").strip().lower()
+    return "account-only" if value == "account-only" else "per-repo"
 
 
 def register_repo(
