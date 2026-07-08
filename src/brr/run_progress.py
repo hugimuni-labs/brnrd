@@ -931,12 +931,21 @@ def _render_verbose(view: RunProgressView) -> str:
 
 
 def _compact_header(view: RunProgressView) -> str:
-    """Sticky one-line header: runner · env · branch ← base.
+    """Sticky one-line header: run-id · runner · env · branch ← base.
 
     Empty when none of the fields are populated yet (fresh event), in
     which case the body falls back to a single status line.
+
+    The run ID leads the header (2026-07-08, direct ask): the prior
+    "dev-side noise" call left it out of the chat card entirely, but a
+    user following a fast-moving thread across several runs has no
+    stable handle to point back at a specific one ("regarding
+    run-260708-..., ...") without it — small, reversible, asked for
+    directly.
     """
     bits: list[str] = []
+    if view.run_id:
+        bits.append(view.run_id)
     if view.repo_label:
         bits.append(view.repo_label)
     if view.runner_name:

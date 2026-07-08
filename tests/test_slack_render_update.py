@@ -71,7 +71,7 @@ def test_render_update_posts_message_on_run_created(tmp_path, monkeypatch):
     assert params["thread_ts"] == "1700000.0001"
     assert "docker" in params["text"]
     assert "preparing" in params["text"]
-    assert task.id not in params["text"]
+    assert task.id in params["text"]
     entry = slack._load_progress_for_run(brr_dir, task.id)
     assert entry["ts"] == "1700000.0500"
 
