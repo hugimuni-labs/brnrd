@@ -362,3 +362,4 @@ the load-bearing notes:
 - **Cross-repo concurrency.** v1 stays single-flight across all repos. Whether an
   account daemon eventually runs repos concurrently ties to the #128 claim model
   and `concurrent-worktrees` work — a later decision.
+  Same-repo fan-out (worker-stack `spawn:` children, cap raised past 1) is a separate, narrower axis that doesn't require deciding this one first — see [`design-multi-workstream-concurrency.md`](design-multi-workstream-concurrency.md) (2026-07-08), which names this cross-repo question as one of its own open forks rather than re-deciding it.

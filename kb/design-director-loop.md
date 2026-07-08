@@ -645,6 +645,14 @@ the fix: [`plan-spawn-gap-closure.md`](plan-spawn-gap-closure.md)
 §"Addendum (2026-07-08) — decided: unconditional decoupling, not B1". Not
 re-duplicated here — this entry is the pointer, that page is the receipt.
 
+**Raising the cap past 1, and the wider fan-out question:**
+[`design-multi-workstream-concurrency.md`](design-multi-workstream-concurrency.md)
+(2026-07-08) picks up exactly where slice 1's "cap fixed at 1 until proven
+not to starve the resident's attention" leaves off — maps the fuller design
+space (fan-out width, quota-pool-aware placement, comms-channel routing) and
+recommends generalizing `current_spawn` into a small pool as its own next
+slice, still gated on a maintainer nod for the width/comms forks it names.
+
 ## Hot-idle residency and quota-aware pacing (maintainer, 2026-07-02)
 
 Follow-up sharpening the stingy-director economics: if the wake already

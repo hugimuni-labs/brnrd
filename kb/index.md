@@ -87,6 +87,16 @@ dive-in map) and are stable until something contradicts them.
   directory isolation under `environment=host` (fixed, PR #278) and
   `reload_requested` coupling spawn dispatch to daemon re-exec (named
   fork, awaiting a nod).
+- [Multi-workstream concurrency design](design-multi-workstream-concurrency.md)
+  — *active, 2026-07-08*. Beyond single-flight: maps the design space for
+  running several independent asks at once (fan-out width, quota-pool-aware
+  placement, isolation, comms-channel routing, fold-in cadence) against the
+  actual code (`spawn:` cap, presence registry, run_ledger, dashboard
+  live-runs), reconciles it with the reversed
+  [`design-concurrent-execution.md`](design-concurrent-execution.md), and
+  recommends bounded worker-stack fan-out over flat resident-weight
+  concurrency. Ships the `coexisting_runs` facet (previously pure schema)
+  as its one no-fork slice; names three genuine forks for the maintainer.
 - [Brand space design](design-brand-brnrd-brr.md) — *active, 2026-07-01*.
   bRnЯd as textual mascot (card/CLI-native, `ornament` knob as the cheese
   valve), sell-the-pacing/skin-the-game positioning (dev-facing winks, B2B

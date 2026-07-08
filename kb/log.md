@@ -12099,3 +12099,43 @@ Detail: `kb/design-brand-visual-language.md` §"Accretion disk in negative
 — scoped, decided, shipped" and §"Credits line: intentional-but-
 unvalidated blue, and a structural fix". Branch:
 `brr/accretion-disk-and-credits-block-2026-07-08`.
+
+## [2026-07-08] design | Multi-workstream concurrency mapped; coexisting_runs facet wired
+
+Maintainer ask: support genuinely parallel workstreams (a UI tweak, a ToS
+draft, a backend spawn-logic change, all at once) for high-quota accounts,
+explored beyond the two poles floated ("flat society-of-mind" vs.
+"pure-orchestrator + isolated workers"). Same-thread follow-up corrected the
+premise first: Claude and Codex already run in parallel on the same
+subscriptions — single-flight is a coherence/continuity design choice
+("simplest way to keep inter-run context"), not a quota or provider wall.
+
+Wrote `kb/design-multi-workstream-concurrency.md`: grounds the current state
+(resident single-flight, `spawn:` cap 1, dedup-by-origin-message not
+event-locking, telegram topics wired per-gate not per-run, `run_ledger`
+already carrying `parent_run_id`/`is_subspawn`, `LiveRuns` dashboard already
+rendering N peer rows uncapped), reconciles the ask against
+`design-concurrent-execution.md` (the threaded-daemon model tried and
+reversed when the resident-agent reshape landed — the coherence tax applies
+to durable-memory writers, not worker-stack children, so it doesn't block
+raising the spawn cap), and recommends **bounded worker-stack fan-out**
+(flatten the dashboard presentation, keep one resident writer) over flat
+resident-weight concurrency. Names 3 forks for the maintainer (default
+fan-out width by subscription tier, comms-channel UX for N concurrent
+workstreams, whether cross-repo fan-out is in scope now) rather than
+deciding them unilaterally.
+
+Shipped alongside, not just discussed: the `coexisting_runs` facet
+(`facets.py`) was pure schema with zero collector wired anywhere —
+`facets.build()` hardcoded it `unimplemented` regardless of input. Wired it
+to the same presence-registry query `_run_worker` already used for the
+wake-time-only `context.md` injection, now live-refreshed every
+heartbeat/flush (`daemon.py::_write_live_portal_state` gained a `brr_dir`
+param). A running resident now gets a live sibling-run signal instead of a
+snapshot frozen at wake time — infrastructure every future concurrency
+slice needs regardless of which fan-out shape ships. New regression tests in
+`test_facets.py`/`test_daemon.py`; full suite green (1399).
+
+Cross-linked from `design-director-loop.md` §"Concurrent sub-spawns" and
+`decision-account-centered-daemon.md` §"Cross-repo concurrency", and from
+`kb/index.md`.
