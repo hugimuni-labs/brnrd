@@ -119,6 +119,9 @@ def _migrate_daemons(conn: Connection) -> None:
     # Closed-run cost ledger snapshot mirror (#271) — see models.Daemon.run_ledger_json.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS run_ledger_json TEXT DEFAULT '[]'"))
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS run_ledger_updated_at TIMESTAMP"))
+    # Configured spawn: pool width, piggybacked on live-runs publish (loom
+    # envelope Phase 1) — see models.Daemon.spawn_max_concurrent.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS spawn_max_concurrent INTEGER"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:
