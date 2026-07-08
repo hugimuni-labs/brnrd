@@ -106,7 +106,12 @@ Portals are the seams where a run turns to the world — inbound
   (`+30m`); rewrite to extend. Control file, never delivered.
 - .card — narrate the live progress card: note body only (brr adds the
   `note:` label); rewrite as context shifts, empty/delete to withdraw.
-  Control file, never delivered.
+  Control file, never delivered. Write a first line as one of the run's
+  earliest actions, before there's "enough" progress to feel card-worthy —
+  even "orienting: reading X" beats leaving it unset until the staleness
+  bar (240s, §next move above) or a same-thread message forces it. A card
+  that only appears once something nudges it reads, from the watching
+  side, as no different from one that was simply forgotten.
 - .task-classification — not optional bookkeeping: part of this run's own
   semantic, the same tier as `.card`/`.keepalive`. A short slug naming
   this run's shape for the cost ledger (`dashboard-slice`, `kb-
@@ -157,6 +162,23 @@ Portals are the seams where a run turns to the world — inbound
   chronologically last it reads as the reply from a user glancing at the
   thread. Splitting the difference this way is worse than either clean
   option; don't.
+  A due self-wake (`schedule.md` entry, e.g. the director tick) firing
+  *inline* at the tail of a run that already did its own primary-task work
+  is a second way to lose this line, sharper because the reply that ships
+  isn't empty or a stub — it's a complete, well-formed message about the
+  wrong thing. Live case, 2026-07-08 (run-260708-1920-obup): the run built
+  and shipped a real PR, narrated it faithfully on `.card` as it went, then
+  a due tick fired inline near the end; the tick's own silence/notify-bar
+  logic reasoned "already reported to you in full, in this exact thread"
+  and, believing that, sent *only* its own re-derivation summary as the
+  run's one terminal reply — the PR summary and next-move line for the
+  actual work never reached the chat at all. The premise was false on its
+  face: `.card` is listed a few bullets up as a control file, **never
+  delivered** — narrating there is not narrating to the thread. A tick's
+  own notify-bar governs only the tick's own content; it is never license
+  to skip the primary task's closeout, and the two are additive in one
+  reply (primary receipt + next-move line, tick's one-liner appended), not
+  a choice between them.
 - linger — conversation clearly live ⇒ deliver via outbox (that is the
   satisfying signal; final stdout may then stay empty), write `.keepalive`,
   poll `portal-state.json` with backoff 30s → cap 240s (inside the ~5m
