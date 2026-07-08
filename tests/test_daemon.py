@@ -1363,6 +1363,207 @@ def test_runner_policy_approval_requires_same_conversation(tmp_path):
     assert "different conversation" in response
 
 
+# ── Loom envelope Phase 2 — config-change proposals ────────────────────
+
+
+def test_drain_outbox_parks_config_change_proposal(tmp_path, monkeypatch):
+    from brr.gates import cloud as cloud_mod
+
+    monkeypatch.setattr(
+        cloud_mod,
+        "propose_config_change",
+        lambda brr_dir, **kw: {
+            "request_id": "cfgreq_x",
+            "status": "pending",
+            "approve_url": "https://brnrd.example/config-approve/cfgreq_x",
+        },
+    )
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    ctx = _account_context_for_policy(tmp_path)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "please raise the spawn pool",
+        status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "config.md").write_text(
+        "---\n"
+        "config_change: spawn.max_concurrent\n"
+        "value: 8\n"
+        "---\n"
+        "Need headroom for a four-way fan-out.\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-cfg",
+        event_id=event_id,
+        body="please raise the spawn pool",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        repo_root=tmp_path,
+        account_context=ctx,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"current": 1, "config_change": 1}
+    proposals = list(daemon.account.config_change_proposals_path(ctx).glob("*.md"))
+    assert len(proposals) == 1
+    text = proposals[0].read_text(encoding="utf-8")
+    assert "status: pending" in text
+    assert "config_key: spawn.max_concurrent" in text
+    assert "requested_value: 8" in text
+    assert protocol.frontmatter_body(text).strip() == "Need headroom for a four-way fan-out."
+    partial = protocol.list_partials(responses, event_id)[0].read_text(encoding="utf-8")
+    assert "https://brnrd.example/config-approve/cfgreq_x" in partial
+    assert proposals[0].stem in partial
+
+
+def test_drain_outbox_rejects_config_change_off_allowlist(tmp_path, monkeypatch):
+    from brr.gates import cloud as cloud_mod
+
+    minted_calls: list[str] = []
+    monkeypatch.setattr(
+        cloud_mod,
+        "propose_config_change",
+        lambda brr_dir, **kw: minted_calls.append(kw["config_key"]),
+    )
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    ctx = _account_context_for_policy(tmp_path)
+    path = protocol.create_event(
+        inbox, "telegram", "turn off pacing floors", conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "config.md").write_text(
+        "---\nconfig_change: pacing.quota_low_floor_pct\nvalue: 0\n---\nplease\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-cfg-2",
+        event_id=event_id,
+        body="turn off pacing floors",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        repo_root=tmp_path,
+        account_context=ctx,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert not daemon.account.config_change_proposals_path(ctx).exists()
+    assert minted_calls == []
+    partial = protocol.list_partials(responses, event_id)[0].read_text(encoding="utf-8")
+    assert "isn't on the agent-proposable config allowlist" in partial
+
+
+def _write_config_change_proposal(
+    ctx,
+    proposal_id,
+    *,
+    conversation_key="telegram:42:",
+    key="spawn.max_concurrent",
+    current="4",
+    requested="8",
+):
+    proposal = daemon.account.config_change_proposals_path(ctx) / f"{proposal_id}.md"
+    proposal.parent.mkdir(parents=True)
+    proposal.write_text(
+        "---\n"
+        f"id: {proposal_id}\n"
+        "status: pending\n"
+        f"config_key: {key}\n"
+        f"current_value: {current}\n"
+        f"requested_value: {requested}\n"
+        "repo_label: Gurio/brr\n"
+        f"conversation_key: {conversation_key}\n"
+        "created: 2026-07-08T00:00:00Z\n"
+        "---\n"
+        "Need headroom.\n",
+        encoding="utf-8",
+    )
+    return proposal
+
+
+def test_config_change_approval_applies_to_brr_config(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-test-approve"
+    proposal = _write_config_change_proposal(ctx, proposal_id)
+    target = _policy_control_target(tmp_path, f"approve config-change {proposal_id}")
+
+    handled = daemon._handle_config_change_control_event(target, ctx)
+
+    assert handled is True
+    cfg = daemon.conf.load_config(target.repo_root)
+    assert cfg["spawn.max_concurrent"] == 8
+    updated = proposal.read_text(encoding="utf-8")
+    assert "status: applied" in updated
+    assert protocol.list_pending(target.inbox_dir) == []
+    response = protocol.response_path(
+        target.responses_dir, target.event["id"],
+    ).read_text(encoding="utf-8")
+    assert "Applied config-change proposal" in response
+
+
+def test_config_change_rejection_leaves_config_untouched(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-test-reject"
+    proposal = _write_config_change_proposal(ctx, proposal_id)
+    target = _policy_control_target(tmp_path, f"reject config-change {proposal_id}")
+
+    handled = daemon._handle_config_change_control_event(target, ctx)
+
+    assert handled is True
+    assert daemon.conf.load_config(target.repo_root) == {}
+    assert "status: rejected" in proposal.read_text(encoding="utf-8")
+    response = protocol.response_path(
+        target.responses_dir, target.event["id"],
+    ).read_text(encoding="utf-8")
+    assert "Rejected config-change proposal" in response
+
+
+def test_handle_daemon_control_events_routes_config_change(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-test-route"
+    _write_config_change_proposal(ctx, proposal_id)
+    target = _policy_control_target(tmp_path, f"approve config-change {proposal_id}")
+
+    remaining = daemon._handle_daemon_control_events([target], ctx)
+
+    assert remaining == []
+
+
 def test_run_worker_writes_terminal_failure_response_on_runner_error(
     tmp_path, monkeypatch,
 ):
