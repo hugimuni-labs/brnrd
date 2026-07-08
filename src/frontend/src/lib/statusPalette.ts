@@ -35,6 +35,43 @@
 // Contrast validated against #0c0906 (body), ~#171009 (panel), #1c1917
 // (stone-900 track) via dataviz's scripts/validate_palette.js — all ≥
 // 3.7:1 (ash: 6.17 / 5.85 / 5.43; hue≈31°, sat≈14% — no red/orange cast).
+// "Accretion disk in negative" — decided 2026-07-08 evening, scope 1 of the
+// three named options (kb/design-brand-visual-language.md §"Frost
+// brightened; accretion disk in negative floated"): the void/critical status
+// accent only, not the `.panel` bracket-corner chrome (explicitly rejected —
+// "the amber glow sharp corners we have gives it the right loki-vs-severance
+// feel") and not a full Layer-3 hero visual yet. The motif itself: a dark
+// void fill with light concentrated sharply at the boundary — an eclipse
+// silhouette / event-horizon rim, inverted from a normal accretion disk's
+// bright-center reading. Applied only to the `critical` level, since that's
+// the one status meaning "spent/exhausted" the void register was named for;
+// `ample`/`warn`/`unknown` keep the plain solid-fill treatment they've always
+// had. A shared helper, not inlined per-caller CSS, because this codebase has
+// already paid once (`LiveRuns`/`PRReviewQueue` drift, 2026-07-08 morning) for
+// letting near-identical status styling diverge across files.
+export type StatusLevel = 'ample' | 'low' | 'critical' | 'unknown' | string;
+
+/** Style for the small round status dot. `critical` gets the void-disk
+ * treatment (dark core, glowing rim); everything else keeps the plain
+ * solid-fill dot with its soft halo. */
+export function statusDotStyle(level: StatusLevel, color: string): string {
+	if (level === 'critical') {
+		return `background-color: #0c0906; border: 1px solid ${color}; box-shadow: 0 0 5px 1.5px ${color}, inset 0 0 2px ${color}80;`;
+	}
+	return `background-color: ${color}; box-shadow: 0 0 4px 1px ${color}90;`;
+}
+
+/** Style for the draining quota/credits track's fill. `critical` reads as a
+ * dark void body with a bright rim right at the fill's leading edge — the
+ * same disk-in-negative grammar as the dot, stretched along a bar instead of
+ * a circle — rather than a flat critical-colored block. */
+export function statusBarStyle(level: StatusLevel, color: string): string {
+	if (level === 'critical') {
+		return `background: linear-gradient(to right, #0c0906 0%, #0c0906 82%, ${color} 100%); box-shadow: 0 0 8px 0 ${color}b0, inset 0 0 3px 0 rgba(0, 0, 0, 0.6);`;
+	}
+	return `background-color: ${color}; box-shadow: 0 0 6px 0 ${color}b0, inset 0 0 3px 0 rgba(255, 255, 255, 0.25);`;
+}
+
 export const STATUS_GOOD = '#e8b34a';
 // WARN lightened 2026-07-08 evening, direct ask ("frost could be a bit more
 // white, crisp"): #7aa9c2 -> #a8cbdb, hue held near-identical (200.8° ->
