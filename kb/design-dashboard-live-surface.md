@@ -763,6 +763,10 @@ itself.
 
 ## Read next
 
+- [`design-agent-visual-inspection.md`](design-agent-visual-inspection.md)
+  — what it'd take for a resident to see the *authenticated* dashboard
+  (not just the public page) while working on visuals together; a named
+  fork, not decided.
 - [`plan-loom-realtime-build.md`](plan-loom-realtime-build.md) — the
   week-scoped, ranked slices that turn this page's six-mechanic proposal
   into an actual build order; start there for "what ships next."

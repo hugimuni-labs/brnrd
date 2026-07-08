@@ -830,6 +830,15 @@ dive-in map) and are stable until something contradicts them.
   added a real Zachtronics-mechanics deconstruction mapping distinct
   metrics (commits/PRs/tickets, messages, KBs touched, time, tokens, CPS
   progress) onto distinct game mechanics rather than one widened lane.
+- [Agent visual inspection of brnrd.dev (authenticated)](design-agent-visual-inspection.md)
+  — *active, opened 2026-07-08*. Direct ask: what would it take for a
+  resident to see the authenticated dashboard (not just the public page,
+  already Playwright-screenshotted) when working on visuals together.
+  Confirmed GitHub-OAuth-only auth, a DB-backed session cookie with no
+  device binding, no impersonation/admin/dev-login/staging concept
+  anywhere, and a half-designed account API-key token kind with no
+  issuance route. Named as a fork (cookie handoff vs. finishing the API
+  key vs. a proper scoped viewer identity), not decided unilaterally.
 - [Quota-scheduling loom design](design-quota-scheduling-loom.md) —
   *active, opened 2026-07-06*. The economic layer under the Zachtronics
   motion: per-item cost estimates guessed from tracked historical span

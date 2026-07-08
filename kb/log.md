@@ -11912,3 +11912,46 @@ this fix should improve but wasn't reproduced live to confirm.
 
 Detail: `plans/Gurio__brr/active.md`, `ledger/decisions.md` (account
 dominion). Branch: `brr/stop-hook-refire-and-card-run-id-2026-07-08`.
+
+## [2026-07-08] investigate | Authenticated agent view of brnrd.dev — named, not built
+
+Direct ask: "what would it take" for a resident to see brnrd.dev
+rendered logged into the maintainer's own account (unauthenticated
+Playwright screenshots already work, `plan-loom-realtime-build.md`
+§Slice 1.5 — the gap is the *authenticated* dashboard).
+
+Confirmed: GitHub OAuth is the only login path (`src/brnrd/oauth.py`);
+sessions are a DB-backed bearer cookie (`brnrd_session`, 30-day TTL,
+`Token` table, no device binding — `src/brnrd/models.py`,
+`src/brnrd_web/routes.py:340-365`); no impersonation/admin/dev-login/
+staging concept exists anywhere in code or kb; `Token.KIND_API_KEY` is
+schema-only, no issuance route. Full writeup + three options (cookie
+handoff / finish the API key + token-login exchange / a proper scoped
+viewer identity), read as a fork for the maintainer rather than picked:
+`kb/design-agent-visual-inspection.md`. Branch:
+`brr/agent-visual-inspection-auth-2026-07-08`.
+
+## [2026-07-08] verify | Authenticated agent view of brnrd.dev — option 1 decided, verified live
+
+Same-day follow-up: maintainer settled on option 1 (cookie handoff) and
+dropped the raw `brnrd_session` value in an untracked
+`.tmp/brnrd-session.cookie`, asking to confirm it actually renders.
+
+Verified, not assumed: local Playwright, Chromium already installed from
+the Slice 1.5 unauthenticated work, `context.addCookies(...)` with the
+cookie read from that file, `page.goto("https://brnrd.dev/")` → **HTTP
+200**, body is the real resident dashboard (window-track quota bars,
+live runs — this run's own event text visible in the LIVE RUNS card —
+PR review queue showing #284, run receipts), not the logged-out landing
+page. Cookie value itself never printed/logged beyond the one file it
+already lived in.
+
+Hardened while here: `*.cookie` added to `.gitignore` — the file was
+untracked but not previously ignored by pattern, so a future `git add
+-A` could have swept a live production session credential into history.
+Cheap, in-reach fix per the environment-shaping habit, done rather than
+just noted.
+
+`kb/design-agent-visual-inspection.md` §"Decided + verified live" has
+the full method. Branch: `brr/agent-visual-inspection-auth-2026-07-08`
+(#284, still open — this run adds a commit to it, doesn't merge).
