@@ -199,10 +199,15 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     now = datetime.now(timezone.utc)
     daemon.live_runs_json = json.dumps([run.model_dump() for run in payload.runs], separators=(",", ":"))
     daemon.live_runs_updated_at = now
+    daemon.spawn_max_concurrent = payload.spawn_max_concurrent
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
-    return schemas.LiveRunsOut(runs=payload.runs, live_runs_updated_at=now)
+    return schemas.LiveRunsOut(
+        runs=payload.runs,
+        live_runs_updated_at=now,
+        spawn_max_concurrent=payload.spawn_max_concurrent,
+    )
 
 
 @router.put("/pr-review-queue", response_model=schemas.PRReviewQueueOut)
