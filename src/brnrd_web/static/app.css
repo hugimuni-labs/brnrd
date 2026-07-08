@@ -1,21 +1,31 @@
+/* Brand palette (2026-07-08): this stylesheet predated the amber/frost/void
+ * status language `statusPalette.ts` settled on for the SvelteKit dashboard
+ * (src/frontend) — a mint-green/teal scheme from before that pass, still
+ * serving every brnrd_web-rendered page (login, terms, connect, the legacy
+ * activity/plans dashboards) since those aren't part of the SPA build.
+ * Named directly as "the login page has the old skin" — swapped the token
+ * set below to the same warm-dark/amber-accent language, body/panel/track
+ * anchors matching statusPalette.ts's own validated values
+ * (#0c0906 / #171009 / #1c1917) rather than inventing a second palette.
+ * Structure/layout below is unchanged; only color values moved. */
 :root {
-  --bg: #071113;
-  --surface: #0a1b1f;
-  --surface-subtle: rgba(158, 178, 178, 0.08);
-  --ink: #f3efe4;
-  --muted: #91a3a5;
-  --line: rgba(129, 165, 166, 0.24);
-  --line-strong: rgba(129, 165, 166, 0.36);
-  --accent: #8effbf;
-  --accent-dark: #54d890;
-  --accent-soft: rgba(126, 247, 160, 0.12);
-  --warning: #f7c663;
-  --warning-soft: rgba(247, 198, 99, 0.12);
-  --error: #ff9191;
-  --error-soft: rgba(255, 105, 105, 0.12);
-  --success: #8effbf;
-  --success-soft: rgba(126, 247, 160, 0.12);
-  --shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+  --bg: #0c0906;
+  --surface: #171009;
+  --surface-subtle: rgba(168, 162, 158, 0.08);
+  --ink: #f3ece0;
+  --muted: #a8a29e;
+  --line: rgba(120, 100, 80, 0.28);
+  --line-strong: rgba(120, 100, 80, 0.42);
+  --accent: #e8b34a;
+  --accent-dark: #c98f2e;
+  --accent-soft: rgba(232, 179, 74, 0.12);
+  --warning: #a8cbdb;
+  --warning-soft: rgba(168, 203, 219, 0.12);
+  --error: #c97b6a;
+  --error-soft: rgba(201, 123, 106, 0.12);
+  --success: #e8b34a;
+  --success-soft: rgba(232, 179, 74, 0.12);
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 }
 
 * {
@@ -30,8 +40,8 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    radial-gradient(circle at 82% 4%, rgba(93, 242, 166, 0.16), transparent 28rem),
-    radial-gradient(circle at 12% 12%, rgba(45, 212, 191, 0.10), transparent 24rem),
+    radial-gradient(circle at 82% 4%, rgba(232, 179, 74, 0.14), transparent 28rem),
+    radial-gradient(circle at 12% 12%, rgba(168, 203, 219, 0.08), transparent 24rem),
     var(--bg);
   color: var(--ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -91,9 +101,9 @@ a {
   width: 44px;
   height: 44px;
   place-items: center;
-  border: 1px solid rgba(148, 249, 191, 0.42);
+  border: 1px solid rgba(232, 179, 74, 0.42);
   border-radius: 6px;
-  background: rgba(126, 247, 160, 0.10);
+  background: rgba(232, 179, 74, 0.10);
   color: var(--accent);
   font-weight: 900;
   font-size: 1.35rem;
@@ -160,8 +170,8 @@ h2 {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: rgba(5, 16, 19, 0.72);
-  color: #d7e2dd;
+  background: rgba(12, 9, 6, 0.72);
+  color: #e7ded0;
   box-shadow: var(--shadow);
 }
 
@@ -169,7 +179,7 @@ h2 {
   display: flex;
   gap: 7px;
   padding: 13px 16px;
-  border-bottom: 1px solid rgba(129, 165, 166, 0.18);
+  border-bottom: 1px solid rgba(120, 100, 80, 0.22);
 }
 
 .preview-topbar span {
@@ -177,7 +187,7 @@ h2 {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: rgba(158, 178, 178, 0.45);
+  background: rgba(168, 162, 158, 0.45);
 }
 
 .preview-body {
@@ -212,12 +222,12 @@ h2 {
   content: "";
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 14px rgba(142, 255, 191, 0.7);
+  box-shadow: 0 0 14px rgba(232, 179, 74, 0.7);
 }
 
 .preview-row {
   min-height: 46px;
-  border-top: 1px solid rgba(129, 165, 166, 0.16);
+  border-top: 1px solid rgba(120, 100, 80, 0.2);
   color: var(--muted);
 }
 
@@ -231,7 +241,7 @@ h2 {
   margin-top: 18px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(158, 178, 178, 0.16);
+  background: rgba(168, 162, 158, 0.16);
 }
 
 .preview-meter span {
@@ -245,7 +255,7 @@ h2 {
 .panel {
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: rgba(10, 27, 31, 0.82);
+  background: rgba(23, 16, 9, 0.82);
   box-shadow: var(--shadow);
 }
 
@@ -266,7 +276,7 @@ h2 {
   gap: 10px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
-  background: rgba(158, 178, 178, 0.08);
+  background: rgba(168, 162, 158, 0.08);
   color: var(--ink);
   font: inherit;
   font-weight: 900;
@@ -282,14 +292,14 @@ h2 {
 }
 
 .button-primary {
-  border-color: rgba(126, 247, 160, 0.46);
-  background: rgba(126, 247, 160, 0.16);
-  color: #f3fff7;
+  border-color: rgba(232, 179, 74, 0.46);
+  background: rgba(232, 179, 74, 0.16);
+  color: #fff6e5;
 }
 
 .button-primary:hover,
 .button-primary:focus-visible {
-  background: rgba(126, 247, 160, 0.24);
+  background: rgba(232, 179, 74, 0.24);
 }
 
 .button-primary:disabled,
@@ -304,7 +314,7 @@ h2 {
   margin-top: 10px;
   padding: 0 18px;
   border-color: var(--line-strong);
-  background: rgba(158, 178, 178, 0.08);
+  background: rgba(168, 162, 158, 0.08);
   color: var(--ink);
 }
 
@@ -323,25 +333,25 @@ h2 {
 .state-panel,
 .connect-panel {
   overflow: hidden;
-  border-color: rgba(126, 247, 160, 0.24);
+  border-color: rgba(232, 179, 74, 0.24);
   background:
-    linear-gradient(120deg, rgba(126, 247, 160, 0.08), transparent 34%),
-    rgba(10, 27, 31, 0.86);
+    linear-gradient(120deg, rgba(232, 179, 74, 0.08), transparent 34%),
+    rgba(23, 16, 9, 0.86);
 }
 
 .state-warning {
-  border-color: rgba(247, 198, 99, 0.32);
-  background: linear-gradient(180deg, var(--warning-soft), rgba(10, 27, 31, 0.86) 120px);
+  border-color: rgba(168, 203, 219, 0.32);
+  background: linear-gradient(180deg, var(--warning-soft), rgba(23, 16, 9, 0.86) 120px);
 }
 
 .state-error {
-  border-color: rgba(255, 105, 105, 0.34);
-  background: linear-gradient(180deg, var(--error-soft), rgba(10, 27, 31, 0.86) 120px);
+  border-color: rgba(201, 123, 106, 0.34);
+  background: linear-gradient(180deg, var(--error-soft), rgba(23, 16, 9, 0.86) 120px);
 }
 
 .state-success {
-  border-color: rgba(126, 247, 160, 0.34);
-  background: linear-gradient(180deg, var(--success-soft), rgba(10, 27, 31, 0.86) 120px);
+  border-color: rgba(232, 179, 74, 0.34);
+  background: linear-gradient(180deg, var(--success-soft), rgba(23, 16, 9, 0.86) 120px);
 }
 
 .panel h1 {
@@ -393,10 +403,10 @@ h2 {
 
 .form-error {
   margin: 18px 0 0;
-  border: 1px solid rgba(255, 105, 105, 0.34);
+  border: 1px solid rgba(201, 123, 106, 0.34);
   border-radius: 6px;
   background: var(--error-soft);
-  color: #ffd7d7;
+  color: #f3d9d1;
   padding: 12px;
 }
 
@@ -416,7 +426,7 @@ select {
   min-height: 48px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
-  background: #08181b;
+  background: #12100c;
   color: var(--ink);
   font: inherit;
   padding: 0 12px;
@@ -427,10 +437,10 @@ select:disabled {
 }
 
 code {
-  border: 1px solid rgba(126, 247, 160, 0.26);
+  border: 1px solid rgba(232, 179, 74, 0.26);
   border-radius: 5px;
-  background: rgba(126, 247, 160, 0.10);
-  color: #b9ffe1;
+  background: rgba(232, 179, 74, 0.10);
+  color: #f3d896;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.95em;
   padding: 2px 6px;
