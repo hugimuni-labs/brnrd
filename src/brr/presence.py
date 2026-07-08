@@ -86,6 +86,8 @@ def register(
     entry_id: str | None = None,
     pid: int | None = None,
     now: float | None = None,
+    parent_run_id: str | None = None,
+    is_subspawn: bool = False,
 ) -> dict[str, Any]:
     """Record a participant as present; return its entry (with ``id``).
 
@@ -94,6 +96,14 @@ def register(
     whether they'd collide. *label* is the short human-facing description
     shown in dashboards. The returned ``id`` is the handle for
     :func:`heartbeat` and :func:`deregister`.
+
+    *parent_run_id* / *is_subspawn* mirror the same fields already carried
+    on the closed-run ledger row (``run_ledger.py``) — a concurrent
+    ``spawn:`` child sets both while it's still live, so the live-runs
+    dashboard view can tell a worker-stack child apart from a resident
+    thought at the same joining key the ledger already uses, rather than
+    only after the run closes (kb/design-multi-workstream-concurrency.md
+    "Ranked moves" #1).
     """
     pdir = _presence_dir(brr_dir)
     pdir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +120,8 @@ def register(
         "host": _host(),
         "started_at": ts,
         "last_seen": ts,
+        "parent_run_id": parent_run_id or "",
+        "is_subspawn": bool(is_subspawn),
     }
     _atomic_write(pdir / f"{eid}.json", json.dumps(entry))
     return entry
