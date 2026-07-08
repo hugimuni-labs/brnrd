@@ -12057,3 +12057,45 @@ swapped ember for void-ash; three registers now real". Branch:
 `brr/void-ash-status-fix-2026-07-08` (branched fresh from `main`, since
 #285's branch was already merged — same precedent as the 2026-07-05
 loom-brand-and-priority run).
+
+## [2026-07-08] ship | Accretion disk in negative shipped (scoped); credits line reworked into a real row
+
+Answer to the "accretion disk in negative" fork left open by the
+frost-brighten run (#287/#288, not yet in this log): "lets do 1, maybe
+also a small... void/glowing-white-light... retro-terminal-summoned-from-
+the-void feel... I don't think 2 is right... amber glow sharp corners...
+gives it the right loki-vs-severance feel... cozy, but focused." Read as:
+scope 1 (void/critical status accent) plus a new screen-edge ask, not
+options 2 (`.panel` bracket chrome — explicitly kept amber) or a full
+Layer-3 build.
+
+Shipped: `statusPalette.ts` gained `statusDotStyle`/`statusBarStyle` — the
+`critical` level (and only that level) now renders as a dark void core
+with a bright rim on both the status dot and the quota-track fill, instead
+of a flat critical-colored block; `ample`/`low`/`unknown` unchanged.
+`WindowTrack.svelte`'s window rows call these instead of inlining the CSS.
+`layout.css`'s `body::before` gained a `box-shadow` pair — a hairline
+frost-white rim at the viewport edge closing inward to a soft void
+vignette — the "screen materializing from the void" reading of the ask,
+deliberately subtle so it doesn't compete with the amber panel chrome.
+
+Same message asked two questions about the credits line: whether its blue
+was a stray color, and why it renders as a text note instead of a real
+indicator block. Checked: `text-sky-300` is deliberate (same hex as the
+"stale report" badge's meta-signal), but never contrast/hue-validated the
+way the amber/frost/void scale was — named as a real, narrow gap, not
+fixed this pass (recoloring risks reopening the sky-300/frost collision
+frost was tuned to avoid). The structural half was actionable directly:
+the backend (`claude_usage.py::_scan_usage_credits`) already emits a
+percentage/spent/limit/reset shape identical to a real quota window: only
+the frontend was rendering it as a flat string. `WindowTrack.svelte` now
+renders credits as a peer row (label/dot/bar/reset, same
+`quotaLevel`/`statusDotStyle`/`statusBarStyle` machinery) inside the same
+window list, plus the one spent/limit line windows don't carry.
+
+`npm run check`/`lint`/`build` all clean.
+
+Detail: `kb/design-brand-visual-language.md` §"Accretion disk in negative
+— scoped, decided, shipped" and §"Credits line: intentional-but-
+unvalidated blue, and a structural fix". Branch:
+`brr/accretion-disk-and-credits-block-2026-07-08`.

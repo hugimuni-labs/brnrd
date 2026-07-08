@@ -548,6 +548,79 @@ building anything:
   the ember hex) both cost a redo. Waiting for the maintainer to say which
   surface they're picturing costs one turn; guessing wrong costs a build.
 
+### Accretion disk in negative — scoped, decided, shipped (2026-07-08 evening)
+
+Same-thread reply to the fork above: "lets do 1, maybe also a small similar
+themed void/little-glowing-white-light-though-dark edge around the rendered
+screen... retro-terminal-summoned-from-the-void feel? actually I realize it
+is a bit more than 1, maybe even pushes towards 3, but I don't think 2 is
+right, I think the amber glow sharp corners we have gives it the right
+loki-vs-severance feel, I want it mostly to feel cozy, but focused." Read
+plainly: scope 1 (void/critical status accent) plus a new, narrower ask (a
+screen-edge treatment, not named as one of the three original options) —
+explicitly *not* 2 (`.panel` bracket-corner chrome stays amber, untouched)
+and not a full Layer-3 hero visual either, despite "pushes towards 3."
+
+Shipped, not just planned:
+
+- `statusPalette.ts` gained `statusDotStyle`/`statusBarStyle` — the
+  `critical` level now renders as a dark void core with a bright rim
+  (dot: `border`+`box-shadow` ring; bar: a `linear-gradient` that stays
+  void-dark until a thin bright band at the fill's leading edge) instead of
+  a flat critical-colored fill. `ample`/`low`/`unknown` keep their existing
+  plain-fill treatment — this is a `critical`-only accent, per scope 1.
+  `WindowTrack.svelte`'s window rows (the only place `critical` renders
+  today) now call these helpers instead of inlining the CSS, so a future
+  caller can't drift the way `LiveRuns`/`PRReviewQueue` once did.
+- `layout.css`'s `body::before` gained a `box-shadow` pair: a hairline
+  frost-white rim (`rgba(198, 224, 235, 0.12)`) right at the viewport edge,
+  closing inward to a soft void vignette (`rgba(4, 3, 2, 0.5)`, 60px blur).
+  Same disk-in-negative grammar as the status dot/bar — dark body, light at
+  the boundary — stretched around the whole screen instead of a status
+  glyph, deliberately kept subtle ("cozy, but focused") so it doesn't
+  compete with the amber panel chrome or the existing hearth-glow bloom.
+  This is the "screen materializing from the void" reading of the ask, not
+  a new component.
+
+`npm run check`/`lint`/`build` all clean. Not yet live-eyeballed at time of
+writing (verification pending this same run's deploy) — flag if either
+treatment needs another notch once actually seen.
+
+### Credits line: intentional-but-unvalidated blue, and a structural fix (2026-07-08 evening)
+
+Same message, second half: "what's the color you can see on the credits
+note section... probably means a stray color (not from unified palette)"
+plus "why have it like a note at all, rather than another properly placed
+indicator block within the claude window track block?"
+
+Checked rather than assumed: the credits line's `text-sky-300` was
+deliberate, not an accident — the same hex `WindowTrack`'s own "stale
+report" badge uses for "outside the firelight / metered-not-included"
+meta-signal, and the comment removed in this change said so explicitly.
+But "deliberate" isn't the same as "validated": `sky-300` is a stock
+Tailwind utility color, never contrast-checked or hue-tuned against this
+scale the way `STATUS_GOOD`/`STATUS_WARN`/`STATUS_CRITICAL` were (see
+`WindowTrack.svelte`'s own header comment on those three) — it's a real,
+if narrow, inconsistency: one meta-color in the card was hand-picked from a
+design process, the other was never run through it. Left as a named gap,
+not fixed this pass (recoloring it risks reopening the sky-300/frost
+collision `statusPalette.ts`'s own comments already tuned frost to avoid) —
+worth a deliberate look, not a reflexive swap.
+
+Structural half acted on directly: the credits line was rendering
+`shell.credits.summary` as one flat text string below a `border-t` divider
+— visually demoted relative to the quota windows above it even though the
+backend (`src/brr/claude_usage.py::_scan_usage_credits`) already emits the
+same *shape* of data a window has (a remaining percentage, a spent/limit
+pair, a reset) — the frontend was just never asked to render it as one.
+`WindowTrack.svelte` now renders credits as a peer row inside the same
+`space-y-3` list: label/dot/bar/reset identical to a real window, plus one
+extra spent/limit line (`€8.69 / €40.00 spent`, from `spent_amount`/
+`limit_amount`/`currency`) the windows don't carry. The dot/bar go through
+the same `quotaLevel`/`statusDotStyle`/`statusBarStyle` machinery as every
+other window, so a credits balance that goes `critical` gets the same
+void-disk accent above — one indicator language, not two.
+
 ## Punch list: what's still open on the visuals (2026-07-08 check-in)
 
 Asked directly: "what we still gotta address at the visuals." In order
@@ -578,6 +651,11 @@ kb record above, not just recalled:
    have a `prefers-reduced-motion` guard on the glitch animation, nothing
    checked yet for screen-reader or low-vision contrast against the
    low-alpha borders and glow-heavy chrome.
+7. **Credits-line `sky-300` never contrast/hue-validated** — named same
+   evening as the accretion-disk shipment above (§"Credits line:
+   intentional-but-unvalidated blue"): a deliberate but never-tuned stock
+   color, distinct from the hand-measured amber/frost/void scale sitting
+   right next to it in the same card.
 
 ## Read next
 
