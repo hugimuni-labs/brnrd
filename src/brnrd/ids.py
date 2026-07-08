@@ -39,6 +39,10 @@ def pair_request_id() -> str:
     return _rid("pair")
 
 
+def config_change_request_id() -> str:
+    return _rid("cfgreq")
+
+
 def channel_route_id() -> str:
     return _rid("chan")
 
