@@ -38,6 +38,11 @@ RUNNER_POLICY_PATH = "runner-policy"
 ACCOUNT_RUNNER_POLICY_SLUG = "_account"
 RUNNER_POLICY_PROPOSALS_SLUG = "_proposals"
 
+# Loom envelope Phase 2 — pending config-change proposals (see
+# ``config_change_proposals_path`` below)
+CONFIG_CHANGE_PATH = "config-changes"
+CONFIG_CHANGE_PROPOSALS_SLUG = "_proposals"
+
 # CS7 — decision ledger
 LEDGER_PATH = "ledger"
 
@@ -485,6 +490,24 @@ def runner_policy_proposals_path(ctx: AccountContext) -> Path:
     account runner-policy paths above.
     """
     return ctx.dominion_repo / RUNNER_POLICY_PATH / RUNNER_POLICY_PROPOSALS_SLUG
+
+
+# ── Loom envelope Phase 2 — config-change proposals ───────────────────
+
+
+def config_change_proposals_path(ctx: AccountContext) -> Path:
+    """Return the daemon-owned pending config-change proposal directory.
+
+    A resident can propose a change to an allowlisted ``.brr/config`` key
+    (today: ``spawn.max_concurrent``) that it wants moved past the ceiling
+    the operator set. Unlike runner-policy proposals above, this one is
+    never applied on a chat-typed reply — the daemon mints a brnrd.dev
+    approve/confirm URL (``gates/cloud.propose_config_change``) and only
+    applies the change once that request comes back approved over the
+    account's existing ``/v1/daemons/inbox`` long-poll. Pending proposals
+    live here until approved, rejected, or superseded.
+    """
+    return ctx.dominion_repo / CONFIG_CHANGE_PATH / CONFIG_CHANGE_PROPOSALS_SLUG
 
 
 # ── CS7 — decision ledger helper ──────────────────────────────────────
