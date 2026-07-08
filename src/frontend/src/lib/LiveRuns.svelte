@@ -106,13 +106,18 @@
 					<p class="truncate text-stone-500">{secondary}</p>
 					<!-- No known total duration to bind a real percent to, so a
 					     running card gets an indeterminate scanning bar (the
-					     Zachtronics "in motion" tell) instead of a fabricated fill;
-					     a stalling/unknown card freezes it rather than claim activity
-					     the freshness data can no longer back up. -->
+					     Zachtronics "in motion" tell) instead of a fabricated fill.
+					     A stalling/unknown card freezes it — but freezing the same
+					     w-1/3 segment in place (2026-07-08 first cut) read as a stuck
+					     33%-done fill, not "no longer moving": live-caught same day
+					     ("reads more as a quarter filled bar, like it is still
+					     running"). Fixed by widening the frozen state to the full
+					     track at low opacity — a flatlined signal has no fill amount
+					     to misread, where a frozen fraction always looks like one. -->
 					<div class="mt-2 h-1 overflow-hidden bg-stone-900" aria-hidden="true">
 						<div
-							class={`h-full w-1/3 ${lvl === 'running' ? 'animate-[loom-scan_1.4s_ease-in-out_infinite]' : ''}`}
-							style={`background-color: ${color}; opacity: ${lvl === 'running' ? 1 : 0.5}`}
+							class={`h-full ${lvl === 'running' ? 'w-1/3 animate-[loom-scan_1.4s_ease-in-out_infinite]' : 'w-full'}`}
+							style={`background-color: ${color}; opacity: ${lvl === 'running' ? 1 : 0.3}`}
 						></div>
 					</div>
 				</div>
