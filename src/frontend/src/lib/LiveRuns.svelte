@@ -28,7 +28,7 @@
 	// — an import, not a retyped hex, so the two can't drift the way this
 	// file and WindowTrack's did before 2026-07-08 (this file's old
 	// `#0ca30c`/`#fab219` sat under a comment claiming that parity while
-	// WindowTrack had already moved to hearth/frost/ember): running = good
+	// WindowTrack had already moved to hearth/frost/void): running = good
 	// (amber), stalling = warn (frost), unknown recedes. A status color
 	// never doubles as a series identity.
 	const LEVEL_COLOR: Record<'running' | 'stalling' | 'unknown', string> = {
