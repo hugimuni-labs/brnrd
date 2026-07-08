@@ -277,3 +277,45 @@ def test_non_subspawn_row_has_no_parent(tmp_path, monkeypatch):
 
     assert row["parent_run_id"] is None
     assert row["is_subspawn"] is False
+
+
+def test_row_prefers_real_observed_model_id_over_catalog_placeholder():
+    """Regression #255: an unpinned Claude run's ``runner_core`` must carry
+    the actually-resolved model id (from the completed run's own
+    ``modelUsage`` keys) instead of the static catalog placeholder
+    ``"default"`` once that id has been observed."""
+    task = Run(
+        id="run-claude-resolved",
+        event_id="evt-claude-resolved",
+        body="",
+        source="telegram",
+        meta={
+            "runner_name": "claude",
+            "runner_shell": "claude",
+            "runner_core": "default",
+            "repo_label": "Gurio/brr",
+        },
+    )
+
+    row = run_ledger.build_closed_run_row(
+        task,
+        {},
+        after_levels={"model_ids": ["claude-opus-4-8"]},
+    )
+
+    assert row["runner_core"] == "claude-opus-4-8"
+    # The manifest itself is updated too, so later consumers (run-state doc,
+    # a future wake's Mode block) converge on the same resolved value.
+    assert task.meta["runner_core"] == "claude-opus-4-8"
+
+
+def test_row_falls_back_to_catalog_placeholder_when_model_usage_absent():
+    """An aborted stream (or any run with no captured ``modelUsage``) keeps
+    the pre-existing placeholder rather than silently clearing the field."""
+    task = _task("run-no-model-usage")
+    task.meta["runner_core"] = "default"
+
+    row = run_ledger.build_closed_run_row(task, {}, after_levels=_levels())
+
+    assert row["runner_core"] == "default"
+    assert task.meta["runner_core"] == "default"
