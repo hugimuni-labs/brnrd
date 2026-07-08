@@ -2180,6 +2180,87 @@ def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
     assert checked.is_set()
 
 
+def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
+    tmp_path, monkeypatch,
+):
+    """A single `spawn:` event must be dispatched exactly once, even when
+    the pool has more than one open slot and several ticks pass before it
+    completes.
+
+    Root-caused live 2026-07-08 (run-260708-2010-5sor): one `spawn:` outbox
+    dispatch produced 4 concurrent duplicate children, all working the
+    identical event, bounded only by `spawn.max_concurrent`. Cause:
+    `list_dispatchable`/`list_pending` deliberately keep returning
+    "processing"-status events (so a still-running resident event stays
+    visible for follow-up-folding) — but the spawn pool's fill loop had no
+    check against events already claimed in `active_spawns`, unlike the
+    resident dispatch path, which is implicitly guarded by `current is
+    None` in memory. With pool width > 1, the same single candidate refilled
+    every open slot, tick after tick, until the pool hit its configured cap.
+    This pins the fix: with width 4 and only one pending spawn candidate
+    that takes several ticks to finish, exactly one child ever gets
+    submitted.
+    """
+    write_repo_scaffold(tmp_path)
+
+    dispatch_count = 0
+    dispatch_lock = threading.Lock()
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        nonlocal dispatch_count
+        with dispatch_lock:
+            dispatch_count += 1
+        started.set()
+        release.wait(timeout=5)
+        return Run(
+            id=f"task-{event['id']}", event_id=event["id"], body="spawned",
+            status="done", meta={"worker": True},
+        )
+
+    ticks_since_start = 0
+
+    def fake_fire_due_schedules(*_a, **_k):
+        nonlocal ticks_since_start
+        if started.is_set():
+            ticks_since_start += 1
+            # Let several ticks elapse with the event still "processing"
+            # before releasing the worker and stopping the loop — this is
+            # exactly the window the bug needed to over-dispatch.
+            if ticks_since_start >= 5:
+                release.set()
+                time.sleep(0.05)
+                raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 4},
+    )
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    protocol.create_event(
+        tmp_path / ".brr" / "inbox", "spawn", "spawned work",
+        spawn_immediate=True, worker=True, environment="worktree",
+    )
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert dispatch_count == 1, (
+        f"expected the single spawn event dispatched exactly once, got "
+        f"{dispatch_count}"
+    )
+
+
 def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypatch):
     """A `spawn:` child dispatches alongside a still-running resident
     thought even after the dev-reload watcher has flagged a package
