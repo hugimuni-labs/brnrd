@@ -72,11 +72,12 @@ def test_render_update_sends_message_on_run_created(tmp_path, monkeypatch):
     params = sends[0][2]
     assert params["chat_id"] == 555
     assert params["message_thread_id"] == 7
-    # Compact card opens with the env in the header (no task ID — that's
-    # dev-side noise in a chat reply).
+    # Compact card opens with the run id + env in the header — the run id
+    # leads it (2026-07-08, direct ask) so a chat reader has a stable
+    # handle to point back at a specific run.
     assert "docker" in params["text"]
     assert "preparing" in params["text"]
-    assert task.id not in params["text"]
+    assert task.id in params["text"]
     # Telegram-flavoured rendering: HTML parse_mode so the strike-
     # through markup later in the lifecycle renders as the user expects.
     assert params.get("parse_mode") == "HTML"
