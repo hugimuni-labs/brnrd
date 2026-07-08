@@ -21,11 +21,12 @@ refresh the PR head before the worker runs.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from ... import protocol
-from . import cache, client, parse
+from . import attachments, cache, client, parse
 from .constants import _SEEN_CAP
 from .paths import (
     pull as _pull_path,
@@ -34,6 +35,30 @@ from .paths import (
     repo_issues,
     repo_pulls_comments,
 )
+
+
+def _create_github_event(
+    token: str, inbox_dir: Path, body: str, **meta: Any,
+) -> Path:
+    """``protocol.create_event`` plus best-effort inline-image ingestion.
+
+    Every GitHub event-creation call site below funnels through here so a
+    screenshot dragged into an issue, PR, or comment resolves to a local
+    file the resident can ``Read`` directly, the same way a Telegram
+    photo does — see ``gates/github/attachments.py``.
+    """
+    urls = attachments.extract_image_urls(body)
+    if not urls:
+        return protocol.create_event(inbox_dir, source="github", body=body, **meta)
+    with tempfile.TemporaryDirectory() as tmp:
+        files = attachments.download_images(token, urls, workdir=Path(tmp))
+        return protocol.create_event(
+            inbox_dir,
+            source="github",
+            body=body,
+            attachment_files=files or None,
+            **meta,
+        )
 
 
 def _fetch_pr_head_branch(token: str, repo: str, pr_number: int) -> str | None:
@@ -115,10 +140,10 @@ def _poll_opened_items(
                 meta["branch_target"] = branch
         else:
             meta["github_kind"] = "issue"
-        protocol.create_event(
+        _create_github_event(
+            token,
             inbox_dir,
-            source="github",
-            body=parse._format_event_body(title, body_text),
+            parse._format_event_body(title, body_text),
             title=title,
             **meta,
         )
@@ -183,10 +208,10 @@ def _poll_label_trigger(
             if isinstance(ts, str) and ts > latest_seen:
                 latest_seen = ts
             continue
-        protocol.create_event(
+        _create_github_event(
+            token,
             inbox_dir,
-            source="github",
-            body=parse._format_event_body(title, body),
+            parse._format_event_body(title, body),
             github_repo=repo,
             github_kind="issue",
             github_issue_number=number,
@@ -295,12 +320,7 @@ def _poll_mention_trigger(
                 pr_branch_cache[issue_number] = branch
                 meta["branch_target"] = branch
 
-        protocol.create_event(
-            inbox_dir,
-            source="github",
-            body=parse._format_event_body("", body),
-            **meta,
-        )
+        _create_github_event(token, inbox_dir, parse._format_event_body("", body), **meta)
         seen.add(cid)
         ts = comment.get("updated_at") or comment.get("created_at")
         if isinstance(ts, str) and ts > latest_seen:
@@ -384,10 +404,8 @@ def _poll_mention_review_comments(
             pr_branch_cache[pr_number] = branch
             meta["branch_target"] = branch
 
-        protocol.create_event(
-            inbox_dir,
-            source="github",
-            body=parse._format_review_comment_body(path, line, body),
+        _create_github_event(
+            token, inbox_dir, parse._format_review_comment_body(path, line, body),
             **meta,
         )
         seen.add(cid)
@@ -501,12 +519,7 @@ def _emit_review_event_if_mentioned(
         pr_branch_cache[pr_number] = branch
         meta["branch_target"] = branch
 
-    protocol.create_event(
-        inbox_dir,
-        source="github",
-        body=parse._format_event_body("", body),
-        **meta,
-    )
+    _create_github_event(token, inbox_dir, parse._format_event_body("", body), **meta)
 
 
 # ── any trigger ───────────────────────────────────────────────────
@@ -588,11 +601,8 @@ def _poll_any_activity(
             if branch:
                 pr_branch_cache[issue_number] = branch
                 meta_c["branch_target"] = branch
-        protocol.create_event(
-            inbox_dir,
-            source="github",
-            body=parse._format_event_body("", body_text),
-            **meta_c,
+        _create_github_event(
+            token, inbox_dir, parse._format_event_body("", body_text), **meta_c,
         )
         seen_c.add(cid)
         ts = comment.get("updated_at") or comment.get("created_at")
@@ -672,10 +682,8 @@ def _poll_any_review_comments(
             pr_branch_cache[pr_number] = branch
             meta["branch_target"] = branch
 
-        protocol.create_event(
-            inbox_dir,
-            source="github",
-            body=parse._format_review_comment_body(path, line, body_text),
+        _create_github_event(
+            token, inbox_dir, parse._format_review_comment_body(path, line, body_text),
             **meta,
         )
         seen.add(cid)
