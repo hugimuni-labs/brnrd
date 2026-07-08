@@ -442,6 +442,57 @@ drift instead of relying on a future grep to catch it (the "palette drift
 check" the maintainer's own visual-inspection run flagged as a portal
 worth having, 2026-07-08 same day). Build+lint+typecheck clean.
 
+### Critical was still red; swapped ember for void-ash; three registers now real (2026-07-08 evening)
+
+Live report after merge+redeploy: "the 0 5h quota line is still red." Real,
+not a caching/deploy artifact — checked by measuring, not eyeballing:
+`STATUS_CRITICAL`'s "dying ember" hex (`#c0523f`) sits at roughly OKLCH
+hue≈9°/sat≈51%, i.e. a genuinely red-orange hue at moderate saturation —
+"ember" was a warmer *name* for a color that was still squarely in the
+red/orange family the same-day pass had just banned everywhere else. The
+bug was real, and it was exactly the family the maintainer named as
+unwanted, just dimmer than the old stock `#d03b3b`.
+
+Same message asked the sharper question directly: "your amber/frost/void 3
+registers rather than amber with accents proposal" — i.e. option 2 from
+§"Darkness dial" above, but read correctly this time: not a structural
+crisp-vs-blur split (settled, rejected, stays closed), but *status* void as
+a real third peer alongside amber and frost, rather than amber-primary with
+frost and ember as two narrow accents hanging off it.
+
+Answer, shipped not just discussed: yes, and the two questions turn out to
+be the same fix. `STATUS_CRITICAL` is now `#9c8d7d` — desaturated warm-grey
+ash (hue≈31°, sat≈14%), the fire spent rather than the fire turned red-hot.
+Contrast checked against all three surfaces via the dataviz skill's
+`validate_palette.js` `contrast()`: body 6.17:1, panel 5.85:1, track
+5.43:1 — comfortably clearing the 3.7:1 floor the old ember hex barely
+cleared (4.27/4.06/3.76). This is what makes "void" actually reachable as a
+foreground hue without repeating the earlier finding that true near-black
+text fails contrast on this surface (§"Status palette reconsidered,
+2026-07-08" above): void does its work as *desaturation toward grey*, not
+as literal near-black, while the dark body/panel canvas still carries the
+darkness half as background. Net result, unprompted but real: amber (alive)
+/ frost (cooling) / void-ash (spent) are now three actual peer meanings, one
+hex each, not amber-primary-with-two-accents — the literal thing asked for,
+arrived at by fixing a bug rather than by a separate restyling pass.
+
+Structural chrome (panel borders, brackets, blur) is unchanged and stays
+out of scope here — that fork was closed by the maintainer's own words in
+the addendum above ("still want all the warmth and blur") and reopening it
+wasn't what this question was about. Void nudging darker/more retro-sci-fi
+overall (the still-open dial from the same addendum) is also untouched;
+this is the status-color fix and the register question, not a full
+re-tone.
+
+Shipped: `src/frontend/src/lib/statusPalette.ts` (hex + comment rewritten
+in place, not just a diff — the old ember reasoning is now wrong and
+staying it would mislead the next reader), `WindowTrack.svelte`/
+`LiveRuns.svelte` comment references to "ember" updated to "void ash" for
+the same reason. `npm run check`/`lint`/`build` all clean. Self-merged
+directly per the maintainer's own "feel free to self merge and evaluate
+after a redeploy" — verify-then-merge, not a clean-diff-shaped guess (same
+bar as the 2026-07-06 Upsun self-merges).
+
 ## Punch list: what's still open on the visuals (2026-07-08 check-in)
 
 Asked directly: "what we still gotta address at the visuals." In order

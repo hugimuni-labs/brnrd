@@ -12027,3 +12027,33 @@ instead of relying on a future grep to catch it. `npm run check`/`lint`/
 Detail: `kb/design-brand-visual-language.md` §"Darkness dial resolved".
 Branch: `brr/visual-direction-discussion-2026-07-08` (same branch/PR #285
 as the discussion turn — this run adds the resolving commit to it).
+
+## [2026-07-08] fix | Critical status color was still red; swapped ember for void-ash
+
+Live report after merge+redeploy: "the 0 5h quota line is still red."
+Measured, not eyeballed: `STATUS_CRITICAL`'s "dying ember" hex (`#c0523f`)
+is roughly OKLCH hue≈9°/sat≈51% — a genuinely red-orange hue, just dimmer
+than the old stock `#d03b3b` it replaced. Same message asked directly
+whether the amber/frost/void three-register idea (vs. amber-with-accents)
+could work — answer: yes, and it's the same fix. `STATUS_CRITICAL` is now
+`#9c8d7d`, desaturated warm-grey ash (hue≈31°, sat≈14%), contrast 6.17
+(body) / 5.85 (panel) / 5.43 (track) via the dataviz skill's
+`validate_palette.js` — clears the 3.7:1 floor with more room than the old
+ember hex had. Void reaches the foreground as desaturation toward grey, not
+literal near-black (which fails contrast on this surface, per the
+2026-07-08 finding above), while the dark body/panel canvas still carries
+darkness as background. Net effect: amber/frost/void are now three real
+peer meanings (one hex each), not amber-primary with two narrow accents.
+Structural chrome (borders, blur) untouched — out of scope, already
+settled as "keep the warmth and blur."
+
+`statusPalette.ts`, `WindowTrack.svelte`, `LiveRuns.svelte` comments
+updated to match (no more "ember" language describing a hue that's meant
+to not be red). `npm run check`/`lint`/`build` clean. Self-merged per the
+maintainer's own "feel free to self merge and evaluate after a redeploy."
+
+Detail: `kb/design-brand-visual-language.md` §"Critical was still red;
+swapped ember for void-ash; three registers now real". Branch:
+`brr/void-ash-status-fix-2026-07-08` (branched fresh from `main`, since
+#285's branch was already merged — same precedent as the 2026-07-05
+loom-brand-and-priority run).

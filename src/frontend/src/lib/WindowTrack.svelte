@@ -14,8 +14,11 @@
 	// frost creeping in (cooling, leaving the firelight) — a dimmer/
 	// desaturated blue than the `sky-300` "stale report" badge below, so the
 	// two don't collide as one hue meaning two things in the same card;
-	// critical = dying ember, the closest a legible-on-dark-void hue can get
-	// to "darkness" while still clearing 3:1 (still always icon+label, never
+	// critical = void ash — the fire spent, not the fire gone red-hot (fixed
+	// 2026-07-08 evening: the prior "dying ember" hex was still a genuinely
+	// red hue under a warmer name, live-caught as "the 0% line is still
+	// red"). Three real peer registers now — amber/frost/void — not
+	// amber-primary with two narrow accents (still always icon+label, never
 	// color alone).
 	const LEVEL_COLOR: Record<string, string> = {
 		ample: STATUS_GOOD,
