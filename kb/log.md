@@ -11836,3 +11836,79 @@ against the local build (identical) and grepped the deployed page-2 JS
 chunk for the three new status hexes (all present). Detail:
 `kb/design-brand-visual-language.md` §"Status palette reconsidered,
 2026-07-08".
+
+## [2026-07-08] fix | Stop-hook infinite re-fire (#282) + one-shot fold-in latch, both root-caused
+
+Direct ask: "let's do 282 now," paired with a live report that the
+daemon's post-delivery "attending" floor is buggy — a message sent to an
+attending run "got closed immediately and the message sat unhandled
+until the next one anyway," original intent named as "a way to send
+quick follow ups, before run closes."
+
+**#282 root cause confirmed + fixed.** The prior run's own issue-comment
+hypothesis (`hooks.py:374-379`, Stop-phase `additionalContext` rendered
+unconditionally on *every* fire, not token-gated like post-tool) held up.
+Fixed: the Stop phase now gates on `stop_last_token`, a Stop-scoped twin
+of post-tool's `last_token` (kept separate so the two never fight) — a
+repeat Stop fire on an unchanged `change_token` now returns `{}` instead
+of re-injecting identical context, which is what was reading to Claude
+Code's CLI as "still something to weave in" and driving 10-15+ pointless
+re-fires on a run with nothing left to do. The very first Stop fire for
+any given snapshot still renders unconditionally, so the original
+"explicit all-clear, not silence" intent (`test_stop_injects_affirmative_
+zero_pending_signal`) is unchanged.
+
+**A second, real, previously-unfiled bug found on the same code path
+while fixing the first:** `stop_blocked` was a plain one-shot bool that
+was set on the first pending-event block and never reset. That means
+only the *first* foldable follow-up a run ever saw in its lifetime got
+blocked-and-folded-in via Stop; any later, genuinely new follow-up
+arriving during the same run's remaining life rode along as inert
+rendered text, never forcing the resident to address it before exiting —
+exactly the "quick follow-up before the run closes" contract this hook
+exists to keep, silently failing after the first use. Fixed the same
+way: `stop_blocked_token` replaces the bool, re-arming whenever the
+portal's `change_token` moves (a new/changed pending snapshot) while
+still suppressing a repeat block against the same unresolved one (the
+existing "second stop must not block forever" guarantee is unchanged for
+that case). Two new regression tests in `tests/test_hooks.py` cover both
+fixes; full suite green (1394).
+
+**Folded in, same run:** a same-thread ask to add the run id to the chat
+card ("easier for me to refer to our previous interactions") — the
+compact card header (`run_progress.py::_compact_header`) now leads with
+`view.run_id`, reversing a prior "dev-side noise, leave it out of the
+chat card" call from an earlier pass. Small, reversible, directly asked
+for; three golden-text tests updated to match
+(`test_render_text_compact_has_runner_env_branch_header`,
+`test_render_text_compact_prefixes_repo_when_known`,
+`test_render_text_compact_omits_arrow_without_target_branch`, plus the
+Telegram/Slack `render_update` tests that asserted the run id was
+*absent*, now assert it's present).
+
+**The "attending" report itself: traced, not code-fixed.** Read
+`_post_delivery_attend` and the daemon main dispatch loop end to end
+(burst-settle window, single-flight future reap, `wake` event, the
+`_pending_events_for_agent` scoping) — found no code defect. A follow-up
+arriving during the attend window should get picked up by
+`_post_delivery_attend`'s ~1s poll, end the dwell early ("pending"), free
+the `current` slot, and get redispatched within roughly one
+`_SCAN_INTERVAL` (3s) plus the burst-settle window (≤12s default) —
+call it 15-30s worst case, not "sat unhandled." This also matches the
+documented v1 scope in `kb/design-director-loop.md`: the daemon-owned
+attending floor is explicitly named "the post-return safety net/card
+truth," *not* a same-thought continuation — only the prompt-level,
+runner-owned linger (a judgment call the model makes, not a forcing
+function) gives a true same-thought fold-in, and a quick single-reply run
+doesn't reliably trigger it. Reported back rather than guess-patched,
+since the live Telegram timing can't be reproduced from inside a
+sandboxed run. Two concrete candidates named for a future pass if the
+report still holds once #282 has had a few live cycles to settle: (a) no
+visible "picking this up" signal during the redispatch gap, which reads
+as silence to a human even when the backend redispatched promptly; (b)
+the attending mechanism's value depends on the runner reliably reaching
+a *clean* Stop rather than getting stuck in #282's own loop first, which
+this fix should improve but wasn't reproduced live to confirm.
+
+Detail: `plans/Gurio__brr/active.md`, `ledger/decisions.md` (account
+dominion). Branch: `brr/stop-hook-refire-and-card-run-id-2026-07-08`.
