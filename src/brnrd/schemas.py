@@ -302,11 +302,18 @@ class LiveRunsReport(BaseModel):
     """
 
     runs: list[LiveRunIn] = Field(default_factory=list)
+    # Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked
+    # here rather than a new endpoint — loom-envelope Phase 1's one piece of
+    # data the live-runs publish didn't already carry (the active count is
+    # just a count of `is_subspawn` entries in `runs` above). None when the
+    # daemon hasn't reported yet.
+    spawn_max_concurrent: int | None = None
 
 
 class LiveRunsOut(BaseModel):
     runs: list[LiveRunIn]
     live_runs_updated_at: datetime | None = None
+    spawn_max_concurrent: int | None = None
 
 
 class PRReviewItemIn(BaseModel):

@@ -582,12 +582,17 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
         repo_label="Gurio/brr", pid=os.getpid(), entry_id="spawn-entry",
         parent_run_id="run-live-test", is_subspawn=True,
     )
+    # Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
+    # §"Loom envelope"): the configured spawn pool width piggybacks on this
+    # same publish tick.
+    (brr_dir / "config").write_text("spawn.max_concurrent=6\n")
 
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
 
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
         assert daemon.live_runs_updated_at is not None
+        assert daemon.spawn_max_concurrent == 6
         runs = json_mod.loads(daemon.live_runs_json)
     assert len(runs) == 2
     by_run_id = {row["run_id"]: row for row in runs}
