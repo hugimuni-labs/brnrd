@@ -12186,3 +12186,45 @@ throughout — "Slice 1 — shipped", "Named forks — answered", "Loom
 envelope", "Cross-repo, upgraded from deferred to native-by-design",
 "Add-project UI gap"), `decision-account-centered-daemon.md` §"Open
 questions".
+
+## [2026-07-08] fix | Concurrent-spawn duplicate dispatch found live; obup's missing closeout diagnosed; loom-envelope Phase 2 frontend shipped
+
+Triggered by the maintainer noticing the previous run (obup) closed with
+no summary message, plus asking directly to test spawn dispatch and to
+build the loom-envelope Phase 2 frontend.
+
+Root-caused obup's silent closeout: a due director-tick self-wake fired
+inline at the tail of a run that had shipped a real PR (#293), reasoned
+from a false premise (".card narration = already reported to chat" — it
+isn't, `.card` is a control file, never delivered) and shipped only its
+own re-derivation summary as the run's entire terminal reply. Fixed at
+the source: `daemon-substrate.md`'s next-move section and the account
+dominion's `schedule.md` director-tick entry both now name the failure
+mode directly.
+
+Shipped loom-envelope Phase 2's missing dashboard surface: `GET
+/v1/dashboard/config-requests` + `ConfigRequests.svelte`, PR #297,
+merged.
+
+While live-testing spawn dispatch (a direct ask: "spawn a sub run
+implementing the ToS ticket"), found and fixed a real bug: one `spawn:`
+dispatch fanned out into 4 concurrent duplicate worker-stack children,
+all independently implementing #227. Root cause: the spawn pool's fill
+loop never deduped candidates against events already claimed in
+`active_spawns` — `list_dispatchable`/`list_pending` deliberately keep
+returning "processing"-status events too (for a different reason:
+follow-up-folding), and nothing filtered an already-dispatched spawn
+candidate back out, unlike the resident dispatch path's implicit
+`current is None` guard. Fixed (PR #294, regression test reproduces the
+exact live shape). Real blast radius: 2 duplicate PRs resulted (#295
+merged, #296 closed as superseded); a third worker self-detected the
+duplicate and stopped before opening a competing PR — good instance
+judgment, not a designed safeguard. #227 closed via #295. A related
+near-miss (worker-stack children sharing the resident's conversation/
+pending-event visibility, could answer a follow-up not meant for them)
+named but not fixed.
+
+Full detail: `kb/design-multi-workstream-concurrency.md` (new sections:
+"Loom envelope Phase 2 — dashboard surface shipped", "Concurrent-spawn
+duplicate-dispatch bug"). Branches: `brr/spawn-dedup-fix-and-obup-
+closeout-diagnosis` (#294), `brr/loom-envelope-phase2-frontend` (#297).
