@@ -70,6 +70,39 @@ def test_build_omits_pacing_key_when_quota_pacing_unknown():
     assert "pacing" not in res_none["quota"]
 
 
+# ── coexisting_runs (live presence-registry read) ────────────────────────────
+
+
+def test_build_coexisting_none_stays_unimplemented():
+    """Omitting ``coexisting`` reproduces every prior wake's behaviour."""
+    res = facets.build(quota_summary="42%")
+    assert res["coexisting_runs"]["status"] == "unimplemented"
+
+
+def test_build_coexisting_empty_list_is_affirmative_absent():
+    """A call site with a wired collector that finds nobody else is 'absent',
+    not 'unimplemented' — the collector ran, there's genuinely nothing there."""
+    res = facets.build(quota_summary="42%", coexisting=[])
+    assert res["coexisting_runs"]["status"] == "absent"
+    assert res["coexisting_runs"]["note"] == "no sibling runs active right now"
+
+
+def test_build_coexisting_known_with_sibling_summary():
+    res = facets.build(
+        quota_summary="42%",
+        coexisting=[
+            {"run_id": "run-a", "label": "fix the frontend build", "kind": "daemon"},
+            {"run_id": "run-b", "stream": "telegram:1:", "kind": "daemon"},
+        ],
+    )
+    facet = res["coexisting_runs"]
+    assert facet["status"] == "known"
+    assert facet["required"] is False
+    assert "2 sibling runs" in facet["summary"]
+    assert "fix the frontend build" in facet["summary"]
+    assert len(facet["siblings"]) == 2
+
+
 def test_render_line_carries_every_schema_facet_in_order():
     res = facets.build(quota_summary="42%", branch="brr/x")
     line = facets.render_line(res)
