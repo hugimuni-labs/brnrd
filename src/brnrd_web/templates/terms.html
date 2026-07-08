@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main class="legal-shell" aria-labelledby="terms-title">
+  <section class="panel legal-panel">
+    <p class="eyebrow">Beta terms</p>
+    <h1 id="terms-title">brnrd hosted-execution beta disclaimer</h1>
+    <p class="panel-copy">
+      Version {{ terms_version }}. These beta terms apply when HugiMuni SAS
+      operates brnrd-hosted compute for your account.
+    </p>
+
+    {% if error %}
+      <p class="form-error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <div class="legal-copy">
+      <h2>1. Hosted agent execution</h2>
+      <p>
+        brnrd may run your selected agent, runner, or automation on compute
+        operated by HugiMuni SAS. Hosted execution can include shell commands,
+        file writes, dependency installation, network requests, Git operations,
+        and other tool use needed to work on the repositories or services you
+        connect.
+      </p>
+      <p>
+        Some hosted runs may use yolo-exec or equivalent unattended execution
+        modes. You authorize brnrd to perform those actions for the connected
+        account, repository, branch, and task you provide.
+      </p>
+
+      <h2>2. Beta status and your risk</h2>
+      <p>
+        Hosted execution is a beta feature. You use it at your own risk. Agentic
+        code execution can make incorrect changes, expose secrets already
+        available to the run, call external services, consume quota, or run code
+        supplied by your project or its dependencies.
+      </p>
+      <p>
+        You are responsible for deciding which repositories, credentials,
+        branches, data, prompts, dependencies, and approvals are safe to give to
+        hosted brnrd runs.
+      </p>
+
+      <h2>3. No execution-sandbox guarantee</h2>
+      <p>
+        brnrd will apply the execution defaults and controls stated in its
+        product documentation or configuration, but HugiMuni SAS does not
+        promise that hosted execution is a security sandbox, a containment
+        boundary, or a guarantee against prompt injection, malicious code,
+        supply-chain compromise, data loss, or unauthorized behavior by tools
+        your run can reach.
+      </p>
+
+      <h2>4. Availability and changes</h2>
+      <p>
+        The beta service may change, pause, reject, throttle, or stop hosted
+        execution at any time to protect the service, HugiMuni SAS-operated
+        infrastructure, other users, or connected third-party services.
+      </p>
+
+      <h2>5. Liability limits</h2>
+      <p>
+        To the maximum extent permitted by applicable law, HugiMuni SAS excludes
+        implied warranties and will not be liable for indirect, incidental,
+        special, consequential, punitive, or lost-profit damages arising from
+        hosted execution.
+      </p>
+      <p>
+        Any liability that cannot be excluded is limited to the maximum extent
+        allowed by law. Nothing in these beta terms limits rights or remedies
+        that cannot be waived under French law or European Union consumer
+        protection law.
+      </p>
+
+      <h2>6. Company</h2>
+      <p>
+        brnrd is operated by HugiMuni SAS, France. These terms are intended as a
+        beta hosted-execution disclaimer and do not replace a full customer
+        agreement where one is separately agreed.
+      </p>
+    </div>
+
+    {% if accept_mode %}
+      <form class="stack-form" method="post" action="/terms/accept">
+        <input type="hidden" name="next" value="{{ next }}">
+        <label class="checkbox-row">
+          <input type="checkbox" name="accept_terms" value="yes">
+          <span>
+            I have read and accept the brnrd beta hosted-execution terms,
+            including the yolo-exec risk and no-sandbox disclaimer.
+          </span>
+        </label>
+        <button class="button button-primary" type="submit">Accept and continue</button>
+      </form>
+    {% else %}
+      <p><a class="button button-secondary" href="/login">Back to login</a></p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}
