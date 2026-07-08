@@ -702,6 +702,15 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "repo_label": str(entry.get("repo_label") or ""),
                 "started_at": _iso_from_epoch(entry.get("started_at")),
                 "last_seen": _iso_from_epoch(entry.get("last_seen")),
+                # Joins the live view to the same parent/child shape the
+                # closed-run ledger already carries (run_ledger.py's
+                # `parent_run_id`/`is_subspawn`) — named as a gap and
+                # closed in kb/design-multi-workstream-concurrency.md
+                # "Ranked moves" #1: a running `spawn:` child is now
+                # distinguishable from a resident thought *while it's
+                # still live*, not only after it closes into the ledger.
+                "parent_run_id": str(entry.get("parent_run_id") or "") or None,
+                "is_subspawn": bool(entry.get("is_subspawn")),
             }
         )
     return out
