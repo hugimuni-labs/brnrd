@@ -309,6 +309,80 @@ def test_dashboard_live_runs_api_returns_runs():
     assert body["stale"] is False
 
 
+def test_dashboard_live_runs_api_returns_spawn_max_concurrent():
+    """Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
+    §"Loom envelope"): the configured spawn: pool width piggybacks on the
+    live-runs publish so the dashboard's "limits" panel has something to
+    render against, with no new endpoint."""
+    import json
+    from datetime import datetime, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = Daemon(
+            id="dmn-live-d", repo_id=pid, token_id="tok-live-d", daemon_name="laptop",
+            live_runs_json=json.dumps(
+                [
+                    {"id": "pres-3", "kind": "daemon", "stream": "telegram:x:", "label": "primary", "run_id": "run-c", "repo_label": "Gurio/brr", "started_at": "2026-07-08T23:00:00Z", "last_seen": "2026-07-08T23:05:00Z", "is_subspawn": False},
+                    {"id": "pres-4", "kind": "daemon", "stream": "telegram:x:", "label": "worker", "run_id": "run-d", "repo_label": "Gurio/brr", "started_at": "2026-07-08T23:01:00Z", "last_seen": "2026-07-08T23:05:00Z", "is_subspawn": True, "parent_run_id": "run-c"},
+                ]
+            ),
+            live_runs_updated_at=datetime.now(timezone.utc),
+            spawn_max_concurrent=4,
+        )
+        db.add(daemon)
+        db.commit()
+
+    r = client.get("/v1/dashboard/live-runs")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["spawn_max_concurrent"] == 4
+    assert sum(1 for run in body["runs"] if run.get("is_subspawn")) == 1
+
+
+def test_put_live_runs_stores_spawn_max_concurrent():
+    """The daemon-side write half of the same field — `PUT
+    /v1/daemons/live-runs` (`src/brr/gates/cloud.py::_publish_live_runs`)
+    now sends `spawn_max_concurrent` alongside `runs`; confirm the router
+    stores and echoes it back rather than silently dropping the new key."""
+    client = _client()
+    account_token = _login(client)
+    repo_id = _create_repo(client, account_token)
+    account_headers = {"Authorization": f"Bearer {account_token}"}
+
+    pair = client.post("/v1/accounts/pair").json()
+    client.post(
+        f"/v1/accounts/pair/{pair['pair_code']}/approve",
+        json={"repo_id": repo_id},
+        headers=account_headers,
+    )
+    paired = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    daemon_headers = {"Authorization": f"Bearer {paired['daemon_token']}"}
+    client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers)
+
+    r = client.put(
+        "/v1/daemons/live-runs",
+        json={"runs": [], "spawn_max_concurrent": 4},
+        headers=daemon_headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["spawn_max_concurrent"] == 4
+
+    with client.app.state.SessionLocal() as db:
+        from brnrd.models import Daemon
+
+        daemon = db.query(Daemon).filter(Daemon.repo_id == repo_id).one()
+        assert daemon.spawn_max_concurrent == 4
+
+
 def test_dashboard_pr_review_queue_api_requires_login():
     """#259, same auth shape as quota/live-runs JSON endpoints."""
     client = _client()
