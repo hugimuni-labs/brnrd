@@ -13,6 +13,13 @@ export interface LiveRun {
 	repo_label: string;
 	started_at: string | null;
 	last_seen: string | null;
+	// Same join key as the closed-run ledger's `parent_run_id`/`is_subspawn`
+	// (run_ledger.py) — a concurrent `spawn:` child carries these while
+	// still live, so a peer card can be told apart from a resident thought
+	// before it ever reaches the ledger
+	// (kb/design-multi-workstream-concurrency.md "Ranked moves" #1).
+	parent_run_id: string | null;
+	is_subspawn: boolean;
 }
 
 export interface LiveRunsResponse {
