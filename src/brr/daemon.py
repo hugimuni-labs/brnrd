@@ -1655,6 +1655,7 @@ def _run_worker(
         work_dir=run_root,
         quota_summary=quota_summary,
         cfg=cfg,
+        brr_dir=brr_dir,
     )
 
     attempt = 0
@@ -1751,6 +1752,7 @@ def _run_worker(
             work_dir=run_root,
             quota_summary=quota_summary,
             cfg=cfg,
+            brr_dir=brr_dir,
         )
 
         def _emit_heartbeat() -> None:
@@ -1785,6 +1787,7 @@ def _run_worker(
                 work_dir=run_root,
                 quota_summary=quota_summary,
                 cfg=cfg,
+                brr_dir=brr_dir,
             )
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
@@ -1835,6 +1838,7 @@ def _run_worker(
                 work_dir=run_root,
                 quota_summary=quota_summary,
                 cfg=cfg,
+                brr_dir=brr_dir,
                 refresh_levels=False,
             )
 
@@ -1893,6 +1897,7 @@ def _run_worker(
             work_dir=run_root,
             quota_summary=quota_summary,
             cfg=cfg,
+            brr_dir=brr_dir,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
@@ -2582,6 +2587,7 @@ def _resources_facet(
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
     pacing_status: "dict[str, object] | None" = None,
+    coexisting: "list[dict[str, object]] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -2591,6 +2597,11 @@ def _resources_facet(
     asymmetry all live in ``facets``; this keeps the daemon's construction call
     in one place so the JSON snapshot, the woven hook line, and ``brr portal
     state`` can never drift on which facets they carry.
+
+    ``coexisting`` is ``None`` unless the call site has a presence snapshot to
+    give (see ``_write_live_portal_state``'s ``brr_dir`` param) — passing
+    ``None`` reproduces the previous always-``unimplemented`` behaviour
+    exactly.
     """
     return facets.build(
         quota_summary=quota_summary,
@@ -2604,6 +2615,7 @@ def _resources_facet(
         quality_escalation=quality_escalation,
         relay_consent=relay_consent,
         pacing_status=pacing_status,
+        coexisting=coexisting,
     )
 
 
@@ -2710,6 +2722,7 @@ def _write_live_portal_state(
     quota_summary: str | None = None,
     refresh_levels: bool = True,
     cfg: dict | None = None,
+    brr_dir: Path | None = None,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -2723,6 +2736,14 @@ def _write_live_portal_state(
     ``True`` (default, heartbeat path) allows a cache-miss to trigger the
     blocking PTY probe; ``False`` (flush path) only reads the on-disk
     cache, keeping the event-driven flush cheap.
+
+    *brr_dir*, when given, wires the ``coexisting_runs`` facet to a live
+    presence-registry read (self excluded) — the same query already used to
+    build the wake-time-only ``present_snapshot`` injected into
+    ``context.md`` (``_run_worker``, "Other thoughts awake right now"), now
+    refreshed on every heartbeat/flush instead of frozen at wake time. A
+    caller that omits it gets the previous ``unimplemented`` behaviour
+    unchanged.
     """
     if not outbox_dir:
         return None
@@ -2752,6 +2773,15 @@ def _write_live_portal_state(
             runner_name, outbox_dir, work_dir, refresh=refresh_levels
         )
         pacing_status = _quota_pacing_status(cfg or {}, run_levels)
+        coexisting_snapshot: list[dict[str, object]] | None = None
+        if brr_dir is not None:
+            try:
+                coexisting_snapshot = [
+                    e for e in presence.list_active(brr_dir)
+                    if e.get("run_id") != task.id
+                ]
+            except OSError:
+                coexisting_snapshot = None
         payload: dict[str, object] = {
             "version": 1,
             "generated_at": time.strftime(
@@ -2848,6 +2878,7 @@ def _write_live_portal_state(
                 quality_escalation=quality_escalation,
                 relay_consent=relay_consent,
                 pacing_status=pacing_status,
+                coexisting=coexisting_snapshot,
             ),
         }
         payload["change_token"] = _change_token(payload)
