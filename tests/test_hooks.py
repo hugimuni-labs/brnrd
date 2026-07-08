@@ -98,6 +98,65 @@ def test_stop_blocks_once_when_pending(tmp_path):
     assert second.get("decision") != "block"
 
 
+def test_stop_reblocks_on_a_new_pending_event_after_an_earlier_fold_in(tmp_path):
+    # 2026-07-08 (#282 follow-up): ``stop_blocked`` used to be a one-shot
+    # bool that never reset, so only the *first* pending follow-up a run
+    # ever saw got fold-in-blocked — a second, genuinely new follow-up
+    # arriving later in the same run's lifetime rode along as inert
+    # context instead of forcing the resident to address it before
+    # exiting. Token-scoping the latch should let a distinct new pending
+    # snapshot re-block even though an earlier one already consumed a
+    # block.
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-2", "source": "telegram", "summary": "first",
+        "body": "first follow-up",
+    }])
+    env = _env(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert first["decision"] == "block"
+    assert "first follow-up" in first["reason"]
+
+    # The first follow-up got folded in and addressed; portal now clean.
+    _portal(tmp_path, token="t2", pending=0)
+    quiet, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert quiet.get("decision") != "block"
+
+    # A second, distinct follow-up arrives later in the same run.
+    _portal(tmp_path, token="t3", pending=1, events=[{
+        "id": "evt-3", "source": "telegram", "summary": "second",
+        "body": "second follow-up",
+    }])
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert second["decision"] == "block"
+    assert "second follow-up" in second["reason"]
+
+
+def test_stop_does_not_reinject_identical_context_on_unchanged_token(tmp_path):
+    # #282: after a fully clean, fully-delivered closeout (0 pending, token
+    # unchanged), Claude Code's Stop hook kept re-firing 10-15+ times with
+    # byte-identical state because the closeout render was unconditional on
+    # *every* fire, not just the first one to see this snapshot — non-empty
+    # ``additionalContext`` on every fire reads to the CLI as "still
+    # something to weave in". The runner already has the affirmative
+    # all-clear text in-context from the prior Stop fire; a repeat fire on
+    # the same token should get an empty result (a real "nothing to add,
+    # stop cleanly" signal) instead of the same text again.
+    _portal(tmp_path, token="t1", pending=0)
+    env = _env(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert "0 pending event(s)" in first["hookSpecificOutput"]["additionalContext"]
+
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert "hookSpecificOutput" not in second
+    assert second.get("decision") != "block"
+
+    # A genuinely new snapshot (token moves) still renders — the gate is
+    # per-token, not "only ever once for the whole run".
+    _portal(tmp_path, token="t2", pending=0)
+    third, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert "0 pending event(s)" in third["hookSpecificOutput"]["additionalContext"]
+
+
 def test_stop_does_not_block_when_nothing_pending(tmp_path):
     _portal(tmp_path, token="t1", pending=0)
     out, code = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
