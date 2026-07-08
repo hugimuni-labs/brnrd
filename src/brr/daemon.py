@@ -5217,9 +5217,40 @@ def start(
             # spawn (and the resident thought) is done.
             open_spawn_slots = max_spawns - len(active_spawns)
             if open_spawn_slots > 0:
-                spawn_candidates = [
-                    t for t in (scanned or []) if t.event.get("spawn_immediate")
-                ][:open_spawn_slots]
+                # Dedup against events already claimed this tick or a prior
+                # one: `list_dispatchable`/`list_pending` deliberately keep
+                # returning "processing" events too (so a still-running
+                # resident event stays visible for follow-up-folding), but
+                # that means a spawn-marked event survives its own
+                # `set_status(..., "processing")` write and reappears as a
+                # "candidate" on every subsequent tick. The resident
+                # dispatch path (above) is guarded by `current is None`
+                # in-memory, which incidentally also blocks this
+                # re-selection; the spawn pool has no equivalent single
+                # in-flight flag to check once `max_spawns` > 1, so nothing
+                # stopped the same event from filling every remaining open
+                # slot in one tick, or across ticks before the pool filled.
+                # Root-caused live 2026-07-08 (run-260708-2010-5sor): a
+                # single `spawn:` outbox dispatch produced 4 concurrent
+                # duplicate children (run-260708-2017-{zzc1,tgvx,a2kn,i8x6}),
+                # each its own worktree, all working the same event —
+                # exactly bounded by `max_spawns`, which is what gave the
+                # bug away. Filter by event id against both the active pool
+                # and events already selected earlier in this same tick.
+                active_spawn_ids = {
+                    spawn["event"].get("id") for spawn in active_spawns
+                }
+                spawn_candidates: list[_DispatchTarget] = []
+                for t in (scanned or []):
+                    if not t.event.get("spawn_immediate"):
+                        continue
+                    eid = t.event.get("id")
+                    if eid in active_spawn_ids:
+                        continue
+                    active_spawn_ids.add(eid)
+                    spawn_candidates.append(t)
+                    if len(spawn_candidates) >= open_spawn_slots:
+                        break
                 for target in spawn_candidates:
                     event = target.event
                     eid = event["id"]
