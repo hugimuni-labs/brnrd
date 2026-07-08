@@ -87,6 +87,12 @@ class Daemon(Base):
     # kb/design-dashboard-live-surface.md §"Reconsidered 2026-07-06".
     live_runs_json: Mapped[str] = mapped_column(Text, default="[]")
     live_runs_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked on
+    # the same live-runs publish tick — the loom-envelope Phase 1 "limits"
+    # panel's one piece of data slice 1 didn't already emit (the *active*
+    # count is just `is_subspawn` runs in live_runs_json above).
+    # kb/design-multi-workstream-concurrency.md §"Loom envelope".
+    spawn_max_concurrent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # PR-review queue snapshot (#259), mirrored from `gh pr list` via
     # `PUT /v1/daemons/pr-review-queue`. Calendar age, not runner quota, is
     # the meaningful clock for this lane.
