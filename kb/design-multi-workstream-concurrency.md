@@ -2,13 +2,16 @@
 
 Status: active on 2026-07-08 (maintainer ask, evt-twkg + evt-l6a7/evt-bo51
 same-thread follow-ups; forks answered same day, evt-dzgu; round 2 answered
-the same night, evt-mr8v). Slice 1 shipped (spawn pool + `LiveRuns` join,
+the same night, evt-mr8v; loom envelope Phase 2 shipped later that night,
+run-260708-1920-obup). Slice 1 shipped (spawn pool + `LiveRuns` join,
 "Slice 1 — shipped" below). Round 2 (§"Named forks — round 2") mostly
 *corrected* rather than opened new design: the cross-repo "workbench" fork
 turned out to be already-decided, already-shipped code, not a new idea to
 weigh — see that section before re-deriving it again. The loom envelope's
-Phase 2 approval-URL sub-design is the one genuinely new, still-open thread
-this round added, not shipped code.
+Phase 2 approval-URL sub-design was the one genuinely new thread this round
+added, and it's now shipped backend code — see "Loom envelope Phase 2 —
+shipped" below; Phase 1 (the limits panel) and a dashboard surface for a
+pending Phase 2 request are still open.
 
 ## The ask, corrected before anything else
 
@@ -513,14 +516,83 @@ survive across machines) — worth naming as a pushback, not silently
 dropped: **recommend against literal symlinks**, keep the path-registry
 model, since it already does the job the symlink metaphor was reaching for.
 
+## Loom envelope Phase 2 — shipped (2026-07-08 night, run-260708-1920-obup)
+
+"Merged the pr, agreed on your proposed direction — let's go" — the three
+sub-decisions named above shipped on their recommended defaults, not
+re-litigated:
+
+1. **Allowlist scope.** `_CONFIG_CHANGE_ALLOWED_KEYS` /
+   `ALLOWED_CONFIG_KEYS` = `{"spawn.max_concurrent"}` only, kept in two
+   places on purpose — `src/brr/daemon.py` (local/daemon package) and
+   `src/brnrd/routers/config_approval.py` (hosted/server package) ship
+   separately and can't share an import; a drift between them can only
+   make one side *reject* a proposal the other would allow, never let an
+   unapproved key through, so duplication was the safer shape here, not a
+   shortcut.
+2. **Approval auth.** Reused `pairing.py`'s pattern directly: a new
+   `ConfigChangeRequest` table (same device-flow shape as `PairRequest`),
+   a daemon-authenticated mint endpoint (`POST /v1/daemons/config-
+   requests`, `require_daemon`), and a session-cookie-gated browser page
+   (`/config-approve/{id}`, `brnrd_web/routes.py`, cloned from
+   `/connect/{code}`'s own shape) — no new auth surface invented.
+3. **Outcome delivery.** The recommendation above ("write a
+   `config_approved`/`config_rejected` event straight into
+   `ctx.dispatch_inbox`") turned out to describe a path that doesn't
+   exist: `dispatch_inbox` is a local filesystem directory only the
+   daemon's own machine can reach, never a place a hosted FastAPI request
+   handler can write to. Corrected in the build, not just noted: the
+   approve/reject decision instead calls `inbox_service.enqueue(...)` to
+   drop an ordinary `Event` row into the `events` table for that repo —
+   the exact same channel Telegram/GitHub messages already ride to reach
+   a daemon over the existing `/v1/daemons/inbox` long-poll
+   (`gates/cloud.py::_loop_once`). The event's body is
+   `approve config-change <proposal_id>` / `reject config-change
+   <proposal_id>` — deliberately the same reply-body convention CS6's
+   runner-policy proposals use (`_runner_policy_reply` /
+   `_config_change_reply`), so the daemon-side dispatch, apply, and audit
+   machinery stayed structurally identical to CS6's rather than inventing
+   a second shape. No new daemon-side polling loop was added, matching
+   the sub-decision's actual intent even though its literal mechanism
+   description was off.
+
+**One deliberate, named exception to `gates/README.md`'s "gates talk to
+the daemon exclusively through the filesystem" rule:** minting the
+approve URL (`gates/cloud.py::propose_config_change`) is called
+synchronously from `daemon.py`'s outbox drain
+(`_queue_config_change_proposal`), not from a filesystem handoff. An
+async two-phase design (park locally, mint on a later `gates/cloud.py`
+tick, deliver the link once minted) was considered and set aside: it
+would need a way to push a *spontaneous* chat message with no live
+inbox event to answer, which this codebase doesn't have a clean primitive
+for outside a full resident thought, and it would leave a minting
+failure invisible until something polled for it. The exception is bounded
+on purpose — a short 10s timeout (`_CONFIG_CHANGE_MINT_TIMEOUT_S`, well
+under the general `_HTTP_TIMEOUT_S=60` default) caps how long a slow or
+unreachable server can stall the outbox drain, and it fires only on a
+rare, resident-initiated action, never on a routine dispatch-loop tick.
+Worth a second look if this pattern needs repeating elsewhere; it isn't
+a template to copy without re-deriving the same trade-off.
+
+Backend-only this slice, matching Phase 1's own framing (a "limits" panel
+was Phase 1, not built yet either — see the recommended phasing above);
+no frontend/dashboard surface for a pending config-change request exists
+yet. Full backend suite green (1413) including 5 new daemon-side tests
+(propose/apply/reject/allowlist-reject/dispatch-routing) and 7 new
+brnrd/web tests (mint, allowlist-reject, login-gate, detail page,
+approve, reject, cross-account rejection). Branch:
+`brr/loom-envelope-phase2-config-approval`.
+
 ## What this leaves untouched
 
 Cross-repo concurrency's v1-single-flight-across-repos *execution* call
 (design posture upgraded above, build still open), docker clone-isolation
-(#80), the run-ledger's unpopulated cost-rollup fields, and both phases of
-the loom envelope are all named above as real, open gaps this page doesn't
-resolve — each already has its own tracking (`decision-account-centered-
-daemon.md`, `kb/decision-hosted-execution-liability.md`,
+(#80), the run-ledger's unpopulated cost-rollup fields, and the loom
+envelope's Phase 1 (limits panel) and dashboard surface for Phase 2 (no
+UI shows a pending config-change request yet) are all named above as
+real, open gaps this page doesn't resolve — each already has its own
+tracking (`decision-account-centered-daemon.md`,
+`kb/decision-hosted-execution-liability.md`,
 `design-quota-scheduling-loom.md`).
 
 ## Cross-links
