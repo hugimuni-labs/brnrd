@@ -105,6 +105,19 @@ def test_login_page_uses_github_only(client):
     assert "password" not in r.text.lower()
 
 
+def test_logout_clears_session_cookie_and_redirects_to_login(client, monkeypatch):
+    """Named directly as a real gap (2026-07-08): no way to end a browser
+    session short of clearing cookies by hand."""
+    _start, callback, _seen = _login_web(client, monkeypatch)
+    session_cookie_name = client.app.state.settings.session_cookie
+    assert client.cookies.get(session_cookie_name)
+
+    r = client.get("/logout", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+    assert client.cookies.get(session_cookie_name) is None
+
+
 def test_web_static_assets_are_served(client):
     r = client.get("/static/brnrd_web/app.css")
     assert r.status_code == 200
