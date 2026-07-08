@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import WindowTrack from '$lib/WindowTrack.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
+	import Limits from '$lib/Limits.svelte';
 	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
@@ -42,6 +43,12 @@
 	let liveRuns = $state<LiveRun[] | null>(null);
 	let liveRunsStale = $state(false);
 	let liveRunsError = $state<string | null>(null);
+	// Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
+	// §"Loom envelope") — piggybacked on the same live-runs fetch, not a
+	// separate poll; `activeSpawns` is just a derived count over the same
+	// `runs` list Limits.svelte's sibling `LiveRuns` already renders.
+	let spawnMaxConcurrent = $state<number | null>(null);
+	let activeSpawns = $derived(liveRuns?.filter((r) => r.is_subspawn).length ?? 0);
 
 	let prReviewQueue = $state<PRReviewItem[] | null>(null);
 	let prReviewQueueStale = $state(false);
@@ -75,6 +82,7 @@
 			const live = await fetchLiveRuns();
 			liveRuns = live.runs;
 			liveRunsStale = live.stale;
+			spawnMaxConcurrent = live.spawn_max_concurrent;
 			liveRunsError = null;
 		} catch (e) {
 			// A 401 here is redundant with the quota fetch's own unauthenticated
@@ -190,7 +198,7 @@
 	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">live runs</h2>
 	<p class="mt-1 text-sm text-stone-400">
 		What the daemon is doing right now, across every repo it touches — slice 3, the account-scoped
-		view <code>coexisting-runs=unimplemented</code> named as a gap.
+		view backing the resident's own <code>coexisting_runs</code> facet.
 	</p>
 	<div class="mt-3">
 		{#if liveRunsError}
@@ -199,6 +207,24 @@
 			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
 			<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§2b · limits</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">limits</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		Loom envelope Phase 1: today's real user-tunable ceilings as a pressure meter — not what's
+		happening (that's live runs above), what you've allowed. See
+		<code>kb/design-multi-workstream-concurrency.md</code> §"Loom envelope" for the fuller idea (Phase
+		2, the "scream" when an agent wants past a ceiling, is a later slice).
+	</p>
+	<div class="mt-3">
+		{#if liveRunsError}
+			<p class="text-sm text-red-400">{liveRunsError}</p>
+		{:else if liveRuns === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
 		{/if}
 	</div>
 
