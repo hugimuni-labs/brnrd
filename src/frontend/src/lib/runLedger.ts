@@ -81,6 +81,12 @@ export interface RunLedgerRow {
 	wall_clock_seconds: number | null;
 	runner_shell: string | null;
 	runner_core: string | null;
+	// Core attestation: `runner_core` is what the Shell actually ran
+	// (observed from its own result JSON at close); `core_expected` is what
+	// the config pinned at dispatch; `core_mismatch` is the alarm bit —
+	// true means the pin was not respected, null means unverifiable.
+	core_expected: string | null;
+	core_mismatch: boolean | null;
 	repo_label: string | null;
 	source_system: string | null;
 	external_refs: RelicRecord[] | null;
