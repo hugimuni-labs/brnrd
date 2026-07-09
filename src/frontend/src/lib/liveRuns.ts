@@ -20,6 +20,16 @@ export interface LiveRun {
 	// (kb/design-multi-workstream-concurrency.md "Ranked moves" #1).
 	parent_run_id: string | null;
 	is_subspawn: boolean;
+	// #200's remaining slice (progress-card richness): the run's current
+	// lifecycle phase (`queued`/`preparing`/`running`/`finalizing`/...,
+	// `src/brr/run_progress.py::PHASES`) and the live `.card` note text,
+	// folded into the same publish tick via `run_progress.project_run`.
+	// `null` when there's no conversation record yet or the run hasn't
+	// written a card note. Budget/keepalive posture is a separate,
+	// not-yet-built slice — nothing persists that state today.
+	phase: string | null;
+	card_text: string | null;
+	card_updated_at: string | null;
 }
 
 export interface LiveRunsResponse {
