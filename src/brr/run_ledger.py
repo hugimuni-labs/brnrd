@@ -9,6 +9,7 @@ raw per-run row.
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -37,6 +38,8 @@ _ROW_FIELDS = (
     "wall_clock_seconds",
     "runner_shell",
     "runner_core",
+    "core_expected",
+    "core_mismatch",
     "repo_label",
     "source_system",
     "external_refs",
@@ -147,9 +150,27 @@ def build_closed_run_row(
     # Written back onto the task manifest too, so every later consumer of
     # ``runner_core`` (the run-state doc, a future wake's Mode block) sees
     # the same resolved value rather than diverging from the ledger row.
+    #
+    # Core attestation (follow-up to the shell=/core= shadowing bug fixed
+    # 2026-07-09, runner.py::_warn_if_shell_shadows_core): before observed
+    # overwrites expected, compare the two. `core_expected` is what the
+    # config/catalog *claimed* at dispatch; `runner_core` becomes what the
+    # Shell *actually ran*; `core_mismatch` is the alarm bit when the claim
+    # and the observation disagree — the reliable "did this run respect the
+    # pinned core" signal, so a shadowed/misrouted config can never again go
+    # silent for days.
+    expected_core = _str_or_none(task.meta.get("runner_core"))
     resolved_core = claude_status.resolved_model_id(after_levels)
     if resolved_core:
         task.meta["runner_core"] = resolved_core
+    mismatch = core_mismatch(expected_core, resolved_core)
+    if mismatch:
+        print(
+            f"[brr:run-ledger] WARNING: run {task.id} was dispatched with "
+            f"core={expected_core!r} but the Shell observed "
+            f"{resolved_core!r} — the configured core pin was not respected.",
+            file=sys.stderr,
+        )
 
     after_weekly, after_five_hour = quota_used_percentages(after_levels)
     before_weekly = _num(task.meta.get(_BEFORE_WEEKLY_KEY))
@@ -190,6 +211,8 @@ def build_closed_run_row(
         "wall_clock_seconds": wall_clock_seconds(started_at, ended_at),
         "runner_shell": runner_shell,
         "runner_core": _str_or_none(task.meta.get("runner_core")),
+        "core_expected": expected_core,
+        "core_mismatch": mismatch,
         "repo_label": _str_or_none(task.meta.get("repo_label")),
         "source_system": _source_system(task),
         "external_refs": collected_relics or external_refs(task.meta.get("external_refs")),
@@ -208,6 +231,31 @@ def build_closed_run_row(
         "estimate_vs_actual": ESTIMATE_ACTUAL,
     }
     return {field: row.get(field) for field in _ROW_FIELDS}
+
+
+def core_mismatch(expected: str | None, observed: str | None) -> bool | None:
+    """Did the Shell actually run the core the config pinned?
+
+    Returns ``None`` (unverifiable) when there is nothing to compare:
+    no observation (non-Claude Shells produce no ``modelUsage``, or the run
+    died before result JSON), or an unpinned dispatch (``"default"`` means
+    "whatever the Shell chooses" — anything observed is by definition
+    respected). Returns ``False`` when at least one observed id matches the
+    pin — subagents legitimately resolve to other tiers (Explore on haiku
+    under a fable parent), so the joined ``a+b`` observation only alarms
+    when *none* of its ids match. Matching is prefix-tolerant in both
+    directions so a date-suffixed concrete id (``claude-haiku-4-5-20251001``)
+    matches its shorter catalog pin and vice versa.
+    """
+    expected = (expected or "").strip().lower()
+    observed = (observed or "").strip().lower()
+    if not expected or expected == "default" or not observed:
+        return None
+    for oid in observed.split("+"):
+        oid = oid.strip()
+        if oid and (oid == expected or oid.startswith(expected) or expected.startswith(oid)):
+            return False
+    return True
 
 
 def ledger_path(repo_root: Path) -> Path:
