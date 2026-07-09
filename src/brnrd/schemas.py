@@ -367,6 +367,12 @@ class RunLedgerRowIn(BaseModel):
     wall_clock_seconds: float | None = None
     runner_shell: str | None = None
     runner_core: str | None = None
+    # Core attestation: what the config pinned at dispatch vs. what the
+    # Shell's own result JSON observed (`runner_core` above holds the
+    # observed value once the run closes). `core_mismatch` is the alarm
+    # bit; None = unverifiable (no observation / unpinned dispatch).
+    core_expected: str | None = None
+    core_mismatch: bool | None = None
     repo_label: str | None = None
     source_system: str | None = None
     external_refs: list[Any] | None = None
