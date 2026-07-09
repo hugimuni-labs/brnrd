@@ -247,3 +247,29 @@ def test_format_graph_stats_omits_touched_line_when_zero(tmp_path):
     block = kb_health.format_graph_stats(stats)
 
     assert "run touched" not in block
+
+
+def test_compute_graph_stats_accepts_external_kb_dir(tmp_path, tmp_path_factory):
+    """A repo dogfooding home knowledge passes a kb_dir outside
+    repo_root; stats must reflect that directory, not an empty
+    repo_root/kb that no longer exists."""
+    repo_root = tmp_path
+    kb_dir = tmp_path_factory.mktemp("home-knowledge")
+    _write(kb_dir / "index.md", "# Index\n\n- [Hub](subject-hub.md)\n")
+    _write(kb_dir / "subject-hub.md", "# Hub\n\nBody.\n")
+    _write(kb_dir / "log.md", "# Log\n")
+
+    stats = kb_health.compute_graph_stats(repo_root, kb_dir)
+
+    assert stats.total_pages == 3  # index.md + subject-hub.md + log.md
+    assert stats.pages_by_kind.get("subject") == 1
+
+
+def test_compute_graph_stats_defaults_kb_dir_to_repo_root_kb(tmp_path):
+    """Back-compat: the positional two-arg call (existing callers)
+    still resolves to repo_root/kb when kb_dir is omitted."""
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    assert kb_health.compute_graph_stats(tmp_path) == \
+        kb_health.compute_graph_stats(tmp_path, tmp_path / "kb")
