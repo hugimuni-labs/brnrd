@@ -35,14 +35,69 @@ export function relicIcon(kind: string): string {
 }
 
 /** Collapsed-receipt counts, e.g. `{ commit: 3, pr: 1 }` — excludes the
- * free-form `summary` relic, which is prose, not produce. */
+ * free-form `summary` relic, which is prose, not produce. Counts are
+ * taken over *families* (see `groupRelicFamilies`), so a PR's absorbed
+ * branch/commits don't triple-count the same piece of produce (#329). */
 export function relicCounts(relicList: RelicRecord[]): Record<string, number> {
 	const out: Record<string, number> = {};
-	for (const r of relicList) {
+	for (const fam of groupRelicFamilies(relicList)) {
+		const r = fam.head;
 		if (!r.kind || r.kind === 'summary') continue;
 		out[r.kind] = (out[r.kind] ?? 0) + 1;
 	}
 	return out;
+}
+
+// ── Relic families (#329) ───────────────────────────────────────────
+// Live maintainer feedback on the first real receipts: "branch, commit
+// and PR are basically the same thing for a user." A family is one piece
+// of produce: a `pr` head absorbs the `branch` relic and all `commit`
+// relics; a `branch` head (no PR present) absorbs its commits; everything
+// else is a family of one. The raw manifest stays complete — this is a
+// render-side projection only.
+
+export interface RelicFamily {
+	head: AttributedRelic;
+	/** Absorbed members (commits, branch) shown indented under the head. */
+	members: AttributedRelic[];
+}
+
+/** True when a relic has nothing renderable — e.g. a commit relic with
+ * neither sha nor subject (seen live: a bare 🔨 with only a `↳ via`
+ * suffix). Filtered out rather than rendered as an empty line. */
+export function isBlankRelic(r: RelicRecord): boolean {
+	if (r.kind === 'commit') return !String(r.sha ?? '').trim() && !String(r.subject ?? '').trim();
+	if (r.kind === 'branch') return !String(r.name ?? '').trim();
+	return false;
+}
+
+export function groupRelicFamilies(relicList: AttributedRelic[]): RelicFamily[] {
+	const list = relicList.filter((r) => r.kind !== 'summary' && !isBlankRelic(r));
+	const prs = list.filter((r) => r.kind === 'pr');
+	const branches = list.filter((r) => r.kind === 'branch');
+	const commits = list.filter((r) => r.kind === 'commit');
+	const rest = list.filter((r) => !['pr', 'branch', 'commit'].includes(r.kind));
+
+	const families: RelicFamily[] = [];
+	if (prs.length === 1) {
+		// The clean, common case: one PR absorbs the whole code family.
+		families.push({ head: prs[0], members: [...branches, ...commits] });
+	} else if (prs.length === 0 && branches.length === 1) {
+		families.push({ head: branches[0], members: commits });
+	} else {
+		// Ambiguous (multiple PRs — the manifest doesn't attribute commits
+		// to PRs) or nothing to absorb: keep the flat shape rather than
+		// guess an attribution wrong.
+		for (const r of [...prs, ...branches, ...commits]) families.push({ head: r, members: [] });
+	}
+	for (const r of rest) families.push({ head: r, members: [] });
+	return families;
+}
+
+/** Suffix for a collapsed family line: `· 3 commits`. */
+export function familySuffix(fam: RelicFamily): string {
+	const commits = fam.members.filter((m) => m.kind === 'commit').length;
+	return commits > 0 ? ` · ${commits} commit${commits === 1 ? '' : 's'}` : '';
 }
 
 /** One-line label for a single relic, used in the expanded list. Falls

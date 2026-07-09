@@ -6,6 +6,8 @@
 	import {
 		durationLabel,
 		endedLabel,
+		familySuffix,
+		groupRelicFamilies,
 		groupWithChildren,
 		relicCounts,
 		relicIcon,
@@ -157,26 +159,41 @@
 								{#if summary}
 									<p class="text-stone-300 italic">{relicLabel(summary)}</p>
 								{/if}
+								<!-- #329: relic *families* — a PR absorbs its branch and
+								     commits (one piece of produce, one head line, members
+								     indented); attribution rides the family line once. -->
 								<ul class="space-y-1">
-									{#each entry.relics.filter((r) => r.kind !== 'summary') as r, i (i)}
-										<li class="flex min-w-0 items-center gap-1.5">
-											<span class="shrink-0" title={r.kind}>{relicIcon(r.kind)}</span>
-											{#if r.url}
-												<a
-													href={String(r.url)}
-													target="_blank"
-													rel="external noreferrer"
-													class="truncate text-sky-300 underline decoration-sky-800 hover:text-sky-200"
-													>{relicLabel(r)}</a
-												>
-											{:else}
-												<span class="truncate text-stone-300">{relicLabel(r)}</span>
-											{/if}
-											{#if r._from_run_id}
-												<span class="shrink-0 text-[10px] text-stone-600"
-													>↳ via {r._from_run_id}</span
-												>
-											{/if}
+									{#each groupRelicFamilies(entry.relics) as fam, i (i)}
+										<li class="min-w-0">
+											<div class="flex min-w-0 items-center gap-1.5">
+												<span class="shrink-0" title={fam.head.kind}>{relicIcon(fam.head.kind)}</span>
+												{#if fam.head.url}
+													<a
+														href={String(fam.head.url)}
+														target="_blank"
+														rel="external noreferrer"
+														class="truncate text-sky-300 underline decoration-sky-800 hover:text-sky-200"
+														>{relicLabel(fam.head)}</a
+													>
+												{:else}
+													<span class="truncate text-stone-300">{relicLabel(fam.head)}</span>
+												{/if}
+												{#if familySuffix(fam)}
+													<span class="shrink-0 text-stone-500">{familySuffix(fam)}</span>
+												{/if}
+												{#if fam.head._from_run_id}
+													<span class="shrink-0 text-[10px] text-stone-600"
+														>↳ via {fam.head._from_run_id}</span
+													>
+												{/if}
+											</div>
+											{#each fam.members.filter((m) => m.kind === 'commit') as m, j (j)}
+												<p class="ml-5 truncate text-[11px] text-stone-500">
+													{relicLabel(m)}{#if m._from_run_id && m._from_run_id !== fam.head._from_run_id}
+														<span class="text-[10px] text-stone-600"> ↳ via {m._from_run_id}</span
+														>{/if}
+												</p>
+											{/each}
 										</li>
 									{/each}
 								</ul>
