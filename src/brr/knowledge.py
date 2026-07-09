@@ -73,6 +73,23 @@ def sources(repo_root: Path, cfg: dict | None = None) -> list[KnowledgeSource]:
     return result
 
 
+def active_kb_dir(repo_root: Path, cfg: dict | None = None) -> Path | None:
+    """Return the one directory a maintenance scan should treat as *the* kb.
+
+    Mirrors :func:`sources`' priority (home knowledge first, repo-committed
+    ``kb/`` as the legacy fallback) but narrows to the single directory
+    that actually holds authored kb pages — not the ``.brnrd-kb/``
+    checkout clone or repo ``docs/``, neither of which the deterministic
+    preflight (:mod:`brr.kb_preflight`) or graph stats
+    (:mod:`brr.kb_health`) should walk. Returns ``None`` when this repo
+    has no kb at all yet (fresh checkout, `brnrd init` not run).
+    """
+    for source in sources(repo_root, cfg):
+        if source.kind in ("home", "repo-kb"):
+            return source.root
+    return None
+
+
 def render_injection(repo_root: Path, cfg: dict | None = None) -> str:
     """Render a compact home→repo→docs knowledge block for the wake prompt."""
 
