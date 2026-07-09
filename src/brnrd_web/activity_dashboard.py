@@ -801,6 +801,33 @@ def dashboard(request: Request, installation_id: str | None = None, notice: str 
     return _render(request, "dashboard.html", _activity_dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
 
 
+@router.get("/repos", response_class=HTMLResponse)
+def repos_page(request: Request, installation_id: str | None = None, notice: str | None = None, db: Session = Depends(get_db)):
+    """Repo connect/enable/pairing UI, reachable on its own path.
+
+    Live 2026-07-09: the SvelteKit build (``src/frontend``) took over "/"
+    in production (``.upsun/config.yaml``, 2026-07-06 cutover) and never
+    grew a repo-management surface of its own — this Jinja page's "Daemon
+    pairing" section (enable a repo, pair Telegram, invite the bot,
+    disconnect) is the *only* place that flow lives, and it went
+    unreachable the moment "/" stopped routing here. ``/repos`` was
+    already in the Upsun passthru allowlist (comment: "brnrd_web's
+    remaining HTML routes... repo connect flows"), just never had a GET
+    route behind it. This restores the existing flow at a stable path
+    instead of migrating it — same template, same context builder, same
+    forms — rather than leaving it stranded pending a real SvelteKit
+    rebuild of repo management.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url="/login?next=/repos", status_code=303)
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url="/login?next=/repos", status_code=303)
+    notice = notice or _github_auto_sync_if_needed(request, db, account.id)
+    return _render(request, "dashboard.html", _activity_dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
+
+
 @router.get("/activity", response_class=HTMLResponse)
 def activity_page(request: Request, repo_id: str | None = None, kind: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
     account_id = _account_id(request, db)
