@@ -14,6 +14,8 @@
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
 	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
+	import DecisionsSpace from '$lib/DecisionsSpace.svelte';
+	import { PlansAuthError, fetchPlans, type PlansResponse } from '$lib/plans';
 	import {
 		ConfigRequestsAuthError,
 		fetchConfigRequests,
@@ -60,6 +62,9 @@
 
 	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
 	let configRequestsError = $state<string | null>(null);
+
+	let plansData = $state<PlansResponse | null>(null);
+	let plansError = $state<string | null>(null);
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
@@ -118,6 +123,15 @@
 		} catch (e) {
 			if (!(e instanceof ConfigRequestsAuthError)) {
 				configRequestsError = e instanceof Error ? e.message : 'config-requests fetch failed';
+			}
+		}
+		try {
+			const plans = await fetchPlans();
+			plansData = plans;
+			plansError = null;
+		} catch (e) {
+			if (!(e instanceof PlansAuthError)) {
+				plansError = e instanceof Error ? e.message : 'plans fetch failed';
 			}
 		}
 	}
@@ -259,6 +273,22 @@
 			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
 			<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§3b · decisions space</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">decisions space</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		The resident's own plan — ranked next moves, per repo, plus the decision ledger it keeps as it
+		works. This is what drives scheduling today; read it like a co-pilot's flight plan.
+	</p>
+	<div class="mt-3">
+		{#if plansError}
+			<p class="text-sm text-red-400">{plansError}</p>
+		{:else if plansData === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<DecisionsSpace data={plansData} {now} />
 		{/if}
 	</div>
 
