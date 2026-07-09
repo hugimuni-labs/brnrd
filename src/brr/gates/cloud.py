@@ -41,9 +41,26 @@ class BrnrdAuthError(RuntimeError):
 _AUTH_HINT = "Re-run `brnrd connect` to link this daemon to your brnrd repo."
 
 
+# Gateway-transient statuses worth a short retry: the hosted brnrd sits
+# behind a router that answers 502/503/504 for the duration of a deploy
+# window (main auto-deploys on merge). A single blip tracebacked
+# `brnrd connect` mid-deploy (2026-07-09); a couple of paced retries ride
+# out the blip without hiding a real outage — the last error still raises.
+# Upstream never saw these requests (the router refused them), so retrying
+# non-idempotent methods doesn't double-deliver.
+_RETRY_STATUSES = frozenset({502, 503, 504})
+_RETRY_SLEEPS_S = (2.0, 5.0)
+
+
 def _request(base_url: str, method: str, path: str, *, token: str | None = None, json: dict | None = None, params: dict | None = None, timeout: float = _HTTP_TIMEOUT_S) -> dict:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
+    for attempt, sleep_s in enumerate((*_RETRY_SLEEPS_S, None)):
+        resp = _SESSION.request(method, base_url.rstrip("/") + path, json=json, params=params, headers=headers, timeout=timeout)
+        if resp.status_code in _RETRY_STATUSES and sleep_s is not None:
+            print(f"[brr:cloud] {method} {path} -> {resp.status_code} (gateway); retry {attempt + 1}/{len(_RETRY_SLEEPS_S)} in {sleep_s:.0f}s")
+            time.sleep(sleep_s)
+            continue
+        break
     if resp.status_code == 401:
         raise BrnrdAuthError(f"brnrd {method} {path} -> 401: {resp.text[:200]} — {_AUTH_HINT}")
     if not 200 <= resp.status_code < 300:
