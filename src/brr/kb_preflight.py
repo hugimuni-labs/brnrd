@@ -187,16 +187,27 @@ class Finding:
         return f"- **{self.type}**{sev} `{self.target}` — {self.description}"
 
 
-def scan(repo_root: Path) -> list[Finding]:
+def scan(repo_root: Path, kb_dir: Path | None = None) -> list[Finding]:
     """Return all kb consistency findings for *repo_root*.
 
-    Returns an empty list when ``kb/`` is missing or when the kb is
-    fully consistent. Findings are stable-sorted by
+    *kb_dir* is the directory actually holding the pages. Defaults to
+    ``repo_root / "kb"`` (the repo-committed shape); pass the resolved
+    home-knowledge path explicitly for a repo that dogfoods that shape
+    instead (see ``knowledge.active_kb_dir`` / ``AGENTS.md`` →
+    "Knowledge base" → "Where the kb lives"). *kb_dir* need not live
+    inside *repo_root* at all — cross-kb links into the project's own
+    code (``../src/...``-style, written back when the kb was still
+    ``repo_root/kb``) are re-resolved against that historical root as a
+    fallback when they don't resolve as a plain sibling of *kb_dir*, so
+    an external kb doesn't spuriously report every code link as broken.
+
+    Returns an empty list when the kb directory is missing or when the
+    kb is fully consistent. Findings are stable-sorted by
     ``(severity_rank, type, target)`` so the formatted output is
     reproducible and structural errors appear before advisories.
     """
     repo_root = repo_root.resolve()
-    kb_dir = repo_root / "kb"
+    kb_dir = kb_dir.resolve() if kb_dir is not None else repo_root / "kb"
     if not kb_dir.is_dir():
         return []
 
@@ -205,7 +216,7 @@ def scan(repo_root: Path) -> list[Finding]:
 
     findings: list[Finding] = []
     findings.extend(_check_index_coverage(kb_dir, index_path, pages))
-    findings.extend(_check_index_targets_exist(repo_root, index_path))
+    findings.extend(_check_index_targets_exist(repo_root, kb_dir, index_path))
     findings.extend(_check_broken_links(repo_root, kb_dir, pages))
     findings.extend(_check_oversized_pages(kb_dir, pages))
     findings.extend(_check_missing_status_marker(kb_dir, pages))
@@ -276,7 +287,7 @@ def _check_index_coverage(
 
 
 def _check_index_targets_exist(
-    repo_root: Path, index_path: Path,
+    repo_root: Path, kb_dir: Path, index_path: Path,
 ) -> list[Finding]:
     """Every relative link in index.md must resolve to a real file."""
     if not index_path.exists():
@@ -285,13 +296,16 @@ def _check_index_targets_exist(
     for raw in _markdown_link_targets(index_path):
         if _is_external(raw):
             continue
-        resolved = _resolve_relative(index_path, raw)
+        resolved = _resolve_relative(index_path, raw, repo_root=repo_root, kb_dir=kb_dir)
         if resolved is None:
             continue
-        if resolved.is_relative_to(repo_root) and not resolved.exists():
+        in_project = resolved.is_relative_to(repo_root)
+        in_kb = resolved.is_relative_to(kb_dir)
+        if (in_project or in_kb) and not resolved.exists():
+            base = repo_root if in_project else kb_dir
             findings.append(Finding(
                 type="stale-index-entry",
-                target=str(resolved.relative_to(repo_root)),
+                target=str(resolved.relative_to(base)),
                 description=(
                     "kb/index.md links to this path but no file exists; "
                     "remove the entry or fix the link."
@@ -313,10 +327,10 @@ def _check_broken_links(
         for raw in _markdown_link_targets(page):
             if _is_external(raw):
                 continue
-            resolved = _resolve_relative(page, raw)
+            resolved = _resolve_relative(page, raw, repo_root=repo_root, kb_dir=kb_dir)
             if resolved is None:
                 continue
-            if not resolved.is_relative_to(repo_root):
+            if not (resolved.is_relative_to(repo_root) or resolved.is_relative_to(kb_dir)):
                 continue
             if resolved.exists():
                 continue
@@ -656,16 +670,42 @@ def _markdown_link_targets(page: Path) -> Iterable[str]:
         yield match.group(1)
 
 
-def _resolve_relative(page: Path, raw: str) -> Path | None:
+def _resolve_relative(
+    page: Path,
+    raw: str,
+    *,
+    repo_root: Path | None = None,
+    kb_dir: Path | None = None,
+) -> Path | None:
     """Resolve *raw* (anchor stripped) relative to *page*'s directory.
 
     Returns ``None`` for fragment-only links (``#section``) — they
     point inside the same page and can't be checked structurally.
+
+    When *repo_root* and *kb_dir* are given, *kb_dir* is external (not
+    ``repo_root/kb``), the plain resolution doesn't exist, and *raw*
+    starts with ``../`` (i.e. it's trying to leave the kb, not point at
+    a sibling page), retries the resolution as if the kb still lived at
+    ``repo_root/kb`` — the historical assumption most existing
+    ``../src/...``-style code links were written under. The retry is
+    returned even when it *also* doesn't exist, so a genuinely broken
+    code link still reports inside ``repo_root`` (where a caller's
+    ``is_relative_to`` gate expects it) instead of landing outside every
+    known root and silently going unchecked. A plain sibling-style
+    target (no ``../``) is never redirected — it either exists inside
+    *kb_dir* or is a real broken kb-internal link, either way `primary`
+    is already the right answer.
     """
     target = raw.split("#", 1)[0]
     if not target:
         return None
-    return (page.parent / target).resolve()
+    primary = (page.parent / target).resolve()
+    if primary.exists() or repo_root is None or kb_dir is None:
+        return primary
+    legacy_kb_dir = (repo_root / "kb").resolve()
+    if kb_dir == legacy_kb_dir or not target.startswith(".."):
+        return primary
+    return (legacy_kb_dir / target).resolve()
 
 
 def _is_external(raw: str) -> bool:
