@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
+	import { SvelteSet } from 'svelte/reactivity';
+	import { glitchReveal } from './transitions';
 	import { ageSince, type LiveRun } from './liveRuns';
 	import { STATUS_GOOD, STATUS_WARN, STATUS_UNKNOWN } from './statusPalette';
 
@@ -11,6 +13,25 @@
 	}
 
 	let { runs, stale, now }: Props = $props();
+
+	// Maintainer ask (2026-07-09, same thread as #329/#331): "why don't we
+	// also fix the fact that the active run is unclickable?" — the receipts
+	// got click-to-expand; the *live* card, the thing you actually watch,
+	// stayed a static tile with its task text and card note truncated to
+	// one line each. Same local-UI expansion state pattern as
+	// RunLedgerReceipt: keyed by presence id, survives the 2s re-poll.
+	let expanded = new SvelteSet<string>();
+
+	function toggle(id: string) {
+		if (expanded.has(id)) expanded.delete(id);
+		else expanded.add(id);
+	}
+
+	function clock(iso: string | null): string {
+		if (!iso) return '—';
+		const t = Date.parse(iso);
+		return Number.isNaN(t) ? '—' : new Date(t).toLocaleTimeString();
+	}
 
 	// Loom slice 2 (kb/plan-loom-realtime-build.md #270): live-runs as
 	// SpaceChem-molecule cards, not a plain list. The issue named
@@ -105,49 +126,91 @@
 				{@const parentLabel = run.parent_run_id
 					? runs.find((r) => r.run_id === run.parent_run_id)?.label
 					: null}
+				{@const isOpen = expanded.has(run.id)}
 				<div
 					class="subpanel p-2.5 text-xs"
 					in:fly={{ y: -8, duration: 220 }}
 					out:fade={{ duration: 150 }}
 					animate:flip={{ duration: 220 }}
 				>
-					<div class="flex items-center justify-between gap-2">
-						<span class="flex min-w-0 items-center gap-1.5">
-							<span
-								class="inline-block h-2 w-2 shrink-0 rounded-full"
-								style={`background-color: ${color}`}
-								aria-hidden="true"
-							></span>
-							<span
-								class="truncate font-mono font-medium tracking-wide uppercase"
-								style={`color: ${color}`}
-							>
-								{label(run, lvl)}
+					<button
+						type="button"
+						class="block w-full cursor-pointer text-left"
+						onclick={() => toggle(run.id)}
+						aria-expanded={isOpen}
+						title={isOpen ? 'collapse' : 'expand run detail'}
+					>
+						<div class="flex items-center justify-between gap-2">
+							<span class="flex min-w-0 items-center gap-1.5">
+								<span
+									class="inline-block h-2 w-2 shrink-0 rounded-full"
+									style={`background-color: ${color}`}
+									aria-hidden="true"
+								></span>
+								<span
+									class="truncate font-mono font-medium tracking-wide uppercase"
+									style={`color: ${color}`}
+								>
+									{label(run, lvl)}
+								</span>
 							</span>
-						</span>
-						<span class="shrink-0 font-mono text-stone-500"
-							>{ageSince(run.started_at, now) ?? ''}</span
-						>
-					</div>
-					<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
-						<span class="truncate font-medium text-amber-100">{primary}</span>
-						{#if run.is_subspawn}
-							<span
-								class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
-								title={parentLabel ? `spawned by ${parentLabel}` : 'spawned child'}>↳ spawn</span
-							>
-						{/if}
-					</p>
-					<p class="truncate text-stone-500">{secondary}</p>
-					{#if run.card_text}
-						<!-- Progress-card note (`.card`, `run_progress.py`'s
-						     `agent_card_text`) — the same narration a chat surface
-						     already renders mid-run, now visible on the dashboard
-						     row too (#200's remaining slice). Truncated to one line;
-						     the full note rides in `title` for a hover. -->
-						<p class="mt-0.5 truncate text-stone-400 italic" title={run.card_text}>
-							{run.card_text}
+							<span class="flex shrink-0 items-center gap-1.5 font-mono text-stone-500">
+								{ageSince(run.started_at, now) ?? ''}
+								<span class="text-[9px] text-stone-600">{isOpen ? '▲' : '▼'}</span>
+							</span>
+						</div>
+						<p class="mt-1.5 flex min-w-0 items-center gap-1.5">
+							<span class="truncate font-medium text-amber-100">{primary}</span>
+							{#if run.is_subspawn}
+								<span
+									class="shrink-0 border border-amber-900/60 bg-amber-950/40 px-1 py-0.5 font-mono text-[9px] tracking-wide text-amber-300 uppercase"
+									title={parentLabel ? `spawned by ${parentLabel}` : 'spawned child'}>↳ spawn</span
+								>
+							{/if}
 						</p>
+						<p class="truncate text-stone-500">{secondary}</p>
+						{#if run.card_text && !isOpen}
+							<!-- Progress-card note (`.card`, `run_progress.py`'s
+							     `agent_card_text`) — one truncated line collapsed;
+							     the expanded view below renders it whole. -->
+							<p class="mt-0.5 truncate text-stone-400 italic" title={run.card_text}>
+								{run.card_text}
+							</p>
+						{/if}
+					</button>
+					{#if isOpen}
+						<!-- Expanded run detail: everything the live packet carries,
+						     untruncated — full task text, whole card note, phase,
+						     timing, identity — same glitch-assembly reveal as the
+						     receipts' produce expand. -->
+						<div
+							class="mt-2 space-y-1.5 overflow-hidden border-t border-stone-800/70 pt-2"
+							in:glitchReveal={{ duration: 340, steps: 7 }}
+							out:fade={{ duration: 100 }}
+						>
+							{#if run.label}
+								<p class="whitespace-pre-wrap text-stone-300">{run.label}</p>
+							{/if}
+							{#if run.card_text}
+								<p class="whitespace-pre-wrap border-l border-stone-800 pl-2 text-stone-400 italic">
+									{run.card_text}
+								</p>
+								{#if run.card_updated_at}
+									<p class="font-mono text-[10px] text-stone-600">
+										note updated {clock(run.card_updated_at)}
+									</p>
+								{/if}
+							{/if}
+							<div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] text-stone-500">
+								<span>run: {run.run_id || run.id}</span>
+								<span>phase: {run.phase ?? '—'}</span>
+								<span>started: {clock(run.started_at)}</span>
+								<span>heartbeat: {clock(run.last_seen)}</span>
+								{#if run.parent_run_id}
+									<span class="col-span-2">parent: {parentLabel ?? run.parent_run_id}</span>
+								{/if}
+							</div>
+						</div>
 					{/if}
 					<!-- No known total duration to bind a real percent to, so a
 					     running card gets an indeterminate scanning bar (the
