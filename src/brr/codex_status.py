@@ -113,18 +113,57 @@ def _window_summary(label_default: str, window: Any) -> str | None:
     return f"{text} ({reset})" if reset else text
 
 
-def parse_token_count(payload: dict[str, Any]) -> dict[str, Any]:
+def _fmt_event_timestamp(raw: Any) -> str | None:
+    """Reformat a rollout event's own ``timestamp`` (``"...T..Z"``, millisecond
+    precision, e.g. ``"2026-07-08T20:18:25.753Z"``) to the collector-shared
+    ``updated_at`` format (``%Y-%m-%dT%H:%M:%SZ``). Returns ``None`` for
+    anything unparseable so the caller can fall back to wall-clock time
+    rather than raise — this module never raises on malformed input."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_token_count(payload: dict[str, Any], event_timestamp: Any = None) -> dict[str, Any]:
     """Normalize one ``token_count`` event payload into the levels snapshot shape.
 
     ``payload`` is the ``token_count`` event's ``payload`` dict, carrying
     ``rate_limits`` and ``info`` (with ``model_context_window`` and
     ``last_token_usage``). Returns ``{"quota"|"context_window": {...}, "source",
     "updated_at", "plan_type"}`` with only the slots it could prove.
+
+    ``event_timestamp`` is the rollout record's own top-level ``timestamp``
+    (when the event actually happened), not the scrape time — live-caught
+    2026-07-09 (a user screenshot showed the 5h window rendered ``critical,
+    resets in now`` while the weekly window read a healthy 81%): this
+    function used to stamp ``updated_at`` with wall-clock "now" on *every*
+    call, including calls made long after the underlying run ended (brr
+    re-reads the newest rollout file's last ``token_count`` event on every
+    daemon poll tick, active run or not). That made a quota snapshot that
+    was actually hours stale look freshly-scraped to
+    ``activity_dashboard.py::_quota_views``'s staleness check — the exact
+    "lying usage panel" bug already fixed for Claude (2026-07-07), silently
+    reproduced for Codex because this collector was assumed exempt ("no
+    comparable idle-gap") when it in fact has one: no rollout write happens
+    at all between runs. Falls back to wall-clock time only when the event
+    itself carries no parseable timestamp.
     """
     payload = payload if isinstance(payload, dict) else {}
     levels: dict[str, Any] = {
         "source": "codex session rollout",
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "updated_at": (
+            _fmt_event_timestamp(event_timestamp)
+            or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        ),
     }
 
     rate = payload.get("rate_limits")
@@ -222,14 +261,16 @@ def _latest_rollout(root: Path) -> Path | None:
     return newest
 
 
-def _last_token_count(path: Path) -> dict[str, Any] | None:
-    """The payload of the last ``token_count`` event in rollout *path*, or None.
+def _last_token_count(path: Path) -> tuple[dict[str, Any], Any] | None:
+    """The ``(payload, timestamp)`` of the last ``token_count`` event in
+    rollout *path*, or None. ``timestamp`` is the record's own top-level
+    field (the event's real time), not a scrape time.
 
     Scans line by line (a rollout is JSONL) and keeps the last match; the file is
     small enough that a full pass is cheap, and the *last* event carries the
     freshest quota.
     """
-    last: dict[str, Any] | None = None
+    last: tuple[dict[str, Any], Any] | None = None
     try:
         with path.open(encoding="utf-8") as handle:
             for line in handle:
@@ -242,7 +283,7 @@ def _last_token_count(path: Path) -> dict[str, Any] | None:
                     continue
                 payload = record.get("payload") if isinstance(record, dict) else None
                 if isinstance(payload, dict) and payload.get("type") == "token_count":
-                    last = payload
+                    last = (payload, record.get("timestamp"))
     except OSError:
         return None
     return last
@@ -261,10 +302,11 @@ def load_levels(env: dict[str, str] | None = None) -> dict[str, Any] | None:
     rollout = _latest_rollout(root)
     if rollout is None:
         return None
-    payload = _last_token_count(rollout)
-    if payload is None:
+    found = _last_token_count(rollout)
+    if found is None:
         return None
-    levels = parse_token_count(payload)
+    payload, event_timestamp = found
+    levels = parse_token_count(payload, event_timestamp)
     # Only worth returning if at least one level slot was proven.
     if not any(key in levels for key in COLLECTED_SLOTS):
         return None
