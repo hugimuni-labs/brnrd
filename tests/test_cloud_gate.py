@@ -547,7 +547,7 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
 
     from brnrd.models import Daemon as DaemonModel
 
-    from brr import presence
+    from brr import presence, updates
 
     brr_dir = tmp_path / ".brr"
     inbox_dir = brr_dir / "inbox"
@@ -571,6 +571,25 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
         brr_dir, kind="daemon", stream="telegram:155783668:",
         label="Add live run labels", run_id="run-live-test",
         repo_label="Gurio/brr", pid=os.getpid(),
+    )
+    # #200's remaining slice: a live run with real conversation records
+    # (phase-advancing lifecycle packets + a `.card` note) should fold its
+    # current phase and card text into this same publish tick.
+    updates.emit(
+        brr_dir,
+        updates.UpdatePacket(
+            type="attempt_started",
+            conversation_key="telegram:155783668:",
+            payload={"run_id": "run-live-test", "attempt": 1},
+        ),
+    )
+    updates.emit(
+        brr_dir,
+        updates.UpdatePacket(
+            type="card_composed",
+            conversation_key="telegram:155783668:",
+            payload={"run_id": "run-live-test", "text": "scoping the remaining #200 slice"},
+        ),
     )
     # A concurrent `spawn:` child (kb/design-multi-workstream-concurrency.md
     # "Ranked moves" #1: parent_run_id/is_subspawn joined into the live
@@ -602,9 +621,18 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     assert resident["kind"] == "daemon"
     assert resident["is_subspawn"] is False
     assert resident["parent_run_id"] is None
+    assert resident["phase"] == "running"
+    assert resident["card_text"] == "scoping the remaining #200 slice"
+    assert resident["card_updated_at"] is not None
     spawn = by_run_id["run-live-spawn"]
     assert spawn["is_subspawn"] is True
     assert spawn["parent_run_id"] == "run-live-test"
+    # No packets recorded for this run_id specifically (only the resident's
+    # own run_id has records in this shared conversation) — the projection
+    # comes back with the view's own "no info yet" default, not the
+    # resident's phase/card leaking across run_ids.
+    assert spawn["phase"] == "queued"
+    assert spawn["card_text"] is None
 
 
 def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
