@@ -51,6 +51,7 @@ KNOWLEDGE_PATH = "knowledge"
 GITIGNORE = """\
 /dispatch/inbox/
 /dispatch/responses/
+/knowledge/
 *.tmp
 """
 
@@ -168,11 +169,29 @@ def _init_git_repo(path: Path) -> None:
 
 
 def _write_gitignore(path: Path) -> None:
+    """Ensure every standing ignore rule is present, appending what's missing.
+
+    Not a one-shot "write if absent": a home created before a rule existed
+    (``/knowledge/``, added 2026-07-09 alongside the per-repo knowledge
+    split — a nested git repo living untracked-but-ungitignored inside an
+    already-git-tracked home is exactly the "embedded repository" confusion
+    gitignoring exists to avoid) would otherwise carry a stale
+    ``.gitignore`` forever, since ``resolve_context`` only calls this once
+    at first creation.
+    """
     ignore = path / ".gitignore"
-    if ignore.exists():
+    existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+    existing_lines = set(existing.splitlines())
+    wanted_lines = [line for line in GITIGNORE.splitlines() if line]
+    missing = [line for line in wanted_lines if line not in existing_lines]
+    if not missing:
         return
+    new_text = existing
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+    new_text += "\n".join(missing) + "\n"
     tmp = ignore.with_suffix(ignore.suffix + ".tmp")
-    tmp.write_text(GITIGNORE, encoding="utf-8")
+    tmp.write_text(new_text, encoding="utf-8")
     tmp.replace(ignore)
 
 
