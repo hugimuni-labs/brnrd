@@ -738,6 +738,21 @@ def _publish_quota(brr_dir: Path, state: dict) -> None:
         print(f"[brr:cloud] quota publish failed: {e}")
 
 
+def _live_run_progress(brr_dir: Path, stream: str, run_id: str) -> run_progress.RunProgressView | None:
+    """Best-effort progress projection for one live presence entry.
+
+    Swallows its own failure — a malformed or half-written conversation
+    log for one run must not take down the whole publish tick for every
+    other live run.
+    """
+    if not stream or not run_id:
+        return None
+    try:
+        return run_progress.project_run(brr_dir, stream, run_id)
+    except Exception:
+        return None
+
+
 def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     """This daemon's live/coexisting-runs snapshot (#258).
 
@@ -749,16 +764,34 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     don't give: "what is my daemon doing right now, across every repo it
     touches" (`kb/design-dashboard-live-surface.md` §"Reconsidered
     2026-07-06").
+
+    #200's remaining slice: phase / progress-card richness, folded into
+    this same publish tick rather than a new transport — ``project_run``
+    (already used by the chat gates to render the compact card) gives us
+    both ``phase`` and the live ``.card`` note text from the same
+    per-conversation record projection. Read cost is real (``read_records``
+    loads the whole conversation log, not a tail) and this now pays it once
+    per active run per publish tick (~25-30s) instead of only on card
+    writes — acceptable for a first cut, worth revisiting with a tailed
+    read if a busy thread's log makes this tick hot. Budget/keepalive
+    posture is deliberately *not* included here: that state lives only in
+    the worker's in-memory loop today (``daemon.py``'s
+    ``_keepalive_until``/budget tracking), nothing persists it yet, so it
+    would need new state-threading, not just a read — named as the
+    remaining gap rather than guessed at.
     """
     out: list[dict[str, Any]] = []
     for entry in presence.list_active(brr_dir):
+        stream = str(entry.get("stream") or "")
+        run_id = str(entry.get("run_id") or "")
+        view = _live_run_progress(brr_dir, stream, run_id)
         out.append(
             {
                 "id": str(entry.get("id") or ""),
                 "kind": str(entry.get("kind") or ""),
-                "stream": str(entry.get("stream") or ""),
+                "stream": stream,
                 "label": str(entry.get("label") or ""),
-                "run_id": str(entry.get("run_id") or ""),
+                "run_id": run_id,
                 "repo_label": str(entry.get("repo_label") or ""),
                 "started_at": _iso_from_epoch(entry.get("started_at")),
                 "last_seen": _iso_from_epoch(entry.get("last_seen")),
@@ -771,6 +804,12 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 # still live*, not only after it closes into the ledger.
                 "parent_run_id": str(entry.get("parent_run_id") or "") or None,
                 "is_subspawn": bool(entry.get("is_subspawn")),
+                # #200 remaining slice: live phase + progress-card note,
+                # None when there's no conversation record yet (a
+                # just-registered entry) or projection failed.
+                "phase": (view.phase if view is not None else None) or None,
+                "card_text": (view.agent_card_text if view is not None else None) or None,
+                "card_updated_at": (view.agent_card_updated_at if view is not None else None) or None,
             }
         )
     return out
