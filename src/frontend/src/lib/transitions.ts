@@ -18,30 +18,54 @@ export interface GlitchRevealParams {
 	steps?: number;
 }
 
-/** A fast, discrete-step "block assembly" reveal: left-to-right clip-path
- * steps plus a decaying horizontal jitter, snapped to whole frames instead
- * of continuously interpolated. Use on the element that appears when a
- * receipt expands (`in:glitchReveal`); pair with a plain `fade`/`slide` for
+// Deterministic per-frame glitch states (v2, 2026-07-09). The first cut
+// (180ms, monotonic left→right wipe + fade) tested as invisible in practice
+// — the maintainer's live verdict: "the animation is nowhere to be seen,
+// it is just a dropdown thing." A wipe whose every frame is a superset of
+// the previous one reads as a slide however you snap it. Stop-motion needs
+// frames that *disagree* with each other: blocks appearing out of order,
+// a brightness flicker, offsets that jump rather than decay smoothly.
+// Each state is [opacity, clipTop%, clipRight%, clipBottom%, clipLeft%,
+// translateX px, brightness]; the sequence assembles noisily and snaps
+// clean on the final frame.
+const GLITCH_FRAMES: ReadonlyArray<
+	readonly [number, number, number, number, number, number, number]
+> = [
+	[0.4, 0, 62, 55, 0, -7, 1.6], // first flash: top-left block only
+	[0.9, 30, 8, 0, 22, 5, 0.7], // jump: bottom band, dim
+	[0.55, 0, 40, 20, 6, -4, 1.35], // flicker dip, most of left
+	[1.0, 12, 0, 30, 0, 3, 1.15], // wide band, slight bright
+	[0.75, 0, 18, 0, 10, -2, 0.85], // near-full, dim pulse
+	[1.0, 0, 4, 6, 0, 1, 1.25], // one-frame bright pop
+	[1.0, 0, 0, 0, 0, 0, 1.0] // settled
+];
+
+/** A discrete-frame "block assembly" reveal: the element flickers through
+ * a fixed sequence of disagreeing clip/offset/brightness states — blocks
+ * landing out of order — then snaps clean. Use on the element that appears
+ * when a receipt expands (`in:glitchReveal`); pair with a plain `fade` for
  * the collapse (`out:`) since a stop-motion *disappearance* reads as
  * flicker rather than a clean withdrawal. */
 export function glitchReveal(_node: Element, params: GlitchRevealParams = {}) {
-	const duration = params.duration ?? 180;
-	const steps = Math.max(2, params.steps ?? 6);
+	const duration = params.duration ?? 320;
+	// `steps` now selects how many of the glitch states get visited (the
+	// final settled frame is always included), so fewer steps = choppier.
+	const steps = Math.max(2, Math.min(params.steps ?? GLITCH_FRAMES.length, GLITCH_FRAMES.length));
 	return {
 		duration,
 		css: (t: number) => {
-			// Snap the continuous t onto `steps` discrete frames — this is
-			// what makes it read as stop-motion rather than an eased eaxis.
-			const frame = Math.min(1, Math.ceil(t * steps) / steps);
-			const remaining = 1 - frame;
-			// Jitter decays to 0 as the reveal completes; sin() gives a
-			// settle-then-overshoot wobble instead of a monotonic slide.
-			const jitter = frame < 1 ? Math.sin(frame * 47) * remaining * 6 : 0;
-			const clipRight = Math.round((1 - frame) * 100);
+			// Snap continuous t onto the frame sequence — no interpolation
+			// between states; the disagreement between frames IS the effect.
+			const idx = Math.min(
+				GLITCH_FRAMES.length - 1,
+				GLITCH_FRAMES.length - steps + Math.floor(t * steps)
+			);
+			const [o, ct, cr, cb, cl, tx, br] = GLITCH_FRAMES[idx];
 			return (
-				`opacity: ${frame};` +
-				`clip-path: inset(0 ${clipRight}% 0 0);` +
-				`transform: translateX(${jitter.toFixed(2)}px);`
+				`opacity: ${o};` +
+				`clip-path: inset(${ct}% ${cr}% ${cb}% ${cl}%);` +
+				`transform: translateX(${tx}px);` +
+				`filter: brightness(${br});`
 			);
 		}
 	};
