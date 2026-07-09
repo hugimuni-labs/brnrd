@@ -211,7 +211,7 @@ class TestPromptBuilding:
         (prompts_dir / "run.md").write_text("You are an agent.")
         monkeypatch.setattr(
             kb_preflight, "scan",
-            lambda _root: [
+            lambda _root, _kb_dir=None: [
                 kb_preflight.Finding(
                     type="missing-from-index",
                     target="kb/decision-orphan.md",
@@ -232,7 +232,7 @@ class TestPromptBuilding:
         prompts_dir = tmp_path / ".brr" / "prompts"
         prompts_dir.mkdir(parents=True)
         (prompts_dir / "run.md").write_text("You are an agent.")
-        monkeypatch.setattr(kb_preflight, "scan", lambda _root: [])
+        monkeypatch.setattr(kb_preflight, "scan", lambda _root, _kb_dir=None: [])
 
         prompt = build_run_prompt("do something", tmp_path)
         assert "kb health" not in prompt
@@ -248,7 +248,7 @@ class TestPromptBuilding:
         (prompts_dir / "run.md").write_text("You are an agent.")
         monkeypatch.setattr(
             kb_preflight, "scan",
-            lambda _root: [
+            lambda _root, _kb_dir=None: [
                 kb_preflight.Finding(
                     type="broken-link", target="kb/x.md",
                     description="dangling reference",

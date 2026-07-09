@@ -414,8 +414,11 @@ def _build_kb_health_block(repo_root: Path) -> str:
     """Render the deterministic kb-health preflight as a wake-time block.
 
     Runs the cheap consistency scan (:mod:`brr.kb_preflight`) plus the
-    graph-stats snapshot (:mod:`brr.kb_health`) over ``kb/`` and surfaces
-    any findings so the resident folds fixes into the current thought.
+    graph-stats snapshot (:mod:`brr.kb_health`) over whichever directory
+    ``knowledge.active_kb_dir`` resolves as this repo's kb (repo-committed
+    ``kb/``, or home knowledge for a repo that dogfoods that shape) and
+    surfaces any findings so the resident folds fixes into the current
+    thought.
     Returns ``""`` when the scan is clean (a clean preflight is silent,
     not a tax on every wake) or when the inject is disabled with
     ``kb_maintenance=never`` in ``.brr/config``.
@@ -427,17 +430,18 @@ def _build_kb_health_block(repo_root: Path) -> str:
     ``kb/design-agent-dominion.md`` and ``kb/subject-daemon.md``.)
     """
     from . import config as conf
-    from . import kb_health, kb_preflight
+    from . import kb_health, kb_preflight, knowledge
 
     cfg = conf.load_config(repo_root)
     if str(cfg.get("kb_maintenance", "auto")).strip().lower() == "never":
         return ""
-    findings = kb_preflight.scan(repo_root)
+    kb_dir = knowledge.active_kb_dir(repo_root, cfg)
+    findings = kb_preflight.scan(repo_root, kb_dir)
     if not findings:
         return ""
     findings_block = kb_preflight.format_findings(findings)
     stats_block = kb_health.format_graph_stats(
-        kb_health.compute_graph_stats(repo_root),
+        kb_health.compute_graph_stats(repo_root, kb_dir),
     )
     body = "\n\n".join(b for b in (findings_block, stats_block) if b)
     return (
