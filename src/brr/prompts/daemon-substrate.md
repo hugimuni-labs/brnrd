@@ -134,6 +134,20 @@ Portals are the seams where a run turns to the world — inbound
   (derived from run metadata, never a live forge query), so without this
   file a self-created PR is invisible to the live portal until a later
   wake's task metadata happens to carry it. Control file, never delivered.
+- .relics.jsonl — this run's produce manifest, one JSON object per line,
+  append-only (`brr.relics.append(outbox_dir, kind, **fields)`, or append
+  the line directly — same weight as `.pr`/`.task-classification`).
+  Commits, the pushed branch, and a self-reported PR number are already
+  auto-derived from git + `.pr` at closeout — write nothing for those.
+  What *is* worth a line: `{"kind": "issue", "number": 317, "action":
+  "closed"}` for a GitHub issue this run touched, `{"kind": "kb", "path":
+  "kb/design-run-relics.md"}` for a kb page it edited, `{"kind":
+  "comment", ...}` / `{"kind": "message", ...}` for anything else worth a
+  link back, and at most one `{"kind": "summary", "text": "..."}` line to
+  head the receipt. Feeds the dashboard's collapsed-receipt icon/count
+  summary and its click-to-expand linked list (`kb/design-run-relics.md`,
+  #200/#317) — nothing renders it in the chat card yet (named gap, not
+  built). Control file, never delivered.
 - remote reader — the user reads replies in a chat client (Telegram /
   Slack); files by basename only (`subject-envs.md`, `run_progress.py`),
   never host paths like `.brr/worktrees/<run-id>/kb/foo.md` — they don't
