@@ -122,6 +122,73 @@ def test_resolve_runner_shell_pin(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path) == "claude-bare-api-only-sonnet"
 
 
+def test_resolve_runner_shell_pin_shadows_mismatched_core_pin(
+    tmp_path, monkeypatch, capsys
+):
+    """shell= wins outright over core= — real footgun caught live 2026-07-09:
+    a config setting both, expecting them to compose, silently ran the
+    Shell's bare-default model for days while core= was never consulted.
+    The resolution is unchanged (shell= still wins); a stderr warning now
+    makes the mismatch visible instead of silent.
+    """
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "shell=claude\ncore=claude-fable-5\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude": {"binary": "claude", "cmd": "claude --print"},
+            "claude-fable": {
+                "binary": "claude",
+                "cmd": "claude --model claude-fable-5 --print",
+                "model": "claude-fable-5",
+                "class": "economy",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    assert resolve_runner(tmp_path) == "claude"
+    err = capsys.readouterr().err
+    assert "shell='claude'" in err
+    assert "core='claude-fable-5'" in err
+    assert "not consulted" in err
+
+
+def test_resolve_runner_shell_pin_matching_core_pin_stays_quiet(
+    tmp_path, monkeypatch, capsys
+):
+    """No warning when shell= already names the profile core= would pick."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "shell=claude-fable\ncore=claude-fable-5\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "claude-fable": {
+                "binary": "claude",
+                "cmd": "claude --model claude-fable-5 --print",
+                "model": "claude-fable-5",
+                "class": "economy",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    assert resolve_runner(tmp_path) == "claude-fable"
+    assert capsys.readouterr().err == ""
+
+
 def test_resolve_runner_event_override_pins_shell(tmp_path, monkeypatch):
     """A respawned event can carry shell= without rewriting .brr/config."""
     (tmp_path / ".brr").mkdir()
