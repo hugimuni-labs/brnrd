@@ -96,7 +96,7 @@
 							{#if isOpen && move.detail}
 								<p
 									class="mt-1 ml-5 whitespace-pre-wrap text-stone-400"
-									in:glitchReveal={{ duration: 180, steps: 6 }}
+									in:glitchReveal={{ duration: 340, steps: 7 }}
 									out:fade={{ duration: 100 }}
 								>
 									{move.detail}
@@ -120,7 +120,7 @@
 				{#if isOpen}
 					<p
 						class="mt-1 whitespace-pre-wrap border-l border-stone-800 pl-2 text-stone-400"
-						in:glitchReveal={{ duration: 180, steps: 6 }}
+						in:glitchReveal={{ duration: 340, steps: 7 }}
 						out:fade={{ duration: 100 }}
 					>
 						{section.body}
@@ -175,7 +175,7 @@
 						{#if isOpen}
 							<p
 								class="mt-1 whitespace-pre-wrap border-l border-stone-800 pl-2 text-stone-400"
-								in:glitchReveal={{ duration: 180, steps: 6 }}
+								in:glitchReveal={{ duration: 340, steps: 7 }}
 								out:fade={{ duration: 100 }}
 							>
 								{d.body}

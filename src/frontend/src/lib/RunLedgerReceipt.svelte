@@ -153,7 +153,7 @@
 						{#if isOpen}
 							<div
 								class="mt-2 space-y-1.5 overflow-hidden border-t border-stone-800/70 pt-2"
-								in:glitchReveal={{ duration: 180, steps: 6 }}
+								in:glitchReveal={{ duration: 340, steps: 7 }}
 								out:fade={{ duration: 100 }}
 							>
 								{#if summary}
