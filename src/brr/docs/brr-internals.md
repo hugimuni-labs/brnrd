@@ -147,8 +147,11 @@ appearance settings rather than a runtime prose override of that core.
 Project-specific knowledge belongs in `kb/` (the knowledge base),
 never in `.brr/`. The split is:
 
-- `kb/` — permanent, project-specific, committed to the repo. Owned by
-  agents working in this repo.
+- `kb/` — permanent, project-specific knowledge base. Either committed to
+  the repo (default), or, for a repo connected to a brnrd account, home
+  knowledge outside the repo (`<home>/knowledge/repos/<label>/`, resolved
+  by `knowledge.active_kb_dir` — see `AGENTS.md` → "Knowledge base" →
+  "Where the kb lives"). Owned by agents working in this repo either way.
 - `.brr/` — tool runtime. Ephemeral by default; traces and any task
   failures/leftovers stay for inspection.
 - `src/brr/docs/` (bundled) + `.brr/docs/` (override) — tool
@@ -157,7 +160,8 @@ never in `.brr/`. The split is:
 ## KB maintenance: deterministic preflight, injected on wake
 
 brr runs a deterministic kb consistency scan
-(`brr.kb_preflight.scan(repo_root)`) over `kb/` as part of prompt
+(`brr.kb_preflight.scan(repo_root, kb_dir)`) over whichever directory
+`knowledge.active_kb_dir` resolves as this repo's kb, as part of prompt
 assembly (`prompts._build_kb_health_block`). When the scan finds
 anything, the findings — plus a one-line graph-stats summary
 (`brr.kb_health`) — ride into the resident's wake prompt as a

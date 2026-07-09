@@ -36,9 +36,26 @@ def sources(repo_root: Path, cfg: dict | None = None) -> list[KnowledgeSource]:
     result: list[KnowledgeSource] = []
     try:
         ctx = account.resolve_context(repo_root, cfg, create=False)
-        home_knowledge = account.knowledge_path(ctx)
-        if home_knowledge.is_dir():
-            result.append(KnowledgeSource("home knowledge", home_knowledge, "home"))
+        if ctx.kind == "account" and account.knowledge_split_mode(cfg) == "per-repo":
+            # Account homes span multiple repos — split so a wake sees its
+            # own repo's knowledge first, account-wide (cross-repo) second.
+            # A project home has exactly one repo, so there is nothing to
+            # split; it always uses the flat bucket below.
+            label = account.repo_label(repo_root, cfg)
+            repo_knowledge = account.repo_knowledge_path(ctx, label)
+            if repo_knowledge.is_dir():
+                result.append(
+                    KnowledgeSource("home knowledge (repo)", repo_knowledge, "home")
+                )
+            cross_repo_knowledge = account.account_knowledge_path(ctx)
+            if cross_repo_knowledge.is_dir():
+                result.append(
+                    KnowledgeSource("home knowledge (account)", cross_repo_knowledge, "home")
+                )
+        else:
+            home_knowledge = account.knowledge_path(ctx)
+            if home_knowledge.is_dir():
+                result.append(KnowledgeSource("home knowledge", home_knowledge, "home"))
     except Exception:
         pass
 
@@ -54,6 +71,23 @@ def sources(repo_root: Path, cfg: dict | None = None) -> list[KnowledgeSource]:
     if repo_docs.is_dir():
         result.append(KnowledgeSource("repo docs", repo_docs, "repo-docs"))
     return result
+
+
+def active_kb_dir(repo_root: Path, cfg: dict | None = None) -> Path | None:
+    """Return the one directory a maintenance scan should treat as *the* kb.
+
+    Mirrors :func:`sources`' priority (home knowledge first, repo-committed
+    ``kb/`` as the legacy fallback) but narrows to the single directory
+    that actually holds authored kb pages — not the ``.brnrd-kb/``
+    checkout clone or repo ``docs/``, neither of which the deterministic
+    preflight (:mod:`brr.kb_preflight`) or graph stats
+    (:mod:`brr.kb_health`) should walk. Returns ``None`` when this repo
+    has no kb at all yet (fresh checkout, `brnrd init` not run).
+    """
+    for source in sources(repo_root, cfg):
+        if source.kind in ("home", "repo-kb"):
+            return source.root
+    return None
 
 
 def render_injection(repo_root: Path, cfg: dict | None = None) -> str:

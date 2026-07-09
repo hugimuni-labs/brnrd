@@ -1,9 +1,11 @@
 # Project
 
-> Revision: 2026-06-30. Structural arc:
-> [`kb/plan-agent-orientation-layering.md`](kb/plan-agent-orientation-layering.md).
-> Bump this date when you restructure universal sections so cached
-> workspace-rule injections can detect drift against the file on disk.
+> Revision: 2026-07-09. Structural arc: `plan-agent-orientation-layering.md`
+> in the kb (see "Knowledge base" below for where that is — not a
+> repo-relative link, since the kb's physical location is no longer fixed
+> to this tree). Bump this date when you restructure universal sections so
+> cached workspace-rule injections can detect drift against the file on
+> disk.
 
 This file is brr's playbook — the contract every AI tool follows in
 this repo, and the template adopters receive when they run `brnrd init`.
@@ -169,6 +171,14 @@ Run this at the start of every session, ad-hoc or daemon. It collapses
 what older versions of this file split between "Session startup" and
 "Work re-review" — they were the same job under different names.
 
+The paths below (`kb/index.md`, `kb/log.md`) are the repo-committed-`kb/`
+shape. If this repo dogfoods home knowledge instead (see "Knowledge base"
+→ "Where the kb lives"), read the equivalent files at the checkout root
+(`.brnrd-kb/index.md`, `.brnrd-kb/log.md`, no `kb/` prefix) or use `brnrd
+kb <query>` — the daemon's wake prompt already resolves this for you via
+`knowledge.render_injection`, so a daemon-hosted wake usually doesn't need
+to read these by hand at all.
+
 1. Read `kb/index.md` first. It's organised by subject hub and the
    links carry inline lifecycle markers, so a 30-second skim tells you
    what current shape exists in `kb/`.
@@ -312,10 +322,51 @@ task explicitly requires.
 
 ## Knowledge base
 
-The `kb/` directory is a persistent, LLM-maintained knowledge base committed
-to the repo. It compounds across sessions. Maintenance is everyone's job —
-brr's daemon, ad-hoc Cursor sessions, direct Claude Code or Codex
-invocations, anyone editing the repo.
+**The kb** is a persistent, LLM-maintained knowledge base. It compounds
+across sessions. Maintenance is everyone's job — brr's daemon, ad-hoc
+Cursor sessions, direct Claude Code or Codex invocations, anyone editing
+the repo. Everything below (state-first writing, memory layers, graph
+topology, lifecycle markers, log format, health checks) is maintenance
+discipline that applies the same way regardless of where the pages
+physically live — read "kb" in the rest of this section as "wherever this
+repo's knowledge base is checked out," per the location model here.
+
+### Where the kb lives
+
+Two physical shapes, chosen per repo, not per task:
+
+- **Repo-committed `kb/`** — a directory of `.md` files inside this repo,
+  versioned with the code. This is what `brnrd init` scaffolds by default
+  for a repo with no connected account, and it's a fully portable,
+  git-native wiki: clone the repo, get the kb, no extra auth or fetch.
+- **Home knowledge** — for a repo connected to a brnrd account
+  (`account.resolve_context` resolves an account-kind home), the kb lives
+  outside the project tree entirely, in that account's own backing git
+  repo (`<home>/knowledge/`), split per-repo by default
+  (`<home>/knowledge/repos/<org>__<repo>/`, plus an account-wide
+  `_cross-repo/` bucket once more than one repo shares real cross-cutting
+  material). `knowledge.py` materializes it for a wake through one chain:
+  **inject** (`render_injection` — a compact home→repo→docs slice folded
+  into the wake prompt directly, no tool call needed) → **checkout**
+  (`ensure_checkout` clones `<home>/knowledge/` to a gitignored
+  `.brnrd-kb/` beside the repo, the writable surface an agent edits) →
+  **query** (`brnrd kb <query>` / `knowledge.search()` for the long tail
+  that doesn't fit the wake-time slice). `knowledge.sources()` is the one
+  resolution path both the inject and query rungs walk, in order: home
+  knowledge (repo-scoped, then account-wide) → the `.brnrd-kb/` checkout →
+  repo-committed `kb/` (if one exists — the two shapes aren't mutually
+  exclusive; a home-knowledge repo can still have a legacy or
+  deliberately-portable repo `kb/` layered in) → repo `docs/`.
+
+**This repo dogfoods home knowledge, not a committed `kb/`.** `Gurio/brr`
+is public, and a committed `kb/` was carrying maintainer-personal and
+pre-decision material in public git history — moved 2026-07-09 to the
+account's private `hugimuni-labs/brnrd-knowledge` repo
+(`repos/Gurio__brr/` inside it). There is no `kb/` directory in this tree
+to browse; read the kb via `.brnrd-kb/` (once checked out) or `brnrd kb
+<query>`, and edit it there — commits land in the knowledge repo, not this
+one. A fresh adopter repo with no connected account still gets the
+repo-committed `kb/` path by default; nothing here removes that option.
 
 ### State first, history in git
 
@@ -354,8 +405,8 @@ The kb has four layers, each with a distinct job:
 | Layer | Purpose | Lives in |
 |-------|---------|----------|
 | Raw | What was said / what happened, verbatim | `.brr/conversations/`, `.brr/runs/`, `.brr/traces/` (gitignored) |
-| Episodic | Curated chronological narrative | `kb/log.md` |
-| Semantic + decisional | Current-state synthesis of what we know / why we chose it | `kb/subject-*.md`, `kb/decision-*.md`, `kb/research-*.md`, `kb/plan-*.md`, `kb/design-*.md` |
+| Episodic | Curated chronological narrative | `log.md` (kb root — repo `kb/log.md` or home knowledge's `log.md`, see "Where the kb lives") |
+| Semantic + decisional | Current-state synthesis of what we know / why we chose it | `subject-*.md`, `decision-*.md`, `research-*.md`, `plan-*.md`, `design-*.md` (same kb root) |
 | Schema | How the kb is structured + how to maintain it | this file, `src/brr/docs/` |
 
 The split matters because conflating them produces noise. A chronological
@@ -368,9 +419,10 @@ with each new layer of edits.
 
 The kb is a graph, not a stack of memos:
 
-- **Entry point**: `kb/index.md`. Organised by subject hub, not by artifact
-  type.
-- **Nodes**: every committed `.md` file under `kb/`.
+- **Entry point**: `index.md` at the kb root. Organised by subject hub, not
+  by artifact type.
+- **Nodes**: every `.md` file at the kb root (repo `kb/`, or the home-
+  knowledge checkout — see "Where the kb lives").
 - **Edges**: markdown relative links between nodes. A node with no inbound
   edges is an orphan.
 - **Splits and merges are normal**. A subject page that grows past
@@ -414,14 +466,14 @@ history of why beliefs evolved is itself knowledge.
 
 ### Cross-link discipline
 
-Every committed kb page (except `index.md`, `log.md`, and subject hubs
+Every kb page (except `index.md`, `log.md`, and subject hubs
 themselves) should link from at least one subject hub or peer page, and
 should link out to at least one neighbour. Orphan pages (no inbound links
 from any hub or peer) should not exist for long.
 
 ### Log format
 
-Each entry in `kb/log.md` uses this format for parseability:
+Each entry in the kb's `log.md` uses this format for parseability:
 
 ```
 ## [YYYY-MM-DD] <type> | <title>
@@ -431,12 +483,12 @@ Each entry in `kb/log.md` uses this format for parseability:
 
 Types: `implement`, `review`, `research`, `plan`, `fix`, `decision`.
 
-`grep '^## \[' kb/log.md | tail -10` gives recent activity at a glance;
-see Workflow → Orientation for the orientation-time reading recipe.
+`grep '^## \[' <kb-root>/log.md | tail -10` gives recent activity at a
+glance; see Workflow → Orientation for the orientation-time reading
+recipe (and where `<kb-root>` resolves to for this repo).
 
-`kb/log.md` is a **curated** narrative. Add an entry when your task
-produced a meaningful learning, decision, or shipped change. If it
-didn't, don't.
+The log is a **curated** narrative. Add an entry when your task produced a
+meaningful learning, decision, or shipped change. If it didn't, don't.
 
 ### What to persist
 
@@ -453,7 +505,7 @@ didn't, don't.
 ### What not to persist
 
 - Per-task scratch (status, todos, "checklists for next session"). That
-  belongs in your task's response or in `.brr/` (gitignored), not in `kb/`.
+  belongs in your task's response or in `.brr/` (gitignored), not the kb.
 - Verbose debug output.
 - Anything that duplicates what's already in the codebase — reference, don't
   copy.
@@ -475,7 +527,7 @@ historians, and git already has it.
 
 ### Health checks
 
-When resuming work or between tasks, scan `kb/` for:
+When resuming work or between tasks, scan the kb for:
 
 - Pages referenced in `index.md` that no longer exist (or vice versa).
 - `plan-*` / `design-*` pages whose work has shipped without a lifecycle
