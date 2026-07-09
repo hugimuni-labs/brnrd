@@ -337,7 +337,10 @@ def test_prescriptive_phrase_warns():
 
 
 def _prototype_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "kb" / "diffense-prototype-pr64-pack.json"
+    # Was kb/diffense-prototype-pr64-pack.json; kb/ moved out of the repo
+    # (2026-07-09, plan-kb-out-of-repo-migration.md) so the test fixture
+    # keeps its own copy here rather than depending on it.
+    return Path(__file__).resolve().parent / "diffense-prototype-pr64-pack.json"
 
 
 def test_prototype_pack_structure_is_valid():
