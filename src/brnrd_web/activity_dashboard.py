@@ -777,6 +777,58 @@ def dashboard_config_requests_api(request: Request, db: Session = Depends(get_db
     )
 
 
+@router.get("/v1/dashboard/plans")
+def dashboard_plans_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Account-scoped decisions space (#324 Phase 0) for the SvelteKit frontend.
+
+    The CPS files (CS5 ``plans/<repo>/active.md``, cross-repo plan, CS7
+    ``ledger/decisions.md``) were already mirrored via ``PUT
+    /v1/daemons/plans`` and rendered raw on the Jinja ``/plans`` page — but
+    that page lost its discoverability when the SvelteKit build took over
+    "/", leaving the resident's entire scheduling mechanism (the ranked-move
+    list) invisible from the surface the user actually watches. Read-only,
+    same session-cookie auth as the other dashboard JSON endpoints;
+    structure (section parsing, staleness) is the frontend's job — no
+    storage-schema decision here, per the Phase 0 boundary.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    plans = [
+        {
+            "repo_label": repo.repo_full_name,
+            "plan_md": repo.plan_md or "",
+            "updated_at": repo.plan_updated_at.isoformat() if repo.plan_updated_at else None,
+        }
+        for repo in repos
+        if (repo.plan_md or "").strip()
+    ]
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "plans": plans,
+            "cross_repo_plan_md": (account.cross_repo_plan_md or "").strip(),
+            "decisions_md": (account.decision_ledger_md or "").strip(),
+            "reported_at": account.plans_updated_at.isoformat() if account.plans_updated_at else None,
+        }
+    )
+
+
+@router.get("/plans")
+def plans_redirect() -> RedirectResponse:
+    """First real Jinja template cut (kb plan-jinja-removal.md Phase 2,
+    plans half): the raw-``<pre>`` CPS page is fully superseded by the
+    dashboard's decisions-space panel (#324 Phase 0), which renders the
+    same ``PUT /v1/daemons/plans`` mirror structured. The URL stays alive
+    — old-page nav links and bookmarks land on the panel, not a 404.
+    """
+    return RedirectResponse(url="/", status_code=308)
+
+
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, installation_id: str | None = None, notice: str | None = None, db: Session = Depends(get_db)):
     account_id = _account_id(request, db)
