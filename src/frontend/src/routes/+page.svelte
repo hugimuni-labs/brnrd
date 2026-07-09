@@ -143,12 +143,27 @@
 		     session short of clearing cookies by hand. Small on purpose
 		     ("a small one somewhere") — a plain link, not a nav bar this
 		     single-page dashboard doesn't otherwise have. -->
-		<a
-			href="/logout"
-			rel="external"
-			class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
-			>sign out</a
-		>
+		<div class="flex items-center gap-4">
+			<!-- Restores discoverability for the repo connect/pairing flow
+			     (`/repos`, `brnrd_web/activity_dashboard.py::repos_page`),
+			     which lost its only entry point when this page took over
+			     "/" in production and never grew its own repo-management
+			     UI (found live 2026-07-09). Same small-link treatment as
+			     "sign out" until repo management gets a real slice of this
+			     page instead of a link out to the Jinja one. -->
+			<a
+				href="/repos"
+				rel="external"
+				class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+				>manage repos</a
+			>
+			<a
+				href="/logout"
+				rel="external"
+				class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+				>sign out</a
+			>
+		</div>
 	</div>
 	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
 		brnrd dashboard — next
