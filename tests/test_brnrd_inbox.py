@@ -368,3 +368,54 @@ def test_password_account_endpoints_are_not_exposed(env):
     payload = {"email": "a@b.com", "password": "supersecret"}
     assert client.post("/v1/accounts", json=payload).status_code == 404
     assert client.post("/v1/accounts/sessions", json=payload).status_code == 404
+
+
+def test_stale_cursor_from_older_epoch_redelivers_queued_backlog(env):
+    """A cursor above the repo's max seq is provably from an older DB epoch
+    (cursors are derived from delivered seqs). Instead of trusting it — which
+    silently skips every queued event — the server resets it to just below
+    the oldest still-queued event so the backlog delivers, and returns the
+    healed cursor. Live failure 2026-07-09: since=4 against a fresh table
+    swallowed a week of messages with no error anywhere."""
+    app, client, forwarder = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+
+    first = client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "do you hear me?"}, headers=acc
+    ).json()["event_id"]
+    client.post(
+        "/v1/_dev/enqueue", json={"repo_id": rid, "body": "hola"}, headers=acc
+    )
+
+    drained = client.get(
+        "/v1/daemons/inbox", params={"since": 999, "wait": 0}, headers=dmn
+    ).json()
+    assert [e["body"] for e in drained["events"]] == ["do you hear me?", "hola"]
+    # The healed cursor rides back so the daemon can persist it.
+    assert drained["cursor"] == drained["events"][-1]["seq"]
+
+    # Responded husks (body nulled) below the backlog are not redelivered.
+    client.post(
+        "/v1/daemons/responses",
+        json={"event_id": first, "body_markdown": "done", "status": "done"},
+        headers=dmn,
+    )
+    again = client.get(
+        "/v1/daemons/inbox", params={"since": 999, "wait": 0}, headers=dmn
+    ).json()
+    assert [e["body"] for e in again["events"]] == ["hola"]
+
+
+def test_stale_cursor_with_no_backlog_heals_to_max_seq(env):
+    _, client, _ = env
+    acc = _account(client)
+    rid = _repo(client, acc)
+    dmn = _connect(client, acc, rid)
+
+    empty = client.get(
+        "/v1/daemons/inbox", params={"since": 999, "wait": 0}, headers=dmn
+    ).json()
+    assert empty["events"] == []
+    assert empty["cursor"] == 0

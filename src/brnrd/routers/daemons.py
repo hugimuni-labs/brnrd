@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import ids, inbox as inbox_service, schemas
@@ -89,7 +90,14 @@ def register(payload: schemas.DaemonRegister, principal: Principal = Depends(req
 
 @router.put("/activity", response_model=schemas.ActivityList)
 def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
-    """Replace this daemon token's current Activity snapshot for its repo."""
+    """Replace this daemon token's current Activity snapshot for its repo.
+
+    Delete-then-insert is atomic per transaction but not against a
+    *concurrent* PUT for the same (repo, token): both delete, both insert,
+    the second commit hits ``uq_activity_repo_token_record``. Snapshots are
+    full replacements published every few seconds, so on that race the
+    loser rolls back and defers to the winner instead of 500ing.
+    """
     daemon = _current_daemon(db, principal)
     now = datetime.now(timezone.utc)
     db.execute(
@@ -131,7 +139,19 @@ def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends
     if daemon is not None:
         daemon.online = True
         daemon.last_seen_at = now
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        current = list(
+            db.execute(
+                select(ActivityRecord).where(
+                    ActivityRecord.repo_id == principal.repo_id,
+                    ActivityRecord.token_id == principal.token.id,
+                )
+            ).scalars()
+        )
+        return schemas.ActivityList(activity=[_activity_out(row) for row in current])
     return schemas.ActivityList(activity=[_activity_out(row) for row in rows])
 
 
@@ -249,6 +269,10 @@ def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depe
 def inbox(request: Request, since: int | None = Query(default=None), wait: float | None = Query(default=None), principal: Principal = Depends(require_daemon)):
     settings = request.app.state.settings
     since_seq = since if since is not None else 0
+    if since_seq > 0:
+        # Reset a cursor from an older DB epoch — see inbox_service.clamp_since.
+        with request.app.state.SessionLocal() as db:
+            since_seq = inbox_service.clamp_since(db, principal.repo_id, since_seq)
     max_wait = settings.inbox_long_poll_max_s if wait is None else max(0.0, min(wait, settings.inbox_long_poll_max_s))
     events = inbox_service.long_poll(request.app.state.SessionLocal, principal.repo_id, since_seq, max_wait_s=max_wait, interval_s=settings.inbox_poll_interval_s)
     cursor = max((e.seq for e in events), default=since_seq)

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from . import ids
@@ -118,6 +118,32 @@ def enqueue(db: Session, *, repo_id: str, body: str, source: str = "dev", reply_
     db.commit()
     db.refresh(event)
     return event
+
+
+def clamp_since(db: Session, repo_id: str, since: int) -> int:
+    """Guard a daemon's inbox cursor against a DB-epoch break.
+
+    A cursor is always derived from event seqs the daemon actually
+    received, so a legitimate cursor can never exceed the repo's max seq.
+    One that does is from an older DB epoch (table recreated / renumbered)
+    — trusting it silently skips every queued event until new traffic
+    outruns the stale number. Seen live 2026-07-09: a daemon carrying
+    ``since=4`` against a fresh events table swallowed seqs 1-4 (a week of
+    messages, "do you hear me?" included) with no error anywhere.
+
+    On a proven break, reset to just below the oldest still-queued event so
+    the backlog delivers; skip responded husks (their bodies are nulled —
+    redelivering them would spawn empty runs). No queued backlog ⇒ the max
+    seq itself. The poll response's cursor then carries the healed value
+    back to the daemon.
+    """
+    ceiling = int(db.execute(select(func.max(Event.seq)).where(Event.repo_id == repo_id)).scalar() or 0)
+    if since <= ceiling:
+        return since
+    oldest_queued = db.execute(
+        select(func.min(Event.seq)).where(Event.repo_id == repo_id, Event.status == Event.STATUS_QUEUED)
+    ).scalar()
+    return int(oldest_queued) - 1 if oldest_queued is not None else ceiling
 
 
 def fetch_since(db: Session, repo_id: str, since: int) -> list[Event]:
