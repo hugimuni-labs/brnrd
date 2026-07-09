@@ -25,6 +25,54 @@ class TestContextInjection:
     def test_read_recent_log_missing(self, tmp_path):
         assert _read_recent_log(tmp_path) == ""
 
+    def test_read_recent_log_falls_back_to_home_knowledge(self, tmp_path):
+        """A repo that migrated kb/ out per design-home-scopes-and-knowledge.md
+
+        still gets its recent-activity block from home knowledge instead of
+        going silent just because ``kb/log.md`` no longer lives in the tree.
+        """
+        from _helpers import init_git_repo
+
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        home = tmp_path / "home"
+        (repo / ".brr").mkdir()
+        (repo / ".brr" / "config").write_text(f"home.path={home}\n", encoding="utf-8")
+        (home / "knowledge").mkdir(parents=True)
+        (home / "knowledge" / "log.md").write_text(
+            "# Activity Log\n\n## [2026-07-09] migrate | kb moved\n\nOut of the tree.\n",
+            encoding="utf-8",
+        )
+
+        result = _read_recent_log(repo)
+
+        assert "## [2026-07-09]" in result
+        assert "Out of the tree" in result
+
+    def test_read_recent_log_prefers_repo_kb_when_both_exist(self, tmp_path):
+        from _helpers import init_git_repo
+
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        home = tmp_path / "home"
+        (repo / ".brr").mkdir()
+        (repo / ".brr" / "config").write_text(f"home.path={home}\n", encoding="utf-8")
+        (home / "knowledge").mkdir(parents=True)
+        (home / "knowledge" / "log.md").write_text(
+            "# Activity Log\n\n## [2026-01-01] plan | home only\n\nHome copy.\n",
+            encoding="utf-8",
+        )
+        (repo / "kb").mkdir()
+        (repo / "kb" / "log.md").write_text(
+            "# Activity Log\n\n## [2026-07-09] plan | repo copy\n\nStill in the tree.\n",
+            encoding="utf-8",
+        )
+
+        result = _read_recent_log(repo)
+
+        assert "repo copy" in result
+        assert "home only" not in result
+
     def test_read_recent_log_basic(self, tmp_path):
         kb = tmp_path / "kb"
         kb.mkdir()
