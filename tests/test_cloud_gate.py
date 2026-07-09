@@ -1122,3 +1122,47 @@ def test_stale_cursor_from_older_db_epoch_heals_end_to_end(tmp_path, monkeypatch
     assert cloud._load_state(brr_dir)["since"] == 1
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
     assert len(protocol.list_pending(inbox_dir)) == 1
+
+
+def test_request_retries_gateway_statuses_then_succeeds(monkeypatch):
+    """502/503/504 are deploy-window blips from the hosted router (main
+    auto-deploys on merge): `_request` rides them out with short paced
+    retries instead of tracebacking `brnrd connect` (live failure
+    2026-07-09). The router refused the request, so the upstream never saw
+    it — retrying non-idempotent methods is safe here."""
+    statuses = iter([502, 503, 200])
+    calls = []
+
+    class _Resp:
+        def __init__(self, status):
+            self.status_code = status
+            self.text = "gateway"
+            self.content = b'{"ok": true}'
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, **kwargs):
+        status = next(statuses)
+        calls.append(status)
+        return _Resp(status)
+
+    monkeypatch.setattr(cloud._SESSION, "request", fake_request)
+    monkeypatch.setattr(cloud.time, "sleep", lambda s: None)
+    out = cloud._request("http://brnrd", "POST", "/v1/x", token="t")
+    assert out == {"ok": True}
+    assert calls == [502, 503, 200]
+
+
+def test_request_gives_up_after_retry_budget(monkeypatch):
+    """A real outage still raises: retries smooth a blip, never mask an
+    error — the final 502 surfaces as the RuntimeError it always was."""
+    class _Resp:
+        status_code = 502
+        text = "bad gateway"
+        content = b""
+
+    monkeypatch.setattr(cloud._SESSION, "request", lambda *a, **k: _Resp())
+    monkeypatch.setattr(cloud.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError, match="502"):
+        cloud._request("http://brnrd", "GET", "/v1/x")
