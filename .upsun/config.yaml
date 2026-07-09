@@ -51,7 +51,7 @@ applications:
             # src/brnrd_web/routes.py/activity_dashboard.py/
             # plans_dashboard.py — anything added there needs a passthru
             # rule here or the new frontend's static root will 404 it.
-            '^/(v1|api|r|login|logout|auth|connect|repos|activity|plans|static)(/|$)':
+            '^/(v1|api|r|login|logout|auth|connect|repos|activity|plans|static|terms|config-approve)(/|$)':
               passthru: true
 
     variables:
