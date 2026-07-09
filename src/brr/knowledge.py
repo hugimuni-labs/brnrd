@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Iterable
 
@@ -145,7 +146,19 @@ def search(
 
 
 def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
-    """Materialize the writable home-knowledge checkout beside *repo_root*."""
+    """Materialize the writable home-knowledge checkout beside *repo_root*.
+
+    Re-clones when a checkout already exists but its ``origin`` no longer
+    matches the currently-resolved home-knowledge path, instead of treating
+    "directory exists" as "checkout is current". Account resolution can
+    change after a checkout is first made (a cloud-gate connect fills in
+    ``account_id`` where it used to fall back to the literal ``"connected"``,
+    an account switch, ``home.path`` moving) — without this check the old
+    checkout just sits there forever, silently orphaned, pointed at a path
+    nothing else reads or writes. Caught live 2026-07-09: a repo's
+    ``.brnrd-kb`` still had ``origin`` set to an early decoy account slot
+    weeks after ``cloud.json`` started carrying the real one, at 0 commits.
+    """
 
     cfg = cfg if cfg is not None else conf.load_config(repo_root)
     ctx = account.resolve_context(repo_root, cfg)
@@ -156,7 +169,9 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     checkout = repo_root / CHECKOUT_DIRNAME
     _exclude_from_project_git(repo_root, f"{CHECKOUT_DIRNAME}/")
     if checkout.exists():
-        return checkout
+        if _checkout_origin_matches(checkout, home_knowledge):
+            return checkout
+        shutil.rmtree(checkout, ignore_errors=True)
 
     result = subprocess.run(
         ["git", "clone", str(home_knowledge), str(checkout)],
@@ -169,6 +184,31 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
         checkout.mkdir(parents=True, exist_ok=True)
         _init_git_repo(checkout)
     return checkout
+
+
+def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
+    """Return whether *checkout*'s ``origin`` remote still resolves to
+    *home_knowledge* — the check :func:`ensure_checkout` skipped before
+    2026-07-09, letting a stale clone survive an account-resolution change
+    indefinitely."""
+
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=checkout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    origin = result.stdout.strip()
+    if not origin:
+        return False
+    try:
+        return Path(origin).resolve() == home_knowledge.resolve()
+    except OSError:
+        return origin == str(home_knowledge)
 
 
 def _source_excerpt(source: KnowledgeSource) -> str:
