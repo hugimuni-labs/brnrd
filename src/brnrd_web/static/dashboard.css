@@ -91,7 +91,7 @@
 
 .ops-nav a {
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 0;
   padding: 11px 12px;
   color: #9eb2b2;
   font-size: 0.86rem;
@@ -110,7 +110,7 @@
 .daemon-card,
 .sidebar-user {
   border: 1px solid rgba(129, 165, 166, 0.24);
-  border-radius: 8px;
+  border-radius: 0;
   background: rgba(5, 16, 19, 0.8);
   padding: 14px;
 }
@@ -127,7 +127,7 @@
   display: grid;
   place-items: center;
   border: 1px solid rgba(148, 249, 191, 0.42);
-  border-radius: 8px;
+  border-radius: 0;
   color: #b9ffe1;
 }
 
@@ -149,7 +149,7 @@
   align-items: start;
   overflow: hidden;
   border: 1px solid rgba(129, 165, 166, 0.18);
-  border-radius: 4px;
+  border-radius: 0;
   padding: 34px 36px;
   background:
     linear-gradient(90deg, rgba(11, 28, 33, 0.94), rgba(11, 28, 33, 0.52)),
@@ -212,7 +212,7 @@
 .notice-banner {
   border: 1px solid rgba(148, 249, 191, 0.34);
   border-left: 4px solid #7df7a0;
-  border-radius: 6px;
+  border-radius: 0;
   background: rgba(30, 93, 67, 0.22);
   color: #effff3;
   padding: 13px 16px;
@@ -238,7 +238,7 @@
 
 .status-card {
   min-width: 0;
-  border-radius: 6px;
+  border-radius: 0;
   padding: 16px;
 }
 
@@ -286,7 +286,7 @@
 
 .deck-panel {
   min-width: 0;
-  border-radius: 6px;
+  border-radius: 0;
   padding: 18px;
 }
 
@@ -322,7 +322,7 @@
   display: inline-flex;
   align-items: center;
   border: 1px solid rgba(129, 165, 166, 0.28);
-  border-radius: 999px;
+  border-radius: 0;
   background: rgba(158, 178, 178, 0.08);
   color: #9eb2b2;
   padding: 4px 9px;
@@ -371,7 +371,7 @@
   justify-content: center;
   gap: 8px;
   border: 1px solid rgba(129, 165, 166, 0.32);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 0 14px;
   background: rgba(158, 178, 178, 0.08);
   color: #e7f5ef;
@@ -414,7 +414,7 @@
 .activity-row,
 .binding-row,
 .quota-card {
-  border-radius: 6px;
+  border-radius: 0;
   padding: 13px;
 }
 
@@ -461,7 +461,7 @@
 
 code {
   border: 1px solid rgba(129, 165, 166, 0.26);
-  border-radius: 5px;
+  border-radius: 0;
   background: rgba(158, 178, 178, 0.08);
   color: #b9ffe1;
   padding: 1px 5px;
@@ -477,7 +477,7 @@ code {
   display: grid;
   place-items: center;
   border: 1px solid rgba(129, 165, 166, 0.28);
-  border-radius: 999px;
+  border-radius: 0;
   background: rgba(158, 178, 178, 0.08);
   cursor: pointer;
   list-style: none;
@@ -495,7 +495,7 @@ code {
   width: min(240px, 80vw);
   margin-top: 8px;
   border: 1px solid rgba(129, 165, 166, 0.28);
-  border-radius: 8px;
+  border-radius: 0;
   background: #0a1b1f;
   box-shadow: 0 18px 45px rgba(0, 0, 0, 0.38);
   padding: 8px;
@@ -510,7 +510,7 @@ code {
 .menu-danger {
   width: 100%;
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   background: transparent;
   color: #e7f5ef;
   cursor: pointer;
@@ -531,7 +531,7 @@ code {
 
 .setup-details {
   border: 1px solid rgba(129, 165, 166, 0.22);
-  border-radius: 6px;
+  border-radius: 0;
   background: rgba(5, 16, 19, 0.55);
 }
 
@@ -553,7 +553,7 @@ code {
   margin: 10px 11px 11px;
   overflow-x: auto;
   border: 1px solid rgba(129, 165, 166, 0.24);
-  border-radius: 6px;
+  border-radius: 0;
   background: #061012;
   color: #b9ffe1;
   padding: 11px;
@@ -613,7 +613,7 @@ code {
 .quota-bar {
   height: 8px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: 0;
   background: rgba(158, 178, 178, 0.16);
 }
 
@@ -741,14 +741,14 @@ input[type="hidden"] {
   width: 100%;
   min-height: 40px;
   border: 1px solid rgba(129, 165, 166, 0.28);
-  border-radius: 6px;
+  border-radius: 0;
   background: #08181b;
   padding: 0 10px;
 }
 
 .empty-state {
   border: 1px dashed rgba(129, 165, 166, 0.28);
-  border-radius: 6px;
+  border-radius: 0;
   background: rgba(5, 16, 19, 0.55);
   padding: 16px;
   color: #91a3a5;
@@ -758,7 +758,7 @@ input[type="hidden"] {
   margin: 12px 0 0;
   padding: 14px 16px;
   border: 1px solid rgba(129, 165, 166, 0.2);
-  border-radius: 6px;
+  border-radius: 0;
   background: #08181b;
   color: #d7ded9;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
