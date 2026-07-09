@@ -43,8 +43,40 @@ def test_resolve_context_creates_account_home_and_registry(tmp_path):
     assert (home / ".gitignore").read_text(encoding="utf-8").splitlines() == [
         "/dispatch/inbox/",
         "/dispatch/responses/",
+        "/knowledge/",
         "*.tmp",
     ]
+
+
+def test_gitignore_backfills_missing_rules_on_a_pre_existing_home(tmp_path):
+    """A home created before a rule existed shouldn't carry a stale .gitignore.
+
+    ``resolve_context`` only calls ``_write_gitignore`` at first creation —
+    the write itself has to be an append-what's-missing, not a one-shot
+    "skip if the file exists", or every home created before ``/knowledge/``
+    was added would keep a nested, un-ignored knowledge git repo forever.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_repo_scaffold(repo)
+    home = tmp_path / "account-home"
+    home.mkdir(parents=True)
+    (home / ".gitignore").write_text(
+        "/dispatch/inbox/\n/dispatch/responses/\n*.tmp\n", encoding="utf-8"
+    )
+
+    account.resolve_context(
+        repo,
+        {
+            "home.kind": "account",
+            "home.path": str(home),
+            "account.id": "acct-1",
+        },
+    )
+
+    lines = (home / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "/knowledge/" in lines
+    assert lines.count("/knowledge/") == 1
 
 
 def test_default_home_is_repo_derived_project_home(monkeypatch, tmp_path):
