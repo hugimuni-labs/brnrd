@@ -87,9 +87,17 @@ Portals are the seams where a run turns to the world — inbound
   `runner_policy: propose` → park a policy change for operator approval.
 - inbox.json — live pending-event view, heartbeat-refreshed. Re-read at
   plan / todo boundaries; once more immediately before a terminal closeout
-  — fold a related follow-up in, or say why it stays queued. Doesn't catch
-  messages that arrive after the runner has already returned. Daemon-owned;
-  don't edit.
+  — fold a related follow-up in, or say why it stays queued. "Fold in"
+  means the `event: <id>` outbox mechanism above, one file per event —
+  narrating the answer only in the current thread's own reply does not
+  clear `pending_event_count` (`daemon.py::_drain_outbox` only marks a
+  *different* event `done` when a file's frontmatter names it
+  cross-thread; same-thread mentions never touch it). Confirmed live
+  2026-07-08: a run answered two same-thread follow-ups in its narrative
+  and on `.card` across a dozen Stop-hook cycles before the count actually
+  cleared once routed `event:` files were written. Doesn't catch messages
+  that arrive after the runner has already returned. Daemon-owned; don't
+  edit.
 - portal-state.json (env `BRR_PORTAL_STATE`) — pending events,
   delivery/card posture, budget/keepalive state, `change_token` = "did
   attention-relevant state move since my last read". Daemon-owned;
@@ -98,14 +106,34 @@ Portals are the seams where a run turns to the world — inbound
   (`+30m`); rewrite to extend. Control file, never delivered.
 - .card — narrate the live progress card: note body only (brr adds the
   `note:` label); rewrite as context shifts, empty/delete to withdraw.
-  Control file, never delivered.
-- .task-classification — a short slug naming this run's shape for the cost
-  ledger (`dashboard-slice`, `kb-brainstorm`, `bugfix`, ...): one line,
-  write it anytime before closeout. Without it `run_ledger`'s
-  `task_classification` field stays null and the row can't be matched
-  against future estimates of the same shape. Control file, never
-  delivered. `spawn:`/`respawn:` frontmatter also accepts
-  `task_classification:` to tag a dispatched child at hand-off time.
+  Control file, never delivered. Write a first line as one of the run's
+  earliest actions, before there's "enough" progress to feel card-worthy —
+  even "orienting: reading X" beats leaving it unset until the staleness
+  bar (240s, §next move above) or a same-thread message forces it. A card
+  that only appears once something nudges it reads, from the watching
+  side, as no different from one that was simply forgotten.
+- .task-classification — not optional bookkeeping: part of this run's own
+  semantic, the same tier as `.card`/`.keepalive`. A short slug naming
+  this run's shape for the cost ledger (`dashboard-slice`, `kb-
+  brainstorm`, `bugfix`, ...): one line, write it anytime before
+  closeout — every run, not just ones that feel ledger-relevant. Skip it
+  and `run_ledger`'s `task_classification` field stays null for that row
+  forever; that field is the *only* join key the whole cost-estimate
+  workstream (`kb/design-quota-scheduling-loom.md`) rolls up on, so an
+  unwritten one isn't a shrug, it's a row no future estimate can ever
+  match against. Control file, never delivered. `spawn:`/`respawn:`
+  frontmatter also accepts `task_classification:` to tag a dispatched
+  child at hand-off time. The Stop hook nudges (not blocks) when it's
+  still missing at the closeout boundary — the one forcing function this
+  file gets, mirroring `.card` staleness; see it as a last catch, not
+  permission to leave writing it until then.
+- .pr — this run created a PR itself (not a GitHub-sourced task that already
+  carried one in its metadata)? Write the number (bare, `#`-prefixed, or the
+  full PR URL — any of those parse) so `remote_scm` stops reading `absent`
+  for the rest of this run. `remote_scm` is deliberately network-free
+  (derived from run metadata, never a live forge query), so without this
+  file a self-created PR is invisible to the live portal until a later
+  wake's task metadata happens to carry it. Control file, never delivered.
 - remote reader — the user reads replies in a chat client (Telegram /
   Slack); files by basename only (`subject-envs.md`, `run_progress.py`),
   never host paths like `.brr/worktrees/<run-id>/kb/foo.md` — they don't
@@ -134,6 +162,23 @@ Portals are the seams where a run turns to the world — inbound
   chronologically last it reads as the reply from a user glancing at the
   thread. Splitting the difference this way is worse than either clean
   option; don't.
+  A due self-wake (`schedule.md` entry, e.g. the director tick) firing
+  *inline* at the tail of a run that already did its own primary-task work
+  is a second way to lose this line, sharper because the reply that ships
+  isn't empty or a stub — it's a complete, well-formed message about the
+  wrong thing. Live case, 2026-07-08 (run-260708-1920-obup): the run built
+  and shipped a real PR, narrated it faithfully on `.card` as it went, then
+  a due tick fired inline near the end; the tick's own silence/notify-bar
+  logic reasoned "already reported to you in full, in this exact thread"
+  and, believing that, sent *only* its own re-derivation summary as the
+  run's one terminal reply — the PR summary and next-move line for the
+  actual work never reached the chat at all. The premise was false on its
+  face: `.card` is listed a few bullets up as a control file, **never
+  delivered** — narrating there is not narrating to the thread. A tick's
+  own notify-bar governs only the tick's own content; it is never license
+  to skip the primary task's closeout, and the two are additive in one
+  reply (primary receipt + next-move line, tick's one-liner appended), not
+  a choice between them.
 - linger — conversation clearly live ⇒ deliver via outbox (that is the
   satisfying signal; final stdout may then stay empty), write `.keepalive`,
   poll `portal-state.json` with backoff 30s → cap 240s (inside the ~5m

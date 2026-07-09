@@ -245,6 +245,25 @@ def format_delta(
                 f"{modified} modified file(s) on {branch} — commit and let "
                 "the branch publish before ending."
             )
+    # Task-classification presence (stop only): unlike the card, there is
+    # nothing wrong with it being unwritten mid-run — the file legitimately
+    # gets written anytime before closeout — so this renders only at the
+    # boundary where "still missing" actually means something. A
+    # card-staleness-style forcing function requested directly
+    # (2026-07-07/08) after a run caught itself nearly shipping without it:
+    # the miss is silent otherwise — no error, just a `run_ledger` row whose
+    # `task_classification` stays null forever, the one field the whole
+    # cost-rollup workstream joins on.
+    task_cls = (
+        payload.get("task_classification")
+        if isinstance(payload.get("task_classification"), dict) else {}
+    )
+    if stop and not task_cls.get("written"):
+        lines.append(
+            "- .task-classification: not written yet — a short slug (e.g. "
+            "`bugfix`, `kb-brainstorm`) before this ends, or this run's "
+            "run_ledger row has a null task_classification forever."
+        )
     # Card staleness (all phases): the note is the one live surface a
     # watching user sees between replies, so its own silence needs the same
     # "this is attention-worthy" framing pending events got 2026-07-05 — a
@@ -353,11 +372,27 @@ def compute_neutral(
         inject = format_delta(portal, seed=True)
         state["last_token"] = portal.get("change_token")
     elif phase == PHASE_STOP:
-        # The closeout boundary renders unconditionally (not token-gated):
-        # the affirmative "0 pending" signal and the SCM commit/push
-        # reminder must land even when nothing moved since the last tick.
-        inject = format_delta(portal, stop=True)
-        state["last_token"] = portal.get("change_token")
+        # The closeout boundary renders unconditionally *once per distinct
+        # portal snapshot* (gated on ``stop_last_token``, a Stop-scoped twin
+        # of post-tool's ``last_token`` so the two gates never fight): the
+        # affirmative "0 pending" signal and the SCM commit/push reminder
+        # must land at least once even when nothing moved since the last
+        # post-tool tick, satisfying the original "explicit all-clear, not
+        # silence" intent. What it must not do is re-render the identical
+        # text on every subsequent Stop fire once the runner has already
+        # seen it — #282: a stuck-clean run (0 pending, token unchanged)
+        # kept getting non-empty ``additionalContext`` on every Stop fire,
+        # which reads to the CLI as "there's still something to weave in"
+        # and drove 10-15+ pointless re-fires burning budget on a run that
+        # had nothing left to do. An unchanged token means the runner
+        # already has this exact text in-context from the prior Stop; a
+        # bare ``{}`` result is the actual "nothing to add, stop cleanly"
+        # signal.
+        stop_token = portal.get("change_token")
+        if stop_token != state.get("stop_last_token"):
+            inject = format_delta(portal, stop=True)
+        state["stop_last_token"] = stop_token
+        state["last_token"] = stop_token
     else:
         token = portal.get("change_token")
         if token is not None and token != state.get("last_token"):
@@ -370,7 +405,18 @@ def compute_neutral(
             if isinstance(portal.get("attention"), dict) else {}
         )
         pending = int(attention.get("pending_event_count", 0) or 0)
-        if pending > 0 and not state.get("stop_blocked"):
+        # Token-scoped, not a one-shot boolean: a plain "blocked once ever"
+        # latch (the pre-fix shape) never let a *later*, genuinely new
+        # follow-up re-block once the run had folded in any earlier one —
+        # every pending event after the first silently rode along as inert
+        # context instead of forcing the resident to address it before
+        # exiting, which is exactly the "quick follow-up before the run
+        # closes" contract this hook exists to keep. Re-arming on a token
+        # change (a new/changed pending event) while still suppressing a
+        # repeat block against the *same* unresolved snapshot preserves the
+        # existing "second stop must not block forever" guarantee for the
+        # unchanged case.
+        if pending > 0 and state.get("stop_blocked_token") != stop_token:
             block = True
             event = _first_pending_event(portal)
             if event is not None:
@@ -383,7 +429,7 @@ def compute_neutral(
                     "foldable ones into this wake (read inbox.json) before "
                     "ending, or say why they should wait."
                 )
-            state["stop_blocked"] = True
+            state["stop_blocked_token"] = stop_token
 
     _write_hook_state(ctx, state)
     return {"inject": inject, "block": block, "block_reason": block_reason}

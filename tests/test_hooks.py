@@ -8,7 +8,8 @@ from brr import hooks
 
 
 def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
-            resources=None, budget=None, outbound=None, card=None):
+            resources=None, budget=None, outbound=None, card=None,
+            task_classification=None):
     payload = {
         "run": {"id": "run-1", "event_id": "evt-1", "phase": "running"},
         "attention": {
@@ -30,6 +31,8 @@ def _portal(tmp_path, *, token="t1", pending=0, events=None, scm=None,
         payload["resources"] = resources
     if card is not None:
         payload["card"] = card
+    if task_classification is not None:
+        payload["task_classification"] = task_classification
     path = tmp_path / "portal-state.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -93,6 +96,65 @@ def test_stop_blocks_once_when_pending(tmp_path):
     # Second stop must not block forever — the nudge fired once.
     second, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
     assert second.get("decision") != "block"
+
+
+def test_stop_reblocks_on_a_new_pending_event_after_an_earlier_fold_in(tmp_path):
+    # 2026-07-08 (#282 follow-up): ``stop_blocked`` used to be a one-shot
+    # bool that never reset, so only the *first* pending follow-up a run
+    # ever saw got fold-in-blocked — a second, genuinely new follow-up
+    # arriving later in the same run's lifetime rode along as inert
+    # context instead of forcing the resident to address it before
+    # exiting. Token-scoping the latch should let a distinct new pending
+    # snapshot re-block even though an earlier one already consumed a
+    # block.
+    _portal(tmp_path, token="t1", pending=1, events=[{
+        "id": "evt-2", "source": "telegram", "summary": "first",
+        "body": "first follow-up",
+    }])
+    env = _env(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert first["decision"] == "block"
+    assert "first follow-up" in first["reason"]
+
+    # The first follow-up got folded in and addressed; portal now clean.
+    _portal(tmp_path, token="t2", pending=0)
+    quiet, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert quiet.get("decision") != "block"
+
+    # A second, distinct follow-up arrives later in the same run.
+    _portal(tmp_path, token="t3", pending=1, events=[{
+        "id": "evt-3", "source": "telegram", "summary": "second",
+        "body": "second follow-up",
+    }])
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert second["decision"] == "block"
+    assert "second follow-up" in second["reason"]
+
+
+def test_stop_does_not_reinject_identical_context_on_unchanged_token(tmp_path):
+    # #282: after a fully clean, fully-delivered closeout (0 pending, token
+    # unchanged), Claude Code's Stop hook kept re-firing 10-15+ times with
+    # byte-identical state because the closeout render was unconditional on
+    # *every* fire, not just the first one to see this snapshot — non-empty
+    # ``additionalContext`` on every fire reads to the CLI as "still
+    # something to weave in". The runner already has the affirmative
+    # all-clear text in-context from the prior Stop fire; a repeat fire on
+    # the same token should get an empty result (a real "nothing to add,
+    # stop cleanly" signal) instead of the same text again.
+    _portal(tmp_path, token="t1", pending=0)
+    env = _env(tmp_path)
+    first, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert "0 pending event(s)" in first["hookSpecificOutput"]["additionalContext"]
+
+    second, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert "hookSpecificOutput" not in second
+    assert second.get("decision") != "block"
+
+    # A genuinely new snapshot (token moves) still renders — the gate is
+    # per-token, not "only ever once for the whole run".
+    _portal(tmp_path, token="t2", pending=0)
+    third, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", env)
+    assert "0 pending event(s)" in third["hookSpecificOutput"]["additionalContext"]
 
 
 def test_stop_does_not_block_when_nothing_pending(tmp_path):
@@ -193,6 +255,47 @@ def test_scm_unknown_is_silent(tmp_path):
     )
     out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
     assert "scm:" not in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_stop_nudges_unwritten_task_classification(tmp_path):
+    # 2026-07-08: a card-staleness-style forcing function, requested directly
+    # after a run caught itself nearly closing out without writing this
+    # control file — the miss is silent otherwise (no error, a `run_ledger`
+    # row's task_classification just stays null forever).
+    _portal(tmp_path, token="t1", pending=0,
+            task_classification={"written": False})
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ".task-classification" in ctx
+    assert "not written yet" in ctx
+
+
+def test_stop_silent_when_task_classification_written(tmp_path):
+    _portal(tmp_path, token="t1", pending=0,
+            task_classification={"written": True})
+    out, _ = hooks.run_hook(hooks.PHASE_STOP, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ".task-classification" not in ctx
+
+
+def test_post_tool_never_renders_task_classification_nudge(tmp_path):
+    # Unlike the card, an unwritten control file mid-run is not itself a
+    # problem — it legitimately gets written anytime before closeout — so
+    # this stays a stop-only boundary signal, same shape as SCM.
+    _portal(tmp_path, token="t1", pending=1,
+            events=[{"id": "evt-2", "source": "telegram", "summary": "hi"}],
+            task_classification={"written": False})
+    out, _ = hooks.run_hook(hooks.PHASE_POST_TOOL, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ".task-classification" not in ctx
+
+
+def test_seed_never_renders_task_classification_nudge(tmp_path):
+    _portal(tmp_path, token="t1", pending=0,
+            task_classification={"written": False})
+    out, _ = hooks.run_hook(hooks.PHASE_SESSION_START, "{}", _env(tmp_path))
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert ".task-classification" not in ctx
 
 
 def test_post_tool_surfaces_stale_card(tmp_path):

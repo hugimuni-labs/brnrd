@@ -135,6 +135,18 @@ _LIVE_PORTAL_STATE_NAME = "portal-state.json"
 # seam preserves (the daemon stays the renderer; brnrd still only edits
 # a card it does not author or store).
 _CARD_CONTROL_NAME = ".card"
+# Agent-declared PR handle: the resident writes the PR number (or a full
+# GitHub PR URL) here right after `gh pr create` succeeds mid-run. The
+# `remote_scm` facet is deliberately network-free (`brr.facets` docstring —
+# "derived from run metadata", never a live `gh pr view`), so before this
+# file existed a PR created by the resident itself (as opposed to one a
+# GitHub-sourced task already carried in `task.meta['github_pr_number']`)
+# was invisible to the live portal for the rest of that same run — reported
+# live, 2026-07-07 (a same-thread follow-up naming the exact gap from a
+# prior run's own ergonomics note). Same shape as `.card`/`.keepalive`: a
+# small control dotfile the daemon reads on the heartbeat cadence, never
+# delivered as a chat message.
+_PR_CONTROL_NAME = ".pr"
 # Soft cap on the agent narration the daemon will accept from ``.card``.
 # Same intent as ``_format_agent_note``'s render cap: keep a runaway
 # resident from flooding a thread. Excess bytes are truncated.
@@ -152,6 +164,25 @@ _RUNNER_POLICY_REPLY_RE = re.compile(
     r"(?:runner[-_ ]?policy|policy)\s+([A-Za-z0-9_.-]{1,96})\b",
     re.IGNORECASE,
 )
+# Loom envelope Phase 2 (kb/design-multi-workstream-concurrency.md §"Named
+# forks — round 2"): unlike runner-policy above, this reply never comes
+# from a chat-typed approval — it's synthesized by
+# ``brnrd.routers.config_approval.decide_core`` once the account owner
+# clicks approve/reject on the brnrd.dev confirm URL, and arrives over the
+# same cloud events long-poll any other message does
+# (``_dispatchable_targets`` below).
+_CONFIG_CHANGE_PROPOSAL_ID_RE = _RUNNER_POLICY_PROPOSAL_ID_RE
+_CONFIG_CHANGE_REPLY_RE = re.compile(
+    r"^\s*(approve|approved|yes|reject|rejected|deny|denied|no)\s+"
+    r"config[-_ ]?change\s+([A-Za-z0-9_.-]{1,96})\b",
+    re.IGNORECASE,
+)
+# Sub-decision 1: start narrow. Keep in lockstep with
+# ``src/brnrd/routers/config_approval.py::ALLOWED_CONFIG_KEYS`` — the two
+# packages ship separately (local daemon vs. hosted server) so this can't
+# be a shared import; a mismatch just means one side rejects a proposal
+# the other would have allowed, never an unapproved config write.
+_CONFIG_CHANGE_ALLOWED_KEYS = {"spawn.max_concurrent"}
 
 
 @dataclass(frozen=True)
@@ -988,6 +1019,287 @@ def _handle_runner_policy_control_event(
     return True
 
 
+# ── Loom envelope Phase 2 — config-change proposals ────────────────────
+#
+# A resident can ask for more of an allowlisted, user-tunable ceiling
+# (today: only ``spawn.max_concurrent``) than ``.brr/config`` currently
+# grants. Unlike CS6's runner-policy proposals above, this one is never
+# applied on a chat-typed reply: the daemon mints a brnrd.dev approve/
+# confirm URL (``gates/cloud.propose_config_change``) and only applies the
+# change once that decision rides back over the account's existing
+# ``/v1/daemons/inbox`` long-poll as an ``approve config-change <id>`` /
+# ``reject config-change <id>`` event — the exact reply-body convention
+# ``_config_change_reply`` below parses, deliberately mirroring
+# ``_runner_policy_reply``'s shape so the dispatch machinery downstream
+# stays uniform. kb/design-multi-workstream-concurrency.md §"Named forks —
+# round 2".
+
+
+def _config_change_requested(fm: dict) -> str | None:
+    key = str(fm.get("config_change") or "").strip()
+    return key or None
+
+
+def _config_change_proposal_id(task: Run, event_id: str, key: str) -> str:
+    stamp = time.strftime("%y%m%d-%H%M%S", time.gmtime())
+    digest = hashlib.sha1(
+        f"{task.id}\0{event_id}\0{time.time()}\0{key}".encode("utf-8")
+    ).hexdigest()[:8]
+    return f"cfgchg-{stamp}-{digest}"
+
+
+def _read_config_change_proposal(
+    ctx: account.AccountContext,
+    proposal_id: str,
+) -> dict[str, object] | None:
+    if not _CONFIG_CHANGE_PROPOSAL_ID_RE.match(proposal_id):
+        return None
+    path = account.config_change_proposals_path(ctx) / f"{proposal_id}.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    meta = protocol.parse_frontmatter(text)
+    if str(meta.get("id") or "") != proposal_id:
+        return None
+    meta["body"] = protocol.frontmatter_body(text).strip()
+    meta["_path"] = path
+    return meta
+
+
+def _commit_account_config_update(
+    ctx: account.AccountContext,
+    *,
+    proposal_id: str,
+    action: str,
+) -> bool:
+    if not gitops.worktree_dirty(ctx.dominion_repo):
+        return False
+    committed = gitops.commit_all(
+        ctx.dominion_repo,
+        f"config-change: {action} proposal {proposal_id}",
+    )
+    if not committed:
+        return False
+    try:
+        remote = gitops.default_remote(ctx.dominion_repo)
+        branch = gitops.current_branch(ctx.dominion_repo)
+        if remote and branch and branch != "HEAD":
+            gitops.push_branch(ctx.dominion_repo, remote, branch)
+    except Exception:  # noqa: BLE001 - durability push is best-effort
+        pass
+    return True
+
+
+def _queue_config_change_proposal(
+    emit: _WorkerEmit,
+    task: Run,
+    repo_root: Path,
+    responses_dir: Path,
+    event_id: str,
+    fm: dict,
+    body: str,
+    *,
+    account_context: account.AccountContext | None,
+) -> bool:
+    key = _config_change_requested(fm)
+    if not key:
+        return False
+    raw_value = fm.get("value")
+    if raw_value is None or str(raw_value).strip() == "":
+        message = f"Config-change proposal for `{key}` had no `value:` frontmatter; dropping."
+        protocol.write_partial(responses_dir, event_id, message)
+        return True
+    requested_value = str(raw_value).strip()
+
+    if account_context is None or not account_context.enabled:
+        print("[brr] outbox: config-change proposal had no account context; dropping")
+        message = (
+            f"Config-change proposal for `{key}` needs an account context "
+            "(cross-repo dominion) to park and escalate; this repo doesn't "
+            "have one, so I left `.brr/config` untouched."
+        )
+        protocol.write_partial(responses_dir, event_id, message)
+        return True
+
+    if key not in _CONFIG_CHANGE_ALLOWED_KEYS:
+        message = (
+            f"`{key}` isn't on the agent-proposable config allowlist today "
+            f"({sorted(_CONFIG_CHANGE_ALLOWED_KEYS)}). No change requested."
+        )
+        protocol.write_partial(responses_dir, event_id, message)
+        return True
+
+    current_cfg = conf.load_config(repo_root)
+    current_value = current_cfg.get(key)
+    proposal_id = _config_change_proposal_id(task, event_id, key)
+    proposal_path = account.config_change_proposals_path(account_context) / f"{proposal_id}.md"
+    repo_label = str(
+        fm.get("repo") or fm.get("repo_label") or task.meta.get("repo_label") or account_context.default_repo.label
+    ).strip()
+    meta = {
+        "id": proposal_id,
+        "status": "pending",
+        "config_key": key,
+        "current_value": "" if current_value is None else str(current_value),
+        "requested_value": requested_value,
+        "repo_label": repo_label,
+        "created": _utc_now(),
+        "created_by_run": task.id,
+        "created_from_event": event_id,
+        "conversation_key": task.conversation_key or emit.conversation_key,
+    }
+    _write_text_atomic(proposal_path, _frontmatter_doc(meta, body.strip()))
+    _commit_account_config_update(account_context, proposal_id=proposal_id, action="park")
+
+    # Gates normally talk to the daemon exclusively through the filesystem
+    # (gates/README.md) — this is the one deliberate exception. Minting the
+    # approve URL is a rare, resident-initiated action (not a dispatch-loop
+    # tick), so a single short-timeout call here (see
+    # ``_CONFIG_CHANGE_MINT_TIMEOUT_S``) buys one message with a working
+    # link instead of a two-phase park/mint/notify dance whose async half
+    # would leave a minting failure invisible until something polled for
+    # it. Deferred import matches the existing `from .gates import cloud`
+    # pattern in cli.py.
+    from .gates import cloud
+    minted = cloud.propose_config_change(
+        emit.brr_dir,
+        proposal_id=proposal_id,
+        config_key=key,
+        current_value=current_value,
+        requested_value=requested_value,
+        reason=body.strip(),
+    )
+    if minted and minted.get("approve_url"):
+        message = (
+            f"Config-change proposal `{proposal_id}` parked: `{key}` "
+            f"`{current_value}` → `{requested_value}`.\n\n"
+            f"Approve or reject at: {minted['approve_url']}\n\n"
+            "No change applies until the account owner decides there."
+        )
+    else:
+        message = (
+            f"Config-change proposal `{proposal_id}` parked locally (`{key}` "
+            f"`{current_value}` → `{requested_value}`), but this repo isn't "
+            "cloud-connected, so there's no approve link to send. Run "
+            "`brnrd connect` first, or apply the change by hand in "
+            "`.brr/config`."
+        )
+    ppath = protocol.write_partial(responses_dir, event_id, message)
+    if emit.conversation_key:
+        conversations.append_artifact(
+            emit.brr_dir,
+            emit.conversation_key,
+            kind="config_change_proposal",
+            path=str(ppath),
+            run_id=task.id,
+            event_id=event_id,
+            label=f"config-change:{proposal_id}",
+            body=message,
+        )
+    emit(
+        "config_change_proposed",
+        run_id=task.id,
+        event_id=event_id,
+        proposal_id=proposal_id,
+        config_key=key,
+        current_value=current_value,
+        requested_value=requested_value,
+        approve_url=(minted or {}).get("approve_url"),
+    )
+    return True
+
+
+def _config_change_reply(body: str) -> tuple[str, str] | None:
+    match = _CONFIG_CHANGE_REPLY_RE.match(body)
+    if not match:
+        return None
+    verb = match.group(1).lower()
+    action = "approve" if verb in {"approve", "approved", "yes"} else "reject"
+    return action, match.group(2)
+
+
+def _handle_config_change_control_event(
+    target: _DispatchTarget,
+    account_context: account.AccountContext,
+) -> bool:
+    parsed = _config_change_reply(str(target.event.get("body") or ""))
+    if parsed is None:
+        return False
+    action, proposal_id = parsed
+    proposal = _read_config_change_proposal(account_context, proposal_id)
+    if proposal is None:
+        _write_control_response(
+            target,
+            f"I couldn't find config-change proposal `{proposal_id}`. No config changed.",
+        )
+        return True
+
+    status = str(proposal.get("status") or "").strip()
+    if status != "pending":
+        _write_control_response(
+            target,
+            f"Config-change proposal `{proposal_id}` is already `{status or 'closed'}`. "
+            "No config changed.",
+        )
+        return True
+
+    if not isinstance(proposal.get("_path"), Path):
+        _write_control_response(
+            target,
+            f"Config-change proposal `{proposal_id}` could not be read. No config changed.",
+        )
+        return True
+
+    if action == "reject":
+        protocol.update_event_meta(
+            proposal,
+            status="rejected",
+            decided=_utc_now(),
+            decided_by_event=target.event["id"],
+        )
+        _commit_account_config_update(account_context, proposal_id=proposal_id, action="reject")
+        _write_control_response(
+            target,
+            f"Rejected config-change proposal `{proposal_id}`. No config changed.",
+        )
+        return True
+
+    key = str(proposal.get("config_key") or "").strip()
+    requested_value = str(proposal.get("requested_value") or "").strip()
+    if not key or key not in _CONFIG_CHANGE_ALLOWED_KEYS or not requested_value:
+        protocol.update_event_meta(
+            proposal,
+            status="invalid",
+            decided=_utc_now(),
+            decided_by_event=target.event["id"],
+        )
+        _commit_account_config_update(account_context, proposal_id=proposal_id, action="invalidate")
+        _write_control_response(
+            target,
+            f"Config-change proposal `{proposal_id}` was no longer valid to apply "
+            f"(`{key}` off the current allowlist, or missing a value). No config changed.",
+        )
+        return True
+
+    cfg = conf.load_config(target.repo_root)
+    cfg[key] = conf._parse_value(requested_value)
+    conf.write_config(target.repo_root, cfg)
+    protocol.update_event_meta(
+        proposal,
+        status="applied",
+        decided=_utc_now(),
+        decided_by_event=target.event["id"],
+        applied_value=requested_value,
+    )
+    _commit_account_config_update(account_context, proposal_id=proposal_id, action="apply")
+    _write_control_response(
+        target,
+        f"Applied config-change proposal `{proposal_id}`: `{key}` is now `{requested_value}`.",
+    )
+    return True
+
+
 def _handle_daemon_control_events(
     targets: list[_DispatchTarget],
     account_context: account.AccountContext,
@@ -995,6 +1307,8 @@ def _handle_daemon_control_events(
     remaining: list[_DispatchTarget] = []
     for target in targets:
         if _handle_runner_policy_control_event(target, account_context):
+            continue
+        if _handle_config_change_control_event(target, account_context):
             continue
         remaining.append(target)
     return remaining
@@ -1334,9 +1648,17 @@ def _run_worker(
         live_run_label = " ".join(
             str(event.get("summary") or task.body or "").split()
         )[:120]
+        # Same fields, same derivation as the closed-run ledger row
+        # (run_ledger.py::_ledger_row) — `spawn_immediate` is set only on a
+        # concurrent `spawn:` child's own event (_queue_spawn_request), so
+        # it (not the parent-id truthiness alone) is the ledger's own
+        # is_subspawn source of truth; mirrored here rather than
+        # re-derived differently.
         presence_id = presence.register(
             brr_dir, kind="daemon", stream=conv_key, run_id=task.id,
             repo_label=repo_label, label=live_run_label,
+            parent_run_id=task.meta.get("spawn_parent_run_id") or None,
+            is_subspawn=bool(task.meta.get("spawn_immediate")),
         )["id"]
         task.meta["presence_id"] = presence_id
     except OSError:
@@ -1643,6 +1965,7 @@ def _run_worker(
         work_dir=run_root,
         quota_summary=quota_summary,
         cfg=cfg,
+        brr_dir=brr_dir,
     )
 
     attempt = 0
@@ -1700,6 +2023,7 @@ def _run_worker(
             pending_events=pending_events_snapshot,
             present=present_snapshot,
             event_body=event_body_for_prompt,
+            event_attachments=protocol.event_attachment_paths(event),
             budget_seconds=budget_seconds,
             runner_medium=runner_name,
             runner_quota=quota_summary,
@@ -1739,6 +2063,7 @@ def _run_worker(
             work_dir=run_root,
             quota_summary=quota_summary,
             cfg=cfg,
+            brr_dir=brr_dir,
         )
 
         def _emit_heartbeat() -> None:
@@ -1773,6 +2098,7 @@ def _run_worker(
                 work_dir=run_root,
                 quota_summary=quota_summary,
                 cfg=cfg,
+                brr_dir=brr_dir,
             )
             if presence_id:
                 presence.heartbeat(brr_dir, presence_id)
@@ -1823,6 +2149,7 @@ def _run_worker(
                 work_dir=run_root,
                 quota_summary=quota_summary,
                 cfg=cfg,
+                brr_dir=brr_dir,
                 refresh_levels=False,
             )
 
@@ -1881,6 +2208,7 @@ def _run_worker(
             work_dir=run_root,
             quota_summary=quota_summary,
             cfg=cfg,
+            brr_dir=brr_dir,
         )
         # Capture the resident's dominion edits before any branch/exit. One
         # call site covers success, retry, and hard failure: a clean
@@ -2570,6 +2898,7 @@ def _resources_facet(
     quality_escalation: "dict[str, object] | None" = None,
     relay_consent: "dict[str, object] | None" = None,
     pacing_status: "dict[str, object] | None" = None,
+    coexisting: "list[dict[str, object]] | None" = None,
 ) -> dict[str, object]:
     """Operator-facing 'work status' the running resident can read.
 
@@ -2579,6 +2908,11 @@ def _resources_facet(
     asymmetry all live in ``facets``; this keeps the daemon's construction call
     in one place so the JSON snapshot, the woven hook line, and ``brr portal
     state`` can never drift on which facets they carry.
+
+    ``coexisting`` is ``None`` unless the call site has a presence snapshot to
+    give (see ``_write_live_portal_state``'s ``brr_dir`` param) — passing
+    ``None`` reproduces the previous always-``unimplemented`` behaviour
+    exactly.
     """
     return facets.build(
         quota_summary=quota_summary,
@@ -2592,6 +2926,7 @@ def _resources_facet(
         quality_escalation=quality_escalation,
         relay_consent=relay_consent,
         pacing_status=pacing_status,
+        coexisting=coexisting,
     )
 
 
@@ -2617,6 +2952,27 @@ def _scm_facet(
         "unpushed_commits": worktree.unpushed_commit_count(Path(work_dir)),
         "modified_files": worktree.uncommitted_file_count(Path(work_dir)),
     }
+
+
+_PR_CONTROL_RE = re.compile(r"(\d+)\s*$")
+
+
+def _read_pr_control(pr_path: Path) -> str | None:
+    """Best-effort PR number from the ``.pr`` control file, or ``None``.
+
+    Accepts a bare number (``274``), a ``#``-prefixed one, or a full PR URL
+    (``.../pull/274``) — whatever's quickest for the resident to write right
+    after ``gh pr create`` prints its result. Never raises; a malformed or
+    missing file just means ``remote_scm`` falls back to ``task.meta``.
+    """
+    try:
+        text = pr_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    match = _PR_CONTROL_RE.search(text)
+    return match.group(1) if match else None
 
 
 def _change_token(payload: dict[str, object]) -> str:
@@ -2677,6 +3033,7 @@ def _write_live_portal_state(
     quota_summary: str | None = None,
     refresh_levels: bool = True,
     cfg: dict | None = None,
+    brr_dir: Path | None = None,
 ) -> Path | None:
     """Refresh the runner-visible daemon-state portal.
 
@@ -2690,6 +3047,14 @@ def _write_live_portal_state(
     ``True`` (default, heartbeat path) allows a cache-miss to trigger the
     blocking PTY probe; ``False`` (flush path) only reads the on-disk
     cache, keeping the event-driven flush cheap.
+
+    *brr_dir*, when given, wires the ``coexisting_runs`` facet to a live
+    presence-registry read (self excluded) — the same query already used to
+    build the wake-time-only ``present_snapshot`` injected into
+    ``context.md`` (``_run_worker``, "Other thoughts awake right now"), now
+    refreshed on every heartbeat/flush instead of frozen at wake time. A
+    caller that omits it gets the previous ``unimplemented`` behaviour
+    unchanged.
     """
     if not outbox_dir:
         return None
@@ -2719,6 +3084,15 @@ def _write_live_portal_state(
             runner_name, outbox_dir, work_dir, refresh=refresh_levels
         )
         pacing_status = _quota_pacing_status(cfg or {}, run_levels)
+        coexisting_snapshot: list[dict[str, object]] | None = None
+        if brr_dir is not None:
+            try:
+                coexisting_snapshot = [
+                    e for e in presence.list_active(brr_dir)
+                    if e.get("run_id") != task.id
+                ]
+            except OSError:
+                coexisting_snapshot = None
         payload: dict[str, object] = {
             "version": 1,
             "generated_at": time.strftime(
@@ -2776,6 +3150,19 @@ def _write_live_portal_state(
                 "keepalive": _keepalive_state(keepalive_path),
             },
             "scm": _scm_facet(work_dir, task.meta.get("branch_name")),
+            # Task-classification presence: the ledger's only rollup-by-shape
+            # join key (``run_ledger.py`` §``task_classification``), and one a
+            # resident can go a whole run without writing since nothing
+            # breaks when it's missing — the row's field just stays null
+            # forever. A card-staleness-style forcing function, named
+            # directly after a live near-miss (2026-07-07,
+            # run-260707-2243-nf13's own predecessor caught it only because
+            # the maintainer's question forced a self-check).
+            "task_classification": {
+                "written": bool(
+                    run_ledger.read_task_classification_control(outbox_dir)
+                ),
+            },
             "resources": _resources_facet(
                 quota_summary,
                 # Per-Shell level source (see _collect_levels): Codex reads its
@@ -2786,13 +3173,23 @@ def _write_live_portal_state(
                 levels=run_levels,
                 levels_collector=run_level_slots,
                 branch=task.meta.get("branch_name"),
-                pr_number=task.meta.get("github_pr_number"),
+                # A resident-declared `.pr` control file wins over task.meta:
+                # it's this run's own live evidence (written the moment `gh pr
+                # create` succeeds), whereas `github_pr_number` in task.meta
+                # only exists for tasks that originated *from* a GitHub
+                # issue/PR — a run that creates its own PR mid-thought had no
+                # way to update that field before this file existed.
+                pr_number=(
+                    _read_pr_control(outbox_dir / _PR_CONTROL_NAME)
+                    or task.meta.get("github_pr_number")
+                ),
                 runner_name=runner_name,
                 runner_meta=runner_meta,
                 runner_catalog=runner_catalog,
                 quality_escalation=quality_escalation,
                 relay_consent=relay_consent,
                 pacing_status=pacing_status,
+                coexisting=coexisting_snapshot,
             ),
         }
         payload["change_token"] = _change_token(payload)
@@ -2969,8 +3366,8 @@ def _queue_spawn_request(
     difference: a respawn only ever starts once *this* run ends (queued
     into the ordinary inbox, dispatched by the next idle tick); a spawn is
     picked up by the main loop's *second* dispatch slot immediately,
-    alongside this still-running thought (see the ``current_spawn`` cap-of-1
-    slot in the daemon loop). Always ``worker: true`` — never the
+    alongside this still-running thought (see ``active_spawns`` and
+    ``_max_concurrent_spawns`` in the daemon loop). Always ``worker: true`` — never the
     resident stack — a concurrent child does not get dominion write, kb
     governance, or scheduling authority any more than a sequential
     worker-stack respawn does (`kb/design-director-loop.md` §"Concurrent
@@ -3001,6 +3398,20 @@ def _queue_spawn_request(
         return False
     source = str(fm.get("source") or "spawn")
     meta: dict = {"worker": True}
+    # A spawn is the one primitive that deliberately runs concurrently
+    # with its still-running parent in the *same* daemon process — every
+    # other dispatch path (respawn:, a fresh event) only ever starts once
+    # whatever came before it has ended, so sharing the repo's own
+    # `environment=host` working directory has never been a collision
+    # risk for them. For a spawn it is: confirmed live 2026-07-07
+    # (run-260707-1321-auhp, kb/design-director-loop.md §"Concurrent
+    # sub-spawns" addendum) a spawned child's `git checkout -b` executed
+    # in the same cwd as the parent's own mid-edit shell, flipping the
+    # parent's branch out from under it. Force worktree isolation
+    # unconditionally, regardless of the repo's own env policy — an
+    # event's own `environment` key outranks the repo config default
+    # (`run.py::_event_environment_policy`).
+    meta["environment"] = "worktree"
     if proposed:
         meta["shell"] = proposed
     if core:
@@ -3141,6 +3552,23 @@ def _drain_outbox(
                 if stats is not None:
                     stats["current"] = stats.get("current", 0) + 1
                     stats["runner_policy"] = stats.get("runner_policy", 0) + 1
+            fpath.unlink(missing_ok=True)
+            continue
+        if _config_change_requested(fm):
+            if _queue_config_change_proposal(
+                emit,
+                task,
+                repo_root,
+                responses_dir,
+                event_id,
+                fm,
+                body,
+                account_context=account_context,
+            ):
+                promoted += 1
+                if stats is not None:
+                    stats["current"] = stats.get("current", 0) + 1
+                    stats["config_change"] = stats.get("config_change", 0) + 1
             fpath.unlink(missing_ok=True)
             continue
         if _truthy(fm.get("respawn")):
@@ -3922,6 +4350,30 @@ def _seconds_config(
     return default
 
 
+_MAX_CONCURRENT_SPAWNS_DEFAULT = 4
+
+
+def _max_concurrent_spawns(cfg: dict) -> int:
+    """Configured worker-stack ``spawn:`` pool width.
+
+    Slice 1 (kb/design-director-loop.md §"Concurrent sub-spawns") shipped
+    this hardcoded at a cap of 1. Generalized to a small configurable pool
+    per kb/design-multi-workstream-concurrency.md "Ranked moves" #1 and the
+    maintainer's 2026-07-08 call ("set the concurrency to 4 or something
+    already"). ``spawn.max_concurrent`` in ``.brr/config``; clamped to at
+    least 1 so a misconfigured 0/negative value can't silently wedge every
+    ``spawn:`` request back into the ordinary sequential queue.
+    """
+    raw = cfg.get("spawn.max_concurrent", _MAX_CONCURRENT_SPAWNS_DEFAULT)
+    if isinstance(raw, bool):
+        return _MAX_CONCURRENT_SPAWNS_DEFAULT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _MAX_CONCURRENT_SPAWNS_DEFAULT
+    return max(1, value)
+
+
 def _post_delivery_attend_seconds(cfg: dict) -> float:
     """Configured daemon-owned dwell after a current-thread delivery.
 
@@ -4132,6 +4584,26 @@ def _deduplicated_event_body() -> str:
     )
 
 
+def _crash_requires_notice(event: dict) -> bool:
+    """True when a *hard failure* on this event should still surface.
+
+    ``_event_requires_thread_delivery`` says "schedule" is internal — right
+    for the success path, where a director tick that re-derived nothing new
+    is correctly silent (the notify-bar logic, untouched by this). But a
+    crash is never "did its job quietly": found live 2026-07-07
+    (run-260707-1154-kem3, the 11:54 director tick) — killed mid-run
+    (returncode 143, empty stdout/stderr), yet ``_event_requires_thread_delivery``
+    made ``_write_terminal_failure_response`` return before writing anything,
+    so the crash left zero trace anywhere the maintainer could see it.
+    Silence-because-crashed and silence-because-nothing-changed rendered
+    identically — indistinguishable from the one surface (chat) the
+    maintainer actually watches. The gate can already route a schedule
+    event's response via ``last_chat_id`` (PR #244), so this only needed
+    the early-return relaxed for the failure path specifically.
+    """
+    return str(event.get("source") or "") == "schedule"
+
+
 def _write_terminal_failure_response(
     emit: _WorkerEmit,
     task: Run,
@@ -4148,7 +4620,7 @@ def _write_terminal_failure_response(
     The run record still stays ``error``; only the inbox event moves to
     ``done`` so the gate has a message to deliver and a cleanup signal.
     """
-    if not _event_requires_thread_delivery(event):
+    if not _event_requires_thread_delivery(event) and not _crash_requires_notice(event):
         return False
     if _response_has_body(response_path):
         return False
@@ -4596,24 +5068,26 @@ def start(
     # gate liveness, and signals during a long thought. The runner's own
     # wall-clock timeout (runner.timeout_seconds) is the liveness
     # backstop that reclaims the slot if the CLI subprocess wedges.
-    # Second slot (kb/design-director-loop.md §"Concurrent sub-spawns",
-    # slice 1): `current` remains the one resident-stack thought
+    # Second pool (kb/design-director-loop.md §"Concurrent sub-spawns";
+    # generalized past cap-of-1 in kb/design-multi-workstream-concurrency.md
+    # "slice 1"): `current` remains the one resident-stack thought
     # single-flight protects (dominion write, kb governance, scheduling).
-    # `current_spawn` is a *worker-stack-only*, cap-of-1 concurrent child a
-    # running thought can dispatch via `spawn:` outbox frontmatter — it
-    # never touches the surface single-flight exists to protect, so it
-    # gets its own pool slot rather than waiting behind the resident's.
+    # `active_spawns` holds up to `_max_concurrent_spawns(cfg)` *worker-
+    # stack-only* concurrent children a running thought can dispatch via
+    # `spawn:` outbox frontmatter — none of them touch the surface
+    # single-flight exists to protect, so they share a pool of their own
+    # rather than waiting behind the resident's slot.
+    max_spawns = _max_concurrent_spawns(cfg)
     pool = concurrent.futures.ThreadPoolExecutor(
-        max_workers=2,
+        max_workers=1 + max_spawns,
         thread_name_prefix="brr-thought",
     )
     current: concurrent.futures.Future | None = None
-    current_spawn: concurrent.futures.Future | None = None
-    current_spawn_inbox_dir: Path | None = None
-    # Captured at submission time so a crashed spawn (which never returns a
-    # Run/task object) can still be notified back to its parent — see
+    # Each entry: {"future", "inbox_dir", "event"}. `event` is captured at
+    # submission time so a crashed spawn (which never returns a Run/task
+    # object) can still be notified back to its parent — see
     # _notify_spawn_parent_of_crash.
-    current_spawn_event: dict | None = None
+    active_spawns: list[dict] = []
     reload_requested = False
 
     wake = protocol.inbox_wake()
@@ -4642,26 +5116,30 @@ def start(
                     print(f"[brr] thought crashed: {exc}")
                 current = None
 
-            # Reap the concurrent worker-stack child, if one is in flight,
-            # and notify its still-running parent thought (or leave a
+            # Reap any concurrent worker-stack children that have finished,
+            # and notify each one's still-running parent thought (or leave a
             # normal pending event behind if the parent already ended —
             # the next dispatch tick picks it up like any other follow-up,
             # standing in for the guessed-time review self-wake convention
             # this replaces for the common case).
-            if current_spawn is not None and current_spawn.done():
-                try:
-                    spawn_task = current_spawn.result()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[brr] spawned child crashed: {exc}")
-                    if current_spawn_event is not None:
-                        _notify_spawn_parent_of_crash(
-                            current_spawn_inbox_dir, current_spawn_event, exc,
-                        )
-                else:
-                    _notify_spawn_parent(current_spawn_inbox_dir, spawn_task)
-                current_spawn = None
-                current_spawn_inbox_dir = None
-                current_spawn_event = None
+            if active_spawns:
+                still_running = []
+                for spawn in active_spawns:
+                    future = spawn["future"]
+                    if not future.done():
+                        still_running.append(spawn)
+                        continue
+                    try:
+                        spawn_task = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[brr] spawned child crashed: {exc}")
+                        if spawn["event"] is not None:
+                            _notify_spawn_parent_of_crash(
+                                spawn["inbox_dir"], spawn["event"], exc,
+                            )
+                    else:
+                        _notify_spawn_parent(spawn["inbox_dir"], spawn_task)
+                active_spawns = still_running
 
             # Quiescent reload: only re-exec between thoughts, so a
             # running run can't have its process replaced underneath it.
@@ -4686,30 +5164,100 @@ def start(
             # marked event is never a resident-lead candidate and vice
             # versa, so splitting one pass avoids a second full inbox scan
             # (and a second round of ``list_pending`` I/O) every tick.
+            # Scanning is gated on an open slot existing at all, not on
+            # ``reload_requested`` — a pending package-file reload no
+            # longer holds the spawn slot shut (see below); it still holds
+            # the *resident* slot shut, so a scan purely for a fresh
+            # resident dispatch would be wasted while reload is pending.
             scanned: list[_DispatchTarget] | None = None
-            if not reload_requested and (current is None or current_spawn is None):
+            if len(active_spawns) < max_spawns or (
+                current is None and not reload_requested
+            ):
                 scanned = _dispatchable_targets(account_context, repo_root, cfg)
 
-            # Concurrent worker-stack child (slice 1): dispatched
-            # independently of the resident's own `current` slot — that's
-            # the entire point, a spawn runs *alongside* the still-live
-            # parent thought rather than after it ends. Capped at 1
-            # (`current_spawn is None`), scanned every tick regardless of
-            # whether the resident slot is busy. No burst-settling here —
+            # Concurrent worker-stack children (slice 1, generalized past
+            # cap-of-1): dispatched independently of the resident's own
+            # `current` slot — that's the entire point, a spawn runs
+            # *alongside* the still-live parent thought rather than after it
+            # ends. Capped at `max_spawns` (`len(active_spawns) <
+            # max_spawns`), scanned every tick regardless of whether the
+            # resident slot is busy. No burst-settling here —
             # unlike a fresh external message, a `spawn:` request is
             # already one deliberate, already-complete dispatch decision
             # the parent made; nothing to debounce it against.
-            if current_spawn is None and not reload_requested:
-                spawn_candidates = [
-                    t for t in (scanned or []) if t.event.get("spawn_immediate")
-                ]
-                if spawn_candidates:
-                    target = spawn_candidates[0]
+            #
+            # Deliberately NOT gated on ``reload_requested`` (kb/plan-
+            # spawn-gap-closure.md "Gap 2", resolved 2026-07-08). A spawn
+            # is a separate subprocess (a `claude`/`codex` CLI child); it
+            # does its own work by reading the checkout fresh off disk,
+            # never by calling back into this process's in-memory daemon
+            # module. So the staleness risk re-exec-gating exists to guard
+            # against never reaches the child's own work at all — only the
+            # few lines of daemon orchestration code that submit/reap/
+            # notify it (the subprocess call below, and
+            # ``_notify_spawn_parent`` / ``_notify_spawn_parent_of_crash``
+            # on reap) could run stale. The vision this closes against
+            # (2026-07-08, same-thread): "the daemon should do [the]
+            # little possible work there, we just need to make sure the
+            # runs don't step on each other's toes" — and toe-stepping is
+            # what `environment: worktree` (unconditionally forced onto
+            # every spawned event, Gap 1, shipped 2026-07-08) actually
+            # guards, not process-image freshness. Holding the spawn slot
+            # shut for an unrelated package edit crippled the primitive
+            # for close to "most substantive resident turns" on this
+            # repo's own dev-reload daemon (design-director-loop.md
+            # "Finding 2/3") for a staleness risk that's narrow (only the
+            # rare edit that changes spawn-dispatch logic itself) and
+            # already bounded by the standing review-before-close contract
+            # and the crash-notify path (PR #266) — a bad dispatch
+            # surfaces at review, it doesn't silently corrupt anything.
+            # Re-exec itself is still safe: ``pool.shutdown(wait=True)``
+            # below blocks on any in-flight spawn future exactly as it does
+            # on ``current``, so a reload never kills a spawn mid-flight,
+            # only defers replacing the process image until every active
+            # spawn (and the resident thought) is done.
+            open_spawn_slots = max_spawns - len(active_spawns)
+            if open_spawn_slots > 0:
+                # Dedup against events already claimed this tick or a prior
+                # one: `list_dispatchable`/`list_pending` deliberately keep
+                # returning "processing" events too (so a still-running
+                # resident event stays visible for follow-up-folding), but
+                # that means a spawn-marked event survives its own
+                # `set_status(..., "processing")` write and reappears as a
+                # "candidate" on every subsequent tick. The resident
+                # dispatch path (above) is guarded by `current is None`
+                # in-memory, which incidentally also blocks this
+                # re-selection; the spawn pool has no equivalent single
+                # in-flight flag to check once `max_spawns` > 1, so nothing
+                # stopped the same event from filling every remaining open
+                # slot in one tick, or across ticks before the pool filled.
+                # Root-caused live 2026-07-08 (run-260708-2010-5sor): a
+                # single `spawn:` outbox dispatch produced 4 concurrent
+                # duplicate children (run-260708-2017-{zzc1,tgvx,a2kn,i8x6}),
+                # each its own worktree, all working the same event —
+                # exactly bounded by `max_spawns`, which is what gave the
+                # bug away. Filter by event id against both the active pool
+                # and events already selected earlier in this same tick.
+                active_spawn_ids = {
+                    spawn["event"].get("id") for spawn in active_spawns
+                }
+                spawn_candidates: list[_DispatchTarget] = []
+                for t in (scanned or []):
+                    if not t.event.get("spawn_immediate"):
+                        continue
+                    eid = t.event.get("id")
+                    if eid in active_spawn_ids:
+                        continue
+                    active_spawn_ids.add(eid)
+                    spawn_candidates.append(t)
+                    if len(spawn_candidates) >= open_spawn_slots:
+                        break
+                for target in spawn_candidates:
                     event = target.event
                     eid = event["id"]
                     print(f"[brr] processing (concurrent spawn): {eid}")
                     protocol.set_status(event, "processing")
-                    current_spawn = pool.submit(
+                    future = pool.submit(
                         _run_worker_and_finalize,
                         event,
                         target.repo_root,
@@ -4719,14 +5267,22 @@ def start(
                         account_context=account_context,
                         inbox_dir=target.inbox_dir,
                     )
-                    current_spawn_inbox_dir = target.inbox_dir
-                    current_spawn_event = event
+                    active_spawns.append(
+                        {
+                            "future": future,
+                            "inbox_dir": target.inbox_dir,
+                            "event": event,
+                        }
+                    )
 
             # Spawn one thought when idle and work is pending. Events that
             # arrive while a thought runs stay pending — the living agent
             # picks them up at a plan boundary (multi-response), or the
-            # next spawn handles them. Reload also holds dispatch so the
-            # slot can drain.
+            # next spawn handles them. Reload holds *this* (resident)
+            # dispatch so the slot can drain and re-exec can proceed — a
+            # fresh resident thought must not start on soon-to-be-stale
+            # code. The concurrent-spawn slot above is no longer gated the
+            # same way; see its own comment.
             burst_hold = 0.0
             if current is None and not reload_requested:
                 pending = [
@@ -4798,11 +5354,13 @@ def start(
         # reclaim the slot promptly instead of waiting out its (long,
         # possibly extended) budget, then drain the thought.
         #
-        # Known slice-1 gap: ``runner.kill_active`` tracks a single active
-        # subprocess module-globally, so a live concurrent spawn (if any)
-        # isn't killed here the way the resident's own ``current`` is —
-        # ``pool.shutdown(wait=True)`` still drains it, just without the
-        # prompt-reclaim this gives the resident slot. Not fixed in this
+        # Known slice-1 gap, wider now that ``max_spawns`` can exceed 1:
+        # ``runner.kill_active`` tracks a single active subprocess
+        # module-globally, so live concurrent spawns aren't killed here the
+        # way the resident's own ``current`` is — ``pool.shutdown(wait=True)``
+        # still drains them, just without the prompt-reclaim this gives the
+        # resident slot, and a shutdown now waits out up to `max_spawns`
+        # in-flight children instead of at most one. Not fixed in this
         # slice; would need ``kill_active`` to become a small registry.
         if current is not None and not current.done():
             if runner.kill_active():

@@ -396,6 +396,150 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
     assert shells["codex"]["windows"][1]["resets_at"] == 1783890000.0
 
 
+def test_claude_quota_shell_carries_scrape_updated_at_and_credits(tmp_path):
+    """2026-07-07 fix ('the lying Claude usage panel'): the published shell
+    payload must forward the underlying scrape's own timestamp (so the
+    dashboard can flag staleness against real data age, not the daemon's
+    always-fresh publish cadence) and a real per-run USD figure when Claude's
+    result JSON proved one — the credits/metered-overage exposure the
+    maintainer asked for after confirming live that a run keeps working (and
+    billing) straight through an exhausted 5h window."""
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-credits-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 1.0}, "week": {"remaining_percentage": 9.0}}},
+                "session_reset": "resets 12:20am (Europe/Berlin)",
+                "week_reset": "resets Jul 10, 12am (Europe/Berlin)",
+                "updated_at": "2026-07-07T20:17:03Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_outbox / ".claude-result-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "spend": {"summary": "$1.15 this session (estimated)", "total_cost_usd": 1.15},
+                "updated_at": "2026-07-07T20:20:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+    assert shell is not None
+    assert shell["updated_at"] == "2026-07-07T20:17:03Z"
+    assert shell["credits"] == {
+        "total_cost_usd": 1.15,
+        "summary": "$1.15 this session (estimated)",
+        "updated_at": "2026-07-07T20:20:00Z",
+    }
+
+
+def test_claude_quota_shell_refreshes_stale_idle_cache(tmp_path, monkeypatch):
+    """The dashboard publisher must not keep scavenging a stale run cache
+    forever once no Claude run is actively heartbeating."""
+    import json as json_mod
+    import os
+    import time
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-stale-run"
+    run_outbox.mkdir(parents=True)
+    usage_path = run_outbox / ".claude-usage-levels.json"
+    usage_path.write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 100.0}}},
+                "session_reset": "old",
+                "updated_at": "2026-07-07T06:54:17Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    old = time.time() - cloud._CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS - 30
+    os.utime(usage_path, (old, old))
+
+    monkeypatch.setattr(
+        cloud.claude_usage,
+        "capture_levels",
+        lambda *a, **k: {
+            "quota": {"buckets": {"session": {"remaining_percentage": 0.0}, "week": {"remaining_percentage": 9.0}}},
+            "session_reset": "12:20am (Europe/Berlin)",
+            "week_reset": "Jul 10, 12am (Europe/Berlin)",
+            "updated_at": "2026-07-07T20:58:59Z",
+        },
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+
+    assert shell is not None
+    assert shell["updated_at"] == "2026-07-07T20:58:59Z"
+    assert shell["windows"][0]["percent"] == 0.0
+    assert shell["windows"][1]["percent"] == 9.0
+
+
+def test_claude_quota_shell_publishes_usage_credit_balance(tmp_path):
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-credits-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 0.0}}},
+                "usage_credits": {
+                    "enabled": True,
+                    "used_percentage": 21.0,
+                    "remaining_percentage": 79.0,
+                    "spent_amount": 8.69,
+                    "limit_amount": 40.0,
+                    "currency": "\u20ac",
+                    "reset": "Aug 1 (Europe/Berlin)",
+                    "summary": "usage credits 79% left; \u20ac8.69 / \u20ac40.00 spent; resets Aug 1 (Europe/Berlin)",
+                },
+                "updated_at": "2026-07-07T20:58:59Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+
+    assert shell is not None
+    assert shell["credits"]["summary"].startswith("usage credits 79% left")
+    assert shell["credits"]["remaining_percentage"] == 79.0
+    assert shell["credits"]["spent_amount"] == 8.69
+    assert shell["credits"]["limit_amount"] == 40.0
+    assert shell["credits"]["currency"] == "\u20ac"
+
+
+def test_claude_quota_shell_credits_absent_without_a_spend_snapshot(tmp_path):
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    run_outbox = brr_dir / "outbox" / "evt-no-spend-run"
+    run_outbox.mkdir(parents=True)
+    (run_outbox / ".claude-usage-levels.json").write_text(
+        json_mod.dumps(
+            {
+                "quota": {"buckets": {"session": {"remaining_percentage": 100.0}}},
+                "updated_at": "2026-07-07T20:17:03Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shell = cloud._claude_quota_shell(brr_dir)
+    assert shell is not None
+    assert shell["credits"] is None
+
+
 def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     """#258: the local presence registry mirrors into the account-scoped
     live/coexisting-runs view, the same publish shape as quota (#237)."""
@@ -428,18 +572,39 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
         label="Add live run labels", run_id="run-live-test",
         repo_label="Gurio/brr", pid=os.getpid(),
     )
+    # A concurrent `spawn:` child (kb/design-multi-workstream-concurrency.md
+    # "Ranked moves" #1: parent_run_id/is_subspawn joined into the live
+    # view, not only the closed-run ledger) — a second, distinct pid so it
+    # doesn't collide with the resident entry above.
+    presence.register(
+        brr_dir, kind="daemon", stream="telegram:155783668:",
+        label="spawned work", run_id="run-live-spawn",
+        repo_label="Gurio/brr", pid=os.getpid(), entry_id="spawn-entry",
+        parent_run_id="run-live-test", is_subspawn=True,
+    )
+    # Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
+    # §"Loom envelope"): the configured spawn pool width piggybacks on this
+    # same publish tick.
+    (brr_dir / "config").write_text("spawn.max_concurrent=6\n")
 
     cloud._loop_once(brr_dir, inbox_dir, responses_dir)
 
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
         assert daemon.live_runs_updated_at is not None
+        assert daemon.spawn_max_concurrent == 6
         runs = json_mod.loads(daemon.live_runs_json)
-    assert len(runs) == 1
-    assert runs[0]["run_id"] == "run-live-test"
-    assert runs[0]["label"] == "Add live run labels"
-    assert runs[0]["repo_label"] == "Gurio/brr"
-    assert runs[0]["kind"] == "daemon"
+    assert len(runs) == 2
+    by_run_id = {row["run_id"]: row for row in runs}
+    resident = by_run_id["run-live-test"]
+    assert resident["label"] == "Add live run labels"
+    assert resident["repo_label"] == "Gurio/brr"
+    assert resident["kind"] == "daemon"
+    assert resident["is_subspawn"] is False
+    assert resident["parent_run_id"] is None
+    spawn = by_run_id["run-live-spawn"]
+    assert spawn["is_subspawn"] is True
+    assert spawn["parent_run_id"] == "run-live-test"
 
 
 def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
@@ -520,6 +685,167 @@ def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
             "author": "gurio",
         }
     ]
+
+
+def test_run_ledger_snapshot_tails_recent_rows_and_skips_malformed(tmp_path):
+    import json as json_mod
+
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    ledger = brr_dir / "run-ledger.jsonl"
+    rows = [{"run_id": f"run-{i}", "ended_at": f"2026-07-07T19:{i:02d}:00Z"} for i in range(25)]
+    ledger.write_text(
+        "\n".join(json_mod.dumps(row) for row in rows[:10])
+        + "\nnot json\n"
+        + "\n".join(json_mod.dumps(row) for row in rows[10:])
+        + "\n",
+        encoding="utf-8",
+    )
+
+    snapshot = cloud._run_ledger_snapshot(brr_dir)
+
+    assert len(snapshot) == 19
+    assert snapshot[0]["run_id"] == "run-6"
+    assert snapshot[-1]["run_id"] == "run-24"
+
+
+def test_run_ledger_snapshot_missing_file_is_empty(tmp_path):
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+
+    assert cloud._run_ledger_snapshot(brr_dir) == []
+
+
+def test_loop_publishes_run_ledger_snapshot(tmp_path, monkeypatch):
+    import json as json_mod
+
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    (brr_dir / "run-ledger.jsonl").write_text(
+        json_mod.dumps(
+            {
+                "run_id": "run-ledger-cloud",
+                "ended_at": "2026-07-07T19:30:00Z",
+                "task_classification": "dashboard-slice",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud, "_pr_review_repo_labels", lambda _brr_dir: [])
+
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.run_ledger_updated_at is not None
+        rows = json_mod.loads(daemon.run_ledger_json)
+    assert rows[0]["run_id"] == "run-ledger-cloud"
+    assert rows[0]["ended_at"] == "2026-07-07T19:30:00Z"
+    assert rows[0]["task_classification"] == "dashboard-slice"
+    assert rows[0]["tokens_input"] is None
+
+
+def test_dashboard_publish_tick_publishes_all_six_snapshots(tmp_path, monkeypatch):
+    """kb/plan-loom-realtime-build.md slice 0: dashboard snapshots must not
+    wait on the inbox long-poll (`_POLL_WAIT_S = 25`) to publish — a single
+    ``_dashboard_publish_tick`` call (what the background loop calls every
+    ``_DASHBOARD_PUBLISH_INTERVAL_S``) has to move all six, the same set
+    ``_loop_once`` publishes, without needing an inbox event at all."""
+    from brnrd.models import Daemon as DaemonModel
+
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    client, _ = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    daemon_headers = {"Authorization": f"Bearer {token}"}
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 0},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+    monkeypatch.setattr(cloud, "_pr_review_repo_labels", lambda _brr_dir: [])
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
+
+    listing = client.get("/v1/accounts/activity", headers=acc)
+    assert listing.status_code == 200
+    with client.app.state.SessionLocal() as db:
+        daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
+        assert daemon.quota_updated_at is not None
+        assert daemon.live_runs_updated_at is not None
+        assert daemon.pr_review_queue_updated_at is not None
+        assert daemon.run_ledger_updated_at is not None
+
+
+def test_dashboard_publish_tick_noop_without_configured_state(tmp_path):
+    """No token/URL yet (not paired) → skip quietly, don't raise — this runs
+    unattended on a background thread with no caller to surface an error to."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    cloud._save_state(brr_dir, {})
+
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)  # must not raise
+
+
+def test_run_loop_starts_dashboard_publish_thread(tmp_path, monkeypatch):
+    """The fast publish loop has to actually be wired into `run_loop`, not
+    just exist as a dead function — assert the thread it spawns runs
+    `_dashboard_publish_loop` with this run's `brr_dir`/`inbox_dir`."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    cloud._save_state(brr_dir, {"brnrd_url": "http://brnrd", "token": "t", "repo_id": 1})
+
+    started: list[tuple] = []
+
+    class _StubThread:
+        def __init__(self, *, target, args, daemon, name):
+            started.append((target, args, daemon, name))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(cloud.threading, "Thread", _StubThread)
+    monkeypatch.setattr(cloud, "_register", lambda *_a, **_k: None)
+
+    def stop_after_one(*_a, **_k):
+        raise cloud.BrnrdAuthError("stop the loop for the test")
+
+    monkeypatch.setattr(cloud, "_loop_once", stop_after_one)
+
+    cloud.run_loop(brr_dir, inbox_dir, responses_dir)
+
+    assert len(started) == 1
+    target, args, daemon, name = started[0]
+    assert target is cloud._dashboard_publish_loop
+    assert args == (brr_dir, inbox_dir)
+    assert daemon is True
+    assert name == "cloud-dashboard-publish"
 
 
 def test_drain_preserves_github_origin_metadata(tmp_path, monkeypatch):

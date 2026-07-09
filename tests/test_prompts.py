@@ -25,6 +25,54 @@ class TestContextInjection:
     def test_read_recent_log_missing(self, tmp_path):
         assert _read_recent_log(tmp_path) == ""
 
+    def test_read_recent_log_falls_back_to_home_knowledge(self, tmp_path):
+        """A repo that migrated kb/ out per design-home-scopes-and-knowledge.md
+
+        still gets its recent-activity block from home knowledge instead of
+        going silent just because ``kb/log.md`` no longer lives in the tree.
+        """
+        from _helpers import init_git_repo
+
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        home = tmp_path / "home"
+        (repo / ".brr").mkdir()
+        (repo / ".brr" / "config").write_text(f"home.path={home}\n", encoding="utf-8")
+        (home / "knowledge").mkdir(parents=True)
+        (home / "knowledge" / "log.md").write_text(
+            "# Activity Log\n\n## [2026-07-09] migrate | kb moved\n\nOut of the tree.\n",
+            encoding="utf-8",
+        )
+
+        result = _read_recent_log(repo)
+
+        assert "## [2026-07-09]" in result
+        assert "Out of the tree" in result
+
+    def test_read_recent_log_prefers_repo_kb_when_both_exist(self, tmp_path):
+        from _helpers import init_git_repo
+
+        repo = tmp_path / "repo"
+        init_git_repo(repo)
+        home = tmp_path / "home"
+        (repo / ".brr").mkdir()
+        (repo / ".brr" / "config").write_text(f"home.path={home}\n", encoding="utf-8")
+        (home / "knowledge").mkdir(parents=True)
+        (home / "knowledge" / "log.md").write_text(
+            "# Activity Log\n\n## [2026-01-01] plan | home only\n\nHome copy.\n",
+            encoding="utf-8",
+        )
+        (repo / "kb").mkdir()
+        (repo / "kb" / "log.md").write_text(
+            "# Activity Log\n\n## [2026-07-09] plan | repo copy\n\nStill in the tree.\n",
+            encoding="utf-8",
+        )
+
+        result = _read_recent_log(repo)
+
+        assert "repo copy" in result
+        assert "home only" not in result
+
     def test_read_recent_log_basic(self, tmp_path):
         kb = tmp_path / "kb"
         kb.mkdir()
@@ -163,7 +211,7 @@ class TestPromptBuilding:
         (prompts_dir / "run.md").write_text("You are an agent.")
         monkeypatch.setattr(
             kb_preflight, "scan",
-            lambda _root: [
+            lambda _root, _kb_dir=None: [
                 kb_preflight.Finding(
                     type="missing-from-index",
                     target="kb/decision-orphan.md",
@@ -184,7 +232,7 @@ class TestPromptBuilding:
         prompts_dir = tmp_path / ".brr" / "prompts"
         prompts_dir.mkdir(parents=True)
         (prompts_dir / "run.md").write_text("You are an agent.")
-        monkeypatch.setattr(kb_preflight, "scan", lambda _root: [])
+        monkeypatch.setattr(kb_preflight, "scan", lambda _root, _kb_dir=None: [])
 
         prompt = build_run_prompt("do something", tmp_path)
         assert "kb health" not in prompt
@@ -200,7 +248,7 @@ class TestPromptBuilding:
         (prompts_dir / "run.md").write_text("You are an agent.")
         monkeypatch.setattr(
             kb_preflight, "scan",
-            lambda _root: [
+            lambda _root, _kb_dir=None: [
                 kb_preflight.Finding(
                     type="broken-link", target="kb/x.md",
                     description="dangling reference",
@@ -722,6 +770,31 @@ class TestPromptBuilding:
         assert "Seed ref: feat/task" in prompt
         assert "Workstream" not in prompt
         assert "Triage" not in prompt
+
+    def test_daemon_prompt_lists_event_attachments_for_read(self, tmp_path):
+        image_path = tmp_path / "evt-1.attachments" / "photo.jpg"
+        prompt = build_daemon_prompt(
+            "look at this", "evt-1", "/tmp/resp.md", tmp_path,
+            event_body="look at this",
+            event_attachments=[image_path],
+        )
+        assert "Original event body" in prompt
+        assert "look at this" in prompt
+        assert "Attachments" in prompt
+        assert str(image_path) in prompt
+
+    def test_daemon_prompt_shows_attachments_section_with_empty_body(self, tmp_path):
+        # A bare photo with no caption: body is empty, but the image is
+        # still the whole point of the event — the section must still
+        # render so the attachment isn't silently invisible.
+        image_path = tmp_path / "evt-1.attachments" / "photo.jpg"
+        prompt = build_daemon_prompt(
+            "task", "evt-1", "/tmp/resp.md", tmp_path,
+            event_body="",
+            event_attachments=[image_path],
+        )
+        assert "Original event body" in prompt
+        assert str(image_path) in prompt
 
     def test_daemon_prompt_with_communication_snapshot(self, tmp_path):
         prompts = tmp_path / ".brr" / "prompts"

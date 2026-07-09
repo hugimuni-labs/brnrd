@@ -111,6 +111,7 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
                 "shell": "claude",
                 "status": "known",
                 "windows": [{"label": "5h window", "used": None, "limit": None, "percent": 61.0}],
+                "credits": None,
             }
         ]
 
@@ -118,6 +119,59 @@ def test_dashboard_renders_real_quota_and_flags_stale_reports():
         db.commit()
         stale = _quota_views(db, [repo], runner_stats=[])
         assert stale[0]["status"] == "stale"
+        assert stale[0]["windows"][0]["percent"] is None
+
+
+def test_dashboard_quota_staleness_measures_scrape_age_not_publish_cadence():
+    """The 'lying Claude usage panel' bug (2026-07-07): a daemon that keeps
+    publishing every ~25-30s makes `quota_updated_at` (the publish time)
+    always fresh, even when the underlying Claude `/usage` scrape a shell
+    carries has gone stale for hours because no Claude run has been active
+    to refresh it. Staleness must be measured against the shell's own
+    `updated_at`, not the publish timestamp."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import Daemon
+    from brnrd_web.activity_dashboard import _quota_views
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        repo = db.get(Repo, pid)
+        stale_scrape_at = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        daemon = Daemon(
+            id="dmn-quota-2",
+            repo_id=pid,
+            token_id="tok-quota-2",
+            daemon_name="laptop",
+            quota_json=json.dumps(
+                [
+                    {
+                        "shell": "claude",
+                        "status": "known",
+                        "updated_at": stale_scrape_at,
+                        "windows": [
+                            {"label": "5h window", "used": None, "limit": None, "percent": 61.0}
+                        ],
+                    }
+                ]
+            ),
+            # The daemon just published this instant — the bug this guards
+            # is exactly that a fresh publish timestamp used to be treated
+            # as proof the *data* was fresh too.
+            quota_updated_at=datetime.now(timezone.utc),
+        )
+        db.add(daemon)
+        db.commit()
+
+        views = _quota_views(db, [repo], runner_stats=[])
+        assert views[0]["status"] == "stale"
+        assert views[0]["windows"][0]["percent"] is None
 
 
 def test_dashboard_quota_api_requires_login():
@@ -255,6 +309,80 @@ def test_dashboard_live_runs_api_returns_runs():
     assert body["stale"] is False
 
 
+def test_dashboard_live_runs_api_returns_spawn_max_concurrent():
+    """Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
+    §"Loom envelope"): the configured spawn: pool width piggybacks on the
+    live-runs publish so the dashboard's "limits" panel has something to
+    render against, with no new endpoint."""
+    import json
+    from datetime import datetime, timezone
+
+    from brnrd.models import Daemon
+
+    client = _client()
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    with client.app.state.SessionLocal() as db:
+        daemon = Daemon(
+            id="dmn-live-d", repo_id=pid, token_id="tok-live-d", daemon_name="laptop",
+            live_runs_json=json.dumps(
+                [
+                    {"id": "pres-3", "kind": "daemon", "stream": "telegram:x:", "label": "primary", "run_id": "run-c", "repo_label": "Gurio/brr", "started_at": "2026-07-08T23:00:00Z", "last_seen": "2026-07-08T23:05:00Z", "is_subspawn": False},
+                    {"id": "pres-4", "kind": "daemon", "stream": "telegram:x:", "label": "worker", "run_id": "run-d", "repo_label": "Gurio/brr", "started_at": "2026-07-08T23:01:00Z", "last_seen": "2026-07-08T23:05:00Z", "is_subspawn": True, "parent_run_id": "run-c"},
+                ]
+            ),
+            live_runs_updated_at=datetime.now(timezone.utc),
+            spawn_max_concurrent=4,
+        )
+        db.add(daemon)
+        db.commit()
+
+    r = client.get("/v1/dashboard/live-runs")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["spawn_max_concurrent"] == 4
+    assert sum(1 for run in body["runs"] if run.get("is_subspawn")) == 1
+
+
+def test_put_live_runs_stores_spawn_max_concurrent():
+    """The daemon-side write half of the same field — `PUT
+    /v1/daemons/live-runs` (`src/brr/gates/cloud.py::_publish_live_runs`)
+    now sends `spawn_max_concurrent` alongside `runs`; confirm the router
+    stores and echoes it back rather than silently dropping the new key."""
+    client = _client()
+    account_token = _login(client)
+    repo_id = _create_repo(client, account_token)
+    account_headers = {"Authorization": f"Bearer {account_token}"}
+
+    pair = client.post("/v1/accounts/pair").json()
+    client.post(
+        f"/v1/accounts/pair/{pair['pair_code']}/approve",
+        json={"repo_id": repo_id},
+        headers=account_headers,
+    )
+    paired = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    daemon_headers = {"Authorization": f"Bearer {paired['daemon_token']}"}
+    client.post("/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers)
+
+    r = client.put(
+        "/v1/daemons/live-runs",
+        json={"runs": [], "spawn_max_concurrent": 4},
+        headers=daemon_headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["spawn_max_concurrent"] == 4
+
+    with client.app.state.SessionLocal() as db:
+        from brnrd.models import Daemon
+
+        daemon = db.query(Daemon).filter(Daemon.repo_id == repo_id).one()
+        assert daemon.spawn_max_concurrent == 4
+
+
 def test_dashboard_pr_review_queue_api_requires_login():
     """#259, same auth shape as quota/live-runs JSON endpoints."""
     client = _client()
@@ -356,6 +484,62 @@ def test_dashboard_pr_review_queue_api_returns_prs_oldest_first():
     assert body["prs"][0]["draft"] is False
     assert body["prs"][1]["draft"] is True
     assert body["stale"] is False
+
+
+def test_dashboard_config_requests_api_requires_login():
+    """Loom envelope Phase 2 dashboard surface, same auth shape as the
+    other JSON dashboard endpoints."""
+    client = _client()
+    r = client.get("/v1/dashboard/config-requests")
+    assert r.status_code == 401
+
+
+def test_dashboard_config_requests_api_returns_pending_oldest_first():
+    """Reads the `config_change_requests` table directly (no daemon
+    publish/mirror step, unlike live-runs/PR-queue/run-ledger) — only
+    pending rows for the account's own repos, oldest first, with an
+    approve_url built from the request's own id."""
+    from datetime import datetime, timedelta, timezone
+
+    from brnrd.models import ConfigChangeRequest
+
+    client = _client(public_base_url="https://brnrd.example")
+    token = _login(client)
+    pid = _create_repo(client, token)
+
+    now = datetime.now(timezone.utc)
+    with client.app.state.SessionLocal() as db:
+        account_id = db.get(Repo, pid).account_id
+        newer = ConfigChangeRequest(
+            id="ccr-newer", account_id=account_id, repo_id=pid,
+            proposal_id="prop-newer", config_key="spawn.max_concurrent",
+            current_value="4", requested_value="8", reason="burst of ranked work",
+            status=ConfigChangeRequest.STATUS_PENDING,
+            created_at=now, expires_at=now + timedelta(days=7),
+        )
+        older = ConfigChangeRequest(
+            id="ccr-older", account_id=account_id, repo_id=pid,
+            proposal_id="prop-older", config_key="spawn.max_concurrent",
+            current_value="2", requested_value="4", reason="",
+            status=ConfigChangeRequest.STATUS_PENDING,
+            created_at=now - timedelta(hours=1), expires_at=now + timedelta(days=6),
+        )
+        decided = ConfigChangeRequest(
+            id="ccr-decided", account_id=account_id, repo_id=pid,
+            proposal_id="prop-decided", config_key="spawn.max_concurrent",
+            current_value="4", requested_value="6", reason="",
+            status=ConfigChangeRequest.STATUS_APPROVED,
+            created_at=now - timedelta(hours=2), expires_at=now + timedelta(days=5),
+        )
+        db.add_all([newer, older, decided])
+        db.commit()
+
+    r = client.get("/v1/dashboard/config-requests")
+    assert r.status_code == 200
+    body = r.json()
+    assert [row["id"] for row in body["requests"]] == ["ccr-older", "ccr-newer"]
+    assert body["requests"][0]["config_key"] == "spawn.max_concurrent"
+    assert body["requests"][0]["approve_url"] == "https://brnrd.example/config-approve/ccr-older"
 
 
 def test_dashboard_can_issue_telegram_pair_link():

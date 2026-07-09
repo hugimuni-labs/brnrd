@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import forge_state
+from . import account, config as conf, forge_state
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -78,10 +78,18 @@ def _read_recent_log(
     Returns the raw markdown of the included entries (oldest of the
     included set first, for natural reading order), or an empty string
     if the log is missing or has no entries.
+
+    Repo ``kb/log.md`` wins when present (today's default for most
+    adopters); a repo that migrated its kb out per
+    ``kb/design-home-scopes-and-knowledge.md`` falls back to this repo's
+    slice of home knowledge, so the recent-activity block doesn't just go
+    silent the day a repo's own log moves out of the tree.
     """
     log_path = repo_root / "kb" / "log.md"
     if not log_path.exists():
-        return ""
+        log_path = _home_knowledge_log_path(repo_root)
+        if log_path is None or not log_path.exists():
+            return ""
     text = log_path.read_text(encoding="utf-8")
     parts = _LOG_ENTRY_RE.split(text)
     if len(parts) <= 1:
@@ -104,6 +112,26 @@ def _read_recent_log(
         return ""
     picked.reverse()
     return "\n\n".join(picked).strip()
+
+
+def _home_knowledge_log_path(repo_root: Path) -> Path | None:
+    """Return this repo's ``log.md`` inside home knowledge, if any.
+
+    Mirrors ``knowledge.sources()``'s own home-knowledge resolution
+    (repo-scoped bucket for a split account home, flat bucket otherwise)
+    without importing :mod:`brr.knowledge` here — that module renders
+    injection *blocks*, not raw paths, and pulling it in just for a path
+    lookup would be the wrong direction of dependency for a one-file check.
+    """
+    try:
+        cfg = conf.load_config(repo_root)
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        if ctx.kind == "account" and account.knowledge_split_mode(cfg) == "per-repo":
+            label = account.repo_label(repo_root, cfg)
+            return account.repo_knowledge_path(ctx, label) / "log.md"
+        return account.knowledge_path(ctx) / "log.md"
+    except Exception:
+        return None
 
 
 def _build_context_block(repo_root: Path) -> str:
@@ -386,8 +414,11 @@ def _build_kb_health_block(repo_root: Path) -> str:
     """Render the deterministic kb-health preflight as a wake-time block.
 
     Runs the cheap consistency scan (:mod:`brr.kb_preflight`) plus the
-    graph-stats snapshot (:mod:`brr.kb_health`) over ``kb/`` and surfaces
-    any findings so the resident folds fixes into the current thought.
+    graph-stats snapshot (:mod:`brr.kb_health`) over whichever directory
+    ``knowledge.active_kb_dir`` resolves as this repo's kb (repo-committed
+    ``kb/``, or home knowledge for a repo that dogfoods that shape) and
+    surfaces any findings so the resident folds fixes into the current
+    thought.
     Returns ``""`` when the scan is clean (a clean preflight is silent,
     not a tax on every wake) or when the inject is disabled with
     ``kb_maintenance=never`` in ``.brr/config``.
@@ -399,17 +430,18 @@ def _build_kb_health_block(repo_root: Path) -> str:
     ``kb/design-agent-dominion.md`` and ``kb/subject-daemon.md``.)
     """
     from . import config as conf
-    from . import kb_health, kb_preflight
+    from . import kb_health, kb_preflight, knowledge
 
     cfg = conf.load_config(repo_root)
     if str(cfg.get("kb_maintenance", "auto")).strip().lower() == "never":
         return ""
-    findings = kb_preflight.scan(repo_root)
+    kb_dir = knowledge.active_kb_dir(repo_root, cfg)
+    findings = kb_preflight.scan(repo_root, kb_dir)
     if not findings:
         return ""
     findings_block = kb_preflight.format_findings(findings)
     stats_block = kb_health.format_graph_stats(
-        kb_health.compute_graph_stats(repo_root),
+        kb_health.compute_graph_stats(repo_root, kb_dir),
     )
     body = "\n\n".join(b for b in (findings_block, stats_block) if b)
     return (
@@ -687,6 +719,7 @@ def build_daemon_prompt(
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None = None,
+    event_attachments: list[Path] | None = None,
     budget_seconds: int | None = None,
     runner_medium: str | None = None,
     runner_quota: str | None = None,
@@ -749,6 +782,7 @@ def build_daemon_prompt(
         pending_events=pending_events,
         present=present,
         event_body=event_body,
+        event_attachments=event_attachments,
         diffense=diffense,
     )
     trailer = bundle.rstrip()
@@ -833,6 +867,7 @@ def _build_run_context_bundle(
     pending_events: list[dict[str, Any]] | None = None,
     present: list[dict[str, Any]] | None = None,
     event_body: str | None,
+    event_attachments: list[Path] | None = None,
     diffense: bool = False,
 ) -> str:
     """Assemble the human-readable Run Context Bundle for the daemon prompt.
@@ -1027,13 +1062,19 @@ def _build_run_context_bundle(
         sections.append("")
         sections.append(thread_record_block)
 
-    if event_body is not None:
-        body = event_body.strip()
+    body = event_body.strip() if event_body is not None else ""
+    if body or event_attachments:
+        sections.append("")
+        sections.append("### Original event body")
+        sections.append("")
         if body:
-            sections.append("")
-            sections.append("### Original event body")
-            sections.append("")
             sections.append(body)
+        if event_attachments:
+            sections.append("")
+            sections.append(
+                "Attachments (local image files — open them with Read):"
+            )
+            sections.extend(f"- {p}" for p in event_attachments)
 
     sections.append("")
     return "\n".join(sections) + "\n"

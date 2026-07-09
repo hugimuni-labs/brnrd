@@ -175,6 +175,11 @@
                       <div class="quota-bar"><span style="width: {{ window.percent or 0 }}%"></span></div>
                     </div>
                   {% endfor %}
+                  {% if quota.credits and quota.credits.summary %}
+                    <div class="quota-window">
+                      <div><span>credits</span><small>{{ quota.credits.summary }}</small></div>
+                    </div>
+                  {% endif %}
                 </section>
               {% endfor %}
             </div>

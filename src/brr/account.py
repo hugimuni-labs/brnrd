@@ -38,6 +38,11 @@ RUNNER_POLICY_PATH = "runner-policy"
 ACCOUNT_RUNNER_POLICY_SLUG = "_account"
 RUNNER_POLICY_PROPOSALS_SLUG = "_proposals"
 
+# Loom envelope Phase 2 — pending config-change proposals (see
+# ``config_change_proposals_path`` below)
+CONFIG_CHANGE_PATH = "config-changes"
+CONFIG_CHANGE_PROPOSALS_SLUG = "_proposals"
+
 # CS7 — decision ledger
 LEDGER_PATH = "ledger"
 
@@ -46,6 +51,7 @@ KNOWLEDGE_PATH = "knowledge"
 GITIGNORE = """\
 /dispatch/inbox/
 /dispatch/responses/
+/knowledge/
 *.tmp
 """
 
@@ -163,11 +169,29 @@ def _init_git_repo(path: Path) -> None:
 
 
 def _write_gitignore(path: Path) -> None:
+    """Ensure every standing ignore rule is present, appending what's missing.
+
+    Not a one-shot "write if absent": a home created before a rule existed
+    (``/knowledge/``, added 2026-07-09 alongside the per-repo knowledge
+    split — a nested git repo living untracked-but-ungitignored inside an
+    already-git-tracked home is exactly the "embedded repository" confusion
+    gitignoring exists to avoid) would otherwise carry a stale
+    ``.gitignore`` forever, since ``resolve_context`` only calls this once
+    at first creation.
+    """
     ignore = path / ".gitignore"
-    if ignore.exists():
+    existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+    existing_lines = set(existing.splitlines())
+    wanted_lines = [line for line in GITIGNORE.splitlines() if line]
+    missing = [line for line in wanted_lines if line not in existing_lines]
+    if not missing:
         return
+    new_text = existing
+    if new_text and not new_text.endswith("\n"):
+        new_text += "\n"
+    new_text += "\n".join(missing) + "\n"
     tmp = ignore.with_suffix(ignore.suffix + ".tmp")
-    tmp.write_text(GITIGNORE, encoding="utf-8")
+    tmp.write_text(new_text, encoding="utf-8")
     tmp.replace(ignore)
 
 
@@ -379,9 +403,39 @@ def context_home_root(ctx: HomeContext) -> Path:
 
 
 def knowledge_path(ctx: HomeContext) -> Path:
-    """Return the home-level knowledge directory."""
+    """Return the home-level knowledge directory (single flat bucket).
+
+    This is the physical git repo root regardless of split mode — see
+    ``repo_knowledge_path`` / ``account_knowledge_path`` for the two
+    sub-scopes an account home can present separately.
+    """
 
     return context_home_root(ctx) / KNOWLEDGE_PATH
+
+
+def repo_knowledge_path(ctx: HomeContext, repo_label_value: str) -> Path:
+    """Return the repo-scoped knowledge directory inside home knowledge."""
+
+    return knowledge_path(ctx) / REPOS_PATH / slug_repo_label(repo_label_value)
+
+
+def account_knowledge_path(ctx: HomeContext) -> Path:
+    """Return the cross-repo (account-wide) knowledge directory."""
+
+    return knowledge_path(ctx) / CROSS_REPO_SLUG
+
+
+def knowledge_split_mode(cfg: dict[str, Any] | None) -> str:
+    """Return the configured knowledge split: ``per-repo`` or ``account-only``.
+
+    Only meaningful for account-kind homes — a project home has exactly one
+    repo, so there is nothing to split. ``knowledge.split=account-only`` in
+    ``.brr/config`` opts an account home back into one flat bucket.
+    """
+
+    cfg = cfg or {}
+    value = str(cfg.get("knowledge.split") or "per-repo").strip().lower()
+    return "account-only" if value == "account-only" else "per-repo"
 
 
 def register_repo(
@@ -485,6 +539,24 @@ def runner_policy_proposals_path(ctx: AccountContext) -> Path:
     account runner-policy paths above.
     """
     return ctx.dominion_repo / RUNNER_POLICY_PATH / RUNNER_POLICY_PROPOSALS_SLUG
+
+
+# ── Loom envelope Phase 2 — config-change proposals ───────────────────
+
+
+def config_change_proposals_path(ctx: AccountContext) -> Path:
+    """Return the daemon-owned pending config-change proposal directory.
+
+    A resident can propose a change to an allowlisted ``.brr/config`` key
+    (today: ``spawn.max_concurrent``) that it wants moved past the ceiling
+    the operator set. Unlike runner-policy proposals above, this one is
+    never applied on a chat-typed reply — the daemon mints a brnrd.dev
+    approve/confirm URL (``gates/cloud.propose_config_change``) and only
+    applies the change once that request comes back approved over the
+    account's existing ``/v1/daemons/inbox`` long-poll. Pending proposals
+    live here until approved, rejected, or superseded.
+    """
+    return ctx.dominion_repo / CONFIG_CHANGE_PATH / CONFIG_CHANGE_PROPOSALS_SLUG
 
 
 # ── CS7 — decision ledger helper ──────────────────────────────────────

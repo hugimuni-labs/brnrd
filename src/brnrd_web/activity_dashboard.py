@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from brnrd.activity_records import dedupe_activity_records
 from brnrd.auth import get_db
-from brnrd.models import Account, ActivityRecord, Daemon, Event, GitHubInstalledRepo, Repo
+from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
 
 from .routes import (
     _account_id,
@@ -270,6 +270,40 @@ def _activity_stats(
 _QUOTA_STALE_SECONDS = 300  # daemon publishes on its ~25-30s poll loop (#237)
 
 
+def _parse_scrape_updated_at(value: Any) -> datetime | None:
+    """Parse a collector's own ``updated_at`` (``claude_usage``/``codex_status``
+    shape: ``%Y-%m-%dT%H:%M:%SZ``), or ``None`` for anything else — never
+    raises, since this is best-effort staleness math, not a validated field.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _stale_quota_windows(windows: Any) -> list[dict[str, Any]]:
+    """Keep stale quota rows visible without rendering old percentages as truth."""
+    if not isinstance(windows, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        out.append(
+            {
+                **window,
+                "used": None,
+                "limit": None,
+                "percent": None,
+                "reset": None,
+                "resets_at": None,
+            }
+        )
+    return out
+
+
 def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Real per-shell quota windows from the daemons' own reports (#237).
 
@@ -281,6 +315,18 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
     (``runner_stats``) but no quota report at all (older daemon build, or
     cold cache) still renders as an explicit ``unknown`` placeholder card,
     not omitted — "quota provider pending" beats a missing panel.
+
+    Staleness is measured against the *scrape's own* ``updated_at`` when the
+    shell payload carries one, not the daemon's publish timestamp. Claude's
+    quota shell is a cached interactive ``/usage`` PTY scrape that only
+    refreshes while a Claude run is actively heartbeating — with no run
+    active, the daemon still PUTs this endpoint every poll tick with numbers
+    that haven't actually changed in hours, so gating staleness on
+    ``quota_updated_at`` alone never fires (that timestamp is always fresh)
+    and the dashboard shows old numbers as if they were live — the reported
+    "lying Claude usage panel" bug (2026-07-07). Falls back to the daemon's
+    publish time for shells that carry no per-scrape timestamp (older daemon
+    builds; Codex's live rollout read, which has no comparable idle-gap).
     """
     repo_ids = {repo.id for repo in repos}
     real: dict[str, dict[str, Any]] = {}
@@ -297,7 +343,6 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                 shells = []
             if not isinstance(shells, list):
                 continue
-            stale = (now - reported_at).total_seconds() > _QUOTA_STALE_SECONDS
             for shell in shells:
                 if not isinstance(shell, dict):
                     continue
@@ -307,10 +352,16 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                 existing = real.get(name)
                 if existing is not None and existing["_reported_at"] >= reported_at:
                     continue
+                scrape_at = _parse_scrape_updated_at(shell.get("updated_at")) or reported_at
+                stale = (now - scrape_at).total_seconds() > _QUOTA_STALE_SECONDS
                 real[name] = {
                     "shell": name,
                     "status": "stale" if stale else str(shell.get("status") or "unknown"),
-                    "windows": shell.get("windows") or [],
+                    "windows": (
+                        _stale_quota_windows(shell.get("windows"))
+                        if stale else shell.get("windows") or []
+                    ),
+                    "credits": shell.get("credits"),
                     "_reported_at": reported_at,
                 }
     out = list(real.values())
@@ -350,10 +401,11 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
     """
     repo_ids = {repo.id for repo in repos}
     if not repo_ids:
-        return {"runs": [], "stale": False, "generated_at": None}
+        return {"runs": [], "stale": False, "generated_at": None, "spawn_max_concurrent": None}
     now = datetime.now(timezone.utc)
     runs: dict[str, dict[str, Any]] = {}
     newest_reported_at: datetime | None = None
+    spawn_max_concurrent: int | None = None
     daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
     for daemon in daemons:
         reported_at = _dt(daemon.live_runs_updated_at)
@@ -361,6 +413,11 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
             continue
         if newest_reported_at is None or reported_at > newest_reported_at:
             newest_reported_at = reported_at
+            # Same "freshest report wins" rule the entries dict below
+            # applies per-run-id — one daemon process may register under
+            # several repos, each a separate row; the most recently
+            # reported row's own config value is the one that's live.
+            spawn_max_concurrent = daemon.spawn_max_concurrent
         try:
             entries = json.loads(daemon.live_runs_json or "[]")
         except ValueError:
@@ -388,6 +445,7 @@ def _live_runs_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
         "runs": out,
         "stale": stale,
         "generated_at": newest_reported_at.isoformat() if newest_reported_at else None,
+        "spawn_max_concurrent": spawn_max_concurrent,
     }
 
 
@@ -444,6 +502,108 @@ def _pr_review_queue_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
         "prs": out,
         "stale": stale,
         "generated_at": newest_reported_at.isoformat() if newest_reported_at else None,
+    }
+
+
+_RUN_LEDGER_STALE_SECONDS = 300  # daemon publishes on the same fast dashboard loop (#271)
+
+
+def _run_ledger_views(db: Session, repos: list[Repo], limit: int) -> dict[str, Any]:
+    """Account-scoped closed-run receipt feed (#271).
+
+    Reads the last ``PUT /v1/daemons/run-ledger`` snapshot per connected
+    daemon (`src/brr/gates/cloud.py::_run_ledger_snapshot` is the writer).
+    Several ``Daemon`` rows can report the same physical ledger; dedupe by
+    ``run_id`` and keep the freshest daemon report. This is a receipt feed,
+    so newest ``ended_at`` sorts first.
+    """
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return {"rows": [], "stale": False, "generated_at": None}
+    now = datetime.now(timezone.utc)
+    rows: dict[str, dict[str, Any]] = {}
+    newest_reported_at: datetime | None = None
+    daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+    for daemon in daemons:
+        reported_at = _dt(daemon.run_ledger_updated_at)
+        if reported_at is None:
+            continue
+        if newest_reported_at is None or reported_at > newest_reported_at:
+            newest_reported_at = reported_at
+        try:
+            entries = json.loads(daemon.run_ledger_json or "[]")
+        except ValueError:
+            entries = []
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            run_key = str(entry.get("run_id") or "")
+            if not run_key:
+                continue
+            existing = rows.get(run_key)
+            if existing is not None and existing["_reported_at"] >= reported_at:
+                continue
+            row = dict(entry)
+            row["_reported_at"] = reported_at
+            rows[run_key] = row
+    out = list(rows.values())
+    for row in out:
+        row.pop("_reported_at", None)
+    out.sort(key=lambda row: row.get("ended_at") or "", reverse=True)
+    stale = bool(newest_reported_at) and (now - newest_reported_at).total_seconds() > _RUN_LEDGER_STALE_SECONDS
+    return {
+        "rows": out[:limit],
+        "stale": stale,
+        "generated_at": newest_reported_at.isoformat() if newest_reported_at else None,
+    }
+
+
+def _config_change_requests_view(db: Session, repos: list[Repo], settings: Any) -> dict[str, Any]:
+    """Account-scoped pending config-change requests (loom-envelope Phase 2,
+    kb/design-multi-workstream-concurrency.md "Named forks - round 2").
+
+    Unlike the daemon-published snapshots above (live-runs, PR queue, run
+    ledger), ``ConfigChangeRequest`` rows are written directly by the
+    daemon's own ``POST /v1/daemons/config-requests`` call
+    (``src/brnrd/routers/config_approval.py``) — there is no publish/mirror
+    step and no staleness concept, this queries the table directly. Phase 2
+    shipped the device-flow (mint, approve page, outcome-over-inbox) with
+    no dashboard surface for a pending request at all; this is that surface
+    — read-only, linking to the existing session-gated ``/config-approve/{id}``
+    page for the actual decision rather than re-implementing the decide
+    action in the SPA.
+    """
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return {"requests": [], "generated_at": None}
+    repo_labels = {repo.id: repo.repo_full_name for repo in repos}
+    rows = db.execute(
+        select(ConfigChangeRequest)
+        .where(ConfigChangeRequest.repo_id.in_(repo_ids))
+        .where(ConfigChangeRequest.status == ConfigChangeRequest.STATUS_PENDING)
+        .order_by(ConfigChangeRequest.created_at)
+    ).scalars()
+    base_url = str(getattr(settings, "public_base_url", "") or "").rstrip("/")
+    out = []
+    for row in rows:
+        out.append(
+            {
+                "id": row.id,
+                "repo_label": repo_labels.get(row.repo_id, ""),
+                "config_key": row.config_key,
+                "current_value": row.current_value,
+                "requested_value": row.requested_value,
+                "reason": row.reason,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "approve_url": f"{base_url}/config-approve/{row.id}" if base_url else f"/config-approve/{row.id}",
+            }
+        )
+    return {
+        "requests": out,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -537,6 +697,7 @@ def dashboard_live_runs_api(request: Request, db: Session = Depends(get_db)) -> 
             "runs": view["runs"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+            "spawn_max_concurrent": view["spawn_max_concurrent"],
         }
     )
 
@@ -560,6 +721,52 @@ def dashboard_pr_review_queue_api(request: Request, db: Session = Depends(get_db
             "prs": view["prs"],
             "stale": view["stale"],
             "reported_at": view["generated_at"],
+        }
+    )
+
+
+@router.get("/v1/dashboard/run-ledger")
+def dashboard_run_ledger_api(request: Request, limit: int = 10, db: Session = Depends(get_db)) -> JSONResponse:
+    """Account-scoped closed-run receipt feed (#271) for the SvelteKit frontend."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    capped = max(1, min(limit, 50))
+    view = _run_ledger_views(db, repos, capped)
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "rows": view["rows"],
+            "stale": view["stale"],
+            "reported_at": view["generated_at"],
+        }
+    )
+
+
+@router.get("/v1/dashboard/config-requests")
+def dashboard_config_requests_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """Account-scoped pending config-change requests (loom-envelope Phase 2)
+    for the SvelteKit frontend. Same session-cookie auth as the other
+    dashboard JSON endpoints. Read-only: the actual approve/reject action
+    stays on the existing ``/config-approve/{id}`` page (``approve_url``
+    below), not duplicated here.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    view = _config_change_requests_view(db, repos, request.app.state.settings)
+    return JSONResponse(
+        {
+            "generated_at": view["generated_at"],
+            "requests": view["requests"],
         }
     )
 

@@ -13,6 +13,13 @@ export interface LiveRun {
 	repo_label: string;
 	started_at: string | null;
 	last_seen: string | null;
+	// Same join key as the closed-run ledger's `parent_run_id`/`is_subspawn`
+	// (run_ledger.py) — a concurrent `spawn:` child carries these while
+	// still live, so a peer card can be told apart from a resident thought
+	// before it ever reaches the ledger
+	// (kb/design-multi-workstream-concurrency.md "Ranked moves" #1).
+	parent_run_id: string | null;
+	is_subspawn: boolean;
 }
 
 export interface LiveRunsResponse {
@@ -20,6 +27,11 @@ export interface LiveRunsResponse {
 	runs: LiveRun[];
 	stale: boolean;
 	reported_at: string | null;
+	// Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked
+	// on this same publish tick — loom-envelope Phase 1's one piece of data
+	// the slice-1 publish didn't already carry. `null` before any daemon
+	// has reported it (pre-upgrade daemon, or never published yet).
+	spawn_max_concurrent: number | null;
 }
 
 export class LiveRunsAuthError extends Error {}

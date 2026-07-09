@@ -2,7 +2,10 @@
 	import { onDestroy, onMount } from 'svelte';
 	import WindowTrack from '$lib/WindowTrack.svelte';
 	import LiveRuns from '$lib/LiveRuns.svelte';
+	import Limits from '$lib/Limits.svelte';
 	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
+	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
+	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
 	import {
@@ -10,12 +13,25 @@
 		fetchPRReviewQueue,
 		type PRReviewItem
 	} from '$lib/prReviewQueue';
+	import { RunLedgerAuthError, fetchRunLedger, type RunLedgerRow } from '$lib/runLedger';
+	import {
+		ConfigRequestsAuthError,
+		fetchConfigRequests,
+		type ConfigChangeRequestItem
+	} from '$lib/configRequests';
 
 	// Slice 2 (kb/design-dashboard-live-surface.md): the window-track
 	// live-quota view. Polls the same daemon-published data the Jinja
 	// dashboard's quota card reads (`GET /v1/dashboard/quota`), so the two
 	// surfaces agree until the Jinja one is retired.
-	const POLL_MS = 20_000;
+	//
+	// Slice 0/1 (kb/plan-loom-realtime-build.md): 20s read like a page that
+	// refreshes, not a surface you can watch tick — and the daemon-side
+	// snapshots are now published on their own ~3s cadence (gates/cloud.py
+	// `_dashboard_publish_loop`), so a 20s client poll was throwing away
+	// freshness the backend already provides. Tightened to the "2 second
+	// delay is acceptable" bar named directly.
+	const POLL_MS = 2_000;
 	const TICK_MS = 1_000;
 
 	let shells = $state<QuotaShell[] | null>(null);
@@ -27,10 +43,23 @@
 	let liveRuns = $state<LiveRun[] | null>(null);
 	let liveRunsStale = $state(false);
 	let liveRunsError = $state<string | null>(null);
+	// Loom envelope Phase 1 (kb/design-multi-workstream-concurrency.md
+	// §"Loom envelope") — piggybacked on the same live-runs fetch, not a
+	// separate poll; `activeSpawns` is just a derived count over the same
+	// `runs` list Limits.svelte's sibling `LiveRuns` already renders.
+	let spawnMaxConcurrent = $state<number | null>(null);
+	let activeSpawns = $derived(liveRuns?.filter((r) => r.is_subspawn).length ?? 0);
 
 	let prReviewQueue = $state<PRReviewItem[] | null>(null);
 	let prReviewQueueStale = $state(false);
 	let prReviewQueueError = $state<string | null>(null);
+
+	let runLedgerRows = $state<RunLedgerRow[] | null>(null);
+	let runLedgerStale = $state(false);
+	let runLedgerError = $state<string | null>(null);
+
+	let configRequests = $state<ConfigChangeRequestItem[] | null>(null);
+	let configRequestsError = $state<string | null>(null);
 
 	let pollHandle: ReturnType<typeof setInterval> | undefined;
 	let tickHandle: ReturnType<typeof setInterval> | undefined;
@@ -53,6 +82,7 @@
 			const live = await fetchLiveRuns();
 			liveRuns = live.runs;
 			liveRunsStale = live.stale;
+			spawnMaxConcurrent = live.spawn_max_concurrent;
 			liveRunsError = null;
 		} catch (e) {
 			// A 401 here is redundant with the quota fetch's own unauthenticated
@@ -69,6 +99,25 @@
 		} catch (e) {
 			if (!(e instanceof PRReviewQueueAuthError)) {
 				prReviewQueueError = e instanceof Error ? e.message : 'pr-review-queue fetch failed';
+			}
+		}
+		try {
+			const receipts = await fetchRunLedger();
+			runLedgerRows = receipts.rows;
+			runLedgerStale = receipts.stale;
+			runLedgerError = null;
+		} catch (e) {
+			if (!(e instanceof RunLedgerAuthError)) {
+				runLedgerError = e instanceof Error ? e.message : 'run-ledger fetch failed';
+			}
+		}
+		try {
+			const requests = await fetchConfigRequests();
+			configRequests = requests.requests;
+			configRequestsError = null;
+		} catch (e) {
+			if (!(e instanceof ConfigRequestsAuthError)) {
+				configRequestsError = e instanceof Error ? e.message : 'config-requests fetch failed';
 			}
 		}
 	}
@@ -88,18 +137,32 @@
 </script>
 
 <div class="mx-auto max-w-2xl p-6">
-	<h1 class="text-2xl font-semibold text-slate-100">brnrd dashboard — next</h1>
-	<p class="mt-2 text-sm text-slate-400">
-		Live per-shell quota windows — the first real screen on the new stack. See
-		<code>kb/design-dashboard-live-surface.md</code> in the main repo for the fuller live-flow plan this
-		is slice 2 of.
+	<div class="flex items-start justify-between gap-4">
+		<p class="eyebrow">brnrd · resident dashboard</p>
+		<!-- Named directly as a real gap (2026-07-08): no way to end a
+		     session short of clearing cookies by hand. Small on purpose
+		     ("a small one somewhere") — a plain link, not a nav bar this
+		     single-page dashboard doesn't otherwise have. -->
+		<a
+			href="/logout"
+			rel="external"
+			class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+			>sign out</a
+		>
+	</div>
+	<h1 class="mt-1 font-mono text-2xl font-semibold tracking-tight text-amber-100">
+		brnrd dashboard — next
+	</h1>
+	<p class="mt-2 text-sm text-stone-400">
+		Live per-shell quota windows, updated as your daemons report in.
 	</p>
 
-	<div class="mt-6 space-y-3">
+	<p class="eyebrow mt-6">§1 · window track</p>
+	<div class="mt-2 space-y-3">
 		{#if unauthenticated}
-			<p class="text-sm text-slate-400">
+			<p class="text-sm text-stone-400">
 				Sign in to see live quota windows — <a
-					class="text-blue-400 underline"
+					class="text-sky-400 underline"
 					href="/login?next=/"
 					rel="external">log in</a
 				>.
@@ -107,44 +170,92 @@
 		{:else if error}
 			<p class="text-sm text-red-400">{error}</p>
 		{:else if shells === null}
-			<p class="text-sm text-slate-500">Loading…</p>
+			<p class="text-sm text-stone-500">Loading…</p>
 		{:else if shells.length === 0}
-			<p class="text-sm text-slate-500">No connected daemon has reported quota yet.</p>
+			<p class="text-sm text-stone-500">No connected daemon has reported quota yet.</p>
 		{:else}
 			{#each shells as shell (shell.shell)}
 				<WindowTrack {shell} {now} />
 			{/each}
 			{#if generatedAt}
-				<p class="text-right text-[11px] text-slate-600">
+				<p class="text-right text-[11px] text-stone-600">
 					daemon report as of {new Date(generatedAt).toLocaleTimeString()}
 				</p>
 			{/if}
 		{/if}
 	</div>
 
-	<h2 class="mt-8 text-lg font-semibold text-slate-100">live runs</h2>
-	<p class="mt-1 text-sm text-slate-400">
-		What the daemon is doing right now, across every repo it touches — slice 3, the account-scoped
-		view <code>coexisting-runs=unimplemented</code> named as a gap.
+	<p class="eyebrow mt-8">§1b · config-change requests</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">
+		pending settings requests
+	</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		When an agent wants to raise a limit you've set (like <code>spawn.max_concurrent</code>) past
+		what it's currently allowed, it parks the request here instead of applying it — review and
+		decide from the linked page.
+	</p>
+	<div class="mt-3">
+		{#if configRequestsError}
+			<p class="text-sm text-red-400">{configRequestsError}</p>
+		{:else if configRequests === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<ConfigRequests requests={configRequests} {now} />
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§2 · live runs</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">live runs</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		What the daemon is doing right now, across every repo it touches.
 	</p>
 	<div class="mt-3">
 		{#if liveRunsError}
 			<p class="text-sm text-red-400">{liveRunsError}</p>
 		{:else if liveRuns === null}
-			<p class="text-sm text-slate-500">Loading…</p>
+			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
 			<LiveRuns runs={liveRuns} stale={liveRunsStale} {now} />
 		{/if}
 	</div>
 
-	<h2 class="mt-8 text-lg font-semibold text-slate-100">PR review queue</h2>
+	<p class="eyebrow mt-8">§2b · limits</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">limits</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		Today's user-tunable ceilings, as a pressure meter — not what's happening (that's live runs
+		above), what you've allowed.
+	</p>
+	<div class="mt-3">
+		{#if liveRunsError}
+			<p class="text-sm text-red-400">{liveRunsError}</p>
+		{:else if liveRuns === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<Limits {activeSpawns} maxSpawns={spawnMaxConcurrent} />
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§3 · pr review queue</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">PR review queue</h2>
 	<div class="mt-3">
 		{#if prReviewQueueError}
 			<p class="text-sm text-red-400">{prReviewQueueError}</p>
 		{:else if prReviewQueue === null}
-			<p class="text-sm text-slate-500">Loading…</p>
+			<p class="text-sm text-stone-500">Loading…</p>
 		{:else}
 			<PRReviewQueue prs={prReviewQueue} stale={prReviewQueueStale} {now} />
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§4 · run receipts</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">run receipts</h2>
+	<div class="mt-3">
+		{#if runLedgerError}
+			<p class="text-sm text-red-400">{runLedgerError}</p>
+		{:else if runLedgerRows === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<RunLedgerReceipt rows={runLedgerRows} stale={runLedgerStale} />
 		{/if}
 	</div>
 </div>

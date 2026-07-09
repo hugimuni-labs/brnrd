@@ -19,6 +19,8 @@ class Account(Base):
     github_login: Mapped[str] = mapped_column(String(255), index=True)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    hosted_terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    hosted_terms_version: Mapped[str] = mapped_column(String(32), default="")
     repos: Mapped[list["Repo"]] = relationship(back_populates="account")
     # Current Planned State (CPS) — account-level slices of the account
     # dominion's CS5/CS7 files (cross-repo plan + decision ledger); see
@@ -85,11 +87,21 @@ class Daemon(Base):
     # kb/design-dashboard-live-surface.md §"Reconsidered 2026-07-06".
     live_runs_json: Mapped[str] = mapped_column(Text, default="[]")
     live_runs_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked on
+    # the same live-runs publish tick — the loom-envelope Phase 1 "limits"
+    # panel's one piece of data slice 1 didn't already emit (the *active*
+    # count is just `is_subspawn` runs in live_runs_json above).
+    # kb/design-multi-workstream-concurrency.md §"Loom envelope".
+    spawn_max_concurrent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # PR-review queue snapshot (#259), mirrored from `gh pr list` via
     # `PUT /v1/daemons/pr-review-queue`. Calendar age, not runner quota, is
     # the meaningful clock for this lane.
     pr_review_queue_json: Mapped[str] = mapped_column(Text, default="[]")
     pr_review_queue_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Closed-run cost ledger snapshot (#271), mirrored from local
+    # `.brr/run-ledger.jsonl` rows via `PUT /v1/daemons/run-ledger`.
+    run_ledger_json: Mapped[str] = mapped_column(Text, default="[]")
+    run_ledger_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ActivityRecord(Base):
@@ -203,4 +215,40 @@ class PairRequest(Base):
     repo_id: Mapped[str | None] = mapped_column(nullable=True)
     minted_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class ConfigChangeRequest(Base):
+    """Loom-envelope Phase 2 — a daemon-proposed ``.brr/config`` key change,
+    parked until the account owner approves it from a browser.
+
+    Same device-flow shape as ``PairRequest`` above (mint -> approve-page
+    click while logged in -> outcome observed), but daemon-initiated rather
+    than account-initiated, and carrying a structured key/value instead of
+    a repo binding. See ``kb/design-multi-workstream-concurrency.md``
+    §"Named forks - round 2" for why this exists: the agent asking for more
+    of a user-tunable ceiling than it currently has must never apply the
+    change itself or accept a chat-typed approval - it has to ride the same
+    auth boundary as everything else that touches account state.
+    """
+
+    __tablename__ = "config_change_requests"
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_EXPIRED = "expired"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id"), index=True)
+    # The daemon's own local proposal id (``account.config_change_proposals_path``
+    # filename stem) - the join key between this server-side row and the
+    # local proposal file the daemon applies against on approval.
+    proposal_id: Mapped[str] = mapped_column(String(96), index=True)
+    config_key: Mapped[str] = mapped_column(String(128))
+    current_value: Mapped[str] = mapped_column(String(256), default="")
+    requested_value: Mapped[str] = mapped_column(String(256), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default=STATUS_PENDING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime)

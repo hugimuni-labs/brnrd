@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from brnrd.auth import get_db
 from brnrd.models import (
     Account,
     ChannelRoute,
+    ConfigChangeRequest,
     Daemon,
     Event,
     GitHubInstallation,
@@ -29,6 +31,7 @@ from brnrd.models import (
 )
 from brnrd.platforms import github_app as gh_app_client
 from brnrd.routers.accounts import SESSION_TTL, account_for_github_identity, issue_session_token
+from brnrd.routers.config_approval import decide_core as decide_config_change
 from brnrd.routers.github_app import sync_app_installations_for_account
 from brnrd.routers.pairing import approve_core, telegram_pair_core
 from brnrd.security import hash_token
@@ -37,10 +40,37 @@ router = APIRouter(tags=["web"])
 _TEMPLATES = Jinja2Templates(directory=Path(__file__).with_name("templates"))
 _GITHUB_AUTO_SYNC_AFTER = timedelta(minutes=15)
 _DAEMON_ONLINE_AFTER = timedelta(minutes=2)
+_HOSTED_TERMS_VERSION = "2026-07-08"
+
+
+def _compute_asset_version() -> str:
+    """Content hash of the static assets base.html cache-busts with.
+
+    base.html has requested `?v={{ asset_version }}` since it was scaffolded,
+    but nothing ever populated the variable, so every deploy served the exact
+    same `app.css?v=` URL — a stable cache key an edge CDN (Cloudflare, here)
+    is free to hold onto for its full `max-age` regardless of what changed
+    server-side. Live-caught 2026-07-08: the login/terms brand-palette fix
+    (PR #301) had already merged and deployed, but `/login` kept rendering
+    the old mint-green accent because Cloudflare was still serving the
+    pre-fix `app.css` bytes under that same unversioned URL (`cf-cache-status:
+    HIT`, `cache-control: max-age=14400`). Hashing the served files at import
+    time means a real content change mints a new URL/cache key for free.
+    """
+    h = hashlib.sha256()
+    for name in sorted(("app.css", "dashboard.css")):
+        try:
+            h.update((Path(__file__).with_name("static") / name).read_bytes())
+        except OSError:
+            pass
+    return h.hexdigest()[:12]
+
+
+_ASSET_VERSION = _compute_asset_version()
 
 
 def _render(request: Request, template: str, context: dict | None = None, *, status_code: int = 200) -> HTMLResponse:
-    data = {"request": request}
+    data = {"request": request, "asset_version": _ASSET_VERSION}
     if context:
         data.update(context)
     return _TEMPLATES.TemplateResponse(request=request, name=template, context=data, status_code=status_code)
@@ -50,6 +80,14 @@ def _safe_next(value: str) -> str:
     if not value or not value.startswith("/") or value.startswith("//"):
         return "/"
     return value
+
+
+def _terms_accept_url(next_url: str) -> str:
+    return f"/terms/accept?next={quote(_safe_next(next_url), safe='/')}"
+
+
+def _needs_hosted_terms(account: Account) -> bool:
+    return account.hosted_terms_accepted_at is None or account.hosted_terms_version != _HOSTED_TERMS_VERSION
 
 
 def _oauth_redirect_uri(request: Request) -> str:
@@ -331,6 +369,96 @@ def login_form(request: Request, next: str = "/"):
     return _render(request, "login.html", {"body_class": "auth-page", "title": "Sign in to brnrd", "signin_url": signin, "oauth_ready": _github_oauth_ready(request)})
 
 
+@router.get("/logout")
+def logout(request: Request):
+    """Clear the session cookie and send the browser back to `/login`.
+
+    Named directly as a real gap (2026-07-08): there was no way to end a
+    browser session short of clearing cookies by hand. GET, not POST — this
+    is a plain link (the dashboard's own "sign out" affordance), not a form;
+    revoking the underlying `Token` row isn't attempted here (the cookie
+    stops being sent, which is what actually ends the browser session), the
+    same "delete the cookie, not the token" shape `_clear_oauth_cookies`
+    already uses for the oauth-flow cookies above.
+    """
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(request.app.state.settings.session_cookie, samesite="lax", secure=_cookie_secure(request))
+    return resp
+
+
+@router.get("/terms", response_class=HTMLResponse)
+def terms_page(request: Request):
+    return _render(
+        request,
+        "terms.html",
+        {
+            "body_class": "auth-page",
+            "title": "brnrd beta terms",
+            "accept_mode": False,
+            "terms_version": _HOSTED_TERMS_VERSION,
+        },
+    )
+
+
+@router.get("/terms/accept", response_class=HTMLResponse)
+def terms_accept_page(request: Request, next: str = "/", db: Session = Depends(get_db)):
+    safe_next = _safe_next(next)
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+    if not _needs_hosted_terms(account):
+        return RedirectResponse(url=safe_next, status_code=303)
+    return _render(
+        request,
+        "terms.html",
+        {
+            "body_class": "auth-page",
+            "title": "Accept brnrd beta terms",
+            "accept_mode": True,
+            "terms_version": _HOSTED_TERMS_VERSION,
+            "next": safe_next,
+            "error": None,
+        },
+    )
+
+
+@router.post("/terms/accept", response_class=HTMLResponse)
+def terms_accept_submit(
+    request: Request,
+    next: str = Form("/"),
+    accept_terms: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    safe_next = _safe_next(next)
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+    if accept_terms != "yes":
+        return _render(
+            request,
+            "terms.html",
+            {
+                "body_class": "auth-page",
+                "title": "Accept brnrd beta terms",
+                "accept_mode": True,
+                "terms_version": _HOSTED_TERMS_VERSION,
+                "next": safe_next,
+                "error": "You need to accept the beta hosted-execution terms before continuing.",
+            },
+            status_code=400,
+        )
+    account.hosted_terms_accepted_at = datetime.now(timezone.utc)
+    account.hosted_terms_version = _HOSTED_TERMS_VERSION
+    db.commit()
+    return RedirectResponse(url=safe_next, status_code=303)
+
+
 @router.get("/auth/github/start")
 def github_login_start(request: Request, next: str = "/"):
     if not _github_oauth_ready(request):
@@ -360,7 +488,8 @@ def github_login_callback(request: Request, code: str | None = None, state: str 
         return _render(request, "message.html", {"title": "Login failed", "eyebrow": "GitHub provider", "heading": "GitHub login failed", "message": str(exc), "action_url": "/login", "action_label": "Try again", "severity": "error"}, status_code=502)
     account = account_for_github_identity(db, identity)
     raw = issue_session_token(db, account)
-    resp = RedirectResponse(url=next_url, status_code=303)
+    target_url = _terms_accept_url(next_url) if _needs_hosted_terms(account) else next_url
+    resp = RedirectResponse(url=target_url, status_code=303)
     resp.set_cookie(s.session_cookie, raw, httponly=True, samesite="lax", secure=_cookie_secure(request), max_age=int(SESSION_TTL.total_seconds()))
     _clear_oauth_cookies(resp, request)
     return resp
@@ -394,3 +523,61 @@ def connect_submit(code: str, request: Request, repo_id: str = Form(...), db: Se
     if pair is not None:
         message += f" To use Telegram, bind the chat too: {pair.instructions}"
     return _render(request, "message.html", {"title": "Approved", "eyebrow": "Daemon approval", "heading": "Approved", "message": message, "action_url": pair.deep_link if pair else None, "action_label": "Open Telegram and press Start" if pair and pair.deep_link else None, "severity": "success"})
+
+
+def _config_change_request_view(db: Session, request_id: str) -> ConfigChangeRequest | None:
+    return db.get(ConfigChangeRequest, request_id)
+
+
+@router.get("/config-approve/{request_id}", response_class=HTMLResponse)
+def config_approve_page(request_id: str, request: Request, db: Session = Depends(get_db)):
+    """Loom-envelope Phase 2's approve/confirm URL — the daemon mints
+    ``request_id`` via ``POST /v1/daemons/config-requests`` (see
+    ``brnrd.routers.config_approval``) when a resident wants more of an
+    allowlisted ceiling than ``.brr/config`` currently grants."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url=f"/login?next=/config-approve/{request_id}", status_code=303)
+    row = _config_change_request_view(db, request_id)
+    if row is None or row.account_id != account_id:
+        return _render(request, "message.html", {"title": "Not found", "eyebrow": "Config-change request", "heading": "Request not found", "message": "This config-change link is unknown or belongs to a different account.", "severity": "error"}, status_code=404)
+    repo = db.get(Repo, row.repo_id)
+    if row.status != ConfigChangeRequest.STATUS_PENDING:
+        return _render(request, "message.html", {"title": "Already decided", "eyebrow": "Config-change request", "heading": f"Already {row.status}", "message": f"`{row.config_key}` on {repo.repo_full_name if repo else row.repo_id} was already {row.status}. No further action needed.", "severity": "neutral"})
+    return _render(
+        request,
+        "config_approve.html",
+        {
+            "title": "Approve config change",
+            "request_id": row.id,
+            "repo_full_name": repo.repo_full_name if repo else row.repo_id,
+            "config_key": row.config_key,
+            "current_value": row.current_value,
+            "requested_value": row.requested_value,
+            "reason": row.reason,
+        },
+    )
+
+
+@router.post("/config-approve/{request_id}", response_class=HTMLResponse)
+def config_approve_submit(request_id: str, request: Request, decision: str = Form(...), db: Session = Depends(get_db)):
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return RedirectResponse(url=f"/login?next=/config-approve/{request_id}", status_code=303)
+    approve = decision.strip().lower() == "approve"
+    try:
+        row = decide_config_change(db, account_id, request_id, approve=approve)
+    except HTTPException as exc:
+        return _render(request, "message.html", {"title": "Could not decide", "eyebrow": "Config-change request", "heading": "Could not record a decision", "message": str(exc.detail), "severity": "error"}, status_code=exc.status_code)
+    repo = db.get(Repo, row.repo_id)
+    repo_label = repo.repo_full_name if repo else row.repo_id
+    if row.status == ConfigChangeRequest.STATUS_EXPIRED:
+        message = f"This request to change `{row.config_key}` on {repo_label} expired before a decision was made. No change applied."
+        severity = "warning"
+    elif row.status == ConfigChangeRequest.STATUS_APPROVED:
+        message = f"Approved. Your daemon will set `{row.config_key}` to `{row.requested_value}` on {repo_label} the next time it checks in."
+        severity = "success"
+    else:
+        message = f"Rejected. `{row.config_key}` on {repo_label} stays at `{row.current_value}`."
+        severity = "neutral"
+    return _render(request, "message.html", {"title": "Config change", "eyebrow": "Config-change request", "heading": row.status.capitalize(), "message": message, "severity": severity})

@@ -78,6 +78,28 @@ class PairStatus(BaseModel):
     telegram_pair: TelegramPairStarted | None = None
 
 
+class ConfigChangeRequestCreate(BaseModel):
+    """Daemon-initiated loom-envelope Phase 2 proposal (`POST /v1/daemons/config-requests`).
+
+    ``proposal_id`` is the daemon's own local proposal filename stem — the
+    join key `decide_core` writes back into the account dispatch channel so
+    the daemon's existing approve/reject reply convention (CS6's
+    runner-policy pattern) resolves it without a new lookup mechanism.
+    """
+
+    proposal_id: str = Field(min_length=1, max_length=96)
+    config_key: str = Field(min_length=1, max_length=128)
+    current_value: str = ""
+    requested_value: str = Field(min_length=1, max_length=256)
+    reason: str = ""
+
+
+class ConfigChangeRequestOut(BaseModel):
+    request_id: str
+    status: str
+    approve_url: str | None = None
+
+
 class DaemonRegister(BaseModel):
     daemon_name: str = Field(min_length=1, max_length=128)
     capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -195,10 +217,42 @@ class QuotaWindowIn(BaseModel):
     resets_at: float | None = None
 
 
+class QuotaCreditsIn(BaseModel):
+    """Shell credit evidence: account credit balance plus proven per-run spend.
+
+    Claude's interactive ``/usage`` panel can expose usage credits (amount
+    spent / cap / reset). Claude's headless result JSON separately reports
+    ``total_cost_usd`` for a completed run; that becomes a real charge once a
+    subscription window is exhausted and the account falls through to metered
+    credits. See ``src/brr/gates/cloud.py::_claude_credits_block``.
+    """
+
+    total_cost_usd: float | None = None
+    summary: str | None = None
+    updated_at: str | None = None
+    enabled: bool | None = None
+    used_percentage: float | None = None
+    remaining_percentage: float | None = None
+    spent_amount: float | None = None
+    limit_amount: float | None = None
+    currency: str | None = None
+    reset: str | None = None
+    resets_at: float | None = None
+    run_spend_summary: str | None = None
+
+
 class QuotaShellIn(BaseModel):
     shell: str = Field(min_length=1, max_length=32)
     status: str = Field(default="unknown", max_length=32)
     windows: list[QuotaWindowIn] = Field(default_factory=list)
+    # The underlying scrape's own capture time (ISO-8601), distinct from
+    # when the daemon last PUT this payload — a cached Claude ``/usage``
+    # scrape only refreshes while a run is active, so it can be hours older
+    # than the publish itself. Without this, staleness can only be measured
+    # against the daemon's publish cadence, which is always "fresh" — the
+    # reported "lying Claude usage panel" bug, 2026-07-07.
+    updated_at: str | None = None
+    credits: QuotaCreditsIn | None = None
 
 
 class QuotaReport(BaseModel):
@@ -231,6 +285,12 @@ class LiveRunIn(BaseModel):
     repo_label: str = Field(default="", max_length=256)
     started_at: str | None = None
     last_seen: str | None = None
+    # Same join key as RunLedgerRowIn's fields below — a concurrent
+    # `spawn:` child now carries these while still live (presence.py),
+    # not only after it closes into the ledger
+    # (kb/design-multi-workstream-concurrency.md "Ranked moves" #1).
+    parent_run_id: str | None = Field(default=None, max_length=64)
+    is_subspawn: bool = False
 
 
 class LiveRunsReport(BaseModel):
@@ -242,11 +302,18 @@ class LiveRunsReport(BaseModel):
     """
 
     runs: list[LiveRunIn] = Field(default_factory=list)
+    # Configured `spawn:` pool width (`spawn.max_concurrent`), piggybacked
+    # here rather than a new endpoint — loom-envelope Phase 1's one piece of
+    # data the live-runs publish didn't already carry (the active count is
+    # just a count of `is_subspawn` entries in `runs` above). None when the
+    # daemon hasn't reported yet.
+    spawn_max_concurrent: int | None = None
 
 
 class LiveRunsOut(BaseModel):
     runs: list[LiveRunIn]
     live_runs_updated_at: datetime | None = None
+    spawn_max_concurrent: int | None = None
 
 
 class PRReviewItemIn(BaseModel):
@@ -275,6 +342,50 @@ class PRReviewQueueReport(BaseModel):
 class PRReviewQueueOut(BaseModel):
     prs: list[PRReviewItemIn]
     pr_review_queue_updated_at: datetime | None = None
+
+
+class RunLedgerRowIn(BaseModel):
+    """One closed-run receipt row from ``src/brr/run_ledger.py`` (#271).
+
+    This is a mirrored receipt, not a validation surface: the local ledger is
+    best-effort and may leave any field null when the runner or quota source
+    cannot prove it.
+    """
+
+    run_id: str | None = None
+    event_id: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    wall_clock_seconds: float | None = None
+    runner_shell: str | None = None
+    runner_core: str | None = None
+    repo_label: str | None = None
+    source_system: str | None = None
+    external_refs: list[Any] | None = None
+    task_classification: str | None = None
+    parent_run_id: str | None = None
+    is_subspawn: bool | None = None
+    tokens_input: int | None = None
+    tokens_output: int | None = None
+    tokens_cache_read: int | None = None
+    tokens_cache_creation: int | None = None
+    context_window_used: float | None = None
+    weekly_pct_delta: float | None = None
+    five_hour_pct_delta: float | None = None
+    usd_subscription_attributed: float | None = None
+    usd_credits_equivalent: float | None = None
+    estimate_vs_actual: str | None = None
+
+
+class RunLedgerReport(BaseModel):
+    """Closed-run receipt rows a daemon pushes for itself (#271)."""
+
+    rows: list[RunLedgerRowIn] = Field(default_factory=list)
+
+
+class RunLedgerOut(BaseModel):
+    rows: list[RunLedgerRowIn]
+    run_ledger_updated_at: datetime | None = None
 
 
 class PackRelayPost(BaseModel):

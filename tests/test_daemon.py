@@ -1041,6 +1041,13 @@ def test_drain_outbox_queues_spawn_request(tmp_path):
     ][0]
     assert spawned["worker"] is True
     assert spawned["spawn_immediate"] is True
+    # Forced regardless of the repo's own `environment=` config — a
+    # spawn shares the daemon process with its still-running parent, so
+    # it is the one dispatch path that needs its own isolated cwd even
+    # when the repo otherwise runs `environment=host` (see the
+    # 2026-07-07 run-260707-1321-auhp collision in
+    # kb/design-director-loop.md).
+    assert spawned["environment"] == "worktree"
     assert spawned["shell"] == "codex-mini"
     assert spawned["task_classification"] == "reset-epoch-plumbing"
     assert spawned["repo_label"] == "Gurio/brr"
@@ -1172,6 +1179,192 @@ def test_notify_spawn_parent_of_crash_noop_without_parent_linkage(tmp_path):
     daemon._notify_spawn_parent_of_crash(inbox, event, RuntimeError("boom"))
 
     assert protocol.list_pending(inbox) == []
+
+
+def test_clean_finish_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
+    """A spawn that runs to a clean, zero-commit finish must still land a
+    completion notification in the parent's thread — issue #268's still-
+    open finding, quoted from its 2026-07-07 follow-up comment: "a spawn
+    that exits cleanly with zero commits produces no completion/crash
+    notification back to the parent, despite #266's crash-notify path."
+
+    Every existing test touching this exercises only one half of the
+    seam: ``test_notify_spawn_parent_lands_pending_event_for_still_running_
+    parent`` unit-tests ``_notify_spawn_parent`` against a hand-built
+    ``Run`` whose ``meta`` already contains ``spawn_parent_run_id`` —
+    never touching real event dispatch. ``test_concurrent_spawn_pool_
+    respects_configured_width`` and its siblings drive the real
+    ``start()`` loop's dispatch/reap wiring, but monkeypatch
+    ``_notify_spawn_parent`` away entirely and hand the fake worker a
+    ``Run`` with bare ``meta={"worker": True}`` — never exercising the
+    real ``spawn_parent_run_id``/``spawn_parent_conversation_key``
+    propagation ``Run.from_event`` performs from the actual dispatched
+    event. ``test_drain_outbox_queues_spawn_request``'s own docstring
+    names the gap directly: "the main-loop concurrent-dispatch wiring
+    itself has no automated end-to-end test."
+
+    This pins that missing seam: a real spawn event created via
+    ``_drain_outbox``/``_queue_spawn_request`` (so it carries the same
+    parent-linkage meta production dispatch writes), read back through
+    the real ``start()`` loop's dispatch scan, turned into a ``Run`` via
+    the real ``Run.from_event`` (only the runner subprocess itself is
+    faked — no branch, no commit, no response file: the exact "clean,
+    zero-commit finish" shape #268 names), reaped by the real main loop,
+    and handed to the real (unmocked) ``_notify_spawn_parent``. If parent
+    linkage ever failed to survive that round trip, this test would catch
+    it; as of this run it passes against the current code, meaning the
+    success-path notify wiring is already structurally sound for this
+    shape — the director's own read of the issue.
+    """
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    parent_outbox = brr_dir / "outbox" / "evt-parent"
+    parent_outbox.mkdir(parents=True)
+
+    parent_path = protocol.create_event(
+        inbox, "telegram", "parent task", status="processing",
+        conversation_key="telegram:99:",
+    )
+    parent_event_id = parent_path.stem
+    (parent_outbox / "spawn.md").write_text(
+        "---\nspawn: true\nshell: codex-mini\n---\nbounded concurrent task\n",
+        encoding="utf-8",
+    )
+    parent_task = Run(
+        id="run-parent-e2e", event_id=parent_event_id, body="parent task",
+        source="telegram", conversation_key="telegram:99:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:99:", parent_event_id),
+        parent_task, responses, parent_event_id, parent_outbox, inbox,
+    )
+    assert promoted == 1
+
+    cfg: dict = {}
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        # Real meta propagation via the real Run.from_event — this is the
+        # exact mechanism that must carry spawn_parent_run_id /
+        # spawn_parent_conversation_key from the dispatched event through
+        # to the Run the reap block hands to _notify_spawn_parent. Status
+        # "done", no branch/commit/response-file meta at all: the "clean,
+        # zero-commit finish" shape #268 names.
+        task = Run.from_event(event, cfg)
+        task.status = "done"
+        return task
+
+    ticks = {"n": 0}
+
+    def fake_fire_due_schedules(*_a, **_k):
+        ticks["n"] += 1
+        notes = [
+            e for e in protocol.list_pending(inbox) if e.get("spawned_by_run")
+        ]
+        if notes or ticks["n"] > 200:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    # Deliberately NOT monkeypatching _notify_spawn_parent — that is the
+    # function under test.
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert ticks["n"] <= 200, "spawn never reaped/notified within the tick budget"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawned_by_run")]
+    assert len(notes) == 1
+    note = notes[0]
+    assert note["conversation_key"] == "telegram:99:"
+    assert note["spawn_parent_run_id"] == "run-parent-e2e"
+    assert note.get("spawn_failed") is not True
+    assert "status=done" in note["body"]
+
+
+def test_crashed_spawn_notifies_parent_end_to_end(tmp_path, monkeypatch):
+    """Symmetric to ``test_clean_finish_spawn_notifies_parent_end_to_end``,
+    for the crash half of the same reap block: a spawn whose worker raises
+    before producing a ``Run`` must still land a (failure) notification in
+    the parent's thread, via the real ``_queue_spawn_request`` → dispatch →
+    reap → ``_notify_spawn_parent_of_crash`` path — not a hand-built event
+    dict calling the notifier directly (``test_notify_spawn_parent_of_
+    crash_lands_pending_event`` already covers that half in isolation).
+    """
+    write_repo_scaffold(tmp_path)
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    parent_outbox = brr_dir / "outbox" / "evt-parent"
+    parent_outbox.mkdir(parents=True)
+
+    parent_path = protocol.create_event(
+        inbox, "telegram", "parent task", status="processing",
+        conversation_key="telegram:77:",
+    )
+    parent_event_id = parent_path.stem
+    (parent_outbox / "spawn.md").write_text(
+        "---\nspawn: true\nshell: codex-mini\n---\nbounded concurrent task\n",
+        encoding="utf-8",
+    )
+    parent_task = Run(
+        id="run-parent-crash-e2e", event_id=parent_event_id, body="parent task",
+        source="telegram", conversation_key="telegram:77:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:77:", parent_event_id),
+        parent_task, responses, parent_event_id, parent_outbox, inbox,
+    )
+    assert promoted == 1
+
+    cfg: dict = {}
+
+    def fake_run_worker(_event, *_args, **_kwargs):
+        raise RuntimeError("boom: runner launch failed")
+
+    ticks = {"n": 0}
+
+    def fake_fire_due_schedules(*_a, **_k):
+        ticks["n"] += 1
+        notes = [
+            e for e in protocol.list_pending(inbox) if e.get("spawn_failed")
+        ]
+        if notes or ticks["n"] > 200:
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: cfg)
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+    # Deliberately NOT monkeypatching _notify_spawn_parent_of_crash.
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert ticks["n"] <= 200, "crashed spawn never reaped/notified within the tick budget"
+    notes = [e for e in protocol.list_pending(inbox) if e.get("spawn_failed")]
+    assert len(notes) == 1
+    note = notes[0]
+    assert note["conversation_key"] == "telegram:77:"
+    assert note["spawn_parent_run_id"] == "run-parent-crash-e2e"
+    assert "boom" in note["body"]
 
 
 def _account_context_for_policy(tmp_path):
@@ -1356,6 +1549,207 @@ def test_runner_policy_approval_requires_same_conversation(tmp_path):
     assert "different conversation" in response
 
 
+# ── Loom envelope Phase 2 — config-change proposals ────────────────────
+
+
+def test_drain_outbox_parks_config_change_proposal(tmp_path, monkeypatch):
+    from brr.gates import cloud as cloud_mod
+
+    monkeypatch.setattr(
+        cloud_mod,
+        "propose_config_change",
+        lambda brr_dir, **kw: {
+            "request_id": "cfgreq_x",
+            "status": "pending",
+            "approve_url": "https://brnrd.example/config-approve/cfgreq_x",
+        },
+    )
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    ctx = _account_context_for_policy(tmp_path)
+    path = protocol.create_event(
+        inbox,
+        "telegram",
+        "please raise the spawn pool",
+        status="processing",
+        conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "config.md").write_text(
+        "---\n"
+        "config_change: spawn.max_concurrent\n"
+        "value: 8\n"
+        "---\n"
+        "Need headroom for a four-way fan-out.\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-cfg",
+        event_id=event_id,
+        body="please raise the spawn pool",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        repo_root=tmp_path,
+        account_context=ctx,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert stats == {"current": 1, "config_change": 1}
+    proposals = list(daemon.account.config_change_proposals_path(ctx).glob("*.md"))
+    assert len(proposals) == 1
+    text = proposals[0].read_text(encoding="utf-8")
+    assert "status: pending" in text
+    assert "config_key: spawn.max_concurrent" in text
+    assert "requested_value: 8" in text
+    assert protocol.frontmatter_body(text).strip() == "Need headroom for a four-way fan-out."
+    partial = protocol.list_partials(responses, event_id)[0].read_text(encoding="utf-8")
+    assert "https://brnrd.example/config-approve/cfgreq_x" in partial
+    assert proposals[0].stem in partial
+
+
+def test_drain_outbox_rejects_config_change_off_allowlist(tmp_path, monkeypatch):
+    from brr.gates import cloud as cloud_mod
+
+    minted_calls: list[str] = []
+    monkeypatch.setattr(
+        cloud_mod,
+        "propose_config_change",
+        lambda brr_dir, **kw: minted_calls.append(kw["config_key"]),
+    )
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    ctx = _account_context_for_policy(tmp_path)
+    path = protocol.create_event(
+        inbox, "telegram", "turn off pacing floors", conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "config.md").write_text(
+        "---\nconfig_change: pacing.quota_low_floor_pct\nvalue: 0\n---\nplease\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-cfg-2",
+        event_id=event_id,
+        body="turn off pacing floors",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    stats: dict[str, int] = {}
+
+    promoted = daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        repo_root=tmp_path,
+        account_context=ctx,
+        stats=stats,
+    )
+
+    assert promoted == 1
+    assert not daemon.account.config_change_proposals_path(ctx).exists()
+    assert minted_calls == []
+    partial = protocol.list_partials(responses, event_id)[0].read_text(encoding="utf-8")
+    assert "isn't on the agent-proposable config allowlist" in partial
+
+
+def _write_config_change_proposal(
+    ctx,
+    proposal_id,
+    *,
+    conversation_key="telegram:42:",
+    key="spawn.max_concurrent",
+    current="4",
+    requested="8",
+):
+    proposal = daemon.account.config_change_proposals_path(ctx) / f"{proposal_id}.md"
+    proposal.parent.mkdir(parents=True)
+    proposal.write_text(
+        "---\n"
+        f"id: {proposal_id}\n"
+        "status: pending\n"
+        f"config_key: {key}\n"
+        f"current_value: {current}\n"
+        f"requested_value: {requested}\n"
+        "repo_label: Gurio/brr\n"
+        f"conversation_key: {conversation_key}\n"
+        "created: 2026-07-08T00:00:00Z\n"
+        "---\n"
+        "Need headroom.\n",
+        encoding="utf-8",
+    )
+    return proposal
+
+
+def test_config_change_approval_applies_to_brr_config(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-test-approve"
+    proposal = _write_config_change_proposal(ctx, proposal_id)
+    target = _policy_control_target(tmp_path, f"approve config-change {proposal_id}")
+
+    handled = daemon._handle_config_change_control_event(target, ctx)
+
+    assert handled is True
+    cfg = daemon.conf.load_config(target.repo_root)
+    assert cfg["spawn.max_concurrent"] == 8
+    updated = proposal.read_text(encoding="utf-8")
+    assert "status: applied" in updated
+    assert protocol.list_pending(target.inbox_dir) == []
+    response = protocol.response_path(
+        target.responses_dir, target.event["id"],
+    ).read_text(encoding="utf-8")
+    assert "Applied config-change proposal" in response
+
+
+def test_config_change_rejection_leaves_config_untouched(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-test-reject"
+    proposal = _write_config_change_proposal(ctx, proposal_id)
+    target = _policy_control_target(tmp_path, f"reject config-change {proposal_id}")
+
+    handled = daemon._handle_config_change_control_event(target, ctx)
+
+    assert handled is True
+    assert daemon.conf.load_config(target.repo_root) == {}
+    assert "status: rejected" in proposal.read_text(encoding="utf-8")
+    response = protocol.response_path(
+        target.responses_dir, target.event["id"],
+    ).read_text(encoding="utf-8")
+    assert "Rejected config-change proposal" in response
+
+
+def test_handle_daemon_control_events_routes_config_change(tmp_path):
+    ctx = _account_context_for_policy(tmp_path)
+    proposal_id = "cfgchg-test-route"
+    _write_config_change_proposal(ctx, proposal_id)
+    target = _policy_control_target(tmp_path, f"approve config-change {proposal_id}")
+
+    remaining = daemon._handle_daemon_control_events([target], ctx)
+
+    assert remaining == []
+
+
 def test_run_worker_writes_terminal_failure_response_on_runner_error(
     tmp_path, monkeypatch,
 ):
@@ -1435,6 +1829,50 @@ def test_run_worker_writes_terminal_failure_response_after_empty_stdout(
     response = protocol.read_response(tmp_path / ".brr" / "responses", "evt-empty-final")
     assert response is not None
     assert "runner produced no reply after 1 attempt(s)" in response
+
+
+def test_write_terminal_failure_response_notices_schedule_crash(tmp_path):
+    """A crashed ``schedule``-source run (director tick) must not vanish.
+
+    ``_event_requires_thread_delivery`` correctly treats "schedule" as
+    internal for the *success* path — a tick that re-derived nothing new
+    is supposed to stay quiet (the notify-bar logic). But that same
+    internal-source check used to gate the *failure* path too, so a
+    crashed tick (found live 2026-07-07, run-260707-1154-kem3: killed
+    mid-run, returncode 143, empty stdout/stderr) left no response file
+    and nothing for the gate to deliver — silence-because-crashed and
+    silence-because-nothing-changed were indistinguishable from the one
+    surface (chat) the maintainer watches. This asserts the crash path now
+    writes and delivers a note even though the event source is internal.
+    """
+    write_repo_scaffold(tmp_path)
+    responses_dir = tmp_path / ".brr" / "responses"
+    event = make_event(
+        tmp_path, eid="evt-tick-crash", source="schedule", body="director tick",
+    )
+    task = Run(
+        id="run-tick-crash",
+        event_id="evt-tick-crash",
+        body="director tick",
+        source="schedule",
+        conversation_key="schedule:director-tick",
+    )
+    response_path = tmp_path / ".brr" / "responses" / "evt-tick-crash.md"
+
+    wrote = daemon._write_terminal_failure_response(
+        daemon._WorkerEmit(tmp_path / ".brr", "schedule:director-tick", "evt-tick-crash"),
+        task,
+        event,
+        responses_dir,
+        response_path,
+        "runner killed after 1 attempt(s) with exit code 143",
+    )
+
+    assert wrote is True
+    assert event["status"] == "done"
+    response = protocol.read_response(responses_dir, "evt-tick-crash")
+    assert response is not None
+    assert "runner killed after 1 attempt(s) with exit code 143" in response
 
 
 def test_run_worker_calls_sync_before_resolving_branch_plan(
@@ -1833,6 +2271,285 @@ def test_dev_reload_reexecs_only_after_task_push(tmp_path, monkeypatch):
         "watch:2",
         "clear-pid",
     ]
+
+
+def test_max_concurrent_spawns_config_parsing():
+    """``spawn.max_concurrent`` generalizes the old spawn cap-of-1 to a
+    small configurable pool (kb/design-multi-workstream-concurrency.md
+    'Ranked moves' #1; maintainer call 2026-07-08: 'set the concurrency to
+    4 or something already'). Default 4; clamped to at least 1 so a
+    misconfigured 0/negative value can't silently wedge every `spawn:`
+    request back into the sequential queue; a non-numeric value falls back
+    to the default rather than crashing the daemon loop.
+    """
+    assert daemon._max_concurrent_spawns({}) == 4
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": 2}) == 2
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": 0}) == 1
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": -3}) == 1
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": "bogus"}) == 4
+    assert daemon._max_concurrent_spawns({"spawn.max_concurrent": True}) == 4
+
+
+def test_concurrent_spawn_pool_respects_configured_width(tmp_path, monkeypatch):
+    """Multiple `spawn:` events dispatch up to `spawn.max_concurrent` at
+    once — the old shape allowed exactly one concurrent spawn no matter how
+    many `spawn:` requests were pending; this exercises the generalized
+    pool (kb/design-multi-workstream-concurrency.md 'slice 1') with three
+    candidates against a configured width of 2, asserting the third waits
+    for a slot rather than either queuing sequentially (old behavior) or
+    all three running at once (an unbounded pool).
+    """
+    write_repo_scaffold(tmp_path)
+
+    lock = threading.Lock()
+    running_ids: set[str] = set()
+    started_two = threading.Event()
+    release = threading.Event()
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        eid = event["id"]
+        with lock:
+            running_ids.add(eid)
+            if len(running_ids) >= 2:
+                started_two.set()
+        release.wait(timeout=5)
+        with lock:
+            running_ids.discard(eid)
+        return Run(
+            id=f"task-{eid}", event_id=eid, body="spawned",
+            status="done", meta={"worker": True},
+        )
+
+    checked = threading.Event()
+
+    def fake_fire_due_schedules(*_a, **_k):
+        # Called every main-loop tick regardless of busy/idle state — the
+        # one hook available to observe pool state and stop the loop
+        # without racing the worker threads over StopIteration.
+        if started_two.is_set() and not checked.is_set():
+            checked.set()
+            time.sleep(0.05)
+            with lock:
+                snapshot = set(running_ids)
+            assert len(snapshot) == 2, (
+                f"expected exactly 2 concurrent at pool width 2, got {snapshot}"
+            )
+            release.set()
+            # Let the freed slots pick up the third candidate and finish
+            # before stopping the loop.
+            time.sleep(0.3)
+            raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 2},
+    )
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    for i in range(3):
+        protocol.create_event(
+            tmp_path / ".brr" / "inbox", "spawn", f"spawned work {i}",
+            spawn_immediate=True, worker=True, environment="worktree",
+        )
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert checked.is_set()
+
+
+def test_concurrent_spawn_does_not_duplicate_dispatch_of_same_event(
+    tmp_path, monkeypatch,
+):
+    """A single `spawn:` event must be dispatched exactly once, even when
+    the pool has more than one open slot and several ticks pass before it
+    completes.
+
+    Root-caused live 2026-07-08 (run-260708-2010-5sor): one `spawn:` outbox
+    dispatch produced 4 concurrent duplicate children, all working the
+    identical event, bounded only by `spawn.max_concurrent`. Cause:
+    `list_dispatchable`/`list_pending` deliberately keep returning
+    "processing"-status events (so a still-running resident event stays
+    visible for follow-up-folding) — but the spawn pool's fill loop had no
+    check against events already claimed in `active_spawns`, unlike the
+    resident dispatch path, which is implicitly guarded by `current is
+    None` in memory. With pool width > 1, the same single candidate refilled
+    every open slot, tick after tick, until the pool hit its configured cap.
+    This pins the fix: with width 4 and only one pending spawn candidate
+    that takes several ticks to finish, exactly one child ever gets
+    submitted.
+    """
+    write_repo_scaffold(tmp_path)
+
+    dispatch_count = 0
+    dispatch_lock = threading.Lock()
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        nonlocal dispatch_count
+        with dispatch_lock:
+            dispatch_count += 1
+        started.set()
+        release.wait(timeout=5)
+        return Run(
+            id=f"task-{event['id']}", event_id=event["id"], body="spawned",
+            status="done", meta={"worker": True},
+        )
+
+    ticks_since_start = 0
+
+    def fake_fire_due_schedules(*_a, **_k):
+        nonlocal ticks_since_start
+        if started.is_set():
+            ticks_since_start += 1
+            # Let several ticks elapse with the event still "processing"
+            # before releasing the worker and stopping the loop — this is
+            # exactly the window the bug needed to over-dispatch.
+            if ticks_since_start >= 5:
+                release.set()
+                time.sleep(0.05)
+                raise StopIteration
+
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(
+        daemon.conf, "load_config", lambda _root: {"spawn.max_concurrent": 4},
+    )
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_notify_spawn_parent", lambda *_a, **_k: None)
+    monkeypatch.setattr(daemon, "_fire_due_schedules", fake_fire_due_schedules)
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    protocol.create_event(
+        tmp_path / ".brr" / "inbox", "spawn", "spawned work",
+        spawn_immediate=True, worker=True, environment="worktree",
+    )
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path)
+
+    assert dispatch_count == 1, (
+        f"expected the single spawn event dispatched exactly once, got "
+        f"{dispatch_count}"
+    )
+
+
+def test_dev_reload_does_not_stall_concurrent_spawn_dispatch(tmp_path, monkeypatch):
+    """A `spawn:` child dispatches alongside a still-running resident
+    thought even after the dev-reload watcher has flagged a package
+    change — kb/plan-spawn-gap-closure.md "Gap 2", resolved 2026-07-08.
+    Only the resident slot (and re-exec itself) still wait on
+    ``reload_requested``; the concurrent-spawn slot no longer does, since
+    a spawn is a separate subprocess that never touches this process's
+    in-memory staleness the way a fresh resident dispatch or re-exec does.
+    """
+    write_repo_scaffold(tmp_path)
+    make_event(tmp_path, eid="evt-resident", body="edit brr itself")
+
+    order: list[str] = []
+    order_lock = threading.Lock()
+
+    def record(label: str) -> None:
+        with order_lock:
+            order.append(label)
+
+    resident_started = threading.Event()
+    release_resident = threading.Event()
+
+    class FakeWatcher:
+        def __init__(self):
+            self.calls = 0
+
+        def changed(self):
+            self.calls += 1
+            record(f"watch:{self.calls}")
+            # Flips true only once resident dispatch is confirmed
+            # underway, so reload_requested becomes true while `current`
+            # is still busy — the exact shape Gap 2 was about.
+            return resident_started.is_set()
+
+    watcher = FakeWatcher()
+
+    def _stop_after_reexec():
+        record("reexec")
+        raise StopIteration
+
+    def fake_run_worker(event, *_args, **_kwargs):
+        eid = event.get("id")
+        if eid == "evt-resident":
+            record("resident-start")
+            resident_started.set()
+            release_resident.wait(timeout=5)
+            record("resident-done")
+            return Run(
+                id="task-resident", event_id=eid, body="edit brr itself",
+                status="done",
+            )
+        record("spawn-run")
+        return Run(
+            id="task-spawn", event_id=eid, body="spawned work",
+            status="done", meta={"worker": True},
+        )
+
+    monkeypatch.setattr(
+        daemon.reload_mod.DevReloadWatcher,
+        "for_repo",
+        classmethod(lambda cls, _repo_root: watcher),
+    )
+    monkeypatch.setattr(daemon.reload_mod, "reexec", _stop_after_reexec)
+    monkeypatch.setattr(daemon, "read_pid", lambda _brr_dir: None)
+    monkeypatch.setattr(daemon, "_write_pid", lambda _brr_dir: record("write-pid"))
+    monkeypatch.setattr(daemon, "_clear_pid", lambda _brr_dir: record("clear-pid"))
+    monkeypatch.setattr(daemon, "_start_gates", lambda *_args: [])
+    monkeypatch.setattr(daemon.conf, "load_config", lambda _root: {})
+    monkeypatch.setattr(daemon, "_SCAN_INTERVAL", 0.02)
+    monkeypatch.setattr(daemon, "_run_worker", fake_run_worker)
+    monkeypatch.setattr(daemon, "publish", lambda *_a, **_k: record("push"))
+    monkeypatch.setattr(
+        daemon, "_notify_spawn_parent", lambda *_a, **_k: record("notify"),
+    )
+    monkeypatch.setattr(daemon.signal, "signal", lambda *_args: None)
+
+    def _inject_spawn_once_resident_running() -> None:
+        resident_started.wait(timeout=5)
+        protocol.create_event(
+            tmp_path / ".brr" / "inbox", "spawn", "spawned work",
+            spawn_immediate=True, worker=True, environment="worktree",
+        )
+        # Give the loop a couple of ticks to observe reload_requested
+        # flip true and still dispatch the spawn before unblocking the
+        # resident thought.
+        time.sleep(0.15)
+        release_resident.set()
+
+    injector = threading.Thread(target=_inject_spawn_once_resident_running)
+    injector.start()
+
+    with pytest.raises(StopIteration):
+        daemon.start(tmp_path, dev_reload=True)
+    injector.join(timeout=5)
+
+    assert "resident-start" in order
+    assert "spawn-run" in order
+    # The spawn dispatched (and ran) *before* the resident thought wound
+    # down, and reexec waited for both — proof reload_requested still
+    # holds the resident slot but no longer holds the concurrent-spawn
+    # slot.
+    assert order.index("spawn-run") < order.index("resident-done")
+    assert order.index("resident-done") < order.index("reexec")
 
 
 def test_publish_runs_with_task_meta_for_pr_rebase(tmp_path, monkeypatch):
@@ -2281,6 +2998,67 @@ def test_resources_facet_quota_known_when_summary_present():
     assert facet["coexisting_runs"]["required"] is False
 
 
+def test_resources_facet_coexisting_known_when_siblings_passed():
+    """Explicit passthrough: ``_resources_facet`` forwards ``coexisting`` to
+    ``facets.build`` unchanged (the wiring under test is the call site in
+    ``_write_live_portal_state`` below, not this thin wrapper)."""
+    facet = daemon._resources_facet(
+        "weekly 42%",
+        coexisting=[{"run_id": "run-b", "label": "other work"}],
+    )
+    assert facet["coexisting_runs"]["status"] == "known"
+    assert "other work" in facet["coexisting_runs"]["summary"]
+
+
+# ── _write_live_portal_state (coexisting_runs ← presence registry) ───────────
+
+
+def test_write_live_portal_state_coexisting_runs_reflects_presence(tmp_path):
+    """``brr_dir`` wires a *live*, heartbeat-refreshed sibling-run read —
+    the same presence query already used for the wake-time-only
+    ``present_snapshot`` (``_run_worker``'s "Other thoughts awake right
+    now"), extended to the portal-state facet a running resident's hooks
+    surface after every tool call."""
+    brr_dir = tmp_path / ".brr"
+    outbox_dir = brr_dir / "outbox" / "evt-1"
+    inbox_dir = brr_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    task = Run(id="run-self", event_id="evt-1", body="", source="telegram")
+
+    def _read_facet() -> dict:
+        payload = json.loads(
+            (outbox_dir / "portal-state.json").read_text(encoding="utf-8")
+        )
+        return payload["resources"]["coexisting_runs"]
+
+    # No brr_dir given → unchanged legacy behaviour.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+    )
+    assert _read_facet()["status"] == "unimplemented"
+
+    # brr_dir given, nobody else present → affirmative-absent.
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+    assert _read_facet()["status"] == "absent"
+
+    # A sibling registers itself (a concurrent spawn, an ad-hoc session) →
+    # known, self excluded by run_id.
+    presence.register(
+        brr_dir, kind="daemon", stream="other", run_id="run-sibling",
+        label="fix the frontend build",
+    )
+    daemon._write_live_portal_state(
+        outbox_dir, inbox_dir, "evt-1", task, phase="running",
+        brr_dir=brr_dir,
+    )
+    facet = _read_facet()
+    assert facet["status"] == "known"
+    assert "fix the frontend build" in facet["summary"]
+
+
 def test_resources_facet_level_collector_flips_empty_to_absent():
     # With a level collector wired (for example Claude result JSON), an empty spend /
     # context-window slot is affirmative-'absent', not unbuilt 'unimplemented'.
@@ -2331,6 +3109,23 @@ def test_resources_facet_remote_scm_known_when_pr_recorded():
     assert facet["remote_scm"]["pr_state"] == "open"
     assert facet["remote_scm"]["pr_number"] == "207"
     assert facet["remote_scm"]["note"] is None
+
+
+def test_read_pr_control_accepts_bare_number_hash_and_url(tmp_path):
+    """The `.pr` control file (2026-07-07 fix for 'remote_scm=absent even
+    after the resident created a PR itself mid-run'): the resident can write
+    whatever `gh pr create` handed it, not a specific format."""
+    for text in ("274", "#274", "https://github.com/Gurio/brr/pull/274\n"):
+        pr_path = tmp_path / ".pr"
+        pr_path.write_text(text, encoding="utf-8")
+        assert daemon._read_pr_control(pr_path) == "274"
+
+
+def test_read_pr_control_missing_or_empty_file_is_none(tmp_path):
+    assert daemon._read_pr_control(tmp_path / ".pr") is None
+    empty = tmp_path / ".pr"
+    empty.write_text("   ", encoding="utf-8")
+    assert daemon._read_pr_control(empty) is None
 
 
 def test_resources_facet_threads_runner_catalog():

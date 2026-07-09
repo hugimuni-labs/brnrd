@@ -199,10 +199,15 @@ def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depend
     now = datetime.now(timezone.utc)
     daemon.live_runs_json = json.dumps([run.model_dump() for run in payload.runs], separators=(",", ":"))
     daemon.live_runs_updated_at = now
+    daemon.spawn_max_concurrent = payload.spawn_max_concurrent
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
-    return schemas.LiveRunsOut(runs=payload.runs, live_runs_updated_at=now)
+    return schemas.LiveRunsOut(
+        runs=payload.runs,
+        live_runs_updated_at=now,
+        spawn_max_concurrent=payload.spawn_max_concurrent,
+    )
 
 
 @router.put("/pr-review-queue", response_model=schemas.PRReviewQueueOut)
@@ -223,6 +228,21 @@ def put_pr_review_queue(payload: schemas.PRReviewQueueReport, principal: Princip
     daemon.last_seen_at = now
     db.commit()
     return schemas.PRReviewQueueOut(prs=payload.prs, pr_review_queue_updated_at=now)
+
+
+@router.put("/run-ledger", response_model=schemas.RunLedgerOut)
+def put_run_ledger(payload: schemas.RunLedgerReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon's closed-run receipt snapshot (#271)."""
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        raise HTTPException(status_code=404, detail="no daemon registered for this token")
+    now = datetime.now(timezone.utc)
+    daemon.run_ledger_json = json.dumps([row.model_dump() for row in payload.rows], separators=(",", ":"))
+    daemon.run_ledger_updated_at = now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    return schemas.RunLedgerOut(rows=payload.rows, run_ledger_updated_at=now)
 
 
 @router.get("/inbox", response_model=schemas.InboxResponse)

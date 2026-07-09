@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime, timezone
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
 
 import requests
 
-from .. import claude_usage, codex_status, gitops, presence, protocol, run_progress, runner_quota
+from .. import claude_status, claude_usage, codex_status, gitops, presence, protocol, run_ledger, run_progress, runner_quota
 from .. import dominion, schedule as schedule_mod
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -22,6 +24,14 @@ _HTTP_TIMEOUT_S = 60
 _DEFAULT_DAEMON_NAME = "daemon"
 _RESPONSE_LIMITS = {"telegram": 3900}
 _SESSION = requests.Session()
+_CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS = 240.0
+# Dashboard snapshots (activity/plans/quota/live-runs/PR-review-queue/run-ledger) used
+# to publish once per `_loop_once` iteration, which is paced by the inbox
+# long-poll above (`_POLL_WAIT_S = 25`) — a constant chosen for chat
+# responsiveness, never for dashboard freshness. That coupling capped every
+# dashboard snapshot at ~25s stale by construction. Publishing runs on its
+# own short cadence instead — see kb/plan-loom-realtime-build.md slice 0.
+_DASHBOARD_PUBLISH_INTERVAL_S = 3
 
 
 class BrnrdAuthError(RuntimeError):
@@ -91,6 +101,66 @@ def relay_pack(brr_dir: Path, pack: dict, *, ttl_s: int | None = None) -> str | 
     return url if isinstance(url, str) and url else None
 
 
+_CONFIG_CHANGE_MINT_TIMEOUT_S = 10.0
+
+
+def propose_config_change(
+    brr_dir: Path,
+    *,
+    proposal_id: str,
+    config_key: str,
+    current_value: Any,
+    requested_value: Any,
+    reason: str = "",
+    timeout: float = _CONFIG_CHANGE_MINT_TIMEOUT_S,
+) -> dict[str, Any] | None:
+    """Mint a brnrd.dev approve/confirm URL for a proposed config-key change.
+
+    Loom envelope Phase 2 (kb/design-multi-workstream-concurrency.md
+    §"Named forks — round 2"): when a resident wants more of an
+    allowlisted, user-tunable ceiling than ``.brr/config`` currently
+    grants, the change is never applied unilaterally, and never on a
+    chat-typed approval — it rides the same device-flow shape as
+    ``routers/pairing.py``'s daemon pairing, gated behind the account
+    owner's login (``src/brnrd/routers/config_approval.py``). Returns
+    ``None`` (never raises) when this daemon isn't cloud-connected, since a
+    repo with no brnrd.dev account has no approver to escalate to — the
+    caller falls back to a locally-parked-only proposal in that case.
+
+    Called synchronously from ``daemon.py``'s outbox drain (a deliberate,
+    narrow exception to gates normally talking to the daemon only through
+    the filesystem — see ``gates/README.md``): this is a rare,
+    resident-initiated action, not a routine dispatch-loop tick, so the
+    shorter-than-default ``timeout`` bounds how long a slow/unreachable
+    server can stall that drain rather than avoiding the call entirely; a
+    fully async two-phase mint (park now, mint on a later tick) was
+    considered and set aside because it would leave a proposal's approve
+    link — and any minting failure — invisible to the user until a
+    separate poll noticed it.
+    """
+    state = _load_state(brr_dir)
+    if not (state.get("token") and state.get("brnrd_url")):
+        return None
+    try:
+        return _request(
+            state["brnrd_url"],
+            "POST",
+            "/v1/daemons/config-requests",
+            token=state["token"],
+            json={
+                "proposal_id": proposal_id,
+                "config_key": config_key,
+                "current_value": "" if current_value is None else str(current_value),
+                "requested_value": str(requested_value),
+                "reason": reason,
+            },
+            timeout=timeout,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] config-change proposal mint failed: {e}")
+        return None
+
+
 def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:
     pair = _request(brnrd_url, "POST", "/v1/accounts/pair")
     out(f"[brr] Approve this daemon at: {pair['pair_url']}")
@@ -151,6 +221,12 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
         return
     except Exception as e:
         print(f"[brr:cloud] register failed: {e}")
+    threading.Thread(
+        target=_dashboard_publish_loop,
+        args=(brr_dir, inbox_dir),
+        daemon=True,
+        name="cloud-dashboard-publish",
+    ).start()
     backoff = 1
     while True:
         try:
@@ -163,6 +239,43 @@ def run_loop(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
             print(f"[brr:cloud] error: {e}, retrying in {backoff}s")
             time.sleep(backoff)
             backoff = min(backoff * 2, 120)
+
+
+def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
+    """One publish pass — see ``_dashboard_publish_loop`` for why it exists.
+
+    Split out from the loop so a test can drive a single tick without
+    threading or monkeypatching ``time.sleep`` on a ``while True``.
+    """
+    state = _load_state(brr_dir)
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    _publish_activity(brr_dir, inbox_dir, state)
+    _publish_plans(brr_dir, state)
+    _publish_quota(brr_dir, state)
+    _publish_live_runs(brr_dir, state)
+    _publish_pr_review_queue(brr_dir, state)
+    _publish_run_ledger(brr_dir, state)
+
+
+def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
+    """Publish the dashboard snapshots on their own short cadence.
+
+    Runs alongside ``run_loop``'s main iteration (which still publishes once
+    per inbox long-poll return too — harmless, idempotent overwrites, not
+    worth special-casing out of the tested main path). This loop is what
+    actually delivers on "a live dashboard": `_loop_once`'s cadence is
+    capped at ``_POLL_WAIT_S`` (25s, chosen for chat responsiveness) whether
+    or not any inbox event ever arrives, so relying on it alone means every
+    dashboard snapshot is at best 25s stale. See
+    kb/plan-loom-realtime-build.md slice 0.
+    """
+    while True:
+        try:
+            _dashboard_publish_tick(brr_dir, inbox_dir)
+        except Exception as e:
+            print(f"[brr:cloud] dashboard publish loop error: {e}")
+        time.sleep(_DASHBOARD_PUBLISH_INTERVAL_S)
 
 
 def _register(brr_dir: Path, state: dict) -> None:
@@ -214,6 +327,7 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     _publish_quota(brr_dir, state)
     _publish_live_runs(brr_dir, state)
     _publish_pr_review_queue(brr_dir, state)
+    _publish_run_ledger(brr_dir, state)
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:
@@ -477,6 +591,11 @@ def _codex_quota_shell() -> dict[str, Any] | None:
     return {
         "shell": "codex",
         "status": "known",
+        # Codex's rollout read is live every loop tick (no idle-window gap
+        # the way Claude's cached PTY scrape has), but the scrape still
+        # carries its own timestamp — forward it so the dashboard measures
+        # staleness off the same clock for both shells.
+        "updated_at": levels.get("updated_at"),
         "windows": [
             _quota_window("5h window", primary, resets_at=quota.get("primary_resets_at")),
             _quota_window("weekly", secondary, resets_at=quota.get("secondary_resets_at")),
@@ -486,20 +605,39 @@ def _codex_quota_shell() -> dict[str, Any] | None:
 
 def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
     outbox_dir = runner_quota.latest_claude_usage_outbox_dir(brr_dir)
-    levels = claude_usage.load_snapshot(outbox_dir) if outbox_dir else None
+    levels = (
+        claude_usage.load_or_refresh_snapshot(
+            outbox_dir,
+            cwd=brr_dir,
+            max_age_seconds=_CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS,
+            timeout_seconds=10.0,
+            wait_for_credits=True,
+        )
+        if outbox_dir else None
+    )
     quota = levels.get("quota") if isinstance(levels, dict) else None
     buckets = quota.get("buckets") if isinstance(quota, dict) else None
+    credits = _claude_credits_block(brr_dir, usage_levels=levels)
     if not isinstance(buckets, dict):
-        return None
-    session = buckets.get("session") if isinstance(buckets.get("session"), dict) else {}
+        if credits is None:
+            return None
+        buckets = {}
+    session = (
+        buckets.get("session") if isinstance(buckets.get("session"), dict) else {}
+    )
     week = buckets.get("week") if isinstance(buckets.get("week"), dict) else {}
     session_pct = session.get("remaining_percentage")
     week_pct = week.get("remaining_percentage")
-    if session_pct is None and week_pct is None:
+    if session_pct is None and week_pct is None and credits is None:
         return None
     return {
         "shell": "claude",
         "status": "known",
+        # The scrape's own capture time, not "now". The cloud publisher now
+        # refreshes the cached PTY probe on a bounded idle cadence, but the
+        # dashboard still measures freshness off this field so a failed or
+        # skipped refresh cannot make old data look live.
+        "updated_at": levels.get("updated_at"),
         "windows": [
             _quota_window(
                 "5h window", session_pct, levels.get("session_reset"), levels.get("session_resets_at")
@@ -508,18 +646,77 @@ def _claude_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
                 "weekly", week_pct, levels.get("week_reset"), levels.get("week_resets_at")
             ),
         ],
+        "credits": credits,
     }
+
+
+def _claude_credits_block(
+    brr_dir: Path,
+    *,
+    usage_levels: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Claude credits evidence from `/usage` plus per-run spend, when proven.
+
+    ``usage_levels["usage_credits"]`` is Claude's account credit-balance
+    surface from the interactive ``/usage`` panel (amount spent / cap /
+    reset). Separately, the run-scoped ``total_cost_usd`` in the headless
+    result JSON is
+    an internal accounting figure, not a real charge. It becomes real dollars
+    the moment the subscription's 5h/weekly window is exhausted and Anthropic
+    falls the account through to metered credits (confirmed live 2026-07-07:
+    a maintainer-observed run kept working straight through an exhausted 5h
+    window, billed ~$1 in credits) — so this is not a projection, it is the
+    same terminal-JSON field :mod:`brr.claude_status` already collects for
+    the boot-prompt ``spend`` facet, just never published to the dashboard
+    before now. ``None`` when no run has ever produced one (cold cache, or a
+    Codex-only daemon).
+    """
+    outbox_dir = runner_quota.latest_claude_spend_outbox_dir(brr_dir)
+    levels = claude_status.load_snapshot(outbox_dir) if outbox_dir else None
+    spend = levels.get("spend") if isinstance(levels, dict) else None
+    usage = (
+        usage_levels.get("usage_credits")
+        if isinstance(usage_levels, dict) else None
+    )
+    total = spend.get("total_cost_usd") if isinstance(spend, dict) else None
+    if not isinstance(usage, dict) and total is None:
+        return None
+    block = {
+        "total_cost_usd": total,
+        "summary": spend.get("summary") if isinstance(spend, dict) else None,
+        "updated_at": levels.get("updated_at") if isinstance(levels, dict) else None,
+    }
+    if isinstance(usage, dict):
+        block.update(
+            {
+                "enabled": usage.get("enabled"),
+                "used_percentage": usage.get("used_percentage"),
+                "remaining_percentage": usage.get("remaining_percentage"),
+                "spent_amount": usage.get("spent_amount"),
+                "limit_amount": usage.get("limit_amount"),
+                "currency": usage.get("currency"),
+                "reset": usage.get("reset"),
+                "resets_at": usage.get("resets_at"),
+                "summary": usage.get("summary") or block.get("summary"),
+                "run_spend_summary": spend.get("summary") if isinstance(spend, dict) else None,
+                "updated_at": (
+                    usage_levels.get("updated_at")
+                    if isinstance(usage_levels, dict) else block.get("updated_at")
+                ),
+            }
+        )
+    return block
 
 
 def _quota_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     """This daemon's runner-quota snapshot: real per-shell 5h/weekly windows.
 
     Mirrors the Activity/Plans publish shape (#237) — reads whatever local
-    evidence already exists (Codex's live rollout read, Claude's most
-    recently cached ``/usage`` scrape via
-    :func:`runner_quota.latest_claude_usage_outbox_dir`) rather than
-    spawning a fresh probe on this loop's ~25s cadence. A shell with no
-    evidence yet is omitted, not reported as a fake zero.
+    evidence already exists (Codex's live rollout read, Claude's cached
+    ``/usage`` scrape via :func:`runner_quota.latest_claude_usage_outbox_dir`).
+    Claude's cached scrape is refreshed here on a bounded idle cadence shorter
+    than the dashboard's stale threshold, not on every publish tick. A shell
+    with no evidence yet is omitted, not reported as a fake zero.
     """
     shells = [_claude_quota_shell(brr_dir), _codex_quota_shell()]
     return [shell for shell in shells if shell is not None]
@@ -565,9 +762,40 @@ def _live_runs_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
                 "repo_label": str(entry.get("repo_label") or ""),
                 "started_at": _iso_from_epoch(entry.get("started_at")),
                 "last_seen": _iso_from_epoch(entry.get("last_seen")),
+                # Joins the live view to the same parent/child shape the
+                # closed-run ledger already carries (run_ledger.py's
+                # `parent_run_id`/`is_subspawn`) — named as a gap and
+                # closed in kb/design-multi-workstream-concurrency.md
+                # "Ranked moves" #1: a running `spawn:` child is now
+                # distinguishable from a resident thought *while it's
+                # still live*, not only after it closes into the ledger.
+                "parent_run_id": str(entry.get("parent_run_id") or "") or None,
+                "is_subspawn": bool(entry.get("is_subspawn")),
             }
         )
     return out
+
+
+def _spawn_pool_width(brr_dir: Path) -> int:
+    """Configured ``spawn:`` pool width (``spawn.max_concurrent``), for the
+    loom-envelope Phase 1 limits panel (`kb/design-multi-workstream-
+    concurrency.md` §"Loom envelope").
+
+    Piggybacked on the live-runs publish tick rather than a new endpoint —
+    the *active* count is already derivable from ``is_subspawn`` entries in
+    ``_live_runs_snapshot`` above, this is the one number that publish
+    doesn't already carry. Reuses ``daemon._max_concurrent_spawns``'s own
+    clamped-default parsing via a deferred import rather than duplicating
+    it: ``daemon.py`` already does a deferred ``from .gates import cloud``
+    (see its own comment there), so importing the other direction here has
+    to stay deferred too, executed at runtime after both modules are
+    fully loaded, not at import time.
+    """
+    from .. import config as _config
+    from ..daemon import _max_concurrent_spawns
+
+    cfg = _config.load_config(brr_dir.parent)
+    return _max_concurrent_spawns(cfg)
 
 
 def _publish_live_runs(brr_dir: Path, state: dict) -> None:
@@ -579,7 +807,10 @@ def _publish_live_runs(brr_dir: Path, state: dict) -> None:
             "PUT",
             "/v1/daemons/live-runs",
             token=state["token"],
-            json={"runs": _live_runs_snapshot(brr_dir)},
+            json={
+                "runs": _live_runs_snapshot(brr_dir),
+                "spawn_max_concurrent": _spawn_pool_width(brr_dir),
+            },
             timeout=10,
         )
     except Exception as e:
@@ -709,6 +940,47 @@ def _publish_pr_review_queue(brr_dir: Path, state: dict) -> None:
         )
     except Exception as e:
         print(f"[brr:cloud] pr-review-queue publish failed: {e}")
+
+
+def _run_ledger_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
+    """This daemon's recent closed-run receipt rows (#271).
+
+    Reads the local-first ``.brr/run-ledger.jsonl`` written at run closeout.
+    Missing files and malformed lines are not publish failures: the ledger
+    invariant is "unavailable evidence becomes absent/null, not a closeout or
+    dashboard failure."
+    """
+    path = run_ledger.ledger_path(brr_dir.parent)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            lines = deque(handle, maxlen=20)
+    except FileNotFoundError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _publish_run_ledger(brr_dir: Path, state: dict) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    try:
+        _request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/run-ledger",
+            token=state["token"],
+            json={"rows": _run_ledger_snapshot(brr_dir)},
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] run-ledger publish failed: {e}")
 
 
 class _CloudCardTransport:
