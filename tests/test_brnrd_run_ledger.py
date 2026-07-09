@@ -73,6 +73,8 @@ _ROW = {
     "wall_clock_seconds": 600.0,
     "runner_shell": "codex",
     "runner_core": "gpt-5-codex",
+    "core_expected": "gpt-5-codex",
+    "core_mismatch": False,
     "repo_label": "Gurio/brr",
     "source_system": "telegram",
     "external_refs": [{"gate": "telegram"}],

@@ -12,6 +12,8 @@ _ROW_FIELDS = {
     "wall_clock_seconds",
     "runner_shell",
     "runner_core",
+    "core_expected",
+    "core_mismatch",
     "repo_label",
     "source_system",
     "external_refs",
@@ -319,3 +321,94 @@ def test_row_falls_back_to_catalog_placeholder_when_model_usage_absent():
 
     assert row["runner_core"] == "default"
     assert task.meta["runner_core"] == "default"
+
+
+def test_core_attestation_alarms_when_pin_not_respected(capsys):
+    """The shell=/core= shadowing failure mode (2026-07-09): config pinned
+    fable-5 but the Shell actually ran another model. The row must carry
+    the expected pin, the observed core, and a true ``core_mismatch`` —
+    plus a loud stderr warning so it can never again go silent for days."""
+    task = Run(
+        id="run-shadowed",
+        event_id="evt-shadowed",
+        body="",
+        source="telegram",
+        meta={
+            "runner_name": "claude-fable",
+            "runner_shell": "claude",
+            "runner_core": "claude-fable-5",
+            "repo_label": "Gurio/brr",
+        },
+    )
+
+    row = run_ledger.build_closed_run_row(
+        task,
+        {},
+        after_levels={"model_ids": ["claude-sonnet-5"]},
+    )
+
+    assert row["core_expected"] == "claude-fable-5"
+    assert row["runner_core"] == "claude-sonnet-5"
+    assert row["core_mismatch"] is True
+    assert "was dispatched with core='claude-fable-5'" in capsys.readouterr().err
+
+
+def test_core_attestation_verifies_respected_pin(capsys):
+    task = Run(
+        id="run-attested",
+        event_id="evt-attested",
+        body="",
+        source="telegram",
+        meta={
+            "runner_name": "claude-fable",
+            "runner_shell": "claude",
+            "runner_core": "claude-fable-5",
+            "repo_label": "Gurio/brr",
+        },
+    )
+
+    row = run_ledger.build_closed_run_row(
+        task,
+        {},
+        after_levels={"model_ids": ["claude-fable-5"]},
+    )
+
+    assert row["core_expected"] == "claude-fable-5"
+    assert row["core_mismatch"] is False
+    assert capsys.readouterr().err == ""
+
+
+def test_core_attestation_unpinned_or_unobserved_is_unverifiable():
+    # Unpinned dispatch ("default"): anything observed is by definition
+    # respected — no claim to verify.
+    task = _task("run-unpinned")
+    task.meta["runner_core"] = "default"
+    row = run_ledger.build_closed_run_row(
+        task, {}, after_levels={"model_ids": ["claude-opus-4-8"]}
+    )
+    assert row["core_mismatch"] is None
+
+    # No observation (non-Claude Shell / aborted stream): unverifiable.
+    task = _task("run-unobserved")
+    row = run_ledger.build_closed_run_row(task, {}, after_levels=_levels())
+    assert row["core_expected"] == "gpt-5-codex"
+    assert row["core_mismatch"] is None
+
+
+def test_core_mismatch_matching_rules():
+    # Prefix-tolerant both directions (date-suffixed concrete ids).
+    assert run_ledger.core_mismatch(
+        "claude-haiku-4-5", "claude-haiku-4-5-20251001"
+    ) is False
+    assert run_ledger.core_mismatch(
+        "claude-haiku-4-5-20251001", "claude-haiku-4-5"
+    ) is False
+    # Joined multi-id observation: fine when any id matches the pin
+    # (subagents legitimately resolve to other tiers)...
+    assert run_ledger.core_mismatch(
+        "claude-fable-5", "claude-haiku-4-5+claude-fable-5"
+    ) is False
+    # ...alarms only when none do.
+    assert run_ledger.core_mismatch(
+        "claude-fable-5", "claude-haiku-4-5+claude-sonnet-5"
+    ) is True

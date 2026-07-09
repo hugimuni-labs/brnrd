@@ -73,7 +73,26 @@
 					<div class="flex items-start justify-between gap-3">
 						<div class="min-w-0">
 							<p class="truncate font-medium text-amber-100">{label}</p>
-							<p class="truncate font-mono text-stone-500">{runner}</p>
+							<!-- Core attestation: runner_core is the *observed* model
+							     (from the Shell's own result JSON), not the config
+							     claim. ✓ = observed matches the dispatch pin;
+							     red badge = the pin was not respected (the
+							     shell=/core= shadowing failure mode, caught
+							     2026-07-09, must never be silent again). -->
+							<p class="truncate font-mono text-stone-500">
+								{runner}
+								{#if row.core_mismatch === false}
+									<span class="text-emerald-400" title="observed model matches the configured core pin"
+										>✓</span
+									>
+								{:else if row.core_mismatch}
+									<span
+										class="rounded bg-red-950/70 px-1 text-red-300"
+										title="the Shell ran a different model than the configured core pin"
+										>⚠ pinned {row.core_expected ?? '?'}, ran {row.runner_core ?? '?'}</span
+									>
+								{/if}
+							</p>
 						</div>
 						<span class="shrink-0 font-mono text-stone-500">{endedLabel(row.ended_at)}</span>
 					</div>
