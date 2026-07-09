@@ -1,9 +1,10 @@
 """In-memory, TTL-bounded fallback relay for diffense review packs.
 
-brnrd is a **transient relay** for packs, never a store
-([`kb/design-diffense.md`](../../kb/design-diffense.md) → "Where packs
-live"; [`kb/design-brnrd-protocol.md`](../../kb/design-brnrd-protocol.md)
-→ data ownership). A pack is derived from the user's diff + conversation;
+brnrd is a **transient relay** for packs, never a store (kb pages
+`design-diffense.md` → "Where packs live" and `design-brnrd-protocol.md`
+→ data ownership; see `AGENTS.md` → "Knowledge base" → "Where the kb
+lives" for where those actually are, since it's no longer a
+repo-relative path). A pack is derived from the user's diff + conversation;
 persisting it server-side would break that stance. So a relayed pack
 lives only here — in process memory, behind an unguessable token, dropped
 on TTL expiry or process restart. It is never written to the database or

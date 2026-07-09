@@ -142,3 +142,38 @@ def test_project_home_never_splits(tmp_path):
     found = knowledge.sources(repo, {"home.path": str(home)})
 
     assert [s.name for s in found[:1]] == ["home knowledge"]
+
+
+def test_active_kb_dir_prefers_home_knowledge_over_repo_kb(tmp_path):
+    """When both shapes exist (a repo mid-migration, say), the
+    maintenance scanners should walk the home-knowledge copy — the
+    same priority `sources()` already gives it for injection/search."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = tmp_path / "home"
+    cfg = _account_cfg(repo, home)
+    ctx = account.resolve_context(repo, cfg)
+    repo_knowledge = account.repo_knowledge_path(ctx, "Gurio/brr")
+    repo_knowledge.mkdir(parents=True)
+    (repo / "kb").mkdir()
+
+    found = knowledge.active_kb_dir(repo, cfg)
+
+    assert found == repo_knowledge
+
+
+def test_active_kb_dir_falls_back_to_repo_kb(tmp_path):
+    """No account context (or an account home with nothing checked out
+    yet) — the legacy repo-committed kb/ is still a valid answer."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    (repo / "kb").mkdir()
+
+    assert knowledge.active_kb_dir(repo, {}) == repo / "kb"
+
+
+def test_active_kb_dir_none_when_neither_exists(tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+
+    assert knowledge.active_kb_dir(repo, {}) is None
