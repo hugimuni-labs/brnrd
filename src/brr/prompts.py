@@ -61,6 +61,73 @@ _LOG_ENTRY_RE = re.compile(r"^## \[", re.MULTILINE)
 _MAX_LOG_ENTRIES = 10
 _MAX_LOG_BYTES = 4096
 
+# Byte budget for the resident-authored, append-only blocks (CS5 active
+# plan, CS7 decision ledger). Both had no cap at all until 2026-07-09 —
+# unlike the self-inject digest (`dominion.DEFAULT_INJECT_BUDGET_BYTES`)
+# and Knowledge Sources (`knowledge._MAX_TOTAL_BYTES`), which have carried
+# an enforced budget since their own introduction. "Keep it short" /
+# "collapse on sight" was prose-only guidance, and prose guidance is the
+# weakest rung the dominion playbook's own "Environment shaping" section
+# names — it doesn't hold under normal accretion. Live proof: the decision
+# ledger grew unbounded to 68KB/1110 lines over five days (2026-07-04 to
+# 2026-07-09) and became the single largest block in the wake bundle,
+# dwarfing the capped self-inject digest (~12KB) several times over.
+# Same default for both; independently overridable per repo.
+_MAX_ACCRETING_BLOCK_BYTES = 8192
+
+_H2_RE = re.compile(r"(?m)^## ")
+_H2_SPLIT_RE = re.compile(r"(?m)(?=^## )")
+
+
+def _tail_trim_entries(content: str, max_bytes: int, source_hint: str) -> str:
+    """Trim an append-only, chronological-ascending page to fit *max_bytes*.
+
+    CS5/CS7 pages only ever grow — the resident's own convention is "add an
+    entry", never "prune the last one" (see ``_MAX_ACCRETING_BLOCK_BYTES``).
+    Mirrors ``_read_recent_log``'s newest-first, entry-boundary-aware
+    accumulation, generalized past ``kb/log.md``'s bracketed ``## [date]``
+    heading to a plain ``## `` heading: keep the file's leading preamble,
+    then walk ``## `` entries from the bottom (newest, since these pages
+    append at the end rather than prepend) backward, keeping everything
+    that fits and always keeping at least the newest entry even if it alone
+    exceeds budget — the most recent decision never silently disappears.
+
+    Returns *content* unchanged when it already fits. Falls back to a flat
+    tail cut when the page has no ``## `` headings to respect.
+    """
+    encoded = content.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return content
+    match = _H2_RE.search(content)
+    if not match:
+        tail = encoded[-max_bytes:].decode("utf-8", errors="ignore")
+        return (
+            f"_(older content cut to fit the wake budget — full page: "
+            f"{source_hint})_\n\n{tail}"
+        )
+    preamble = content[: match.start()].strip()
+    entries = [e for e in _H2_SPLIT_RE.split(content[match.start() :]) if e.strip()]
+    picked: list[str] = []
+    used = 0
+    for entry in reversed(entries):
+        entry_bytes = len(entry.encode("utf-8"))
+        if picked and used + entry_bytes > max_bytes:
+            break
+        picked.append(entry)
+        used += entry_bytes
+    picked.reverse()
+    omitted = len(entries) - len(picked)
+    pieces: list[str] = []
+    if preamble:
+        pieces.append(preamble)
+    if omitted:
+        pieces.append(
+            f"_({omitted} earlier {'entry' if omitted == 1 else 'entries'} cut "
+            f"to fit the wake budget — full history: {source_hint})_"
+        )
+    pieces.append("".join(picked).strip())
+    return "\n\n".join(p for p in pieces if p)
+
 
 def _read_recent_log(
     repo_root: Path,
@@ -304,13 +371,22 @@ def _build_inter_run_plan_block(repo_root: Path) -> str:
     label = acc.repo_label(repo_root, cfg)
     plan_path = acc.active_plan_path(ctx, label)
     cross_path = acc.cross_repo_plans_path(ctx) / "active.md"
+    budget = int(
+        cfg.get(
+            "dominion.plan_inject_budget_bytes",
+            cfg.get("dominion_plan_inject_budget_bytes", _MAX_ACCRETING_BLOCK_BYTES),
+        )
+    )
 
     blocks: list[str] = []
-    for path in (plan_path, cross_path):
+    for path, hint in (
+        (plan_path, f"`plans/{label}/active.md`"),
+        (cross_path, "`plans/_cross-repo/active.md`"),
+    ):
         if path.is_file():
             content = path.read_text(encoding="utf-8").strip()
             if content:
-                blocks.append(content)
+                blocks.append(_tail_trim_entries(content, budget, hint))
 
     if not blocks:
         return ""
@@ -400,6 +476,15 @@ def _build_decision_ledger_block(repo_root: Path) -> str:
     content = ledger_path.read_text(encoding="utf-8").strip()
     if not content:
         return ""
+    budget = int(
+        cfg.get(
+            "dominion.ledger_inject_budget_bytes",
+            cfg.get(
+                "dominion_ledger_inject_budget_bytes", _MAX_ACCRETING_BLOCK_BYTES
+            ),
+        )
+    )
+    content = _tail_trim_entries(content, budget, "`ledger/decisions.md`")
 
     return (
         "## Decision ledger\n\n"

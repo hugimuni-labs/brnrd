@@ -1,5 +1,6 @@
 """Tests for the home/repo knowledge source chain."""
 
+from pathlib import Path
 import subprocess
 
 from brr import account, knowledge
@@ -52,6 +53,82 @@ def test_search_reads_home_then_repo_sources(tmp_path):
     hits = knowledge.search(repo, "needle", {"home.path": str(home)})
 
     assert [hit.source for hit in hits[:2]] == ["home knowledge", "repo KB"]
+
+
+def test_checkout_recloned_when_origin_is_stale(tmp_path):
+    """Live bug, 2026-07-09: a checkout made before an account-resolution
+    change (e.g. a cloud-gate connect starts filling in ``account_id``
+    where it used to fall back to a decoy value) kept its old ``origin``
+    forever — ``ensure_checkout`` only checked "does the directory exist",
+    never "does it still point at the right home". Simulate that by
+    pointing the existing checkout's origin at a different, empty
+    knowledge repo and confirming a call with the *real* home re-clones
+    rather than silently returning the stale one."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = tmp_path / "home"
+    (home / "knowledge").mkdir(parents=True)
+    (home / "knowledge" / "index.md").write_text("current home content", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=home / "knowledge", check=True)
+    subprocess.run(["git", "add", "-A"], cwd=home / "knowledge", check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed"],
+        cwd=home / "knowledge",
+        check=True,
+    )
+    cfg = {"home.path": str(home)}
+
+    # A prior wake's checkout, cloned from a since-abandoned decoy home.
+    decoy_home = tmp_path / "decoy-home" / "knowledge"
+    decoy_home.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(decoy_home)], check=True)
+    checkout = repo / knowledge.CHECKOUT_DIRNAME
+    subprocess.run(
+        ["git", "clone", "-q", str(decoy_home), str(checkout)], check=True
+    )
+    assert (
+        subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=checkout,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        == str(decoy_home)
+    )
+
+    result = knowledge.ensure_checkout(repo, cfg)
+
+    assert result == checkout
+    origin = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=checkout,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert Path(origin).resolve() == (home / "knowledge").resolve()
+    assert (checkout / "index.md").read_text(encoding="utf-8") == "current home content"
+
+
+def test_checkout_reused_when_origin_still_matches(tmp_path):
+    """The common case: an existing, still-correct checkout is left alone
+    rather than needlessly re-cloned on every call."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    home = tmp_path / "home"
+    (home / "knowledge").mkdir(parents=True)
+    (home / "knowledge" / "index.md").write_text("v1", encoding="utf-8")
+    cfg = {"home.path": str(home)}
+
+    first = knowledge.ensure_checkout(repo, cfg)
+    marker = first / ".untracked-marker"
+    marker.write_text("still here", encoding="utf-8")
+
+    second = knowledge.ensure_checkout(repo, cfg)
+
+    assert second == first
+    assert marker.exists()
 
 
 def test_checkout_is_gitignored_from_project_status(tmp_path):
