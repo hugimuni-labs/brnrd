@@ -1306,6 +1306,30 @@ class TestInterRunPlanInjection:
 
         assert _build_inter_run_plan_block(tmp_path) == ""
 
+    def test_oversized_plan_is_tail_trimmed(self, tmp_path):
+        """An active.md left to accrete stays bounded, keeping the newest
+        entries — the CS5 twin of the CS7 regression below. No cap here
+        until 2026-07-09 meant a plan that grew via "append instead of
+        collapse" (a pattern already caught once live, 2026-07-07) would
+        ride into every wake in full, unbounded."""
+        home = _seed_account_home(tmp_path)
+        (tmp_path / ".brr" / "config").open("a", encoding="utf-8").write(
+            "dominion.plan_inject_budget_bytes=200\n"
+        )
+        plan_dir = home / "plans" / "local__default"
+        plan_dir.mkdir(parents=True)
+        entries = "\n\n".join(
+            f"## Move {i} (2026-07-{i:02d})\n" + ("detail " * 20)
+            for i in range(1, 10)
+        )
+        (plan_dir / "active.md").write_text(f"# Plan\n\n{entries}", encoding="utf-8")
+
+        result = _build_inter_run_plan_block(tmp_path)
+
+        assert "Move 9" in result
+        assert "Move 1 (" not in result
+        assert "entries cut to fit the wake budget" in result
+
     def test_plan_block_rides_in_daemon_prompt(self, tmp_path):
         """CS5 plan appears in the assembled daemon prompt."""
         prompts = tmp_path / ".brr" / "prompts"
@@ -1433,6 +1457,38 @@ class TestDecisionLedgerInjection:
         (ledger_dir / "decisions.md").write_text("", encoding="utf-8")
 
         assert _build_decision_ledger_block(tmp_path) == ""
+
+    def test_oversized_ledger_is_tail_trimmed(self, tmp_path):
+        """Live case, 2026-07-09: ledger/decisions.md grew unbounded to
+        68KB/1110 lines over five days (its own file header says "kept
+        short and current... don't let this become a duplicate log", but
+        nothing enforced that) and became the single largest block in the
+        wake bundle — bigger than the capped self-inject digest several
+        times over. A budget cap, tail-trimmed at an entry boundary so the
+        newest decision never silently drops, closes the gap in code
+        rather than leaving it to a convention that already didn't hold."""
+        home = _seed_account_home(tmp_path)
+        (tmp_path / ".brr" / "config").open("a", encoding="utf-8").write(
+            "dominion.ledger_inject_budget_bytes=200\n"
+        )
+        ledger_dir = home / "ledger"
+        ledger_dir.mkdir(parents=True)
+        entries = "\n\n".join(
+            f"## Decision {i} (2026-07-{i:02d})\n" + ("rationale " * 20)
+            for i in range(1, 10)
+        )
+        (ledger_dir / "decisions.md").write_text(
+            f"# Decision ledger\n\n{entries}", encoding="utf-8"
+        )
+
+        result = _build_decision_ledger_block(tmp_path)
+
+        assert "Decision 9" in result
+        assert "Decision 1 (" not in result
+        assert "entries cut to fit the wake budget" in result
+        assert len(result.encode("utf-8")) < len(
+            (f"# Decision ledger\n\n{entries}").encode("utf-8")
+        )
 
     def test_ledger_block_rides_in_daemon_prompt(self, tmp_path):
         """CS7 decision ledger appears in the assembled daemon prompt."""
