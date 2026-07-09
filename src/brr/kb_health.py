@@ -81,15 +81,23 @@ class GraphStats:
 
 def compute_graph_stats(
     repo_root: Path,
+    kb_dir: Path | None = None,
     *,
     run_touched: list[str] | None = None,
 ) -> GraphStats:
-    """Return a :class:`GraphStats` snapshot for ``repo_root/kb``.
+    """Return a :class:`GraphStats` snapshot for *kb_dir*.
 
-    Returns an all-zero ``GraphStats`` when ``kb/`` does not exist;
-    the formatter renders that trivially and the skip-fast contract
-    from :mod:`brr.kb_preflight` drops the wake block when the scan is
-    clean.
+    *kb_dir* defaults to ``repo_root / "kb"``; pass the resolved
+    home-knowledge path explicitly for a repo that dogfoods that shape
+    instead (see :func:`brr.kb_preflight.scan`'s matching parameter for
+    the same rationale — this module only reasons about links between
+    kb pages, so unlike the preflight it needs no repo-relative
+    code-link fallback).
+
+    Returns an all-zero ``GraphStats`` when the kb directory does not
+    exist; the formatter renders that trivially and the skip-fast
+    contract from :mod:`brr.kb_preflight` drops the wake block when the
+    scan is clean.
 
     When *run_touched* is supplied, the snapshot records the count
     of kb / AGENTS.md pages changed; the formatter surfaces it as a
@@ -99,7 +107,7 @@ def compute_graph_stats(
     set.)
     """
     repo_root = repo_root.resolve()
-    kb_dir = repo_root / "kb"
+    kb_dir = kb_dir.resolve() if kb_dir is not None else repo_root / "kb"
     touched_count = len(run_touched) if run_touched else 0
     if not kb_dir.is_dir():
         return GraphStats(

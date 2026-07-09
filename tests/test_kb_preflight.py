@@ -544,3 +544,89 @@ def test_scan_finding_order_is_stable(tmp_path):
     assert severities == sorted(severities, key=lambda s: (
         ["error", "warning", "info"].index(s)
     )), severities
+
+
+# ── External kb_dir (home-knowledge, outside repo_root) ────────────────
+
+
+def test_scan_accepts_external_kb_dir_outside_repo_root(tmp_path, tmp_path_factory):
+    repo_root = tmp_path
+    kb_dir = tmp_path_factory.mktemp("home-knowledge")
+    _write(kb_dir / "index.md", (
+        "# Index\n\n- [Foo](decision-foo.md) — desc\n"
+    ))
+    _write(
+        kb_dir / "decision-foo.md",
+        "# Foo\n\nStatus: accepted on 2026-04-01\n\nBody.\n",
+    )
+    _write(kb_dir / "log.md", "# Log\n")
+
+    # A plain kb-internal sibling link must resolve fine even though
+    # kb_dir isn't repo_root/"kb" — no false missing-from-index or
+    # broken-link findings just because the kb moved.
+    assert kb_preflight.scan(repo_root, kb_dir) == []
+
+
+def test_scan_external_kb_dir_resolves_legacy_code_links_against_repo_root_kb(
+    tmp_path, tmp_path_factory,
+):
+    repo_root = tmp_path
+    _write(repo_root / "src" / "brr" / "AGENTS.md", "# Playbook\n")
+    kb_dir = tmp_path_factory.mktemp("home-knowledge")
+    _write(kb_dir / "index.md", (
+        "# Index\n\n- [Foo](decision-foo.md) — desc\n"
+    ))
+    _write(kb_dir / "decision-foo.md", (
+        "Status: accepted on 2026-04-01\n\n"
+        "See [the playbook](../src/brr/AGENTS.md).\n"
+    ))
+    _write(kb_dir / "log.md", "# Log\n")
+
+    # Written back when this page assumed kb_dir == repo_root/"kb"; the
+    # code link should still resolve by falling back to that historical
+    # root, not get flagged as broken just because the kb moved out.
+    findings = kb_preflight.scan(repo_root, kb_dir)
+    assert all(f.type != "broken-link" for f in findings), findings
+
+
+def test_scan_external_kb_dir_still_flags_genuinely_missing_code_link(
+    tmp_path, tmp_path_factory,
+):
+    repo_root = tmp_path
+    kb_dir = tmp_path_factory.mktemp("home-knowledge")
+    _write(kb_dir / "index.md", (
+        "# Index\n\n- [Foo](decision-foo.md) — desc\n"
+    ))
+    _write(kb_dir / "decision-foo.md", (
+        "Status: accepted on 2026-04-01\n\n"
+        "See [gone](../src/brr/nonexistent.py).\n"
+    ))
+    _write(kb_dir / "log.md", "# Log\n")
+
+    # The legacy-root fallback isn't a blank check — a link to a file
+    # that never existed in repo_root either should still be flagged.
+    findings = kb_preflight.scan(repo_root, kb_dir)
+    broken = [f for f in findings if f.type == "broken-link"]
+    assert any("nonexistent.py" in f.target for f in broken), findings
+
+
+def test_scan_external_kb_dir_flags_stale_index_entry(tmp_path, tmp_path_factory):
+    repo_root = tmp_path
+    kb_dir = tmp_path_factory.mktemp("home-knowledge")
+    _write(kb_dir / "index.md", (
+        "# Index\n\n- [Gone](decision-gone.md) — was here once\n"
+    ))
+    _write(kb_dir / "log.md", "# Log\n")
+
+    findings = kb_preflight.scan(repo_root, kb_dir)
+    stale = [f for f in findings if f.type == "stale-index-entry"]
+    assert any("decision-gone.md" in f.target for f in stale), findings
+
+
+def test_scan_defaults_kb_dir_to_repo_root_kb_when_omitted(tmp_path):
+    # Back-compat: the two-arg call sites (existing tests, existing
+    # callers) keep working unchanged.
+    _write(tmp_path / "kb" / "index.md", "# Index\n")
+    _write(tmp_path / "kb" / "log.md", "# Log\n")
+
+    assert kb_preflight.scan(tmp_path) == kb_preflight.scan(tmp_path, tmp_path / "kb")

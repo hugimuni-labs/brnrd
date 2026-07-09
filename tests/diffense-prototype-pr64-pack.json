@@ -1,0 +1,463 @@
+{
+  "schema_version": "0.1-prototype",
+  "_note": "Hand-authored diffense review pack for Gurio/brr PR #64. NOT a runner emission. Authored 2026-05-29, extended 2026-05-31 (pass 10: entry-stat distributions, invariants, data-trace, kb axes) to pressure-test the card schema before it is locked. Companion render + findings: kb/diffense-prototype-pr64.md. Runtime home would be .brr/diffense/<task-id>/pack.json (keyed by task, not PR \u2014 brr publishes a branch; see #68).",
+  "metadata": {
+    "pr": {
+      "repo": "Gurio/brr",
+      "number": 64,
+      "title": "fix: poll GitHub PR review comments for @-mention triggers",
+      "url": "https://github.com/Gurio/brr/pull/64",
+      "base": "main",
+      "head_ref": "fix/github-pr-review-comment-mentions",
+      "head_sha": "2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1",
+      "merge_commit": "bd14644b3ab8bf36bf7d0d9ba2139b6aea5ceffc",
+      "merged_at": "2026-05-27T21:14:45Z",
+      "totals": {"additions": 2642, "deletions": 1221, "changed_files": 23}
+    },
+    "conversation_id": null,
+    "generated_at": "2026-05-29",
+    "generator": "hand-authored prototype (not a runner emission)",
+    "locator_base": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/"
+  },
+  "reading_order": [
+    "summary:pr64",
+    "unc:seen-cap-dedup",
+    "unc:summary-only-reviews",
+    "unc:reactions-followup",
+    "walk:review-comment-round-trip",
+    "item:polling.review-comments",
+    "item:client.conditional-get",
+    "item:delivery.in-thread-reply",
+    "item:gate.package-split",
+    "item:kb.gate-vs-brnrd-design",
+    "item:test.etag-304"
+  ],
+  "cards": [
+    {
+      "id": "summary:pr64",
+      "kind": "summary",
+      "identity": {"label": "PR #64 — review-comment fix, gate refactor, cheaper polling"},
+      "lore": {
+        "descriptive": "Inline PR review-comment @-mentions now actually reach the gate (they were invisible — those comments live on /pulls/comments, not /issues/comments), replies land in-thread, and steady-state polling gets cheaper via conditional requests. Three arcs braided into one PR."
+      },
+      "shape": {
+        "arcs": [
+          {"theme": "fix", "what": "inline review-comment round-trip: poll -> task -> in-thread reply"},
+          {"theme": "refactor", "what": "monolithic github.py (1052 lines) -> 12-module package, brnrd-reusable core split out"},
+          {"theme": "feature", "what": "conditional polling (ETag/304) + review-summary events"}
+        ],
+        "surface_area": ["src/brr/gates/github/ (the GitHub gate)", "kb/ (1 new design page + cross-links)", "tests/test_github_gate.py"],
+        "risk_pointer": "2 concerns (1 med: the seen-id cap) + 1 follow-up — read next"
+      },
+      "entry_stats": [
+        {"viz": "bar", "label": "change mix", "caption": "10 cards across 3 arcs",
+         "segments": [
+           {"label": "fix", "weight": 4, "tone": "fix"},
+           {"label": "refactor", "weight": 3, "tone": "refactor"},
+           {"label": "feature", "weight": 3, "tone": "feature"}
+         ]},
+        {"viz": "meter", "label": "public surface", "value": 1.0, "tone": "good",
+         "caption": "preserved verbatim — __all__ pinned across the 12-module split"},
+        {"viz": "heat", "label": "invariants", "caption": "2 held \u00b7 1 threatened (links the med concern)",
+         "dots": [
+           {"tone": "good", "title": "public import surface preserved"},
+           {"tone": "good", "title": "exactly-once delivery (since-cursor + seen-set)"},
+           {"tone": "warn", "title": "seen-set stays bounded \u2014 threatened on very busy PRs", "ref": "unc:seen-cap-dedup"}
+         ]},
+        {"viz": "delta", "label": "steady-state REST cost", "before": 1.0, "after": 0.05, "tone": "good",
+         "caption": "conditional 304s are free \u2014 a quiet repo polls at ~0 budget"},
+        {"viz": "meter", "label": "tests on new paths", "value": 0.9, "tone": "good",
+         "caption": "+6: transport 304, cursor threading, in-thread reply, review-comment event"},
+        {"viz": "tags", "label": "data-shape delta", "caption": "1 new event kind, 3 new cursor fields",
+         "items": ["+event pr-review-comment", "+cursor review_comments_since", "+cursor seen_review_comment_ids", "+cursor etags"]}
+      ],
+      "secondary_stats": {"_demoted": "raw size \u2014 tells you nothing about what to do", "changed_files": 23, "additions": 2642, "deletions": 1221, "commits": 4},
+      "lateral_edges": [
+        {"type": "points-at", "target": "unc:seen-cap-dedup"},
+        {"type": "points-at", "target": "unc:summary-only-reviews"},
+        {"type": "contains-arc", "target": "walk:review-comment-round-trip"}
+      ],
+      "provenance": {"pr": 64, "conversation_msg": null}
+    },
+    {
+      "id": "unc:seen-cap-dedup",
+      "kind": "uncertainty",
+      "subkind": "concern",
+      "severity": "med",
+      "headline": "On a very busy PR, a rare edit to an already-handled review comment could re-trigger it — each cursor keeps only the newest 500 ids and forgets the oldest.",
+      "identity": {
+        "label": "trigger: sorted(seen)[-_SEEN_CAP:] (7 sites)",
+        "file": "src/brr/gates/github/polling.py",
+        "symbol": "seen_review_comment_ids dedup",
+        "lines": [283, 283]
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/polling.py#L283",
+        "local": "src/brr/gates/github/polling.py:283"
+      },
+      "lore": {
+        "descriptive": "Every poller bounds its seen-id set with sorted(seen)[-_SEEN_CAP:] (_SEEN_CAP=500), keeping the 500 highest (newest) ids and evicting the lowest (oldest). It appears at 7 sites across the file, one per cursor."
+      },
+      "tension": {
+        "between": ["bounded cursor state (a cap on the seen set)", "exactly-once event delivery"],
+        "refs": [
+          {"kind": "code", "what": "the cap", "locator": "src/brr/gates/github/polling.py:283"},
+          {"kind": "code", "what": "_SEEN_CAP value", "locator": "src/brr/gates/github/constants.py:26"}
+        ]
+      },
+      "honest_nuance": "The risk is narrower than 'any handled comment re-fires': the `since` cursor advances to latest_seen, so an evicted id only re-fires if that old comment is *edited* after eviction (bumping its updated_at back into the window) on a PR busy enough to have pushed >500 ids past it. The since-cursor + seen-set is belt-and-suspenders for the common case.",
+      "proposed_resolution": "Either raise the cap for the review-comment cursors specifically, or switch from a bounded id-set to a timestamp-window dedup keyed on updated_at, or scope the seen-set per PR. Flagging so you can decide whether it is worth touching here or filing.",
+      "stats": {"severity": "med", "blast_radius": "review-comment + review dedup on very busy PRs; no other card depends on it"},
+      "lateral_edges": [
+        {"type": "related", "target": "item:polling.review-comments"},
+        {"type": "related", "target": "item:test.etag-304"}
+      ],
+      "provenance": {"commit": "297bfaaca", "commit_headline": "fix: poll GitHub PR review comments for @-mention triggers", "conversation_msg": null}
+    },
+    {
+      "id": "unc:summary-only-reviews",
+      "kind": "uncertainty",
+      "subkind": "out-of-scope-flag",
+      "severity": "low",
+      "headline": "A reviewer who Approves with a written summary but no inline comments is invisible to this OSS gate — by design; the managed brnrd webhook is what catches it.",
+      "identity": {
+        "label": "gap: summary-only reviews (Approve with body, no line comments)",
+        "file": "src/brr/gates/github/polling.py",
+        "symbol": "_poll_mention_review_summaries",
+        "lines": [285, 295]
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/polling.py#L285-L335",
+        "local": "src/brr/gates/github/polling.py:285"
+      },
+      "lore": {
+        "descriptive": "Review *summary* bodies are discovered only via the parent of a freshly-seen line comment. A reviewer who Approves with a written summary and zero inline comments produces a pull_request_review that neither /issues/comments nor /pulls/comments surfaces, so this OSS gate cannot see it without per-PR /reviews scans that would blow the REST budget on busy repos. Left to the brnrd webhook path."
+      },
+      "tension": {
+        "between": ["poll-based discovery within the REST budget", "full review-event coverage"],
+        "refs": [
+          {"kind": "code", "what": "summary discovery is line-comment-gated", "locator": "src/brr/gates/github/polling.py:285"},
+          {"kind": "kb", "what": "documented gap", "ref": "kb/design-github-gate-vs-brnrd-app.md#deferred-follow-ups"}
+        ]
+      },
+      "proposed_resolution": "No action in OSS; the managed brnrd App receives pull_request_review webhooks directly and closes the gap with zero polling cost. Surfaced so the asymmetry is not a surprise to a reviewer of this PR.",
+      "stats": {"severity": "low", "blast_radius": "OSS gate review-summary coverage only; documented as intended"},
+      "lateral_edges": [
+        {"type": "related", "target": "item:kb.gate-vs-brnrd-design"},
+        {"type": "related", "target": "item:polling.review-comments"}
+      ],
+      "provenance": {"commit": "6922cd3fc", "commit_headline": "docs(kb): file the GitHub gate vs brnrd App design + cross-links", "conversation_msg": null}
+    },
+    {
+      "id": "unc:reactions-followup",
+      "kind": "uncertainty",
+      "subkind": "follow-up",
+      "severity": "low",
+      "headline": "The near-future step that would make this feel native: a +1 reaction as a one-tap approve, so a user needn't type '@brr-bot approve'.",
+      "identity": {
+        "label": "near-future: reactions-as-signal for lightweight approve",
+        "file": "kb/design-github-gate-vs-brnrd-app.md",
+        "symbol": "Deferred follow-ups -> Reactions as signal",
+        "lines": [190, 196]
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/kb/design-github-gate-vs-brnrd-app.md#L188-L209",
+        "local": "kb/design-github-gate-vs-brnrd-app.md:188"
+      },
+      "lore": {
+        "descriptive": "This PR makes @-mention review comments actionable. The near-future work that would make the loop feel native is reactions-as-signal: a +1 reaction as a lightweight approve gesture for the coming permission-prompt UX, so a user need not type '@brr-bot approve'."
+      },
+      "tension": {
+        "between": ["this PR's scope (make review comments trigger)", "the full reviewer-ergonomics value (one-tap approve)"],
+        "refs": [{"kind": "kb", "what": "filed follow-up", "ref": "kb/design-github-gate-vs-brnrd-app.md#deferred-follow-ups"}]
+      },
+      "proposed_resolution": "Implement brnrd-side first (its webhook path gets issue_comment reactions for free; the cost asymmetry favours it). Filed, not done here.",
+      "stats": {"severity": "low", "blast_radius": "future permission-prompt UX; nothing in this PR depends on it"},
+      "lateral_edges": [{"type": "related", "target": "item:kb.gate-vs-brnrd-design"}],
+      "provenance": {"commit": "6922cd3fc", "commit_headline": "docs(kb): file the GitHub gate vs brnrd App design + cross-links", "conversation_msg": null}
+    },
+    {
+      "id": "walk:review-comment-round-trip",
+      "kind": "walkthrough",
+      "identity": {"label": "An @-mention on an inline diff comment becomes a task and an in-thread reply"},
+      "lore": {
+        "descriptive": "The headline fix, end to end: inline review comments live on /pulls/comments, not /issues/comments, so before this PR a mention on a diff line was invisible to the gate. Now it is polled, normalised, turned into a task, and answered in the same review thread."
+      },
+      "story": {
+        "setup": "A reviewer leaves an inline comment on a diff line of an open PR, mentioning the configured trigger (e.g. @brr).",
+        "action": "The mention poller's review-comment pass reads /pulls/comments, filters for the mention, extracts pr_number/path/line, and emits a pr-review-comment event carrying github_path + github_line + branch_target.",
+        "outcome": "The daemon builds a task scoped to that hunk; on delivery the response is posted in-thread via /pulls/{n}/comments/{cid}/replies with a quote-pointer preface, not as an orphaned top-level comment."
+      },
+      "trace_kind": "data",
+      "datum": "an @-mention on an inline diff line",
+      "stages": [
+        {"label": "review comment", "datum": "{ body: '@brr \u2026', path, line, pull_request_url, id }", "note": "lives on /pulls/comments \u2014 invisible to the gate before this PR"},
+        {"label": "poll + filter", "datum": "kept iff mention \u2227 unseen \u2227 not self-authored", "note": "_poll_mention_review_comments", "card": "item:polling.review-comments"},
+        {"label": "normalise", "datum": "{ github_kind: 'pr-review-comment', github_path, github_line, github_pr_number, branch_target }", "note": "parse._format_review_comment_body + _extract_pr_number + _fetch_pr_head_branch"},
+        {"label": "task", "datum": "task scoped to the hunk (path + line + branch_target)", "note": "the daemon builds it"},
+        {"label": "in-thread reply", "datum": "POST /pulls/{n}/comments/{cid}/replies, quote-pointer preface", "note": "delivery._deliver_responses", "card": "item:delivery.in-thread-reply"}
+      ],
+      "members": [
+        {"order": 1, "card": "item:polling.review-comments", "note": "poll /pulls/comments for the mention"},
+        {"order": 2, "card": "item:delivery.in-thread-reply", "note": "reply in the review thread"}
+      ],
+      "zoom": [
+        {"level": 0, "summary": "reviewer mentions @brr on a diff line -> brr replies in that thread"},
+        {"level": 1, "summary": "poll -> normalise (parse._format_review_comment_body) -> construct (github_kind=pr-review-comment) -> deliver (pull_comment_replies)"},
+        {"leaf": "members", "ref": "ordered member cards above"}
+      ],
+      "grounded_by": [
+        "tests/test_github_gate.py::test_mention_trigger_creates_event_for_pr_review_comment",
+        "tests/test_github_gate.py::test_response_to_pr_review_comment_replies_in_thread"
+      ],
+      "diffense_note": "This is literally diffense's own feedback-loop path (flag a card -> anchored comment -> task -> reply). The prototype validating the schema on the very gate code diffense will ride is a happy accident worth keeping in mind.",
+      "provenance": {"commits": ["297bfaaca"], "commit_headline": "fix: poll GitHub PR review comments for @-mention triggers", "conversation_msg": null}
+    },
+    {
+      "id": "item:polling.review-comments",
+      "kind": "code-fn-new",
+      "identity": {
+        "label": "polling._poll_mention_review_comments",
+        "file": "src/brr/gates/github/polling.py",
+        "symbol": "_poll_mention_review_comments",
+        "lines": [201, 295]
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/polling.py#L201-L295",
+        "local": "src/brr/gates/github/polling.py:201"
+      },
+      "lore": {
+        "descriptive": "New poller pass that reads inline PR review-line comments from /pulls/comments, filters for the mention, and emits pr-review-comment events carrying github_path, github_line, and branch_target. Called at the tail of _poll_mention_trigger.",
+        "possibility": "Inline diff-thread @-mentions now reach the gate at all; before this they were silently dropped because the gate only read /issues/comments."
+      },
+      "stats": {
+        "new_function": true,
+        "emits_event_kind": "pr-review-comment",
+        "new_endpoint_polled": "/repos/{repo}/pulls/comments",
+        "calls": ["parse._format_review_comment_body", "parse._extract_pr_number", "parse._skip_mention_comment_author", "_fetch_pr_head_branch", "_poll_mention_review_summaries"],
+        "new_cursor_keys": ["review_comments_since", "seen_review_comment_ids"],
+        "test_coverage": "+1 integration test (direct)"
+      },
+      "invariants": [
+        {"name": "exactly-once review-comment delivery", "state": "threatened", "note": "the seen-set is bounded; an evicted id whose comment is later edited can re-fire", "ref": "unc:seen-cap-dedup"}
+      ],
+      "zoom": [
+        {"level": 0, "summary": "polls /pulls/comments for the mention; emits pr-review-comment events with path+line"},
+        {"level": 1, "summary": "per comment: skip if seen / no mention / self-author; extract pr_number from pull_request_url; attach branch_target via _fetch_pr_head_branch; then check parent reviews for summary mentions"},
+        {"leaf": "code", "locator_ref": "self"},
+        {"leaf": "diff-hunk", "locator_ref": "self", "note": "this whole function is +new (file github.py deleted; package is new)"}
+      ],
+      "demo": {
+        "kind": "text-transcript",
+        "content": "# reviewer comments on a diff line, mentioning @brr\nPOST /repos/Gurio/brr/pulls/comments  (reviewer)\n# gate poll, next cycle:\nGET  /repos/Gurio/brr/pulls/comments?since=... -> 200\n  -> event: {github_kind: pr-review-comment, github_path: 'src/x.py',\n             github_line: 42, github_pr_number: 64, branch_target: 'feature/x'}"
+      },
+      "exercising_tests": ["tests/test_github_gate.py::test_mention_trigger_creates_event_for_pr_review_comment"],
+      "lateral_edges": [
+        {"type": "called-by", "target": "polling._poll_mention_trigger"},
+        {"type": "calls", "target": "polling._poll_mention_review_summaries"},
+        {"type": "shares-invariant", "target": "unc:seen-cap-dedup"},
+        {"type": "part-of", "target": "walk:review-comment-round-trip"}
+      ],
+      "provenance": {"commit": "297bfaaca", "commit_headline": "fix: poll GitHub PR review comments for @-mention triggers", "conversation_msg": null}
+    },
+    {
+      "id": "item:client.conditional-get",
+      "kind": "code-fn-edit",
+      "identity": {
+        "label": "client._request (etag_store) / client._api_get",
+        "file": "src/brr/gates/github/client.py",
+        "symbol": "_request",
+        "lines": [41, 110]
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/client.py#L41-L137",
+        "local": "src/brr/gates/github/client.py:41"
+      },
+      "lore": {
+        "descriptive": "The transport gains an optional etag_store: when present it sends If-None-Match using the cached ETag for (method, path), returns (None, headers) on 304 without raising, and refreshes the store on a 2xx. Pollers thread cursor['etags'] through it.",
+        "possibility": "Steady-state polling on a quiet repo costs roughly zero REST budget: GitHub does not count conditional 304s against the rate limit. A stale ETag self-heals at the cost of one 200."
+      },
+      "stats": {
+        "signature_delta": "+ keyword-only etag_store: dict[str,str] | None on _request and _api_get",
+        "behaviour": "304 -> (None, headers), no raise; 2xx with ETag -> store updated in place",
+        "endpoints_made_conditional": ["/issues", "/issues/comments", "/pulls/comments"],
+        "self_healing": true,
+        "test_coverage": "+3 transport tests + 1 cursor-threading test"
+      },
+      "invariants": [
+        {"name": "poll-result correctness under caching", "state": "held", "note": "304 means unchanged; a stale ETag self-heals at the cost of one 200, never a missed event"}
+      ],
+      "zoom": [
+        {"level": 0, "summary": "If-None-Match per (method,path); 304 is free; self-heals"},
+        {"level": 1, "summary": "cache_key = '{method} {path}'; since-cursor deliberately excluded from the key so the latest ETag still rides every poll"},
+        {"leaf": "code", "locator_ref": "self"}
+      ],
+      "demo": {
+        "kind": "text-transcript",
+        "content": "# first poll caches the ETag\nGET /issues/comments            -> 200  ETag: \"abc\"   (rate -1)\n# next poll, nothing changed\nGET /issues/comments  If-None-Match: \"abc\"  -> 304   (rate  0)"
+      },
+      "exercising_tests": [
+        "tests/test_github_gate.py::test_request_sends_if_none_match_when_etag_cached",
+        "tests/test_github_gate.py::test_request_304_returns_none_and_preserves_cached_etag",
+        "tests/test_github_gate.py::test_polling_threads_etag_through_cursor"
+      ],
+      "lateral_edges": [
+        {"type": "called-by", "target": "item:polling.review-comments"},
+        {"type": "shares-invariant", "target": "cursor.etags store"}
+      ],
+      "provenance": {"commit": "7c3d3d8ae", "commit_headline": "feat(gates/github): conditional polling + review-summary events", "conversation_msg": null},
+      "_authoring_note": "The design doc's worked-example card #1 attributed this to a 'cache.get_with_etag' symbol that does not exist; the real logic is here in client._request. Caught by grounding against the repo."
+    },
+    {
+      "id": "item:delivery.in-thread-reply",
+      "kind": "code-fn-edit",
+      "identity": {
+        "label": "delivery._deliver_responses / _thread_reply_body",
+        "file": "src/brr/gates/github/delivery.py",
+        "symbol": "_deliver_responses",
+        "lines": [98, 135]
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/delivery.py#L69-L135",
+        "local": "src/brr/gates/github/delivery.py:98"
+      },
+      "lore": {
+        "descriptive": "Delivery routes a pr-review-comment response to /pulls/{n}/comments/{cid}/replies (in-thread) instead of /issues/{n}/comments (top-level), and prepends a quote-pointer preface for all comment-origin kinds.",
+        "possibility": "A reply to an inline review comment lands in the diff thread where the reviewer asked, keeping the review conversation legible rather than scattering answers as orphaned top-level comments."
+      },
+      "stats": {
+        "routing": "kind == pr-review-comment + comment_id + pr_number -> pull_comment_replies; else issue_comments",
+        "quote_pointer": "all kinds in _COMMENT_KINDS get a blockquote preface",
+        "test_coverage": "+1 in-thread reply test"
+      },
+      "invariants": [
+        {"name": "the reply lands where the reviewer asked", "state": "held", "note": "routing keyed on kind + comment_id + pr_number; never an orphaned top-level comment"}
+      ],
+      "zoom": [
+        {"level": 0, "summary": "pr-review-comment -> in-thread reply; others -> top-level comment; all quote-prefaced"},
+        {"leaf": "code", "locator_ref": "self"}
+      ],
+      "exercising_tests": [
+        "tests/test_github_gate.py::test_response_to_pr_review_comment_replies_in_thread",
+        "tests/test_github_gate.py::test_response_to_mention_quotes_source_comment"
+      ],
+      "lateral_edges": [
+        {"type": "part-of", "target": "walk:review-comment-round-trip"},
+        {"type": "shares-invariant", "target": "constants._COMMENT_KINDS"}
+      ],
+      "provenance": {"commit": "297bfaaca", "commit_headline": "fix: poll GitHub PR review comments for @-mention triggers", "conversation_msg": null}
+    },
+    {
+      "id": "item:gate.package-split",
+      "kind": "code-module-split",
+      "_kind_status": "PROMOTED — surfaced as a gap by this prototype; now a core kind in design-diffense.md. The open-taxonomy path (declare a custom kind -> raise a meta concern -> promote on recurrence) is exactly how it got here.",
+      "identity": {
+        "label": "github.py (monolith) -> github/ package (12 modules)",
+        "file": "src/brr/gates/github/",
+        "symbol": "package split",
+        "lines": null
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/src/brr/gates/github/__init__.py#L56-L79",
+        "local": "src/brr/gates/github/__init__.py:56"
+      },
+      "lore": {
+        "descriptive": "A single 1052-line github.py is deleted and split into a 12-module package (paths, cache, parse, client, state, wizard, polling, delivery, progress, loop, constants, __init__). The public surface is preserved verbatim in __init__.__all__.",
+        "possibility": "Separates a transport-agnostic, brnrd-reusable pure core (paths, cache, parse) from OSS-only transport (client, state, wizard, polling, delivery, progress, loop), so the managed brnrd backend can import the core without the sync requests stack — the seam codified in design-github-gate-vs-brnrd-app.md."
+      },
+      "stats": {
+        "before": "1 file, 1052 lines",
+        "after": "12 files",
+        "public_surface_preserved": ["GitHubAPIError", "auth", "autodetect_repo", "bind", "is_configured", "parse_origin_url", "render_update", "resolve_token", "run_loop", "setup"],
+        "brnrd_reusable_modules": ["paths", "cache", "parse"],
+        "oss_only_modules": ["client", "state", "wizard", "polling", "delivery", "progress", "loop"]
+      },
+      "invariants": [
+        {"name": "public import surface", "state": "held", "note": "__init__.__all__ preserves every exported name verbatim; the 1052-line move is internal-only"}
+      ],
+      "zoom": [
+        {"level": 0, "summary": "monolith github.py -> github/ package; public surface unchanged"},
+        {"level": 1, "summary": "split axis is reuse: pure core (paths/cache/parse) vs OSS-only transport; __all__ pins the surface so internal refactors stay private"},
+        {"leaf": "tree", "ref": "the 12 module files at their locators"},
+        {"leaf": "diff", "ref": "github.py -100% ; 12 new files +N each"}
+      ],
+      "lateral_edges": [
+        {"type": "implements", "target": "item:kb.gate-vs-brnrd-design"},
+        {"type": "part-of-same-decision", "target": "item:kb.gate-vs-brnrd-design"}
+      ],
+      "provenance": {"commit": "5c3e589b9", "commit_headline": "refactor(gates/github): split monolithic gate into a package", "conversation_msg": null}
+    },
+    {
+      "id": "item:kb.gate-vs-brnrd-design",
+      "kind": "kb-page-new",
+      "identity": {
+        "label": "design-github-gate-vs-brnrd-app.md",
+        "file": "kb/design-github-gate-vs-brnrd-app.md",
+        "symbol": "whole page",
+        "lines": [1, 227]
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/kb/design-github-gate-vs-brnrd-app.md",
+        "local": "kb/design-github-gate-vs-brnrd-app.md:1"
+      },
+      "lore": {
+        "descriptive": "New boundary doc (227 lines, Status: accepted 2026-05-27) codifying the OSS gate vs managed brnrd GitHub App split: what each side owns, and which modules (paths/cache/parse) ship in brr.gates.github because brnrd imports them.",
+        "possibility": "The code seam between OSS and managed is now a citable contract rather than tribal knowledge; the managed-gates plan can lean on the package structure instead of re-implementing it."
+      },
+      "stats": {
+        "new_page": true,
+        "lifecycle": "accepted 2026-05-27",
+        "inbound_links_delta": "0 -> 6 (index, plan-managed-gates-launch, subject-managed-mode, decision-runtime-dependencies, repo-dive-in-map, design-publish-kernel)",
+        "sibling_sync": "design-git-layer-rework + plan-managed-gates-launch updated to point here",
+        "successor_link_validity": "n/a (not superseding)"
+      },
+      "kb_axes": {
+        "claim_delta": "Asserts a citable OSS-gate \u27f7 managed-brnrd boundary: paths/cache/parse are the shared pure core brnrd imports; client/state/wizard/polling/delivery/progress/loop are OSS-only transport. Previously tribal knowledge.",
+        "graph_delta": {"inbound_before": 0, "inbound_after": 6, "outbound": 5, "hub": "subject-managed-mode", "orphan": false},
+        "lifecycle": {"from": null, "to": "accepted 2026-05-27"}
+      },
+      "zoom": [
+        {"level": 0, "summary": "new accepted boundary doc: OSS gate vs brnrd App, and the shared pure core"},
+        {"level": 1, "summary": "sections: what OSS owns / what brnrd owns / what both share (paths,cache,parse) / why both survive / deferred follow-ups"},
+        {"leaf": "rendered-page", "locator_ref": "self"},
+        {"leaf": "diff", "locator_ref": "self", "note": "+227 / -0"}
+      ],
+      "lateral_edges": [
+        {"type": "implemented-by", "target": "item:gate.package-split"},
+        {"type": "referenced-by", "target": "subject-managed-mode.md"},
+        {"type": "referenced-by", "target": "plan-managed-gates-launch.md"}
+      ],
+      "provenance": {"commit": "6922cd3fc", "commit_headline": "docs(kb): file the GitHub gate vs brnrd App design + cross-links", "conversation_msg": null}
+    },
+    {
+      "id": "item:test.etag-304",
+      "kind": "test-add",
+      "identity": {
+        "label": "test_request_304_returns_none_and_preserves_cached_etag",
+        "file": "tests/test_github_gate.py",
+        "symbol": "test_request_304_returns_none_and_preserves_cached_etag",
+        "lines": [224, 240]
+      },
+      "locator": {
+        "forge": "https://github.com/Gurio/brr/blob/2bd51a8d82dce7a9b0d4c0a6ebe30df8a5650ba1/tests/test_github_gate.py#L224-L240",
+        "local": "tests/test_github_gate.py:224"
+      },
+      "lore": {
+        "descriptive": "When the server answers 304 Not Modified to a conditional GET, _request returns (None, headers) without raising and leaves the cached ETag in place — so the next poll stays conditional and the 304 stays free."
+      },
+      "stats": {
+        "exercises": "client._request (304 branch + etag store preservation)",
+        "assertion_shape": "payload is None; etag_store still holds the prior ETag",
+        "fixtures": "shares _FakeGitHubResponse with the request/etag test cluster"
+      },
+      "zoom": [
+        {"level": 0, "summary": "304 -> (None, headers), cached ETag preserved"},
+        {"leaf": "code", "locator_ref": "self"}
+      ],
+      "lateral_edges": [
+        {"type": "exercises", "target": "item:client.conditional-get"}
+      ],
+      "provenance": {"commit": "7c3d3d8ae", "commit_headline": "feat(gates/github): conditional polling + review-summary events", "conversation_msg": null}
+    }
+  ]
+}
