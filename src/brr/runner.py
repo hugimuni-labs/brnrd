@@ -17,6 +17,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import random
@@ -408,6 +409,39 @@ def _runner_available(name: str, profiles: dict[str, dict[str, Any]]) -> bool:
     return True
 
 
+def _warn_if_shell_shadows_core(
+    shell_pin: str, core_pin: str, profiles: dict[str, dict[str, Any]]
+) -> None:
+    """``shell=`` is an exact-pin that wins outright over ``core=`` (see
+    :func:`resolve_runner`'s own precedence docs) — a config that sets both
+    expecting them to compose (``shell=claude`` + ``core=claude-fable-5``)
+    silently gets the Shell's bare default model, with ``core=`` never
+    consulted at all. Caught live 2026-07-09: several days of runs resolved
+    to the base ``claude`` profile (Claude Code's own CLI-default model)
+    while the operator believed ``core=`` had pinned ``claude-fable-5`` —
+    nothing failed, so nothing surfaced it until quota usage on the pinned
+    model stopped moving. Warn once per resolution instead of failing
+    silently; this does not change which runner gets picked, only whether
+    the mismatch is visible.
+    """
+    profile = profiles.get(shell_pin) or {}
+    model = str(profile.get("model") or "").strip().lower()
+    core_lower = core_pin.strip().lower()
+    if model and (model == core_lower or model.startswith(core_lower)):
+        return  # shell_pin already names a profile pinned to this core
+    resolved = model or "default"
+    print(
+        f"brr: .brr/config sets both shell={shell_pin!r} and "
+        f"core={core_pin!r}, but shell= is an exact profile pin and wins "
+        f"outright — core= is not consulted. This run resolves to "
+        f"model={resolved!r}, not {core_pin!r}. To pin Shell+Core "
+        f"together, set shell= to the combined profile name (e.g. "
+        "shell=claude-fable) or drop shell= and let core= filter "
+        "cost-aware auto-selection.",
+        file=sys.stderr,
+    )
+
+
 def detect_runner(repo_root: Path | None = None) -> str | None:
     """Return the first available built-in runner CLI name, or None."""
     profiles = _load_profiles(repo_root)
@@ -584,6 +618,8 @@ def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> 
     explicit_pin = shell_pin or (runner_cfg if runner_cfg != "auto" else None)
     if explicit_pin:
         if _runner_available(explicit_pin, profiles):
+            if core_pin and shell_pin:
+                _warn_if_shell_shadows_core(shell_pin, core_pin, profiles)
             return explicit_pin
         raise RuntimeError(
             f"Runner '{explicit_pin}' not found on PATH. "
