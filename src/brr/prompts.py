@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import forge_state
+from . import account, config as conf, forge_state
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -78,10 +78,18 @@ def _read_recent_log(
     Returns the raw markdown of the included entries (oldest of the
     included set first, for natural reading order), or an empty string
     if the log is missing or has no entries.
+
+    Repo ``kb/log.md`` wins when present (today's default for most
+    adopters); a repo that migrated its kb out per
+    ``kb/design-home-scopes-and-knowledge.md`` falls back to this repo's
+    slice of home knowledge, so the recent-activity block doesn't just go
+    silent the day a repo's own log moves out of the tree.
     """
     log_path = repo_root / "kb" / "log.md"
     if not log_path.exists():
-        return ""
+        log_path = _home_knowledge_log_path(repo_root)
+        if log_path is None or not log_path.exists():
+            return ""
     text = log_path.read_text(encoding="utf-8")
     parts = _LOG_ENTRY_RE.split(text)
     if len(parts) <= 1:
@@ -104,6 +112,26 @@ def _read_recent_log(
         return ""
     picked.reverse()
     return "\n\n".join(picked).strip()
+
+
+def _home_knowledge_log_path(repo_root: Path) -> Path | None:
+    """Return this repo's ``log.md`` inside home knowledge, if any.
+
+    Mirrors ``knowledge.sources()``'s own home-knowledge resolution
+    (repo-scoped bucket for a split account home, flat bucket otherwise)
+    without importing :mod:`brr.knowledge` here — that module renders
+    injection *blocks*, not raw paths, and pulling it in just for a path
+    lookup would be the wrong direction of dependency for a one-file check.
+    """
+    try:
+        cfg = conf.load_config(repo_root)
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        if ctx.kind == "account" and account.knowledge_split_mode(cfg) == "per-repo":
+            label = account.repo_label(repo_root, cfg)
+            return account.repo_knowledge_path(ctx, label) / "log.md"
+        return account.knowledge_path(ctx) / "log.md"
+    except Exception:
+        return None
 
 
 def _build_context_block(repo_root: Path) -> str:
