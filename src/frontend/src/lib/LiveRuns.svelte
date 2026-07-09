@@ -56,6 +56,18 @@
 		return now - seen > STALL_AFTER_MS ? 'stalling' : 'running';
 	}
 
+	// #200's remaining slice: the heartbeat-freshness label above only ever
+	// said "running" while a thought worked — real lifecycle phase
+	// (queued/preparing/finalizing/delivering/attending/...) was invisible.
+	// A live, non-stalling row now prefers the real phase reported by
+	// `run_progress.project_run` (`cloud.py::_live_runs_snapshot`); a
+	// stalling/unknown/phaseless row keeps the generic freshness label —
+	// "stalling" is more informative than a stale phase reading.
+	function label(run: LiveRun, lvl: 'running' | 'stalling' | 'unknown'): string {
+		if (lvl === 'running' && run.phase) return run.phase;
+		return LEVEL_LABEL[lvl];
+	}
+
 	// Multi-workstream slice 1 (kb/design-multi-workstream-concurrency.md
 	// "Ranked moves" #1): `spawn:`'s pool grew past a cap of 1, so this grid
 	// can now hold several concurrent worker-stack children alongside the
@@ -110,7 +122,7 @@
 								class="truncate font-mono font-medium tracking-wide uppercase"
 								style={`color: ${color}`}
 							>
-								{LEVEL_LABEL[lvl]}
+								{label(run, lvl)}
 							</span>
 						</span>
 						<span class="shrink-0 font-mono text-stone-500"
@@ -127,6 +139,16 @@
 						{/if}
 					</p>
 					<p class="truncate text-stone-500">{secondary}</p>
+					{#if run.card_text}
+						<!-- Progress-card note (`.card`, `run_progress.py`'s
+						     `agent_card_text`) — the same narration a chat surface
+						     already renders mid-run, now visible on the dashboard
+						     row too (#200's remaining slice). Truncated to one line;
+						     the full note rides in `title` for a hover. -->
+						<p class="mt-0.5 truncate text-stone-400 italic" title={run.card_text}>
+							{run.card_text}
+						</p>
+					{/if}
 					<!-- No known total duration to bind a real percent to, so a
 					     running card gets an indeterminate scanning bar (the
 					     Zachtronics "in motion" tell) instead of a fabricated fill.
