@@ -105,6 +105,27 @@ def test_login_page_uses_github_only(client):
     assert "password" not in r.text.lower()
 
 
+def test_login_page_does_not_load_the_legacy_dashboard_stylesheet(client):
+    """Live-caught 2026-07-09 (screenshot from the user): /login and /terms
+    still rendered a green GitHub-identity card and button against the
+    amber brand palette PR #301 (2026-07-08) shipped in app.css. Root cause
+    was not a caching regression (the cache-busting fix above already
+    covers that) but a cascade bug: base.html loaded dashboard.css
+    unconditionally on every page, and dashboard.css — the legacy mint/teal
+    control-deck sheet for the plans/activity dashboards — defines
+    unscoped `.eyebrow`/`.button`/`.button-primary` rules that, loaded
+    after app.css with identical specificity, always won the cascade and
+    clobbered the amber values on every non-dashboard page. Fixed by only
+    linking dashboard.css when body_class is 'dashboard-page'."""
+    r = client.get("/login")
+    assert r.status_code == 200
+    assert "dashboard.css" not in r.text
+
+    r = client.get("/terms")
+    assert r.status_code == 200
+    assert "dashboard.css" not in r.text
+
+
 def test_static_asset_urls_carry_a_real_cache_busting_version(client):
     """Live-caught 2026-07-08: base.html's `?v={{ asset_version }}` was never
     wired to a value, so every deploy served the identical `app.css?v=` URL —
