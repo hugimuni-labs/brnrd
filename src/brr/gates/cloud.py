@@ -261,14 +261,16 @@ def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
 def _dashboard_publish_loop(brr_dir: Path, inbox_dir: Path) -> None:
     """Publish the dashboard snapshots on their own short cadence.
 
-    Runs alongside ``run_loop``'s main iteration (which still publishes once
-    per inbox long-poll return too — harmless, idempotent overwrites, not
-    worth special-casing out of the tested main path). This loop is what
-    actually delivers on "a live dashboard": `_loop_once`'s cadence is
-    capped at ``_POLL_WAIT_S`` (25s, chosen for chat responsiveness) whether
-    or not any inbox event ever arrives, so relying on it alone means every
-    dashboard snapshot is at best 25s stale. See
-    kb/plan-loom-realtime-build.md slice 0.
+    This thread is the *only* publisher. ``_loop_once`` used to publish once
+    per inbox long-poll return too, on the theory that duplicate publishes
+    were "harmless, idempotent overwrites" — they weren't: two threads
+    PUTting the same activity snapshot concurrently raced the server's
+    delete-then-insert replace into ``UniqueViolation`` 500s (seen live
+    2026-07-09 as ``PUT /v1/daemons/activity -> 502`` spam). One publisher,
+    no race. This loop is also what actually delivers on "a live
+    dashboard": `_loop_once`'s cadence is capped at ``_POLL_WAIT_S`` (25s,
+    chosen for chat responsiveness) whether or not any inbox event ever
+    arrives. See kb/plan-loom-realtime-build.md slice 0.
     """
     while True:
         try:
@@ -318,16 +320,15 @@ def _loop_once(brr_dir: Path, inbox_dir: Path, responses_dir: Path) -> None:
     for ev in events:
         protocol.create_event(inbox_dir, source="cloud", body=ev.get("body") or "", cloud_event_id=ev["event_id"], **_origin_meta(ev.get("reply_to") or {}))
     cursor = result.get("cursor", since)
-    if cursor > since:
+    if cursor != since:
+        # Trust the server's cursor in both directions: it moves up as
+        # events deliver, and moves *down* when the server detects a
+        # cursor from an older DB epoch and heals it (brnrd
+        # ``inbox_service.clamp_since``). Rejecting the lower value kept a
+        # stale cursor stale forever.
         state["since"] = cursor
         _save_state(brr_dir, state)
     _deliver_responses(brr_dir, inbox_dir, responses_dir, state)
-    _publish_activity(brr_dir, inbox_dir, state)
-    _publish_plans(brr_dir, state)
-    _publish_quota(brr_dir, state)
-    _publish_live_runs(brr_dir, state)
-    _publish_pr_review_queue(brr_dir, state)
-    _publish_run_ledger(brr_dir, state)
 
 
 def _deliver_responses(brr_dir: Path, inbox_dir: Path, responses_dir: Path, state: dict) -> None:
