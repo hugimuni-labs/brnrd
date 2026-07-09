@@ -58,6 +58,14 @@ dive-in map) and are stable until something contradicts them.
   inject→checkout→query knowledge ladder, and the lean GH gate. Drops the
   round-1 compat scaffolding (no backwards compatibility yet). Carries the
   maintainer's manual migration steps and a both-lanes validation checklist.
+- [kb-out-of-repo migration plan](plan-kb-out-of-repo-migration.md) —
+  *active 2026-07-09*. Executes the home-scopes design's deferred piece:
+  actually moving *this repo's own* committed `kb/` (this page's own
+  directory) to the account-home knowledge repo
+  (`hugimuni-labs/brnrd-knowledge`, private), per-repo split. Names a
+  separate, maintainer-owned fork this migration does not resolve: the
+  public `Gurio/brr` repo's git history already carries personal/sensitive
+  material from before this move.
 - [brnrd rename decision](decision-brnrd-rename.md) — *direction accepted
   2026-06-29, execution staged*. Rename the product **brr → brnrd** (PyPI
   `brnrd` free, `brnrd-dev`/`brnrd-bot` identities, `brnrd.dev`; the daemon is
