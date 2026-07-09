@@ -37,3 +37,6 @@ build/
 # live brnrd.dev session cookie for option 1 of
 # kb/design-agent-visual-inspection.md. Never committed, never logged.
 *.cookie
+# Local scratch (screenshots, one-off playwright scripts) — never produce;
+# live-account views get the same no-commit handling as the session cookie.
+.tmp/
