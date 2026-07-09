@@ -102,7 +102,7 @@ a {
   height: 44px;
   place-items: center;
   border: 1px solid rgba(232, 179, 74, 0.42);
-  border-radius: 6px;
+  border-radius: 0;
   background: rgba(232, 179, 74, 0.10);
   color: var(--accent);
   font-weight: 900;
@@ -169,7 +169,7 @@ h2 {
   margin-top: 36px;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 0;
   background: rgba(12, 9, 6, 0.72);
   color: #e7ded0;
   box-shadow: var(--shadow);
@@ -240,7 +240,7 @@ h2 {
   height: 10px;
   margin-top: 18px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: 0;
   background: rgba(168, 162, 158, 0.16);
 }
 
@@ -254,7 +254,7 @@ h2 {
 .auth-panel,
 .panel {
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 0;
   background: rgba(23, 16, 9, 0.82);
   box-shadow: var(--shadow);
 }
@@ -275,7 +275,7 @@ h2 {
   justify-content: center;
   gap: 10px;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: 0;
   background: rgba(168, 162, 158, 0.08);
   color: var(--ink);
   font: inherit;
@@ -404,7 +404,7 @@ h2 {
 .form-error {
   margin: 18px 0 0;
   border: 1px solid rgba(201, 123, 106, 0.34);
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--error-soft);
   color: #f3d9d1;
   padding: 12px;
@@ -425,7 +425,7 @@ select {
   width: 100%;
   min-height: 48px;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: 0;
   background: #12100c;
   color: var(--ink);
   font: inherit;
@@ -438,7 +438,7 @@ select:disabled {
 
 code {
   border: 1px solid rgba(232, 179, 74, 0.26);
-  border-radius: 5px;
+  border-radius: 0;
   background: rgba(232, 179, 74, 0.10);
   color: #f3d896;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
