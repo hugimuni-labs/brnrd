@@ -818,6 +818,17 @@ def dashboard_plans_api(request: Request, db: Session = Depends(get_db)) -> JSON
     )
 
 
+@router.get("/plans")
+def plans_redirect() -> RedirectResponse:
+    """First real Jinja template cut (kb plan-jinja-removal.md Phase 2,
+    plans half): the raw-``<pre>`` CPS page is fully superseded by the
+    dashboard's decisions-space panel (#324 Phase 0), which renders the
+    same ``PUT /v1/daemons/plans`` mirror structured. The URL stays alive
+    — old-page nav links and bookmarks land on the panel, not a 404.
+    """
+    return RedirectResponse(url="/", status_code=308)
+
+
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, installation_id: str | None = None, notice: str | None = None, db: Session = Depends(get_db)):
     account_id = _account_id(request, db)

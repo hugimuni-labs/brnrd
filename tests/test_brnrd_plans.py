@@ -97,50 +97,15 @@ def test_daemon_plans_snapshot_replaces_repo_and_account_fields():
     assert replaced.json()["cross_repo_plan_md"] == ""
 
 
-def test_plans_dashboard_renders_mirrored_snapshot():
-    client = _client()
-    _, daemon_headers, _repo_id = _repo_and_daemon(client)
-    assert client.post(
-        "/v1/daemons/register",
-        json={"daemon_name": "laptop"},
-        headers=daemon_headers,
-    ).status_code == 200
-    client.put(
-        "/v1/daemons/plans",
-        json={
-            "repo_plan_md": "Ship the CPS view plain, skin later.",
-            "cross_repo_plan_md": "Coordinate the brr/brnrd naming rollout.",
-            "decision_ledger_md": "Accepted the ToS disclaimer posture.",
-        },
-        headers=daemon_headers,
-    )
-    _login_cookie(client)
-
-    page = client.get("/plans")
-
-    assert page.status_code == 200
-    assert "Ship the CPS view plain, skin later." in page.text
-    assert "Coordinate the brr/brnrd naming rollout." in page.text
-    assert "Accepted the ToS disclaimer posture." in page.text
-    assert "Gurio/brr" in page.text
-
-
-def test_plans_dashboard_empty_state_when_nothing_mirrored():
-    client = _client()
-    _repo_and_daemon(client)
-    _login_cookie(client)
-
-    page = client.get("/plans")
-
-    assert page.status_code == 200
-    assert "No plans mirrored yet." in page.text
-
-
-def test_plans_dashboard_requires_login():
+def test_plans_page_redirects_to_dashboard_decisions_space():
+    """The Jinja /plans page is retired (first real template cut of the
+    jinja-removal plan): the decisions-space panel on "/" renders the same
+    mirror structured. The URL survives as a permanent redirect so old
+    nav links and bookmarks don't 404."""
     client = _client()
     page = client.get("/plans", follow_redirects=False)
-    assert page.status_code == 303
-    assert page.headers["location"].startswith("/login")
+    assert page.status_code == 308
+    assert page.headers["location"] == "/"
 
 
 def test_dashboard_plans_api_returns_mirrored_decisions_space():
