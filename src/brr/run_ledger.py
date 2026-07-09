@@ -17,6 +17,7 @@ from . import claude_status
 from . import claude_usage
 from . import codex_status
 from . import gitops
+from . import relics
 from .run import Run
 
 LEDGER_NAME = "run-ledger.jsonl"
@@ -169,6 +170,18 @@ def build_closed_run_row(
 
     tokens = token_fields(after_levels)
     started_at = _str_or_none(task.meta.get("started_at"))
+    # Run relics (#200/#317, kb/design-run-relics.md): commits/branch/PR are
+    # auto-derived from git + the ``.pr`` control file, issues/kb/summary
+    # come from whatever the resident self-reported to ``.relics.jsonl``.
+    # Falls back to the pre-existing (always-empty in practice, since
+    # nothing ever wrote it) ``task.meta["external_refs"]`` path so a task
+    # that somehow pre-populated it directly doesn't regress.
+    collected_relics = relics.collect(
+        work_dir,
+        branch=_str_or_none(task.meta.get("branch_name")),
+        seed_ref=_str_or_none(task.meta.get("seed_ref")),
+        outbox_dir=outbox_dir,
+    )
     row = {
         "run_id": task.id,
         "event_id": task.event_id,
@@ -179,7 +192,7 @@ def build_closed_run_row(
         "runner_core": _str_or_none(task.meta.get("runner_core")),
         "repo_label": _str_or_none(task.meta.get("repo_label")),
         "source_system": _source_system(task),
-        "external_refs": external_refs(task.meta.get("external_refs")),
+        "external_refs": collected_relics or external_refs(task.meta.get("external_refs")),
         "task_classification": task_classification(task),
         "parent_run_id": _str_or_none(task.meta.get("spawn_parent_run_id")),
         "is_subspawn": bool(task.meta.get("spawn_immediate")),

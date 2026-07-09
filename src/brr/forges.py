@@ -91,6 +91,17 @@ _BLOB_TEMPLATES: dict[str, str] = {
 }
 
 
+# Single-commit templates. Used by run relics (``kb/design-run-relics.md``)
+# to turn a ``git log`` short sha into a clickable link the same way a
+# branch or blob already projects to one.
+_COMMIT_TEMPLATES: dict[str, str] = {
+    _KIND_GITHUB:    "https://{host}/{owner}/{repo}/commit/{sha}",
+    _KIND_GITLAB:    "https://{host}/{owner}/{repo}/-/commit/{sha}",
+    _KIND_BITBUCKET: "https://{host}/{owner}/{repo}/commits/{sha}",
+    _KIND_GITEA:     "https://{host}/{owner}/{repo}/commit/{sha}",
+}
+
+
 # Issue / PR thread templates. The ``issues`` path is the durable common
 # denominator: GitHub redirects ``/issues/N`` to ``/pull/N`` when N is a
 # pull request, so a single template covers both without us knowing the
@@ -273,6 +284,37 @@ def view_blob_url(
         branch=branch,
         path=rel,
     )
+
+
+def commit_url(
+    remote_url: str,
+    sha: str,
+    *,
+    override_kind: str | None = None,
+    override_url_base: str | None = None,
+) -> str | None:
+    """Return a clickable URL for commit *sha* on the forge, or ``None``.
+
+    Unlike :func:`thread_url` (which takes an explicit ``repo_path`` because
+    an issue/PR reference can point at a different repo than the one the
+    daemon is running in), a commit relic is always local to *remote_url* —
+    the run's own origin — so owner/repo come from the same parse as
+    :func:`view_branch_url`.
+    """
+    sha = (sha or "").strip()
+    if not sha or not _is_url_safe_branch(sha):
+        return None
+    match = detect_forge(
+        remote_url,
+        override_kind=override_kind,
+        override_url_base=override_url_base,
+    )
+    if match is None:
+        return None
+    template = _COMMIT_TEMPLATES.get(match.kind)
+    if template is None:
+        return None
+    return template.format(host=match.host, owner=match.owner, repo=match.repo, sha=sha)
 
 
 def thread_url(
