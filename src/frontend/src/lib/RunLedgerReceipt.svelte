@@ -1,9 +1,15 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
 	import { flip } from 'svelte/animate';
+	import { SvelteSet } from 'svelte/reactivity';
+	import { glitchReveal } from './transitions';
 	import {
 		durationLabel,
 		endedLabel,
+		groupWithChildren,
+		relicCounts,
+		relicIcon,
+		relicLabel,
 		signedPercentLabel,
 		tokenLabel,
 		type RunLedgerRow,
@@ -16,6 +22,24 @@
 	}
 
 	let { rows, stale }: Props = $props();
+
+	// #200/#317: "the run should be clickable... collapsed it would just
+	// show plain data (3 commits, 1 pr, 1 issue modified, maybe as
+	// kaomojis/icons)". Expansion state is local UI state, keyed by run_id
+	// (falling back to event_id for the rare row missing one) — not part of
+	// the fetched data, so a re-poll doesn't collapse an open receipt.
+	let expanded = new SvelteSet<string>();
+
+	function receiptKey(row: RunLedgerRow): string {
+		return row.run_id ?? row.event_id ?? row.ended_at ?? '';
+	}
+
+	function toggle(key: string) {
+		if (expanded.has(key)) expanded.delete(key);
+		else expanded.add(key);
+	}
+
+	let grouped = $derived(groupWithChildren(rows));
 </script>
 
 <div class="panel p-4">
@@ -32,9 +56,14 @@
 		<p class="text-sm text-stone-500">No closed-run receipts yet.</p>
 	{:else}
 		<div class="grid grid-cols-1 gap-2">
-			{#each rows as row (row.run_id ?? row.event_id ?? row.ended_at)}
+			{#each grouped as entry (receiptKey(entry.row))}
+				{@const row = entry.row}
+				{@const key = receiptKey(row)}
 				{@const label = row.task_classification || row.repo_label || '—'}
 				{@const runner = [row.runner_shell, row.runner_core].filter(Boolean).join(' · ') || '—'}
+				{@const counts = relicCounts(entry.relics)}
+				{@const summary = entry.relics.find((r) => r.kind === 'summary')}
+				{@const isOpen = expanded.has(key)}
 				<div
 					class="subpanel p-2.5 text-xs"
 					in:fly={{ y: -8, duration: 220 }}
@@ -75,6 +104,66 @@
 							<p class="font-medium text-stone-200">{usdLabel(row.usd_subscription_attributed)}</p>
 						</div>
 					</div>
+
+					<!-- Run relics (#200/#317): collapsed receipt = clickable
+					     icon/count summary line ("3 commits, 1 pr, 1 issue" per
+					     the maintainer's own framing); click expands to the full
+					     linked list, sub-spawn relics folded in and tagged. -->
+					{#if entry.relics.length > 0}
+						<button
+							type="button"
+							class="mt-2 flex w-full items-center justify-between gap-2 border-t border-stone-800/70 pt-2 text-left font-mono"
+							onclick={() => toggle(key)}
+							aria-expanded={isOpen}
+						>
+							<span class="flex flex-wrap items-center gap-x-2 gap-y-1 text-stone-300">
+								{#if Object.keys(counts).length > 0}
+									{#each Object.entries(counts) as [kind, count] (kind)}
+										<span title={kind}>{relicIcon(kind)} {count}</span>
+									{/each}
+								{:else}
+									<span class="text-stone-500">summary only</span>
+								{/if}
+							</span>
+							<span class="shrink-0 text-[10px] tracking-wide text-stone-500 uppercase"
+								>{isOpen ? '▲ collapse' : '▼ produce'}</span
+							>
+						</button>
+						{#if isOpen}
+							<div
+								class="mt-2 space-y-1.5 overflow-hidden border-t border-stone-800/70 pt-2"
+								in:glitchReveal={{ duration: 180, steps: 6 }}
+								out:fade={{ duration: 100 }}
+							>
+								{#if summary}
+									<p class="text-stone-300 italic">{relicLabel(summary)}</p>
+								{/if}
+								<ul class="space-y-1">
+									{#each entry.relics.filter((r) => r.kind !== 'summary') as r, i (i)}
+										<li class="flex min-w-0 items-center gap-1.5">
+											<span class="shrink-0" title={r.kind}>{relicIcon(r.kind)}</span>
+											{#if r.url}
+												<a
+													href={String(r.url)}
+													target="_blank"
+													rel="external noreferrer"
+													class="truncate text-sky-300 underline decoration-sky-800 hover:text-sky-200"
+													>{relicLabel(r)}</a
+												>
+											{:else}
+												<span class="truncate text-stone-300">{relicLabel(r)}</span>
+											{/if}
+											{#if r._from_run_id}
+												<span class="shrink-0 text-[10px] text-stone-600"
+													>↳ via {r._from_run_id}</span
+												>
+											{/if}
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+					{/if}
 				</div>
 			{/each}
 		</div>

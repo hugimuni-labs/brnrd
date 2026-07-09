@@ -2,6 +2,77 @@
 // `GET /v1/dashboard/run-ledger` returns, sourced from the daemon's local
 // `.brr/run-ledger.jsonl` via `PUT /v1/daemons/run-ledger`.
 
+// Run relics (#200/#317, kb/design-run-relics.md): one entry per thing the
+// run produced. `kind` is the only required field — everything else is
+// kind-specific (a `commit` carries `sha`/`subject`, an `issue` carries
+// `number`/`action`, etc). Mirrors `brr.relics`'s JSON shape byte for byte;
+// this type is deliberately loose (`Record<string, unknown>` underneath)
+// because the backend's relic vocabulary is meant to grow without a
+// frontend type-and-ship round trip for every new kind.
+export interface RelicRecord {
+	kind: string;
+	url?: string | null;
+	[key: string]: unknown;
+}
+
+// Mirrors `brr.relics._ICONS`. Kept in sync by hand today — noted in
+// `kb/design-run-relics.md` as a follow-up to generate this from one
+// source instead of two hand-maintained maps.
+export const RELIC_ICONS: Record<string, string> = {
+	summary: '📝',
+	commit: '🔨',
+	branch: '🌿',
+	pr: '🔀',
+	issue: '🎫',
+	comment: '💬',
+	kb: '📚',
+	file: '📄',
+	message: '✉️'
+};
+
+export function relicIcon(kind: string): string {
+	return RELIC_ICONS[kind] ?? '•';
+}
+
+/** Collapsed-receipt counts, e.g. `{ commit: 3, pr: 1 }` — excludes the
+ * free-form `summary` relic, which is prose, not produce. */
+export function relicCounts(relicList: RelicRecord[]): Record<string, number> {
+	const out: Record<string, number> = {};
+	for (const r of relicList) {
+		if (!r.kind || r.kind === 'summary') continue;
+		out[r.kind] = (out[r.kind] ?? 0) + 1;
+	}
+	return out;
+}
+
+/** One-line label for a single relic, used in the expanded list. Falls
+ * back to the kind name when no more specific field is present, so an
+ * unrecognised future kind still renders something instead of "undefined". */
+export function relicLabel(r: RelicRecord): string {
+	switch (r.kind) {
+		case 'commit':
+			return `${String(r.sha ?? '').slice(0, 7)} ${r.subject ?? ''}`.trim();
+		case 'branch':
+			return String(r.name ?? 'branch');
+		case 'pr':
+			return `PR #${r.number ?? '?'}`;
+		case 'issue':
+			return `issue #${r.number ?? '?'}${r.action ? ` (${r.action})` : ''}`;
+		case 'kb':
+			return String(r.path ?? 'kb page');
+		case 'file':
+			return String(r.path ?? 'file');
+		case 'comment':
+			return String(r.on ?? 'comment');
+		case 'message':
+			return String(r.note ?? r.channel ?? 'message');
+		case 'summary':
+			return String(r.text ?? '');
+		default:
+			return r.kind;
+	}
+}
+
 export interface RunLedgerRow {
 	run_id: string | null;
 	event_id: string | null;
@@ -12,7 +83,7 @@ export interface RunLedgerRow {
 	runner_core: string | null;
 	repo_label: string | null;
 	source_system: string | null;
-	external_refs: unknown[] | null;
+	external_refs: RelicRecord[] | null;
 	task_classification: string | null;
 	parent_run_id: string | null;
 	is_subspawn: boolean | null;
@@ -26,6 +97,58 @@ export interface RunLedgerRow {
 	usd_subscription_attributed: number | null;
 	usd_credits_equivalent: number | null;
 	estimate_vs_actual: string | null;
+}
+
+// A relic folded in from a child (sub-spawn) run, tagged with which run
+// it actually came from so the expanded view can show "↳ via <run>"
+// rather than silently attributing a child's produce to the parent.
+export interface AttributedRelic extends RelicRecord {
+	_from_run_id?: string;
+}
+
+export interface GroupedReceipt {
+	row: RunLedgerRow;
+	relics: AttributedRelic[];
+	childRunIds: string[];
+}
+
+/** Fold sub-spawn rows into their parent for receipt rendering (the
+ * maintainer's "list of subrun relics too" ask). Same join key
+ * (`parent_run_id`/`is_subspawn`) `LiveRuns.svelte` already uses for the
+ * live view — this is the closed-receipt side of that same relationship.
+ *
+ * A child whose parent isn't present in this page/limit window (parent
+ * already scrolled past, or never in this batch) renders standalone
+ * rather than silently vanishing — its relics still deserve a receipt.
+ */
+export function groupWithChildren(rows: RunLedgerRow[]): GroupedReceipt[] {
+	const byId = new Map<string, RunLedgerRow>();
+	for (const row of rows) {
+		if (row.run_id) byId.set(row.run_id, row);
+	}
+	const childrenByParent = new Map<string, RunLedgerRow[]>();
+	const parentless: RunLedgerRow[] = [];
+	for (const row of rows) {
+		if (row.is_subspawn && row.parent_run_id && byId.has(row.parent_run_id)) {
+			const list = childrenByParent.get(row.parent_run_id) ?? [];
+			list.push(row);
+			childrenByParent.set(row.parent_run_id, list);
+		} else {
+			parentless.push(row);
+		}
+	}
+	return parentless.map((row) => {
+		const children = row.run_id ? (childrenByParent.get(row.run_id) ?? []) : [];
+		const ownRelics: AttributedRelic[] = row.external_refs ?? [];
+		const childRelics: AttributedRelic[] = children.flatMap((child) =>
+			(child.external_refs ?? []).map((r) => ({ ...r, _from_run_id: child.run_id ?? undefined }))
+		);
+		return {
+			row,
+			relics: [...ownRelics, ...childRelics],
+			childRunIds: children.map((c) => c.run_id).filter((id): id is string => Boolean(id))
+		};
+	});
 }
 
 export interface RunLedgerResponse {
