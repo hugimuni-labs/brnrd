@@ -264,7 +264,7 @@ def test_loop_publishes_local_activity_snapshot(tmp_path, monkeypatch):
         defer_until="2999-01-01T01:00:00Z",
     )
 
-    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
     listing = client.get("/v1/accounts/activity", headers=acc)
     assert listing.status_code == 200
@@ -314,7 +314,7 @@ def test_loop_publishes_plans_snapshot(tmp_path, monkeypatch):
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     ledger_path.write_text("adopted the ToS posture", encoding="utf-8")
 
-    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
     with client.app.state.SessionLocal() as db:
         repo_row = db.get(RepoModel, pid)
@@ -378,7 +378,7 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
         },
     )
 
-    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
@@ -606,7 +606,7 @@ def test_loop_publishes_live_runs_snapshot(tmp_path, monkeypatch):
     # same publish tick.
     (brr_dir / "config").write_text("spawn.max_concurrent=6\n")
 
-    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
@@ -696,7 +696,7 @@ def test_loop_publishes_pr_review_queue_snapshot(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cloud.subprocess, "run", fake_run)
 
-    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
@@ -780,7 +780,7 @@ def test_loop_publishes_run_ledger_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud, "_request", _route_to(client))
     monkeypatch.setattr(cloud, "_pr_review_repo_labels", lambda _brr_dir: [])
 
-    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    cloud._dashboard_publish_tick(brr_dir, inbox_dir)
 
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
@@ -1093,3 +1093,32 @@ def test_run_loop_exits_on_auth_error(tmp_path, monkeypatch):
     thread.start()
     thread.join(timeout=2)
     assert not thread.is_alive()
+
+
+def test_stale_cursor_from_older_db_epoch_heals_end_to_end(tmp_path, monkeypatch):
+    """Daemon cursor outlives a brnrd DB reset (since=999 vs fresh table):
+    the server detects the epoch break, redelivers the queued backlog, and
+    the client accepts the *lower* healed cursor instead of staying stale
+    forever. Live failure 2026-07-09."""
+    brr_dir = tmp_path / ".brr"
+    inbox_dir = brr_dir / "inbox"
+    responses_dir = brr_dir / "responses"
+    client, forwarder = _make_brnrd()
+    acc, pid = _account_and_project(client)
+    token = _handshake(client, acc, pid)
+    cloud._save_state(
+        brr_dir,
+        {"brnrd_url": "http://brnrd", "token": token, "repo_id": pid, "since": 999},
+    )
+    monkeypatch.setattr(cloud, "_request", _route_to(client))
+
+    client.post(
+        "/v1/_dev/enqueue", json={"repo_id": pid, "body": "do you hear me?"}, headers=acc
+    )
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    pending = protocol.list_pending(inbox_dir)
+    assert [ev["body"] for ev in pending] == ["do you hear me?"]
+    # Healed cursor persisted: the next poll resumes from the real seq.
+    assert cloud._load_state(brr_dir)["since"] == 1
+    cloud._loop_once(brr_dir, inbox_dir, responses_dir)
+    assert len(protocol.list_pending(inbox_dir)) == 1
