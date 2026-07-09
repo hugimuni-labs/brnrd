@@ -325,8 +325,14 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
     ``quota_updated_at`` alone never fires (that timestamp is always fresh)
     and the dashboard shows old numbers as if they were live — the reported
     "lying Claude usage panel" bug (2026-07-07). Falls back to the daemon's
-    publish time for shells that carry no per-scrape timestamp (older daemon
-    builds; Codex's live rollout read, which has no comparable idle-gap).
+    publish time only for shells that carry no per-scrape timestamp at all
+    (older daemon builds). Codex was assumed exempt here ("no comparable
+    idle-gap") until a live 2026-07-09 screenshot showed the identical
+    lying-panel symptom on its 5h window — codex_status.py's collector
+    re-reads the same rollout file on every poll tick whether or not a run
+    is active, and used to stamp ``updated_at`` with wall-clock now on every
+    read; fixed at the source (``codex_status.py::parse_token_count`` now
+    uses the rollout event's own timestamp) rather than special-cased here.
     """
     repo_ids = {repo.id for repo in repos}
     real: dict[str, dict[str, Any]] = {}

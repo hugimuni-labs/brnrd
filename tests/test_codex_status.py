@@ -105,6 +105,40 @@ def test_load_levels_no_sessions_dir(tmp_path, monkeypatch):
     assert codex_status.load_levels() is None
 
 
+def test_load_levels_updated_at_is_the_events_own_timestamp_not_scrape_time(
+    tmp_path, monkeypatch
+):
+    """Live-caught 2026-07-09: a screenshot showed the 5h window rendered
+    'critical, resets in now' while the weekly window read a healthy 81% —
+    traced to ``updated_at`` being stamped with wall-clock "now" on every
+    daemon poll tick, even when the rollout file hadn't been written to in
+    hours (no codex run active). ``activity_dashboard.py::_quota_views``'s
+    staleness check trusts this field, so an hours-stale snapshot always
+    looked freshly-scraped — the same "lying usage panel" class already
+    fixed for Claude (2026-07-07), reproduced here because this collector
+    was assumed to have no idle-gap. ``updated_at`` must reflect the
+    rollout event's own real time, not whenever brr happened to re-read it."""
+    sessions = tmp_path / ".codex" / "sessions" / "2026" / "07" / "08"
+    sessions.mkdir(parents=True)
+    rollout = sessions / "rollout-2026-07-08T00-00-00-abc.jsonl"
+    old_timestamp = "2026-07-08T20:18:25.753Z"
+    rollout.write_text(
+        json.dumps({"timestamp": old_timestamp, "type": "event_msg", "payload": _PAYLOAD}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+    levels = codex_status.load_levels()
+    assert levels is not None
+    # Reformatted to the shared updated_at shape, not left as wall-clock now.
+    assert levels["updated_at"] == "2026-07-08T20:18:25Z"
+
+
+def test_fmt_event_timestamp_falls_back_to_none_for_garbage():
+    assert codex_status._fmt_event_timestamp("not-a-timestamp") is None
+    assert codex_status._fmt_event_timestamp(None) is None
+    assert codex_status._fmt_event_timestamp("2026-07-08T20:18:25.753Z") == "2026-07-08T20:18:25Z"
+
+
 def test_facets_codex_collector_marks_spend_unimplemented():
     """Per-slot honesty: Codex collects quota + context, but has no $-spend
     gauge, so ``spend`` must read ``unimplemented`` (not ``absent``)."""
