@@ -1,0 +1,65 @@
+site_name: brr docs
+site_url: https://gurio.github.io/brr-docs/
+repo_url: https://github.com/Gurio/brr
+repo_name: Gurio/brr
+edit_uri: edit/main/docs/
+site_description: >-
+  brr — structured AI agent playbook with persistent knowledge base and
+  remote execution. Documentation for adopters running brr or the
+  hosted brnrd service.
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - content.action.edit
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quickstart: getting-started/quickstart.md
+      - Installing: getting-started/install.md
+  - Concepts:
+      - AGENTS.md + kb: concepts/agents-and-kb.md
+      - The daemon: concepts/daemon.md
+      - Gates and portals: concepts/gates-and-portals.md
+  - Reference:
+      - CLI: reference/cli.md
+  - Self-hosting brnrd: self-hosting/index.md
+  - Hosted brnrd (brnrd.dev): https://brnrd.dev
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Gurio/brr
