@@ -291,6 +291,14 @@ class LiveRunIn(BaseModel):
     # (kb/design-multi-workstream-concurrency.md "Ranked moves" #1).
     parent_run_id: str | None = Field(default=None, max_length=64)
     is_subspawn: bool = False
+    # #200's remaining slice (progress-card richness): the run's current
+    # lifecycle phase and live `.card` note text, projected by
+    # `src/brr/run_progress.py::project_run` at publish time
+    # (`cloud.py::_live_runs_snapshot`). `None` when there's no
+    # conversation record yet or no card note has been written.
+    phase: str | None = Field(default=None, max_length=32)
+    card_text: str | None = Field(default=None, max_length=4096)
+    card_updated_at: str | None = None
 
 
 class LiveRunsReport(BaseModel):
