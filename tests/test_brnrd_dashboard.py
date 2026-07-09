@@ -64,6 +64,32 @@ def test_dashboard_shows_enabled_repo():
     assert "/activity" in r.text
 
 
+def test_repos_page_requires_login():
+    client = _client()
+
+    r = client.get("/repos", follow_redirects=False)
+
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login?next=/repos"
+
+
+def test_repos_page_shows_enabled_repo():
+    """#313-adjacent: `/repos` restores the connect/pair/disconnect UI that
+    lost its only entry point when the SvelteKit build took over "/" in
+    production (found live 2026-07-09) — same content `/` renders for a
+    signed-in account, reachable at the path Upsun already passes through.
+    """
+    client = _client()
+    token = _login(client, login="Gurio")
+    _create_repo(client, token)
+
+    r = client.get("/repos")
+
+    assert r.status_code == 200
+    assert "Gurio/brr" in r.text
+    assert "Waiting for local daemon" in r.text
+
+
 def test_dashboard_disconnect_removes_repo():
     client = _client()
     token = _login(client, login="Gurio")
