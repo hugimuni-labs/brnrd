@@ -204,6 +204,12 @@ def _by_cost(runner: RunnerProfile) -> tuple[int, str]:
     return (runner.rank, runner.name)
 
 
+def _by_fallback_capability(runner: RunnerProfile) -> tuple[int, float, int, str]:
+    if runner.capability_score is None:
+        return (1, 0.0, runner.rank, runner.name)
+    return (0, -runner.capability_score, runner.rank, runner.name)
+
+
 def select_runner(
     runners: list[RunnerProfile],
     *,
@@ -322,7 +328,7 @@ def automatic_fallback_runner(
 
     if not candidates:
         return None
-    return sorted(candidates, key=_by_cost)[0]
+    return sorted(candidates, key=_by_fallback_capability)[0]
 
 
 def quality_escalation_runner(
