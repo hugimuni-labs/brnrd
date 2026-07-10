@@ -2077,6 +2077,7 @@ def _run_worker(
                 stats=output_stats,
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
+            _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
             _write_live_inbox(outbox_dir, inbox_dir, eid)
             _write_live_portal_state(
                 outbox_dir,
@@ -2128,6 +2129,7 @@ def _run_worker(
                 stats=output_stats,
             )
             _drain_agent_card(emit, task, eid, card_path, card_state)
+            _emit_mirror_cards(emit, task, eid, inbox_dir, card_state)
             _write_live_inbox(outbox_dir, inbox_dir, eid)
             _write_live_portal_state(
                 outbox_dir,
@@ -2187,6 +2189,7 @@ def _run_worker(
             stats=output_stats,
         )
         _drain_agent_card(emit, task, eid, card_path, card_state)
+        _emit_mirror_cards(emit, task, eid, inbox_dir, card_state, final=True)
         _write_live_inbox(outbox_dir, inbox_dir, eid)
         _write_live_portal_state(
             outbox_dir,
@@ -3791,6 +3794,102 @@ def _drain_agent_card(
         text=body,
     )
     return True
+
+
+_MIRROR_CARD_GATES = ("telegram",)
+
+
+def _emit_mirror_cards(
+    emit: _WorkerEmit,
+    task: Run,
+    current_event_id: str,
+    inbox_dir: Path,
+    card_state: dict[str, object],
+    *,
+    final: bool = False,
+) -> None:
+    """Mirror the live card into waiting correspondents' own threads (#341).
+
+    Card routing follows a run's *origin* thread, so when a chat message
+    folds into (say) a schedule-sourced run as a pending event, its author
+    watches a silent chat while their message is actively being worked.
+    This emits one ``mirror_card`` packet per foreign-thread pending chat
+    event so the gate can render a small "folded into a running thought"
+    stub under the correspondent's own message. Events in the run's own
+    thread are skipped — that chat already has the real card.
+
+    State rides in ``card_state["mirrors"]`` for the life of the attempt.
+    Packets fire on first sight, on narration change, and once on
+    resolution: an event leaving the pending set mid-run was folded in
+    ("answered"); one still pending at the post-return drain stays
+    "queued" for the next thought (*final*). Errors are swallowed — a
+    mirror must never break a run.
+    """
+    try:
+        run_conv = task.conversation_key or ""
+        mirrors = card_state.setdefault("mirrors", {})
+        if not isinstance(mirrors, dict):  # pragma: no cover - state abuse
+            return
+        narration = str(card_state.get("last") or "")
+        seen: set[str] = set()
+        for ev in protocol.list_pending(inbox_dir):
+            eid = str(ev.get("id") or "")
+            if not eid or eid == current_event_id:
+                continue
+            if ev.get("status") != "pending":
+                continue
+            if ev.get("respawned_by_run") or ev.get("respawned_from_event"):
+                continue
+            source = str(ev.get("source") or "")
+            if source not in _MIRROR_CARD_GATES:
+                continue
+            conv = conversations.conversation_key_for_event(ev) or ""
+            if not conv or conv == run_conv:
+                continue
+            seen.add(eid)
+            entry = mirrors.get(eid)
+            if (
+                isinstance(entry, dict)
+                and entry.get("last") == narration
+                and not final
+            ):
+                continue
+            payload: dict[str, object] = {
+                "run_id": task.id,
+                "origin_conversation_key": run_conv,
+                "origin_source": task.source,
+                "source": source,
+                "status": "queued" if final else "active",
+                "agent_card_text": narration,
+                "event_meta": {
+                    k: v for k, v in ev.items()
+                    if k.startswith(f"{source}_")
+                },
+            }
+            updates.emit(emit.brr_dir, updates.UpdatePacket(
+                type="mirror_card",
+                conversation_key=conv,
+                event_id=eid,
+                payload=payload,
+            ))
+            mirrors[eid] = {"conv": conv, "last": narration, "payload": payload}
+        # Resolution: a tracked mirror whose event left the pending set was
+        # folded into this run — close its stub as answered.
+        for eid in [k for k in mirrors if k not in seen]:
+            entry = mirrors.pop(eid)
+            if not isinstance(entry, dict):
+                continue
+            payload = dict(entry.get("payload") or {})
+            payload["status"] = "answered"
+            payload["agent_card_text"] = ""
+            updates.emit(emit.brr_dir, updates.UpdatePacket(
+                type="mirror_card",
+                conversation_key=str(entry.get("conv") or ""),
+                event_id=eid,
+                payload=payload,
+            ))
+    except Exception:
+        return
 
 
 def _remove_outbox(outbox_dir: Path | None) -> None:
