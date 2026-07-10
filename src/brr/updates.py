@@ -35,6 +35,7 @@ PACKET_TYPES = (
     "artifact_created",
     "interim_response",
     "card_composed",
+    "mirror_card",
     "heartbeat",
     "hooks_installed",
     "finalizing",
@@ -92,6 +93,10 @@ _QUIET_TYPES = {
     # persisted as a record of what the agent said, but it doesn't earn
     # a daemon-console line each time.
     "card_composed",
+    # ``mirror_card`` mirrors that narration into a waiting
+    # correspondent's own thread (see daemon.py::_emit_mirror_cards);
+    # same cadence as ``card_composed``, same console quiet.
+    "mirror_card",
 }
 
 
