@@ -818,6 +818,79 @@ def dashboard_plans_api(request: Request, db: Session = Depends(get_db)) -> JSON
     )
 
 
+def _activity_row_out(view: dict[str, Any]) -> dict[str, Any]:
+    """JSON projection of one `_activity_views` row for the SvelteKit
+    frontend: raw ISO timestamps plus the server-derived `bucket` (the
+    status-set folding at the top of this module is backend knowledge the
+    client shouldn't re-own); presentation labels are the client's job,
+    same division as the other dashboard JSON twins.
+    """
+    record: ActivityRecord = view["record"]
+    return {
+        "id": record.record_id,
+        "kind": record.kind,
+        "source": view["source_label"],
+        "status": record.status,
+        "phase": record.phase,
+        "bucket": view["bucket"],
+        "summary": view["summary_compact"],
+        "repo_label": view["repo_name"],
+        "daemon_name": view["daemon_name"],
+        "conversation_key": record.conversation_key,
+        "runner": {"shell": view["shell"], "core": view["core"], "summary": view["runner_summary"]},
+        "branch": record.branch,
+        "pr_number": record.pr_number,
+        "started_at": record.started_at.isoformat() if record.started_at else None,
+        "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+        "scheduled_for": record.scheduled_for.isoformat() if record.scheduled_for else None,
+        "defer_until": record.defer_until.isoformat() if record.defer_until else None,
+        "reported_at": record.reported_at.isoformat() if record.reported_at else None,
+        "links": view["links"],
+    }
+
+
+@router.get("/v1/dashboard/activity")
+def dashboard_activity_api(
+    request: Request,
+    repo_id: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Account-scoped activity feed (#327 Jinja-removal, /activity half) for
+    the SvelteKit frontend. Same session-cookie auth + filter params as the
+    Jinja page this supersedes, with one deliberate difference: the response
+    is bounded (``limit``, capped) — the legacy page rendered every record
+    unbounded, which is exactly the 282-row pileup that made it unreadable.
+    ``total`` carries the pre-limit count so the client can say "N of M".
+    ``kinds``/``statuses``/``repos`` feed the filter UI from the repo-scoped
+    (but kind/status-unfiltered) view, mirroring the Jinja page's behavior.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    base_views = _activity_views(db, repos, repo_id=repo_id or None)
+    views = _activity_views(db, repos, repo_id=repo_id or None, kind=kind or None, status=status or None)
+    capped = max(1, min(limit, 300))
+    kinds = sorted({view["record"].kind for view in base_views} | {"run", "scheduled", "respawn"})
+    statuses = sorted({view["record"].status for view in base_views if view["record"].status} | {"running", "pending", "scheduled"})
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "rows": [_activity_row_out(view) for view in views[:capped]],
+            "total": len(views),
+            "kinds": kinds,
+            "statuses": statuses,
+            "repos": [{"id": repo.id, "label": repo.repo_full_name} for repo in repos],
+        }
+    )
+
+
 @router.get("/plans")
 def plans_redirect() -> RedirectResponse:
     """First real Jinja template cut (kb plan-jinja-removal.md Phase 2,
@@ -880,39 +953,15 @@ def repos_page(request: Request, installation_id: str | None = None, notice: str
     return _render(request, "dashboard.html", _activity_dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
 
 
-@router.get("/activity", response_class=HTMLResponse)
-def activity_page(request: Request, repo_id: str | None = None, kind: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
-    account_id = _account_id(request, db)
-    if account_id is None:
-        return RedirectResponse(url="/login?next=/activity", status_code=303)
-    account = db.get(Account, account_id)
-    if account is None:
-        return RedirectResponse(url="/login?next=/activity", status_code=303)
-    repos = _repos(db, account.id)
-    base_views = _activity_views(db, repos, repo_id=repo_id or None)
-    views = _activity_views(
-        db,
-        repos,
-        repo_id=repo_id or None,
-        kind=kind or None,
-        status=status or None,
-    )
-    kinds = sorted({view["record"].kind for view in base_views} | {"run", "scheduled", "respawn"})
-    statuses = sorted({view["record"].status for view in base_views if view["record"].status} | {"running", "pending", "scheduled"})
-    return _render(
-        request,
-        "activity.html",
-        {
-            "body_class": "dashboard-page",
-            "title": "brnrd activity",
-            "logged_in": True,
-            "account": account,
-            "repos": repos,
-            "activity_views": views,
-            "selected_repo_id": repo_id or "",
-            "selected_kind": kind or "",
-            "selected_status": status or "",
-            "kinds": kinds,
-            "statuses": statuses,
-        },
-    )
+@router.get("/activity")
+def activity_redirect() -> RedirectResponse:
+    """Second Jinja template cut (#327, same shape as ``plans_redirect``
+    above): the unbounded legacy activity feed is superseded by the
+    SvelteKit ``/activity`` route (``src/frontend/src/routes/activity``),
+    which reads ``dashboard_activity_api`` bounded. In production the
+    static build serves ``/activity`` directly (Upsun passthru no longer
+    lists it); this backend route is only reachable from a bare-uvicorn
+    deployment, where old nav links and bookmarks land on the dashboard
+    instead of a 404.
+    """
+    return RedirectResponse(url="/", status_code=308)
