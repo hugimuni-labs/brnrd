@@ -631,12 +631,16 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     — the daemon must keep running even if Telegram is misconfigured.
     """
     ptype = getattr(packet, "type", None)
-    if ptype not in _RENDERABLE_PACKETS:
+    if ptype != "mirror_card" and ptype not in _RENDERABLE_PACKETS:
         return
 
     state = _load_state(brr_dir)
     token = state.get("token")
     if not token:
+        return
+
+    if ptype == "mirror_card":
+        _render_mirror_card(brr_dir, str(token), packet)
         return
 
     conv_key = getattr(packet, "conversation_key", "") or ""
@@ -664,4 +668,48 @@ def render_update(brr_dir: Path, packet: Any) -> None:
     delivery.update_card(
         brr_dir, "telegram", run_id, text,
         transport=transport, reply_to=reply_to, render_tag=ptype,
+    )
+
+
+def _render_mirror_card(brr_dir: Path, token: str, packet: Any) -> None:
+    """Render the correspondent-thread stub for a ``mirror_card`` packet.
+
+    A run's real card lives in its *origin* thread; this stub sits under a
+    waiting correspondent's own message so the chat whose message is being
+    actively worked never looks silent (#341). The daemon emits one packet
+    per foreign pending chat event (``_emit_mirror_cards``); the card state
+    is keyed per (run, event) so several folded-in messages each keep their
+    own stub, edited in place through the same shared card driver.
+    """
+    payload = getattr(packet, "payload", None) or {}
+    if str(payload.get("source") or "") != "telegram":
+        return
+    meta = payload.get("event_meta") or {}
+    if not isinstance(meta, dict):
+        return
+    chat_id = _coerce_optional_int(meta.get("telegram_chat_id"))
+    if chat_id is None:
+        return
+    topic_id = _coerce_optional_int(meta.get("telegram_topic_id"))
+    # Thread the stub under the correspondent's own waiting message.
+    reply_to = _coerce_optional_int(meta.get("telegram_message_id"))
+    run_id = run_progress.run_id_from_packet(packet) or ""
+    event_id = getattr(packet, "event_id", "") or ""
+    if not run_id or not event_id:
+        return
+    status = str(payload.get("status") or "active")
+    if status == "answered":
+        text = "✅ folded into the running thought — answered"
+    elif status == "queued":
+        text = "⏸ still queued — the next thought picks this up"
+    else:
+        text = "⏳ folded into a running thought"
+        narration = str(payload.get("agent_card_text") or "").strip()
+        if narration:
+            text += f"\n<i>{_escape_html(narration)}</i>"
+    transport = _CardTransport(token, chat_id, topic_id)
+    delivery.update_card(
+        brr_dir, "telegram", f"{run_id}.mirror.{event_id}", text,
+        transport=transport, reply_to=reply_to,
+        render_tag=f"mirror:{status}",
     )

@@ -425,3 +425,74 @@ def test_render_update_treats_not_modified_as_noop(tmp_path, monkeypatch):
     assert methods.count("sendMessage") == 0
     entry = telegram._load_progress_for_run(brr_dir, task.id)
     assert entry["message_id"] == 900
+
+
+# ── Correspondent mirror stubs (#341) ────────────────────────────────
+
+
+def _mirror_payload(**over):
+    payload = dict(
+        run_id="run-mirror-1",
+        origin_conversation_key="schedule:tick:",
+        origin_source="schedule",
+        source="telegram",
+        status="active",
+        agent_card_text="folding your message in",
+        event_meta={"telegram_chat_id": 555, "telegram_message_id": 99},
+    )
+    payload.update(over)
+    return payload
+
+
+def test_mirror_card_sends_stub_under_waiting_message(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    _save_token(brr_dir)
+    api_calls: list[tuple] = []
+
+    def fake_api_call(token, method, params=None):
+        api_calls.append((token, method, params))
+        if method in ("sendMessage", "editMessageText"):
+            return {"result": {"message_id": 71}}
+        return {}
+
+    monkeypatch.setattr(telegram, "_api_call", fake_api_call)
+
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="mirror_card", conversation_key="telegram:555:",
+        event_id="evt-w1", payload=_mirror_payload(),
+    ))
+    sends = [c for c in api_calls if c[1] == "sendMessage"]
+    assert len(sends) == 1
+    params = sends[0][2]
+    assert params["chat_id"] == 555
+    # The stub threads under the correspondent's own waiting message.
+    assert params["reply_to_message_id"] == 99
+    assert "folded into a running thought" in params["text"]
+    assert "folding your message in" in params["text"]
+
+    # Resolution edits the same stub in place.
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="mirror_card", conversation_key="telegram:555:",
+        event_id="evt-w1",
+        payload=_mirror_payload(status="answered", agent_card_text=""),
+    ))
+    edits = [c for c in api_calls if c[1] == "editMessageText"]
+    assert len(edits) == 1
+    assert "answered" in edits[0][2]["text"]
+    assert [c for c in api_calls if c[1] == "sendMessage"] == sends
+
+
+def test_mirror_card_ignores_other_gates_correspondents(tmp_path, monkeypatch):
+    brr_dir = tmp_path / ".brr"
+    _save_token(brr_dir)
+    api_calls: list[tuple] = []
+    monkeypatch.setattr(
+        telegram, "_api_call",
+        lambda *a, **k: api_calls.append(a) or {},
+    )
+
+    updates.emit(brr_dir, updates.UpdatePacket(
+        type="mirror_card", conversation_key="slack:C1:",
+        event_id="evt-w2", payload=_mirror_payload(source="slack"),
+    ))
+    assert api_calls == []
