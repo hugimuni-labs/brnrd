@@ -41,17 +41,26 @@ applications:
         "/":
           root: "src/frontend/build"
           index: ["index.html"]
+          # SPA fallback: the frontend is adapter-static with
+          # `fallback: 'index.html'` (vite.config.ts) — client-side routes
+          # like /activity have no per-path file in build/, so any request
+          # the rules below don't claim serves the SPA shell and the
+          # router takes it from there. (#327: first client route beyond
+          # "/", the ported activity feed.)
+          passthru: "/index.html"
           scripts: false
           rules:
             # brnrd_web's remaining HTML routes (login/oauth, repo
-            # connect flows, the legacy activity/plans dashboards) plus
-            # every JSON/API/webhook surface (src/brnrd/routers/*) and
-            # the legacy dashboard's own static assets. Keep this list in
-            # sync with src/brnrd/app.py's include_router calls and
-            # src/brnrd_web/routes.py/activity_dashboard.py/
-            # plans_dashboard.py — anything added there needs a passthru
-            # rule here or the new frontend's static root will 404 it.
-            '^/(v1|api|r|login|logout|auth|connect|repos|activity|plans|static|terms|config-approve)(/|$)':
+            # connect flows) plus every JSON/API/webhook surface
+            # (src/brnrd/routers/*) and the legacy dashboard's own static
+            # assets. Keep this list in sync with src/brnrd/app.py's
+            # include_router calls and src/brnrd_web/routes.py/
+            # activity_dashboard.py — anything added there needs a
+            # passthru rule here or it never reaches FastAPI. /activity
+            # deliberately absent: SPA-owned now (#327). /plans stays
+            # passthru'd so old bookmarks hit the backend's 308 → "/"
+            # (#326) instead of the SPA's 404.
+            '^/(v1|api|r|login|logout|auth|connect|repos|plans|static|terms|config-approve)(/|$)':
               passthru: true
 
     variables:
