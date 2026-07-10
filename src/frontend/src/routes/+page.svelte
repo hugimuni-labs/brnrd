@@ -158,6 +158,14 @@
 		     ("a small one somewhere") — a plain link, not a nav bar this
 		     single-page dashboard doesn't otherwise have. -->
 		<div class="flex items-center gap-4">
+			<!-- #327: the full activity history (runs, scheduled wakes,
+			     parked respawns) — a client-side route in this same SPA,
+			     replacing the retired Jinja /activity page. -->
+			<a
+				href="/activity"
+				class="font-mono text-[11px] tracking-wide text-stone-500 uppercase hover:text-stone-300"
+				>activity</a
+			>
 			<!-- Restores discoverability for the repo connect/pairing flow
 			     (`/repos`, `brnrd_web/activity_dashboard.py::repos_page`),
 			     which lost its only entry point when this page took over
