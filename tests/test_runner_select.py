@@ -128,6 +128,146 @@ def test_select_override_for_relay_is_honoured():
     assert rs.select_runner(runners, override="relay").name == "relay"
 
 
+def test_automatic_fallback_prefers_capability_within_eligible_pool():
+    runners = [
+        _profile(
+            "claude-fable",
+            provider="anthropic",
+            quota_source="claude-local",
+            capability_score=0.95,
+            **{"class": "economy", "cost_rank": 15},
+        ),
+        _profile(
+            "gemini-flash",
+            provider="google",
+            quota_source="gemini-local",
+            **{"class": "economy", "cost_rank": 10},
+        ),
+        _profile(
+            "codex-mini",
+            provider="openai",
+            quota_source="codex-local",
+            capability_score=0.73,
+            **{"class": "economy", "cost_rank": 20},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="claude-fable",
+        failure_kind="quota_exhausted",
+        tried=("claude-fable",),
+    )
+
+    assert chosen is not None
+    assert chosen.name == "codex-mini"
+
+
+def test_automatic_fallback_uses_cost_when_candidates_lack_capability_hints():
+    runners = [
+        _profile(
+            "claude-fable",
+            provider="anthropic",
+            quota_source="claude-local",
+            **{"class": "economy", "cost_rank": 15},
+        ),
+        _profile(
+            "gemini-flash",
+            provider="google",
+            quota_source="gemini-local",
+            **{"class": "economy", "cost_rank": 10},
+        ),
+        _profile(
+            "codex-mini",
+            provider="openai",
+            quota_source="codex-local",
+            **{"class": "economy", "cost_rank": 20},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="claude-fable",
+        failure_kind="quota_exhausted",
+        tried=("claude-fable",),
+    )
+
+    assert chosen is not None
+    assert chosen.name == "gemini-flash"
+
+
+def test_automatic_fallback_tiebreaks_equal_capability_by_cost():
+    runners = [
+        _profile(
+            "claude-fable",
+            provider="anthropic",
+            quota_source="claude-local",
+            capability_score=0.95,
+            **{"class": "economy", "cost_rank": 15},
+        ),
+        _profile(
+            "gemini-flash",
+            provider="google",
+            quota_source="gemini-local",
+            capability_score=0.4,
+            **{"class": "economy", "cost_rank": 10},
+        ),
+        _profile(
+            "codex-mini",
+            provider="openai",
+            quota_source="codex-local",
+            capability_score=0.4,
+            **{"class": "economy", "cost_rank": 20},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="claude-fable",
+        failure_kind="quota_exhausted",
+        tried=("claude-fable",),
+    )
+
+    assert chosen is not None
+    assert chosen.name == "gemini-flash"
+
+
+def test_automatic_fallback_capability_sort_keeps_class_ceiling():
+    runners = [
+        _profile(
+            "claude-fable",
+            provider="anthropic",
+            quota_source="claude-local",
+            capability_score=0.95,
+            **{"class": "economy", "cost_rank": 15},
+        ),
+        _profile(
+            "codex-full",
+            provider="openai",
+            quota_source="codex-local",
+            capability_score=0.99,
+            **{"class": "strong", "cost_rank": 35},
+        ),
+        _profile(
+            "gemini-flash",
+            provider="google",
+            quota_source="gemini-local",
+            capability_score=0.2,
+            **{"class": "economy", "cost_rank": 10},
+        ),
+    ]
+
+    chosen = rs.automatic_fallback_runner(
+        runners,
+        current="claude-fable",
+        failure_kind="quota_exhausted",
+        tried=("claude-fable",),
+    )
+
+    assert chosen is not None
+    assert chosen.name == "gemini-flash"
+
+
 def test_automatic_fallback_picks_same_or_cheaper_different_domain():
     runners = [
         _profile(
