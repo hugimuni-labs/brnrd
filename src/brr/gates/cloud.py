@@ -14,7 +14,7 @@ from typing import Any, Callable
 import requests
 
 from .. import claude_status, claude_usage, codex_status, gitops, presence, protocol, run_ledger, run_progress, runner_quota
-from .. import dominion, schedule as schedule_mod
+from .. import dominion, schedule as schedule_mod, wake_request
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
 from . import delivery, runtime
@@ -797,17 +797,29 @@ def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
 def _publish_runners(brr_dir: Path, state: dict) -> None:
     if not (state.get("token") and state.get("brnrd_url")):
         return
+    payload = _runners_snapshot(brr_dir)
+    # #328 tap-to-request: ack wake requests a dispatched wake has spent,
+    # and mirror back the account's still-pending one (if any). Same
+    # publish tick, no extra request — see src/brr/wake_request.py.
+    acked = wake_request.consumed_ids(brr_dir)
+    payload["consumed_wake_request_ids"] = acked
     try:
-        _request(
+        body = _request(
             state["brnrd_url"],
             "PUT",
             "/v1/daemons/runners",
             token=state["token"],
-            json=_runners_snapshot(brr_dir),
+            json=payload,
             timeout=10,
         )
     except Exception as e:
         print(f"[brr:cloud] runners publish failed: {e}")
+        return
+    wake_request.clear_consumed(brr_dir, acked)
+    pending = body.get("pending_wake_request") if isinstance(body, dict) else None
+    wake_request.store_pending(
+        brr_dir, pending if isinstance(pending, dict) else None,
+    )
 
 
 def _live_run_progress(brr_dir: Path, stream: str, run_id: str) -> run_progress.RunProgressView | None:

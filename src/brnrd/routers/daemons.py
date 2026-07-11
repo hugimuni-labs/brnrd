@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import ids, inbox as inbox_service, schemas
+from .. import ids, inbox as inbox_service, schemas, wake_requests
 from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
 from ..models import Account, ActivityRecord, Daemon, Event, Repo
@@ -235,7 +235,23 @@ def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(r
     daemon.online = True
     daemon.last_seen_at = now
     db.commit()
-    return schemas.RunnersOut(profiles=payload.profiles, default=payload.default, runners_updated_at=now)
+    # #328 tap-to-request piggyback: retire wake requests this daemon just
+    # spent on a dispatched wake, then hand back the account's still-pending
+    # one (if any) so the daemon learns of a tap within one publish tick.
+    wake_requests.mark_consumed(
+        db, principal.account_id, payload.consumed_wake_request_ids,
+    )
+    pending = wake_requests.pending_for_account(db, principal.account_id)
+    return schemas.RunnersOut(
+        profiles=payload.profiles,
+        default=payload.default,
+        runners_updated_at=now,
+        pending_wake_request=(
+            schemas.RunnerWakeRequestOut(**wake_requests.view(pending))
+            if pending is not None
+            else None
+        ),
+    )
 
 
 @router.put("/live-runs", response_model=schemas.LiveRunsOut)
