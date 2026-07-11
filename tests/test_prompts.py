@@ -1148,15 +1148,15 @@ class TestDaemonModeGuardrails:
 
     def test_run_prompt_names_mode_block_and_recovery_role(self):
         prompt = _read_bundled_run_prompt()
-        # AGENTS.md remains the entry point when the host did not inject
-        # the playbook, but daemon wakes should not be told to re-open a
-        # contract already present in their outer context.
-        assert "Injected in most daemon wakes" in prompt
-        assert "daemon wake" in prompt
-        assert (
-            "only when it's absent, stale, or the task touches it"
-            in prompt
-        )
+        # AGENTS.md remains the entry point, but whether a wake already
+        # carries it is Shell-dependent (codex reads it natively; claude
+        # does not) — verified live 2026-07-11 on a claude-fable daemon
+        # wake whose context had no AGENTS.md block. The old "injected in
+        # most daemon wakes" wording taught residents to skip the contract
+        # they never received.
+        assert "Shell-dependent" in prompt
+        assert "not guaranteed" in prompt
+        assert "open it before touching" in prompt
         assert "Read the `AGENTS.md` playbook at the repo root" not in prompt
         # The bundle is the authoritative "where am I?" (its Mode block).
         assert "mode, run metadata" in prompt

@@ -1674,6 +1674,120 @@ def test_drain_outbox_rejects_config_change_off_allowlist(tmp_path, monkeypatch)
     assert "isn't on the agent-proposable config allowlist" in partial
 
 
+def test_drain_outbox_parks_dominion_budget_config_change(tmp_path, monkeypatch):
+    """Wake-context budget knobs are proposable (2026-07-11 audit)."""
+    from brr.gates import cloud as cloud_mod
+
+    monkeypatch.setattr(
+        cloud_mod,
+        "propose_config_change",
+        lambda brr_dir, **kw: {
+            "request_id": "cfgreq_y",
+            "status": "pending",
+            "approve_url": "https://brnrd.example/config-approve/cfgreq_y",
+        },
+    )
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    ctx = _account_context_for_policy(tmp_path)
+    path = protocol.create_event(
+        inbox, "telegram", "trim the ledger inject", conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "config.md").write_text(
+        "---\nconfig_change: dominion.ledger_inject_budget_bytes\nvalue: 4096\n---\n"
+        "Ledger tail rides every wake at its full cap; halve it.\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-cfg-3",
+        event_id=event_id,
+        body="trim the ledger inject",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    stats: dict[str, int] = {}
+
+    daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        repo_root=tmp_path,
+        account_context=ctx,
+        stats=stats,
+    )
+
+    proposals = list(daemon.account.config_change_proposals_path(ctx).glob("*.md"))
+    assert len(proposals) == 1
+    text = proposals[0].read_text(encoding="utf-8")
+    assert "config_key: dominion.ledger_inject_budget_bytes" in text
+    assert "requested_value: 4096" in text
+
+
+def test_drain_outbox_rejects_non_integer_config_change_value(tmp_path, monkeypatch):
+    """Allowlisted keys are int-valued; a bad value must never park.
+
+    An approved proposal writes straight into ``.brr/config`` and prompt
+    assembly does ``int(cfg.get(...))`` at wake build — a non-integer
+    would crash every subsequent wake. Validate at proposal time.
+    """
+    from brr.gates import cloud as cloud_mod
+
+    minted_calls: list[str] = []
+    monkeypatch.setattr(
+        cloud_mod,
+        "propose_config_change",
+        lambda brr_dir, **kw: minted_calls.append(kw["config_key"]),
+    )
+    brr_dir = tmp_path / ".brr"
+    inbox = brr_dir / "inbox"
+    responses = brr_dir / "responses"
+    outbox = brr_dir / "outbox" / "evt-current"
+    outbox.mkdir(parents=True)
+    ctx = _account_context_for_policy(tmp_path)
+    path = protocol.create_event(
+        inbox, "telegram", "tune budget", conversation_key="telegram:42:",
+    )
+    event_id = path.stem
+    (outbox / "config.md").write_text(
+        "---\nconfig_change: dominion.ledger_inject_budget_bytes\nvalue: lots\n---\nplease\n",
+        encoding="utf-8",
+    )
+    task = Run(
+        id="run-cfg-4",
+        event_id=event_id,
+        body="tune budget",
+        source="telegram",
+        conversation_key="telegram:42:",
+        meta={"repo_label": "Gurio/brr"},
+    )
+    stats: dict[str, int] = {}
+
+    daemon._drain_outbox(
+        daemon._WorkerEmit(brr_dir, "telegram:42:", event_id),
+        task,
+        responses,
+        event_id,
+        outbox,
+        inbox,
+        repo_root=tmp_path,
+        account_context=ctx,
+        stats=stats,
+    )
+
+    assert not daemon.account.config_change_proposals_path(ctx).exists()
+    assert minted_calls == []
+    partial = protocol.list_partials(responses, event_id)[0].read_text(encoding="utf-8")
+    assert "needs a positive integer value" in partial
+
+
 def _write_config_change_proposal(
     ctx,
     proposal_id,
