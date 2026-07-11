@@ -95,9 +95,11 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
         "shell": "claude",
         "model": "claude-fable-5",
         "provider": "anthropic",
-        "class": "economy",
-        "cost_rank": 15,
-        "freshness_date": "2026-06-29",
+        # Priciest core in the rack (maintainer-confirmed 2026-07-11);
+        # was mislabeled economy/rank-15 in the 2026-06-29 seed.
+        "class": "strong",
+        "cost_rank": 55,
+        "freshness_date": "2026-07-11",
     },
     # ── Codex (OpenAI) ──────────────────────────────────────────────────
     # codex exec -m <model> selects the Core. Mini is the economy tier;
