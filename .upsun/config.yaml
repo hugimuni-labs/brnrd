@@ -50,17 +50,18 @@ applications:
           passthru: "/index.html"
           scripts: false
           rules:
-            # brnrd_web's remaining HTML routes (login/oauth and approval
+            # brnrd_web's remaining HTML routes (oauth and approval
             # flows) plus every JSON/API/webhook surface
             # (src/brnrd/routers/*) and the legacy dashboard's own static
             # assets. Keep this list in sync with src/brnrd/app.py's
             # include_router calls and src/brnrd_web/routes.py/
             # activity_dashboard.py — anything added there needs a
-            # passthru rule here or it never reaches FastAPI. /activity
-            # deliberately absent: SPA-owned now (#327). /plans stays
-            # passthru'd so old bookmarks hit the backend's 308 → "/"
-            # (#326) instead of the SPA's 404.
-            '^/(v1|api|r|login|logout|auth|connect|plans|static|terms/accept|config-approve)(/|$)':
+            # passthru rule here or it never reaches FastAPI. /activity,
+            # /repos and /login deliberately absent: SPA-owned now (#327).
+            # /plans stays passthru'd so old bookmarks hit the backend's
+            # 308 → "/" (#326) instead of the SPA's 404. /logout stays
+            # backend-owned (it must clear the session cookie).
+            '^/(v1|api|r|logout|auth|connect|plans|static|terms/accept|config-approve)(/|$)':
               passthru: true
 
     variables:

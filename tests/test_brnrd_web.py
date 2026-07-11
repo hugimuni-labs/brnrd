@@ -93,23 +93,53 @@ def _login_web(
     return start, callback, seen
 
 
-def test_login_page_uses_github_only(client):
-    r = client.get("/login?next=/connect/BR-123")
+def test_login_context_carries_backend_validated_next(client):
+    """#327 /login slice: the SPA renders the OAuth start URL the backend
+    hands back — `_safe_next` stays server-owned, exactly like the retired
+    Jinja page."""
+    r = client.get("/v1/dashboard/login-context?next=/connect/BR-123")
     assert r.status_code == 200
-    assert '<meta name="viewport"' in r.text
-    assert "/static/brnrd_web/app.css" in r.text
-    assert "managed brr control plane" in r.text
-    assert "preview-frame" in r.text
-    assert "Sign in with GitHub" in r.text
-    assert "/terms" in r.text
-    assert "password" not in r.text.lower()
+    body = r.json()
+    assert body["authenticated"] is False
+    assert body["oauth_ready"] is True
+    assert body["signin_url"] == "/auth/github/start?next=/connect/BR-123"
+    assert body["next"] == "/connect/BR-123"
+
+    hostile = client.get("/v1/dashboard/login-context?next=//evil.example")
+    assert hostile.json()["signin_url"] == "/auth/github/start?next=/"
 
 
-def test_login_page_does_not_load_the_legacy_dashboard_stylesheet(client):
-    """Live-caught 2026-07-09 (screenshot from the user): /login and the
-    then-Jinja /terms page rendered a green GitHub-identity card and button
+def test_login_context_reports_authenticated_session(client, monkeypatch):
+    _login_web(client, monkeypatch)
+    r = client.get("/v1/dashboard/login-context?next=/repos")
+    body = r.json()
+    assert body["authenticated"] is True
+    assert body["next"] == "/repos"
+
+
+def test_login_page_is_spa_owned(client):
+    # The SPA serves /login in production (passthru removed); the backend
+    # route only survives for bare uvicorn, same 308 shape as /repos.
+    r = client.get("/login", follow_redirects=False)
+    assert r.status_code == 308
+    assert r.headers["location"] == "/"
+
+
+def _message_page(client, monkeypatch):
+    """A guaranteed non-dashboard Jinja render (message.html via the
+    oauth-unready path) — the probe the retired /login page used to be for
+    the two regression tests below."""
+    monkeypatch.setattr("brnrd_web.routes._github_oauth_ready", lambda _request: False)
+    r = client.get("/auth/github/start")
+    assert r.status_code == 503
+    return r
+
+
+def test_non_dashboard_pages_do_not_load_the_legacy_dashboard_stylesheet(client, monkeypatch):
+    """Live-caught 2026-07-09 (screenshot from the user): the then-Jinja
+    /login and /terms pages rendered a green GitHub-identity card and button
     against the amber brand palette PR #301 (2026-07-08) shipped in app.css.
-    Root cause was not a caching regression (the cache-busting fix above
+    Root cause was not a caching regression (the cache-busting fix below
     already covers that) but a cascade bug: base.html loaded dashboard.css
     unconditionally on every page, and dashboard.css — the legacy mint/teal
     control-deck sheet for the plans/activity dashboards — defines unscoped
@@ -117,20 +147,18 @@ def test_login_page_does_not_load_the_legacy_dashboard_stylesheet(client):
     with identical specificity, always won the cascade and clobbered the
     amber values on every non-dashboard page. Fixed by only linking
     dashboard.css when body_class is 'dashboard-page'."""
-    r = client.get("/login")
-    assert r.status_code == 200
+    r = _message_page(client, monkeypatch)
     assert "dashboard.css" not in r.text
 
 
-def test_static_asset_urls_carry_a_real_cache_busting_version(client):
+def test_static_asset_urls_carry_a_real_cache_busting_version(client, monkeypatch):
     """Live-caught 2026-07-08: base.html's `?v={{ asset_version }}` was never
     wired to a value, so every deploy served the identical `app.css?v=` URL —
     Cloudflare kept serving pre-fix (green) CSS bytes under that stable cache
     key for its full max-age after the brand-palette fix (PR #301) had
     already shipped and deployed. A non-empty version tied to file content
     means a real static-asset change always mints a new URL."""
-    r = client.get("/login")
-    assert r.status_code == 200
+    r = _message_page(client, monkeypatch)
     assert "app.css?v=" in r.text
     assert "app.css?v=\"" not in r.text
     assert "dashboard.css?v=\"" not in r.text
