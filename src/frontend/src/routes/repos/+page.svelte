@@ -202,7 +202,11 @@
 			</div>
 		{/if}
 
-		<div class="mt-5 grid gap-2 sm:grid-cols-3">
+		<!-- grid-cols-1 everywhere below: without a base template the implicit
+	     track is max-content-sized, and the nowrap truncate text pushes
+	     cards wider than the container on narrow viewports (live-caught on
+	     mobile 2026-07-11 — installed-repo cards overflowing the panel). -->
+	<div class="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
 			<div class="subpanel p-3">
 				<p class="font-mono text-[10px] tracking-wide text-stone-500 uppercase">signed in</p>
 				<p class="mt-1 font-mono text-sm text-amber-100">@{data.account.github_login}</p>
@@ -366,7 +370,7 @@
 					All {connectedInstalled.length} synced repositories are enabled.
 				</p>
 			{:else}
-				<div class="grid gap-2 lg:grid-cols-2">
+				<div class="grid grid-cols-1 gap-2 lg:grid-cols-2">
 					{#each availableInstalled as repo (repo.id)}
 						<div class="subpanel flex items-center justify-between gap-3 p-3">
 							<div class="min-w-0">
@@ -391,7 +395,7 @@
 
 			<form class="mt-5 border-t border-stone-800/70 pt-4" onsubmit={connectManual}>
 				<p class="font-mono text-[11px] tracking-wide text-stone-500 uppercase">manual connect</p>
-				<div class="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
+				<div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px_auto]">
 					<input
 						class="border border-stone-800 bg-stone-950/60 px-2 py-1.5 font-mono text-sm text-stone-200 outline-none focus:border-amber-700"
 						bind:value={manualRepo}
