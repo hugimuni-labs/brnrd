@@ -391,6 +391,73 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
     return sorted(out, key=lambda row: row["shell"])[:6]
 
 
+# The catalog itself changes rarely (a shell install/upgrade, a config
+# repin) but it rides the same ~3s publish tick as quota, so a report this
+# old means the daemon is gone, not the rack unchanged.
+_RUNNERS_STALE_SECONDS = 600
+
+
+def _runners_views(db: Session, repos: list[Repo]) -> dict[str, Any]:
+    """Account-scoped runner catalog: the spool rack (#328).
+
+    Reads the last ``PUT /v1/daemons/runners`` snapshot per connected daemon
+    (`src/brr/gates/cloud.py::_runners_snapshot` is the writer). Freshest
+    report wins per profile name — same merge rule `_quota_views` applies
+    per shell — and the freshest daemon's own ``default`` pin is the one
+    shown, since the pin is daemon-local config.
+    """
+    repo_ids = {repo.id for repo in repos}
+    if not repo_ids:
+        return {"profiles": [], "default": None, "stale": False, "reported_at": None}
+    now = datetime.now(timezone.utc)
+    profiles: dict[str, dict[str, Any]] = {}
+    default: str | None = None
+    newest: datetime | None = None
+    daemons = db.execute(select(Daemon).where(Daemon.repo_id.in_(repo_ids))).scalars()
+    for daemon in daemons:
+        reported_at = _dt(daemon.runners_updated_at)
+        if reported_at is None:
+            continue
+        try:
+            rows = json.loads(daemon.runners_json or "[]")
+        except ValueError:
+            rows = []
+        if not isinstance(rows, list):
+            continue
+        if newest is None or reported_at > newest:
+            newest = reported_at
+            default = daemon.runners_default
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if not name:
+                continue
+            existing = profiles.get(name)
+            if existing is not None and existing["_reported_at"] >= reported_at:
+                continue
+            entry = dict(row)
+            entry["_reported_at"] = reported_at
+            profiles[name] = entry
+    out = list(profiles.values())
+    for row in out:
+        row.pop("_reported_at", None)
+    out.sort(
+        key=lambda row: (
+            row.get("cost_rank") is None,
+            row.get("cost_rank") if row.get("cost_rank") is not None else 0,
+            str(row.get("name") or ""),
+        )
+    )
+    stale = newest is not None and (now - newest).total_seconds() > _RUNNERS_STALE_SECONDS
+    return {
+        "profiles": out,
+        "default": default,
+        "stale": stale,
+        "reported_at": newest.isoformat() if newest else None,
+    }
+
+
 _LIVE_RUNS_STALE_SECONDS = 300  # matches presence.py's own DEFAULT_STALE_AFTER_S
 
 
@@ -793,6 +860,30 @@ def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSON
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "runner_quotas": _quota_views(db, repos, runner_stats),
+        }
+    )
+
+
+@router.get("/v1/dashboard/runners")
+def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    """JSON twin for the spool-rack panel (#328): every Shell+Core profile
+    the account's daemons can actually wake — locally discovered, cheapest
+    first — plus the current default pin. Read-only by design: the change
+    path is conversational (config-change request → approve page), not a
+    selector on this payload.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    repos = _repos(db, account.id)
+    views = _runners_views(db, repos)
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            **views,
         }
     )
 
