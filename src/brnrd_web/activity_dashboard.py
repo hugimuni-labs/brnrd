@@ -20,6 +20,7 @@ from .routes import (
     _age_label,
     _dt,
     _github_auto_sync_if_needed,
+    _github_oauth_ready,
     _github_sync_configured,
     _installations,
     _installed_repos,
@@ -658,6 +659,119 @@ def _activity_dashboard_context(request: Request, db: Session, account: Account,
     }
 
 
+def _iso(value: datetime | None) -> str | None:
+    value = _dt(value)
+    return value.isoformat() if value else None
+
+
+def _repo_view_out(row: dict[str, Any], *, github_bot_user_login: str) -> dict[str, Any]:
+    repo: Repo = row["repo"]
+    return {
+        "id": repo.id,
+        "repo_full_name": repo.repo_full_name,
+        "forge": repo.forge,
+        "forge_repo_id": repo.forge_repo_id,
+        "repo_owner": repo.repo_owner,
+        "repo_name": repo.repo_name,
+        "default_branch": repo.default_branch,
+        "created_at": _iso(repo.created_at),
+        "updated_at": _iso(repo.updated_at),
+        "created_label": _age_label(repo.created_at),
+        "updated_label": _age_label(repo.updated_at),
+        "daemon_count": row["daemon_count"],
+        "daemon_status": row["daemon_status"],
+        "daemon_label": row["daemon_label"],
+        "daemon_last_seen": row["daemon_last_seen"],
+        "daemon_last_seen_at": _iso(row.get("daemon_last_seen_at")),
+        "latest_daemon_name": row["latest_daemon_name"],
+        "setup_command": row["setup_command"],
+        "telegram_pair_enabled": True,
+        "bot_invite_enabled": repo.forge == "github" and bool(github_bot_user_login),
+    }
+
+
+def _installation_out(row: Any) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "installation_id": row.installation_id,
+        "target_login": row.target_login,
+        "target_type": row.target_type,
+        "created_at": _iso(row.created_at),
+        "last_synced_at": _iso(row.last_synced_at),
+        "last_synced_label": _age_label(row.last_synced_at),
+    }
+
+
+def _installed_repo_out(row: GitHubInstalledRepo, *, connected_names: set[str]) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "github_installation_id": row.github_installation_id,
+        "repo_full_name": row.repo_full_name,
+        "forge_repo_id": row.forge_repo_id,
+        "is_private": row.is_private,
+        "default_branch": row.default_branch,
+        "github_pushed_at": _iso(row.github_pushed_at),
+        "github_updated_at": _iso(row.github_updated_at),
+        "last_seen_at": _iso(row.last_seen_at),
+        "pushed_label": _age_label(row.github_pushed_at),
+        "updated_label": _age_label(row.github_updated_at),
+        "last_seen_label": _age_label(row.last_seen_at),
+        "connected": row.repo_full_name.casefold() in connected_names,
+    }
+
+
+@router.get("/v1/dashboard/repos")
+def dashboard_repos_api(
+    request: Request,
+    installation_id: str | None = None,
+    notice: str | None = None,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Account-scoped repo-management JSON twin for the SvelteKit `/repos`
+    route (#327 Jinja-removal). Same session-cookie auth as the other
+    dashboard JSON endpoints; unauthenticated fetches get a JSON 401, not a
+    login redirect.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    account = db.get(Account, account_id)
+    if account is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    notice = notice or _github_auto_sync_if_needed(request, db, account.id)
+    settings = request.app.state.settings
+    repos = _repos(db, account.id)
+    repo_views = _repo_views(db, repos)
+    installed = _installed_repos(db, account.id)
+    installations = _installations(db, account.id)
+    connected_names = {repo.repo_full_name.casefold() for repo in repos}
+    github_bot_user_login = settings.github_bot_user_login.strip().lstrip("@")
+    return JSONResponse(
+        {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "account": {"id": account.id, "github_login": account.github_login},
+            "connected_repos": [
+                _repo_view_out(row, github_bot_user_login=github_bot_user_login)
+                for row in repo_views
+            ],
+            "connected_count": len(repos),
+            "installations": [_installation_out(row) for row in installations],
+            "installed_repos": [
+                _installed_repo_out(row, connected_names=connected_names)
+                for row in installed
+            ],
+            "github_sync_configured": _github_sync_configured(request),
+            "oauth_ready": _github_oauth_ready(request),
+            "install_url": settings.github_install_url,
+            "github_app_slug": settings.github_app_slug,
+            "github_bot_login": settings.github_bot_login.strip().lstrip("@"),
+            "github_bot_user_login": github_bot_user_login,
+            "notice": _notice_text(notice),
+            "setup_installation_id": installation_id or "",
+        }
+    )
+
+
 @router.get("/v1/dashboard/quota")
 def dashboard_quota_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     """JSON twin of ``runner_quotas`` for the SvelteKit frontend (slice 2:
@@ -926,31 +1040,14 @@ def dashboard(request: Request, installation_id: str | None = None, notice: str 
     return _render(request, "dashboard.html", _activity_dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
 
 
-@router.get("/repos", response_class=HTMLResponse)
-def repos_page(request: Request, installation_id: str | None = None, notice: str | None = None, db: Session = Depends(get_db)):
-    """Repo connect/enable/pairing UI, reachable on its own path.
-
-    Live 2026-07-09: the SvelteKit build (``src/frontend``) took over "/"
-    in production (``.upsun/config.yaml``, 2026-07-06 cutover) and never
-    grew a repo-management surface of its own — this Jinja page's "Daemon
-    pairing" section (enable a repo, pair Telegram, invite the bot,
-    disconnect) is the *only* place that flow lives, and it went
-    unreachable the moment "/" stopped routing here. ``/repos`` was
-    already in the Upsun passthru allowlist (comment: "brnrd_web's
-    remaining HTML routes... repo connect flows"), just never had a GET
-    route behind it. This restores the existing flow at a stable path
-    instead of migrating it — same template, same context builder, same
-    forms — rather than leaving it stranded pending a real SvelteKit
-    rebuild of repo management.
+@router.get("/repos")
+def repos_redirect() -> RedirectResponse:
+    """#327 Jinja cut: the repo-management page now lives in the SvelteKit
+    `/repos` route and reads `GET /v1/dashboard/repos`. In production the
+    static SPA owns the path; this backend shim only catches bare-uvicorn
+    deployments and old passthru configs.
     """
-    account_id = _account_id(request, db)
-    if account_id is None:
-        return RedirectResponse(url="/login?next=/repos", status_code=303)
-    account = db.get(Account, account_id)
-    if account is None:
-        return RedirectResponse(url="/login?next=/repos", status_code=303)
-    notice = notice or _github_auto_sync_if_needed(request, db, account.id)
-    return _render(request, "dashboard.html", _activity_dashboard_context(request, db, account, notice=notice, installation_id=installation_id))
+    return RedirectResponse(url="/", status_code=308)
 
 
 @router.get("/activity")

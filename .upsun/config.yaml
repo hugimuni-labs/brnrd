@@ -50,8 +50,8 @@ applications:
           passthru: "/index.html"
           scripts: false
           rules:
-            # brnrd_web's remaining HTML routes (login/oauth, repo
-            # connect flows) plus every JSON/API/webhook surface
+            # brnrd_web's remaining HTML routes (login/oauth and approval
+            # flows) plus every JSON/API/webhook surface
             # (src/brnrd/routers/*) and the legacy dashboard's own static
             # assets. Keep this list in sync with src/brnrd/app.py's
             # include_router calls and src/brnrd_web/routes.py/
@@ -60,7 +60,7 @@ applications:
             # deliberately absent: SPA-owned now (#327). /plans stays
             # passthru'd so old bookmarks hit the backend's 308 → "/"
             # (#326) instead of the SPA's 404.
-            '^/(v1|api|r|login|logout|auth|connect|repos|plans|static|terms/accept|config-approve)(/|$)':
+            '^/(v1|api|r|login|logout|auth|connect|plans|static|terms/accept|config-approve)(/|$)':
               passthru: true
 
     variables:
