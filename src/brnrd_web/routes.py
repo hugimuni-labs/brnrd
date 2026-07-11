@@ -6,6 +6,7 @@ import hashlib
 import hmac
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
@@ -227,6 +228,7 @@ def _repo_views(db: Session, repos: list[Repo]) -> list[dict]:
                 "daemon_status": daemon_status,
                 "daemon_label": daemon_label,
                 "daemon_last_seen": _age_label(latest.last_seen_at if latest else None),
+                "daemon_last_seen_at": _dt(latest.last_seen_at if latest else None),
                 "latest_daemon_name": latest.daemon_name if latest else "",
                 "setup_command": f"cd {repo.repo_name}\nbrnrd connect https://brnrd.dev\nbrnrd up",
                 "sort_time": last_activity or datetime.min.replace(tzinfo=timezone.utc),
@@ -313,14 +315,50 @@ def _notice_text(value: str | None) -> str | None:
     }.get(value or "", value)
 
 
-@router.post("/repos", response_class=HTMLResponse)
-def connect_repo_submit(request: Request, repo_full_name: str = Form(...), forge_repo_id: str = Form(""), default_branch: str = Form(""), db: Session = Depends(get_db)):
+def _json_account(request: Request, db: Session) -> Account:
     account_id = _account_id(request, db)
     if account_id is None:
-        return RedirectResponse(url="/login?next=/", status_code=303)
+        raise HTTPException(status_code=401, detail="unauthenticated")
     account = db.get(Account, account_id)
     if account is None:
-        return RedirectResponse(url="/login?next=/", status_code=303)
+        raise HTTPException(status_code=401, detail="unauthenticated")
+    return account
+
+
+async def _json_body(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payload_str(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    return value.strip() if isinstance(value, str) else str(value or "").strip()
+
+
+def _repo_action_response(notice: str, *, ok: bool = True, status_code: int = 200, **extra: Any) -> JSONResponse:
+    body = {"ok": ok, "notice": _notice_text(notice) or notice}
+    body.update(extra)
+    return JSONResponse(body, status_code=status_code)
+
+
+def _repo_error_response(exc: HTTPException) -> JSONResponse:
+    detail = str(exc.detail or "request failed")
+    return _repo_action_response(detail, ok=False, status_code=exc.status_code)
+
+
+def _connect_repo_core(
+    request: Request,
+    db: Session,
+    account: Account,
+    *,
+    repo_full_name: str,
+    forge_repo_id: str = "",
+    default_branch: str = "",
+) -> str:
+    repo_full_name = repo_full_name.strip()
     owner, name = _repo_parts(repo_full_name)
     repo = db.execute(select(Repo).where(Repo.account_id == account.id, Repo.repo_full_name == repo_full_name)).scalar_one_or_none()
     created = repo is None
@@ -332,38 +370,22 @@ def connect_repo_submit(request: Request, repo_full_name: str = Form(...), forge
     repo.updated_at = datetime.now(timezone.utc)
     db.commit()
     notice = _ensure_bot_collaborator(request, db, account.id, repo) if created else "repo-connected"
-    return RedirectResponse(url=f"/?notice={notice}", status_code=303)
+    return notice
 
 
-@router.post("/repos/{repo_id}/invite-bot", response_class=HTMLResponse)
-def invite_repo_bot(repo_id: str, request: Request, db: Session = Depends(get_db)):
-    account_id = _account_id(request, db)
-    if account_id is None:
-        return RedirectResponse(url="/login?next=/", status_code=303)
+def _invite_repo_bot_core(request: Request, db: Session, account_id: str, repo_id: str) -> str:
     repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
     notice = _ensure_bot_collaborator(request, db, account_id, repo).replace("repo-connected-bot", "repo-bot")
-    return RedirectResponse(url=f"/?notice={notice}", status_code=303)
+    return notice
 
 
-@router.post("/repos/{repo_id}/telegram-pair", response_class=HTMLResponse)
-def pair_repo_telegram(repo_id: str, request: Request, db: Session = Depends(get_db)):
-    account_id = _account_id(request, db)
-    if account_id is None:
-        return RedirectResponse(url="/login?next=/", status_code=303)
-    try:
-        pair = telegram_pair_core(db, request.app.state.settings, account_id, repo_id)
-    except HTTPException as exc:
-        return _render(request, "message.html", {"title": "Telegram pair failed", "eyebrow": "Telegram pairing", "heading": "Could not create pair link", "message": str(exc.detail), "severity": "error"}, status_code=exc.status_code)
-    return _render(request, "message.html", {"title": "Pair Telegram", "eyebrow": "Telegram pairing", "heading": "Pair this Telegram chat", "message": pair.instructions, "action_url": pair.deep_link, "action_label": "Open Telegram and press Start" if pair.deep_link else None, "severity": "success"})
+def _pair_repo_telegram_core(request: Request, db: Session, account_id: str, repo_id: str):
+    return telegram_pair_core(db, request.app.state.settings, account_id, repo_id)
 
 
-@router.post("/repos/{repo_id}/disconnect", response_class=HTMLResponse)
-def disconnect_repo(repo_id: str, request: Request, db: Session = Depends(get_db)):
-    account_id = _account_id(request, db)
-    if account_id is None:
-        return RedirectResponse(url="/login?next=/", status_code=303)
+def _disconnect_repo_core(db: Session, account_id: str, repo_id: str) -> str:
     repo = db.execute(select(Repo).where(Repo.id == repo_id, Repo.account_id == account_id)).scalar_one_or_none()
     if repo is None:
         raise HTTPException(status_code=404, detail="repo not found")
@@ -371,7 +393,60 @@ def disconnect_repo(repo_id: str, request: Request, db: Session = Depends(get_db
         db.execute(delete(model).where(model.repo_id == repo.id))
     db.delete(repo)
     db.commit()
-    return RedirectResponse(url="/?notice=repo-disconnected", status_code=303)
+    return "repo-disconnected"
+
+
+@router.post("/v1/repos/connect")
+async def connect_repo_api(request: Request, db: Session = Depends(get_db)):
+    account = _json_account(request, db)
+    payload = await _json_body(request)
+    try:
+        notice = _connect_repo_core(
+            request,
+            db,
+            account,
+            repo_full_name=_payload_str(payload, "repo_full_name"),
+            forge_repo_id=_payload_str(payload, "forge_repo_id"),
+            default_branch=_payload_str(payload, "default_branch"),
+        )
+    except HTTPException as exc:
+        return _repo_error_response(exc)
+    return _repo_action_response(notice)
+
+
+@router.post("/v1/repos/{repo_id}/invite-bot")
+def invite_repo_bot_api(repo_id: str, request: Request, db: Session = Depends(get_db)):
+    account = _json_account(request, db)
+    try:
+        notice = _invite_repo_bot_core(request, db, account.id, repo_id)
+    except HTTPException as exc:
+        return _repo_error_response(exc)
+    return _repo_action_response(notice)
+
+
+@router.post("/v1/repos/{repo_id}/telegram-pair")
+def pair_repo_telegram_api(repo_id: str, request: Request, db: Session = Depends(get_db)):
+    account = _json_account(request, db)
+    try:
+        pair = _pair_repo_telegram_core(request, db, account.id, repo_id)
+    except HTTPException as exc:
+        return _repo_error_response(exc)
+    return _repo_action_response(
+        "Pair this Telegram chat",
+        pairing_code=pair.pair_code,
+        instructions=pair.instructions,
+        action_url=pair.deep_link,
+    )
+
+
+@router.post("/v1/repos/{repo_id}/disconnect")
+def disconnect_repo_api(repo_id: str, request: Request, db: Session = Depends(get_db)):
+    account = _json_account(request, db)
+    try:
+        notice = _disconnect_repo_core(db, account.id, repo_id)
+    except HTTPException as exc:
+        return _repo_error_response(exc)
+    return _repo_action_response(notice)
 
 
 @router.get("/login", response_class=HTMLResponse)
