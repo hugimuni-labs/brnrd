@@ -278,6 +278,7 @@ def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
     _publish_activity(brr_dir, inbox_dir, state)
     _publish_plans(brr_dir, state)
     _publish_quota(brr_dir, state)
+    _publish_runners(brr_dir, state)
     _publish_live_runs(brr_dir, state)
     _publish_pr_review_queue(brr_dir, state)
     _publish_run_ledger(brr_dir, state)
@@ -762,6 +763,51 @@ def _publish_quota(brr_dir: Path, state: dict) -> None:
         )
     except Exception as e:
         print(f"[brr:cloud] quota publish failed: {e}")
+
+
+def _runners_snapshot(brr_dir: Path) -> dict[str, Any]:
+    """This daemon's runner catalog: locally-discovered Shell+Core profiles.
+
+    #328's spool rack, daemon-owned discovery: the same PATH-filtered,
+    probe-augmented projection the Run Context Bundle's "Runner catalog"
+    block injects into every wake (`runner.available_runner_catalog` —
+    Core registry + `runner_cores.probe_shell_models`, no network).
+    ``default`` is the profile `resolve_runner` resolves for a plain wake
+    right now — the ``shell=``/``core=`` config pin, or the cost-aware
+    selection when unpinned. Publishing the *discovered* view (not the
+    packaged registry alone) is deliberate: installed shells update on
+    their own clock, and a hardcoded menu rots silently (#343).
+    """
+    from .. import runner
+
+    repo_root = brr_dir.parent
+    default: str | None
+    try:
+        default = runner.resolve_runner(repo_root)
+    except Exception:
+        default = None
+    try:
+        profiles = runner.available_runner_catalog(repo_root, selected=default)
+    except Exception as e:
+        print(f"[brr:cloud] runner catalog read failed: {e}")
+        profiles = []
+    return {"profiles": profiles, "default": default}
+
+
+def _publish_runners(brr_dir: Path, state: dict) -> None:
+    if not (state.get("token") and state.get("brnrd_url")):
+        return
+    try:
+        _request(
+            state["brnrd_url"],
+            "PUT",
+            "/v1/daemons/runners",
+            token=state["token"],
+            json=_runners_snapshot(brr_dir),
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[brr:cloud] runners publish failed: {e}")
 
 
 def _live_run_progress(brr_dir: Path, stream: str, run_id: str) -> run_progress.RunProgressView | None:

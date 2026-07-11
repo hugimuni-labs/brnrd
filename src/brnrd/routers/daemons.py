@@ -212,6 +212,32 @@ def put_quota(payload: schemas.QuotaReport, principal: Principal = Depends(requi
     return schemas.QuotaOut(shells=payload.shells, quota_updated_at=now)
 
 
+@router.put("/runners", response_model=schemas.RunnersOut)
+def put_runners(payload: schemas.RunnersReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
+    """Replace this daemon's runner-catalog snapshot (#328 spool rack).
+
+    Same last-write-wins mirror shape as `put_quota` above: the daemon owns
+    the discovery (`src/brr/gates/cloud.py::_runners_snapshot` reads the
+    locally-probed catalog), this endpoint just stores the latest projection
+    so the dashboard can render which bodies the account's daemons can
+    actually wake, and which one the config currently pins.
+    """
+    daemon = _current_daemon(db, principal)
+    if daemon is None:
+        raise HTTPException(status_code=404, detail="no daemon registered for this token")
+    now = datetime.now(timezone.utc)
+    daemon.runners_json = json.dumps(
+        [profile.model_dump(by_alias=True, exclude_none=True) for profile in payload.profiles],
+        separators=(",", ":"),
+    )
+    daemon.runners_default = payload.default
+    daemon.runners_updated_at = now
+    daemon.online = True
+    daemon.last_seen_at = now
+    db.commit()
+    return schemas.RunnersOut(profiles=payload.profiles, default=payload.default, runners_updated_at=now)
+
+
 @router.put("/live-runs", response_model=schemas.LiveRunsOut)
 def put_live_runs(payload: schemas.LiveRunsReport, principal: Principal = Depends(require_daemon), db: Session = Depends(get_db)):
     """Replace this daemon's live/coexisting-runs snapshot (#258).

@@ -122,6 +122,10 @@ def _migrate_daemons(conn: Connection) -> None:
     # Configured spawn: pool width, piggybacked on live-runs publish (loom
     # envelope Phase 1) — see models.Daemon.spawn_max_concurrent.
     conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS spawn_max_concurrent INTEGER"))
+    # Runner-catalog snapshot mirror (#328 spool rack) — see models.Daemon.runners_json.
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_json TEXT DEFAULT '[]'"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_default VARCHAR(64)"))
+    conn.execute(text("ALTER TABLE daemons ADD COLUMN IF NOT EXISTS runners_updated_at TIMESTAMP"))
 
 
 def _tighten_required_account_columns(conn: Connection) -> None:

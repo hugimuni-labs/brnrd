@@ -102,6 +102,13 @@ class Daemon(Base):
     # `.brr/run-ledger.jsonl` rows via `PUT /v1/daemons/run-ledger`.
     run_ledger_json: Mapped[str] = mapped_column(Text, default="[]")
     run_ledger_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Runner-catalog snapshot (#328 spool rack): the locally-discovered
+    # Shell+Core profiles this daemon can dispatch, plus its current default
+    # pin, mirrored via `PUT /v1/daemons/runners`. Discovery is daemon-owned
+    # and network-free (`src/brr/runner.py::available_runner_catalog`).
+    runners_json: Mapped[str] = mapped_column(Text, default="[]")
+    runners_default: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    runners_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class ActivityRecord(Base):

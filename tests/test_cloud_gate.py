@@ -792,11 +792,11 @@ def test_loop_publishes_run_ledger_snapshot(tmp_path, monkeypatch):
     assert rows[0]["tokens_input"] is None
 
 
-def test_dashboard_publish_tick_publishes_all_six_snapshots(tmp_path, monkeypatch):
+def test_dashboard_publish_tick_publishes_all_seven_snapshots(tmp_path, monkeypatch):
     """kb/plan-loom-realtime-build.md slice 0: dashboard snapshots must not
     wait on the inbox long-poll (`_POLL_WAIT_S = 25`) to publish — a single
     ``_dashboard_publish_tick`` call (what the background loop calls every
-    ``_DASHBOARD_PUBLISH_INTERVAL_S``) has to move all six, the same set
+    ``_DASHBOARD_PUBLISH_INTERVAL_S``) has to move all seven, the same set
     ``_loop_once`` publishes, without needing an inbox event at all."""
     from brnrd.models import Daemon as DaemonModel
 
@@ -825,9 +825,40 @@ def test_dashboard_publish_tick_publishes_all_six_snapshots(tmp_path, monkeypatc
     with client.app.state.SessionLocal() as db:
         daemon = db.query(DaemonModel).filter(DaemonModel.repo_id == pid).one()
         assert daemon.quota_updated_at is not None
+        assert daemon.runners_updated_at is not None
         assert daemon.live_runs_updated_at is not None
         assert daemon.pr_review_queue_updated_at is not None
         assert daemon.run_ledger_updated_at is not None
+
+
+def test_runners_snapshot_reads_local_catalog(tmp_path, monkeypatch):
+    """#328 spool rack: the collector publishes the *discovered* catalog
+    (`runner.available_runner_catalog`) plus the resolved default pin, and
+    degrades to an empty rack — never a raise — when resolution fails (a
+    daemon whose config pins a profile that isn't installed must still
+    publish everything else)."""
+    from brr import runner as runner_mod
+
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    catalog = [
+        {"name": "claude-fable", "shell": "claude", "model": "claude-fable-5", "class": "economy", "cost_rank": 15, "selected": True},
+        {"name": "codex", "shell": "codex", "class": "balanced", "cost_rank": 25},
+    ]
+    monkeypatch.setattr(runner_mod, "resolve_runner", lambda root, overrides=None: "claude-fable")
+    monkeypatch.setattr(
+        runner_mod, "available_runner_catalog", lambda root, selected=None: catalog
+    )
+    snapshot = cloud._runners_snapshot(brr_dir)
+    assert snapshot == {"profiles": catalog, "default": "claude-fable"}
+
+    def _boom(root, overrides=None):
+        raise RuntimeError("no profile")
+
+    monkeypatch.setattr(runner_mod, "resolve_runner", _boom)
+    snapshot = cloud._runners_snapshot(brr_dir)
+    assert snapshot["default"] is None
+    assert snapshot["profiles"] == catalog
 
 
 def test_dashboard_publish_tick_noop_without_configured_state(tmp_path):
