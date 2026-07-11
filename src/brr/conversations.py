@@ -47,7 +47,7 @@ import os
 import re
 import shutil
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, TypedDict
 
@@ -756,6 +756,31 @@ def _without_current_records(
     return out
 
 
+# How far back (relative to the thread's newest dialogue turn) the
+# unanswered-event boost in _select_snapshot_turns reaches. Answered-ness
+# is bookkeeping, not truth: a reply folded into a sibling event's answer,
+# an image-only message, or a pre-artifact-tagging delivery leaves the
+# event "unanswered" forever. Without a horizon those fossils get boosted
+# into *every* future wake's snapshot on a busy thread (observed live
+# 2026-07-11: month-old turns permanently occupying half the recent-turns
+# budget). A genuinely pending week-old ask belongs in the inbox/plan, not
+# in a recency snapshot.
+_UNANSWERED_BOOST_HORIZON = timedelta(days=7)
+
+
+def _parse_record_ts(value: Any) -> datetime | None:
+    """Parse a record ``ts`` into an aware datetime, or ``None``."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def _select_snapshot_turns(
     records: list[dict[str, Any]],
     *,
@@ -769,9 +794,12 @@ def _select_snapshot_turns(
     thread, a handful of stray old unanswered events (an image-only
     message, a reply folded into a sibling event's answer, ...) must never
     be able to outrank *every* recent turn and blank out what just
-    happened — recency always keeps at least half the slots. The selected
-    rows are returned in chronological order so the prompt still reads
-    like a chat.
+    happened — recency always keeps at least half the slots. The boost is
+    also bounded by ``_UNANSWERED_BOOST_HORIZON``: an event that has sat
+    unanswered longer than that (relative to the newest dialogue turn) is
+    treated as answered-in-substance or abandoned, not re-pinned into
+    every wake forever. The selected rows are returned in chronological
+    order so the prompt still reads like a chat.
     """
     dialogue = [r for r in records if _is_dialogue_record(r)]
     total = len(dialogue)
@@ -788,13 +816,23 @@ def _select_snapshot_turns(
         )
     }
 
+    newest_ts = _parse_record_ts(dialogue[-1].get("ts"))
+    boost_cutoff = (
+        newest_ts - _UNANSWERED_BOOST_HORIZON if newest_ts is not None else None
+    )
+
     def _is_unanswered(index: int) -> bool:
         record = dialogue[index]
-        return bool(
+        if not (
             record.get("kind") == "event"
             and record.get("event_id")
             and str(record.get("event_id")) not in answered_event_ids
-        )
+        ):
+            return False
+        if boost_cutoff is None:
+            return True
+        record_ts = _parse_record_ts(record.get("ts"))
+        return record_ts is not None and record_ts >= boost_cutoff
 
     unanswered_count = sum(1 for i in range(total) if _is_unanswered(i))
     unanswered_budget = min(limit // 2, unanswered_count)
