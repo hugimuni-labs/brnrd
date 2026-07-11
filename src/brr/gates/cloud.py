@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import requests
 
-from .. import claude_status, claude_usage, codex_status, gitops, presence, protocol, run_ledger, run_progress, runner_quota
+from .. import claude_status, claude_usage, codex_status, codex_usage, gitops, presence, protocol, run_ledger, run_progress, runner_quota
 from .. import dominion, schedule as schedule_mod, wake_request
 from ..gates.github.parse import parse_origin_url
 from ..run import Run, list_runs, run_manifest_path
@@ -25,6 +25,10 @@ _DEFAULT_DAEMON_NAME = "daemon"
 _RESPONSE_LIMITS = {"telegram": 3900}
 _SESSION = requests.Session()
 _CLAUDE_QUOTA_PUBLISH_MAX_AGE_SECONDS = 240.0
+# Codex's probe is a ~1.5s process spawn against an account-metadata endpoint
+# (no model tokens), so it can refresh well inside the dashboard's 300s
+# staleness threshold without costing anything but wall-clock.
+_CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS = 120.0
 # Dashboard snapshots (activity/plans/quota/live-runs/PR-review-queue/run-ledger) used
 # to publish once per `_loop_once` iteration, which is paced by the inbox
 # long-poll above (`_POLL_WAIT_S = 25`) — a constant chosen for chat
@@ -611,8 +615,26 @@ def _quota_window(
     }
 
 
-def _codex_quota_shell() -> dict[str, Any] | None:
-    levels = codex_status.load_levels()
+def _codex_quota_shell(brr_dir: Path) -> dict[str, Any] | None:
+    """Codex's quota row: the app-server probe, backstopped by the rollout read.
+
+    The rollout read alone *does* have an idle-window gap — the comment here
+    used to deny it ("live every loop tick, no idle-window gap the way Claude's
+    cached PTY scrape has"), and that was simply wrong: nothing writes a
+    ``token_count`` event between runs, so an idle Codex froze this row until the
+    dashboard aged it out to ``stale`` (#312 made that honest, #315 asked for it
+    to stop happening). The active ``codex app-server`` probe closes it — an
+    account-metadata call that needs no run and spends no quota — on the same
+    bounded idle cadence the Claude row already refreshes on.
+    """
+    levels = codex_usage.merge_levels(
+        codex_usage.load_or_refresh_snapshot(
+            brr_dir,
+            max_age_seconds=_CODEX_QUOTA_PUBLISH_MAX_AGE_SECONDS,
+            timeout_seconds=10.0,
+        ),
+        codex_status.load_levels(),
+    )
     quota = levels.get("quota") if isinstance(levels, dict) else None
     if not isinstance(quota, dict):
         return None
@@ -623,15 +645,19 @@ def _codex_quota_shell() -> dict[str, Any] | None:
     return {
         "shell": "codex",
         "status": "known",
-        # Codex's rollout read is live every loop tick (no idle-window gap
-        # the way Claude's cached PTY scrape has), but the scrape still
-        # carries its own timestamp — forward it so the dashboard measures
-        # staleness off the same clock for both shells.
+        # The reading's own capture time, not "now" — whichever seam supplied the
+        # quota stamped it (`merge_levels` carries that stamp through), so the
+        # dashboard measures staleness off the same clock for both shells and a
+        # failed probe can never make a frozen rollout look live.
         "updated_at": levels.get("updated_at"),
         "windows": [
             _quota_window("5h window", primary, resets_at=quota.get("primary_resets_at")),
             _quota_window("weekly", secondary, resets_at=quota.get("secondary_resets_at")),
         ],
+        # Free "Full reset (Weekly + 5 hr)" grants sitting unredeemed on the
+        # account — only the app-server seam knows about these, and a quota row
+        # that reads 4% left while four resets go unused is telling half a truth.
+        "reset_credits": quota.get("reset_credits_available"),
     }
 
 
@@ -750,7 +776,7 @@ def _quota_snapshot(brr_dir: Path) -> list[dict[str, Any]]:
     than the dashboard's stale threshold, not on every publish tick. A shell
     with no evidence yet is omitted, not reported as a fake zero.
     """
-    shells = [_claude_quota_shell(brr_dir), _codex_quota_shell()]
+    shells = [_claude_quota_shell(brr_dir), _codex_quota_shell(brr_dir)]
     return [shell for shell in shells if shell is not None]
 
 
