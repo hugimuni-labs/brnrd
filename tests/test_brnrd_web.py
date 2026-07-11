@@ -106,22 +106,18 @@ def test_login_page_uses_github_only(client):
 
 
 def test_login_page_does_not_load_the_legacy_dashboard_stylesheet(client):
-    """Live-caught 2026-07-09 (screenshot from the user): /login and /terms
-    still rendered a green GitHub-identity card and button against the
-    amber brand palette PR #301 (2026-07-08) shipped in app.css. Root cause
-    was not a caching regression (the cache-busting fix above already
-    covers that) but a cascade bug: base.html loaded dashboard.css
+    """Live-caught 2026-07-09 (screenshot from the user): /login and the
+    then-Jinja /terms page rendered a green GitHub-identity card and button
+    against the amber brand palette PR #301 (2026-07-08) shipped in app.css.
+    Root cause was not a caching regression (the cache-busting fix above
+    already covers that) but a cascade bug: base.html loaded dashboard.css
     unconditionally on every page, and dashboard.css — the legacy mint/teal
-    control-deck sheet for the plans/activity dashboards — defines
-    unscoped `.eyebrow`/`.button`/`.button-primary` rules that, loaded
-    after app.css with identical specificity, always won the cascade and
-    clobbered the amber values on every non-dashboard page. Fixed by only
-    linking dashboard.css when body_class is 'dashboard-page'."""
+    control-deck sheet for the plans/activity dashboards — defines unscoped
+    `.eyebrow`/`.button`/`.button-primary` rules that, loaded after app.css
+    with identical specificity, always won the cascade and clobbered the
+    amber values on every non-dashboard page. Fixed by only linking
+    dashboard.css when body_class is 'dashboard-page'."""
     r = client.get("/login")
-    assert r.status_code == 200
-    assert "dashboard.css" not in r.text
-
-    r = client.get("/terms")
     assert r.status_code == 200
     assert "dashboard.css" not in r.text
 
@@ -175,13 +171,27 @@ def test_github_login_redirect_uses_state_and_pkce(client):
     assert query["code_challenge"][0]
 
 
-def test_terms_page_serves_hosted_execution_disclaimer(client):
-    r = client.get("/terms")
+def test_terms_status_is_public_for_anonymous_users(client):
+    r = client.get("/v1/dashboard/terms-status")
     assert r.status_code == 200
-    assert "brnrd hosted-execution beta disclaimer" in r.text
-    assert "HugiMuni SAS" in r.text
-    assert "yolo-exec" in r.text
-    assert "French law or European Union consumer" in r.text
+    assert r.json() == {
+        "authenticated": False,
+        "needs_accept": False,
+        "terms_version": "2026-07-08",
+        "accepted_at": None,
+    }
+
+
+def test_terms_status_reports_authenticated_acceptance_state(client, monkeypatch):
+    _login_web(client, monkeypatch, next="/connect/BR-123")
+    r = client.get("/v1/dashboard/terms-status")
+    assert r.status_code == 200
+    assert r.json() == {
+        "authenticated": True,
+        "needs_accept": True,
+        "terms_version": "2026-07-08",
+        "accepted_at": None,
+    }
 
 
 def test_github_callback_requires_terms_acceptance_without_seed_repo(
@@ -189,7 +199,7 @@ def test_github_callback_requires_terms_acceptance_without_seed_repo(
 ):
     _, callback, seen = _login_web(client, monkeypatch, next="/connect/BR-123")
     assert callback.status_code == 303
-    assert callback.headers["location"] == "/terms/accept?next=/connect/BR-123"
+    assert callback.headers["location"] == "/terms?next=/connect/BR-123"
     assert "brnrd_session" in callback.cookies or "brnrd_session" in client.cookies
     assert seen["code"] == "ok"
     assert seen["redirect_uri"] == "https://brnrd.example/auth/github/callback"
@@ -209,15 +219,24 @@ def test_github_callback_requires_terms_acceptance_without_seed_repo(
         assert repos == []
 
 
+def test_terms_acceptance_requires_session(client):
+    r = client.post("/v1/terms/accept", json={"accept_terms": "yes"})
+    assert r.status_code == 401
+    assert r.json() == {"detail": "unauthenticated"}
+
+
 def test_terms_acceptance_requires_checkbox(client, monkeypatch):
     _login_web(client, monkeypatch, next="/connect/BR-123")
     r = client.post(
-        "/terms/accept",
-        data={"next": "/connect/BR-123"},
+        "/v1/terms/accept",
+        json={},
         follow_redirects=False,
     )
     assert r.status_code == 400
-    assert "need to accept" in r.text
+    assert r.json() == {
+        "ok": False,
+        "notice": "You need to accept the beta hosted-execution terms before continuing.",
+    }
     with client.app.state.SessionLocal() as db:
         account = db.execute(
             select(Account).where(Account.github_id == _GITHUB_ID)
@@ -228,18 +247,29 @@ def test_terms_acceptance_requires_checkbox(client, monkeypatch):
 def test_terms_acceptance_records_account_and_redirects(client, monkeypatch):
     _login_web(client, monkeypatch, next="/connect/BR-123")
     r = client.post(
-        "/terms/accept",
-        data={"next": "/connect/BR-123", "accept_terms": "yes"},
+        "/v1/terms/accept",
+        json={"accept_terms": "yes"},
         follow_redirects=False,
     )
-    assert r.status_code == 303
-    assert r.headers["location"] == "/connect/BR-123"
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
     with client.app.state.SessionLocal() as db:
         account = db.execute(
             select(Account).where(Account.github_id == _GITHUB_ID)
         ).scalar_one()
         assert account.hosted_terms_accepted_at is not None
         assert account.hosted_terms_version == "2026-07-08"
+    status = client.get("/v1/dashboard/terms-status")
+    assert status.status_code == 200
+    assert status.json()["authenticated"] is True
+    assert status.json()["needs_accept"] is False
+    assert status.json()["accepted_at"] is not None
+
+
+def test_terms_acceptance_shim_redirects_to_spa(client):
+    r = client.get("/terms/accept?next=/connect/BR-123", follow_redirects=False)
+    assert r.status_code == 308
+    assert r.headers["location"] == "/terms?next=/connect/BR-123"
 
 
 def test_github_login_is_not_the_identity_key(client):
