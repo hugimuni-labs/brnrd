@@ -41,3 +41,25 @@ def _isolate_codex_home(tmp_path_factory, monkeypatch):
     codex_home = tmp_path_factory.mktemp("codex-home")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_codex_app_server_probe(monkeypatch):
+    """Never spawn ``codex app-server`` from the unit suite (#315).
+
+    ``codex_usage.probe_rate_limits`` shells out to a real Codex and makes a
+    real backend call — correct in production (it is how an idle Codex reports
+    quota at all), fatal in tests: it would make the suite depend on a
+    logged-in Codex, add a second of latency per collector call, and give
+    different answers on CI than on a maintainer's box. Patched to
+    "unavailable", which is also the honest default for a machine with no
+    Codex: collectors then degrade to the cached snapshot or the passive
+    rollout read. Tests that mean to exercise the probe patch it back.
+    """
+    from brr import codex_usage
+
+    real_probe = codex_usage.probe_rate_limits
+    monkeypatch.setattr(codex_usage, "probe_rate_limits", lambda **kwargs: None)
+    # Yielded so a test that *means* to exercise the real probe (its
+    # never-raises contract) can reach past the patch for it.
+    yield real_probe

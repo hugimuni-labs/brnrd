@@ -365,6 +365,11 @@ def test_loop_publishes_quota_snapshot(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     # Codex has no on-disk fixture here; stub its live rollout read instead.
+    # And pin the app-server probe to "unavailable" (#315) — a unit test must
+    # never spawn `codex app-server` or depend on a logged-in Codex, and this
+    # also exercises the degraded path: probe down ⇒ the passive rollout read
+    # still publishes, rather than the merge blanking the row.
+    monkeypatch.setattr(cloud.codex_usage, "probe_rate_limits", lambda **kw: None)
     monkeypatch.setattr(
         cloud.codex_status,
         "load_levels",
