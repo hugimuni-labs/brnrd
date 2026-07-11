@@ -182,7 +182,21 @@ _CONFIG_CHANGE_REPLY_RE = re.compile(
 # packages ship separately (local daemon vs. hosted server) so this can't
 # be a shared import; a mismatch just means one side rejects a proposal
 # the other would have allowed, never an unapproved config write.
-_CONFIG_CHANGE_ALLOWED_KEYS = {"spawn.max_concurrent"}
+_CONFIG_CHANGE_ALLOWED_KEYS = {
+    "spawn.max_concurrent",
+    # Wake-context budget knobs (2026-07-11 context-shape audit): the
+    # resident tuning the standing cost of its own injected blocks is
+    # exactly the resident-proposes / operator-approves shape this path
+    # exists for. Defaults live in prompts.py / dominion.py.
+    "dominion.inject_budget_bytes",
+    "dominion.plan_inject_budget_bytes",
+    "dominion.ledger_inject_budget_bytes",
+}
+
+# Every allowlisted key today is integer-valued; validate at proposal time
+# so an approval can never write a value that later crashes prompt
+# assembly (``int(cfg.get(...))`` at wake build).
+_CONFIG_CHANGE_INT_KEYS = set(_CONFIG_CHANGE_ALLOWED_KEYS)
 
 
 @dataclass(frozen=True)
@@ -1129,6 +1143,19 @@ def _queue_config_change_proposal(
         )
         protocol.write_partial(responses_dir, event_id, message)
         return True
+
+    if key in _CONFIG_CHANGE_INT_KEYS:
+        try:
+            parsed_value = int(requested_value)
+        except ValueError:
+            parsed_value = -1
+        if parsed_value <= 0:
+            message = (
+                f"Config-change proposal for `{key}` needs a positive "
+                f"integer value; got `{requested_value}`. No change requested."
+            )
+            protocol.write_partial(responses_dir, event_id, message)
+            return True
 
     current_cfg = conf.load_config(repo_root)
     current_value = current_cfg.get(key)
