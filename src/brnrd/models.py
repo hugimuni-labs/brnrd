@@ -259,3 +259,37 @@ class ConfigChangeRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class RunnerWakeRequest(Base):
+    """#328 spool-rack tap — "next wake on this Shell+Core, please".
+
+    The inversion of ``ConfigChangeRequest``: browser-initiated (the account
+    owner taps a rack row while logged in), daemon-consumed. Deliberately a
+    *one-shot* request — the next dispatched wake runs on the requested
+    profile and the request is spent; a durable default change stays on the
+    conversational config-change path. No approve step: the tapper is the
+    account owner approving their own ask, and a second confirm would be
+    ceremony (thread decision, 2026-07-11).
+
+    Delivery rides the existing catalog publish tick: the daemon's
+    ``PUT /v1/daemons/runners`` response carries the account's pending
+    request, and the daemon acks consumption in its next PUT payload — no
+    new polling loop, the same piggyback economics as the config-approval
+    flow riding the inbox long-poll. Cancelable (chip tap) until a wake
+    actually consumes it; cancellation propagates within one tick.
+    """
+
+    __tablename__ = "runner_wake_requests"
+    STATUS_PENDING = "pending"
+    STATUS_CONSUMED = "consumed"
+    STATUS_CANCELED = "canceled"
+    STATUS_EXPIRED = "expired"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    # Profile name as published in the rack (`RunnerProfileIn.name`).
+    profile: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default=STATUS_PENDING)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
