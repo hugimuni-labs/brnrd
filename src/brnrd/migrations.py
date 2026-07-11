@@ -90,6 +90,12 @@ def _migrate_accounts(conn: Connection) -> None:
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS decision_ledger_md TEXT DEFAULT ''"))
     conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plans_updated_at TIMESTAMP"))
 
+    # Billing (#53) — tier + Stripe customer link; new billing tables come
+    # from create_all.
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS tier VARCHAR(32) DEFAULT 'free'"))
+    conn.execute(text("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(64)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_stripe_customer_id ON accounts (stripe_customer_id)"))
+
     _tighten_required_account_columns(conn)
 
 
