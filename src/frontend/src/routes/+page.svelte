@@ -6,7 +6,9 @@
 	import PRReviewQueue from '$lib/PRReviewQueue.svelte';
 	import RunLedgerReceipt from '$lib/RunLedgerReceipt.svelte';
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
+	import SpoolRack from '$lib/SpoolRack.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
+	import { RunnersAuthError, fetchRunners, type RunnersResponse } from '$lib/runners';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
 	import {
 		PRReviewQueueAuthError,
@@ -41,6 +43,9 @@
 	let error = $state<string | null>(null);
 	let unauthenticated = $state(false);
 	let now = $state(Date.now());
+
+	let runnersData = $state<RunnersResponse | null>(null);
+	let runnersError = $state<string | null>(null);
 
 	let liveRuns = $state<LiveRun[] | null>(null);
 	let liveRunsStale = $state(false);
@@ -81,6 +86,16 @@
 				unauthenticated = true;
 			} else {
 				error = e instanceof Error ? e.message : 'quota fetch failed';
+			}
+		}
+		try {
+			const runners = await fetchRunners();
+			runnersData = runners;
+			runnersError = null;
+		} catch (e) {
+			// 401 already surfaced by the quota fetch's unauthenticated state.
+			if (!(e instanceof RunnersAuthError)) {
+				runnersError = e instanceof Error ? e.message : 'runners fetch failed';
 			}
 		}
 		try {
@@ -213,6 +228,27 @@
 					daemon report as of {new Date(generatedAt).toLocaleTimeString()}
 				</p>
 			{/if}
+		{/if}
+	</div>
+
+	<p class="eyebrow mt-8">§1a · spool rack</p>
+	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">runners</h2>
+	<p class="mt-1 text-sm text-stone-400">
+		The bodies available for the next wake — every Shell+Core profile your daemons discovered
+		locally, cheapest first. The marked spool is who answers unless you ask otherwise; changing it
+		is a conversation with the resident (a parked settings request below), not a switch.
+	</p>
+	<div class="mt-3">
+		{#if runnersError}
+			<p class="text-sm text-red-400">{runnersError}</p>
+		{:else if runnersData === null}
+			<p class="text-sm text-stone-500">Loading…</p>
+		{:else}
+			<SpoolRack
+				profiles={runnersData.profiles}
+				defaultProfile={runnersData.default}
+				stale={runnersData.stale}
+			/>
 		{/if}
 	</div>
 
