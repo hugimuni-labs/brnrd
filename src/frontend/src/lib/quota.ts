@@ -42,6 +42,11 @@ export interface QuotaShell {
 	/** Present only for shells with a proven per-run spend figure (Claude
 	 *  today; absent, not null, on shells/builds with no such collector). */
 	credits?: QuotaCredits | null;
+	/** Unredeemed free "Full reset (Weekly + 5 hr)" grants on the account —
+	 *  Codex only, and only since the app-server quota probe (#315) started
+	 *  reading them (the session-rollout seam never carried them). A window at
+	 *  4% left means something different when four resets sit unused. */
+	reset_credits?: number | null;
 }
 
 export interface QuotaResponse {
