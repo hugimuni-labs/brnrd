@@ -30,10 +30,22 @@ from ..models import ConfigChangeRequest
 router = APIRouter(prefix="/v1/daemons/config-requests", tags=["config-approval"])
 
 # Sub-decision 1 (kb/design-multi-workstream-concurrency.md §"Named forks —
-# round 2"): start narrow, one key, rather than "any `.brr/config` key" —
-# that's a materially bigger trust-boundary call than this fork settled.
-# Widen deliberately by editing this set, not by habit.
-ALLOWED_CONFIG_KEYS = {"spawn.max_concurrent"}
+# round 2"): start narrow, rather than "any `.brr/config` key" — that's a
+# materially bigger trust-boundary call than this fork settled. Widen
+# deliberately by editing this set, not by habit. Keep in lockstep with
+# ``src/brr/daemon.py::_CONFIG_CHANGE_ALLOWED_KEYS`` (the daemon-side twin;
+# enforced by ``tests/test_brnrd_config_approval.py``'s lockstep test — a
+# key present on one side only means every mint for it 422s here while the
+# daemon happily parks proposals that can never grow an approve link).
+ALLOWED_CONFIG_KEYS = {
+    "spawn.max_concurrent",
+    # Wake-context budget knobs (2026-07-11 audit, PR #349 — daemon half
+    # landed there; this server half was missed and caught by the first
+    # live dominion-key proposal minting a 422).
+    "dominion.inject_budget_bytes",
+    "dominion.plan_inject_budget_bytes",
+    "dominion.ledger_inject_budget_bytes",
+}
 
 # A week — long enough that an AFK-heavy account owner (the maintainer's
 # own stated working style, kb/log.md 2026-07-06) doesn't lose a real
