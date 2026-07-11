@@ -219,6 +219,46 @@ def test_probe_shell_models_parses_model_help(monkeypatch):
     assert runner_cores.probe_shell_models("codex") == ("gpt-5-codex", "gpt-5.4-mini")
 
 
+def test_probe_shell_models_reads_codex_models_cache(tmp_path, monkeypatch):
+    """$CODEX_HOME/models_cache.json is the primary codex discovery source."""
+    import json as _json
+
+    cache = {
+        "models": [
+            {"slug": "gpt-9.9-nova", "visibility": "list"},
+            {"slug": "codex-auto-review", "visibility": "hide"},
+            {"slug": "gpt-9.9-mini", "visibility": "list"},
+        ]
+    }
+    (tmp_path / "models_cache.json").write_text(_json.dumps(cache))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(runner_cores.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    class _Proc:
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(runner_cores.subprocess, "run", lambda *a, **k: _Proc())
+    runner_cores.probe_shell_models.cache_clear()
+
+    assert runner_cores.probe_shell_models("codex") == ("gpt-9.9-nova", "gpt-9.9-mini")
+
+
+def test_probe_shell_models_tolerates_malformed_models_cache(tmp_path, monkeypatch):
+    (tmp_path / "models_cache.json").write_text("{not json")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(runner_cores.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    class _Proc:
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(runner_cores.subprocess, "run", lambda *a, **k: _Proc())
+    runner_cores.probe_shell_models.cache_clear()
+
+    assert runner_cores.probe_shell_models("codex") == ()
+
+
 def test_generated_profile_entries_derive_class_when_missing(monkeypatch):
     monkeypatch.setattr(
         runner_cores,
