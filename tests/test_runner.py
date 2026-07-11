@@ -220,6 +220,56 @@ def test_resolve_runner_event_override_pins_shell(tmp_path, monkeypatch):
     assert resolve_runner(tmp_path, {"shell": "claude-opus"}) == "claude-opus"
 
 
+def _override_vs_config_pin_fixture(tmp_path, monkeypatch):
+    """Config file pins shell=claude-opus; overrides must outrank it."""
+    (tmp_path / ".brr").mkdir()
+    (tmp_path / ".brr" / "config").write_text(
+        "shell=claude-opus\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_profiles_cache",
+        {
+            "codex-mini": {
+                "binary": "codex",
+                "cmd": "codex exec --model gpt-5-mini",
+                "model": "gpt-5-mini",
+                "class": "economy",
+            },
+            "claude-opus": {
+                "binary": "claude",
+                "cmd": "claude --model opus --print",
+                "model": "opus",
+                "class": "strong",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        runner_mod.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in ("claude", "codex") else None,
+    )
+
+
+def test_resolve_runner_runner_override_beats_config_shell_pin(
+    tmp_path, monkeypatch
+):
+    """A consumed spool-rack tap (daemon sets overrides['runner']) must win
+    over the config-file shell= pin — found live 2026-07-11: a luna tap was
+    consumed and stamped, yet the wake dispatched on the config pin."""
+    _override_vs_config_pin_fixture(tmp_path, monkeypatch)
+    assert resolve_runner(tmp_path, {"runner": "codex-mini"}) == "codex-mini"
+
+
+def test_resolve_runner_core_override_beats_config_shell_pin(
+    tmp_path, monkeypatch
+):
+    """An event-level core: override (spawn/respawn routing, #357) must not
+    be silently shadowed by the config-file shell= pin."""
+    _override_vs_config_pin_fixture(tmp_path, monkeypatch)
+    assert resolve_runner(tmp_path, {"core": "gpt-5-mini"}) == "codex-mini"
+
+
 def test_resolve_runner_core_pin_filters_by_model(tmp_path, monkeypatch):
     """core= filters candidates to profiles with a matching model."""
     (tmp_path / ".brr").mkdir()
