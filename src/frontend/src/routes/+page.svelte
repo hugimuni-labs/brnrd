@@ -60,12 +60,30 @@
 
 	// #328 tap-to-request: optimistic-free — each action re-fetches the
 	// catalog so the chip always reflects the server's row, not a guess.
+	//
+	// Every tap means "next wake here". Tapping the default row while a
+	// request is parked restores the default (= cancels the request);
+	// re-tapping the requested row is a no-op with a receipt, never a
+	// silent toggle-off (which ate a live tap on 2026-07-11).
 	async function tapWakeRunner(profileName: string) {
+		const parked = runnersData?.wake_request ?? null;
+		if (parked && profileName === parked.profile) {
+			runnersNote = `${profileName} is already requested — tap the default row to cancel`;
+			return;
+		}
+		if (parked && profileName === runnersData?.default) {
+			await cancelWakeRunner(parked.request_id);
+			return;
+		}
+		if (!parked && profileName === runnersData?.default) {
+			runnersNote = `${profileName} is the standing default — the next wake runs there anyway`;
+			return;
+		}
 		try {
 			const wake = await requestWake(profileName);
 			if (runnersData) runnersData = { ...runnersData, wake_request: wake };
 			runnersError = null;
-			runnersNote = `next wake runs on ${profileName} — no approval needed; tap the row again to cancel`;
+			runnersNote = `next wake runs on ${profileName} — no approval needed; tap the default row to cancel`;
 		} catch (e) {
 			// An auth failure on a *tap* must be loud: the passive fetch may
 			// stay quiet for anonymous viewers, but here the user just acted
@@ -319,7 +337,6 @@
 				stale={runnersData.stale}
 				wakeRequest={runnersData.wake_request ?? null}
 				onTap={tapWakeRunner}
-				onCancel={cancelWakeRunner}
 			/>
 		{/if}
 	</div>
