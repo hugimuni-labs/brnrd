@@ -60,7 +60,7 @@ applications:
             # deliberately absent: SPA-owned now (#327). /plans stays
             # passthru'd so old bookmarks hit the backend's 308 → "/"
             # (#326) instead of the SPA's 404.
-            '^/(v1|api|r|login|logout|auth|connect|repos|plans|static|terms|config-approve)(/|$)':
+            '^/(v1|api|r|login|logout|auth|connect|repos|plans|static|terms/accept|config-approve)(/|$)':
               passthru: true
 
     variables:

@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -83,11 +83,23 @@ def _safe_next(value: str) -> str:
 
 
 def _terms_accept_url(next_url: str) -> str:
-    return f"/terms/accept?next={quote(_safe_next(next_url), safe='/')}"
+    return f"/terms?next={quote(_safe_next(next_url), safe='/')}"
 
 
 def _needs_hosted_terms(account: Account) -> bool:
     return account.hosted_terms_accepted_at is None or account.hosted_terms_version != _HOSTED_TERMS_VERSION
+
+
+def _terms_status(account: Account | None) -> dict:
+    accepted_at = account.hosted_terms_accepted_at if account is not None else None
+    if accepted_at is not None and accepted_at.tzinfo is None:
+        accepted_at = accepted_at.replace(tzinfo=timezone.utc)
+    return {
+        "authenticated": account is not None,
+        "needs_accept": _needs_hosted_terms(account) if account is not None else False,
+        "terms_version": _HOSTED_TERMS_VERSION,
+        "accepted_at": accepted_at.isoformat() if accepted_at is not None else None,
+    }
 
 
 def _oauth_redirect_uri(request: Request) -> str:
@@ -386,77 +398,41 @@ def logout(request: Request):
     return resp
 
 
-@router.get("/terms", response_class=HTMLResponse)
-def terms_page(request: Request):
-    return _render(
-        request,
-        "terms.html",
-        {
-            "body_class": "auth-page",
-            "title": "brnrd beta terms",
-            "accept_mode": False,
-            "terms_version": _HOSTED_TERMS_VERSION,
-        },
-    )
-
-
-@router.get("/terms/accept", response_class=HTMLResponse)
-def terms_accept_page(request: Request, next: str = "/", db: Session = Depends(get_db)):
-    safe_next = _safe_next(next)
+@router.get("/v1/dashboard/terms-status")
+def terms_status_api(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
     account_id = _account_id(request, db)
-    if account_id is None:
-        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
-    account = db.get(Account, account_id)
-    if account is None:
-        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
-    if not _needs_hosted_terms(account):
-        return RedirectResponse(url=safe_next, status_code=303)
-    return _render(
-        request,
-        "terms.html",
-        {
-            "body_class": "auth-page",
-            "title": "Accept brnrd beta terms",
-            "accept_mode": True,
-            "terms_version": _HOSTED_TERMS_VERSION,
-            "next": safe_next,
-            "error": None,
-        },
-    )
+    account = db.get(Account, account_id) if account_id is not None else None
+    return JSONResponse(_terms_status(account))
 
 
-@router.post("/terms/accept", response_class=HTMLResponse)
-def terms_accept_submit(
+@router.post("/v1/terms/accept")
+def terms_accept_api(
     request: Request,
-    next: str = Form("/"),
-    accept_terms: str | None = Form(None),
+    payload: dict[str, object] | None = Body(None),
     db: Session = Depends(get_db),
-):
-    safe_next = _safe_next(next)
+) -> JSONResponse:
     account_id = _account_id(request, db)
     if account_id is None:
-        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     account = db.get(Account, account_id)
     if account is None:
-        return RedirectResponse(url=f"/login?next={quote(_terms_accept_url(safe_next), safe='/')}", status_code=303)
-    if accept_terms != "yes":
-        return _render(
-            request,
-            "terms.html",
-            {
-                "body_class": "auth-page",
-                "title": "Accept brnrd beta terms",
-                "accept_mode": True,
-                "terms_version": _HOSTED_TERMS_VERSION,
-                "next": safe_next,
-                "error": "You need to accept the beta hosted-execution terms before continuing.",
-            },
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    if (payload or {}).get("accept_terms") != "yes":
+        return JSONResponse(
+            {"ok": False, "notice": "You need to accept the beta hosted-execution terms before continuing."},
             status_code=400,
         )
     account.hosted_terms_accepted_at = datetime.now(timezone.utc)
     account.hosted_terms_version = _HOSTED_TERMS_VERSION
     db.commit()
-    return RedirectResponse(url=safe_next, status_code=303)
+    return JSONResponse({"ok": True})
+
+
+@router.get("/terms/accept")
+def terms_accept_redirect(next: str = "/") -> RedirectResponse:
+    # In-flight OAuth/login links used the old Jinja acceptance URL; the SPA
+    # owns /terms now, with this shim preserving the validated next handoff.
+    return RedirectResponse(url=_terms_accept_url(next), status_code=308)
 
 
 @router.get("/auth/github/start")
