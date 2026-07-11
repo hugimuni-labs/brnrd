@@ -310,12 +310,28 @@ class RunnersReport(BaseModel):
 
     profiles: list[RunnerProfileIn] = Field(default_factory=list)
     default: str | None = Field(default=None, max_length=64)
+    # Wake-request ids this daemon has consumed since its last publish
+    # (#328 tap-to-request): a dispatched wake ran on the requested profile,
+    # so the server should retire the row (and with it the rack chip).
+    consumed_wake_request_ids: list[str] = Field(default_factory=list)
+
+
+class RunnerWakeRequestOut(BaseModel):
+    """A spool-rack tap (#328): "next wake on this profile"."""
+
+    request_id: str
+    profile: str
+    requested_at: datetime | None = None
+    status: str
 
 
 class RunnersOut(BaseModel):
     profiles: list[RunnerProfileIn]
     default: str | None = None
     runners_updated_at: datetime | None = None
+    # Piggyback channel: the account's pending wake request, if any, rides
+    # back on the daemon's own catalog publish tick — no extra polling loop.
+    pending_wake_request: RunnerWakeRequestOut | None = None
 
 
 class LiveRunIn(BaseModel):

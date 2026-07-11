@@ -144,3 +144,100 @@ def test_dashboard_runners_api_serves_merged_catalog():
     # Sorted cheapest-first by cost_rank.
     assert [p["name"] for p in body["profiles"]] == ["claude-haiku", "claude-fable", "codex"]
     assert body["profiles"][1]["selected"] is True
+    # No tap parked yet (#328 tap-to-request).
+    assert body["wake_request"] is None
+
+
+# ── #328 tap-to-request ──────────────────────────────────────────────────
+
+
+def test_wake_request_tap_cancel_lifecycle():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+
+    # Unauthenticated tap: 401.
+    assert client.post(
+        "/v1/dashboard/runners/wake-request", json={"profile": "codex"},
+    ).status_code == 401
+
+    _login_cookie(client)
+    # Empty profile: 422.
+    assert client.post(
+        "/v1/dashboard/runners/wake-request", json={"profile": ""},
+    ).status_code == 422
+
+    tapped = client.post(
+        "/v1/dashboard/runners/wake-request", json={"profile": "codex-mini"},
+    )
+    assert tapped.status_code == 200, tapped.text
+    wake = tapped.json()["wake_request"]
+    assert wake["profile"] == "codex-mini"
+    assert wake["status"] == "pending"
+
+    # The dashboard view carries the pending tap.
+    body = client.get("/v1/dashboard/runners").json()
+    assert body["wake_request"]["request_id"] == wake["request_id"]
+
+    # A second tap supersedes the first rather than queueing.
+    retapped = client.post(
+        "/v1/dashboard/runners/wake-request", json={"profile": "claude-haiku"},
+    ).json()["wake_request"]
+    assert retapped["request_id"] != wake["request_id"]
+    body = client.get("/v1/dashboard/runners").json()
+    assert body["wake_request"]["profile"] == "claude-haiku"
+
+    # Cancel clears the chip.
+    canceled = client.delete(
+        f"/v1/dashboard/runners/wake-request/{retapped['request_id']}",
+    )
+    assert canceled.status_code == 200
+    assert canceled.json()["wake_request"]["status"] == "canceled"
+    assert client.get("/v1/dashboard/runners").json()["wake_request"] is None
+
+    # Unknown id: 404.
+    assert client.delete(
+        "/v1/dashboard/runners/wake-request/wake_nope",
+    ).status_code == 404
+
+
+def test_wake_request_rides_daemon_publish_and_consume_ack():
+    client = _client()
+    _, daemon_headers, _repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register", json={"daemon_name": "laptop"}, headers=daemon_headers,
+    ).status_code == 200
+
+    # No tap: the publish response piggybacks nothing.
+    posted = client.put("/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers)
+    assert posted.status_code == 200
+    assert posted.json()["pending_wake_request"] is None
+
+    _login_cookie(client)
+    wake = client.post(
+        "/v1/dashboard/runners/wake-request", json={"profile": "codex"},
+    ).json()["wake_request"]
+
+    # Next publish tick: the daemon learns of the tap.
+    posted = client.put("/v1/daemons/runners", json=_CATALOG_PAYLOAD, headers=daemon_headers)
+    pending = posted.json()["pending_wake_request"]
+    assert pending is not None
+    assert pending["request_id"] == wake["request_id"]
+    assert pending["profile"] == "codex"
+
+    # The daemon acks consumption on its next publish; the row retires and
+    # the chip disappears from the dashboard view.
+    payload = dict(_CATALOG_PAYLOAD)
+    payload["consumed_wake_request_ids"] = [wake["request_id"]]
+    posted = client.put("/v1/daemons/runners", json=payload, headers=daemon_headers)
+    assert posted.status_code == 200
+    assert posted.json()["pending_wake_request"] is None
+    assert client.get("/v1/dashboard/runners").json()["wake_request"] is None
+
+    # Cancel-after-consume stays truthful: the wake fired.
+    canceled = client.delete(
+        f"/v1/dashboard/runners/wake-request/{wake['request_id']}",
+    )
+    assert canceled.json()["wake_request"]["status"] == "consumed"

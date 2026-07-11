@@ -73,6 +73,7 @@ from . import run_ledger
 from . import runner
 from . import runner_failures
 from . import runner_quota
+from . import wake_request as wake_request_mod
 from . import runner_select
 from . import schedule as schedule_mod
 from . import spending_plan
@@ -1545,6 +1546,27 @@ def _run_worker(
         for key in ("shell", "core", "runner", "runner_policy")
         if event.get(key) not in (None, "")
     }
+    # #328 tap-to-request: a spool-rack tap parked "next wake on this
+    # profile" (mirrored into .brr/wake-request.json by the cloud gate's
+    # publish tick). One-shot: apply it to this wake and spend it. An
+    # event-level pin (respawn shell:/core:, quality: escalate) is a
+    # deliberate per-run choice and wins — the tap then stays pending for
+    # the next unpinned wake rather than being silently swallowed.
+    runner_wake_note: str | None = None
+    wake_req = wake_request_mod.pending(brr_dir)
+    if wake_req and not any(
+        runner_overrides.get(key) for key in ("shell", "core", "runner")
+    ):
+        requested_profile = wake_req["profile"]
+        if runner.profile_metadata(requested_profile, repo_root) is not None:
+            runner_overrides["runner"] = requested_profile
+            runner_wake_note = "requested from the dashboard spool rack"
+        else:
+            print(
+                f"[brr] wake request {wake_req['request_id']} names unknown "
+                f"profile '{requested_profile}'; dropping it"
+            )
+        wake_request_mod.consume(brr_dir, wake_req["request_id"])
     runner_name = (
         runner.resolve_runner(repo_root, runner_overrides)
         if runner_overrides else runner.resolve_runner(repo_root)
@@ -2065,7 +2087,11 @@ def _run_worker(
             event_body=event_body_for_prompt,
             event_attachments=protocol.event_attachment_paths(event),
             budget_seconds=budget_seconds,
-            runner_medium=runner_name,
+            runner_medium=(
+                f"{runner_name} ({runner_wake_note})"
+                if runner_wake_note
+                else runner_name
+            ),
             runner_quota=quota_summary,
             runner_catalog=runner_catalog,
             diffense=prompt_diffense,
@@ -2436,6 +2462,9 @@ def _run_worker(
         if fallback_runner_name:
             previous_runner = runner_name
             runner_name = fallback_runner_name
+            # A wake-request note would now be a lie: the requested body
+            # failed and this is the fallback, not the tapped profile.
+            runner_wake_note = None
             runner_meta, quota_summary, runner_env, extra_runner_args = (
                 _runner_runtime(runner_name)
             )

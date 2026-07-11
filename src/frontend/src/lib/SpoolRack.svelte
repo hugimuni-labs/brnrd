@@ -1,19 +1,23 @@
 <script lang="ts">
-	import type { RunnerProfile } from './runners';
+	import type { RunnerProfile, WakeRequest } from './runners';
 
-	// #328 spool rack — read-only by design. You don't set a being's body
-	// with a dropdown; the rack shows who *can* wake and which spool is
-	// threaded (the pin). Changing it is a conversation: tell the resident,
-	// it parks a config-change request, you confirm on the approve page —
-	// the same loop every other setting already uses. No selector here, on
-	// purpose.
+	// #328 spool rack. You don't set a being's body with a dropdown; the
+	// rack shows who *can* wake and which spool is threaded (the pin).
+	// A tap parks a one-shot "next wake on this profile" request
+	// (#328 tap-to-request): no confirm modal — the tapper is the account
+	// owner approving their own ask — and cancelable until the wake fires.
+	// A durable default change stays a conversation with the resident
+	// (config-change request → approve page). No selector here, on purpose.
 	interface Props {
 		profiles: RunnerProfile[];
 		defaultProfile: string | null;
 		stale: boolean;
+		wakeRequest: WakeRequest | null;
+		onTap?: (profileName: string) => void;
+		onCancel?: (requestId: string) => void;
 	}
 
-	let { profiles, defaultProfile, stale }: Props = $props();
+	let { profiles, defaultProfile, stale, wakeRequest, onTap, onCancel }: Props = $props();
 
 	const CLASS_LABEL: Record<string, string> = {
 		economy: 'economy',
@@ -28,6 +32,25 @@
 
 	function isPinned(profile: RunnerProfile): boolean {
 		return profile.selected === true || profile.name === defaultProfile;
+	}
+
+	function isRequested(profile: RunnerProfile): boolean {
+		return wakeRequest !== null && wakeRequest.profile === profile.name;
+	}
+
+	/** Who actually answers the next wake: the tap when one is parked,
+	 *  the pin otherwise. The "next wake" badge follows this, so the rack
+	 *  never shows two contradictory answers to one question. */
+	function isNextWake(profile: RunnerProfile): boolean {
+		return wakeRequest ? isRequested(profile) : isPinned(profile);
+	}
+
+	function handleTap(profile: RunnerProfile) {
+		if (isRequested(profile)) {
+			if (wakeRequest && onCancel) onCancel(wakeRequest.request_id);
+		} else if (onTap) {
+			onTap(profile.name);
+		}
 	}
 </script>
 
@@ -47,14 +70,23 @@
 		<div class="space-y-1.5">
 			{#each profiles as profile (profile.name)}
 				{@const pinned = isPinned(profile)}
-				<div
-					class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border px-2 py-1.5 {pinned
-						? 'border-amber-800/70 bg-amber-950/20'
-						: 'border-stone-800/60 bg-stone-900/30'}"
+				{@const requested = isRequested(profile)}
+				{@const nextWake = isNextWake(profile)}
+				<button
+					type="button"
+					onclick={() => handleTap(profile)}
+					title={requested
+						? 'cancel this wake request'
+						: `next wake on ${profile.name} — one wake, cancelable until it fires`}
+					class="flex w-full flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border px-2 py-1.5 text-left transition-colors {requested
+						? 'border-amber-600/80 bg-amber-950/40'
+						: pinned
+							? 'border-amber-800/70 bg-amber-950/20'
+							: 'border-stone-800/60 bg-stone-900/30 hover:border-stone-600/70'}"
 				>
 					<div class="flex items-baseline gap-3">
 						<span
-							class="font-mono text-xs font-medium tracking-wide {pinned
+							class="font-mono text-xs font-medium tracking-wide {nextWake
 								? 'text-amber-200'
 								: 'text-stone-300'}">{profile.name}</span
 						>
@@ -63,12 +95,25 @@
 						>
 					</div>
 					<div class="flex items-baseline gap-3 font-mono text-[11px]">
-						{#if pinned}
+						{#if requested}
+							<!-- The parked tap: one wake, then back to the pin.
+							     Tapping the row again cancels it. -->
+							<span
+								class="border border-amber-600/80 bg-amber-950/60 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-200 uppercase"
+								>next wake · requested ✕</span
+							>
+						{:else if nextWake}
 							<!-- The threaded shuttle: who wakes next unless addressed
 							     otherwise. Label + border, never color alone. -->
 							<span
 								class="border border-amber-700/70 bg-amber-950/40 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-300 uppercase"
 								>next wake</span
+							>
+						{:else if pinned}
+							<!-- Pinned default, superseded for one wake by the tap. -->
+							<span
+								class="border border-stone-700/70 bg-stone-900/40 px-1.5 py-0.5 text-[10px] tracking-wide text-stone-400 uppercase"
+								>default</span
 							>
 						{/if}
 						{#if profile.class}
@@ -91,7 +136,7 @@
 							>
 						{/if}
 					</div>
-				</div>
+				</button>
 			{/each}
 		</div>
 	{/if}
