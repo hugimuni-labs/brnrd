@@ -28,6 +28,12 @@ class Account(Base):
     cross_repo_plan_md: Mapped[str] = mapped_column(Text, default="")
     decision_ledger_md: Mapped[str] = mapped_column(Text, default="")
     plans_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Billing (#53, kb design-billing.md). ``tier`` flips only from Stripe
+    # webhook state transitions; the Stripe subscription is source of truth.
+    TIER_FREE = "free"
+    TIER_SUBSCRIBED = "subscribed"
+    tier: Mapped[str] = mapped_column(String(32), default=TIER_FREE)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class Repo(Base):
@@ -293,3 +299,80 @@ class RunnerWakeRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class Subscription(Base):
+    """#53 — local mirror of the account's Stripe subscription.
+
+    One row per Stripe subscription id; at most one non-canceled row per
+    account in practice. ``cohort`` pins which price pair the subscriber
+    signed up on (supporter vs public) — grandfathering is Stripe-native
+    (existing subscriptions keep their ``Price``), this column just makes
+    the cohort countable without a Stripe API call.
+    """
+
+    __tablename__ = "subscriptions"
+    STATUS_ACTIVE = "active"
+    STATUS_PAST_DUE = "past_due"
+    STATUS_CANCELED = "canceled"
+    COHORT_SUPPORTER = "supporter"
+    COHORT_PUBLIC = "public"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    stripe_subscription_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    stripe_price_id: Mapped[str] = mapped_column(String(64), default="")
+    cohort: Mapped[str] = mapped_column(String(16), default=COHORT_SUPPORTER)
+    cadence: Mapped[str] = mapped_column(String(16), default="monthly")  # monthly | annual
+    status: Mapped[str] = mapped_column(String(16), default=STATUS_ACTIVE, index=True)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class CreditBucket(Base):
+    """#53/#54 — one wallet grant/purchase, drained in place.
+
+    The bucketed-ledger contract from kb design-billing.md §"Credit buckets
+    and expiry policy": append-only rows, ``remaining_credits`` drained by
+    debits (#54's machinery), ``stripe_ref`` carries the idempotency key —
+    ``payment_intent`` id for purchases, invoice id for subscriber grants.
+    """
+
+    __tablename__ = "credit_buckets"
+    SOURCE_FREE_SIGNUP_BONUS = "free_signup_bonus"
+    SOURCE_SUBSCRIBER_MONTHLY = "subscriber_monthly"
+    SOURCE_PURCHASED = "purchased"
+    SOURCE_PROMOTIONAL = "promotional"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)
+    granted_credits: Mapped[int] = mapped_column(Integer)
+    remaining_credits: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    stripe_ref: Mapped[str | None] = mapped_column(String(96), nullable=True, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class BillingLedgerEntry(Base):
+    """#53 — append-only billing audit ledger (kb design-billing.md §"Audit
+    log entries"). ``credits_delta`` is signed; pure-audit ops carry 0."""
+
+    __tablename__ = "billing_ledger"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    op: Mapped[str] = mapped_column(String(64), index=True)
+    credits_delta: Mapped[int] = mapped_column(Integer, default=0)
+    bucket_id: Mapped[str | None] = mapped_column(ForeignKey("credit_buckets.id"), nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class StripeEvent(Base):
+    """#53 — processed Stripe webhook event ids (idempotency guard)."""
+
+    __tablename__ = "stripe_events"
+    stripe_event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64), default="")
+    processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
