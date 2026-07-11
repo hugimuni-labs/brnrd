@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -9,9 +11,12 @@ pytest.importorskip("sqlalchemy")
 pytest.importorskip("multipart")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
+from brnrd.activity_records import ACTIVITY_STALE_TTL  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
+from brnrd.models import ActivityRecord  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 from _helpers import brnrd_account_headers  # noqa: E402
@@ -52,6 +57,21 @@ def _repo_and_daemon(client: TestClient) -> tuple[dict[str, str], dict[str, str]
     return account_headers, daemon_headers, repo["repo_id"]
 
 
+def _pair_daemon(client: TestClient, account_headers: dict[str, str], repo_id: str) -> dict[str, str]:
+    pair = client.post("/v1/accounts/pair").json()
+    approved = client.post(
+        f"/v1/accounts/pair/{pair['pair_code']}/approve",
+        json={"repo_id": repo_id},
+        headers=account_headers,
+    )
+    assert approved.status_code == 200
+    paired = client.get(
+        f"/v1/accounts/pair/{pair['pair_code']}",
+        params={"poll_secret": pair["poll_secret"]},
+    ).json()
+    return {"Authorization": f"Bearer {paired['daemon_token']}"}
+
+
 def _login_cookie(client: TestClient) -> None:
     with client.app.state.SessionLocal() as db:
         account = account_for_github_identity(
@@ -59,6 +79,25 @@ def _login_cookie(client: TestClient) -> None:
         )
         token = issue_session_token(db, account)
     client.cookies.set("brnrd_session", token)
+
+
+def _backdate_activity(client: TestClient, record_id: str) -> None:
+    with client.app.state.SessionLocal() as db:
+        row = db.execute(
+            select(ActivityRecord).where(ActivityRecord.record_id == record_id)
+        ).scalar_one()
+        row.reported_at = datetime.now(timezone.utc) - ACTIVITY_STALE_TTL - ACTIVITY_STALE_TTL
+        db.commit()
+
+
+def _activity_record(record_id: str, summary: str, *, status: str = "running") -> dict[str, str]:
+    return {
+        "id": record_id,
+        "kind": "run",
+        "summary": summary,
+        "status": status,
+        "updated_at": "2026-06-29T06:00:00Z",
+    }
 
 
 def test_daemon_activity_snapshot_is_account_readable():
@@ -275,3 +314,111 @@ def test_activity_views_collapse_repeat_snapshots_across_daemon_tokens():
     dashboard_page = client.get("/")
     assert dashboard_page.status_code == 200
     assert dashboard_page.text.count("run.completed") == 1
+
+
+def test_daemon_activity_put_reaps_stale_rows_from_previous_token():
+    client = _client()
+    account_headers, daemon_headers, repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/activity",
+        json={"records": [_activity_record("run:stale", "stale token row")]},
+        headers=daemon_headers,
+    ).status_code == 200
+    _backdate_activity(client, "run:stale")
+
+    second_headers = _pair_daemon(client, account_headers, repo_id)
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "backup"},
+        headers=second_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/activity",
+        json={"records": [_activity_record("run:fresh", "fresh token row")]},
+        headers=second_headers,
+    ).status_code == 200
+
+    with client.app.state.SessionLocal() as db:
+        record_ids = set(
+            db.execute(
+                select(ActivityRecord.record_id).where(ActivityRecord.repo_id == repo_id)
+            ).scalars()
+        )
+    assert record_ids == {"run:fresh"}
+
+
+def test_activity_reads_hide_stale_rows_and_keep_fresh_rows():
+    client = _client()
+    account_headers, daemon_headers, repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/activity",
+        json={"records": [_activity_record("run:stale", "stale visible row")]},
+        headers=daemon_headers,
+    ).status_code == 200
+
+    second_headers = _pair_daemon(client, account_headers, repo_id)
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "backup"},
+        headers=second_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/activity",
+        json={"records": [_activity_record("run:fresh", "fresh visible row")]},
+        headers=second_headers,
+    ).status_code == 200
+    _backdate_activity(client, "run:stale")
+
+    listing = client.get("/v1/accounts/activity", headers=account_headers)
+    assert listing.status_code == 200
+    assert {row["id"] for row in listing.json()["activity"]} == {"run:fresh"}
+
+    _login_cookie(client)
+    dashboard_api = client.get("/v1/dashboard/activity", params={"repo_id": repo_id})
+    assert dashboard_api.status_code == 200
+    assert {row["id"] for row in dashboard_api.json()["rows"]} == {"run:fresh"}
+
+
+def test_daemon_activity_put_keeps_fresh_rows_from_other_tokens():
+    client = _client()
+    account_headers, daemon_headers, repo_id = _repo_and_daemon(client)
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "laptop"},
+        headers=daemon_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/activity",
+        json={"records": [_activity_record("run:laptop", "laptop row")]},
+        headers=daemon_headers,
+    ).status_code == 200
+
+    second_headers = _pair_daemon(client, account_headers, repo_id)
+    assert client.post(
+        "/v1/daemons/register",
+        json={"daemon_name": "backup"},
+        headers=second_headers,
+    ).status_code == 200
+    assert client.put(
+        "/v1/daemons/activity",
+        json={"records": [_activity_record("run:backup", "backup row")]},
+        headers=second_headers,
+    ).status_code == 200
+
+    with client.app.state.SessionLocal() as db:
+        record_ids = set(
+            db.execute(
+                select(ActivityRecord.record_id).where(ActivityRecord.repo_id == repo_id)
+            ).scalars()
+        )
+    assert record_ids == {"run:laptop", "run:backup"}
