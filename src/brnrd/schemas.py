@@ -272,6 +272,52 @@ class QuotaOut(BaseModel):
     quota_updated_at: datetime | None = None
 
 
+class RunnerProfileIn(BaseModel):
+    """One selectable Shell+Core profile from a daemon's local catalog (#328).
+
+    Mirrors `src/brr/runner.py::_catalog_record` — the same projection the
+    Run Context Bundle's "Runner catalog" block injects into every wake.
+    ``class`` is the wire name for the cost class (economy/balanced/strong);
+    pydantic can't use the keyword, hence the alias.
+    """
+
+    name: str = Field(min_length=1, max_length=64)
+    shell: str | None = Field(default=None, max_length=64)
+    model: str | None = Field(default=None, max_length=128)
+    provider: str | None = Field(default=None, max_length=64)
+    owner: str | None = Field(default=None, max_length=32)
+    cost_class: str | None = Field(default=None, max_length=32, alias="class")
+    cost_rank: int | None = None
+    quota_source: str | None = Field(default=None, max_length=64)
+    capability_score: float | None = None
+    capability_source: str | None = Field(default=None, max_length=255)
+    capability_freshness: str | None = Field(default=None, max_length=64)
+    generated_core: bool | None = None
+    availability: str | None = Field(default=None, max_length=32)
+    selected: bool | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class RunnersReport(BaseModel):
+    """Runner-catalog snapshot a daemon pushes for itself (#328 spool rack).
+
+    Same last-write-wins mirror shape as `QuotaReport`; see
+    `src/brr/gates/cloud.py::_runners_snapshot` for the daemon-side collector.
+    ``default`` names the profile `resolve_runner` would pick for the next
+    default wake (the config pin, or the cost-aware choice when unpinned).
+    """
+
+    profiles: list[RunnerProfileIn] = Field(default_factory=list)
+    default: str | None = Field(default=None, max_length=64)
+
+
+class RunnersOut(BaseModel):
+    profiles: list[RunnerProfileIn]
+    default: str | None = None
+    runners_updated_at: datetime | None = None
+
+
 class LiveRunIn(BaseModel):
     """One entry from the local presence registry (``src/brr/presence.py``)
     — a thought currently awake on this daemon, or an ad-hoc session
