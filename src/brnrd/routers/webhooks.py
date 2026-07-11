@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -13,8 +14,8 @@ from sqlalchemy.orm import Session
 
 from brr.gates.github import parse as gh_parse
 
-from .. import ids, inbox as inbox_service
-from ..models import ChannelRoute, Repo, TgPairCode
+from .. import billing, ids, inbox as inbox_service, stripe_api
+from ..models import ChannelRoute, Repo, StripeEvent, TgPairCode
 from ..platforms import github as gh
 from ..platforms import telegram as tg
 
@@ -268,6 +269,36 @@ def telegram_webhook(request: Request, payload: dict, x_telegram_bot_api_secret_
             return {"ok": True}
         _enqueue_telegram_event(db, parsed, repo_id=route.repo_id, body=parsed.text)
     return {"ok": True}
+
+
+@router.post("/stripe")
+async def stripe_webhook(request: Request, stripe_signature: str | None = Header(default=None)):
+    """#53 — signed Stripe webhook for both billing legs.
+
+    Signature-verified (manual HMAC, kb design-billing.md §"Stripe
+    integration shape"), idempotent on Stripe event ids. Design drafts named
+    ``/v1/internal/stripe/webhook`` / ``/webhooks/stripe``; the existing
+    ``/v1/webhooks/*`` ingress prefix wins.
+    """
+    settings = request.app.state.settings
+    raw = await request.body()
+    if not stripe_api.verify_webhook_signature(raw, stripe_signature or "", settings.stripe_webhook_secret):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad signature")
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="bad payload")
+    if not isinstance(event, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="bad payload")
+    event_id = event.get("id") or ""
+    with request.app.state.SessionLocal() as db:
+        if event_id and db.get(StripeEvent, event_id) is not None:
+            return {"ok": True, "disposition": "duplicate"}
+        disposition = billing.handle_stripe_event(db, settings, event)
+        if event_id:
+            db.add(StripeEvent(stripe_event_id=event_id, event_type=event.get("type") or ""))
+        db.commit()
+    return {"ok": True, "disposition": disposition}
 
 
 @router.post("/github")
