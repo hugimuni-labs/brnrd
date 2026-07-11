@@ -8,7 +8,13 @@
 	import ConfigRequests from '$lib/ConfigRequests.svelte';
 	import SpoolRack from '$lib/SpoolRack.svelte';
 	import { QuotaAuthError, fetchQuota, type QuotaShell } from '$lib/quota';
-	import { RunnersAuthError, fetchRunners, type RunnersResponse } from '$lib/runners';
+	import {
+		RunnersAuthError,
+		cancelWake,
+		fetchRunners,
+		requestWake,
+		type RunnersResponse
+	} from '$lib/runners';
 	import { LiveRunsAuthError, fetchLiveRuns, type LiveRun } from '$lib/liveRuns';
 	import {
 		PRReviewQueueAuthError,
@@ -46,6 +52,39 @@
 
 	let runnersData = $state<RunnersResponse | null>(null);
 	let runnersError = $state<string | null>(null);
+
+	// #328 tap-to-request: optimistic-free — each action re-fetches the
+	// catalog so the chip always reflects the server's row, not a guess.
+	async function tapWakeRunner(profileName: string) {
+		try {
+			const wake = await requestWake(profileName);
+			if (runnersData) runnersData = { ...runnersData, wake_request: wake };
+			runnersError = null;
+		} catch (e) {
+			if (!(e instanceof RunnersAuthError)) {
+				runnersError = e instanceof Error ? e.message : 'wake request failed';
+			}
+		}
+	}
+
+	async function cancelWakeRunner(requestId: string) {
+		try {
+			const wake = await cancelWake(requestId);
+			// `consumed` means the wake fired before the cancel landed —
+			// show that truth briefly rather than pretending it unhappened.
+			if (runnersData) {
+				runnersData = {
+					...runnersData,
+					wake_request: wake.status === 'pending' ? wake : null
+				};
+			}
+			runnersError = null;
+		} catch (e) {
+			if (!(e instanceof RunnersAuthError)) {
+				runnersError = e instanceof Error ? e.message : 'wake cancel failed';
+			}
+		}
+	}
 
 	let liveRuns = $state<LiveRun[] | null>(null);
 	let liveRunsStale = $state(false);
@@ -235,8 +274,9 @@
 	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">runners</h2>
 	<p class="mt-1 text-sm text-stone-400">
 		The bodies available for the next wake — every Shell+Core profile your daemons discovered
-		locally, cheapest first. The marked spool is who answers unless you ask otherwise; changing it
-		is a conversation with the resident (a parked settings request below), not a switch.
+		locally, cheapest first. The marked spool is who answers unless you ask otherwise. Tap a row
+		to hand the <em>next</em> wake that body — one wake, cancelable until it fires; a durable
+		default change stays a conversation with the resident (a parked settings request below).
 	</p>
 	<div class="mt-3">
 		{#if runnersError}
@@ -248,6 +288,9 @@
 				profiles={runnersData.profiles}
 				defaultProfile={runnersData.default}
 				stale={runnersData.stale}
+				wakeRequest={runnersData.wake_request ?? null}
+				onTap={tapWakeRunner}
+				onCancel={cancelWakeRunner}
 			/>
 		{/if}
 	</div>

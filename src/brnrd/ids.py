@@ -43,6 +43,10 @@ def config_change_request_id() -> str:
     return _rid("cfgreq")
 
 
+def runner_wake_request_id() -> str:
+    return _rid("wake")
+
+
 def channel_route_id() -> str:
     return _rid("chan")
 
