@@ -131,6 +131,158 @@ def test_run_worker_constructs_task_without_triage(tmp_path, monkeypatch):
     assert response == "plain answer\n"
 
 
+def test_run_worker_applies_dashboard_wake_request_one_shot(tmp_path, monkeypatch):
+    """#328 tap-to-request: a mirrored wake request overrides the runner for
+    exactly one wake, is spent into the consumed ledger, and stamps the
+    prompt's Runner line so the resident knows the body was asked for."""
+    from brr import wake_request as wake_request_mod
+
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-wake")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    brr_dir = tmp_path / ".brr"
+    wake_request_mod.store_pending(
+        brr_dir, {"request_id": "wake_9", "profile": "codex-mini"},
+    )
+
+    seen_overrides: list[dict | None] = []
+
+    def fake_resolve(_root, overrides=None):
+        seen_overrides.append(overrides)
+        return overrides["runner"] if overrides and overrides.get("runner") else "codex"
+
+    prompt_kwargs: dict = {}
+
+    def fake_prompt(task, eid, rp, root, **kw):
+        prompt_kwargs.update(kw)
+        return f"PROMPT {eid}"
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", fake_resolve)
+    monkeypatch.setattr(
+        daemon.runner, "profile_metadata", lambda name, root=None: {"shell": "codex"},
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(daemon.prompts, "build_daemon_prompt", fake_prompt)
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+    )
+
+    task = daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+
+    assert task.status == "done"
+    assert seen_overrides and seen_overrides[0] == {"runner": "codex-mini"}
+    # Spent: pending mirror gone, id parked for the publish-tick ack.
+    assert wake_request_mod.pending(brr_dir) is None
+    assert wake_request_mod.consumed_ids(brr_dir) == ["wake_9"]
+    # The wake knows it was asked for.
+    assert prompt_kwargs["runner_medium"] == (
+        "codex-mini (requested from the dashboard spool rack)"
+    )
+
+
+def test_run_worker_event_pin_outranks_wake_request(tmp_path, monkeypatch):
+    """An event-level shell/core pin (respawn, quality escalation) is a
+    deliberate per-run choice: the tap must neither override it nor be
+    silently swallowed — it stays pending for the next unpinned wake."""
+    from brr import wake_request as wake_request_mod
+
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-pinned")
+    event["core"] = "claude-opus-4-8"
+    _stub_env_isolated(monkeypatch, tmp_path)
+    brr_dir = tmp_path / ".brr"
+    wake_request_mod.store_pending(
+        brr_dir, {"request_id": "wake_10", "profile": "codex-mini"},
+    )
+
+    seen_overrides: list[dict | None] = []
+
+    def fake_resolve(_root, overrides=None):
+        seen_overrides.append(overrides)
+        return "claude-opus"
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", fake_resolve)
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
+    )
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+    )
+
+    daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+
+    assert seen_overrides and seen_overrides[0] == {"core": "claude-opus-4-8"}
+    assert wake_request_mod.pending(brr_dir) == {
+        "request_id": "wake_10",
+        "profile": "codex-mini",
+    }
+    assert wake_request_mod.consumed_ids(brr_dir) == []
+
+
+def test_run_worker_drops_wake_request_for_unknown_profile(tmp_path, monkeypatch):
+    """A tap naming a profile this daemon doesn't know (stale rack, another
+    daemon's catalog) is spent rather than left to wedge every future wake."""
+    from brr import wake_request as wake_request_mod
+
+    write_repo_scaffold(tmp_path)
+    event = make_event(tmp_path, eid="evt-unknown")
+    _stub_env_isolated(monkeypatch, tmp_path)
+    brr_dir = tmp_path / ".brr"
+    wake_request_mod.store_pending(
+        brr_dir, {"request_id": "wake_11", "profile": "gemini-ultra-99"},
+    )
+
+    seen_overrides: list[dict | None] = []
+
+    def fake_resolve(_root, overrides=None):
+        seen_overrides.append(overrides)
+        return "codex"
+
+    monkeypatch.setattr(daemon.runner, "resolve_runner", fake_resolve)
+    monkeypatch.setattr(
+        daemon.runner, "profile_metadata", lambda name, root=None: None,
+    )
+    monkeypatch.setattr(daemon.gitops, "current_branch", lambda _root: "main")
+    monkeypatch.setattr(
+        daemon.prompts, "build_daemon_prompt", lambda *a, **kw: "PROMPT",
+    )
+    def fake_invoke(_self, _ctx, runner_name, invocation, cfg=None, *, trace=False):
+        Path(invocation.response_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(invocation.response_path).write_text("done\n", encoding="utf-8")
+        return RunnerResult(
+            invocation=invocation, runner_name=runner_name, command=["mock"],
+            stdout="done\n", stderr="", returncode=0, trace_dir=None, artifacts=[],
+        )
+
+    monkeypatch.setattr(
+        envs.get_env("worktree").__class__, "invoke", fake_invoke, raising=False,
+    )
+
+    daemon._run_worker(event, tmp_path, brr_dir / "responses", {}, 0)
+
+    # No override applied, but the request is consumed (acked as spent).
+    assert seen_overrides and seen_overrides[0] is None
+    assert wake_request_mod.pending(brr_dir) is None
+    assert wake_request_mod.consumed_ids(brr_dir) == ["wake_11"]
+
+
 def test_run_worker_finalize_appends_run_ledger_row(tmp_path, monkeypatch):
     write_repo_scaffold(tmp_path)
     event = make_event(tmp_path, eid="evt-ledger")

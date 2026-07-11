@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from brnrd import wake_requests
 from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
@@ -880,12 +881,60 @@ def dashboard_runners_api(request: Request, db: Session = Depends(get_db)) -> JS
         return JSONResponse({"detail": "unauthenticated"}, status_code=401)
     repos = _repos(db, account.id)
     views = _runners_views(db, repos)
+    pending = wake_requests.pending_for_account(db, account.id)
     return JSONResponse(
         {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             **views,
+            "wake_request": wake_requests.view(pending) if pending else None,
         }
     )
+
+
+@router.post("/v1/dashboard/runners/wake-request")
+async def dashboard_runners_wake_request(
+    request: Request, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Tap a spool-rack row (#328): park a one-shot "next wake on this
+    profile" request. No approve step — the tapper *is* the account owner,
+    and a confirm modal on your own tap is ceremony. The request stays
+    cancelable until a wake actually consumes it (chip → DELETE below);
+    the daemon learns of it within one catalog-publish tick via the
+    ``PUT /v1/daemons/runners`` response piggyback.
+
+    Deliberately not a durable default change: that keeps its conversational
+    config-change path. This is "hand the next thought this body", nothing
+    more — the rack stays a being-view, not a control panel.
+    """
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    profile = str((payload or {}).get("profile") or "").strip()
+    if not profile or len(profile) > 64:
+        return JSONResponse({"detail": "profile name required"}, status_code=422)
+    row = wake_requests.create(db, account_id, profile)
+    return JSONResponse({"wake_request": wake_requests.view(row)})
+
+
+@router.delete("/v1/dashboard/runners/wake-request/{request_id}")
+def dashboard_runners_wake_request_cancel(
+    request_id: str, request: Request, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Cancel a pending wake request (chip tap). If a wake already consumed
+    it, the row comes back ``consumed`` rather than a 409 — the ~seconds
+    race between cancel and dispatch is inherent, and "it already fired"
+    is an answer, not an error."""
+    account_id = _account_id(request, db)
+    if account_id is None:
+        return JSONResponse({"detail": "unauthenticated"}, status_code=401)
+    row = wake_requests.cancel(db, account_id, request_id)
+    if row is None:
+        return JSONResponse({"detail": "unknown wake request"}, status_code=404)
+    return JSONResponse({"wake_request": wake_requests.view(row)})
 
 
 @router.get("/v1/dashboard/live-runs")
