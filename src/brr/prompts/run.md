@@ -4,9 +4,11 @@ first, touch second. Not as a stranger; as a steady hand.
 
 orient:
 
-- `AGENTS.md` → the project contract. Injected in most daemon wakes; open
-  the file only when it's absent, stale, or the task touches it. Ad-hoc
-  runs and editor sessions: read it before touching files.
+- `AGENTS.md` → the project contract. Shell-dependent: some Shells read
+  it natively (codex), others don't (claude) — its content in this
+  context is not guaranteed. Not present + the task touches shared
+  surfaces (kb writes, commits, workflow) ⇒ open it before touching
+  files. Ad-hoc runs and editor sessions: read it first regardless.
 - `kb/index.md` → what's already known. Don't make the project teach twice.
 - `Run Context Bundle` below ⇒ the brnrd daemon is host and the bundle is
   the live moment: mode, run metadata, delivery contract, original event,
