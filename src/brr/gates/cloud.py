@@ -275,10 +275,15 @@ def _dashboard_publish_tick(brr_dir: Path, inbox_dir: Path) -> None:
     state = _load_state(brr_dir)
     if not (state.get("token") and state.get("brnrd_url")):
         return
+    # Runners first: its response piggybacks the pending wake request
+    # (#328 tap-to-request), the one dispatch-relevant datum in this tick.
+    # Behind the others, a slow or 502-retrying dashboard PUT stretched the
+    # mirror's staleness to tens of seconds — long enough for a tap racing
+    # its own follow-up message to lose (found live 2026-07-11).
+    _publish_runners(brr_dir, state)
     _publish_activity(brr_dir, inbox_dir, state)
     _publish_plans(brr_dir, state)
     _publish_quota(brr_dir, state)
-    _publish_runners(brr_dir, state)
     _publish_live_runs(brr_dir, state)
     _publish_pr_review_queue(brr_dir, state)
     _publish_run_ledger(brr_dir, state)
