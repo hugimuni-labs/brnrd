@@ -78,6 +78,24 @@ class Settings:
     github_trigger_aliases: str = os.environ.get("BRNRD_GITHUB_TRIGGER_ALIASES", "brnrd,brr")
     github_bot_token: str = os.environ.get("BRNRD_GITHUB_BOT_TOKEN", "")
 
+    # Billing (#53, kb design-billing.md §"Launch defaults + tunable knobs").
+    # Test mode until #52 (Stripe France KYB) flips the keys to live.
+    stripe_api_key: str = os.environ.get("BRNRD_STRIPE_API_KEY", "")
+    stripe_webhook_secret: str = os.environ.get("BRNRD_STRIPE_WEBHOOK_SECRET", "")
+    stripe_api_base_url: str = os.environ.get("BRNRD_STRIPE_API_BASE_URL", "https://api.stripe.com")
+    stripe_price_supporter_monthly: str = os.environ.get("BRNRD_STRIPE_PRICE_SUPPORTER_MONTHLY", "")
+    stripe_price_supporter_annual: str = os.environ.get("BRNRD_STRIPE_PRICE_SUPPORTER_ANNUAL", "")
+    stripe_price_public_monthly: str = os.environ.get("BRNRD_STRIPE_PRICE_PUBLIC_MONTHLY", "")
+    stripe_price_public_annual: str = os.environ.get("BRNRD_STRIPE_PRICE_PUBLIC_ANNUAL", "")
+    subscriber_monthly_credits: int = _env_int("BRNRD_SUBSCRIBER_MONTHLY_CREDITS", 300)
+    supporter_cohort_size: int = _env_int("BRNRD_SUPPORTER_COHORT_SIZE", 200)
+    # Optional hard cutoff (ISO date) for the supporter cohort — the
+    # "12 months from public launch, whichever comes first" clause. Empty =
+    # cohort closes on count alone.
+    supporter_cohort_deadline: str = os.environ.get("BRNRD_SUPPORTER_COHORT_DEADLINE", "")
+    topup_min_usd: int = _env_int("BRNRD_TOPUP_MIN_USD", 5)
+    topup_max_usd: int = _env_int("BRNRD_TOPUP_MAX_USD", 500)
+
     oauth_state_cookie: str = os.environ.get("BRNRD_OAUTH_STATE_COOKIE", "brnrd_oauth_state")
     oauth_pkce_cookie: str = os.environ.get("BRNRD_OAUTH_PKCE_COOKIE", "brnrd_oauth_pkce")
     oauth_next_cookie: str = os.environ.get("BRNRD_OAUTH_NEXT_COOKIE", "brnrd_oauth_next")
