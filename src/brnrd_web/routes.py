@@ -449,11 +449,32 @@ def disconnect_repo_api(repo_id: str, request: Request, db: Session = Depends(ge
     return _repo_action_response(notice)
 
 
-@router.get("/login", response_class=HTMLResponse)
-def login_form(request: Request, next: str = "/"):
+@router.get("/v1/dashboard/login-context")
+def login_context_api(request: Request, next: str = "/", db: Session = Depends(get_db)) -> JSONResponse:
+    """Context for the SPA /login page (#327 Jinja-removal, /login slice).
+
+    ``next`` validation stays server-owned (`_safe_next`), same shape the
+    Jinja page used: the SPA never builds its own OAuth start URL, it
+    renders the one handed back here. ``authenticated`` lets an
+    already-signed-in visitor skip straight to ``next``.
+    """
     safe_next = _safe_next(next)
-    signin = f"/auth/github/start?next={quote(safe_next, safe='/')}"
-    return _render(request, "login.html", {"body_class": "auth-page", "title": "Sign in to brnrd", "signin_url": signin, "oauth_ready": _github_oauth_ready(request)})
+    return JSONResponse(
+        {
+            "authenticated": _account_id(request, db) is not None,
+            "oauth_ready": _github_oauth_ready(request),
+            "signin_url": f"/auth/github/start?next={quote(safe_next, safe='/')}",
+            "next": safe_next,
+        }
+    )
+
+
+@router.get("/login")
+def login_redirect() -> RedirectResponse:
+    # #327: the SPA owns /login (passthru removed in .upsun/config.yaml and
+    # the Vite dev proxy); this backend route only serves bare uvicorn now,
+    # same 308 shape as the retired /repos and /activity Jinja pages.
+    return RedirectResponse(url="/", status_code=308)
 
 
 @router.get("/logout")
