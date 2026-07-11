@@ -32,6 +32,9 @@ verified so a future tooling pass can flag stale entries.
 from __future__ import annotations
 
 from functools import lru_cache
+import json
+import os
+from pathlib import Path
 import re
 import shlex
 import shutil
@@ -102,23 +105,35 @@ _BUNDLED_CORES: dict[str, dict[str, Any]] = {
         "freshness_date": "2026-07-11",
     },
     # ── Codex (OpenAI) ──────────────────────────────────────────────────
-    # codex exec -m <model> selects the Core. Mini is the economy tier;
-    # gpt-5-codex is the balanced/strong tier.
+    # codex exec -m <model> selects the Core. The GPT-5.6 family maps onto
+    # the three tiers: luna (economy) / terra (balanced) / sol (frontier).
+    # IDs verified against ~/.codex/models_cache.json + a live exec on
+    # 2026-07-11 (codex-cli 0.144.1); gpt-5-codex no longer exists.
+    # Older families (5.5, 5.4, 5.4-mini) still resolve and are surfaced
+    # by the models-cache probe rather than pinned here.
     "codex-mini": {
         "shell": "codex",
-        "model": "gpt-5.4-mini",
+        "model": "gpt-5.6-luna",
         "provider": "openai",
         "class": "economy",
         "cost_rank": 20,
-        "freshness_date": "2026-06-29",
+        "freshness_date": "2026-07-11",
+    },
+    "codex-terra": {
+        "shell": "codex",
+        "model": "gpt-5.6-terra",
+        "provider": "openai",
+        "class": "balanced",
+        "cost_rank": 30,
+        "freshness_date": "2026-07-11",
     },
     "codex-full": {
         "shell": "codex",
-        "model": "gpt-5-codex",
+        "model": "gpt-5.6-sol",
         "provider": "openai",
-        "class": "balanced",
-        "cost_rank": 35,
-        "freshness_date": "2026-06-29",
+        "class": "strong",
+        "cost_rank": 45,
+        "freshness_date": "2026-07-11",
     },
     # ── Gemini (Google) ─────────────────────────────────────────────────
     # gemini CLI model selection not yet probed; placeholder for when we
@@ -164,7 +179,7 @@ def probe_shell_models(
     binary = shutil.which(shell)
     if not binary:
         return ()
-    models: list[str] = []
+    models: list[str] = list(_models_from_disk(shell))
     for cmd in _probe_commands(shell, binary):
         try:
             proc = subprocess.run(
@@ -382,6 +397,36 @@ def _probe_commands(shell: str, binary: str) -> list[list[str]]:
     if shell == "codex":
         return [[binary, "exec", "--help"], [binary, "--help"]]
     return [[binary, "--help"]]
+
+
+def _models_from_disk(shell: str) -> list[str]:
+    """Model IDs the Shell itself keeps on disk — the authoritative probe.
+
+    Codex maintains ``$CODEX_HOME/models_cache.json`` (refreshed by the CLI
+    on its own network calls; we only read it). Help-text probing never
+    surfaces codex model lists, so this file is the primary discovery source
+    for that Shell. Hidden entries (``visibility: "hide"``) are internal
+    models, not selectable Cores.
+    """
+    if shell != "codex":
+        return []
+    home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+    cache = Path(home) / "models_cache.json"
+    try:
+        payload = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    models: list[str] = []
+    entries = payload.get("models") if isinstance(payload, dict) else None
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("visibility") or "").strip().lower() == "hide":
+            continue
+        slug = _str(entry.get("slug"))
+        if slug and _valid_model_token(slug):
+            models.append(slug)
+    return list(dict.fromkeys(models))
 
 
 def _models_from_text(text: str) -> list[str]:
