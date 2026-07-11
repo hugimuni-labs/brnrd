@@ -63,6 +63,18 @@ def tg_pair_code_id() -> str:
     return _rid("tgpair")
 
 
+def subscription_id() -> str:
+    return _rid("sub")
+
+
+def credit_bucket_id() -> str:
+    return _rid("bkt")
+
+
+def billing_ledger_id() -> str:
+    return _rid("blg")
+
+
 def api_key() -> str:
     return "bk_" + secrets.token_urlsafe(32)
 
