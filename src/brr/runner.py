@@ -599,11 +599,25 @@ def resolve_runner(repo_root: Path, overrides: dict[str, Any] | None = None) -> 
     from . import runner_select
 
     cfg = conf.load_config(repo_root)
+    override_keys: set[str] = set()
     if overrides:
         for key in ("shell", "core", "runner", "runner_policy"):
             value = overrides.get(key)
             if value not in (None, ""):
                 cfg[key] = value
+                override_keys.add(key)
+    # An event/tap-level override outranks a *config-file* pin. Without
+    # this, a consumed spool-rack tap (daemon sets ``runner``) or a spawn
+    # ``core:`` override loses silently to ``shell=`` in .brr/config —
+    # found live 2026-07-11: a luna tap was consumed and the wake stamped
+    # "requested from the dashboard spool rack", yet dispatched on the
+    # config-pinned profile. Precedence *within* the config file is
+    # unchanged; only cross-source shadowing is removed.
+    if "shell" not in override_keys:
+        if "runner" in override_keys or "core" in override_keys:
+            cfg["shell"] = ""
+        if "core" in override_keys and "runner" not in override_keys:
+            cfg["runner"] = "auto"
     profiles = _selection_profiles(repo_root)
 
     # shell= is the new explicit pin. When set it is treated as an exact
