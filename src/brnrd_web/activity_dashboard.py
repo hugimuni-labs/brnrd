@@ -370,6 +370,13 @@ def _quota_views(db: Session, repos: list[Repo], runner_stats: list[dict[str, An
                         if stale else shell.get("windows") or []
                     ),
                     "credits": shell.get("credits"),
+                    # Unredeemed free rate-limit resets (Codex, #315). Survives
+                    # staleness on purpose: `_stale_quota_windows` nulls the
+                    # percentages because an old percentage is a lie, but a
+                    # granted reset credit does not decay — and an operator
+                    # staring at a stale-and-empty quota panel is exactly who
+                    # needs to know four resets are sitting there.
+                    "reset_credits": shell.get("reset_credits"),
                     "_reported_at": reported_at,
                 }
     out = list(real.values())
