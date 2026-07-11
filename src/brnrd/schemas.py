@@ -485,3 +485,50 @@ class DevEnqueue(BaseModel):
 class DevEnqueued(BaseModel):
     event_id: str
     seq: int
+
+
+# --- billing (#53) -----------------------------------------------------------
+
+
+class SubscriptionOut(BaseModel):
+    tier: str
+    status: str | None = None
+    cohort: str | None = None
+    cadence: str | None = None
+    cancel_at_period_end: bool = False
+    current_period_end: datetime | None = None
+
+
+class SubscriptionCheckoutIn(BaseModel):
+    cadence: str = Field(default="monthly", pattern="^(monthly|annual)$")
+
+
+class CheckoutOut(BaseModel):
+    checkout_url: str
+    cohort: str | None = None
+
+
+class PortalOut(BaseModel):
+    portal_url: str
+
+
+class WalletOut(BaseModel):
+    balances: dict[str, int] = Field(default_factory=dict)
+    total_credits: int = 0
+    cumulative_purchased_credits_lifetime: int = 0
+
+
+class TopupCheckoutIn(BaseModel):
+    amount_usd: int
+
+
+class BillingLedgerEntryOut(BaseModel):
+    seq: int
+    op: str
+    credits_delta: int
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class BillingLedgerList(BaseModel):
+    entries: list[BillingLedgerEntryOut]

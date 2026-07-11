@@ -11,7 +11,7 @@ from .db import Base, make_engine, make_session_factory
 from .inbox import Forwarder, make_default_forwarder
 from .migrations import run_startup_migrations
 from .pack_relay import PackRelayStore
-from .routers import accounts, config_approval, daemons, dev, github_app, pairing, render, webhooks
+from .routers import accounts, billing, config_approval, daemons, dev, github_app, pairing, render, webhooks
 
 
 def _maybe_register_telegram_webhook(settings: Settings) -> None:
@@ -66,6 +66,7 @@ def create_app(
     app.state.pack_relay = PackRelayStore(default_ttl_s=settings.pack_relay_ttl_s)
 
     app.include_router(accounts.router)
+    app.include_router(billing.router)
     app.include_router(pairing.router)
     app.include_router(config_approval.router)
     app.include_router(daemons.router)
