@@ -52,6 +52,11 @@
 
 	let runnersData = $state<RunnersResponse | null>(null);
 	let runnersError = $state<string | null>(null);
+	// Transient receipt for the last rack action. A tap has no approval
+	// step and no modal — this line is its only textual acknowledgment,
+	// so a parked/canceled request is never a silent state change
+	// (found live 2026-07-11: a swallowed tap read as "didn't go through").
+	let runnersNote = $state<string | null>(null);
 
 	// #328 tap-to-request: optimistic-free — each action re-fetches the
 	// catalog so the chip always reflects the server's row, not a guess.
@@ -60,10 +65,18 @@
 			const wake = await requestWake(profileName);
 			if (runnersData) runnersData = { ...runnersData, wake_request: wake };
 			runnersError = null;
+			runnersNote = `next wake runs on ${profileName} — no approval needed; tap the row again to cancel`;
 		} catch (e) {
-			if (!(e instanceof RunnersAuthError)) {
-				runnersError = e instanceof Error ? e.message : 'wake request failed';
-			}
+			// An auth failure on a *tap* must be loud: the passive fetch may
+			// stay quiet for anonymous viewers, but here the user just acted
+			// and the action was dropped.
+			runnersNote = null;
+			runnersError =
+				e instanceof RunnersAuthError
+					? 'session expired — sign in again, then re-tap'
+					: e instanceof Error
+						? e.message
+						: 'wake request failed';
 		}
 	}
 
@@ -79,10 +92,18 @@
 				};
 			}
 			runnersError = null;
+			runnersNote =
+				wake.status === 'consumed'
+					? 'that wake already fired — the request was spent, not canceled'
+					: 'wake request canceled — next wake falls back to the default';
 		} catch (e) {
-			if (!(e instanceof RunnersAuthError)) {
-				runnersError = e instanceof Error ? e.message : 'wake cancel failed';
-			}
+			runnersNote = null;
+			runnersError =
+				e instanceof RunnersAuthError
+					? 'session expired — sign in again, then re-tap'
+					: e instanceof Error
+						? e.message
+						: 'wake cancel failed';
 		}
 	}
 
@@ -274,15 +295,23 @@
 	<h2 class="font-mono text-lg font-semibold tracking-tight text-amber-100">runners</h2>
 	<p class="mt-1 text-sm text-stone-400">
 		The bodies available for the next wake — every Shell+Core profile your daemons discovered
-		locally, cheapest first. The marked spool is who answers unless you ask otherwise. Tap a row
-		to hand the <em>next</em> wake that body — one wake, cancelable until it fires; a durable
-		default change stays a conversation with the resident (a parked settings request below).
+		locally, cheapest first. The marked spool is who answers unless you ask otherwise. Tap a row to
+		hand the <em>next</em> wake that body — one wake, cancelable until it fires; a durable default change
+		stays a conversation with the resident (a parked settings request below).
 	</p>
 	<div class="mt-3">
+		<!-- Error above the rack, not instead of it: a failed *action* must
+		     not blank the panel the user is acting on. -->
 		{#if runnersError}
-			<p class="text-sm text-red-400">{runnersError}</p>
-		{:else if runnersData === null}
-			<p class="text-sm text-stone-500">Loading…</p>
+			<p class="mb-2 text-sm text-red-400">{runnersError}</p>
+		{/if}
+		{#if runnersNote}
+			<p class="mb-2 font-mono text-xs text-amber-300">{runnersNote}</p>
+		{/if}
+		{#if runnersData === null}
+			{#if !runnersError}
+				<p class="text-sm text-stone-500">Loading…</p>
+			{/if}
 		{:else}
 			<SpoolRack
 				profiles={runnersData.profiles}
