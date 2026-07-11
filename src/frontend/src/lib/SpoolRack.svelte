@@ -8,16 +8,21 @@
 	// owner approving their own ask — and cancelable until the wake fires.
 	// A durable default change stays a conversation with the resident
 	// (config-change request → approve page). No selector here, on purpose.
+	//
+	// Every tap means one thing: "next wake here". Canceling a parked
+	// request = tapping the default row (still pinned, still visible) —
+	// not re-tapping the requested row, which silently toggled a request
+	// away on first live use (2026-07-11). The page owns the routing;
+	// this component just reports which row was tapped.
 	interface Props {
 		profiles: RunnerProfile[];
 		defaultProfile: string | null;
 		stale: boolean;
 		wakeRequest: WakeRequest | null;
 		onTap?: (profileName: string) => void;
-		onCancel?: (requestId: string) => void;
 	}
 
-	let { profiles, defaultProfile, stale, wakeRequest, onTap, onCancel }: Props = $props();
+	let { profiles, defaultProfile, stale, wakeRequest, onTap }: Props = $props();
 
 	const CLASS_LABEL: Record<string, string> = {
 		economy: 'economy',
@@ -46,11 +51,17 @@
 	}
 
 	function handleTap(profile: RunnerProfile) {
+		if (onTap) onTap(profile.name);
+	}
+
+	function rowTitle(profile: RunnerProfile): string {
 		if (isRequested(profile)) {
-			if (wakeRequest && onCancel) onCancel(wakeRequest.request_id);
-		} else if (onTap) {
-			onTap(profile.name);
+			return 'already requested — tap the default row to cancel';
 		}
+		if (wakeRequest && isPinned(profile)) {
+			return `back to ${profile.name} — cancels the parked request`;
+		}
+		return `next wake on ${profile.name} — one wake, cancelable until it fires`;
 	}
 </script>
 
@@ -75,9 +86,7 @@
 				<button
 					type="button"
 					onclick={() => handleTap(profile)}
-					title={requested
-						? 'cancel this wake request'
-						: `next wake on ${profile.name} — one wake, cancelable until it fires`}
+					title={rowTitle(profile)}
 					class="flex w-full flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 border px-2 py-1.5 text-left transition-colors {requested
 						? 'border-amber-600/80 bg-amber-950/40'
 						: pinned
@@ -97,10 +106,10 @@
 					<div class="flex items-baseline gap-3 font-mono text-[11px]">
 						{#if requested}
 							<!-- The parked tap: one wake, then back to the pin.
-							     Tapping the row again cancels it. -->
+							     Cancel = tap the default row, not this one. -->
 							<span
 								class="border border-amber-600/80 bg-amber-950/60 px-1.5 py-0.5 text-[10px] tracking-wide text-amber-200 uppercase"
-								>next wake · requested ✕</span
+								>next wake · requested</span
 							>
 						{:else if nextWake}
 							<!-- The threaded shuttle: who wakes next unless addressed
@@ -110,10 +119,14 @@
 								>next wake</span
 							>
 						{:else if pinned}
-							<!-- Pinned default, superseded for one wake by the tap. -->
+							<!-- Pinned default, superseded for one wake by the tap.
+							     Sky, not amber: the standing pin and the one-shot
+							     request are different concepts and wear different
+							     colors. Tapping here restores the default (cancels
+							     the parked request). -->
 							<span
-								class="border border-stone-700/70 bg-stone-900/40 px-1.5 py-0.5 text-[10px] tracking-wide text-stone-400 uppercase"
-								>default</span
+								class="border border-sky-800/70 bg-sky-950/40 px-1.5 py-0.5 text-[10px] tracking-wide text-sky-300 uppercase"
+								>default · tap to restore</span
 							>
 						{/if}
 						{#if profile.class}
