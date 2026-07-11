@@ -1036,7 +1036,7 @@ def _handle_runner_policy_control_event(
 # ── Loom envelope Phase 2 — config-change proposals ────────────────────
 #
 # A resident can ask for more of an allowlisted, user-tunable ceiling
-# (today: only ``spawn.max_concurrent``) than ``.brr/config`` currently
+# (``_CONFIG_CHANGE_ALLOWED_KEYS`` below) than ``.brr/config`` currently
 # grants. Unlike CS6's runner-policy proposals above, this one is never
 # applied on a chat-typed reply: the daemon mints a brnrd.dev approve/
 # confirm URL (``gates/cloud.propose_config_change``) and only applies the
@@ -1203,6 +1203,19 @@ def _queue_config_change_proposal(
             f"`{current_value}` → `{requested_value}`.\n\n"
             f"Approve or reject at: {minted['approve_url']}\n\n"
             "No change applies until the account owner decides there."
+        )
+    elif minted and minted.get("error"):
+        # Cloud-connected, but the mint call itself failed (server
+        # allowlist mismatch, deploy-window 5xx, timeout ...). Surface the
+        # detail — telling a connected account to run `brnrd connect`
+        # buries the actionable part (observed live 2026-07-11: a 422 from
+        # an out-of-lockstep server allowlist read as "not connected").
+        message = (
+            f"Config-change proposal `{proposal_id}` parked locally (`{key}` "
+            f"`{current_value}` → `{requested_value}`), but minting the "
+            f"approve link failed: {minted['error']}\n\n"
+            "Re-propose to retry, or apply the change by hand in "
+            "`.brr/config`."
         )
     else:
         message = (
