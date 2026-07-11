@@ -236,6 +236,7 @@ def _subscription_fields(obj: dict) -> tuple[str, str, datetime | None]:
 
 
 def _refresh_tier(db: Session, account: Account) -> None:
+    db.flush()  # sessions run autoflush=False; make pending rows countable
     live = db.execute(
         select(func.count()).select_from(Subscription).where(
             Subscription.account_id == account.id,
@@ -409,6 +410,12 @@ def _on_invoice_paid(db: Session, settings: Settings, obj: dict) -> str:
     )
     if account is None:
         return "no-account"
+    # Idempotency first: a redelivered invoice event must not re-expire the
+    # allowance it granted the first time around.
+    if obj.get("id") and db.execute(
+        select(CreditBucket).where(CreditBucket.stripe_ref == obj.get("id"))
+    ).scalar_one_or_none() is not None:
+        return "grant-duplicate"
     if row is not None and row.status == Subscription.STATUS_PAST_DUE:
         row.status = Subscription.STATUS_ACTIVE
         _refresh_tier(db, account)
