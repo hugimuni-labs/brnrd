@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from brnrd import create_app  # noqa: E402
 from brnrd.config import Settings  # noqa: E402
-from brnrd.models import Repo  # noqa: E402
+from brnrd.models import Account, GitHubInstallation, GitHubInstalledRepo, Repo  # noqa: E402
 from brnrd.oauth import GitHubIdentity  # noqa: E402
 from brnrd.routers.accounts import account_for_github_identity, issue_session_token  # noqa: E402
 
@@ -51,6 +51,44 @@ def _create_repo(client: TestClient, token: str, repo: str = "Gurio/brr") -> str
     return r.json()["repo_id"]
 
 
+def _account_id(client: TestClient, login: str = "Gurio") -> str:
+    with client.app.state.SessionLocal() as db:
+        account = db.query(Account).filter(Account.github_login == login).one()
+        return account.id
+
+
+def _add_installation_repo(
+    client: TestClient,
+    account_id: str,
+    repo_full_name: str,
+    *,
+    forge_repo_id: str = "123",
+    default_branch: str = "main",
+) -> None:
+    with client.app.state.SessionLocal() as db:
+        installation = db.query(GitHubInstallation).filter(GitHubInstallation.account_id == account_id).one_or_none()
+        if installation is None:
+            installation = GitHubInstallation(
+                id=f"ghi-{account_id}",
+                account_id=account_id,
+                installation_id="42",
+                target_login="Gurio",
+                target_type="User",
+            )
+            db.add(installation)
+            db.flush()
+        db.add(
+            GitHubInstalledRepo(
+                id=f"ghr-{repo_full_name.replace('/', '-')}",
+                github_installation_id=installation.id,
+                repo_full_name=repo_full_name,
+                forge_repo_id=forge_repo_id,
+                default_branch=default_branch,
+            )
+        )
+        db.commit()
+
+
 def test_dashboard_shows_enabled_repo():
     client = _client()
     token = _login(client, login="Gurio")
@@ -64,30 +102,111 @@ def test_dashboard_shows_enabled_repo():
     assert "/activity" in r.text
 
 
-def test_repos_page_requires_login():
+def test_repos_page_redirects_to_dashboard():
     client = _client()
 
     r = client.get("/repos", follow_redirects=False)
 
-    assert r.status_code == 303
-    assert r.headers["location"] == "/login?next=/repos"
+    assert r.status_code == 308
+    assert r.headers["location"] == "/"
 
 
-def test_repos_page_shows_enabled_repo():
-    """#313-adjacent: `/repos` restores the connect/pair/disconnect UI that
-    lost its only entry point when the SvelteKit build took over "/" in
-    production (found live 2026-07-09) — same content `/` renders for a
-    signed-in account, reachable at the path Upsun already passes through.
-    """
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("get", "/v1/dashboard/repos", None),
+        ("post", "/v1/repos/connect", {"repo_full_name": "Gurio/brr"}),
+        ("post", "/v1/repos/repo_missing/invite-bot", {}),
+        ("post", "/v1/repos/repo_missing/telegram-pair", {}),
+        ("post", "/v1/repos/repo_missing/disconnect", {}),
+    ],
+)
+def test_repos_json_endpoints_require_login(method, path, json_body):
+    client = _client()
+
+    request = getattr(client, method)
+    r = request(path, json=json_body) if json_body is not None else request(path)
+
+    assert r.status_code == 401
+    assert r.json()["detail"] == "unauthenticated"
+
+
+def test_dashboard_repos_api_returns_repo_management_payload():
     client = _client()
     token = _login(client, login="Gurio")
-    _create_repo(client, token)
+    _create_repo(client, token, repo="Gurio/brr")
+    account_id = _account_id(client)
+    _add_installation_repo(client, account_id, "Gurio/brr", forge_repo_id="100")
+    _add_installation_repo(client, account_id, "Gurio/new", forge_repo_id="101", default_branch="trunk")
 
-    r = client.get("/repos")
+    r = client.get("/v1/dashboard/repos")
 
     assert r.status_code == 200
-    assert "Gurio/brr" in r.text
-    assert "Waiting for local daemon" in r.text
+    body = r.json()
+    assert body["account"]["github_login"] == "Gurio"
+    assert body["connected_count"] == 1
+    assert body["connected_repos"][0]["repo_full_name"] == "Gurio/brr"
+    assert body["connected_repos"][0]["daemon_status"] == "missing"
+    assert body["connected_repos"][0]["setup_command"].startswith("cd brr\n")
+    installed = {repo["repo_full_name"]: repo for repo in body["installed_repos"]}
+    assert installed["Gurio/brr"]["connected"] is True
+    assert installed["Gurio/new"]["connected"] is False
+    assert installed["Gurio/new"]["default_branch"] == "trunk"
+    assert body["github_app_slug"] == "brnrd-dev"
+    assert body["github_bot_user_login"] == "brnrd-bot"
+    assert body["oauth_ready"] is True
+
+
+def test_dashboard_connect_repo_api_enables_repo():
+    client = _client()
+    _login(client, login="Gurio")
+
+    r = client.post(
+        "/v1/repos/connect",
+        json={"repo_full_name": "Gurio/new", "forge_repo_id": "999", "default_branch": "trunk"},
+    )
+
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert "Repo enabled" in r.json()["notice"]
+    with client.app.state.SessionLocal() as db:
+        repo = db.query(Repo).filter(Repo.repo_full_name == "Gurio/new").one()
+        assert repo.default_branch == "trunk"
+        assert repo.forge_repo_id == "999"
+
+
+def test_dashboard_connect_repo_api_returns_error_notice_for_bad_name():
+    client = _client()
+    _login(client, login="Gurio")
+
+    r = client.post("/v1/repos/connect", json={"repo_full_name": "not-a-full-name"})
+
+    assert r.status_code == 400
+    assert r.json() == {"ok": False, "notice": "repo must look like owner/name"}
+
+
+def test_dashboard_invite_bot_api_returns_notice():
+    client = _client()
+    token = _login(client, login="Gurio")
+    repo_id = _create_repo(client, token)
+
+    r = client.post(f"/v1/repos/{repo_id}/invite-bot")
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "notice": "Could not find a synced installation for the bot-user invite.",
+    }
+
+
+def test_dashboard_repo_action_returns_error_notice_for_missing_repo():
+    client = _client()
+    _login(client, login="Gurio")
+
+    r = client.post("/v1/repos/repo_missing/invite-bot")
+
+    assert r.status_code == 404
+    assert r.json() == {"ok": False, "notice": "repo not found"}
 
 
 def test_dashboard_disconnect_removes_repo():
@@ -95,9 +214,10 @@ def test_dashboard_disconnect_removes_repo():
     token = _login(client, login="Gurio")
     repo_id = _create_repo(client, token)
 
-    r = client.post(f"/repos/{repo_id}/disconnect", follow_redirects=False)
+    r = client.post(f"/v1/repos/{repo_id}/disconnect")
 
-    assert r.status_code == 303
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "notice": "Repo disconnected from brnrd."}
     with client.app.state.SessionLocal() as db:
         assert db.get(Repo, repo_id) is None
 
@@ -573,11 +693,11 @@ def test_dashboard_can_issue_telegram_pair_link():
     token = _login(client, login="Gurio")
     repo_id = _create_repo(client, token)
 
-    page = client.get("/")
-    assert page.status_code == 200
-    assert f"/repos/{repo_id}/telegram-pair" in page.text
+    r = client.post(f"/v1/repos/{repo_id}/telegram-pair")
 
-    r = client.post(f"/repos/{repo_id}/telegram-pair")
     assert r.status_code == 200
-    assert "https://t.me/brnrd_bot?start=TG-" in r.text
-    assert "Open Telegram and press Start" in r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["pairing_code"].startswith("TG-")
+    assert body["action_url"].startswith("https://t.me/brnrd_bot?start=TG-")
+    assert "Open https://t.me/brnrd_bot?start=TG-" in body["instructions"]
