@@ -3,8 +3,31 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 
 from .models import ActivityRecord
+
+
+ACTIVITY_STALE_TTL = timedelta(minutes=10)
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def fresh_activity_records(rows: Iterable[ActivityRecord], *, now: datetime | None = None) -> list[ActivityRecord]:
+    """Keep only daemon activity rows with a recent report timestamp."""
+    cutoff = _utc(now or datetime.now(timezone.utc)) - ACTIVITY_STALE_TTL
+    fresh: list[ActivityRecord] = []
+    for row in rows:
+        reported_at = row.reported_at
+        if reported_at is None:
+            continue
+        if _utc(reported_at) >= cutoff:
+            fresh.append(row)
+    return fresh
 
 
 def dedupe_activity_records(rows: Iterable[ActivityRecord]) -> list[ActivityRecord]:
