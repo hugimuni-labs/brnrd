@@ -93,6 +93,18 @@
 				{/if}
 			</div>
 		{/each}
+		{#if shell.reset_credits}
+			<!-- Unredeemed free "Full reset" grants (Codex, via the app-server
+			     quota probe — #315). Deliberately a line, not a track: it is a
+			     count of one-shot escape hatches, not a headroom that drains, and
+			     rendering it as a bar would lie about its shape. It earns a place
+			     next to the windows anyway, because it changes what they *mean* —
+			     a 4%-left week with four resets in the pocket is not an emergency. -->
+			<div class="font-mono text-[11px] text-stone-500">
+				{shell.reset_credits} free rate-limit reset{shell.reset_credits === 1 ? '' : 's'}
+				available
+			</div>
+		{/if}
 		{#if shell.credits && shell.credits.enabled !== false && (shell.credits.summary || (shell.credits.remaining_percentage !== null && shell.credits.remaining_percentage !== undefined) || (shell.credits.total_cost_usd !== null && shell.credits.total_cost_usd !== undefined))}
 			{@const creditsPct = shell.credits.remaining_percentage ?? null}
 			{@const creditsLevel = quotaLevel(creditsPct)}

@@ -67,6 +67,7 @@ from . import hooks as hooks_mod
 from . import presence
 from . import prompts
 from . import codex_status
+from . import codex_usage
 from . import protocol
 from . import run_context
 from . import run_ledger
@@ -2058,7 +2059,8 @@ def _run_worker(
 
         if attempt == 1:
             run_levels, _ = _collect_levels(
-                runner_name, outbox_dir, run_root, refresh=False,
+                runner_name, outbox_dir, run_root,
+                refresh=False, shared_dir=brr_dir,
             )
             level_quota = runner_quota.summary_from_levels(run_levels)
             quota_summary = level_quota or quota_summary
@@ -2915,34 +2917,56 @@ def _collect_levels(
     work_dir: Path | None = None,
     *,
     refresh: bool = True,
+    shared_dir: Path | None = None,
 ) -> tuple[dict[str, object] | None, "frozenset[str] | bool"]:
     """Pick the level snapshot + wired-slot set for *runner_name*'s Shell.
 
     Each Shell exposes its quota/context (and, for Claude, spend) through a
     different head-less seam, so the level *source* is per-Shell:
 
-    - **codex** — the session rollout file carries ``rate_limits`` (5h + weekly
-      subscription quota) and ``model_context_window`` on every ``token_count``
-      event, read live by :mod:`codex_status`. No dollar-spend gauge, so
-      ``spend`` is deliberately not collected.
+    - **codex** — two seams, merged. Passively, the session rollout file carries
+      ``rate_limits`` (5h + weekly subscription quota) and
+      ``model_context_window`` on every ``token_count`` event
+      (:mod:`codex_status`) — exact while a run is live, frozen the moment it
+      ends. Actively, a cached ``codex app-server`` JSON-RPC probe reads the
+      account's rate limits with no run at all and no quota spent
+      (:mod:`codex_usage`), which is what keeps the panel true between runs
+      (#315). No dollar-spend gauge either way, so ``spend`` is deliberately not
+      collected.
     - **claude** — a cached, daemon-side PTY scrape of interactive ``/usage``
       carries subscription quota windows, and the final ``--output-format json``
       result normalized by :mod:`claude_status` carries spend + context
       accounting. The TUI scrape is intentionally throttled; hooks read the
       portal-state snapshot, they do not run the scrape themselves.
 
-    When *refresh* is ``False`` only the on-disk cache is read — the
-    blocking multi-second PTY scrape is skipped entirely. The heartbeat path passes
-    ``refresh=True`` (the default) so the cache stays current on the 30s
-    cadence; the event-driven flush path passes ``refresh=False`` so it
-    never stalls a boundary reply waiting for a stale-cache refresh.
+    When *refresh* is ``False`` only the on-disk cache is read — the blocking
+    probe (Claude's PTY scrape, Codex's app-server spawn) is skipped entirely.
+    The heartbeat path passes ``refresh=True`` (the default) so the cache stays
+    current on the 30s cadence; the event-driven flush path passes
+    ``refresh=False`` so it never stalls a boundary reply waiting for a
+    stale-cache refresh.
+
+    *shared_dir* is the account's ``.brr`` dir. Codex's quota is **account**
+    state, not run state, so its probe cache lives there: one cache every reader
+    shares, warm across runs and daemon restarts, instead of the per-run
+    snapshot Claude's collectors write (which forces the
+    ``latest_claude_usage_outbox_dir`` hunt on any reader without a "current
+    run"). Falls back to *outbox_dir* when no shared dir is supplied.
 
     Returns ``(levels, wired_slots)`` for :func:`facets.build`. ``wired_slots``
     is the set of level slots whose collector exists (so an empty slot reads
     ``absent`` not ``unimplemented``); Shells with no collector return ``False``.
     """
     if codex_status.supported(runner_name):
-        return codex_status.load_levels(), frozenset(codex_status.COLLECTED_SLOTS)
+        cache_dir = shared_dir or outbox_dir
+        probe = (
+            codex_usage.load_or_refresh_snapshot(cache_dir)
+            if refresh else codex_usage.load_snapshot(cache_dir)
+        )
+        merged = codex_usage.merge_levels(probe, codex_status.load_levels())
+        return merged, frozenset(
+            codex_usage.COLLECTED_SLOTS | codex_status.COLLECTED_SLOTS
+        )
     if claude_status.supported(runner_name):
         if refresh:
             usage_levels = claude_usage.load_or_refresh_snapshot(
@@ -3153,7 +3177,8 @@ def _write_live_portal_state(
             if isinstance(card_written_monotonic, (int, float)) else None
         )
         run_levels, run_level_slots = _collect_levels(
-            runner_name, outbox_dir, work_dir, refresh=refresh_levels
+            runner_name, outbox_dir, work_dir,
+            refresh=refresh_levels, shared_dir=brr_dir,
         )
         pacing_status = _quota_pacing_status(cfg or {}, run_levels)
         coexisting_snapshot: list[dict[str, object]] | None = None
@@ -4047,7 +4072,15 @@ def _fire_due_schedules(
             levels_dir = brr_dir
             if claude_status.supported(runner_name):
                 levels_dir = runner_quota.latest_claude_usage_outbox_dir(brr_dir) or brr_dir
-            sched_levels, _ = _collect_levels(runner_name, levels_dir, None, refresh=False)
+            # Codex needs none of that hunt: its probe cache is account-scoped and
+            # lives at brr_dir (`shared_dir`), warm across runs — which is what
+            # makes *this* read meaningful at all. Pacing decides between runs,
+            # exactly when the rollout file is frozen; before the app-server probe
+            # existed, an idle daemon paced its schedule off whatever quota the
+            # last Codex turn happened to leave behind, however old.
+            sched_levels, _ = _collect_levels(
+                runner_name, levels_dir, None, refresh=False, shared_dir=brr_dir,
+            )
             binding_pct = runner_quota.binding_quota_remaining_pct(sched_levels)
             if binding_pct is not None:
                 if binding_pct < _quota_critical_floor_pct(cfg):
