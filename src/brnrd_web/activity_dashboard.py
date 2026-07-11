@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from brnrd.activity_records import dedupe_activity_records
+from brnrd.activity_records import dedupe_activity_records, fresh_activity_records
 from brnrd.auth import get_db
 from brnrd.models import Account, ActivityRecord, ConfigChangeRequest, Daemon, Event, GitHubInstalledRepo, Repo
 
@@ -153,7 +153,7 @@ def _activity_views(
             ActivityRecord.reported_at.desc(),
         )
     ).scalars()
-    rows = dedupe_activity_records(rows)
+    rows = dedupe_activity_records(fresh_activity_records(rows))
 
     out: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)

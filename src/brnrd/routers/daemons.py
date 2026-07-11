@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import ids, inbox as inbox_service, schemas
+from ..activity_records import ACTIVITY_STALE_TTL
 from ..auth import Principal, get_db, require_daemon
 from ..models import Account, ActivityRecord, Daemon, Event, Repo
 
@@ -104,6 +105,12 @@ def put_activity(payload: schemas.ActivityReport, principal: Principal = Depends
         delete(ActivityRecord).where(
             ActivityRecord.repo_id == principal.repo_id,
             ActivityRecord.token_id == principal.token.id,
+        )
+    )
+    db.execute(
+        delete(ActivityRecord).where(
+            ActivityRecord.repo_id == principal.repo_id,
+            ActivityRecord.reported_at < now - ACTIVITY_STALE_TTL,
         )
     )
     rows: list[ActivityRecord] = []
