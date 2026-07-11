@@ -1166,3 +1166,42 @@ def test_request_gives_up_after_retry_budget(monkeypatch):
     monkeypatch.setattr(cloud.time, "sleep", lambda s: None)
     with pytest.raises(RuntimeError, match="502"):
         cloud._request("http://brnrd", "GET", "/v1/x")
+
+
+def test_propose_config_change_reports_mint_failure(tmp_path, monkeypatch):
+    """Connected-but-mint-failed returns {'error': ...} (not None): the
+    daemon's user-facing park message must not tell a connected account to
+    run `brnrd connect` when the real story is a 422/5xx — the detail is
+    the actionable part (observed live 2026-07-11: an out-of-lockstep
+    server allowlist read back as "isn't cloud-connected")."""
+    brr_dir = tmp_path / ".brr"
+    brr_dir.mkdir()
+    cloud._save_state(brr_dir, {"brnrd_url": "http://brnrd.example", "token": "bd_tok"})
+
+    def fake_request(base_url, method, path, **kwargs):
+        raise RuntimeError("HTTP 422: config key not agent-proposable")
+
+    monkeypatch.setattr(cloud, "_request", fake_request)
+    result = cloud.propose_config_change(
+        brr_dir,
+        proposal_id="cfgchg-x",
+        config_key="dominion.ledger_inject_budget_bytes",
+        current_value=None,
+        requested_value=4096,
+    )
+    assert result == {"error": "HTTP 422: config key not agent-proposable"}
+
+    # Not-connected still reports None — the caller's `brnrd connect` hint
+    # stays for the case where it's actually true.
+    empty_dir = tmp_path / "empty" / ".brr"
+    empty_dir.mkdir(parents=True)
+    assert (
+        cloud.propose_config_change(
+            empty_dir,
+            proposal_id="cfgchg-y",
+            config_key="spawn.max_concurrent",
+            current_value=4,
+            requested_value=8,
+        )
+        is None
+    )

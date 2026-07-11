@@ -143,6 +143,9 @@ def propose_config_change(
     ``None`` (never raises) when this daemon isn't cloud-connected, since a
     repo with no brnrd.dev account has no approver to escalate to — the
     caller falls back to a locally-parked-only proposal in that case.
+    A connected daemon whose mint *request* fails returns
+    ``{"error": <detail>}`` instead, so the caller can report the real
+    failure rather than misdiagnosing it as not-connected.
 
     Called synchronously from ``daemon.py``'s outbox drain (a deliberate,
     narrow exception to gates normally talking to the daemon only through
@@ -174,8 +177,13 @@ def propose_config_change(
             timeout=timeout,
         )
     except Exception as e:
+        # Distinguish "connected but the mint failed" from "not connected":
+        # the caller's user-facing message must not tell a cloud-connected
+        # account to run `brnrd connect` when the real story is e.g. a 422
+        # (server allowlist out of lockstep — observed live 2026-07-11) or
+        # a deploy-window 502. The error detail is the actionable part.
         print(f"[brr:cloud] config-change proposal mint failed: {e}")
-        return None
+        return {"error": str(e)}
 
 
 def connect(brr_dir: Path, *, brnrd_url: str, daemon_name: str = _DEFAULT_DAEMON_NAME, poll_interval_s: float = 2.0, timeout_s: float = 600.0, out: Callable[[str], None] = print) -> dict:

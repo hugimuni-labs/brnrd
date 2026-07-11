@@ -207,3 +207,34 @@ def test_config_approve_rejects_other_accounts_request():
 
     submit = client.post(f"/config-approve/{minted['request_id']}", data={"decision": "approve"})
     assert submit.status_code == 403
+
+
+def test_allowlist_lockstep_with_daemon():
+    """The two allowlists ship in separate packages and can't share an
+    import (see the comment on either side); a key present on one side
+    only means every mint for it 422s while the daemon parks proposals
+    that can never grow an approve link (observed live 2026-07-11, when
+    PR #349 widened the daemon side and missed this one)."""
+    from brnrd.routers.config_approval import ALLOWED_CONFIG_KEYS
+
+    daemon_mod = pytest.importorskip("brr.daemon")
+    assert daemon_mod._CONFIG_CHANGE_ALLOWED_KEYS == ALLOWED_CONFIG_KEYS
+
+
+def test_daemon_can_mint_dominion_budget_key():
+    client = _client()
+    _session, _account_headers, daemon_headers, _repo_id = _repo_and_daemon(client)
+
+    resp = client.post(
+        "/v1/daemons/config-requests",
+        json={
+            "proposal_id": "cfgchg-260711-000000-ledger01",
+            "config_key": "dominion.ledger_inject_budget_bytes",
+            "current_value": "",
+            "requested_value": "4096",
+            "reason": "always-full accreting block; budget is the lever",
+        },
+        headers=daemon_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "pending"
