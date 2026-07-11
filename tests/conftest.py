@@ -25,3 +25,19 @@ def _isolate_account_state(tmp_path_factory, monkeypatch):
     state_home = tmp_path_factory.mktemp("xdg-state")
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_codex_home(tmp_path_factory, monkeypatch):
+    """Point ``CODEX_HOME`` at an empty per-test dir.
+
+    ``runner_cores._models_from_disk`` reads ``$CODEX_HOME/models_cache.json``
+    as the codex model-discovery source. Without isolation, a developer's real
+    ``~/.codex`` cache leaks host models into catalog/probe tests. Tests that
+    exercise the disk probe clear ``probe_shell_models``'s ``lru_cache``
+    themselves; clearing it here would force re-probing inside tests that fake
+    ``subprocess.Popen`` and rely on the primed cache.
+    """
+    codex_home = tmp_path_factory.mktemp("codex-home")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    yield

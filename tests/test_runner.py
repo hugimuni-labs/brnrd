@@ -341,7 +341,7 @@ def test_available_runner_catalog_marks_selected_generated_core(tmp_path, monkey
 
     assert mini["selected"] is True
     assert mini["shell"] == "codex"
-    assert mini["model"] == "gpt-5.4-mini"
+    assert mini["model"] == "gpt-5.6-luna"
     assert mini["class"] == "economy"
     assert mini["quota_source"] == "codex-local"
     assert mini["availability"] == "available"
