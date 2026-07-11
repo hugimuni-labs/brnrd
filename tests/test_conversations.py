@@ -459,6 +459,80 @@ def test_build_communication_snapshot_unanswered_flood_does_not_blank_recency(
     assert sum(1 for b in bodies if b.startswith("stale-")) <= 4
 
 
+def test_build_communication_snapshot_unanswered_boost_has_age_horizon(
+    tmp_path,
+):
+    """A fossil unanswered event stops being boosted after the horizon.
+
+    Live observation (2026-07-11): "unanswered" is bookkeeping, not truth —
+    replies folded into sibling events (or delivered before artifact
+    tagging) leave events unanswered forever, and on a busy thread those
+    month-old fossils were boosted into every wake's snapshot, displacing
+    genuinely recent turns. Beyond ``_UNANSWERED_BOOST_HORIZON`` the boost
+    must lapse; plain recency still applies.
+    """
+    key = "telegram:10:"
+    # A month-old unanswered event — the fossil.
+    conversations.append_record(
+        tmp_path,
+        key,
+        {
+            "ts": "2026-06-01T10:00:00+00:00",
+            "kind": "event",
+            "event_id": "evt-fossil",
+            "body": "fossil ask",
+        },
+        event_id="evt-fossil",
+    )
+    # A recent unanswered event — inside the horizon, still boosted.
+    conversations.append_record(
+        tmp_path,
+        key,
+        {
+            "ts": "2026-06-30T10:00:00+00:00",
+            "kind": "event",
+            "event_id": "evt-recent-open",
+            "body": "recent open ask",
+        },
+        event_id="evt-recent-open",
+    )
+    # Enough recent answered exchanges to overflow the budget.
+    for i in range(4):
+        conversations.append_record(
+            tmp_path,
+            key,
+            {
+                "ts": f"2026-07-01T1{i}:00:00+00:00",
+                "kind": "event",
+                "event_id": f"evt-q-{i}",
+                "body": f"q-{i}",
+            },
+            event_id=f"evt-q-{i}",
+        )
+        conversations.append_record(
+            tmp_path,
+            key,
+            {
+                "ts": f"2026-07-01T1{i}:30:00+00:00",
+                "kind": "artifact",
+                "artifact_kind": "response",
+                "path": f"/tmp/evt-q-{i}.md",
+                "event_id": f"evt-q-{i}",
+                "body": f"a-{i}",
+            },
+            event_id=f"evt-q-{i}",
+        )
+
+    snapshot = conversations.build_communication_snapshot(
+        tmp_path, key, recent_limit=7,
+    )
+
+    bodies = [r.get("body") for r in snapshot["recent_turns"]]
+    # The within-horizon unanswered ask is boosted in; the fossil is not.
+    assert "recent open ask" in bodies
+    assert "fossil ask" not in bodies
+
+
 def test_build_communication_snapshot_surfaces_prior_run_failure(tmp_path):
     key = "telegram:10:"
     # A prior run on the thread that died operationally (credit-low).
