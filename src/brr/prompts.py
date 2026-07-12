@@ -540,13 +540,32 @@ def _build_kb_health_block(repo_root: Path) -> str:
 
 
 def _build_knowledge_sources_block(repo_root: Path) -> str:
-    """Render the compact home→repo→docs knowledge slice."""
+    """Render the compact home→repo→docs knowledge slice.
+
+    Leads with the knowledge chain's divergence warning when brr's last push
+    of the knowledge repo was rejected. A marker nothing surfaces is a
+    guardrail that doesn't guard: the whole point of not swallowing a
+    rejected push is that the next resident awake sees it and reconciles.
+    """
 
     from . import config as conf
+    from . import gitops
     from . import knowledge
 
     cfg = conf.load_config(repo_root)
-    return knowledge.render_injection(repo_root, cfg)
+    block = knowledge.render_injection(repo_root, cfg)
+    diverged = knowledge.needs_sync(gitops.shared_brr_dir(repo_root))
+    if not diverged:
+        return block
+    warning = (
+        "**The knowledge remote has diverged** — brr's last push of the "
+        "knowledge repo was rejected, so another machine or session wrote it "
+        "too. Nothing is lost (it's committed locally), but reconciling is "
+        "yours: fetch, merge / resolve, push. Until then the kb pages this "
+        "run writes will not reach the archive, and they will not be "
+        f"linkable. (Reason on record: {diverged})"
+    )
+    return f"{warning}\n\n{block}" if block else warning
 
 
 def _build_introspection_block(repo_root: Path) -> str:

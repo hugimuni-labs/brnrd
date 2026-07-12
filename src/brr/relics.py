@@ -70,6 +70,7 @@ _ICONS: dict[str, str] = {
     "kb": "📚",
     "file": "📄",
     "message": "✉️",
+    "reply": "🗣️",
 }
 
 

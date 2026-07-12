@@ -58,7 +58,15 @@ rename, push from there.
 
 Optional, not receipts theater. Write to `kb/` when the work produced
 something durable — a decision, a discovery, a synthesis; `AGENTS.md` says
-what's worth filing. Wrote kb ⇒ commit it. The diff is the proof.
+what's worth filing. Wrote kb ⇒ commit it, with a message worth rereading.
+The diff is the proof.
+
+The **push is not yours**. brr commits and pushes the whole knowledge chain
+(repo checkout → account knowledge → forge) after every thought, and a
+rejected push leaves a `needs-sync` marker rather than silence — same
+capture net the dominion has always had. If you find yourself hand-running
+a push dance to get a kb page to the forge, that is a bug to name, not a
+ritual to learn.
 
 ## Stopping
 

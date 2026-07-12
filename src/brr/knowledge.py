@@ -11,6 +11,9 @@ from typing import Iterable
 from . import account, config as conf, forges, gitops
 
 CHECKOUT_DIRNAME = ".brnrd-kb"
+REPLIES_DIRNAME = "replies"
+SYNC_MARKER_FILE = "knowledge.needs-sync"
+CAPTURE_LOCK_FILE = "knowledge.capture.lock"
 _MAX_SOURCE_BYTES = 2048
 _MAX_TOTAL_BYTES = 6144
 
@@ -359,6 +362,7 @@ def ensure_checkout(repo_root: Path, cfg: dict | None = None) -> Path:
     home_knowledge = account.knowledge_path(ctx)
     home_knowledge.mkdir(parents=True, exist_ok=True)
     _init_git_repo(home_knowledge)
+    _allow_push_to_checkout(home_knowledge)
 
     checkout = repo_root / CHECKOUT_DIRNAME
     _exclude_from_project_git(repo_root, f"{CHECKOUT_DIRNAME}/")
@@ -403,6 +407,276 @@ def _checkout_origin_matches(checkout: Path, home_knowledge: Path) -> bool:
         return Path(origin).resolve() == home_knowledge.resolve()
     except OSError:
         return origin == str(home_knowledge)
+
+
+# ── Capture net (checkout → account knowledge → forge) ───────────────
+#
+# The dominion has had a capture net since it existed: the daemon commits
+# and best-effort pushes it after every thought, so a forgetful thought
+# loses nothing it wrote. Knowledge had *none* — no code path in brnrd
+# ever committed or pushed the kb. Residents hand-ran a three-step
+# workaround out of a pitfall note, and when a run forgot, the writes just
+# sat in a working tree: #357 recorded a log entry that stayed uncommitted
+# (and therefore absent from every later wake's injected log tail) for a
+# day, and on 2026-07-12 the account's knowledge repo was found five
+# commits ahead of its forge remote — three log entries that existed
+# nowhere but one laptop, in the repo whose entire job is durability.
+#
+# The chain has three links and each one had a way to silently not happen:
+#
+#     .brnrd-kb ──push──> home/knowledge ──push──> forge
+#     (repo-local          (account-scoped         (the durable,
+#      checkout)            working tree)           auth-gated archive)
+#
+# Pushing into ``home/knowledge`` used to bounce outright: it is a *non-bare*
+# clone with ``main`` checked out, and git refuses that by default.
+# ``receive.denyCurrentBranch=updateInstead`` is git's own answer — accept
+# the push and update the working tree, provided that tree is clean — so
+# capture commits stray direct writes *first*, then pushes.
+
+
+def needs_sync(brr_dir: Path) -> str | None:
+    """Return the knowledge sync-needed reason, or ``None`` when in sync."""
+    try:
+        text = (brr_dir / SYNC_MARKER_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return text or None
+
+
+def mark_needs_sync(brr_dir: Path, reason: str) -> None:
+    try:
+        brr_dir.mkdir(parents=True, exist_ok=True)
+        (brr_dir / SYNC_MARKER_FILE).write_text(reason.strip() + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_needs_sync(brr_dir: Path) -> None:
+    try:
+        (brr_dir / SYNC_MARKER_FILE).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def capture(
+    repo_root: Path,
+    message: str,
+    *,
+    cfg: dict | None = None,
+    brr_dir: Path | None = None,
+    lock_timeout: float = 30.0,
+) -> bool:
+    """Commit and push the knowledge chain. Best-effort; never raises.
+
+    Returns True when something was committed or pushed. Symmetric with
+    :func:`brr.dominion.commit`: a clean chain is a no-op, a *rejected*
+    push to the forge sets a ``needs_sync`` marker (the remote diverged —
+    reconciling is the resident's judgement, not something to paper over),
+    and a successful push clears it.
+    """
+
+    try:
+        cfg = cfg if cfg is not None else conf.load_config(repo_root)
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        home_knowledge = account.knowledge_path(ctx)
+    except Exception:  # noqa: BLE001 - capture must never break the thought
+        return False
+    if not (home_knowledge / ".git").exists():
+        return False
+    brr_dir = brr_dir if brr_dir is not None else gitops.shared_brr_dir(repo_root)
+    checkout = repo_root / CHECKOUT_DIRNAME
+    has_checkout = (checkout / ".git").exists()
+
+    moved = False
+    try:
+        lock = home_knowledge.parent / CAPTURE_LOCK_FILE
+        with gitops.file_lock(lock, lock_timeout) as held:
+            if not held:
+                return False
+            _allow_push_to_checkout(home_knowledge)
+
+            # 1. The repo-local checkout, if a resident wrote through it.
+            if has_checkout and gitops.worktree_dirty(checkout):
+                moved |= gitops.commit_all(checkout, message)
+
+            # 2. Direct writes into the account tree — today's common path,
+            #    since ``active_kb_dir`` points residents straight at it.
+            #    Committing these *before* the push is also what makes
+            #    ``updateInstead`` accept it (it refuses a dirty tree).
+            if gitops.worktree_dirty(home_knowledge):
+                moved |= gitops.commit_all(home_knowledge, message)
+
+            branch = gitops.current_branch(home_knowledge)
+            if not branch or branch == "HEAD":
+                return moved
+
+            # 3. checkout → account. Non-ff (the account tree just took a
+            #    stray commit, or a sibling run pushed) → rebase and retry.
+            if has_checkout and _ahead_of_upstream(checkout):
+                if not gitops.push_branch(checkout, "origin", branch):
+                    _pull_rebase(checkout, "origin", branch)
+                    if gitops.push_branch(checkout, "origin", branch):
+                        moved = True
+                    else:
+                        mark_needs_sync(
+                            brr_dir,
+                            f"the knowledge checkout ({checkout}) could not push to "
+                            f"the account knowledge repo ({home_knowledge}); "
+                            f"reconcile by hand (fetch / rebase / push)",
+                        )
+                else:
+                    moved = True
+
+            # 4. account → forge. The only link that makes the archive
+            #    durable off this machine.
+            remote = gitops.default_remote(home_knowledge)
+            if not remote:
+                return moved
+            if _ahead_of_upstream(home_knowledge) or needs_sync(brr_dir):
+                if gitops.push_branch(home_knowledge, remote, branch):
+                    moved = True
+                    clear_needs_sync(brr_dir)
+                    if has_checkout:
+                        gitops.fetch_branch(checkout, "origin", branch)
+                else:
+                    mark_needs_sync(
+                        brr_dir,
+                        f"push of {branch} to {remote} was rejected — the knowledge "
+                        f"remote has diverged; reconcile by hand (fetch / merge / "
+                        f"push) in {home_knowledge}",
+                    )
+    except Exception:  # noqa: BLE001 - capture is best-effort, never fatal
+        return moved
+    return moved
+
+
+def archive_reply(
+    repo_root: Path,
+    *,
+    run_id: str,
+    body: str,
+    repo_label: str | None = None,
+    meta: dict[str, str] | None = None,
+    cfg: dict | None = None,
+) -> str | None:
+    """Persist a run's terminal user-facing reply into the knowledge repo.
+
+    The reply that reaches the user is the run's answer of record — the one
+    artifact a chat client shows and then buries under the next hundred
+    messages. Written here it becomes a durable, auth-gated, *linkable*
+    page in the same private archive the kb lives in, and the run's relics
+    can point at it (``{"kind": "reply", "url": ...}``).
+
+    Terminal replies only, deliberately: interim outbox messages are the
+    run thinking out loud, the terminal reply is what it concluded. Stored
+    outside the kb page tree (``replies/<repo>/<run-id>.md``, not
+    ``repos/<repo>/``) so the kb graph, the preflight scan, and wake
+    injection never see them as pages.
+
+    Returns the path relative to the knowledge repo root, or None.
+    """
+
+    text = (body or "").strip()
+    if not text:
+        return None
+    try:
+        cfg = cfg if cfg is not None else conf.load_config(repo_root)
+        ctx = account.resolve_context(repo_root, cfg, create=False)
+        home_knowledge = account.knowledge_path(ctx)
+        label = repo_label or account.repo_label(repo_root, cfg)
+    except Exception:  # noqa: BLE001
+        return None
+    if not home_knowledge.is_dir() or not run_id:
+        return None
+
+    rel = f"{REPLIES_DIRNAME}/{account.slug_repo_label(label)}/{run_id}.md"
+    front = {"run": run_id, "repo": label, **{k: v for k, v in (meta or {}).items() if v}}
+    lines = ["---"]
+    lines += [f"{key}: {value}" for key, value in front.items()]
+    lines += ["---", "", text, ""]
+    try:
+        path = home_knowledge / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines), encoding="utf-8")
+    except OSError:
+        return None
+    return rel
+
+
+def knowledge_file_url(
+    repo_root: Path,
+    rel_path: str,
+    cfg: dict | None = None,
+) -> str | None:
+    """Forge URL for a path relative to the *knowledge repo root*.
+
+    :func:`kb_page_url` resolves paths inside the repo's kb *scope*
+    (``repos/<slug>/``); this resolves anything else in the same repo —
+    reply archives today. Same guarantee: a page that isn't on the forge
+    gets no link, because a link to an unpushed page is a 404.
+    """
+
+    location = _knowledge_forge_location(repo_root, cfg)
+    if location is None:
+        return None
+    rel = str(rel_path or "").strip().replace("\\", "/").lstrip("/")
+    if not rel or any(part in ("", ".", "..") for part in rel.split("/")):
+        return None
+    if not _path_matches_pushed_ref(
+        location.repo_root, location.branch, location.pushed_ref, rel,
+    ):
+        return None
+    return forges.view_blob_url(location.remote_url, location.branch, rel)
+
+
+def _allow_push_to_checkout(home_knowledge: Path) -> None:
+    """Let the account's non-bare knowledge clone accept pushes (#357).
+
+    Git refuses a push into a checked-out branch by default — sound, since
+    it would desync the working tree from HEAD. ``updateInstead`` is the
+    supported alternative: take the push *and* update the working tree, but
+    only when that tree is clean. Set idempotently on every capture, so
+    accounts created before this existed are repaired rather than left
+    bouncing forever.
+    """
+    subprocess.run(
+        ["git", "config", "receive.denyCurrentBranch", "updateInstead"],
+        cwd=home_knowledge, capture_output=True, text=True, check=False,
+    )
+
+
+def _ahead_of_upstream(repo: Path) -> bool:
+    """True when the current branch has commits its upstream doesn't.
+
+    Guards the network: a clean, already-pushed chain touches no remote.
+    An unknown upstream (never pushed) counts as ahead — that's the case
+    that most needs the push.
+    """
+    result = subprocess.run(
+        ["git", "rev-list", "--count", "@{upstream}..HEAD"],
+        cwd=repo, capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return True
+    try:
+        return int(result.stdout.strip()) > 0
+    except ValueError:
+        return True
+
+
+def _pull_rebase(repo: Path, remote: str, branch: str) -> bool:
+    result = subprocess.run(
+        ["git", "pull", "--rebase", remote, branch],
+        cwd=repo, capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        subprocess.run(
+            ["git", "rebase", "--abort"],
+            cwd=repo, capture_output=True, text=True, check=False,
+        )
+        return False
+    return True
 
 
 def _source_excerpt(source: KnowledgeSource) -> str:
