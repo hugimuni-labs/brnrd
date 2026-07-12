@@ -45,12 +45,13 @@ other so they don't drift.
 | `<name>.md` | outbound ▸ append-log | A **chat message**, delivered in filename order while you keep working. The body is the message. Stage as `*.tmp` and rename for an atomic write. |
 | `<name>.md` with `event: <id>` frontmatter | outbound ▸ another thread | Same, but delivered to a **different pending event's** thread and marks that event handled, so it won't wake again. One complete reply per folded-in event. |
 | `<name>.md` with `gate: <name>` frontmatter | outbound ▸ a destination | A **send** to a destination with no waiting event — ping a chat, post out-of-band, deliver from a scheduled wake. `gate: forge` is the explicit PR handoff (`head`, `base`, `title` frontmatter; body is the PR body) and opens or refreshes the PR for that head branch when the GitHub gate can deliver. Diffense may generate the title/body when a checked review pack exists, but PR delivery is not diffense-owned. An unconfigured gate is dropped. |
-| `<name>.md` with `respawn: true` frontmatter | parked ⏸ runner handoff | Queue a fresh event for the same conversation and mark the current run satisfied by handoff. Use `shell:` / `core:` for an explicit target, or `quality: escalate` / `quality: strong` to let brr choose the stronger local Core exposed in `portal-state.json` (`resources.runner.quality_escalation`). Optional `reason:`, `at:`, `defer_until:`, and body/carry-forward text ride into the queued event. Paid relay is not selected here. |
+| `<name>.md` with `respawn: true` frontmatter | parked ⏸ runner handoff | Queue a fresh event for the same conversation and mark the current run satisfied by handoff. Use `shell:` / `core:` for an explicit target, or `quality: escalate` / `quality: strong` to let brnrd choose the stronger local Core exposed in `portal-state.json` (`resources.runner.quality_escalation`). Optional `reason:`, `at:`, `defer_until:`, and body/carry-forward text ride into the queued event. Paid relay is not selected here. |
+| `<name>.md` with `spawn: true` frontmatter | concurrent ↗ worker dispatch | Queue a bounded worker-stack child in the configured concurrent pool (`spawn.max_concurrent`, default 4). Name `shell:` / `core:` and optionally `task_classification:`; the completion returns to the parent as a pending event. Use this for independent pending work when capacity and quota are healthy. The parent retains ownership of any original external event and answers it with `event: <id>` after reviewing the child; the spawn request alone does not clear that event. |
 | `<name>.md` with `runner_policy: propose` frontmatter | parked ⏸ policy approval | Park a proposed runner-policy edit in the account dominion instead of mutating policy directly. The body is the proposed policy markdown. Optional `scope: account` applies account-wide; the default is repo-scoped, with optional `repo:` / `repo_label:` override. The daemon sends an approval prompt; a later `approve runner-policy <id>` reply applies it, while `reject runner-policy <id>` closes it unchanged. |
 | `.keepalive` | slot control | **Hold the single-flight slot** past your budget. First line is an ISO-8601 time ("busy until T") or `+<duration>` like `+30m`. Rewrite to extend. A control file, never delivered. (Not world-facing — it steers the slot, not a surface.) |
 | `.card` | outbound ▸ desired-state | **Narrate the live progress card** — reconciled in place, not appended. Write only the note body; the daemon adds the `note:` label when it renders the live phase. Rewrite as context shifts; empty/delete to withdraw. The daemon owns the rest of the card; this is your seam to say what's actually happening. |
-| `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout to fold in waiting work or explicitly leave it queued; never edit or remove it. |
-| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, and a stable `change_token` for attention-relevant changes. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
+| `inbox.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the live list of other pending events. Read it at plan/todo boundaries and once more before terminal closeout; every event gets an inline, spawn, or explicit-defer disposition. Never edit or remove it. |
+| `portal-state.json` | inbound ◂ | **Daemon-owned**, refreshed each heartbeat: the broader live daemon-state capsule for this run. It includes pending events, delivered/drained reply counts, pending outbox files, current card text, budget/keepalive posture, worker headroom (`resources.coexisting_runs.spawn_pool`), and a stable `change_token` for attention-relevant changes. The runner also receives `BRR_PORTAL_STATE` pointing at it. Inspect with `brnrd portal state`; never edit or remove it. |
 
 The daemon also injects runner environment variables for the live
 surfaces it owns: `BRR_RUN_ID`, `BRR_EVENT_ID`, `BRR_OUTBOX_DIR`,
@@ -203,9 +204,10 @@ Runner-owned linger is a named contract, not an improvised while-loop:
    poll rides warm context instead of paying a cold re-read.
 4. **Poll, don't spin.** Each poll reads `portal-state.json`
    (`change_token` says whether anything moved). A same-thread follow-up
-   ⇒ fold it in, reply, reset the backoff. **Any unrelated pending event
-   ⇒ yield immediately** — exit so the single-flight slot frees; a
-   linger never starves the queue.
+   ⇒ fold it in, reply, reset the backoff. **Any other pending event ends
+   passive waiting**: dispatch bounded independent work through `spawn:`
+   when capacity and quota are healthy; otherwise yield or explicitly defer
+   it so the queue never starves.
 
    The mechanical shape — one bounded shell command per quiet interval,
    never an unbounded sleep loop:
@@ -223,11 +225,11 @@ Runner-owned linger is a named contract, not an improvised while-loop:
    Run it with `INTERVAL=30`, then `60`, `120`, `240`, `240`, … — the
    backoff lives in the *sequence of calls*, not inside one long-running
    command. After each call: exit 0 ⇒ read `portal-state.json` and
-   `inbox.json`, decide fold-in vs yield; exit 124 ⇒ double the interval
+   `inbox.json`, decide fold-in vs spawn vs explicit defer/yield; exit 124 ⇒ double the interval
    and go again (or exit if the horizon passed). Keeping each poll a
    separate tool call matters beyond tidiness: on hook-capable Shells the
    portal update fires *between* calls, so pending events are pushed into
-   your context at every poll boundary — the yield rule gets checked even
+   your context at every poll boundary — the ownership rule gets checked even
    when you forget to check it.
 5. **Bound the horizon.** Default: 10–15 minutes past the last delivery;
    extend only while the exchange is actually flowing. Multi-hour vigils
@@ -278,9 +280,10 @@ attending floor ends or yields.
    fresh `portal-state` surfaced automatically at its supported seams;
    otherwise re-read `portal-state.json` (or run `brnrd portal state`) at
    natural seams. `inbox.json` remains the focused
-   pending-events view when you only need that list. A related follow-up
-   that appears while you are still thinking should fold into this wake
-   when that is the healthiest path. Bound long commands; write
+   pending-events view when you only need that list. Give every pending event
+   a disposition: fold small/related work here; spawn bounded independent
+   work when capacity and quota are healthy; defer only with an explicit
+   resource, priority, dependency, or authority reason. Bound long commands; write
    `.keepalive` if the work will outlast your budget.
 
 5. **Deliver.** Leave a satisfying operational signal for this situation.
@@ -289,8 +292,8 @@ attending floor ends or yields.
    encode every possible completion shape as a chat reply. Immediately
    before a terminal closeout, re-read the live `portal-state.json` when
    the run has one (`inbox.json` is enough when you only need the pending
-   event list); fold a quick related follow-up, or say why it should
-   remain queued. This cannot catch messages that arrive after the runner
+   event list); fold small/related work, spawn independent bounded work, or
+   record the explicit reason it must remain queued. This cannot catch messages that arrive after the runner
    has already returned, but it prevents avoidable orphaned follow-ups. If
    you wrote files, commit them on the current branch — the diff is the
    receipt the work happened. Rename the run branch to something
@@ -298,10 +301,11 @@ attending floor ends or yields.
    clear theme.
 
 6. **Decompose / defer the rest.** Can't finish it all in one wake, or
-   the request is naturally several steps? Write `schedule.md` entries
-   for the follow-ups instead of cramming or dropping them. Fold a quick,
-   related pending event in via `event: <id>`; leave anything that wants
-   its own branch for its own wake.
+   the request is naturally several steps? Dispatch bounded independent
+   pieces through `spawn:` and review their completions here. Use
+   `schedule.md` for time-bound follow-ups. Defer a pending event only when
+   resources, priority, dependency, or authority make dispatch unwise, and
+   state that reason; unrelated is not itself a reason.
 
 7. **Persist what's worth keeping.** Durable decision, discovery, or
    shipped change → a `kb/log.md` entry and, when it's general, a `kb/`
