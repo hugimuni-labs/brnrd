@@ -526,8 +526,12 @@ class TestPromptBuilding:
         assert "Inbox — other pending events" in prompt
         assert "evt-B" in prompt
         assert "quick question about X" in prompt
+        assert "Every listed event is yours" in prompt
         # The fold-in contract names the frontmatter handle.
         assert "event: <id>" in prompt
+        assert "Own every" in prompt
+        assert "worker capacity and quota are healthy" in prompt
+        assert "spawn:" in prompt
         assert "portal-state.json" in prompt
         assert "inbox.json" in prompt
         assert "snapshot from when you woke" not in prompt
@@ -1013,7 +1017,7 @@ class TestPromptBuilding:
             outbox_path="/repo/.brr/outbox/evt-1",
             run_id="task-9",
         )
-        assert "fold a related follow-up in" in prompt
+        assert "fold small or related work inline" in prompt
         assert "card + mid-thought replies" in prompt
         assert "waiting in the dark" in prompt
 
@@ -1045,8 +1049,8 @@ class TestPromptBuilding:
         # A1/#211 + B5/#216: the delivery-portals block carries the compact
         # next-move rule (four closeout states, manufactured options named
         # as the failure mode) and the post-delivery linger contract
-        # (backoff inside the provider cache window, absolute yield on
-        # unrelated pending work), including the daemon-owned attending
+        # (backoff inside the provider cache window, dispatch-or-explicit-
+        # defer ownership for unrelated pending work), including the daemon-owned attending
         # floor. Full contracts live in the portals manual (pinned in
         # test_docs.py).
         prompt = build_daemon_prompt(
@@ -1068,7 +1072,8 @@ class TestPromptBuilding:
         assert "linger" in prompt
         assert "delivered · attending" in prompt
         assert "backoff 30s → cap 240s" in prompt
-        assert "yield immediately" in prompt
+        assert "worker capacity and quota are healthy" in prompt
+        assert "queue never starves" in prompt
 
 
 # ── Phase 3 guardrails: revisit-signal handling ──────────────────────
