@@ -3289,6 +3289,26 @@ def _write_live_portal_state(
                 coexisting=coexisting_snapshot,
             ),
         }
+        # Spawn ownership is only actionable when the resident can see pool
+        # headroom. Presence already tells us which siblings are sub-spawns;
+        # expose that count beside the coexisting-runs facet rather than
+        # making the prompt infer capacity from prose or a hidden config.
+        coexisting_facet = payload["resources"]["coexisting_runs"]
+        spawn_limit = _max_concurrent_spawns(cfg or {})
+        if coexisting_snapshot is None:
+            spawn_active = None
+            spawn_available = None
+        else:
+            spawn_active = sum(
+                1 for entry in coexisting_snapshot
+                if bool(entry.get("is_subspawn"))
+            )
+            spawn_available = max(0, spawn_limit - spawn_active)
+        coexisting_facet["spawn_pool"] = {
+            "max_concurrent": spawn_limit,
+            "active": spawn_active,
+            "available": spawn_available,
+        }
         payload["change_token"] = _change_token(payload)
         path = outbox_dir / _LIVE_PORTAL_STATE_NAME
         protocol._atomic_write(

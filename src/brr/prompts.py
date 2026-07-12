@@ -1053,13 +1053,13 @@ def _build_run_context_bundle(
         "`brnrd docs portals`."
     )
     sections.append(
-        f"- stdout capture: {response_path} (brr-written; final stdout = the "
+        f"- stdout capture: {response_path} (brnrd-written; final stdout = the "
         "one plain current-thread reply)"
     )
     if outbox_path:
         sections.append(
             f"- outbox: `{outbox_path}/` — one file = one mid-thought chat "
-            "message; frontmatter routes (`event:` / `gate:` / `respawn:`)"
+            "message; frontmatter routes (`event:` / `gate:` / `respawn:` / `spawn:`)"
         )
         sections.append(
             f"- inbox: `{outbox_path}/inbox.json` — re-read at plan / todo "
@@ -1102,10 +1102,13 @@ def _build_run_context_bundle(
         sections.append("")
         sections.append("### Inbox — other pending events")
         sections.append(
-            "Other events were waiting when you woke. You can fold a quick, "
-            "related one in now (answer it via the outbox `event: <id>` "
-            "frontmatter route) instead of leaving it for its own spawn — "
-            "your call. For the current list and surrounding run posture, "
+            "Other events were waiting when you woke. Every listed event is "
+            "yours to disposition: fold small/related work now, dispatch "
+            "bounded independent work with `spawn:`, or explicitly defer for "
+            "a resource, priority, dependency, or authority reason. Answer "
+            "each original event via the outbox `event: <id>` route after "
+            "the work or reviewed child result is ready. For the current "
+            "list and surrounding run posture, "
             "read the live `portal-state.json` in your outbox at plan / todo "
             "boundaries; `inbox.json` remains the focused pending-event list."
         )

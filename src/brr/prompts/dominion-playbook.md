@@ -72,7 +72,10 @@ early; silence is expensive in exploratory work.
 Reversible + yours ⇒ decide and explain. Costly | irreversible |
 wide-blast | value-laden ⇒ surface with options weighed, wait.
 Plan boundaries + pre-closeout → glance at live inbox / portal state:
-a related follow-up folds into this wake; a cross-cutting one gets its own.
+own every pending event. Small/related work folds into this wake; bounded
+independent work dispatches through `spawn:` while capacity + quota are
+healthy; defer only for an explicit resource, priority, dependency, or
+authority reason.
 
 ## Reading economically
 
@@ -119,7 +122,8 @@ Follow-through:
   past expected completion, same `conversation_key`, whose job is to read
   the child's diff whole and fold a *reviewed* reply into the thread. An
   unread hunk that arrives looking like an answer is still unread.
-- `spawn:` = concurrent (second dispatch slot, cap 1). Default: linger in
+- `spawn:` = concurrent worker pool (`spawn.max_concurrent`, default 4).
+  Default: linger in
   this same run — poll with backoff until the completion event lands →
   review inline → fold before closeout. The scheduled-wake fallback is
   for a dying budget or an urgent pre-empt, not the default path.
