@@ -259,6 +259,71 @@ def test_add_registers_repo_in_connected_account_home(monkeypatch, tmp_path, cap
     assert registry["account_id"] == "acct-1"
 
 
+def test_home_link_yes_asks_nothing(monkeypatch, tmp_path, capsys):
+    """``--yes`` is the whole non-interactive contract: no confirm, no stdin read."""
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    from brr import home_link
+
+    calls = []
+
+    def fake_link_home(repo_root, cfg, **kwargs):
+        calls.append(kwargs)
+        results = [
+            home_link.RepoLinkResult("dominion", repo, "https://x/d", "created", True),
+            home_link.RepoLinkResult("knowledge", repo, "https://x/k", "created", True),
+        ]
+        on_result = kwargs.get("on_result")
+        if on_result is not None:
+            for result in results:
+                on_result(result)
+        return results
+
+    monkeypatch.setattr(home_link, "link_home", fake_link_home)
+
+    def _fail_confirm(*_a, **_kw):  # pragma: no cover
+        raise AssertionError("--yes must not prompt")
+
+    monkeypatch.setattr("brr.adopt._confirm", _fail_confirm)
+
+    assert main(["home", "link", "--yes"]) is None
+
+    assert len(calls) == 1
+    out = capsys.readouterr().out
+    assert "dominion: created" in out
+    assert "knowledge: created" in out
+
+
+def test_home_link_without_yes_needs_a_tty(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["home", "link"])
+    assert "--yes" in str(exc.value)
+
+
+def test_home_link_reports_actionable_error_with_no_traceback(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    init_git_repo(repo)
+    monkeypatch.chdir(repo)
+
+    from brr import home_link
+
+    def boom(*a, **kw):
+        raise home_link.HomeLinkError("gh is not authenticated — run `gh auth login` first")
+
+    monkeypatch.setattr(home_link, "link_home", boom)
+
+    with pytest.raises(SystemExit) as exc:
+        main(["home", "link", "--yes"])
+    assert "gh is not authenticated" in str(exc.value)
+
+
 def test_review_prints_pr_title_and_body(tmp_path, capsys):
     pack = tmp_path / "pack.json"
     _write_review_pack(pack)
